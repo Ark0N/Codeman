@@ -33,6 +33,7 @@ function walk(cmd: Command, path: string[] = []): Array<{ path: string[]; cmd: C
 const TOP_LEVEL: Record<string, string[]> = {
   attach: [],
   skill: [],
+  agent: [],
   session: ['s'],
   task: ['t'],
   ralph: ['r'],
@@ -53,6 +54,7 @@ const SUBCOMMANDS: Record<string, Record<string, string[]>> = {
   task: { add: [], list: ['ls'], status: [], remove: ['rm'], clear: [] },
   ralph: { start: [], stop: [], status: [] },
   skill: { install: [], uninstall: [] },
+  agent: { ls: ['list'], spawn: [], send: [], wait: [], read: [], interrupt: [], rm: [] },
   service: { install: [], uninstall: [], status: [] },
   users: { add: [], passwd: [], list: ['ls'], rm: [] },
 };
@@ -204,5 +206,31 @@ describe('help text', () => {
     for (const name of Object.keys(TOP_LEVEL)) {
       expect(help).toContain(name);
     }
+  });
+});
+
+describe('unauthenticated tunnel launch option', () => {
+  it.each(['web', 'service install'])('registers --allow-unauthenticated-tunnel on %s', (path) => {
+    const command = path === 'web' ? find(program, 'web')! : find(find(program, 'service')!, 'install')!;
+    const options = command.options.filter((option) => option.long === '--allow-unauthenticated-tunnel');
+    expect(
+      options.map((option) => ({
+        flags: option.flags,
+        attribute: option.attributeName(),
+        required: option.required,
+        optional: option.optional,
+      }))
+    ).toEqual([
+      {
+        flags: '--allow-unauthenticated-tunnel',
+        attribute: 'allowUnauthenticatedTunnel',
+        required: false,
+        optional: false,
+      },
+    ]);
+  });
+
+  it('documents --allow-unauthenticated-tunnel in web help', () => {
+    expect(find(program, 'web')!.helpInformation()).toContain('--allow-unauthenticated-tunnel');
   });
 });

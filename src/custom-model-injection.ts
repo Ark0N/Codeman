@@ -87,6 +87,12 @@ export interface ConfigDirInjection {
    * `customModelInjection.launchModel` template, never hand-built per CLI.
    */
   launchModel?: string;
+  /** Carried from the registry recipe, see `cli-registry/types.ts` `linkFromRealHome`. */
+  linkFromRealHome?: string[];
+  /** Carried from the registry recipe, see `cli-registry/types.ts` `linkFromRealHomeDirs`. */
+  linkFromRealHomeDirs?: string[];
+  /** Carried from the registry recipe, see `cli-registry/types.ts` `realHomeFallback`. */
+  realHomeFallback?: string;
 }
 
 export interface UnsupportedInjection {
@@ -136,14 +142,22 @@ export function buildCustomModelInjection(
     }
 
     case 'configContentEnv': {
-      const content = renderConfigContent(cap.template, endpoint, modelId, apiKey);
+      const content = renderConfigContent(cap.template, endpoint, modelId, apiKey, contextLength);
       return withLaunchModel({ kind: 'env', envOverrides: { [cap.envVar]: content } }, cap.launchModel, modelId);
     }
 
     case 'configDir': {
-      const { content, extraEnv } = renderConfigFile(cap.template, endpoint, modelId, apiKey);
+      const { content, extraEnv } = renderConfigFile(cap.template, endpoint, modelId, apiKey, contextLength);
       return withLaunchModel(
-        { kind: 'configDir', dirEnvVar: cap.dirEnvVar, files: [{ relPath: cap.fileName, content }], extraEnv },
+        {
+          kind: 'configDir',
+          dirEnvVar: cap.dirEnvVar,
+          files: [{ relPath: cap.fileName, content }],
+          extraEnv,
+          ...(cap.linkFromRealHome ? { linkFromRealHome: cap.linkFromRealHome } : {}),
+          ...(cap.linkFromRealHomeDirs ? { linkFromRealHomeDirs: cap.linkFromRealHomeDirs } : {}),
+          ...(cap.realHomeFallback ? { realHomeFallback: cap.realHomeFallback } : {}),
+        },
         cap.launchModel,
         modelId
       );
@@ -164,41 +178,114 @@ function withLaunchModel<T extends EnvInjection | ConfigDirInjection>(
   return { ...result, launchModel: template.split('{modelId}').join(modelId) };
 }
 
+/**
+ * One quarter of the window is held back for the reply, capped at 8192 tokens (a small local
+ * model's window must not lose a disproportionate slice to the reservation). Returns undefined
+ * for an unknown or non-finite size: opencode then keeps its own default guess, which is the
+ * pre-fix behaviour; never invent a limit here.
+ */
+function opencodeModelLimit(contextLength: number | undefined): { context: number; output: number } | undefined {
+  if (contextLength === undefined || !Number.isFinite(contextLength)) return undefined;
+  const total = Math.trunc(contextLength);
+  if (total <= 0) return undefined;
+  const output = Math.max(1, Math.min(8192, Math.floor(total / 4)));
+  // `limit.context` is the FULL window as far as opencode is concerned: it reserves for
+  // the reply itself, so the discovered total is passed through, never a shrunk figure.
+  return { context: total, output };
+}
+
 function renderConfigContent(
   template: 'opencode-json',
   endpoint: CustomModelEndpoint,
   modelId: string,
-  apiKey: string
+  apiKey: string,
+  contextLength?: number
 ): string {
   switch (template) {
-    case 'opencode-json':
+    case 'opencode-json': {
+      // `limit` carries the discovered context window (issue #749): without it opencode assumes
+      // a large default window for an unrecognized model id and eventually overflows a much
+      // smaller local server. `context` is the FULL window and opencode reserves for the reply
+      // inside it itself, so `opencodeModelLimit` passes the real total through and only
+      // `output` gets the capped reservation.
+      const limit = opencodeModelLimit(contextLength);
       return JSON.stringify({
         $schema: 'https://opencode.ai/config.json',
         provider: {
           custom: {
             options: { baseURL: withV1Suffix(endpoint.baseUrl), apiKey },
-            models: { [modelId]: {} },
+            models: { [modelId]: limit ? { limit } : {} },
           },
         },
         model: `custom/${modelId}`,
       });
+    }
   }
 }
 
-const CODEX_API_KEY_ENV_VAR = 'CODEMAN_CUSTOM_MODEL_API_KEY';
+/** The DEDICATED env var carrying a custom endpoint's API key for config-file recipes that
+ *  reference keys by name (codex's `env_key`, deepseek's `apiKeyEnv`). Never a CLI-native
+ *  name: dsh's own `llm-deepseek`/`web-search-deepseek` rows read `DEEPSEEK_API_KEY` too,
+ *  so an in-session `/model` switch back to `deepseek-official` (or a profile with web
+ *  search on) would otherwise send the custom endpoint's key to api.deepseek.com. Both
+ *  entries list it in `privilegedEnvKeys` (stock.ts) like each other's redirect vars.
+ */
+const CUSTOM_MODEL_API_KEY_ENV_VAR = 'CODEMAN_CUSTOM_MODEL_API_KEY';
 
 /** The `[model.<name>]` block name grok's config.toml uses for the injected model — also
  *  what `-m <name>` in the standalone script's ONE_SHOT argv must reference to select it. */
 export const GROK_CUSTOM_MODEL_NAME = 'codeman-custom';
 
 function renderConfigFile(
-  template: 'codex-toml' | 'pi-models-json' | 'omp-models-yml' | 'grok-toml',
+  template: 'codex-toml' | 'pi-models-json' | 'omp-models-yml' | 'grok-toml' | 'deepseek-patch-json',
   endpoint: CustomModelEndpoint,
   modelId: string,
-  apiKey: string
+  apiKey: string,
+  contextLength?: number
 ): { content: string; extraEnv?: Record<string, string> } {
   const baseUrl = withV1Suffix(endpoint.baseUrl);
   switch (template) {
+    case 'deepseek-patch-json': {
+      const route = { provider: 'codeman-custom', model: modelId };
+      return {
+        content: JSON.stringify(
+          [
+            {
+              id: 'llm-pi-ai',
+              name: '@deepseek-ai/dsh-llm-pi-ai',
+              config: {
+                providers: {
+                  'codeman-custom': {
+                    // By NAME only (never the literal key, see CUSTOM_MODEL_API_KEY_ENV_VAR).
+                    apiKeyEnv: CUSTOM_MODEL_API_KEY_ENV_VAR,
+                    api: 'openai-completions',
+                    baseURL: baseUrl,
+                    models: [
+                      {
+                        id: modelId,
+                        name: modelId,
+                        ...(contextLength !== undefined && Number.isFinite(contextLength) && contextLength > 0
+                          ? {
+                              contextWindow: Math.trunc(contextLength),
+                              // A quarter of the window keeps the reply inside the prompt's share; 8192 caps it on a large window.
+                              maxTokens: Math.max(1, Math.min(8192, Math.floor(contextLength / 4))),
+                            }
+                          : {}),
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+            { id: 'dsh-tui', name: '@deepseek-harness-tui/dsh-tui', config: route },
+            { id: 'agent-default-model', name: '@deepseek-ai/dsh-agent-default-model', config: route },
+          ],
+          null,
+          2
+        ),
+        extraEnv: { [CUSTOM_MODEL_API_KEY_ENV_VAR]: apiKey },
+      };
+    }
     case 'codex-toml': {
       // Verified against real codex (>= Feb 2026): `model` is a top-level STRING, never
       // a `[model].default` table — codex rejects that with "invalid type: map, expected
@@ -217,15 +304,21 @@ function renderConfigFile(
       const content = [
         `model = ${quoted(modelId)}`,
         `model_provider = "custom"`,
+        ...(contextLength !== undefined && Number.isFinite(contextLength) && contextLength > 0
+          ? [
+              `model_context_window = ${Math.trunc(contextLength)}`,
+              `model_auto_compact_token_limit = ${Math.max(1, Math.floor(contextLength * 0.75))}`,
+            ]
+          : []),
         '',
         '[model_providers.custom]',
         `name = "Custom Endpoint"`,
         `base_url = ${quoted(baseUrl)}`,
-        `env_key = ${quoted(CODEX_API_KEY_ENV_VAR)}`,
+        `env_key = ${quoted(CUSTOM_MODEL_API_KEY_ENV_VAR)}`,
         `wire_api = "responses"`,
         '',
       ].join('\n');
-      return { content, extraEnv: { [CODEX_API_KEY_ENV_VAR]: apiKey } };
+      return { content, extraEnv: { [CUSTOM_MODEL_API_KEY_ENV_VAR]: apiKey } };
     }
     case 'pi-models-json':
       // Verified against pi's OWN bundled docs (models.md): `models` is an ARRAY of

@@ -122,7 +122,8 @@ export interface ProductionCliResolverHostOptions {
   allowRealIoUnderVitest?: boolean;
 }
 
-function isExecutableRegularFile(path: string): boolean {
+/** An executable regular file. Exported for `codeman doctor`, which must judge a candidate the same way. */
+export function isExecutableRegularFile(path: string): boolean {
   try {
     if (!statSync(path).isFile()) return false;
     accessSync(path, constants.X_OK);

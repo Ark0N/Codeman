@@ -1,22 +1,22 @@
-/** @fileoverview Real Chromium + real WebSocket coverage for SplitTerminalPane (Task 4 of the split-pane-sessions plan). */
+/** @fileoverview Real Chromium + real WebSocket coverage for TerminalTile (Task 4 of the split-pane-sessions plan). */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { chromium, type Browser, type Page } from 'playwright';
 import { WebServer } from '../src/web/server.js';
 
-const PORT = 3175;
-const BASE_URL = `http://localhost:${PORT}`;
+let baseUrl: string;
 
-describe('SplitTerminalPane in a real browser', () => {
+describe('TerminalTile in a real browser', () => {
   let server: WebServer;
   let browser: Browser;
   let page: Page;
 
   beforeAll(async () => {
-    server = new WebServer(PORT, false, true);
+    server = new WebServer(0, false, true);
     await server.start();
+    baseUrl = `http://localhost:${server.boundPort}`;
     browser = await chromium.launch({ headless: true });
     page = await browser.newPage();
-    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+    await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => (window as any).app?.terminal, null, { timeout: 30000 });
   }, 90000);
 
@@ -37,7 +37,7 @@ describe('SplitTerminalPane in a real browser', () => {
       // Testing section) — the shell PTY only spawns once this is called, and
       // without it the WS opens but no bytes ever flow, and the echo assertion
       // below would hang until its own timeout for reasons unrelated to
-      // SplitTerminalPane.
+      // TerminalTile.
       await fetch(`/api/sessions/${id}/shell`, { method: 'POST' });
       return id;
     });
@@ -48,7 +48,7 @@ describe('SplitTerminalPane in a real browser', () => {
       mount.style.height = '300px';
       document.body.appendChild(mount);
 
-      const pane = new (window as any).SplitTerminalPane(id, mount);
+      const pane = new (window as any).TerminalTile(id, mount);
       pane.connect();
 
       // Wait for the WS to open, then send a real input frame — testMode's
@@ -107,24 +107,27 @@ describe('SplitTerminalPane in a real browser', () => {
       });
       const id = (await res.json()).data.session.id;
       await fetch(`/api/sessions/${id}/shell`, { method: 'POST' });
-      // Write directly to the session (not through SplitTerminalPane, which
+      // Write directly to the session (not through TerminalTile, which
       // does not exist yet). Poll the real ?full=1 capture (same endpoint
       // connect() below will use) rather than a fixed delay — the shell's
       // own startup can race an early write and, on this box, a startup
       // script issues a `clear` that erases scrollback (modern ncurses
       // `clear` emits \x1b[3J) if the input lands before the shell is ready.
-      await fetch(`/api/sessions/${id}/input`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ input: 'PRE_EXISTING_MARKER\r' }),
-      });
-      const deadline = Date.now() + 5000;
+      // Send with useMux:false: a plain prompt otherwise goes out through
+      // tmux send-keys, which test mode no-ops, so the marker never reached
+      // the PTY. Re-sending until the capture shows it is just belt and braces.
+      const deadline = Date.now() + 8000;
       for (;;) {
+        await fetch(`/api/sessions/${id}/input`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ input: 'PRE_EXISTING_MARKER\r', useMux: false }),
+        });
+        await new Promise((r) => setTimeout(r, 400));
         const res2 = await fetch(`/api/sessions/${id}/terminal?full=1`);
         const buffer = (await res2.json())?.data?.terminalBuffer ?? '';
         if (buffer.includes('PRE_EXISTING_MARKER')) break;
         if (Date.now() > deadline) throw new Error('marker never landed in ?full=1 capture: ' + JSON.stringify(buffer));
-        await new Promise((r) => setTimeout(r, 200));
       }
       return id;
     });
@@ -135,7 +138,7 @@ describe('SplitTerminalPane in a real browser', () => {
       mount.style.height = '300px';
       document.body.appendChild(mount);
 
-      const pane = new (window as any).SplitTerminalPane(id, mount);
+      const pane = new (window as any).TerminalTile(id, mount);
       await pane.connect();
 
       // xterm's write() parses asynchronously (it queues data and processes it
@@ -191,7 +194,7 @@ describe('SplitTerminalPane in a real browser', () => {
       mount.style.height = '300px';
       document.body.appendChild(mount);
 
-      const pane = new (window as any).SplitTerminalPane(id, mount);
+      const pane = new (window as any).TerminalTile(id, mount);
       await pane.connect();
       await new Promise((resolve) => {
         const check = () => (pane._wsReady ? resolve(undefined) : setTimeout(check, 100));

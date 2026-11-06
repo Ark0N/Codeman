@@ -15,7 +15,6 @@ import { WebServer } from '../src/web/server.js';
 import { safeRmHomeTree } from './mocks/index.js';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-const TEST_PORT = 3215;
 
 // Helper to parse SSE events from raw text
 function parseSSEEvents(text: string): Array<{ event: string; data: unknown }> {
@@ -106,9 +105,9 @@ describe('Operation Lightspeed', () => {
   let baseUrl: string;
 
   beforeAll(async () => {
-    server = new WebServer(TEST_PORT, false, true);
+    server = new WebServer(0, false, true);
     await server.start();
-    baseUrl = `http://localhost:${TEST_PORT}`;
+    baseUrl = `http://localhost:${server.boundPort}`;
   });
 
   afterAll(async () => {

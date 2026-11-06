@@ -110,9 +110,27 @@ const TITLE_FLASH_INTERVAL_MS = 1500;       // Title flash rate
 const BROWSER_NOTIF_RATE_LIMIT_MS = 3000;   // Rate limit for browser notifications
 const MOBILE_RESIZE_RETRY_MS = 30000;       // Small-viewport resize re-send while a desktop sizing claim is hot
 const AUTO_CLOSE_NOTIFICATION_MS = 8000;    // Auto-close browser notifications
+const DEFAULT_TOAST_DURATION_MS = 3000;     // How long a corner toast stays by default
+const MIN_NOTIFICATION_DURATION_MS = 1000;  // Shortest configurable toast / browser-notification time
+const MAX_NOTIFICATION_DURATION_MS = 300000; // Longest configurable toast / browser-notification time
 const THROTTLE_DELAY_MS = 100;              // General UI throttle delay
 const TERMINAL_CHUNK_SIZE = 32 * 1024;      // 32KB chunks for terminal buffer loading
 const TERMINAL_TAIL_SIZE = 1024 * 1024;     // 1MB tail for initial load (more scrollback on tab switch)
+// A shell's automatic loads (tab select, drop recovery, a tile's load) read
+// tmux's RENDERED history, never the raw byte recording: that recording holds
+// full-screen repaints (an ssh'd tmux, less, a TUI) drawn for the pane size of
+// the moment, and replayed into a terminal of another height each repaint
+// scrolls its top row into scrollback, so one line shows up dozens of times.
+// `lines=` bounds the synchronous capture-pane (~8 ms per 1000 lines measured,
+// so ~0.1 s here); the server reports a cut as 'tail', and scroll-to-top pulls
+// the older lines as before. `alt=recording`: a pane in the alternate screen (a
+// nested tmux, as in remote SSH and Docker cases, but also vim or less while
+// open) gains no tmux history, so the server loads it the old way, visible
+// frame over the tailed byte recording.
+// A grid tile appends its own `lines=` to SHELL_LOAD_BASE_QUERY.
+const SHELL_LOAD_HISTORY_LINES = 10000;
+const SHELL_LOAD_BASE_QUERY = `full=1&tail=${TERMINAL_TAIL_SIZE}&alt=recording`;
+const SHELL_LOAD_QUERY = `${SHELL_LOAD_BASE_QUERY}&lines=${SHELL_LOAD_HISTORY_LINES}`;
 const SYNC_WAIT_TIMEOUT_MS = 50;            // Wait timeout for terminal sync
 const STATS_POLLING_INTERVAL_MS = 2000;     // System stats polling
 const TUI_REDRAW_SETTLE_MS = 400;           // Grace for a TUI to redraw after a real resize, before fetching its buffer
@@ -207,6 +225,9 @@ function shouldAutoWrapTabs(input) {
   if (!input || input.deviceType !== 'desktop') return false;
   if (input.manualTwoRows) return false;
   if ((input.tabCount || 0) < 2) return false;
+  // A box in the strip already wraps inside itself (a case cluster wider than the
+  // whole strip): the strip has rows although nothing overflows.
+  if (input.innerWrap) return true;
 
   const scrollWidth = Number(input.scrollWidth) || 0;
   const clientWidth = Number(input.clientWidth) || 0;
@@ -260,6 +281,11 @@ function resolveTabRailKeyboardWidth(input = {}) {
 // the gap is what tells the user there is more strip to swipe to.
 const TAB_SCROLL_REVEAL_PX = 16;
 
+// Narrowest room beside the toolbar the L-shaped header strip trims its first
+// tab into (`_syncTabStripCorner()`, app.js). Less than this keeps the plain
+// wrap: a tab squeezed further shows its number and buttons but no name.
+const TAB_CORNER_MIN_FIRST_TAB = 120;
+
 // Phone/tablet tab-strip scroll policy (issue #257). Those breakpoints scroll
 // the strip horizontally (desktop wraps to a second row instead and never
 // scrolls), so the active tab can sit entirely outside the visible slice with
@@ -296,139 +322,307 @@ function computeTabScrollLeft(input) {
   return Math.min(Math.max(Math.round(target), 0), maxScroll);
 }
 
-// Session lineage lines — geometry for the arc drawn between a tab and a tab it
+// Session lineage lines: geometry for the lines joining a tab to the tabs it
 // spawned (a worker started through the codeman agent skill, which passes its own
 // id as parentSessionId). Pure: the caller measures and appends, this decides.
 //
-// ONE shape, because both endpoints live in the same horizontal strip and the subagent
-// shape (tab-bottom → window-top) has nothing to aim at: a U-bridge HANGING BELOW the
-// strip, from the parent's bottom edge to the child's bottom edge, so it reads as a
-// bracket joining two tabs rather than as a line crossing them. The dip grows with
-// horizontal distance and with `depth` (the child's index among its siblings), so
-// several children of one parent nest instead of overprinting.
+// ONE TREE PER SPAWNING TAB. Every family is drawn, the selected tab's emphasized
+// (session-lineage.js). Every route starts at the PARENT and ends at one child, so
+// a parent's routes share their first stretch exactly: overlaid, they read as one
+// trunk with a branch per child, and a dashed (working) route stays in phase with
+// its siblings along the shared part.
 //
-// ⚠ A WRAPPED STRIP USED TO GET ITS OWN SHAPE, AND THAT SHAPE WAS THE BUG. When the
-// desktop strip wraps (`tabs-two-rows` / `tabs-auto-wrap`) a parent on row 1 and its
-// child on row 2 are ~4px apart vertically, so the old parent-bottom → child-TOP bezier
-// had a 4px span to work with and drew a flat horizontal line inside the row gap
-// (reported as "they connect already, but the lines are straight and not easy visible"),
-// and three siblings drew three of them on top of each other. Aiming BOTH ends at the
-// tab BOTTOMS and putting the control points below the LOWER row gives the wrapped case
-// the same bracket as the flat case: it leaves the parent downward, crosses the lower
-// row once, and comes back up under the child. Same formula, no branch.
+// ⚠ ROUTES RUN IN THE GAPS, NEVER THROUGH A TAB. This replaced one bezier per
+// child hanging below the strip, which in a wrapped strip crossed every lower
+// row's labels and the terminal text (owner screenshot 2026-10-06: a parent on
+// row 3 with ten children, "too confusing"). A route now moves horizontally only
+// inside a row gap, and vertically only along a tab's own stem (its bottom edge to
+// the gap right under it) or along the SPINE, a channel left of every row that
+// joins the gaps of different rows. styles.css reserves that room
+// (`.session-tabs.lineage-tree`: a wider row gap, bottom padding for the last
+// row's gap, and the spine channel on the left of a wrapped strip).
 //
-// Returns null when the edge must not be drawn: a missing/degenerate rect, or an
-// endpoint scrolled outside the strip. `.session-tabs` is `overflow-x: auto`, so a
-// scrolled-out tab still HAS a rect — one lying over the logo or the header
-// buttons. Skipping is honest; clamping would point at a tab that isn't there.
-// ⚠ THE DIP IS WHAT MAKES THE ARC AN ARC, and it has now been mis-tuned in BOTH
-// directions, so treat these numbers as a corridor rather than a dial to crank:
-// - Too shallow (the first ship, 44px cap): a skill worker is appended to the END of
-//   the strip, so a lead-to-worker span is 800-1500px, and a 44px cap over 1300px is
-//   a 33px sag, a line that reads as STRAIGHT across the terminal (#285).
-// - Too deep (the 104px cap that replaced it): in the wrapped-strip case the cap and
-//   the FULL row offset stacked, bowing the bracket ~106px into the terminal text
-//   (owner screenshot 2026-08-15, "die Linien machen einen grossen Bogen nach unten").
-// The dip is measured from the STRIP'S BOTTOM EDGE (falling back to the lower tab
-// bottom when the strip rect is missing or shorter than its tabs), which buys two
-// things at once: the bow needs no per-row offsets stacked on top, and a same-row
-// arc between ROW-1 tabs of a wrapped strip clears row 2's labels instead of being
-// drawn through them (the retune's own first draft had exactly that regression).
-const LINEAGE_DIP_BASE_PX = 14;
-const LINEAGE_DIP_PER_PX = 0.06;
-const LINEAGE_DIP_MIN_PX = 22;
-const LINEAGE_DIP_MAX_PX = 64;
-// Siblings nest by this much. Widened with the stroke: at 2.5px plus its glow, arcs 6px
-// apart bled into one thick band instead of reading as three separate lines.
-const LINEAGE_SIBLING_STEP_PX = 8;
+// The channel is at the strip's left edge, except where a tab arrangement puts
+// something there: grouped by state, the edge holds the label column and the
+// channel opens between the labels and the tabs. session-lineage.js measures it
+// and passes its left edge as `spineLeft`; without one it is the strip's edge.
+//
+// Rows come from computeLineageRows() over EVERY tab in the strip, not only the
+// endpoints: a row's gap sits under its TALLEST tab (the active tab is 2px
+// taller), or siblings in one row would hang their bus at different heights.
+//
+// computeLineageTree() returns null when the parent cannot be drawn (missing or
+// degenerate rect, scrolled out of the strip); a child that cannot be drawn is
+// left out of `routes`. `.session-tabs` scrolls, so a scrolled-out tab still HAS a
+// rect, lying over the logo or the header buttons. Skipping is honest; clamping
+// would point at a tab that is not there.
+//
+// A child is also left out when its route has nowhere to run: rows whose spans
+// overlap are one row (no gap between them), a row with no gap under it routes
+// nothing, and a route that would still cross a tab is dropped whole. So no tab
+// arrangement can put a line through a tab; a layout without the reserved room
+// loses lines instead.
+const LINEAGE_CORNER_RADIUS_PX = 10;
+// Families drawn together take separate lanes: gap lines this far apart, spines
+// LINEAGE_SPINE_STEP_PX apart.
+const LINEAGE_LANE_STEP_PX = 3.5;
+// Every family is drawn at once, and a 12px row gap only fits this many lanes at
+// LINEAGE_LANE_STEP_PX; session-lineage.js cycles families through them.
+const LINEAGE_MAX_LANES = 3;
+const LINEAGE_SPINE_INSET_PX = 6;
+const LINEAGE_SPINE_STEP_PX = 4;
+// The last row has no row below it; with no strip rect to measure, its gap is
+// taken to be this deep.
+const LINEAGE_LAST_GAP_PX = 12;
+// Narrower than this, the space between two rows is not a gap a route can run in.
+const LINEAGE_MIN_GAP_PX = 2;
+const LINEAGE_ROW_TOLERANCE_PX = 6;
 const LINEAGE_STRIP_TOLERANCE_PX = 4;
-// How far the vertical bracket sits in from the rail's left edge. It has to
-// clear the VIEWPORT edge, not just the tabs: the line carries an 11px outer
-// glow, so a track at 6px had half of that glow clipped away and the arc read
-// as a thin thread pinned to the window frame. The rail reserves the channel
-// itself (`--lineage-vertical-gutter` on the rail's .session-tabs), and
-// computeLineagePath still clamps the track to stay left of both tabs.
+// How far the vertical rail's track sits in from the rail's left edge. It has to
+// clear the VIEWPORT edge, not just the tabs, or the line reads as a thread pinned
+// to the window frame. The rail reserves the channel itself
+// (`--lineage-vertical-gutter` on the rail's .session-tabs), and the track is
+// still clamped to stay left of every endpoint.
 const LINEAGE_VERTICAL_TRACK_INSET_PX = 10;
-const LINEAGE_VERTICAL_SIBLING_STEP_PX = 3;
+const LINEAGE_VERTICAL_LANE_STEP_PX = 4;
 const LINEAGE_VERTICAL_ANCHOR_CLEARANCE_PX = 4;
 // Lineage palette, assigned per SPAWNING TAB in first-seen order and cycled
-// (session-lineage.js). Every arc leaving one tab shares its colour however many
-// workers it spawns; a child that spawns in turn gets its own for the arcs below it.
+// (session-lineage.js). Every line leaving one tab shares its colour however many
+// workers it spawns; a child that spawns in turn gets its own for the lines below it.
 // The empty FIRST entry means "no override": the CSS then falls back to --session-blue,
-// which every skin block tunes for its own background, so a lone arc keeps the
+// which every skin block tunes for its own background, so a lone family keeps the
 // skin-aware blue that shipped in 1.18.2. The fixed entries are deliberately vivid
-// (owner call 2026-08-15: matrix green, pinkish, violet, red, turquoise "and so on");
-// they ride the same double glow as the blue, which is what keeps them legible over
-// terminal text on every skin.
+// (owner call 2026-08-15: matrix green, pinkish, violet, red, turquoise "and so on").
 const LINEAGE_COLORS = ['', '#00ff66', '#ff5ea8', '#a78bfa', '#ff5252', '#2dd4bf', '#ffa940'];
 
-function computeLineagePath(input) {
-  const parent = input?.parent;
-  const child = input?.child;
-  if (!parent || !child) return null;
+/** A rect normalized to numbers with its edges and center, or null if unusable. */
+function lineageRect(rect) {
+  if (!rect) return null;
+  const left = Number(rect.left);
+  const top = Number(rect.top);
+  const width = Number(rect.width);
+  const height = Number(rect.height);
+  if (![left, top, width, height].every(Number.isFinite) || width <= 0 || height <= 0) return null;
+  return {
+    left,
+    top,
+    width,
+    height,
+    right: left + width,
+    bottom: top + height,
+    cx: left + width / 2,
+    cy: top + height / 2,
+  };
+}
 
-  const pw = Number(parent.width) || 0;
-  const ph = Number(parent.height) || 0;
-  const cw = Number(child.width) || 0;
-  const ch = Number(child.height) || 0;
-  if (pw <= 0 || ph <= 0 || cw <= 0 || ch <= 0) return null;
+/**
+ * Group tab rects into the strip's visual rows, top to bottom. A row spans from its
+ * highest top to its LOWEST bottom, so a taller tab (the active one) sets the row's
+ * gap for everyone in it.
+ *
+ * ⚠ Rows never overlap. Tabs whose spans overlap are in one row however far apart
+ * their tops are: case clusters stack and centre tabs inside their boxes, and two
+ * overlapping "rows" put the gap of one in the middle of the other's tabs.
+ */
+function computeLineageRows(rects) {
+  const sorted = [];
+  for (const raw of rects || []) {
+    const r = lineageRect(raw);
+    if (r) sorted.push(r);
+  }
+  sorted.sort((a, b) => a.top - b.top);
+  const rows = [];
+  for (const r of sorted) {
+    // Sorted by top, so only the last row can take this rect, and merging into it
+    // keeps every earlier row clear of it.
+    const row = rows[rows.length - 1];
+    if (row && (r.top < row.bottom || r.top - row.top <= LINEAGE_ROW_TOLERANCE_PX)) {
+      row.bottom = Math.max(row.bottom, r.bottom);
+    } else {
+      rows.push({ top: r.top, bottom: r.bottom });
+    }
+  }
+  return rows;
+}
 
+/** Does an axis-aligned segment pass through the inside of a rect? Touching an edge is fine. */
+function lineageSegmentCrosses([x1, y1], [x2, y2], r) {
+  const eps = 0.5;
+  if (Math.max(x1, x2) <= r.left + eps || Math.min(x1, x2) >= r.right - eps) return false;
+  return Math.max(y1, y2) > r.top + eps && Math.min(y1, y2) < r.bottom - eps;
+}
+
+/**
+ * An orthogonal polyline as an SVG path, each corner rounded by up to `radius`
+ * (never more than half of either segment, so short stems stay short). Repeated and
+ * collinear points are dropped first, so a degenerate corner draws nothing odd.
+ */
+function lineagePolylinePath(points, radius) {
+  const pts = [];
+  for (const p of points) {
+    const prev = pts[pts.length - 1];
+    if (prev && Math.abs(prev[0] - p[0]) < 0.5 && Math.abs(prev[1] - p[1]) < 0.5) continue;
+    const before = pts[pts.length - 2];
+    if (before && prev) {
+      const cross = (prev[0] - before[0]) * (p[1] - prev[1]) - (prev[1] - before[1]) * (p[0] - prev[0]);
+      if (Math.abs(cross) < 0.01) pts.pop();
+    }
+    pts.push(p);
+  }
+  if (pts.length < 2) return null;
+  let d = `M ${r1(pts[0][0])} ${r1(pts[0][1])}`;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const [x0, y0] = pts[i - 1];
+    const [x1, y1] = pts[i];
+    const [x2, y2] = pts[i + 1];
+    const lenIn = Math.hypot(x1 - x0, y1 - y0);
+    const lenOut = Math.hypot(x2 - x1, y2 - y1);
+    const r = Math.min(radius, lenIn / 2, lenOut / 2);
+    if (!(r > 0.5)) {
+      d += ` L ${r1(x1)} ${r1(y1)}`;
+      continue;
+    }
+    const ax = x1 - ((x1 - x0) / lenIn) * r;
+    const ay = y1 - ((y1 - y0) / lenIn) * r;
+    const bx = x1 + ((x2 - x1) / lenOut) * r;
+    const by = y1 + ((y2 - y1) / lenOut) * r;
+    d += ` L ${r1(ax)} ${r1(ay)} Q ${r1(x1)} ${r1(y1)} ${r1(bx)} ${r1(by)}`;
+  }
+  const last = pts[pts.length - 1];
+  return d + ` L ${r1(last[0])} ${r1(last[1])}`;
+}
+
+/**
+ * Routes from one parent tab to each of its children.
+ *
+ * input: { parent, children: [{ id, rect }], strip?, tabs?, spineLeft?,
+ *          orientation?, lane?, laneCount?, radius? }. `tabs` is every tab rect in
+ *          the strip (rows are derived from it); `spineLeft` is the left edge of the
+ *          spine channel (default: the strip's left edge); `lane`/`laneCount`
+ *          separate families drawn together.
+ * Returns { routes: [{ id, points, d, endX, endY }] } or null.
+ */
+function computeLineageTree(input) {
+  const parent = lineageRect(input?.parent);
+  if (!parent) return null;
+  const strip = lineageRect(input?.strip);
   const orientation = input?.orientation === 'vertical' ? 'vertical' : 'horizontal';
-  const strip = input?.strip;
-  const depth = Math.max(0, Math.min(6, Number(input?.depth) || 0));
-  const pLeft = Number(parent.left);
-  const cLeft = Number(child.left);
-  const pTop = Number(parent.top);
-  const cTop = Number(child.top);
-  if (![pLeft, cLeft, pTop, cTop].every(Number.isFinite)) return null;
+  const laneCount = Math.max(1, Math.floor(Number(input?.laneCount)) || 1);
+  const lane = Math.max(0, Math.min(laneCount - 1, Math.floor(Number(input?.lane)) || 0));
+  const radius = Number.isFinite(Number(input?.radius)) ? Math.max(0, Number(input.radius)) : LINEAGE_CORNER_RADIUS_PX;
+  const children = [];
+  for (const child of input?.children || []) {
+    const rect = lineageRect(child?.rect);
+    if (rect) children.push({ id: child.id, rect });
+  }
+
+  const tol = LINEAGE_STRIP_TOLERANCE_PX;
+  const inStripY = (r) => !strip || (r.cy >= strip.top - tol && r.cy <= strip.bottom + tol);
+  const inStripX = (r) => !strip || (r.cx >= strip.left - tol && r.cx <= strip.right + tol);
+  const routes = [];
 
   if (orientation === 'vertical') {
-    const py = pTop + ph / 2;
-    const cy = cTop + ch / 2;
-    if (strip && Number(strip.height) > 0) {
-      const min = Number(strip.top) - LINEAGE_STRIP_TOLERANCE_PX;
-      const max = Number(strip.top) + Number(strip.height) + LINEAGE_STRIP_TOLERANCE_PX;
-      if (py < min || py > max || cy < min || cy > max) return null;
+    // The rail: one track down the empty left gutter, shared by every sibling.
+    if (!inStripY(parent)) return null;
+    const visible = children.filter((c) => inStripY(c.rect));
+    if (visible.length === 0) return { routes };
+    const minLeft = Math.min(parent.left, ...visible.map((c) => c.rect.left));
+    const base = strip ? strip.left : minLeft - LINEAGE_VERTICAL_TRACK_INSET_PX * 2;
+    const trackX = Math.min(
+      base + LINEAGE_VERTICAL_TRACK_INSET_PX + lane * LINEAGE_VERTICAL_LANE_STEP_PX,
+      minLeft - LINEAGE_VERTICAL_ANCHOR_CLEARANCE_PX
+    );
+    for (const { id, rect } of visible) {
+      const points = [
+        [parent.left, parent.cy],
+        [trackX, parent.cy],
+        [trackX, rect.cy],
+        [rect.left, rect.cy],
+      ];
+      const d = lineagePolylinePath(points, radius);
+      if (d) routes.push({ id, points: roundPoints(points), d, endX: r1(rect.left), endY: r1(rect.cy) });
     }
-
-    const stripLeft =
-      strip && Number.isFinite(Number(strip.left))
-        ? Number(strip.left)
-        : Math.min(pLeft, cLeft) - LINEAGE_VERTICAL_TRACK_INSET_PX * 2;
-    const requestedTrack =
-      stripLeft + LINEAGE_VERTICAL_TRACK_INSET_PX + depth * LINEAGE_VERTICAL_SIBLING_STEP_PX;
-    const trackX = Math.min(requestedTrack, Math.min(pLeft, cLeft) - LINEAGE_VERTICAL_ANCHOR_CLEARANCE_PX);
-    const d = `M ${r1(pLeft)} ${r1(py)} H ${r1(trackX)} V ${r1(cy)} H ${r1(cLeft)}`;
-    return { d, endX: cLeft, endY: cy, sameRow: false };
+    return { routes };
   }
 
-  const px = pLeft + pw / 2;
-  const cx = cLeft + cw / 2;
-  if (strip && Number(strip.width) > 0) {
-    const min = Number(strip.left) - LINEAGE_STRIP_TOLERANCE_PX;
-    const max = Number(strip.left) + Number(strip.width) + LINEAGE_STRIP_TOLERANCE_PX;
-    if (px < min || px > max || cx < min || cx > max) return null;
+  if (!inStripX(parent) || !inStripY(parent)) return null;
+  const visible = children.filter((c) => inStripX(c.rect) && inStripY(c.rect));
+  if (visible.length === 0) return { routes };
+
+  const rows = computeLineageRows([...(input?.tabs || []), parent, ...visible.map((c) => c.rect)]);
+  const rowOf = (r) => rows.findIndex((row) => r.cy >= row.top - tol && r.cy <= row.bottom + tol);
+  const laneOffset = (lane - (laneCount - 1) / 2) * LINEAGE_LANE_STEP_PX;
+  // Y of the gap under row i, this family's lane. The offset is clamped so a busy
+  // gap never pushes a lane into the tabs on either side of it. Null when there is
+  // no gap: the row is not found, or the next row starts (nearly) where it ends.
+  const gapUnder = (i) => {
+    const row = rows[i];
+    if (!row) return null;
+    const next = rows[i + 1];
+    let bottom;
+    if (next) bottom = next.top;
+    else if (strip && strip.bottom > row.bottom + 1) bottom = strip.bottom;
+    else bottom = row.bottom + LINEAGE_LAST_GAP_PX;
+    if (!(bottom - row.bottom >= LINEAGE_MIN_GAP_PX)) return null;
+    const half = Math.max(0, (bottom - row.bottom) / 2 - 1);
+    return (row.bottom + bottom) / 2 + Math.max(-half, Math.min(half, laneOffset));
+  };
+  const pRow = rowOf(parent);
+  const gp = gapUnder(pRow);
+  if (gp === null) return { routes };
+  // The spine runs from one row's gap to another's, so it only ever passes BESIDE
+  // rows after the first, and only their tabs bound it. The first row may start
+  // left of the channel (grouped by state it starts after the brand and a label
+  // of its own width), and clamping to it would pull the spine back over the
+  // label column.
+  const lowerLefts = [parent, ...visible.map((c) => c.rect), ...(input?.tabs || []).map(lineageRect)]
+    .filter((r) => r && rowOf(r) > 0)
+    .map((r) => r.left);
+  const minLeft = lowerLefts.length
+    ? Math.min(...lowerLefts)
+    : Math.min(parent.left, ...visible.map((c) => c.rect.left));
+  const channelLeft = Number(input?.spineLeft);
+  const spineBase = strip
+    ? Math.max(strip.left, Number.isFinite(channelLeft) ? channelLeft : strip.left)
+    : minLeft - LINEAGE_SPINE_INSET_PX * 2;
+  const spineX = Math.min(spineBase + LINEAGE_SPINE_INSET_PX + lane * LINEAGE_SPINE_STEP_PX, minLeft - 2);
+
+  // Every tab a route must stay out of. A segment can only cross one if the rows
+  // above failed to describe the layout, so this is a backstop that drops the
+  // route whole rather than drawing it through a tab.
+  const obstacles = [parent, ...visible.map((c) => c.rect), ...(input?.tabs || []).map(lineageRect)].filter(Boolean);
+  for (const { id, rect } of visible) {
+    const cRow = rowOf(rect);
+    const gc = gapUnder(cRow);
+    if (gc === null) continue;
+    const points =
+      cRow === pRow
+        ? [
+            [parent.cx, parent.bottom],
+            [parent.cx, gp],
+            [rect.cx, gp],
+            [rect.cx, rect.bottom],
+          ]
+        : [
+            [parent.cx, parent.bottom],
+            [parent.cx, gp],
+            [spineX, gp],
+            [spineX, gc],
+            [rect.cx, gc],
+            [rect.cx, rect.bottom],
+          ];
+    // The rounded corners cut inside each turn by a few pixels at most
+    // (lineagePolylinePath), so the segments are what has to clear the tabs.
+    const blocked = points.some((p, i) => i > 0 && obstacles.some((r) => lineageSegmentCrosses(points[i - 1], p, r)));
+    if (blocked) continue;
+    const d = lineagePolylinePath(points, radius);
+    if (d) routes.push({ id, points: roundPoints(points), d, endX: r1(rect.cx), endY: r1(rect.bottom) });
   }
+  return { routes };
+}
 
-  const pBottom = pTop + ph;
-  const cBottom = cTop + ch;
-  const sameRow = Math.abs(pTop + ph / 2 - (cTop + ch / 2)) <= Math.min(ph, ch) / 2;
-
-  // Both ends anchor on the tab BOTTOM, and the control points hang below the WHOLE
-  // strip, so one formula covers a flat strip, a wrapped pair, and a same-row pair
-  // sitting above further rows (see the corridor note above the constants).
-  const span = Math.abs(cx - px);
-  const stripBottom =
-    strip && Number(strip.height) > 0 && Number.isFinite(Number(strip.top))
-      ? Number(strip.top) + Number(strip.height)
-      : Number.NEGATIVE_INFINITY;
-  const baseline = Math.max(pBottom, cBottom, stripBottom);
-  const dip =
-    Math.min(LINEAGE_DIP_MAX_PX, Math.max(LINEAGE_DIP_MIN_PX, LINEAGE_DIP_BASE_PX + span * LINEAGE_DIP_PER_PX)) +
-    depth * LINEAGE_SIBLING_STEP_PX;
-  const yc = baseline + dip;
-  const d = `M ${r1(px)} ${r1(pBottom)} C ${r1(px)} ${r1(yc)}, ${r1(cx)} ${r1(yc)}, ${r1(cx)} ${r1(cBottom)}`;
-  return { d, endX: cx, endY: cBottom, sameRow };
+function roundPoints(points) {
+  return points.map(([x, y]) => [r1(x), r1(y)]);
 }
 
 // One decimal is plenty for a screen-space path and keeps the `d` string short.
@@ -535,6 +729,90 @@ function computeConnectionLossUi(input) {
   };
 }
 
+// Session Options → Respawn → "Prompt cache": one sentence of the main
+// conversation's cache state as Claude Code reports it on the statusline
+// (`session.promptCache`, v2.1.251+). A clock time rather than a countdown
+// because the row refreshes on SSE, not on a timer, and a countdown would sit
+// stale between turns. Pure: no DOM, `now` is passed in. `statusLine` is the
+// session's `statusLineExporter`: a launch without the exporter never reports, so
+// it says why instead of "not reported yet" forever.
+const PROMPT_CACHE_NOT_COLLECTED = {
+  'collection-off':
+    'Not collected: Plan Usage was off when this session started. Turn it on in App Settings → Header & Panels, then start a new session; this one cannot pick it up.',
+  'workspace-statusline':
+    "Not collected: this workspace's .claude/settings.local.json sets its own statusLine, which Codeman never replaces.",
+  remote: 'Not collected for remote and Docker sessions.',
+};
+function formatPromptCacheStatus(cache, now, statusLine) {
+  if (PROMPT_CACHE_NOT_COLLECTED[statusLine]) return PROMPT_CACHE_NOT_COLLECTED[statusLine];
+  if (!cache || typeof cache.warm !== 'boolean') {
+    return 'Not reported yet. Claude Code 2.1.251 or newer reports it after the first response.';
+  }
+  const clock = (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const kTokens = (n) => (n >= 1000 ? `${Math.round(n / 1000)}k` : `${n}`);
+  const stake = cache.recacheTokensIfCold;
+  const tokens = Number.isFinite(stake) && stake > 0 ? kTokens(stake) : null;
+  const parts = [];
+  if (cache.warm && Number.isFinite(cache.expiresAt) && cache.expiresAt > now) {
+    const ttl = cache.ttl ? ` (${cache.ttl} cache)` : '';
+    parts.push(`Warm until ${clock(cache.expiresAt)}${ttl}.`);
+    if (tokens) parts.push(`About ${tokens} tokens would be re-cached if it goes cold.`);
+  } else {
+    parts.push(tokens ? `Cold. The next turn re-caches about ${tokens} tokens.` : 'Cold.');
+  }
+  // A compaction or a tool-result clearing leaves no re-cache stake to show until the next
+  // request; naming when it happened explains the gap. Never an alert.
+  if (Number.isFinite(cache.compactedAt)) parts.push(`Context compacted at ${clock(cache.compactedAt)}.`);
+  if (Number.isFinite(cache.hitRatio)) parts.push(`${Math.round(cache.hitRatio * 100)}% cache hit rate.`);
+  if (cache.lastMissCauses && cache.lastMissCauses.length) parts.push(`Last miss: ${cache.lastMissCauses.join(', ')}.`);
+  return parts.join(' ');
+}
+
+// Session Options → Respawn → Prompt cache → Status: the keep-warm line under the cache
+// readout, saying what the keep-warm service is doing (`session.keepWarm`, published by the
+// server on `session:keepWarm`), compact and dot-separated. Empty when there is nothing to
+// say: switched off, not published yet, or a launch without the statusLine exporter, where
+// the readout's own "Not collected" sentence on the same row already says why and
+// session-ui.js greys the switch. Pure: no DOM, `now` is passed in.
+function formatKeepWarmStatus(status, now, statusLine) {
+  if (PROMPT_CACHE_NOT_COLLECTED[statusLine]) return '';
+  if (!status || typeof status.state !== 'string') return '';
+  const clock = (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const keepWarmWindow = Number.isFinite(status.budgetEndsAt)
+    ? status.budgetEndsAt > now
+      ? `stops ${clock(status.budgetEndsAt)}`
+      : 'window closed'
+    : '';
+  // Keep-warm switched on or off after launch: the `idleCompaction` opt-out rides only a launch.
+  const idleCompaction =
+    status.enabled && status.idleCompactionOff === false
+      ? 'idle compaction on until relaunch'
+      : !status.enabled && status.idleCompactionOff === true
+        ? 'idle compaction off until relaunch'
+        : '';
+  let parts;
+  switch (status.state) {
+    case 'off': {
+      const reason = status.reason === 'off' ? '' : status.reason;
+      if (!reason && !idleCompaction) return '';
+      parts = ['off', reason, idleCompaction];
+      break;
+    }
+    case 'armed':
+      parts = [`next ${clock(status.nextCheckAt)}`, keepWarmWindow, idleCompaction];
+      break;
+    case 'waiting':
+      parts = ['waiting', status.reason || 'retrying', `retry ${clock(status.nextCheckAt)}`, keepWarmWindow, idleCompaction];
+      break;
+    case 'nudged':
+      parts = [`sent ${clock(status.lastNudgeAt)} (${status.nudges}\u00d7)`, keepWarmWindow, idleCompaction];
+      break;
+    default:
+      parts = ['stopped', status.reason || 'nothing to do', idleCompaction];
+  }
+  return `Keep-alive: ${parts.filter(Boolean).join(' \u00b7 ')}`;
+}
+
 // SSE staleness policy: is this stream a zombie?
 //
 // An EventSource that stops delivering does not always error. A proxy that
@@ -554,6 +832,15 @@ function computeConnectionLossUi(input) {
 //
 // Pure: no DOM, no timers, no side effects. `now` is passed in.
 const SSE_STALE_TIMEOUT_MS = 45000; // three missed 15s heartbeats
+
+// The watchdog above cannot see a connect attempt that never opens: an
+// EventSource whose request gets no response headers (a resumed phone on a
+// VPN, a proxy that accepted the socket and went silent) stays CONNECTING
+// without firing `open` or `error`, and its status is never 'connected'.
+// connectSSE() bounds each attempt by this much and then retries it through
+// the normal backoff. Generous next to a healthy open (well under a second)
+// so a slow link is not cut off mid-handshake.
+const SSE_CONNECT_TIMEOUT_MS = 15000;
 
 function computeSseStale(input) {
   const {
@@ -656,6 +943,244 @@ function compareSessionActivity(a, b) {
 /** Copy of `rows`, in overview order. Never sorts in place, so callers keep their array. */
 function sortSessionsByActivity(rows) {
   return (Array.isArray(rows) ? rows.slice() : []).sort(compareSessionActivity);
+}
+
+// Tab grouping by state (`tabArrangement: 'state'`, Discussion #426 option C).
+//
+// The tab list answers "who wants me?" the way the home screens do: a row (the
+// header strip) or a section (the flat side rail, the sidebar) per state, most
+// urgent on top. The states are the home screens' own, from
+// `_mobileOverviewState()` (mobile-overview.js); this only folds the six into
+// four groups a strip can hold:
+//
+//   needs   red: a permission or question dialog is blocking the agent. A
+//           failed session joins it, since it also needs a human and the home
+//           screens rank it right below.
+//   waiting yellow: the agent finished its turn and is waiting on you.
+//   working a turn is running.
+//   idle    everything quiet: idle, ended, and an agent that exited inside a
+//           live pane (#446), which may still read as working on screen but is
+//           running nothing. Web tabs close the group.
+//
+// Applied as the flex `order` property, never by reordering the DOM, the same
+// design as the sorted rail (`_tabRailSortOrder`, app.js): `#sessionTabs` stays
+// in `sessionOrder`, so Alt+N, drag-and-drop and the keyboard walk keep reading
+// the list they always read, and a state change moves one inline style instead
+// of rebuilding the strip. Each group owns a band of `TAB_TRIAGE_STRIDE` order
+// values: its heading at the start of the band, its rows after it, its web tabs
+// after those and the line break that ends the header row at the very end.
+//
+// Pure: no DOM, no `this`. Unit-tested in test/tab-triage.test.ts.
+// `quiet` groups keep their heading element (it anchors the row and holds the
+// row's place beside the brand) but draw no text: everything quiet is the
+// default state of a tab, so naming it only adds noise.
+const TAB_TRIAGE_GROUPS = [
+  { key: 'needs', label: 'Needs you' },
+  { key: 'waiting', label: 'Waiting' },
+  { key: 'working', label: 'Working' },
+  { key: 'idle', label: 'Idle', quiet: true },
+];
+
+const TAB_TRIAGE_GROUP_OF_STATE = {
+  needs: 'needs',
+  error: 'needs',
+  waiting: 'waiting',
+  working: 'working',
+  idle: 'idle',
+  done: 'idle',
+};
+
+const TAB_TRIAGE_STRIDE = 10000;
+/** Offset of a group's web tabs inside its band, past any plausible session count. */
+const TAB_TRIAGE_WEB_OFFSET = 5000;
+
+/**
+ * Which group a session belongs to.
+ * @param {string} state a `_mobileOverviewState()` value
+ * @param {boolean} exited the agent inside the pane has exited (`_mobileOverviewExit()` non-null)
+ * @returns {'needs'|'waiting'|'working'|'idle'}
+ */
+function tabTriageGroupFor(state, exited) {
+  const group = TAB_TRIAGE_GROUP_OF_STATE[state] || 'idle';
+  return exited && group === 'working' ? 'idle' : group;
+}
+
+/**
+ * Order values and visible groups for one pass.
+ *
+ * @param {Array<{id: string, state: string, exited?: boolean, pos?: number}>} rows
+ *   live sessions; `pos` ranks a row inside its group (tab order on the header
+ *   strip, the activity sort's position on a sorted rail). Rows without one keep
+ *   the order they were passed in.
+ * @param {Array<string>} webviewIds open web tabs, in their own tab order
+ * @param {{reverse?: boolean}} [options] `reverse` puts the groups the other
+ *   way up (`tabStateOrder: 'urgent-last'`): idle first, needs you last, for a
+ *   strip read from the bottom. Rows inside a group keep their order.
+ * @returns {{
+ *   order: Map<string, number>,
+ *   webOrder: Map<string, number>,
+ *   groups: Array<{key: string, label: string, quiet: boolean, count: number, headOrder: number, breakOrder: number}>
+ * }} `groups` lists only the non-empty groups, in display order (most urgent
+ *   first, or last with `reverse`).
+ */
+function computeTabTriageLayout(rows, webviewIds, options) {
+  const list = Array.isArray(rows) ? rows : [];
+  const webs = Array.isArray(webviewIds) ? webviewIds : [];
+  const sequence = options && options.reverse ? TAB_TRIAGE_GROUPS.slice().reverse() : TAB_TRIAGE_GROUPS;
+  const baseOf = {};
+  const counts = {};
+  sequence.forEach((group, i) => {
+    baseOf[group.key] = (i + 1) * TAB_TRIAGE_STRIDE;
+    counts[group.key] = 0;
+  });
+
+  const placed = list
+    .filter((row) => row && typeof row.id === 'string')
+    .map((row, i) => ({
+      id: row.id,
+      group: tabTriageGroupFor(row.state, !!row.exited),
+      pos: Number.isFinite(row.pos) ? row.pos : i,
+      index: i,
+    }));
+  const byGroup = {};
+  for (const row of placed) (byGroup[row.group] = byGroup[row.group] || []).push(row);
+
+  const order = new Map();
+  for (const key of Object.keys(byGroup)) {
+    // Stable: equal positions keep the order the caller passed.
+    byGroup[key].sort((a, b) => a.pos - b.pos || a.index - b.index);
+    byGroup[key].forEach((row, i) => order.set(row.id, baseOf[key] + 1 + i));
+    counts[key] = byGroup[key].length;
+  }
+
+  const webOrder = new Map();
+  webs.forEach((id, i) => {
+    if (typeof id === 'string' && id) webOrder.set(id, baseOf.idle + TAB_TRIAGE_WEB_OFFSET + i);
+  });
+  counts.idle += webOrder.size;
+
+  const groups = sequence.filter((group) => counts[group.key] > 0).map((group) => ({
+    key: group.key,
+    label: group.label,
+    quiet: !!group.quiet,
+    count: counts[group.key],
+    headOrder: baseOf[group.key],
+    breakOrder: baseOf[group.key] + TAB_TRIAGE_STRIDE - 1,
+  }));
+
+  return { order, webOrder, groups };
+}
+
+// Tab clusters by case (`tabArrangement: 'case'`, Discussion #426 option A).
+//
+// One cluster per case, in the order the case first appears in the tab order,
+// so the strip keeps the user's arrangement at the case level. Inside a cluster
+// with two or more tabs the `-<case>` part of a generated `w<n>-<case>` name is
+// redundant and is hidden (`tabClusterNameSplit()`), which is what lets 18 tabs
+// read as 7 things. A case with one tab is still its own (unlabelled) box.
+//
+// Cluster colours come from the session palette (`--session-<colour>`) by a
+// stable hash of the case key, so a case keeps its colour across reloads and
+// devices without anything being stored.
+//
+// Pure: no DOM, no `this`. Unit-tested in test/tab-clusters.test.ts.
+const TAB_CLUSTER_COLORS = ['blue', 'green', 'purple', 'orange', 'pink', 'yellow', 'red'];
+
+/** Palette colour for a cluster key: a djb2 hash, so the same key always gets the same colour. */
+function tabClusterColorFor(key) {
+  const text = String(key || '');
+  let hash = 5381;
+  for (let i = 0; i < text.length; i++) hash = ((hash << 5) + hash + text.charCodeAt(i)) | 0;
+  return TAB_CLUSTER_COLORS[Math.abs(hash) % TAB_CLUSTER_COLORS.length];
+}
+
+/**
+ * Group tabs by case.
+ * @param {Array<{id: string, key: string, label: string}>} rows live sessions in
+ *   tab order; `key` identifies the case (its path), `label` names it
+ * @returns {Array<{key: string, label: string, color: string, ids: string[]}>}
+ *   clusters in first-appearance order, members in tab order
+ */
+function computeTabClusters(rows) {
+  const clusters = [];
+  const byKey = new Map();
+  for (const row of Array.isArray(rows) ? rows : []) {
+    if (!row || typeof row.id !== 'string') continue;
+    const key = typeof row.key === 'string' && row.key ? row.key : `session:${row.id}`;
+    let cluster = byKey.get(key);
+    if (!cluster) {
+      cluster = { key, label: typeof row.label === 'string' ? row.label : '', color: tabClusterColorFor(key), ids: [] };
+      byKey.set(key, cluster);
+      clusters.push(cluster);
+    }
+    cluster.ids.push(row.id);
+  }
+  return clusters;
+}
+
+/**
+ * Split a generated `w<n>-<case>` / `s<n>-<case>` name into the part a cluster
+ * shows and the case suffix it hides, or null when the name is anything else
+ * (a custom name, a described `w3-x: fix login`, another case's name). Case is
+ * compared case-insensitively; the hidden part keeps its original spelling so
+ * the full name is still in the DOM.
+ * @returns {{shown: string, hidden: string}|null}
+ */
+function tabClusterNameSplit(name, label) {
+  if (typeof name !== 'string' || typeof label !== 'string' || !label) return null;
+  const match = name.match(/^([ws]\d+)(-.+)$/);
+  if (!match) return null;
+  return match[2].slice(1).toLowerCase() === label.toLowerCase() ? { shown: match[1], hidden: match[2] } : null;
+}
+
+/**
+ * Session-list search: the vertical rail's search box and the sidebar's filter
+ * box. Trimmed, case-insensitive substring; a whitespace-only query is no query.
+ * Lower-cased with toLowerCase(), never toLocaleLowerCase(): under a Turkish or
+ * Azeri browser locale "API" lowers to "apı" and a search for "api" would miss it.
+ * @param {unknown} query
+ * @returns {string} the needle, '' when there is nothing to search for
+ */
+function tabSearchNeedle(query) {
+  return typeof query === 'string' ? query.trim().toLowerCase() : '';
+}
+
+/**
+ * Which rows a search hides. Pure: the caller reads the rows off the list it
+ * rendered and applies the result as classes, so the list itself (grouping,
+ * order, Alt+N badges) is never rebuilt or reordered by a search.
+ *
+ * A row flagged `keep: true` is never hidden, matching or not (the caller keeps
+ * a tab with an alert on screen: a prompt waiting on you is never hidden by a
+ * view filter). It counts toward its section, so its group stays on screen with
+ * it, but not toward `matchCount`.
+ *
+ * @param {Array<{key: unknown, text: string, section?: unknown, keep?: boolean}>} rows
+ *   in list order; `section` is the row's group or case box, null/undefined for none.
+ * @param {unknown} query
+ * @returns {{active: boolean, hidden: Set<unknown>, counts: Map<unknown, number>, matchCount: number}}
+ *   `counts` is the rows left showing per section (kept rows included), every
+ *   section seen, an emptied one as 0, so it can be hidden; `matchCount` is the
+ *   number of rows whose TEXT matched, so it can be 0 above a lone kept row.
+ */
+function filterTabSearchRows(rows, query) {
+  const needle = tabSearchNeedle(query);
+  const hidden = new Set();
+  const counts = new Map();
+  let matchCount = 0;
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const hasSection = row.section !== null && row.section !== undefined;
+    if (hasSection && !counts.has(row.section)) counts.set(row.section, 0);
+    const text = typeof row.text === 'string' ? row.text.toLowerCase() : '';
+    const matches = !needle || text.includes(needle);
+    if (!matches && row.keep !== true) {
+      hidden.add(row.key);
+      continue;
+    }
+    if (matches) matchCount++;
+    if (hasSection) counts.set(row.section, counts.get(row.section) + 1);
+  }
+  return { active: needle.length > 0, hidden, counts, matchCount };
 }
 
 // Terminal font stack — the single source for every xterm surface (the main
@@ -939,6 +1464,63 @@ function cleanCopiedSelection(text, options) {
   return lines.join('\n');
 }
 
+// ── Markdown heading anchors ────────────────────────────────────────────────
+// marked emits no `id` on headings, so a rendered document's own `[Install](#installation)` links had
+// nothing to jump to. And with `<base href="/">` a bare `#installation` href points at the dashboard's
+// root, not at the page, so letting the browser follow it navigates the app away. The click delegate
+// (`_bindResponseViewerInteractions`) therefore resolves in-document links itself, with the helpers
+// below. Anchors are `data-md-anchor` attributes, NOT `id`s: a heading titled "Settings" must not claim
+// the id of an element in the app's own DOM, and the lookup is scoped to the rendered document.
+
+/**
+ * GitHub's heading slug: lower-cased, anything that is not a letter, mark, number, `_`, `-` or space
+ * dropped, each space a hyphen (`Why `codeman`? → `why-codeman`, `Über uns` → `über-uns`).
+ */
+function markdownHeadingSlug(text) {
+  return String(text ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{M}\p{N}_\- ]/gu, '')
+    .replace(/ /g, '-');
+}
+
+/** Give every h1..h6 under `root` its slug in `data-md-anchor`; a repeat gets `-1`, `-2`, ... as on GitHub. Idempotent. */
+function assignMarkdownHeadingAnchors(root) {
+  const used = new Set();
+  for (const heading of root.querySelectorAll('h1, h2, h3, h4, h5, h6')) {
+    const base = markdownHeadingSlug(heading.textContent);
+    let slug = base;
+    for (let n = 1; used.has(slug); n += 1) slug = `${base}-${n}`;
+    used.add(slug);
+    heading.dataset.mdAnchor = slug;
+  }
+}
+
+/**
+ * The element inside `root` that an in-document link (`#installation`, `#Installation`, `#my%20title`)
+ * points at, or null. An empty fragment (`#`) means the top of the document. Headings are matched by
+ * slug, then a heading the author wrote an explicit `<a id="...">`/`id` for, looked up INSIDE `root`
+ * only (never `document.getElementById`, which could find an app element of the same name).
+ */
+function findMarkdownAnchorTarget(root, href) {
+  let fragment = String(href ?? '').replace(/^#/, '');
+  try {
+    fragment = decodeURIComponent(fragment);
+  } catch {
+    /* a malformed escape: use it as written */
+  }
+  if (!fragment) return root;
+  assignMarkdownHeadingAnchors(root);
+  const wanted = [fragment.toLowerCase(), markdownHeadingSlug(fragment)];
+  for (const heading of root.querySelectorAll('[data-md-anchor]')) {
+    if (wanted.includes(heading.dataset.mdAnchor)) return heading;
+  }
+  for (const el of root.querySelectorAll('[id]')) {
+    if (el.id === fragment) return el;
+  }
+  return null;
+}
+
 if (typeof window !== 'undefined') {
   window.WEBGL_FALLBACK = WEBGL_FALLBACK;
   window.evaluateWebGLLongTaskTrip = evaluateWebGLLongTaskTrip;
@@ -961,12 +1543,13 @@ if (typeof window !== 'undefined') {
     plan: planWsReconnect,
   };
   window.CodemanLineage = {
-    computePath: computeLineagePath,
-    DIP_MIN_PX: LINEAGE_DIP_MIN_PX,
-    DIP_MAX_PX: LINEAGE_DIP_MAX_PX,
-    SIBLING_STEP_PX: LINEAGE_SIBLING_STEP_PX,
+    computeTree: computeLineageTree,
+    computeRows: computeLineageRows,
+    CORNER_RADIUS_PX: LINEAGE_CORNER_RADIUS_PX,
+    LANE_STEP_PX: LINEAGE_LANE_STEP_PX,
+    MAX_LANES: LINEAGE_MAX_LANES,
+    SPINE_INSET_PX: LINEAGE_SPINE_INSET_PX,
     VERTICAL_TRACK_INSET_PX: LINEAGE_VERTICAL_TRACK_INSET_PX,
-    VERTICAL_SIBLING_STEP_PX: LINEAGE_VERTICAL_SIBLING_STEP_PX,
     COLORS: LINEAGE_COLORS,
   };
   window.CodemanConnectionLoss = {
@@ -976,12 +1559,34 @@ if (typeof window !== 'undefined') {
   window.CodemanSseStale = {
     compute: computeSseStale,
     TIMEOUT_MS: SSE_STALE_TIMEOUT_MS,
+    CONNECT_TIMEOUT_MS: SSE_CONNECT_TIMEOUT_MS,
+  };
+  window.CodemanPromptCache = {
+    format: formatPromptCacheStatus,
+    formatKeepWarm: formatKeepWarmStatus,
+    keepWarmUnavailable: (statusLine) => !!PROMPT_CACHE_NOT_COLLECTED[statusLine],
   };
   window.CodemanSessionOrder = {
     RANK: SESSION_ACTIVITY_RANK,
     anchor: sessionActivityAnchor,
     compare: compareSessionActivity,
     sort: sortSessionsByActivity,
+  };
+  window.CodemanTabClusters = {
+    COLORS: TAB_CLUSTER_COLORS,
+    colorFor: tabClusterColorFor,
+    compute: computeTabClusters,
+    nameSplit: tabClusterNameSplit,
+  };
+  window.CodemanTabTriage = {
+    GROUPS: TAB_TRIAGE_GROUPS,
+    STRIDE: TAB_TRIAGE_STRIDE,
+    groupFor: tabTriageGroupFor,
+    layout: computeTabTriageLayout,
+  };
+  window.CodemanTabSearch = {
+    needle: tabSearchNeedle,
+    filter: filterTabSearchRows,
   };
   window.CodemanInputLimit = {
     FRAME_MAX_CHARS: INPUT_FRAME_MAX_CHARS,
@@ -994,6 +1599,11 @@ if (typeof window !== 'undefined') {
   };
   window.CodemanCopySelection = {
     clean: cleanCopiedSelection,
+  };
+  window.CodemanMarkdownAnchors = {
+    slug: markdownHeadingSlug,
+    assign: assignMarkdownHeadingAnchors,
+    find: findMarkdownAnchorTarget,
   };
   window.CodemanTerminalFont = {
     DEFAULT_STACK: TERMINAL_FONT_DEFAULT_STACK,
@@ -1015,6 +1625,15 @@ function scheduleBackground(fn) {
 // DEC mode 2026 marker stripping — xterm.js 6.0 handles sync natively,
 // but server-sent terminal buffers may still contain markers from Claude CLI.
 const DEC_SYNC_STRIP_RE = /\x1b\[\?2026[hl]/g;
+
+// OSC 52 clipboard writes stripping — a replay re-feeds the raw byte history, and
+// xterm parses it after chunkedTerminalWrite has already released the load
+// gate, so an OSC 52 left in would re-copy old text on every tab switch. The
+// 8-bit C1 forms (OSC \x9d, ST \x9c) too: xterm.js still parses those.
+const OSC52_STRIP_RE = /(?:\x1b\]|\x9d)52;[^\x07\x1b\x9c]*(?:\x07|\x1b\\|\x9c)/g;
+// The same OSC 52 text arriving again within this window is one copy delivered
+// several ways (direct, tmux load-buffer -w, tmux set-clipboard forwarding).
+const OSC52_DEDUPE_MS = 1000;
 
 // Built-in respawn configuration presets
 const BUILTIN_RESPAWN_PRESETS = [
@@ -1141,6 +1760,8 @@ const SSE_EVENTS = {
   SESSION_INTERACTIVE: 'session:interactive',
   SESSION_RUNNING: 'session:running',
   SESSION_STATUS_TELEMETRY: 'session:statusTelemetry',
+  SESSION_PROMPT_CACHE: 'session:promptCache',
+  SESSION_KEEP_WARM: 'session:keepWarm',
 
   // Scheduled runs
   SCHEDULED_CREATED: 'scheduled:created',
@@ -1308,6 +1929,7 @@ const SSE_EVENTS = {
   CASE_CREATED: 'case:created',
   CASE_LINKED: 'case:linked',
   CASE_DELETED: 'case:deleted',
+  CASE_RENAMED: 'case:renamed',
   CASE_ORDER_CHANGED: 'case:order-changed',
   DOCKER_EXPORT_COMPLETE: 'docker:exportComplete',
   DOCKER_EXPORT_FAILED: 'docker:exportFailed',
@@ -1369,7 +1991,10 @@ function escapeHtml(text) {
 function formatHistoryBytes(bytes) {
   const n = typeof bytes === 'number' && isFinite(bytes) && bytes > 0 ? bytes : 0;
   if (n < 1024) return 'less than 1 KB';
-  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  // Switch on the ROUNDED value: a 1 MiB tail cut back to a line boundary is
+  // just under 1 MiB and used to print as "1024 KB".
+  const kb = Math.round(n / 1024);
+  if (kb < 1024) return `${kb} KB`;
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
@@ -1383,12 +2008,27 @@ function formatHistoryBytes(bytes) {
  *   - atCeiling:   the FULL capture itself hit the byte ceiling
  *   - exhausted:   a full pull was refused as a downgrade, so this is all there is
  *
+ * ⚠️ `truncated` measures the server's BYTE stream, not history a pull can
+ * return. `paneHistoryLines` (tmux `#{history_size}`) is the latter: 0 means the
+ * pane keeps no scrollback at all (a fullscreen CLI in the alternate screen,
+ * whose transcript lives in the CLI and is scrolled there), so the bytes a tail
+ * cut dropped are old repaint frames that `full=1` cannot bring back. Measured
+ * on live fullscreen claude panes: "4.8 MB more" was ~33 copies of one frame,
+ * and the button only ever ended in the downgrade refusal. Nothing to offer,
+ * nothing to say. Absent means unknown and keeps the byte-based behaviour.
+ *
  * @param {{truncated?: boolean, reason?: string|null, source?: string|null,
- *          fullSize?: number, retainedBytes?: number, exhausted?: boolean}} state
+ *          fullSize?: number, retainedBytes?: number, exhausted?: boolean,
+ *          paneHistoryLines?: number|null, historyLinesCut?: boolean}} state
  * @returns {{visible: boolean, message: string, canLoadMore: boolean}}
  */
 function computeHistoryTruncationNotice(state = {}) {
   if (!state.truncated) return { visible: false, message: '', canLoadMore: false };
+  const historyLines =
+    typeof state.paneHistoryLines === 'number' && Number.isFinite(state.paneHistoryLines)
+      ? Math.max(0, state.paneHistoryLines)
+      : null;
+  if (historyLines === 0) return { visible: false, message: '', canLoadMore: false };
 
   const retained = Math.max(0, state.retainedBytes || 0);
   const dropped = Math.max(0, (state.fullSize || 0) - retained);
@@ -1411,9 +2051,22 @@ function computeHistoryTruncationNotice(state = {}) {
       canLoadMore: false,
     };
   }
+  // Name what a pull can actually return when the server said: the byte gap
+  // counts repaints and redraw bloat, and overstates it many times over.
+  // Without that count, a `lines=`-bounded capture is cut by tmux before any
+  // bytes are counted, so its fullSize is the window itself and the remainder's
+  // size is unknown: say that more exists without inventing an amount. That
+  // holds even when `tail` also cut bytes off the window (`dropped`), since tmux
+  // still holds more beyond it (`historyLinesCut`, set by the server).
+  const remainder =
+    dropped > 0 && !state.historyLinesCut ? `${formatHistoryBytes(dropped)} more` : 'Earlier output';
+  const more =
+    historyLines !== null
+      ? `${historyLines.toLocaleString('en-US')} ${historyLines === 1 ? 'line of scrollback is' : 'lines of scrollback are'} retained.`
+      : `${remainder} may still be retained.`;
   return {
     visible: true,
-    message: `Showing the most recent ${shown} of this session. ${formatHistoryBytes(dropped)} more may still be retained.`,
+    message: `Showing the most recent ${shown} of this session. ${more}`,
     canLoadMore: true,
   };
 }
@@ -1458,7 +2111,7 @@ function computeRewriteScrollLine(input) {
  * a `/g` regex, so {@link absoluteFilePathPattern} mints a fresh one per call.
  */
 const FILE_PATH_LINK_PATTERN =
-  /(\/(?:home|Users|tmp|var|private|opt|mnt|srv|media|data|workspace)\/[^\s"'<>|;&\n\x00-\x1f]*\.(?:log|txt|json|md|ya?ml|csv|xml|sh|py|tsx|ts|jsx|js|mjs|cjs|css|html|toml|ini|sql|png|jpe?g|gif|webp|bmp|svg|pdf|docx|pptx|mp4|webm|mov|mp3|wav))\b/g;
+  /(\/(?:home|Users|tmp|var|private|opt|mnt|srv|media|data|workspace)\/[^\s"'<>|;&\n\x00-\x1f]*\.(?:log|txt|json|markdown|md|ya?ml|csv|tsv|xml|sh|py|tsx|ts|jsx|js|mjs|cjs|css|html?|toml|ini|conf|sql|diff|patch|png|jpe?g|gif|webp|avif|bmp|ico|svg|pdf|docx|pptx|xlsx|zip|mp4|webm|mov|m4v|ogv|mp3|wav))\b/g;
 
 /** A fresh, zero-state instance of {@link FILE_PATH_LINK_PATTERN}. */
 function absoluteFilePathPattern() {
@@ -1470,19 +2123,347 @@ function absoluteFilePathPattern() {
  * points at goes to the tail/log viewer, which is the right home for a growing
  * text file and the wrong one for bytes (tailing a PNG shows binary noise).
  *
+ * Markdown is here too (owner decision 2026-10-13): an agent's `.md` is a
+ * document to read, so the preview renders it (its MD pill gives the source)
+ * instead of the log viewer streaming it as raw text. Other text (.log, .txt,
+ * .json, code) keeps the log viewer, which follows a file still being written.
+ *
  * The media entries mirror VIDEO_ATTACHMENT_EXTENSIONS/AUDIO_ATTACHMENT_EXTENSIONS
  * (src/attachment-registry.ts, the single source) — they diverged once and an
  * in-workspace `.m4a` opened as binary noise in the log viewer while the same
  * file in /tmp played fine. test/media-extension-parity.test.ts pins the sync.
  */
 const FILE_PREVIEW_EXTENSIONS = new Set(
-  ('png jpg jpeg gif webp bmp svg pdf docx pptx mp4 webm mov m4v ogv mp3 wav ogg oga m4a aac flac opus').split(' ')
+  ('png jpg jpeg gif webp avif bmp ico svg pdf docx pptx xlsx mp4 webm mov m4v ogv mp3 wav ogg oga m4a aac flac opus md markdown').split(' ')
 );
 
 /** Whether a path's extension is one {@link FILE_PREVIEW_EXTENSIONS} covers. */
 function previewsInFileViewer(filePath) {
   const ext = String(filePath || '').split('.').pop().toLowerCase();
   return FILE_PREVIEW_EXTENSIONS.has(ext);
+}
+
+/**
+ * Home-relative and relative file paths: `~/repos/x/garage.png` (how Claude Code
+ * echoes an attached image), `builds/captures/shot.png`, `./a.md`, `../b.json`,
+ * or a bare `look_montage.png`. Same extension list and body as
+ * {@link FILE_PATH_LINK_PATTERN} (test/link-provider-regex.test.ts pins the two
+ * equal).
+ *
+ * Without a known root to anchor on, the START is what has to be unambiguous:
+ * group 1 is the boundary in front of the path (line start, whitespace, a quote,
+ * an opening bracket, `=`, `,`, `>`), so a match can never begin in the middle of
+ * a word, of an absolute path (`/nix/store/x.png` is not `nix/store/x.png`) or of
+ * a URL. The path itself is group 2. Its first character is never `/`: absolute
+ * paths belong to the rooted pattern, which deliberately leaves `/etc` out. A
+ * token containing `://` is a URL, never a path. Brackets, `=` and `,` end a
+ * relative path (unlike a rooted one): `(garage.png)` and `OUT=shots/a.png` link
+ * the file, not the punctuation around it.
+ *
+ * ⚠ Like its sibling, never share an instance (`lastIndex`): use
+ * {@link findFilePathLinks}.
+ */
+const RELATIVE_FILE_PATH_LINK_PATTERN =
+  /(^|[\s"'`(\[{<>=,])((?![^\s"'`<>|;&()[\]{}=,\n\x00-\x1f]*:\/\/)(?:~\/|[^\s"'`<>|;&()[\]{}=,\/~\n\x00-\x1f])[^\s"'`<>|;&()[\]{}=,\n\x00-\x1f]*\.(?:log|txt|json|markdown|md|ya?ml|csv|tsv|xml|sh|py|tsx|ts|jsx|js|mjs|cjs|css|html?|toml|ini|conf|sql|diff|patch|png|jpe?g|gif|webp|avif|bmp|ico|svg|pdf|docx|pptx|xlsx|zip|mp4|webm|mov|m4v|ogv|mp3|wav))\b/g;
+
+/** The `(?:log|txt|…)` extension group, read off the rooted pattern so it cannot drift. */
+const FILE_LINK_EXTENSION_GROUP = /\\\.(\(\?:[^()]*\))\)\\b$/.exec(FILE_PATH_LINK_PATTERN.source)[1];
+
+/**
+ * Every linkable file path in `text`, sorted by position. Spaced candidates
+ * reserve their whole span first, including paths bounded by parentheses, even when unlinkable; rooted, `~/`, relative
+ * and folder detectors then skip reserved spans, earlier matches and URLs.
+ *
+ * The one entry point for both consumers (terminal link provider, response
+ * viewer). The viewer carries a leading bold label into the text it passes
+ * (spacedFilePathOnLine judges it, as for the same line in the terminal) and
+ * reads a text node that follows another inline element as mid-line; paths
+ * split across inline elements are still detected per text node.
+ *
+ * @param {string} text
+ * @returns {Array<{path: string, index: number, folder?: true}>} `index` is where `path` starts in
+ *   `text`; `folder` marks a folder path (folder grid) rather than a file.
+ */
+function findFilePathLinks(text) {
+  const value = String(text || '');
+  const found = [];
+  const overlaps = (index, length) => found.some((f) => index < f.index + f.path.length && f.index < index + length);
+  // Web URLs are never cut into a path: `https://x.io/a/home/b.png` and
+  // `?img=b.png` belong to the URL link, not to a second, overlapping file link.
+  // (`file:///home/x.png` is not one of them: its path is the file.)
+  const urls = [];
+  const webUrlPattern = /\bhttps?:\/\/\S+/gi;
+  let match;
+  while ((match = webUrlPattern.exec(value)) !== null) urls.push({ index: match.index, path: match[0] });
+  const inUrl = (index, length) => urls.some((u) => index < u.index + u.path.length && u.index < index + length);
+
+  // A path with spaces is taken whole, or the span it covers links nothing
+  // (spacedFilePathOnLine). Either way no detector below may cut a fragment out of it.
+  const reserved = [];
+  const isReserved = (index, length) =>
+    reserved.some((r) => index < r.index + r.path.length && r.index < index + length);
+  const reserve = (spaced, index) => {
+    if (!spaced) return;
+    const start = index + spaced.index;
+    if (inUrl(start, spaced.path.length) || isReserved(start, spaced.path.length)) return;
+    reserved.push({ index: start, path: spaced.path });
+    if (spaced.link) found.push({ path: spaced.path, index: start });
+  };
+  let lineStart = 0;
+  for (const line of value.split('\n')) {
+    reserve(spacedFilePathOnLine(line), lineStart);
+    // Parentheses bound an inline path just as a whole line bounds a standalone path.
+    const parenthesised = /\(([^()\r\n]{1,1000})\)/g;
+    while ((match = parenthesised.exec(line)) !== null) {
+      if (opensBashCall(line, match.index)) continue;
+      reserve(spacedFilePathOnLine(match[1], { parenthesised: true }), lineStart + match.index + 1);
+    }
+    lineStart += line.length + 1;
+  }
+  const absolute = absoluteFilePathPattern();
+  while ((match = absolute.exec(value)) !== null) {
+    if (!inUrl(match.index, match[1].length) && !isReserved(match.index, match[1].length)) {
+      found.push({ path: match[1], index: match.index });
+    }
+  }
+  const relative = new RegExp(RELATIVE_FILE_PATH_LINK_PATTERN.source, 'g');
+  while ((match = relative.exec(value)) !== null) {
+    const path = match[2];
+    const index = match.index + match[1].length;
+    if (overlaps(index, path.length) || inUrl(index, path.length) || isReserved(index, path.length)) continue;
+    found.push({ path, index });
+  }
+  const folders = new RegExp(FOLDER_PATH_LINK_PATTERN.source, 'g');
+  while ((match = folders.exec(value)) !== null) {
+    const path = folderLinkPath(match[2]);
+    const index = match.index + match[1].length;
+    if (!path || overlaps(index, path.length) || inUrl(index, path.length) || isReserved(index, path.length)) continue;
+    found.push({ path, index, folder: true });
+  }
+  return found.sort((a, b) => a.index - b.index);
+}
+
+/** Labels that explicitly identify a path, for {@link spacedFilePathOnLine}. */
+const SPACED_FILE_PATH_LABEL_PATTERN =
+  /^(?:path|files?|saved (?:to|as)|wrote|written to|output|created|location|attachment):[ \t]*$/i;
+
+/**
+ * True when the `(` at `open` starts a `Bash(` tool row, which holds a command rather than
+ * a path: `Bash(/tmp/a.out input.txt)` is a program and its argument, so the parentheses do
+ * not bound one spaced path and the ordinary detectors keep the row. Only `Bash(`: the path
+ * tools (`Read(`, `Update(`, `Write(`) do hold a path, spaces included.
+ *
+ * @param {string} text
+ * @param {number} open Index of the `(`.
+ * @returns {boolean}
+ */
+function opensBashCall(text, open) {
+  return /(?:^|\W)Bash\($/.test(text.slice(Math.max(0, open - 5), open + 1));
+}
+
+/**
+ * A file path WITH SPACES on one line, or null.
+ *
+ * Every path pattern ends a path at whitespace, so `/mnt/c/OneDrive - Contoso/a.docx`
+ * linked `/mnt/c/OneDrive` plus a relative `Contoso/a.docx`, two links to the
+ * wrong targets. A space is only safe inside a path where the line itself bounds
+ * the path or a parenthesised group bounds it, so a spaced path is recognised in these shapes:
+ *
+ *   Updated (/mnt/c/My Docs/report.docx)   inside parentheses in prose
+ *   /mnt/c/My Docs/report.docx              the whole line is the path
+ *   - /mnt/c/My Docs/report.docx            after a list marker (`-`, `*`, `•`, `1.`, `2)`)
+ *   Saved to: 03 Attachments/Build SIPOC Design/plan.pptx      after a path label (SPACED_FILE_PATH_LABEL_PATTERN)
+ *
+ * An absolute path may stand alone or follow a marker. Any label, before an
+ * absolute, relative or `~/` path, must be an explicit path label
+ * (SPACED_FILE_PATH_LABEL_PATTERN), with an optional marker before it: generic
+ * labels (`Error:`, `Note:`) and bare bullets also introduce prose, so a relative
+ * path needs a path label to be taken spaced. One trailing sentence mark is left
+ * out, and a leading run of `./` or `../` is not a segment. The candidate must read as ONE path:
+ * it ends on a known extension, a rooted one has a directory before its first
+ * space, no earlier word holds an extension (`a.md,`, `a.ts#L12`) or ends in `/`,
+ * and none holds a `:` and a digit (`a.ts:42`, a line suffix ends the path). Later words cannot start a new
+ * `/`, `~/`, `./` or `../` path, no earlier word ends in `:` (or `,` inside parentheses), is an arrow or has
+ * no letter or digit (a prompt glyph such as `❯` or `$`; a bare `-` is kept), and
+ * a run of spaces (a column gap) is refused, so two paths on a line are never
+ * merged. A relative candidate whose only `/` word is its last is prose after the
+ * label (`Wrote: 120 lines to src/foo.ts`) and is left alone, which also splits
+ * `Saved to: My Docs/plan.md` as master does. An earlier word that is a lowercase
+ * connective or verb (SPACED_PATH_PROSE_WORD: `and`, `in`, `has`, `contains`, ...)
+ * or a bare `=` makes the candidate a sentence (`/tmp/out has the logs in run.log`),
+ * so a name such as `Pros and Cons.md` splits as master does. A command line is
+ * refused: an executable under `bin/`, `.bin/`, `scripts/` or `tools/` as the
+ * first word, any earlier word ending in `$` (a shell prompt, `/home/me/proj$ cat a.md`,
+ * `/mnt/c/My Docs$ ls a.md`), or any `-x`/`--x` flag word.
+ *
+ * A candidate that is one path but not a linkable one (an unknown root such as
+ * `/etc`, a `.`/`..`/empty segment) comes back with `link: false` when its last
+ * word still holds a `/`: its span links nothing, rather than the fragment after
+ * its last space. Otherwise (`/usr/bin/env node build.js`) the line is left to
+ * the ordinary detectors.
+ *
+ * Linear: one bounded prefix match, then string scans.
+ *
+ * @param {string} line One line, no newline.
+ * @param {{parenthesised?: boolean}} [options] Refuse comma-separated lists inside parentheses only.
+ * @returns {{path: string, index: number, link: boolean} | null}
+ */
+function spacedFilePathOnLine(line, options = {}) {
+  const text = String(line || '');
+  const prefix = /^[ \t]*((?:\d{1,3}[.)]|[-*•])[ \t]+)?((?:[A-Za-z][\w-]{0,30}(?: [\w-]{1,30}){0,3}):[ \t]+)?/.exec(text);
+  const index = prefix[0].length;
+  const path = text.slice(index).trimEnd().replace(/[.,;:!?]$/, '');
+  if (!path.includes(' ') || !path.includes('/') || path.length > 1000) return null;
+  // After a label, only a path label introduces a path; with no label, only an
+  // absolute path may stand alone. `Error: /a/b contains c.md` is prose.
+  if (prefix[2] ? !SPACED_FILE_PATH_LABEL_PATTERN.test(prefix[2]) : !path.startsWith('/')) return null;
+  if (!PATH_TOKEN_ENDS_WITH_EXTENSION.test(path)) return null;
+  // A run of spaces is a column gap (`git status`, `ls -l`), not a name.
+  if (/[\t"'`<>|;&\x00-\x1f\\]/.test(path) || path.includes('://') || path.includes('  ')) return null;
+  const words = path.split(' ');
+  // A rooted candidate must have a directory before its first space: `/usr/bin/env node a.js`
+  // or `/review the changes in src/a.ts` is a command, not a spaced path.
+  if (path.startsWith('/') && !/^\/[^/]+\//.test(words[0])) return null;
+  // A command whose executable sits under a known root (`/opt/homebrew/bin/node a.js`,
+  // `/home/me/proj/node_modules/.bin/tsc -p tsconfig.json`, `/home/me/proj/scripts/deploy prod.yml`)
+  // is not a path either.
+  if (/\/(?:\.?bin|scripts?|tools)\/[^/]+$/.test(words[0]) || words.some((word) => /^-{1,2}\w/.test(word))) {
+    return null;
+  }
+  for (const word of words.slice(0, -1)) {
+    if (word.endsWith('/') || word.endsWith(':') || /^(?:—|–|→|=>|->|<-|=)$/.test(word)) return null;
+    if (options.parenthesised && word.endsWith(',')) return null;
+    // A shell prompt that prints its working directory in full (`/home/me/proj$ cat
+    // notes.md`; WSL's `/mnt/c/...` is outside `$HOME`) is a command line too, and so is
+    // one whose directory has a space in it (`/mnt/c/My Docs$ ls notes.md`): the `$`
+    // can end any earlier word, not only the first.
+    if (word.endsWith('$')) return null;
+    // A word with no letter or digit (a prompt glyph `❯` or `$`, a `✓`) is never
+    // part of a file name, apart from a bare `-` (`OneDrive - Contoso`).
+    if (word !== '-' && !/[\p{L}\p{N}]/u.test(word)) return null;
+    // `a.ts:42` (grep -n, compiler output): the path already ended at the line suffix.
+    if (/:\d/.test(word)) return null;
+    // An extension anywhere in an earlier word (`a.md,`, `a.ts#L12`) ends a path there.
+    if (PATH_TOKEN_HAS_EXTENSION.test(word)) return null;
+    // A connective or verb joins a path to prose (`/tmp/out has the logs in run.log`,
+    // `Files: src/components and utils/x.ts`), so the candidate is a sentence.
+    if (SPACED_PATH_PROSE_WORD.test(word)) return null;
+  }
+  if (words.slice(1).some((word) => /^(?:\/|~\/|\.{1,2}\/)/.test(word))) return null;
+  const rooted = SPACED_PATH_ROOT.test(path) || path.startsWith('~/');
+  const segments = path.replace(/^(?:~?\/|(?:\.\.?\/)+)/, '').split('/');
+  const link = (rooted || !path.startsWith('/')) && segments.every((seg) => seg && seg !== '.' && seg !== '..');
+  // A path label vouches that a path follows, not for the words before it: when
+  // only the last word holds a `/` (`Wrote: 120 lines to src/foo.ts`), the spaces
+  // are prose, so a relative candidate is left to the ordinary detectors.
+  const firstSlash = words.findIndex((word) => word.includes('/'));
+  if (link && firstSlash === words.length - 1 && !path.startsWith('/')) return null;
+  // Reserve an unlinkable span only when it still reads as a path to its end;
+  // otherwise leave the line to the ordinary detectors.
+  if (!link && !words[words.length - 1].includes('/')) return null;
+  return { path, index, link };
+}
+
+/**
+ * Folder paths, for the folder grid: rooted like {@link FILE_PATH_LINK_PATTERN}
+ * (`/mnt/raid1/neon_getaway/styleframes`), `~/renders`, or relative with a
+ * trailing slash (`builds/captures/`). Same boundary in front as the relative
+ * file pattern (group 1), the candidate itself is group 2 and goes through
+ * {@link folderLinkPath}, which decides whether it reads as a folder at all.
+ * File links are found first and win any overlap. A folder path ends at `:`,
+ * which is also a boundary in front: `PATH=/a/bin:/b/bin` is two candidates, and
+ * the `://` lookahead stops at the next colon instead of rescanning the token from
+ * every one (quadratic on `a:a:a:…//`).
+ *
+ * ⚠ Like its siblings, never share an instance (`lastIndex`): use
+ * {@link findFilePathLinks}.
+ */
+const FOLDER_PATH_LINK_PATTERN =
+  /(^|[\s"'`(\[{<>=,:])((?:\/(?:home|Users|tmp|var|private|opt|mnt|srv|media|data|workspace)\/|~\/|(?![^\s"'`<>|;&()[\]{}=,:\n\x00-\x1f]*:\/\/)[^\s"'`<>|;&()[\]{}=,:\/~\n\x00-\x1f])[^\s"'`<>|;&()[\]{}=,:\n\x00-\x1f]*)/g;
+
+/**
+ * A {@link FOLDER_PATH_LINK_PATTERN} candidate as a folder link, or null.
+ *
+ * Sentence punctuation after the path is not part of it. A path ending in `/` is
+ * a folder; otherwise only a rooted or `~/` path whose last segment has no
+ * extension (`.cache` and `styleframes` do, `a.rs` does not) — a relative word
+ * without a slash at the end is prose, not a folder.
+ */
+function folderLinkPath(candidate) {
+  // `$` and `#` too: a shell prompt (`user@host:~/proj$ `, `root@c:/app# `) ends
+  // its cwd with one. A folder whose name really ends in one links one short.
+  const path = String(candidate || '').replace(/[.,:;!?'"$#]+$/, '');
+  if (!path || path === '~/' || /^\/[^/]+\/$/.test(path)) return null;
+  if (path.endsWith('/')) return /[^/.]/.test(path) ? path : null;
+  if (!path.startsWith('/') && !path.startsWith('~/')) return null;
+  const last = path.slice(path.lastIndexOf('/') + 1);
+  return /^\.?[^.]+$/.test(last) ? path : null;
+}
+
+/**
+ * Where a clicked path points, as the preview routes need it.
+ *
+ * Absolute and `~/` paths pass through unchanged — `~` is the home of the
+ * session's HOST, which only the server knows (a remote case's home is on the
+ * remote machine), so the server expands it. A relative path is resolved
+ * against the session's working directory, `.` and `..` collapsed, so a
+ * `../other/x.png` ends up outside the workspace and routes like any other
+ * external path. Without a working directory it is returned as is.
+ *
+ * @param {string} filePath
+ * @param {string} [workingDir]
+ * @returns {string}
+ */
+function resolveLinkedFilePath(filePath, workingDir) {
+  const path = String(filePath || '');
+  if (!path || path.startsWith('/') || path.startsWith('~/') || !workingDir) return path;
+  const parts = [];
+  for (const part of `${workingDir}/${path}`.split('/')) {
+    if (!part || part === '.') continue;
+    if (part === '..') parts.pop();
+    else parts.push(part);
+  }
+  return `/${parts.join('/')}`;
+}
+
+/**
+ * The directory a RELATIVE path printed for a session is relative TO.
+ *
+ * `workingDir` is recorded once at create time and never follows a `cd`, so it
+ * stops describing where a shell (or an agent that changed directory) really
+ * is. `session.paneCwd` is the pane's live `#{pane_current_path}`, published by the
+ * server from its pane read. It only changes which BASE a relative path joins;
+ * the result is then routed like any other path, so a target outside the
+ * workspace still goes through the attachment routes.
+ *
+ * Remote and Docker sessions are excluded (the server never sends them a paneCwd,
+ * and this checks again): their local pane runs the ssh / docker-exec CLIENT,
+ * so its directory says nothing about the agent. An unknown paneCwd falls back to
+ * `workingDir`.
+ *
+ * @param {{workingDir?: string, paneCwd?: string, remote?: unknown, docker?: unknown}} [session]
+ * @returns {string|undefined}
+ */
+function relativeResolutionBase(session) {
+  if (!session) return undefined;
+  const paneCwd = session.paneCwd;
+  if (!session.remote && !session.docker && typeof paneCwd === 'string' && paneCwd.startsWith('/')) return paneCwd;
+  return session.workingDir;
+}
+
+/**
+ * Extensions the file preview renders as a PAGE, from the sandboxed
+ * `/html-view/<cap>/` route (src/web/routes/html-view-routes.ts, whose
+ * HTML_VIEW_EXTENSIONS this mirrors; test/file-preview-html-page.test.ts pins
+ * the two equal). The terminal sends a click on one to the preview, never to
+ * the log viewer, and the preview renders it with a Page pill back to source.
+ */
+const HTML_PAGE_EXTENSIONS = new Set(['html', 'htm']);
+
+/** Whether a path names a file the preview renders as a page ({@link HTML_PAGE_EXTENSIONS}). */
+function rendersAsPage(filePath) {
+  const ext = String(filePath || '').split('.').pop().toLowerCase();
+  return HTML_PAGE_EXTENSIONS.has(ext);
 }
 
 
@@ -1542,8 +2523,16 @@ function terminalLogicalLine(buffer, row, cols, maxRows) {
   const continuesPrevious = (r) => {
     if (r <= 0) return false;
     if (lineAt(r)?.isWrapped) return true;
+    // A divider row never continues the row above, even when that row reaches
+    // the right edge: a URL ending at the edge must not absorb `────` below it.
+    if (/^[\s─━═╌╍┄┅┈┉-]+$/u.test(lineAt(r)?.translateToString(true) || '')) return false;
     const prev = lineAt(r - 1);
-    return !!prev && (prev.translateToString(true) || '').length >= width;
+    const prevText = prev?.translateToString(true) || '';
+    // A full-width table divider is a row boundary, not a hard-wrapped line.
+    // Treating it as a continuation glues the divider onto the row below and
+    // hides that row's wrapped URL from the link provider.
+    if (/^[\s─━═╌╍┄┅┈┉-]+$/u.test(prevText)) return false;
+    return prevText.length >= width;
   };
 
   let startRow = row;
@@ -1589,6 +2578,567 @@ function terminalLogicalLine(buffer, row, cols, maxRows) {
   return { startRow, endRow, text, offsetToCell, cellToOffset };
 }
 
+/** Roots of {@link FILE_PATH_LINK_PATTERN}, read off its source (`home|Users|…`). */
+const FILE_LINK_ROOT_GROUP = /^\(\\\/\(\?:([^()]*)\)/.exec(FILE_PATH_LINK_PATTERN.source)[1];
+const PATH_TOKEN_ENDS_WITH_EXTENSION = new RegExp(`\\.${FILE_LINK_EXTENSION_GROUP}$`);
+const PATH_TOKEN_HAS_EXTENSION = new RegExp(`\\.${FILE_LINK_EXTENSION_GROUP}\\b`);
+const PATH_TOKEN_STARTS_NEW_PATH = new RegExp(`^(?:~\\/|\\/(?:${FILE_LINK_ROOT_GROUP})\\/)`);
+/**
+ * Lowercase connectives and verbs that put a spaced candidate in a sentence, for
+ * {@link spacedFilePathOnLine}. `at` stays out (`Screenshot 2026-10-24 at 10.00.00.png`)
+ * and so does `of` (`Copy of report.docx`); a name using a listed word
+ * (`Pros and Cons.md`) splits as it did before spaced paths were linked.
+ */
+const SPACED_PATH_PROSE_WORD =
+  /^(?:and|or|to|in|into|from|the|is|are|was|were|has|have|had|contains|holds|see|then|vs|via|as)$/;
+/** A rooted path's start (`/home/`, `/mnt/`, …), for {@link spacedFilePathOnLine}. */
+const SPACED_PATH_ROOT = new RegExp(`^\\/(?:${FILE_LINK_ROOT_GROUP})\\/`);
+/** A relative head that names its own location (`./a`, `../a`) is an entry of its own. */
+const PATH_TOKEN_STARTS_EXPLICIT_RELATIVE = /^\.{1,2}\//;
+/** First directory of a path, a leading `/` or `./` ignored: `src` for `src/a.ts` and `/src/a.ts`. */
+const pathFirstSegment = (path) => path.replace(/^(?:\.?\/)+/, '').split('/')[0];
+
+/**
+ * Whether the line `nextText` carries on a file path `prevText` broke off.
+ *
+ * Answers `'join'` when the path ends (reaches a known extension) on the next
+ * line, `'chain'` when the next line is nothing but more of the path (a path
+ * spanning three or more lines; only worth keeping once a later line ends it),
+ * and `null` otherwise. The broken-off token must already look like a path in
+ * progress: it contains a `/`, ends on a path character and does not yet end
+ * on an extension. A next line that opens a NEW path is never glued on: a rooted
+ * one (`/home/…`, `~/…`), `./…`/`../…`, or a relative one that opens on the same
+ * top directory the broken token did (the next entry of a listing).
+ */
+function pathContinuation(prevText, nextText) {
+  const previous = String(prevText || '').trimEnd();
+  const next = String(nextText || '').replace(/^\s+/, '');
+  const tail = /[^\s"'<>|;&]+$/.exec(previous)?.[0] || '';
+  if (!tail.includes('/') || !/[\w\-.~+@%/]$/.test(tail) || PATH_TOKEN_ENDS_WITH_EXTENSION.test(tail)) return null;
+  const head = /^[^\s"'<>|;&]+/.exec(next)?.[0] || '';
+  if (!head || PATH_TOKEN_STARTS_NEW_PATH.test(head) || PATH_TOKEN_STARTS_EXPLICIT_RELATIVE.test(head)) return null;
+  // A listing (`git ls-files`, `find`, `ls -R`) puts one path per row, so `src/components`
+  // followed by `src/index.ts` is two entries, not one path broken after `src/components`.
+  // A wrapped path continues INSIDE a name: its next row does not open on the same top directory.
+  if (head.includes('/') && pathFirstSegment(head) === pathFirstSegment(tail)) return null;
+  if (PATH_TOKEN_HAS_EXTENSION.test(head)) return 'join';
+  return head === next.replace(/\s+$/, '') ? 'chain' : null;
+}
+
+/**
+ * {@link terminalLogicalLine}, extended across the line breaks a program puts
+ * INSIDE a file path. Used by the link provider only; touch selection keeps the
+ * plain logical line.
+ *
+ * Claude Code wraps its tool output itself, a few columns short of the terminal
+ * edge, so neither continuation signal of terminalLogicalLine fires (no
+ * `isWrapped`, the row does not reach the last column) and a long path was only
+ * linked up to the break:
+ *
+ *       ⎿  BILD /mnt/build/neon_getaway-mgr-hebel/builds/captures/2
+ *          026-10-10/ghost1b_gameplay.png err=0 …
+ *
+ * A following logical line is glued on (its indent dropped, cell mapping kept
+ * exact) when {@link pathContinuation} says it carries the path on and the row it
+ * broke off is at least as long as the row it continues on. Bounded by the same
+ * `maxRows` as the logical line. Hard breaks concatenate without inserting spaces.
+ * An ambiguous parenthesised filename also carries `pathAlternatives` for a
+ * guarded lookup on activation; its text and cell mapping remain unchanged.
+ *
+ * @returns Same shape as {@link terminalLogicalLine}; null when the row does not exist.
+ */
+function terminalPathLine(buffer, row, cols, maxRows) {
+  const base = terminalLogicalLine(buffer, row, cols, maxRows);
+  if (!base) return null;
+  const bound = Math.max(1, maxRows || 12);
+  const lineAt = (r) => terminalLogicalLine(buffer, r, cols, bound);
+  const rowsOf = (line) => line.endRow - line.startRow + 1;
+  // A program breaking a long token fills the row to its wrap width, and no
+  // later row of that block is wider. So the row a path broke off is at least as
+  // long as the row it continues on — which keeps `cd /mnt/foo` from being glued
+  // to a longer `  file.png written` below it.
+  const rowLength = (r) => (buffer.getLine(r)?.translateToString(true) || '').length;
+  const continues = (prev, next, prevText) =>
+    rowLength(prev.endRow) >= rowLength(next.startRow) && pathContinuation(prevText, next.text);
+
+  /** `first` and the lines a path carries on into, stopping at the last confirmed join. */
+  const extend = (first) => {
+    const parts = [first];
+    const alternatives = [];
+    let text = first.text;
+    let rows = rowsOf(first);
+    let confirmed = 1;
+    for (;;) {
+      const next = lineAt(parts[parts.length - 1].endRow + 1);
+      if (!next || rows + rowsOf(next) > bound) break;
+      const kind = continues(parts[parts.length - 1], next, text);
+      if (!kind) break;
+      parts.push(next);
+      if (kind === 'join') {
+        const opening = text.lastIndexOf('(');
+        const closing = next.text.indexOf(')');
+        if (opening >= 0 && closing > 0 && !opensBashCall(text, opening)) {
+          const before = text.slice(opening + 1);
+          const after = next.text.slice(0, closing).trimStart();
+          const spaced = spacedFilePathOnLine(`${before} ${after}`, { parenthesised: true });
+          if (!before.includes(')') && !/[/-]$/.test(before) && !after.includes('/') && spaced?.link) {
+            alternatives.push({ path: before.slice(spaced.index) + after, spacedPath: spaced.path });
+          }
+        }
+      }
+      text += next.text.replace(/^\s+/, '');
+      rows += rowsOf(next);
+      if (kind === 'join') confirmed = parts.length;
+    }
+    return { parts: parts.slice(0, confirmed), alternatives };
+  };
+
+  // A middle fragment may have no slash, so only a forward pass from its
+  // rooted start can confirm a path spanning three or more rows.
+  let extended = extend(base);
+  let first = base;
+  let rows = rowsOf(base);
+  while (first.startRow > 0) {
+    const prev = lineAt(first.startRow - 1);
+    if (!prev || rows + rowsOf(prev) > bound) break;
+    first = prev;
+    rows += rowsOf(prev);
+    const tail = /[^\s"'<>|;&]+$/.exec(first.text.trimEnd())?.[0] || '';
+    if (!tail.includes('/')) continue;
+    const candidate = extend(first);
+    if (candidate.parts[candidate.parts.length - 1].endRow >= base.startRow) extended = candidate;
+  }
+  const { parts, alternatives } = extended;
+  if (parts.length === 1) return parts[0];
+
+  const segments = [];
+  let text = '';
+  for (const [i, part] of parts.entries()) {
+    const skip = i === 0 ? 0 : part.text.length - part.text.replace(/^\s+/, '').length;
+    segments.push({ part, textStart: text.length, skip });
+    text += part.text.slice(skip);
+  }
+  const offsetToCell = (offset) => {
+    for (let i = segments.length - 1; i >= 0; i--) {
+      const seg = segments[i];
+      if (offset >= seg.textStart || i === 0) return seg.part.offsetToCell(offset - seg.textStart + seg.skip);
+    }
+    return segments[0].part.offsetToCell(offset);
+  };
+  const cellToOffset = (targetRow, targetCol) => {
+    for (const seg of segments) {
+      if (targetRow < seg.part.startRow || targetRow > seg.part.endRow) continue;
+      const offset = seg.part.cellToOffset(targetRow, targetCol);
+      return offset < 0 ? -1 : seg.textStart + Math.max(0, offset - seg.skip);
+    }
+    return -1;
+  };
+  return {
+    startRow: parts[0].startRow,
+    endRow: parts[parts.length - 1].endRow,
+    text,
+    offsetToCell,
+    cellToOffset,
+    ...(alternatives.length ? { pathAlternatives: alternatives } : {}),
+  };
+}
+
+/**
+ * Web URLs in terminal text, with the trimming the link provider applies.
+ *
+ * A single `&` is part of the URL (query separator); `&&` is the shell operator
+ * and ends it. `)` is kept INSIDE a URL when it closes a `(` that is also inside
+ * it (`…/Team-Space(QA)Archive/…` used to link only as far as `(QA`), and an
+ * unmatched `)` ends the URL, which keeps the closing paren of `(https://…)` and
+ * `[text](https://…)` out of the link. Trailing sentence punctuation is trimmed.
+ *
+ * @param {string} text
+ * @returns {Array<{url: string, startIndex: number, endIndex: number, rawEnd: number}>}
+ *          `endIndex` is exclusive; `rawEnd` is where the match ran to before the
+ *          paren/punctuation trim (the wrap-continuation test needs it).
+ */
+function findTerminalUrls(text) {
+  // Named `urlPattern` on purpose: test/link-provider-regex.test.ts extracts it
+  // by name to prove it stays linear-time on hostile lines.
+  const urlPattern = /https?:\/\/(?:[^\s"'<>|;&\]\x00-\x1f]|&(?!&))+/g;
+  const urls = [];
+  let match;
+  while ((match = urlPattern.exec(String(text || ''))) !== null) {
+    const raw = match[0];
+    let end = raw.length;
+    let depth = 0;
+    for (let i = 0; i < raw.length; i++) {
+      if (raw[i] === '(') depth++;
+      else if (raw[i] === ')') {
+        if (depth === 0) {
+          end = i;
+          break;
+        }
+        depth--;
+      }
+    }
+    const url = raw.slice(0, end).replace(/[.,;:!?&]+$/, '');
+    if (!/:\/\/[^/]/.test(url)) continue;
+    urls.push({ url, startIndex: match.index, endIndex: match.index + url.length, rawEnd: match.index + raw.length });
+  }
+  return urls;
+}
+
+/**
+ * The row span a URL covers when the CLI wrapped it with its OWN newlines at a
+ * point short of the terminal width.
+ *
+ * {@link terminalLogicalLine} joins soft wraps and full-width hard wraps. A CLI
+ * that word-wraps inside a table cell or a paragraph (codex's markdown tables,
+ * for one) breaks a long URL at `/`, `?`, `-` … well before the right edge and
+ * indents the rest to the cell's column, so neither rule fires and each row
+ * linked a fragment. A row continues the URL above it only when ALL hold:
+ *   - the URL fragment ends on a character a wrapper breaks after
+ *     (`/ ? & = - _ % # + ~`); a following table column may be excluded;
+ *   - the next row is indented, but no further right than the column the URL
+ *     started in (a table cell or list item continuation, not unrelated text),
+ *     and no column gap lies between its indent and the URL on the first row
+ *     (that would be the next record of a table);
+ *   - that row's first token looks like URL material (contains one of
+ *     `% & = / ? . - _`), is not a bare number/version or list marker,
+ *     and is not itself a new `scheme://`, a shell prompt (`user@host:`),
+ *     a home path (`~/`), an email address, an HTTP status line, a label
+ *     ending in `:`, a measurement or clock time (`45%`, `12.3ms`,
+ *     `10:00:00`), or a `name=value` field under a URL ending in `/`;
+ *     without `% & = / ?`, the token must finish its cell (row end or a
+ *     gap of at least two spaces) and must not be code with a call paren
+ *     or a word ending a sentence (`Done.`).
+ * The last rule is what stops prose such as "…/files/" + "then run it" from
+ * being glued into one link.
+ *
+ * Bounded by `maxRows`, like the logical line. Pure: reads rows only.
+ *
+ * @param {{getLine: (row: number) => any, length: number}} buffer
+ * @param {number} row 0-based absolute row being examined.
+ * @param {number} cols Terminal width.
+ * @param {number} [maxRows]
+ * @returns {{startRow: number, endRow: number, firstRowUrlEnd?: number} | null}
+ *          `firstRowUrlEnd` is where the URL's cell ends on the first row when
+ *          other table columns follow it and that row does not soft-wrap; null
+ *          means the row is not part of a URL continued this way.
+ */
+function terminalUrlContinuationExtent(buffer, row, cols, maxRows) {
+  const bound = Math.max(1, maxRows || 12);
+  const here = terminalLogicalLine(buffer, row, cols, bound);
+  if (!here) return null;
+
+  const chainFrom = (start) => {
+    const first = terminalLogicalLine(buffer, start, cols, bound);
+    if (!first || first.startRow !== start) return null;
+    let text = first.text.replace(/\s+$/, '');
+    let endRow = first.endRow;
+    let urlStartCol = -1;
+    let firstRowUrlEnd = null;
+    let extended = false;
+    while (endRow - start + 1 < bound) {
+      const urls = findTerminalUrls(text);
+      const last = urls[urls.length - 1];
+      // Only on a one-row first line: firstRowUrlEnd cuts the first PHYSICAL
+      // row (terminalLinkLine), so a column sitting on the soft-wrapped part of
+      // the URL's row would stay in the text and take the next row with it.
+      const trailingColumns =
+        first.startRow === first.endRow &&
+        endRow === first.endRow &&
+        last &&
+        last.rawEnd < text.length &&
+        /^ {2,}\S/.test(text.slice(last.rawEnd));
+      const urlText = trailingColumns ? text.slice(0, last.rawEnd) : text;
+      if (!last || last.rawEnd !== urlText.length || !/[/?&=\-_%#+~]$/.test(urlText)) break;
+      if (urlStartCol < 0) urlStartCol = first.offsetToCell(last.startIndex).col;
+      const next = buffer.getLine(endRow + 1);
+      if (!next || next.isWrapped) break;
+      const nextText = next.translateToString(true) || '';
+      const indent = nextText.length - nextText.replace(/^\s+/, '').length;
+      const token = nextText.slice(indent).split(/\s/, 1)[0];
+      // A hard continuation is indented (a table cell, a list item, Claude's
+      // two-space paragraph indent); a column-0 row is a new line of output.
+      if (!token || !indent || indent > urlStartCol || /^(?:\d+[.)]|[-*•])(?:\s|$)/.test(nextText.slice(indent)))
+        break;
+      // When other table columns follow the URL, the next row must align with
+      // the start of its cell. A new numbered row must not become URL text.
+      if (
+        trailingColumns &&
+        (!indent ||
+          first.text[indent - 1] !== ' ' ||
+          first.text[indent] === ' ' ||
+          / {2,}/.test(first.text.slice(indent, last.startIndex)))
+      )
+        break;
+      // The next row must start inside the URL's own cell: a column gap between
+      // its indent and the URL on the first row means it opens an earlier
+      // column (the next record of a table), not the rest of the URL.
+      if (/ {2,}/.test(first.text.slice(indent, last.startIndex).trimStart())) break;
+      if (/^[a-z][a-z0-9+.-]*:\/\//i.test(token) || !/^[A-Za-z0-9%_~]/.test(token)) break;
+      // A shell prompt (`user@host:~/dir$`), a home path and an HTTP status line
+      // are never the rest of a URL, however much URL punctuation they carry.
+      if (/^[\w.-]+@[\w.-]+:|^~\/|^HTTP\/\d/i.test(token)) break;
+      // Nor is a token that is a whole email address.
+      if (/^[\w.+-]+@[\w-]+(?:\.[\w-]+)+$/.test(token)) break;
+      if (!/[%&=/?.\-_]/.test(token) || /^v?\d+(?:\.\d+)*(?:[-+][\w.-]+)?[.,;:!?)]?$/i.test(token)) break;
+      // A label ends with a colon (`Failure/Error:`, `prometheus.io/scrape:`);
+      // the rest of a URL does not.
+      if (token.endsWith(':')) break;
+      // After a `/`, a `name=value` token is the next assignment or log field
+      // (`API_KEY=...`, `level=info`), not the URL: a query starts with `?`.
+      if (urlText.endsWith('/') && /^[A-Za-z_][\w.-]*=/.test(token)) break;
+      // Nor is a measurement or a clock time: `45%` and `45%|####` progress,
+      // `12.3MB/45.0MB`, `12.3ms`, `10:00:00` (`%7B` stays percent-encoding).
+      if (/^\d+(?:\.\d+)?(?:%(?![0-9A-Fa-f]{2})|(?:ms|s|[kKMGT]i?B)(?![\w-]))|^\d{1,2}:\d{2}/.test(token)) break;
+      // Hyphens, underscores and dots also occur in prose. Without stronger
+      // URL punctuation, the token must finish its cell, not introduce a sentence.
+      const rest = nextText.slice(indent + token.length);
+      if (!/[%&=/?]/.test(token)) {
+        // Code (`client.get()`, `expect(x).toBe(y)`) is not a URL piece, and a
+        // word that ends a sentence (`ready.`, `Done.`) is prose. A wiki title
+        // (`Mercury_(planet)`) and a file name before its period
+        // (`install.html.`) still continue the URL.
+        if (/[^_]\(/.test(token)) break;
+        if (/[.,;!]$/.test(token) && !/\.[A-Za-z][A-Za-z0-9]{1,4}[.,;!]+$/.test(token)) break;
+        if (rest.trim() !== '' && !/^ {2,}/.test(rest)) break;
+      }
+      const nextLogical = terminalLogicalLine(buffer, endRow + 1, cols, bound);
+      if (!nextLogical) break;
+      if (trailingColumns) firstRowUrlEnd = last.rawEnd;
+      text = urlText + nextLogical.text.slice(indent).replace(/\s+$/, '');
+      endRow = nextLogical.endRow;
+      extended = true;
+    }
+    return { startRow: start, endRow, extended, firstRowUrlEnd };
+  };
+
+  // Walk up through earlier logical lines: the nearest one whose URL chain
+  // reaches this row owns it.
+  let start = here.startRow;
+  while (start >= 0 && here.startRow - start < bound) {
+    const chain = chainFrom(start);
+    if (chain && chain.extended && chain.endRow >= here.startRow) {
+      return {
+        startRow: chain.startRow,
+        endRow: chain.endRow,
+        ...(chain.firstRowUrlEnd === null ? {} : { firstRowUrlEnd: chain.firstRowUrlEnd }),
+      };
+    }
+    if (start === 0) break;
+    const above = terminalLogicalLine(buffer, start - 1, cols, bound);
+    if (!above) break;
+    start = above.startRow;
+  }
+  return null;
+}
+
+/**
+ * The text the link provider scans for `row`: {@link terminalPathLine}, widened
+ * to the rows of a URL the CLI wrapped short of the edge
+ * ({@link terminalUrlContinuationExtent}). Same shape as terminalPathLine.
+ *
+ * Over a widened span every row is read trimmed (except one a soft wrap
+ * continues from, which fills the width), a HARD continuation's indent is
+ * dropped (the cell mapping keeps the cells), and the first row stops at the
+ * URL's cell when other table columns follow it, so those columns never sit
+ * between the URL's pieces. Those columns still link: they are moved after the
+ * stitched rows as a segment of their own, mapped back to their cells.
+ *
+ * @returns Same shape as {@link terminalPathLine}; null when the row does not exist.
+ */
+function terminalLinkLine(buffer, row, cols, maxRows) {
+  const base = terminalPathLine(buffer, row, cols, maxRows);
+  if (!base) return null;
+  const extent = terminalUrlContinuationExtent(buffer, row, cols, maxRows);
+  if (!extent || (extent.startRow >= base.startRow && extent.endRow <= base.endRow)) return base;
+  const startRow = Math.min(extent.startRow, base.startRow);
+  const endRow = Math.max(extent.endRow, base.endRow);
+  const segments = [];
+  let text = '';
+  let columnsAfterUrl = '';
+  for (let r = startRow; r <= endRow; r++) {
+    const line = buffer.getLine(r);
+    if (!line) break;
+    const next = r < endRow ? buffer.getLine(r + 1) : null;
+    let rowText = line.translateToString(!(next && next.isWrapped)) || '';
+    if (r === extent.startRow && extent.firstRowUrlEnd != null) {
+      columnsAfterUrl = rowText.slice(extent.firstRowUrlEnd);
+      rowText = rowText.slice(0, extent.firstRowUrlEnd);
+    }
+    let colStart = 0;
+    if (r > startRow && !line.isWrapped) {
+      colStart = rowText.length - rowText.replace(/^\s+/, '').length;
+      rowText = rowText.slice(colStart);
+    }
+    segments.push({ row: r, textStart: text.length, colStart });
+    text += rowText;
+  }
+  const lastRow = segments[segments.length - 1].row;
+  // The columns cut off the URL's first row (a path or date column of a table)
+  // are scanned after the stitched rows, so they keep their links on that row.
+  // They open with the cell gap, which keeps them apart from the URL; the one
+  // space before them belongs to the last row, so an end offset there still
+  // maps onto that row and never onto their first cell.
+  if (columnsAfterUrl.trim()) {
+    text += ' ';
+    segments.push({ row: extent.startRow, textStart: text.length, colStart: extent.firstRowUrlEnd });
+    text += columnsAfterUrl;
+  }
+  const offsetToCell = (offset) => {
+    for (let i = segments.length - 1; i >= 0; i--) {
+      const seg = segments[i];
+      if (offset >= seg.textStart || i === 0) return { row: seg.row, col: seg.colStart + (offset - seg.textStart) };
+    }
+    return { row: startRow, col: offset };
+  };
+  // The cut row has two segments: the one starting at or left of the cell owns it.
+  const cellToOffset = (targetRow, targetCol) => {
+    let seg = null;
+    for (const s of segments) if (s.row === targetRow && (!seg || s.colStart <= targetCol)) seg = s;
+    return seg ? seg.textStart + Math.max(0, targetCol - seg.colStart) : -1;
+  };
+  return {
+    startRow,
+    endRow: lastRow,
+    text,
+    offsetToCell,
+    cellToOffset,
+    ...(base.pathAlternatives ? { pathAlternatives: base.pathAlternatives } : {}),
+  };
+}
+
+/**
+ * Absolute file paths the CLI word-wrapped INSIDE a table cell (codex markdown
+ * tables), returned as one link per path with a segment per row.
+ *
+ *    Before screenshot (/tmp/x/docs/review/          After screenshot (/tmp/x/review/BLDMESH-
+ *    BLDMESH-243/before-overview.png)                243/after-overview.png)
+ *
+ * Neither fragment matches FILE_PATH_LINK_PATTERN alone (the first has no
+ * extension, the second no absolute root), and a linear stitch of the rows
+ * cannot serve a two-column table: each column's continuation sits in the same
+ * next row. So each fragment is followed DOWN ITS OWN CELL: the cell's left
+ * edge is where its text starts after the previous ≥2-space column gap, and the
+ * continuation is the token starting at exactly that column on the next row.
+ * A fragment qualifies only when it is the last thing in its cell on that row
+ * (row end or a ≥2-space gap follows) and ends on `/` or `-`, the only places
+ * a wrapper breaks a path; a cell that ends inside a name (`/home/u/proj` over
+ * `config.yaml`) is a whole value, never the first piece of the next row's. A
+ * continuation row must be blank to the left of the cell (a wrapper wraps every
+ * column of one table row together), unless a path in a left column continued
+ * on it too: a label there (`Entry`, `│ Log │`) is the next record. Every
+ * continuation must pass pathContinuation and its cell must be no wider than the
+ * preceding cell's text, so independent listing rows and longer prose never
+ * displace links.
+ *
+ * Pure: reads rows only. Cells are taken one per string character (xterm rows
+ * with wide glyphs would shift columns; such rows simply fail the alignment).
+ *
+ * @param {{getLine: (row: number) => any, length: number}} buffer
+ * @param {number} row 0-based absolute row being examined.
+ * @param {number} [maxRows] Bound on rows one path may span.
+ * @returns {Array<{path: string, segments: Array<{row: number, startCol: number, endCol: number}>}>}
+ *          Paths with a segment on `row`; `endCol` is exclusive, columns 0-based.
+ */
+function terminalCellWrappedPaths(buffer, row, maxRows) {
+  const bound = Math.max(2, maxRows || 4);
+  const rootPattern = new RegExp(`\\/(?:${FILE_LINK_ROOT_GROUP})\\/`, 'g');
+  // Box-drawing verticals are cell borders (Claude Code draws tables with them).
+  const isPathChar = (ch) => !!ch && !/[\s"'<>|;&\x00-\x1f│┃║]/.test(ch);
+  const rowText = (r) => {
+    const line = buffer.getLine(r);
+    return line ? (line.translateToString(true) || '').replace(/\s+$/, '') : null;
+  };
+  // A fragment is the last text in its cell on this row when the row ends, a
+  // column gap (≥2 spaces) follows it, or a cell border does.
+  const endsCell = (text, end) => end >= text.length || /^(?: {2,}| *[│┃║|])/.test(text.slice(end));
+
+  const fromStart = (startRow) => {
+    const found = [];
+    const text = rowText(startRow);
+    if (!text) return found;
+    rootPattern.lastIndex = 0;
+    let m;
+    while ((m = rootPattern.exec(text)) !== null) {
+      const start = m.index;
+      if (start > 0 && !/[\s(\[{"'`<]/.test(text[start - 1])) continue;
+      let end = start;
+      while (end < text.length && isPathChar(text[end])) end++;
+      rootPattern.lastIndex = Math.max(end, start + 1);
+      if (!endsCell(text, end)) continue;
+      // Already a complete path on its own row: the ordinary detector owns it.
+      const alone = absoluteFilePathPattern().exec(text.slice(start, end));
+      if (alone && alone.index === 0 && alone[0].length === end - start) continue;
+      // The cell's left edge: just past the nearest ≥2-space gap or cell border
+      // (and the padding after it) before the path.
+      const before = text.slice(0, start);
+      let cellCol = before.length - before.replace(/^\s+/, '').length;
+      const edge = /(?: {2,}|[│┃║|] *)(?=\S)/g;
+      let e;
+      const upToPath = text.slice(0, start + 1);
+      while ((e = edge.exec(upToPath)) !== null) cellCol = e.index + e[0].length;
+
+      let joined = text.slice(start, end);
+      let previousCellLength = end - cellCol;
+      const segments = [{ row: startRow, startCol: start, endCol: end }];
+      for (let r = startRow + 1; r < startRow + bound; r++) {
+        const line = buffer.getLine(r);
+        if (!line || line.isWrapped) break;
+        const next = rowText(r);
+        if (!next || !isPathChar(next[cellCol]) || (cellCol > 0 && next[cellCol - 1] !== ' ')) break;
+        let tokenEnd = cellCol;
+        while (tokenEnd < next.length && isPathChar(next[tokenEnd])) tokenEnd++;
+        const token = next.slice(cellCol, tokenEnd);
+        // Include prose after the token in this cell, but not another column.
+        const cellText = next.slice(cellCol).split(/ {2,}|[│┃║|]/, 1)[0].trimEnd();
+        // A wrapper breaks a path after `/` or `-`; a fragment that ends inside a
+        // name (`/home/u/proj` over `config.yaml`) is a whole value, not a piece.
+        // codex wraps table cells on Unicode line-break opportunities plus a
+        // hyphen splitter, which break after `/` and `-` but never at `_` (UAX #14
+        // class AL).
+        if (!/[/-]$/.test(joined)) break;
+        // A wrapper wraps every column of one table row together, so a row that
+        // carries a cell's continuation is blank to its left unless a path in a
+        // left column continued on that row too. A label there (`Entry`,
+        // `│ Log │`) opens the next record, even under a directory ending in `/`
+        // (`Workspace /home/u/proj/app/` over `Entry main.py`). A left column of
+        // wrapped prose (a `Description | Path` table) fills that row as well, so
+        // the path beside it is not joined and keeps its per-row fragment links:
+        // the safe direction.
+        // Known trade-off: with nothing to the left, a directory written with its
+        // trailing slash over a relative path in the same column (`/home/u/proj/`
+        // over `index.ts`) still joins, since it reads exactly like a wrap at `/`.
+        if (
+          /[^\s│┃║|]/.test(next.slice(0, cellCol)) &&
+          !found.some((hit) => hit.segments.some((seg) => seg.row === r && seg.endCol <= cellCol))
+        ) {
+          break;
+        }
+        if (cellText.length > previousCellLength || !pathContinuation(joined, token)) break;
+        const candidate = joined + token;
+        const match = absoluteFilePathPattern().exec(candidate);
+        if (match && match.index === 0 && match[0].length > joined.length) {
+          segments.push({ row: r, startCol: cellCol, endCol: cellCol + match[0].length - joined.length });
+          found.push({ path: match[0], segments });
+          break;
+        }
+        if (!endsCell(next, tokenEnd)) break;
+        joined = candidate;
+        previousCellLength = cellText.length;
+        segments.push({ row: r, startCol: cellCol, endCol: tokenEnd });
+      }
+    }
+    return found;
+  };
+
+  const results = [];
+  for (let s = row; s >= 0 && row - s < bound; s--) {
+    for (const hit of fromStart(s)) {
+      if (hit.segments.some((seg) => seg.row === row)) results.push(hit);
+    }
+  }
+  return results;
+}
+
 // ═══════════════════════════════════════════════════════════════
 // Split-Pane Sessions — pure helpers (divider math, picker list)
 // ═══════════════════════════════════════════════════════════════
@@ -1612,25 +3162,603 @@ function buildSplitPickerSessions(sessions, sessionOrder, excludeId, detachedIds
   const result = [];
   for (const id of sessionOrder) {
     if (id === excludeId) continue;
-    // A detached (popped-out) session's own window already yields its PTY
-    // size (see sendResize's detachedElsewhere guard in terminal-ui.js) —
-    // Pane B's SplitTerminalPane._sendResize() has no such check, so letting
-    // one into the picker put its detached window and Pane B in a fight over
-    // the same PTY's dimensions.
+    // A detached (popped-out) session's own window owns its PTY size (see
+    // sendResize's detachedElsewhere guard in terminal-ui.js;
+    // TerminalTile._sendResize() stands aside the same way), so Pane B could
+    // only show it at a size it cannot set.
     if (detachedIds?.has?.(id)) continue;
     const session = sessions.get(id);
     if (!session) continue;
     // A session with no PTY attached (exited CLI, a crash-looped session
     // whose breaker tripped, a restore that failed to re-attach) has nothing
-    // reading its tmux pane. SplitTerminalPane never does selectSession()'s
-    // re-attach POST, so its socket would open onto a pane nothing feeds:
-    // no terminal events, and Session.write() silently drops every keystroke
-    // with no ack either way (Pane B sends no `seq`), so the loss is
-    // invisible — the healthy socket never trips the disconnect banner.
+    // reading its tmux pane, and the split never does selectSession()'s
+    // re-attach POST: Pane B would open a healthy-looking socket onto a pane
+    // that nothing feeds and nothing reads.
     if (session.pid === null) continue;
     result.push({ id, label: session.name || 'Session' });
   }
   return result;
+}
+
+// ── Tile grid (tile-grid.js) ───────────────────────────────────────────────
+//
+// Pure layout and state helpers for the tile grid (docs/tile-grid-plan.md):
+// 1 to TILE_GRID_MAX live sessions side by side, each in its own TerminalTile.
+// Desktop only, behind the same 1180px gate as the split pane.
+
+/**
+ * Hard cap on tiles in one grid: the ONE place it is set (owner decision 7 in
+ * docs/tile-grid-plan.md). Six was tested smooth on a real desktop; nine missed
+ * the headless frame bar and is untested on hardware. Everything that limits
+ * the grid reads this, and the layout table still covers up to TILE_LAYOUT_MAX,
+ * so raising the cap is this one line.
+ */
+const TILE_GRID_MAX = 6;
+/** The largest count the layout table covers (3x3). Never a cap by itself. */
+const TILE_LAYOUT_MAX = 9;
+// The smallest tile worth showing: about 60 columns and a dozen rows at the
+// default tile font. Bounds how many tiles a window can hold.
+const TILE_MIN_W = 480;
+const TILE_MIN_H = 240;
+// Three tiles go side by side (3x1) only when each still gets ~600px;
+// otherwise they take three cells of a 2x2.
+const TILE_GRID_WIDE_3X1 = 1800;
+// A tile's xterm keeps this many lines, not DEFAULT_SCROLLBACK: a grid of DOM
+// renderers at 50k lines each is a real memory cost, and a tile's load is a
+// bounded 1 MiB window anyway, so more scrollback only fills with live output.
+const TILE_SCROLLBACK = 10000;
+// Tiles have their own per-device font size (a tile is a fraction of the screen).
+const TILE_FONT_SIZE_DEFAULT = 13;
+// What the page's SSE filter names while tiles own the terminal: a value no
+// session id takes (ids are UUIDs), so the server, whose filter gates only
+// session:terminal batches, sends none. The tiles carry their own output over
+// their own sockets, and the parked main terminal only parsed those frames to
+// drop them (16 to 18 a second for one busy shell). Every other event still
+// arrives (test/sse-tile-grid-filter.test.ts pins the server's side of this).
+const TILE_GRID_SSE_FILTER = 'tile-grid';
+
+/**
+ * Columns and rows for `count` tiles, by count (the spec's table), and whether
+ * that layout gives every cell at least the minimum tile size (TILE_MIN_W x
+ * TILE_MIN_H) in a grid area of `width` x `height` px.
+ *
+ * @param {{count: number, width?: number, height?: number}} p
+ * @returns {{cols: number, rows: number, fits: boolean}}
+ */
+function computeTileLayout({ count, width = Infinity, height = Infinity }) {
+  const n = Math.min(Math.max(0, Math.floor(Number(count) || 0)), TILE_LAYOUT_MAX);
+  let cols;
+  let rows;
+  if (n === 0) return { cols: 0, rows: 0, fits: true };
+  if (n === 1) { cols = 1; rows = 1; }
+  else if (n === 2) { cols = 2; rows = 1; }
+  else if (n === 3) {
+    if (width >= TILE_GRID_WIDE_3X1) { cols = 3; rows = 1; }
+    else { cols = 2; rows = 2; }
+  }
+  else if (n === 4) { cols = 2; rows = 2; }
+  else if (n <= 6) { cols = 3; rows = 2; }
+  else { cols = 3; rows = 3; }
+  const fits = width / cols >= TILE_MIN_W && height / rows >= TILE_MIN_H;
+  return { cols, rows, fits };
+}
+
+/**
+ * How many tiles a grid area can hold: the largest count up to TILE_GRID_MAX
+ * whose layout, and every smaller count's layout, fits. 0 when not even one
+ * tile fits.
+ *
+ * @param {{width: number, height: number}} p
+ * @returns {number}
+ */
+function tileGridCapacity({ width, height }) {
+  let capacity = 0;
+  for (let n = 1; n <= TILE_GRID_MAX; n++) {
+    if (!computeTileLayout({ count: n, width, height }).fits) break;
+    capacity = n;
+  }
+  return capacity;
+}
+
+/**
+ * The stored grid (`codeman:tile-grid`: session ids and the layout, never
+ * content) made safe to apply: unknown, deleted, detached and duplicate ids
+ * are dropped, the list is capped at TILE_GRID_MAX, `focused` / `zoomed` must
+ * name a kept id, and track fractions must be 1 to 3 finite positive numbers.
+ * Anything that is not a v1 object (or its JSON) gives null.
+ *
+ * The stored `ids` are the grid's CELLS in reading order, `null` for an empty
+ * one (a hole can be any cell). The old packed list (no nulls) reads as cells
+ * with no hole. `ids` comes back packed (the tiles in reading order, what
+ * every list consumer wants) and `cells` keeps the holes: a dropped id (gone,
+ * detached, a duplicate, past the cap) becomes `null` there, never a shift.
+ *
+ * `freed` names the cells whose session no longer exists (or was popped out
+ * to its own window) since the grid was stored: the ranking fills those first
+ * when the grid comes back (restoreTileGridCells). A hole the user left empty
+ * is not freed. `count` is how many tiles the grid had after the user's own
+ * last change (a session that went away by itself does not lower it), so the
+ * grid comes back to that many when there are sessions to fill it; a value
+ * stored before it existed, or a malformed one, reads as the number of
+ * sessions the stored cells name.
+ *
+ * @param {unknown} raw - the parsed value, or the stored JSON string
+ * @param {{has(id: string): boolean}|Iterable<string>} liveSessions - ids that exist now
+ * @param {{has(id: string): boolean}} [detachedIds] - sessions popped out to their own window
+ * @returns {{v: 1, open: boolean, ids: string[], cells: (string|null)[], freed: number[], count: number,
+ *   focused: string|null, zoomed: string|null, colFr: number[]|null, rowFr: number[]|null}|null}
+ */
+function sanitizeTileGridState(raw, liveSessions, detachedIds) {
+  let value = raw;
+  if (typeof value === 'string') {
+    try { value = JSON.parse(value); } catch { return null; }
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value) || value.v !== 1) return null;
+  const live = liveSessions && typeof liveSessions.has === 'function' ? liveSessions : new Set(liveSessions || []);
+  const ids = [];
+  const cells = [];
+  const freed = [];
+  const named = [];
+  for (const id of (Array.isArray(value.ids) ? value.ids : []).slice(0, TILE_LAYOUT_MAX)) {
+    const isId = typeof id === 'string' && id !== '';
+    const present = isId && live.has(id) && !detachedIds?.has?.(id);
+    const keep = present && !ids.includes(id) && ids.length < TILE_GRID_MAX;
+    if (keep) ids.push(id);
+    // Its session went away since: the cell is freed for the ranking to fill.
+    if (isId && !present && !named.includes(id)) freed.push(cells.length);
+    if (isId && !named.includes(id)) named.push(id);
+    // A malformed entry (not a string, not null) is a hole too.
+    cells.push(keep ? id : null);
+  }
+  const fractions = (fr) => {
+    if (!Array.isArray(fr) || fr.length < 1 || fr.length > 3) return null;
+    return fr.every((x) => typeof x === 'number' && Number.isFinite(x) && x > 0) ? fr.slice() : null;
+  };
+  const count =
+    Number.isInteger(value.count) && value.count >= 1 && value.count <= TILE_GRID_MAX
+      ? value.count
+      : Math.min(named.length, TILE_GRID_MAX);
+  return {
+    v: 1,
+    open: value.open === true && ids.length > 0,
+    ids,
+    cells,
+    freed,
+    count,
+    focused: ids.includes(value.focused) ? value.focused : (ids[0] ?? null),
+    zoomed: ids.includes(value.zoomed) ? value.zoomed : null,
+    colFr: fractions(value.colFr),
+    rowFr: fractions(value.rowFr),
+  };
+}
+
+/**
+ * A stored grid as it comes back (the Tiles button, a page reload): its cells
+ * exactly as stored, holes the user left included, and its focus (or the tile
+ * it had zoomed). Only when it holds fewer tiles than its `count` (sessions
+ * that went away since, or by themselves while it was open) does it fill, from
+ * `ranked` (best first, never a session already in it): the freed cells first,
+ * then the other empty cells, in reading order; more than the cells hold join
+ * after them (the shape grows when the grid lays them out, reformTileCells).
+ * A cell stays empty only when no other session is left to place. Never
+ * trimmed to the window: a grid larger than the window fits shows its focused
+ * tile alone until the window fits it again, and the arrangement stays.
+ *
+ * @param {{cells?: (string|null)[], ids?: string[], freed?: number[], count?: number,
+ *   focused?: string|null, zoomed?: string|null}|null} stored - sanitized (sanitizeTileGridState)
+ * @param {string[]} ranked - the sessions that may fill a cell, best first (rankTileSessions)
+ * @returns {{ids: string[], cells: (string|null)[], focusedId: string}|null} null when none of its sessions survive
+ */
+function restoreTileGridCells(stored, ranked) {
+  const source = Array.isArray(stored?.cells) ? stored.cells : Array.isArray(stored?.ids) ? stored.ids : [];
+  const cells = [];
+  for (const id of source) cells.push(typeof id === 'string' && id && !cells.includes(id) ? id : null);
+  const tiles = cells.filter(Boolean);
+  if (tiles.length === 0) return null;
+  const focusedId =
+    [stored.zoomed, stored.focused].find((id) => typeof id === 'string' && tiles.includes(id)) ?? tiles[0];
+  const target = Math.min(Math.max(tiles.length, Math.floor(Number(stored.count)) || 0), TILE_GRID_MAX);
+  const fillers = [];
+  for (const id of ranked || []) {
+    if (typeof id === 'string' && id && !cells.includes(id) && !fillers.includes(id)) fillers.push(id);
+  }
+  const freed = new Set(Array.isArray(stored.freed) ? stored.freed : []);
+  const empty = [];
+  cells.forEach((id, k) => {
+    if (id === null) empty.push(k);
+  });
+  // Freed cells first, each group in reading order.
+  empty.sort((a, b) => Number(freed.has(b)) - Number(freed.has(a)) || a - b);
+  let count = tiles.length;
+  for (const k of empty) {
+    if (count >= target || fillers.length === 0) break;
+    cells[k] = fillers.shift();
+    count++;
+  }
+  const extra = fillers.slice(0, Math.max(0, target - count));
+  return { ids: [...cells.filter(Boolean), ...extra], cells, focusedId };
+}
+
+/**
+ * New track fractions after a divider drag (grid-template `fr` values): the two
+ * tracks either side of divider `index` trade `deltaPx` of size, each kept at
+ * least `minPx` (or half the pair, if the pair cannot give both the minimum).
+ * Every other track keeps its size. Computed from the fractions the drag
+ * STARTED with and the pointer's total travel, so a drag never drifts.
+ *
+ * @param {number[]} fr - the fractions when the drag started
+ * @param {number} index - the divider: between track `index` and `index + 1`
+ * @param {number} deltaPx - pointer travel since the drag started
+ * @param {number} totalPx - the size the tracks share (dividers and padding excluded)
+ * @param {number} minPx - the smallest a track may get
+ * @returns {number[]} new fractions, same length
+ */
+function dragTrackFractions(fr, index, deltaPx, totalPx, minPx) {
+  const out = fr.slice();
+  if (index < 0 || index + 1 >= fr.length || !(totalPx > 0)) return out;
+  const sum = fr.reduce((a, b) => a + b, 0);
+  if (!(sum > 0)) return out;
+  const a = (fr[index] / sum) * totalPx;
+  const b = (fr[index + 1] / sum) * totalPx;
+  const pair = a + b;
+  const lo = Math.min(minPx, pair / 2);
+  const hi = pair - lo;
+  const nextA = Math.min(Math.max(a + (Number(deltaPx) || 0), lo), hi);
+  out[index] = (nextA / totalPx) * sum;
+  out[index + 1] = ((pair - nextA) / totalPx) * sum;
+  return out;
+}
+
+/**
+ * The sessions the Tiles button can open (case c of tileGridOpenSet, and the
+ * ones a count fills a grid with), in the order given (tab order, or the
+ * ranking): live ones only, never a session popped out to
+ * its own window (that window owns its PTY size). A session with no PTY
+ * attached IS offered: its tile shows the Attach overlay.
+ *
+ * @param {Map<string, {name?: string}>} sessions
+ * @param {string[]} sessionOrder
+ * @param {{has(id: string): boolean}} [detachedIds]
+ * @returns {Array<{id: string, label: string}>}
+ */
+function buildTilePickerSessions(sessions, sessionOrder, detachedIds) {
+  const result = [];
+  for (const id of sessionOrder) {
+    if (detachedIds?.has?.(id)) continue;
+    const session = sessions.get(id);
+    if (!session || result.some((r) => r.id === id)) continue;
+    result.push({ id, label: session.name || 'Session' });
+  }
+  return result;
+}
+
+// Ranking groups (rankTileSessions): working first, then the sessions waiting
+// on the user, then everything else.
+const TILE_RANK_GROUP = { working: 0, needs: 1, waiting: 1 };
+
+/**
+ * The stamp a session is ranked by inside its group. A WORKING session keys
+ * off the pane's last Enter (`lastSubmitAt`) ONLY: a working pane repaints
+ * about once a second, so its last-activity stamp is always "now", and one
+ * that never submitted would otherwise claim the head of the group. 0 means
+ * unknown. Every other state is the home screens' anchor (sessionActivityAnchor:
+ * the last byte the pane printed, i.e. when it went quiet).
+ */
+function tileRankStamp(row) {
+  if (row.state === 'working') return Number(row.lastSubmitAt) || 0;
+  return sessionActivityAnchor(row);
+}
+
+/**
+ * Which open sessions the tile grid shows when nobody said which (the Tiles
+ * button with no stored grid to bring back, and every place the grid fills a
+ * tile on its own: a count picked in its menu, a freed cell), best first
+ * (owner request: "prefer to load in tiles that are working and then the most
+ * recent, so the oldest don't get opened"):
+ *   1. WORKING, the most recently started turn first;
+ *   2. then the ones that NEED INPUT, the red and yellow tab alerts (`needs`: a
+ *      permission or question dialog; `waiting`: a finished turn not seen
+ *      yet), most recent first;
+ *   3. then every other one (idle, done, error), most recently active first.
+ * Inside a group the newest stamp wins (tileRankStamp) and a session with no
+ * stamp (0) sorts last; the final tiebreak is the tab order (`orderIndex`), so
+ * the result never shuffles. The states are the home screens' own
+ * (`_mobileOverviewState()`, mobile-overview.js), as are the stamps; only the
+ * order differs: the home screens put the longest-running turn first, the grid
+ * the most recent.
+ *
+ * Pure. Unit-tested in test/tile-grid-ranking.test.ts.
+ *
+ * @param {Array<{id: string, state: string, lastActivityAt?: number, lastSubmitAt?: number, orderIndex?: number}>} rows
+ * @returns {string[]} the ids, best first, each once
+ */
+function rankTileSessions(rows) {
+  const group = (row) => TILE_RANK_GROUP[row.state] ?? 2;
+  const list = (Array.isArray(rows) ? rows : []).filter((row) => row && typeof row.id === 'string' && row.id);
+  list.sort((a, b) => {
+    const byGroup = group(a) - group(b);
+    if (byGroup !== 0) return byGroup;
+    const atA = tileRankStamp(a);
+    const atB = tileRankStamp(b);
+    if (atA !== atB) {
+      if (!atA) return 1;
+      if (!atB) return -1;
+      return atB - atA;
+    }
+    const orderA = Number.isFinite(a.orderIndex) ? a.orderIndex : Number.MAX_SAFE_INTEGER;
+    const orderB = Number.isFinite(b.orderIndex) ? b.orderIndex : Number.MAX_SAFE_INTEGER;
+    return orderA - orderB;
+  });
+  const ids = [];
+  for (const row of list) if (!ids.includes(row.id)) ids.push(row.id);
+  return ids;
+}
+
+/**
+ * What the Tiles button and Ctrl+Shift+G open, at once and without asking
+ * (owner decision 8). In order:
+ *   a. the grid this tab last had (`stored`, already sanitized: live, not
+ *      detached, at most the cap), if any of its sessions survive, exactly
+ *      as it was (restoreTileGridCells: its cells and holes, a cell its
+ *      session freed filled from the ranking);
+ *   b. else an open split's two sessions, Pane A focused;
+ *   c. else the open sessions in `ranked` order (rankTileSessions: working,
+ *      then needing input, then the most recent; tab order when no ranking is
+ *      given), detached ones never, up to `limit`, the active session always
+ *      among them and focused (when it ranks past the limit, the first
+ *      `limit - 1` others come with it).
+ * Null when there is nothing to open.
+ *
+ * @param {{stored?: {ids: string[], cells?: (string|null)[], freed?: number[], count?: number,
+ *   focused: string|null, zoomed: string|null}|null,
+ *   split?: string[]|null, ranked?: string[]|null, sessions: Map<string, object>, sessionOrder: string[],
+ *   detachedIds?: {has(id: string): boolean}, activeId?: string|null, limit: number}} p
+ * @returns {{source: 'stored'|'split'|'ranked', ids: string[], cells?: (string|null)[],
+ *   focusedId: string|null}|null}
+ */
+function tileGridOpenSet({
+  stored = null,
+  split = null,
+  ranked = null,
+  sessions,
+  sessionOrder,
+  detachedIds,
+  activeId = null,
+  limit,
+}) {
+  const all = buildTilePickerSessions(sessions, Array.isArray(ranked) ? ranked : sessionOrder, detachedIds).map(
+    (c) => c.id
+  );
+  const restored = stored ? restoreTileGridCells(stored, all) : null;
+  if (restored) return { source: 'stored', ...restored };
+  const usable = (id) => typeof id === 'string' && sessions.has(id) && !detachedIds?.has?.(id);
+  const pair = (split || []).filter(usable);
+  if (split && pair.length) return { source: 'split', ids: [...new Set(pair)], focusedId: pair[0] };
+  const max = Math.max(1, Math.min(Math.floor(Number(limit) || 0), TILE_GRID_MAX));
+  if (all.length === 0) return null;
+  let ids = all.slice(0, max);
+  if (all.includes(activeId) && !ids.includes(activeId)) {
+    ids = [...all.filter((id) => id !== activeId).slice(0, max - 1), activeId];
+  }
+  return { source: 'ranked', ids, focusedId: ids.includes(activeId) ? activeId : ids[0] };
+}
+
+/**
+ * The tile counts the Tiles button's right-click menu offers, and the count a
+ * click opens until one is picked (owner decision 10 in docs/tile-grid-plan.md).
+ */
+const TILE_GRID_COUNTS = [2, 4, 6];
+const TILE_GRID_COUNT_DEFAULT = 6;
+
+/** A remembered tile count made safe: one of TILE_GRID_COUNTS, else the default. */
+function sanitizeTileCount(raw) {
+  const n = Number(raw);
+  return TILE_GRID_COUNTS.includes(n) ? n : TILE_GRID_COUNT_DEFAULT;
+}
+
+/**
+ * `base` (what the grid would open, or what an open grid shows, in its order)
+ * trimmed or filled to `n` tiles: trimmed from the end, the session to focus
+ * (`keepId`) always kept (it takes the last place when it sat past `n`, as in
+ * tileGridOpenSet's case c); filled from `all` (the open sessions, best first:
+ * the app passes the ranking, rankTileSessions) with the ones not in it yet.
+ * Fewer sessions than `n` give fewer tiles.
+ *
+ * @param {string[]} base
+ * @param {string[]} all
+ * @param {number} n - at most TILE_GRID_MAX
+ * @param {string|null} [keepId]
+ * @returns {string[]}
+ */
+function tileGridSetForCount(base, all, n, keepId = null) {
+  const max = Math.max(1, Math.min(Math.floor(Number(n) || 0), TILE_GRID_MAX));
+  const ids = [];
+  for (const id of [...(base || []), ...(all || [])]) {
+    if (typeof id === 'string' && id && !ids.includes(id)) ids.push(id);
+  }
+  // Every `base` id comes before every filler, so a trim never drops a base id
+  // in favour of one.
+  let out = ids.slice(0, max);
+  if (keepId && ids.includes(keepId) && !out.includes(keepId)) out = [...out.slice(0, max - 1), keepId];
+  return out;
+}
+
+/**
+ * Which tile takes focus when `id` leaves the grid: the next one in grid
+ * order, else the previous one, else null.
+ *
+ * @param {string[]} ids - the grid's tiles, in reading order
+ * @param {string} id - the tile that is leaving
+ * @returns {string|null}
+ */
+function tileNeighbor(ids, id) {
+  const i = ids.indexOf(id);
+  if (i === -1) return ids[0] ?? null;
+  return ids[i + 1] ?? ids[i - 1] ?? null;
+}
+
+/**
+ * The tile a directional focus chord moves to, in a row-major grid of `cols`
+ * columns whose empty cells are `null` (a hole can be any cell) or simply
+ * missing at the end. Focus never lands on a hole. Left and right go along
+ * the row, past any hole, and never leave it. Up and down take the nearest
+ * row in that direction that has a tile: the tile in the same column, else
+ * the one in the nearest column (the lower column on a tie), so moving down
+ * onto a short or holed last row lands on its nearest tile. Null when there
+ * is no tile in that direction.
+ *
+ * @param {(string|null)[]} cells - the grid's cells in reading order (or its packed tiles)
+ * @param {string} focusedId - the tile the keyboard is in
+ * @param {'left'|'right'|'up'|'down'} direction
+ * @param {number} cols - the layout's column count
+ * @returns {string|null}
+ */
+function tileInDirection(cells, focusedId, direction, cols) {
+  const i = focusedId ? cells.indexOf(focusedId) : -1;
+  if (i === -1 || !(cols >= 1)) return null;
+  const rows = Math.ceil(cells.length / cols);
+  const row = Math.floor(i / cols);
+  const col = i % cols;
+  const at = (r, c) => cells[r * cols + c] || null;
+  if (direction === 'left' || direction === 'right') {
+    const step = direction === 'left' ? -1 : 1;
+    for (let c = col + step; c >= 0 && c < cols; c += step) {
+      if (at(row, c)) return at(row, c);
+    }
+    return null;
+  }
+  if (direction !== 'up' && direction !== 'down') return null;
+  const step = direction === 'up' ? -1 : 1;
+  for (let r = row + step; r >= 0 && r < rows; r += step) {
+    let best = null;
+    let bestDistance = Infinity;
+    for (let c = 0; c < cols; c++) {
+      const id = at(r, c);
+      if (id && Math.abs(c - col) < bestDistance) {
+        best = id;
+        bestDistance = Math.abs(c - col);
+      }
+    }
+    if (best) return best;
+  }
+  return null;
+}
+
+/**
+ * The cell next to cell `index` in that direction (Move Tile: a tile moves
+ * into an empty neighbour cell, or swaps with a tiled one), or -1 at the
+ * edge. Adjacent only: a move never jumps over a cell.
+ *
+ * @param {number} index - the cell, in reading order
+ * @param {'left'|'right'|'up'|'down'} direction
+ * @param {number} cols - the layout's column count
+ * @param {number} cellCount - cols x rows
+ * @returns {number}
+ */
+function tileCellInDirection(index, direction, cols, cellCount) {
+  if (!(cols >= 1) || index < 0 || index >= cellCount) return -1;
+  const col = index % cols;
+  let j = -1;
+  if (direction === 'left') j = col > 0 ? index - 1 : -1;
+  else if (direction === 'right') j = col < cols - 1 ? index + 1 : -1;
+  else if (direction === 'up') j = index - cols;
+  else if (direction === 'down') j = index + cols;
+  return j >= 0 && j < cellCount ? j : -1;
+}
+
+/**
+ * The grid's cells after its shape changed (or to fill one for the first
+ * time): `cols` x `rows` cells, `null` for an empty one. The same shape keeps
+ * every cell as it is. A new shape keeps each tile at its row and column when
+ * every tile still fits there (2x2 growing to 3x2: the four tiles stay put),
+ * and otherwise packs the tiles in reading order from the first cell, holes
+ * collapsed (positions do not map between shapes). `oldCols` 0 (no layout
+ * yet) always packs.
+ *
+ * @param {(string|null)[]} cells - the current cells, laid out `oldCols` wide
+ * @param {number} oldCols - the column count they were laid out with
+ * @param {number} cols
+ * @param {number} rows
+ * @returns {(string|null)[]}
+ */
+function fitTileCells(cells, oldCols, cols, rows) {
+  const size = Math.max(0, cols * rows);
+  if (oldCols === cols && cells.length === size) return cells.slice();
+  const out = new Array(size).fill(null);
+  const placed = cells.map((id, k) => (id ? { id, row: Math.floor(k / oldCols), col: k % oldCols } : null));
+  const keep = oldCols >= 1 && placed.every((p) => !p || (p.row < rows && p.col < cols));
+  if (keep) {
+    for (const p of placed) if (p) out[p.row * cols + p.col] = p.id;
+    return out;
+  }
+  cells.filter(Boolean).slice(0, size).forEach((id, k) => {
+    out[k] = id;
+  });
+  return out;
+}
+
+/**
+ * How many columns a grid of `length` cells was laid out with: stored cells
+ * carry no shape of their own, and the layout table gives each cell count one
+ * shape (computeTileLayout: 1x1, 2x1, 3x1, 2x2, 3x2, 3x3). 0 for any other
+ * length (fitTileCells then packs).
+ *
+ * @param {number} length
+ * @returns {number}
+ */
+function tileCellCols(length) {
+  // Every cell count is some count's shape on a wide grid area (2x2, the
+  // narrow 3-tile shape, is also the 4-tile one).
+  for (let n = 1; n <= TILE_LAYOUT_MAX; n++) {
+    const { cols, rows } = computeTileLayout({ count: n });
+    if (cols * rows === length) return cols;
+  }
+  return 0;
+}
+
+/**
+ * The cells of a grid re-formed to another set of tiles (a count picked in the
+ * Tiles menu, or the Tiles button bringing back a remembered grid with more or
+ * fewer tiles): the tiles in `keep` stay in their cells and every other cell
+ * empties, then the cell model's shape rule (fitTileCells: each tile keeps its
+ * row and column when all fit, else they pack in reading order), then the
+ * tiles in `add` fill the empty cells in reading order, holes first.
+ *
+ * @param {(string|null)[]} cells - the cells now, laid out `oldCols` wide
+ * @param {number} oldCols
+ * @param {string[]} keep - tiles that stay
+ * @param {string[]} add - tiles that join, in the order they fill
+ * @param {number} cols - the new shape
+ * @param {number} rows
+ * @returns {(string|null)[]}
+ */
+function reformTileCells(cells, oldCols, keep, add, cols, rows) {
+  const kept = (cells || []).map((id) => (id && keep.includes(id) ? id : null));
+  const out = fitTileCells(kept, oldCols, cols, rows);
+  for (const id of add) {
+    if (!id || out.includes(id)) continue;
+    const k = out.indexOf(null);
+    // Not for a shape made for the count; a full grid takes no more.
+    if (k === -1) break;
+    out[k] = id;
+  }
+  return out;
+}
+
+/**
+ * The tile Ctrl+Tab / Alt+] (delta 1) or Alt+[ (delta -1) moves to while the
+ * grid is open: tiles cycle in reading order and wrap.
+ *
+ * @param {string[]} ids
+ * @param {string} focusedId
+ * @param {number} delta - +1 or -1
+ * @returns {string|null}
+ */
+function cycleTile(ids, focusedId, delta) {
+  if (ids.length === 0) return null;
+  const i = ids.indexOf(focusedId);
+  if (i === -1) return ids[0];
+  return ids[(i + delta + ids.length) % ids.length];
 }
 
 // ── Renderer liveness ──────────────────────────────────────────────────────
@@ -1841,7 +3969,9 @@ function clampTerminalDimensions(proposed) {
  * could reach it. Output visible, typing invisible, for as long as the claim
  * stayed hot. Width is the axis the wrap arithmetic depends on; rows only
  * decide how much is on screen at once, and keeping the local row count keeps
- * the composer at the bottom of a viewport that scrolls.
+ * the composer at the bottom of a viewport that scrolls. The one deliberate
+ * screen taller than its box is this device's own rows held under the
+ * on-screen keyboard, which keyboardClipPx keeps the composer in view for.
  *
  * @param {{cols: number, rows: number}|null} local - what xterm currently holds
  * @param {{cols: number, rows: number}|null} pty - what the server just reported
@@ -1853,14 +3983,183 @@ function reconcilePtyGeometry(local, pty) {
   return { adopt: true, cols: pty.cols };
 }
 
+/** Rows below the last content within which the cursor still counts (keyboardClipPx). */
+const KEYBOARD_CLIP_CURSOR_REACH = 2;
+
+/**
+ * How far to scroll the terminal SCREEN up while its rows are held under the
+ * on-screen keyboard (setting `keyboardHoldsRows`).
+ *
+ * Every PTY height change makes Claude Code clear the screen and reprint only
+ * the transcript tail that fits, so rows above that tail are lost from tmux and
+ * older ones stay in history as stale copies. The keyboard opening and closing
+ * was such a change each time. Instead the rows stay as they were and
+ * `.xterm-screen` (taller than its box now) is translated up by this many px.
+ *
+ * This is the one deliberate exception to "a screen taller than its container
+ * hides the input line" (see reconcilePtyGeometry): the offset below is what
+ * keeps the live content in view.
+ *
+ * - Following live output: the last row with content sits at the bottom of the
+ *   box. A fresh shell prompting on row 1 shows the top; Claude's footer under
+ *   its composer stays visible. The cursor counts only when it is right below
+ *   that content (a prompt or composer line still empty): a TUI that parks its
+ *   cursor far below what it drew (codex's dialogs, with the cursor on the last
+ *   row of an otherwise blank screen) must not scroll its content out of view.
+ * - Reading history: the offset follows the scroll position, so the top of the
+ *   scrollback is reachable and scrolling stays continuous.
+ *
+ * Recomputed on every render with no hysteresis; add some if a TUI's mid-redraw
+ * frames ever make the view jitter.
+ *
+ * @param {{rows: number, cellHeight: number, viewHeight: number, cursorRow: number,
+ *   lastContentRow: number, following: boolean, viewportY: number, baseY: number}} input
+ *   lastContentRow: the last non-blank screen row, or -1 when the screen is blank
+ * @returns {number} px, between 0 and the screen's overflow
+ */
+function keyboardClipPx(input) {
+  const { rows, cellHeight, viewHeight, cursorRow, lastContentRow, following, viewportY, baseY } = input;
+  if (!(cellHeight > 0) || !(viewHeight > 0) || !(rows > 0)) return 0;
+  const max = Math.max(0, rows * cellHeight - viewHeight);
+  if (max === 0) return 0;
+  if (!following && baseY > 0) return Math.round(max * Math.min(1, Math.max(0, viewportY / baseY)));
+  const cursorCounts = lastContentRow < 0 || cursorRow <= lastContentRow + KEYBOARD_CLIP_CURSOR_REACH;
+  const contentBottomRow = cursorCounts ? Math.max(cursorRow, lastContentRow) : lastContentRow;
+  const bottom = (Math.min(rows - 1, Math.max(0, contentBottomRow)) + 1) * cellHeight;
+  return Math.round(Math.min(max, Math.max(0, bottom - viewHeight)));
+}
+
+/**
+ * How many screen rows, from the top, are fully visible at a given offset: the
+ * local-echo overlay grows upward from the last of them (`setRowLimit`).
+ * @returns {number}
+ */
+function keyboardVisibleRowLimit(clipPx, viewHeight, cellHeight) {
+  if (!(cellHeight > 0)) return 0;
+  return Math.max(1, Math.floor((clipPx + viewHeight) / cellHeight));
+}
+
+/**
+ * Which session does a dashboard URL's fragment ask for? Another page that
+ * holds the dashboard's window, such as a task board, points it at
+ * `/#session=<id>`. Only the fragment changes between two such links, so the
+ * browser keeps the page loaded and fires `hashchange`, and the dashboard
+ * switches tabs without reloading. Any other fragment asks for nothing.
+ *
+ * @param {string} hash - `location.hash`, with or without its leading `#`
+ * @returns {string|null} the session id, or null
+ */
+function sessionIdFromFragment(hash) {
+  const params = new URLSearchParams(String(hash || '').replace(/^#/, ''));
+  const id = params.get('session');
+  return id && id.trim() ? id.trim() : null;
+}
+
+/** Longest model name a session header shows (the server caps it as well). */
+const SESSION_MODEL_MAX_CHARS = 64;
+/** A CLI registry id (src/config/cli-registry/schema.ts); anything else is not a class name. */
+const CLI_ID_PATTERN = /^[a-z][a-z0-9-]{0,23}$/;
+
+/**
+ * What a session's header says about its harness: the CLI id (the
+ * `run-mode-dot <id>` logo class), the registry's label for it, the model the
+ * session runs when the server knows it (`SessionState.displayModel`), and the
+ * tooltip naming both.
+ *
+ * The id is data: the label comes from the injected CLI catalog and falls back
+ * to the id, so a CLI added through clis.json still gets a name. The model is
+ * untrusted text (read off a pane, or a CLI's own report): control characters
+ * are dropped and the length capped here too, and callers render it with
+ * textContent. The tooltip says where a model that is not the CLI's own report
+ * came from, so it never claims more than the server knows: one the session
+ * was launched with may have been switched since, one read from the CLI's
+ * config is what it is configured to run, and a custom endpoint's model is the
+ * endpoint's, whatever the CLI calls it.
+ *
+ * @param {object} session - a session from app.sessions
+ * @param {Array<{id: string, label?: string}>} [catalog] - window.__codemanCliCatalog
+ * @returns {{id: string, label: string, model: string, title: string}}
+ */
+function describeSessionHarness(session, catalog) {
+  const id = typeof session?.mode === 'string' && CLI_ID_PATTERN.test(session.mode) ? session.mode : '';
+  const entry = id && Array.isArray(catalog) ? catalog.find((cli) => cli?.id === id) : null;
+  const label = (typeof entry?.label === 'string' && entry.label.trim()) || id;
+  const raw = session?.displayModel?.model;
+  const model =
+    typeof raw === 'string'
+      ? raw
+          .replace(/[\u0000-\u001f\u007f-\u009f]/g, '')
+          .trim()
+          .slice(0, SESSION_MODEL_MAX_CHARS)
+      : '';
+  const source = session?.displayModel?.source;
+  const qualifier = !model
+    ? ''
+    : source === 'launch'
+      ? ' (set at launch)'
+      : source === 'custom-endpoint'
+        ? ' (custom endpoint)'
+        : source === 'config'
+          ? ' (from config)'
+          : '';
+  const title = [label, model].filter(Boolean).join(' \u00B7 ') + qualifier;
+  return { id, label, model, title };
+}
+
 if (typeof window !== 'undefined') {
+  window.CodemanSessionHarness = { describeSessionHarness, SESSION_MODEL_MAX_CHARS };
   window.CodemanHistoryFormat = { formatHistoryBytes, computeHistoryTruncationNotice, computeRewriteScrollLine };
-  window.CodemanFilePaths = { absoluteFilePathPattern, previewsInFileViewer, FILE_PREVIEW_EXTENSIONS };
-  window.CodemanTerminalLines = { terminalLogicalLine };
+  window.CodemanFilePaths = {
+    absoluteFilePathPattern,
+    findFilePathLinks,
+    resolveLinkedFilePath,
+    relativeResolutionBase,
+    previewsInFileViewer,
+    FILE_PREVIEW_EXTENSIONS,
+    rendersAsPage,
+    HTML_PAGE_EXTENSIONS,
+  };
+  window.CodemanTerminalLines = {
+    terminalLogicalLine,
+    terminalPathLine,
+    terminalLinkLine,
+    terminalUrlContinuationExtent,
+    findTerminalUrls,
+    terminalCellWrappedPaths,
+  };
+  window.CodemanUrlSession = { sessionIdFromFragment };
   window.CodemanSplitPane = {
     clampDividerPercent,
     buildSplitPickerSessions,
     SPLIT_PANE_MIN_WIDTH,
+  };
+  window.CodemanTileGrid = {
+    computeTileLayout,
+    tileGridCapacity,
+    sanitizeTileGridState,
+    buildTilePickerSessions,
+    dragTrackFractions,
+    tileNeighbor,
+    tileInDirection,
+    tileCellInDirection,
+    fitTileCells,
+    cycleTile,
+    tileGridOpenSet,
+    restoreTileGridCells,
+    rankTileSessions,
+    sanitizeTileCount,
+    tileGridSetForCount,
+    tileCellCols,
+    reformTileCells,
+    TILE_GRID_COUNTS,
+    TILE_GRID_COUNT_DEFAULT,
+    TILE_GRID_MAX,
+    TILE_LAYOUT_MAX,
+    TILE_MIN_W,
+    TILE_MIN_H,
+    TILE_SCROLLBACK,
+    TILE_FONT_SIZE_DEFAULT,
+    TILE_GRID_SSE_FILTER,
   };
   window.CodemanRenderLiveness = { shouldKickRenderer, RENDER_STALL_MS, RENDER_LIVENESS_POLL_MS };
   window.CodemanFetchDeadline = {
@@ -1878,7 +4177,163 @@ if (typeof window !== 'undefined') {
   window.CodemanTerminalGeometry = {
     clampTerminalDimensions,
     reconcilePtyGeometry,
+    keyboardClipPx,
+    keyboardVisibleRowLimit,
     TERMINAL_MIN_COLS,
     TERMINAL_MIN_ROWS,
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Security notices
+// ═══════════════════════════════════════════════════════════════
+// A security notice is a sticky warning toast about something outside Codeman that
+// its users should act on (the first: OpenCode's Console breach, October 2026). The
+// notices are DATA in the hand-maintained src/web/public/security-notices.json, never
+// in whats-new.json (`npm run version-packages` rewrites that one every release), and
+// they ship with a release. This is the pure half: which notices this browser shows, and
+// on which surface. The wiring (fetches, the seen lists) is checkWhatsNew() in settings-ui.js,
+// the cards are showSecurityNotice() / showUpdateNotice() in panels-ui.js.
+
+/** `YYYY-MM-DD`, and a real calendar day (no 2026-02-30). */
+const SECURITY_NOTICE_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
+/** An https URL with a plain host: no other scheme, no userinfo, no whitespace. */
+const SECURITY_NOTICE_URL_PATTERN = /^https:\/\/[A-Za-z0-9.-]+(?::\d{1,5})?(?:[/?#]\S*)?$/;
+
+/**
+ * The local-time bounds of one `YYYY-MM-DD` day, or null when the string is not one.
+ * Local time on purpose: a notice dated the 18th starts on the viewer's 18th.
+ */
+function securityNoticeDay(value) {
+  const match = typeof value === 'string' ? SECURITY_NOTICE_DATE_PATTERN.exec(value) : null;
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]) - 1;
+  const day = Number(match[3]);
+  const start = new Date(year, month, day);
+  if (start.getFullYear() !== year || start.getMonth() !== month || start.getDate() !== day) return null;
+  const end = new Date(year, month, day + 1).getTime() - 1;
+  return { start: start.getTime(), end };
+}
+
+function securityNoticeText(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : '';
+}
+
+/**
+ * The notices to show, in file order, each as `{ id, title, message, label, url }`
+ * (`title` is '' when the entry has none).
+ *
+ * - A malformed entry is skipped, never repaired: no id, message or link label, a
+ *   link that is not https, a date that is not a real `YYYY-MM-DD` day, a `title`
+ *   that is present but not a non-blank string, or a `cli` that is not a registry
+ *   id. A repeated id shows its first entry only.
+ * - Shown from the start of the `published` day to the END of the `expires` day.
+ *   The expiry is what keeps an old notice from alarming a browser that first opens
+ *   Codeman months later.
+ * - An id in `seen` is skipped (the user closed it, or followed its link).
+ * - A notice naming a `cli` is shown ONLY when `available[cli] === true`. Absent,
+ *   unknown and false all mean "not installed" here, unlike isCliAvailable() in
+ *   settings-ui.js (which offers a launch on a doubt): a warning about software you
+ *   do not have is noise. A notice with no `cli` is for everyone.
+ * - `lang` 'zh-CN' takes the entry's `i18n['zh-CN']` title, message and label where
+ *   they exist, each falling back to the English one on its own.
+ *
+ * The CLI id is data from the JSON, compared as a key; no code here names one.
+ *
+ * @param {Array<object>} notices - `notices` from security-notices.json
+ * @param {{available?: Record<string, boolean>, seen?: Iterable<string>, now?: number, lang?: string}} [opts]
+ *   `available` is window.__codemanCliAvailable, `now` epoch milliseconds (default Date.now()).
+ * @returns {Array<{id: string, title: string, message: string, label: string, url: string}>}
+ */
+function selectSecurityNotices(notices, opts = {}) {
+  if (!Array.isArray(notices)) return [];
+  const available = opts.available && typeof opts.available === 'object' ? opts.available : {};
+  const seenSource = opts.seen;
+  const seen = new Set(
+    seenSource && typeof seenSource !== 'string' && typeof seenSource[Symbol.iterator] === 'function'
+      ? Array.from(seenSource, String)
+      : []
+  );
+  const now = typeof opts.now === 'number' && Number.isFinite(opts.now) ? opts.now : Date.now();
+  const lang = opts.lang === 'zh-CN' ? 'zh-CN' : 'en';
+  const taken = new Set();
+  const shown = [];
+  for (const entry of notices) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+    const id = securityNoticeText(entry.id);
+    const title = securityNoticeText(entry.title);
+    const message = securityNoticeText(entry.message);
+    const link = entry.link && typeof entry.link === 'object' ? entry.link : null;
+    const label = securityNoticeText(link?.label);
+    const url = typeof link?.url === 'string' ? link.url.trim() : '';
+    const published = securityNoticeDay(entry.published);
+    const expires = securityNoticeDay(entry.expires);
+    if (!id || !message || !label || !SECURITY_NOTICE_URL_PATTERN.test(url) || !published || !expires) continue;
+    if (entry.title !== undefined && !title) continue;
+    if (entry.cli !== undefined && (typeof entry.cli !== 'string' || !CLI_ID_PATTERN.test(entry.cli))) continue;
+    if (taken.has(id)) continue;
+    taken.add(id);
+    if (now < published.start || now > expires.end) continue;
+    if (seen.has(id)) continue;
+    if (entry.cli !== undefined && available[entry.cli] !== true) continue;
+    const localized = lang === 'en' ? null : entry.i18n?.[lang];
+    shown.push({
+      id,
+      title: securityNoticeText(localized?.title) || title,
+      message: securityNoticeText(localized?.message) || message,
+      label: securityNoticeText(localized?.label) || label,
+      url,
+    });
+  }
+  return shown;
+}
+
+/**
+ * Which surface carries each selected notice on this page load, decided together with
+ * the once-per-release update toast (checkWhatsNew in settings-ui.js) so a browser gets
+ * ONE notification, never a card and a toast for the same notice.
+ *
+ * - The update toast shows exactly as checkWhatsNew always decided: this browser saw an
+ *   older version (`seenVersion` set and different), and `notes` are this version's with
+ *   at least one highlight. Then every selected notice rides INSIDE it (`updateNotices`)
+ *   and no standalone card is shown.
+ * - Otherwise (a fresh install, a reload on the same version, notes missing or empty)
+ *   each notice gets its own card (`cards`).
+ * - `recordVersion`: store `runningVersion` as seen, as checkWhatsNew always did: on a
+ *   fresh install (so it is not greeted with "what's new") and when the toast shows.
+ *   Notes that are missing or empty record nothing, so the next load tries again.
+ *
+ * @param {{seenVersion?: string|null, runningVersion: string, notes?: object|null, notices?: Array<object>}} state
+ *   `notices` is the output of selectSecurityNotices().
+ * @returns {{recordVersion: boolean, update: boolean, updateNotices: Array<object>, cards: Array<object>}}
+ */
+function planStartupNotices(state = {}) {
+  const seenVersion = typeof state.seenVersion === 'string' && state.seenVersion ? state.seenVersion : null;
+  const runningVersion = state.runningVersion;
+  const notices = Array.isArray(state.notices) ? state.notices : [];
+  const notes = state.notes;
+  const update = Boolean(
+    seenVersion &&
+      seenVersion !== runningVersion &&
+      notes &&
+      notes.version === runningVersion &&
+      Array.isArray(notes.highlights) &&
+      notes.highlights.length > 0
+  );
+  return {
+    recordVersion: !seenVersion || update,
+    update,
+    updateNotices: update ? notices.slice() : [],
+    cards: update ? [] : notices.slice(),
+  };
+}
+
+if (typeof window !== 'undefined') {
+  window.CodemanSecurityNotices = {
+    select: selectSecurityNotices,
+    plan: planStartupNotices,
+    // The same https-only rule select() applies, for the card's link button to check again.
+    urlOk: (url) => typeof url === 'string' && SECURITY_NOTICE_URL_PATTERN.test(url),
   };
 }

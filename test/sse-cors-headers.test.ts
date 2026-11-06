@@ -17,7 +17,6 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { WebServer } from '../src/web/server.js';
 
-const TEST_PORT = 3119;
 const LOCAL_ORIGIN = 'http://localhost:5173';
 
 /** Open /api/events, read the response headers, then abort — it never ends on its own. */
@@ -42,9 +41,9 @@ describe('GET /api/events header inheritance', () => {
   let baseUrl: string;
 
   beforeAll(async () => {
-    server = new WebServer(TEST_PORT, false, true);
+    server = new WebServer(0, false, true);
     await server.start();
-    baseUrl = `http://localhost:${TEST_PORT}`;
+    baseUrl = `http://localhost:${server.boundPort}`;
   });
 
   afterAll(async () => {

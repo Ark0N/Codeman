@@ -274,7 +274,10 @@ Object.assign(CodemanApp.prototype, {
         // one `/`, and refuse whatever still opens a second one. The proxied form
         // is refused server-side as well (resolveUpstreamUrl).
         const path = data.path.replace(/[\t\n\r]/g, '').replace(/^[/\\]+/, '/');
-        void this.openWebview(id, { path: path.startsWith('/') && !/^\/[/\\]/.test(path) ? path : '/' });
+        void this.openWebview(id, {
+          path: path.startsWith('/') && !/^\/[/\\]/.test(path) ? path : '/',
+          auto: true,
+        });
         return;
       }
     };
@@ -301,14 +304,28 @@ Object.assign(CodemanApp.prototype, {
     let idx = startIndex;
 
     for (const id of this.webviewOrder) {
-      const webview = this.webviews.get(id);
-      if (!webview) continue;
-      const isActive = id === this.activeWebviewId;
-      const jsonId = escapeHtml(JSON.stringify(id));
-      const icon = webview.icon ? escapeHtml(webview.icon) : '';
+      if (!this.webviews.get(id)) continue;
+      parts.push(this.renderWebviewTab(id, idx));
+      idx++;
+    }
+    return parts.join('');
+  },
 
-      parts.push(`<div class="session-tab session-tab--web ${isActive ? 'active' : ''}" data-webview-id="${escapeHtml(id)}"
+  /**
+   * One web tab's HTML; `idx` is its zero-based Alt+N slot (no badge from 9 up).
+   * The grouped vertical rail places single web tabs into their group with this,
+   * so a web tab's markup is the same in every layout.
+   */
+  renderWebviewTab(id, idx) {
+    const webview = this.webviews.get(id);
+    if (!webview) return '';
+    const isActive = id === this.activeWebviewId;
+    const jsonId = escapeHtml(JSON.stringify(id));
+    const icon = webview.icon ? escapeHtml(webview.icon) : '';
+
+    return `<div class="session-tab session-tab--web ${isActive ? 'active' : ''}" data-webview-id="${escapeHtml(id)}"
           onclick="app.handleWebviewTabClick(event, ${jsonId})"
+          oncontextmenu="app.handleWebviewTabContextMenu(event, ${jsonId})"
           tabindex="0" role="tab" aria-selected="${isActive ? 'true' : 'false'}"
           aria-label="${escapeHtml(webview.name)} web tab" title="${escapeHtml(webview.url)}">
           ${idx < 9 ? '<span class="tab-number">' + (idx + 1) + '</span>' : ''}
@@ -319,10 +336,7 @@ Object.assign(CodemanApp.prototype, {
             </span>
           </span>
           <span class="tab-actions"><span class="tab-gear" onclick="event.stopPropagation(); app.showWebviewModal(${jsonId})" title="URL settings" aria-label="URL settings" tabindex="0">&#x2699;</span><span class="tab-close" onclick="event.stopPropagation(); app.closeWebviewTab(${jsonId})" title="Close tab" aria-label="Close web tab" tabindex="0">&times;</span></span>
-        </div>`);
-      idx++;
-    }
-    return parts.join('');
+        </div>`;
   },
 
   _webviewGlobeIcon() {
@@ -332,6 +346,16 @@ Object.assign(CodemanApp.prototype, {
   handleWebviewTabClick(event, id) {
     event?.preventDefault?.();
     return this.openWebview(id);
+  },
+
+  /**
+   * Right-click (or the menu key) on a web tab in the vertical rail opens its
+   * actions (Focus, group moves, settings), the flat rail included, where it is
+   * the only way in. Everywhere else the browser keeps its own menu.
+   */
+  handleWebviewTabContextMenu(event, id) {
+    if (!this._tabLayoutEditable?.()) return false;
+    return this.openTabWebviewMenu?.(event, id);
   },
 
   /** Mark exactly one tab active across BOTH tab kinds. */
@@ -345,6 +369,8 @@ Object.assign(CodemanApp.prototype, {
       // A web tab is active, so no session tab may also look active.
       for (const tab of container.querySelectorAll('.session-tab[data-id]')) tab.classList.remove('active');
     }
+    this._syncTabTreeSelection?.(container);
+    this._renderTabFocus?.();
   },
 
   // ── Opening / closing ─────────────────────────────────────────────────────
@@ -356,14 +382,22 @@ Object.assign(CodemanApp.prototype, {
    */
   /**
    * @param {string} id
-   * @param {{path?: string}} [options] `path` (pathname+search+hash) opens a
+   * @param {{path?: string, auto?: boolean}} [options] `path` (pathname+search+hash) opens a
    *   deep link inside the dashboard: appended to the proxy prefix, or resolved
    *   against the real URL in direct mode. A mounted frame is navigated there
-   *   rather than left on whatever page it was showing.
+   *   rather than left on whatever page it was showing. `auto: true` marks an
+   *   open the APP made (a frame recovering itself, the fallback after the
+   *   active web tab closes), as on selectSession().
    */
   async openWebview(id, options = {}) {
     const webview = this.webviews.get(id);
     if (!webview) return;
+
+    // Opening a web tab yourself is choosing something else, so a
+    // `#session=<id>` link still waiting for its session must not take the
+    // screen from this tab later. Retired before the await below, which a
+    // session:created could otherwise land inside.
+    if (options.auto !== true) this._retireUrlSession?.();
 
     if (!this.webviewOrder.includes(id)) {
       this.webviewOrder.push(id);
@@ -492,7 +526,15 @@ Object.assign(CodemanApp.prototype, {
 
   openWebviewExternal(id) {
     const webview = this.webviews.get(id || this.activeWebviewId);
-    if (webview) window.open(webview.url, '_blank', 'noopener');
+    if (!webview) return;
+    // A host that refuses must not fall through to window.open, which in a
+    // WebView can replace the dashboard page.
+    const hosted = this.openInHostWindow?.(webview.url) ?? null;
+    if (hosted !== null) {
+      if (!hosted) this.showToast('Could not open a new window for this dashboard', 'error');
+      return;
+    }
+    window.open(webview.url, '_blank', 'noopener');
   },
 
   closeWebviewTab(id) {
@@ -513,7 +555,7 @@ Object.assign(CodemanApp.prototype, {
       this.activeWebviewId = null;
       const next = this.webviewOrder[0];
       if (next) {
-        this.openWebview(next);
+        this.openWebview(next, { auto: true });
       } else {
         this._hideWebviewLayer();
         // Fall back to whatever session was last shown, or the welcome screen.

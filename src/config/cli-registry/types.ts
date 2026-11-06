@@ -29,6 +29,8 @@ export type EngineValue =
   | 'muxName'
   | 'effortLevel'
   | 'effortSettingsJson'
+  /** The Discord bridge's startup hint, passed to Claude as `--append-system-prompt`. */
+  | 'appendSystemPrompt'
   /** `sessionId` prefixed `codeman_<id>` — codex's unique per-pane rollout originator. */
   | 'codemanPrefixedSessionId'
   /**
@@ -69,6 +71,14 @@ export type Cond =
  */
 export type QuoteStyle = 'auto' | 'bare' | 'double' | 'single';
 
+/**
+ * Workspace-relative directories an agent CLI scans for project skills. A closed list
+ * rather than a free path: the value decides where the server WRITES, and
+ * `~/.codeman/clis.json` can set it, so it must never be able to name `..` or an
+ * absolute path.
+ */
+export type AgentSkillDir = '.claude/skills' | '.agents/skills';
+
 /** One argv element. */
 export type ArgSpec =
   /** A bare literal word, e.g. the base binary or codex's `resume` subcommand. */
@@ -89,6 +99,29 @@ export interface CliVariant {
   when?: Cond;
   args: ArgSpec[];
 }
+
+/** The newline chord a CLI's composer reads as "insert a line break" (see `CliCapabilities.newline`). */
+export type NewlineSequence = 'line-feed' | 'esc-enter';
+
+/** The config readers `capabilities.modelDetect.configResolver` may name (src/model-config-resolvers.ts). */
+export type ModelConfigResolverName = 'deepseek-route';
+
+/**
+ * The synced App Settings keys `capabilities.launchDefaults` may name (src/web/launch-defaults.ts).
+ * A closed list rather than any settings key, so a clis.json override cannot feed an
+ * arbitrary setting onto a command line; each name must also be a `SettingsUpdateSchema`
+ * key, which the resolver's typing enforces.
+ */
+export type LaunchDefaultSettingKey = 'codexModel' | 'codexReasoningEffort';
+
+/** The MCP config dialects `src/mcp-sync.ts` has an adapter for. */
+export type McpConfigFormat =
+  | 'claude-json'
+  | 'gemini-json'
+  | 'codex-toml'
+  | 'opencode-json'
+  | 'antigravity-json'
+  | 'copilot-json';
 
 export interface CliLaunch {
   params: Record<string, ParamSpec>;
@@ -356,8 +389,8 @@ export interface CliCapabilities {
     /**
      * How many rows at the FOOT of the screen that row can appear in, counting non-blank
      * rows only. Claude writes its chip on the last row and keeps the default; Codex pins
-     * its own above the composer, which puts it third from the bottom, so it declares
-     * more. Keep each number as small as that CLI's layout allows: every extra row is
+     * its own above the composer, which puts it third or fourth from the bottom (its hint
+     * row comes and goes), so it declares more. Keep each number as small as that CLI's layout allows: every extra row is
      * another row an agent might be able to write, and the label is what silences an
      * alert. See `watchingLabel()` in `session-activity.ts`.
      */
@@ -375,6 +408,65 @@ export interface CliCapabilities {
      * tested. See `isAwaitingWorkers()` in `session-activity.ts`.
      */
     awaitingLine?: string;
+    /**
+     * Source of a regex matching the dialog this CLI draws when it stops and waits for the
+     * user to answer something (an approval, a question, a trust prompt): Codeman reads
+     * such a pane as BLOCKED, with the same red "needs you" alert, push, webhook and
+     * `blocked` wait signal a Claude `permission_prompt` hook raises. It is the source of
+     * that state for a CLI with no hook of its own (`hooks: 'none'`); a CLI whose hooks
+     * report it never consults the screen for it.
+     *
+     * Tested against the last `blockedLines` non-blank rows of a pane capture, joined
+     * with `\n`, so the pattern can require several markers at once and anchor on the
+     * end of the window (no `m` flag: `$` is the last row). It must anchor on chrome
+     * only that CLI draws, at the FOOT of the screen, where a dialog replaces the
+     * composer: the text above is the agent's own, and it can print anything. A forged
+     * match may cost a false alert and nothing else, because Codeman never answers such a
+     * dialog. See `isBlockedScreen()` in `session-activity.ts`.
+     *
+     * A CLI that omits it is never blocked from the screen, which is what every CLI was
+     * before the field existed.
+     */
+    blockedLine?: string;
+    /**
+     * How many non-blank rows at the foot of the screen `blockedLine` sees. A dialog's
+     * options wrap at narrow widths, which is what pushes its markers up the screen, so
+     * this is sized for the narrowest pane the CLI was measured at. Default 1.
+     */
+    blockedLines?: number;
+    /**
+     * Source of a regex every non-blank row BELOW an idle composer must match (at most
+     * three rows): the footer and hint rows this CLI draws there and nowhere else. It is
+     * what lets the experimental guarded stage/submit routes (`agent-staging.ts`) prove
+     * that the `promptGlyph` row they read is this CLI's own composer, at rest, and not
+     * a dialog option or a transcript line the agent printed. A CLI that omits it never
+     * takes guarded input: stage and submit refuse it. Tested one row at a time.
+     */
+    composerFooterLine?: string;
+    /**
+     * Source of a regex matching a row of a suggestion popup this CLI draws directly
+     * ABOVE its composer (a slash-command list, a file or mention search, its key-hint
+     * row). The footer below such a composer is unchanged, so without this guarded
+     * stage/submit would read the popup frame as an idle composer, and Enter would
+     * accept the highlighted entry instead of sending the draft. Tested one row at a
+     * time against the contiguous block just above the composer row, never further
+     * up the pane: a match there refuses the frame. See `readGuardedComposer()`.
+     */
+    composerPopupLine?: string;
+    /**
+     * Characters that, as the first character of a draft, make Enter run a command
+     * rather than send a prompt (codex: `/` slash commands, `!` shell commands).
+     * Guarded stage refuses such a message before typing; commands go through the
+     * ordinary input route.
+     */
+    composerCommandPrefixes?: string;
+    /**
+     * Characters that, starting the word under the caret, open a completion popup
+     * whose highlighted entry Enter accepts (codex: `@` file and mention search, `$`
+     * skills). Guarded stage refuses a message whose LAST word starts with one,
+     * before typing: the caret ends there, and the popup follows the caret.
+     */
+    composerCompletionSigils?: string;
   };
   /**
    * How many columns this CLI indents its transcript body by, so a copy taken from its
@@ -399,6 +491,17 @@ export interface CliCapabilities {
    * Absent means no strip at all, the same fail-safe direction `workDetect` takes.
    */
   transcriptGutter?: number;
+  /**
+   * Literal text the TUI draws once its composer can take a prompt — what `codeman agent
+   * spawn` waits for (a `wait-output` match) before it calls a worker ready.
+   *
+   * Deliberately NOT `workDetect.promptGlyph`: claude's `❯` also marks the selected row
+   * of its workspace-trust dialog, which is exactly the screen a readiness wait must not
+   * mistake for a composer, so claude declares its composer's own hint text instead.
+   * Absent means no readiness wait: a spawn returns as soon as the session exists, and
+   * the caller synchronizes on `wait-output` markers.
+   */
+  composerReadyMark?: string;
   /** No direct-PTY fallback: the CLI must run inside tmux (secrets ride tmux setenv). */
   requiresMux: boolean;
   /**
@@ -430,11 +533,40 @@ export interface CliCapabilities {
    */
   transcript: 'claude-jsonl' | 'codex-rollout' | 'deepseek-zstd' | 'omp-jsonl' | 'none';
   /**
-   * 'strip-full'     — alt-screen + erase-scrollback + mouse DECSETs stripped (Ink TUIs).
-   * 'strip-mux-only' — only tmux's own attach-time smcup (the safe default).
-   * 'preserve'       — leave everything (a direct-PTY shell running vim/less/htop).
+   * What the server strips from this CLI's output stream before the browser sees it.
+   * The value encodes three independent choices (predicates in session.ts):
+   *
+   * | value                 | alt-screen toggles  | `3J` (erase scrollback) | mouse DECSETs       |
+   * |-----------------------|---------------------|-------------------------|---------------------|
+   * | `strip-full`          | stripped            | stripped                | stripped            |
+   * | `strip-mux-and-mouse` | stripped under tmux | kept                    | stripped under tmux |
+   * | `strip-mux-only`      | stripped under tmux | kept                    | kept                |
+   * | `preserve`            | stripped under tmux | kept                    | kept                |
+   *
+   * `strip-full` is `isAltScreenStripMode`; `strip-mux-and-mouse` is `isMuxMouseStripMode`;
+   * every other value takes `isMuxAltScreenOnlyStripMode`, so at runtime `preserve` and
+   * `strip-mux-only` are the same row — `preserve` only says what such a CLI's pane
+   * holds (terminal-owned scrollback: a shell, pi), not a different strip.
+   *
+   * - alt-screen: the tmux CLIENT emits `smcup` as its first bytes at attach, parking
+   *   xterm in the scrollback-less alternate buffer; a pane program's own toggles never
+   *   reach the client (tmux repaints instead). "Under tmux" means `useMux`: on a
+   *   direct-PTY fallback the `?1049h` is the program's own and must stay.
+   * - `3J`: a user's `clear` is a deliberate scrollback wipe; only an Ink TUI's
+   *   redraw-driven `3J` (strip-full) is noise.
+   * - mouse DECSETs: stripping them keeps a drag a local selection instead of a report
+   *   to the TUI. The browser then hand-encodes clicks (`_sendSyntheticSgrTap`), gated
+   *   on the `cliMouseTracking` the server records as it strips. Kept where a program's
+   *   own mouse support must work in the pane (htop/vim in a shell).
+   *
+   * Stock CLIs: `strip-full` = claude, codex, gemini (Ink TUIs); `strip-mux-and-mouse` =
+   * opencode and copilot (full-screen TUIs that enable tracking themselves); `strip-mux-only` =
+   * antigravity, grok, deepseek, omp; `preserve` = shell, pi.
+   *
+   * A fourth combination is the point to split this into flags; three is still cheaper
+   * as an enum.
    */
-  altScreen: 'strip-full' | 'strip-mux-only' | 'preserve';
+  altScreen: 'strip-full' | 'strip-mux-only' | 'strip-mux-and-mouse' | 'preserve';
   echo: {
     policy: 'buffer' | 'predict' | 'off';
     /** How the local-echo overlay locates the composer row. */
@@ -442,8 +574,54 @@ export interface CliCapabilities {
     /** Names a PREDICT_PROFILES key. Unknown or absent degrades to 'buffer', never to broken. */
     predictProfile?: string;
   };
-  /** Forwarding the wheel to the CLI's own transcript. 'never' keeps local scrollback. */
-  wheelForward: { mode: 'never' | 'version-gated'; minVersion?: string };
+  /**
+   * Forwarding the wheel to the CLI's own transcript. 'never' keeps local scrollback;
+   * 'version-gated' forwards from `minVersion` on; 'always' forwards at any version. Either
+   * forwarding mode applies only while the CLI has mouse tracking on (`cliMouseTracking`).
+   *
+   * ⚠️ Declared only: nothing reads this field yet (see DECLARED-FOR-LATER below). The browser's
+   * gate is `_shouldForwardWheelToApp` in terminal-ui.js, which keeps its own hand-written
+   * per-CLI rules, so changing a value here changes nothing until that gate is changed too.
+   */
+  wheelForward: { mode: 'never' | 'version-gated' | 'always'; minVersion?: string };
+  /**
+   * The CLI pages its OWN transcript on PageUp/PageDown, so a wheel or touch scroll over
+   * a pane with no local history can be turned into those keys instead of doing nothing
+   * (`_maybePageCliTranscript` in terminal-ui.js). Read by the frontend through
+   * `window.__codemanTranscriptPageKeys`, which the server builds from this field.
+   *
+   * ⚠ NOT wheel forwarding. `wheelForward` above sends SGR mouse wheel REPORTS; this sends
+   * plain keys, and only when the local buffer is hollow (normal buffer, `baseY === 0`).
+   * A CLI can ignore one and honour the other: Codex without observed mouse tracking
+   * uses this fallback, while fullscreen Codex 0.163.0 accepts SGR wheel reports.
+   *
+   * Absent means no paging, so a CLI nobody has measured keeps plain local scrolling.
+   */
+  transcriptPageKeys?: boolean;
+  /**
+   * `'inline'`: the CLI renders inline (its content stacks at the bottom of the
+   * main screen), so while a phone's on-screen keyboard is up the browser keeps
+   * the PTY's rows and scrolls the view instead of resizing (`keyboardHoldsRows`,
+   * terminal-ui.js `_keyboardHoldEligible`). Read by the frontend through
+   * `window.__codemanKeyboardHoldModes`, which the server builds from this field.
+   *
+   * Why it exists: every PTY height change makes Claude Code's inline renderer
+   * clear the screen and reprint only the tail that fits (#672). Measured on
+   * Claude Code 2.1.306 with tmux 3.2a, a fresh session already at the phone's
+   * size printing 100 numbered lines: five keyboard open/close cycles (PTY
+   * 62x38 to 62x15 and back, one SIGWINCH per transition) left 75 of the 100 in
+   * `tmux capture-pane` history, the other 25 gone for good; with the rows held
+   * the PTY stayed 62x38, no SIGWINCH reached the pane and all 100 remained.
+   *
+   * ⚠ Only for a renderer that is inline. A CLI that lays out the FULL height
+   * (codex: banner at the top, composer pinned to the bottom) cannot fit both
+   * ends above the keyboard and must be resized instead, so it stays absent.
+   * Absent means resize, the safe default for an unmeasured CLI. Even when set,
+   * the hold stands aside while the CLI reports mouse tracking (Claude's
+   * fullscreen mode, which lays out the full height and has not been measured
+   * losing lines, so it resizes as before), and for remote and docker sessions.
+   */
+  keyboardHold?: 'inline';
   keyboardAccessory: 'agent' | 'shell';
   /** Multi-user: this CLI is a raw shell, so its commands need the privileged gate. */
   privilegedCommandGate: boolean;
@@ -452,10 +630,72 @@ export interface CliCapabilities {
   ralph: boolean;
   respawn: boolean;
   effort: boolean;
+  /**
+   * Codeman may write its agent skill (`skills/codeman`) into this CLI's workspace and
+   * seed its per-session preamble (behind the synced `agentSkillEnabled` setting,
+   * add-only, marker-owned). Where it lands comes from `agentSkillDir` below.
+   */
   agentSkillInjection: boolean;
+  /**
+   * The workspace-relative directory this CLI scans for project skills, so the skill
+   * lands at `<workspace>/<agentSkillDir>/codeman/SKILL.md` where the CLI discovers it.
+   * Measured per CLI. Absent with `agentSkillInjection: true` means Claude Code's
+   * `.claude/skills`, which is what the boolean meant before this field existed, so a
+   * `~/.codeman/clis.json` written against the old schema keeps its behaviour.
+   */
+  agentSkillDir?: AgentSkillDir;
   statusLineTelemetry: boolean;
   /** Where a model override is delivered. Claude uniquely writes settings.local.json. */
   model: { source: 'flag' | 'claude-settings-file' | 'none'; param?: string };
+  /**
+   * Where this CLI draws the model it is running, so a session header can name it
+   * (`SessionState.displayModel`, src/session-display-model.ts).
+   *
+   * `screenLine` is the source of a regex with exactly ONE capture group, the model. It
+   * runs over the last `screenLines` non-blank rows of the pane capture the idle/working
+   * probe already takes (rows joined with `\n`, so a pattern may span them), which costs no
+   * extra tmux call and re-reads the footer at every turn transition, so an in-session
+   * `/model` switch is followed.
+   *
+   * ⚠ The rows are pane text and the agent writes most of a pane, so a pattern must anchor
+   * on chrome only this CLI draws (the row under its own composer, an effort word in its
+   * own footer format), never on a shape the agent could print in its transcript. Measured
+   * on a live pane per CLI; absent means the CLI's screen is never read for a model and
+   * the session shows its launch model, if any.
+   *
+   * `configResolver` names a reader (src/model-config-resolvers.ts) that resolves the
+   * model the CLI's own config pins, the way that CLI resolves it for the session, for
+   * while the screen names none (its status line switched off, or not drawn yet). Read
+   * once per pane start, attach or relaunch, bounded and read-only; the screen still
+   * wins whenever it names a model. A NAMED reader, like a launcher profile, so the
+   * per-CLI behaviour stays data here and code in one module.
+   */
+  modelDetect?: {
+    screenLine?: string;
+    screenLines?: number;
+    /**
+     * Words the `screenLine` field can show when it is NOT the model (a footer whose model
+     * field is switched off shows the next field there), compared lower-cased. A field
+     * equal to the session's own working-directory basename is never the model either,
+     * for every CLI; that rule is the shared reader's, not data.
+     */
+    rejectWords?: string[];
+    configResolver?: ModelConfigResolverName;
+  };
+  /**
+   * Synced App Settings that seed this CLI's launch params when the caller left them unset,
+   * keyed by LAUNCH PARAM name (`{ model: 'codexModel' }`), never the legacy wire name; the
+   * resolver translates through `launch.legacyConfigAliases` like every other `param`.
+   *
+   * Filled into the entry's `launch.legacyConfigField` object at create time by
+   * `applyLaunchDefaults()` (src/web/launch-defaults.ts), which re-validates each value
+   * with `SettingsUpdateSchema` and never overwrites a value the caller sent. Which
+   * launches get it is the CALLER's decision (local ones only: never remote, Docker or a
+   * custom model endpoint). `schema.ts` refuses an undeclared param, and an entry without
+   * a `legacyConfigField`, whose params would otherwise be read off the request body itself.
+   * Absent = no launch defaults.
+   */
+  launchDefaults?: Record<string, LaunchDefaultSettingKey>;
   /**
    * Params a non-granted multi-user owner may not set freely, and what they are forced to.
    * Data-driven so a CUSTOM CLI's bypass flag is clampable exactly like codex's.
@@ -512,6 +752,33 @@ export interface CliCapabilities {
   /** Cap on a single terminal frame, when this CLI needs a tighter one than the default. */
   maxFrameBytes?: number;
   /**
+   * The bytes the web UI types into this CLI's pane for Shift+Enter (the `send-key` route).
+   * `line-feed` (`0x0a`, also what Ctrl+Enter sends) is what Claude Code's Ink input and most TUIs
+   * read as "insert a newline"; `esc-enter` (`ESC` `CR`, the same chord as Option/Alt+Enter and
+   * the mobile ⌥Enter key) is for a TUI that ignores a bare line feed. Absent = `line-feed`.
+   * Data, not a branch on the CLI id, so supporting another CLI's quirk is one line here.
+   */
+  newline?: NewlineSequence;
+  /**
+   * Where this CLI keeps its user-level MCP server list, for MCP sync (`src/mcp-sync.ts`).
+   * `path` is relative to the home directory. `format` names the file dialect the sync
+   * adapter reads and writes. Absent = no known/verified MCP config file, so the CLI is
+   * skipped by sync rather than guessed at.
+   *
+   * `relocation` names the env var the CLI itself reads to move that file (codex's
+   * `CODEX_HOME`, claude's `CLAUDE_CONFIG_DIR`, opencode's `XDG_CONFIG_HOME`). When the SERVER
+   * process env (what the CLIs Codeman spawns inherit) sets it to an absolute directory, the
+   * file is `<that dir>/<relocation.path>` instead; set to anything else, the target is
+   * reported `skipped` rather than written somewhere the CLI never reads. Absent = the file
+   * only follows `$HOME`.
+   */
+  mcpConfig?: {
+    path: string;
+    altPath?: string;
+    format: McpConfigFormat;
+    relocation?: { envVar: string; path: string };
+  };
+  /**
    * How this CLI is pointed at a user-supplied custom OpenAI-compatible
    * endpoint (local, e.g. llama.cpp, or cloud, e.g. Azure AI Foundry) — the
    * Custom Model Endpoint Profiles feature (`docs/custom-model-endpoints-plan.md`). Declared
@@ -547,9 +814,11 @@ export interface CliCapabilities {
    * for pi and omp (`--model custom/<id>`, or the CLI stays on its own default
    * provider and reports "No API key found for the selected model") or for
    * grok (`--model codeman-custom`, the `[model.<name>]` block the config
-   * declares). Absent = the config alone selects the model (claude's env vars,
-   * opencode's blob, codex's top-level `model` key). Applied by the session's
-   * respawn options through the entry's `legacyConfigField`, never by id.
+   * declares), and codex carries its bare selected id (`{modelId}`, an id the
+   * entry's `model` token pattern must be able to carry). Absent = the config
+   * alone selects the model (claude's env vars, opencode's blob). Applied by
+   * the session's respawn options through the entry's `legacyConfigField`,
+   * never by id.
    *
    * `contextLengthVar` (env kind only): the env var a discovered per-model context-window
    * size is written to when known (claude's `CLAUDE_CODE_MAX_CONTEXT_TOKENS`) — without it,
@@ -591,19 +860,13 @@ export interface CliCapabilities {
    * reuses that file.
    *
    * `appendV1Suffix` (env kind only): the raw `endpoint.baseUrl` gets `withV1Suffix()`
-   * applied before being written to `baseUrlVar`, instead of being used verbatim.
-   * DeepSeek needs this and claude/gemini must NOT get it — a per-CLI asymmetry confirmed
-   * by reading each SDK's own request-building source, not assumed: DeepSeek Harness's
-   * bundled `@deepseek-ai/dsh-llm-deepseek` concatenates `${connection.baseURL}/chat/
-   * completions` with no `/v1` insertion of its own (its real public API base,
-   * `https://api.deepseek.com`, expects the caller's base URL to already carry any
-   * needed prefix), while llama-swap/llama.cpp only ever serves the OpenAI-conventional
-   * `/v1/chat/completions` — confirmed live: a bare `POST <baseUrl>/chat/completions`
-   * 404s, `POST <baseUrl>/v1/chat/completions` succeeds, and the harness's own error
-   * message template (`DeepSeek API error (HTTP ${status})`) reproduces the exact
-   * `HTTP_404` this feature originally shipped with unexplained. Claude Code's own SDK,
-   * by contrast, was already confirmed working end-to-end against the RAW `baseUrl` with
-   * no suffix — appending one there would be wrong, not just redundant.
+   * applied before being written to `baseUrlVar`, instead of being used verbatim. Only
+   * copilot declares it: its OpenAI-style route is `<base>/v1/chat/completions`, and a
+   * gateway saves the bare root. claude/gemini must NOT get it: Claude Code's own SDK was
+   * confirmed working end-to-end against the RAW `baseUrl`, so appending a suffix there
+   * would be wrong, not just redundant. The per-session config-file recipes do not need
+   * this flag at all: `renderConfigFile()` applies the suffix inside every template
+   * (deepseek's patch included), so no configDir entry carries a raw base URL.
    */
   customModelInjection:
     | {
@@ -623,8 +886,40 @@ export interface CliCapabilities {
         kind: 'configDir';
         dirEnvVar: string;
         fileName: string;
-        template: 'codex-toml' | 'pi-models-json' | 'omp-models-yml' | 'grok-toml';
+        template: 'codex-toml' | 'pi-models-json' | 'omp-models-yml' | 'grok-toml' | 'deepseek-patch-json';
         launchModel?: string;
+        /**
+         * Names of entries under this CLI's REAL home that must be symlinked into the
+         * isolated directory after the generated file is written: the same trick
+         * `linkSharedProjectsDir()` plays for claude's `projects`. Declared for CLIs whose
+         * home carries state that must survive the redirect (deepseek's `sessions` transcript
+         * root and `profiles` bundles, plus `settings.yaml`, which would otherwise stop
+         * applying and, for `sessions`, get deleted by `removeConfigDir` on clear/close).
+         * A CLI that saves a linked file by rename replaces the link: dsh does, so the first
+         * in-session settings write turns `settings.yaml` into a local file.
+         * Never include `fileName` itself: the generated file owns that name in the isolated
+         * directory, and a link there would write THROUGH into the user's real file.
+         * Consumed generically by custom-model-injection-apply.ts.
+         */
+        linkFromRealHome?: string[];
+        /**
+         * Which of `linkFromRealHome` are DIRECTORIES (`sessions`, `profiles`) rather than
+         * files (`settings.yaml`). A missing directory target is created (mode 0700, what
+         * dsh does itself on a first turn) before linking: linking a nonexistent directory
+         * leaves a dangling symlink the CLI's own `mkdir` under it fails on with ENOENT on
+         * EVERY turn. A missing FILE target is skipped instead of linked (dangling-file
+         * links serve no purpose the CLI could not do itself). Must be a subset of
+         * `linkFromRealHome`; entries absent from it are treated as files.
+         * Consumed generically by custom-model-injection-apply.ts.
+         */
+        linkFromRealHomeDirs?: string[];
+        /**
+         * Fallback location of the CLI's real home, relative to the user's home directory
+         * (deepseek's `.dsh`), used only when neither the session's own `dirEnvVar` override
+         * nor the server's environment sets it. Required whenever `linkFromRealHome` is
+         * declared, so no consumer has to hardcode a per-CLI default of its own.
+         */
+        realHomeFallback?: string;
       }
     | { kind: 'unsupported' };
 }

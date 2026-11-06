@@ -40,6 +40,8 @@ function loadApp() {
     escapeHtml: (s: string) => String(s),
     // Reverse-proxy route builder from constants.js (not loaded here); identity at root.
     CodemanBase: { base: '', url: (p: string) => p },
+    // Also from constants.js: no file in this suite renders as an HTML page.
+    rendersAsPage: () => false,
     document: { getElementById: () => null, addEventListener: vi.fn() },
     window: windowStub,
     setTimeout,
@@ -126,6 +128,30 @@ describe('file viewer detach button', () => {
 
     expect(overlay.classList.contains('visible')).toBe(true);
     expect(app.showToast).toHaveBeenCalledWith(expect.stringContaining('Pop-up blocked'), 'error');
+  });
+
+  it('hands the URL to a host window opener instead of window.open', () => {
+    const { app, overlay, windowStub } = loadApp();
+    app.openInHostWindow = vi.fn().mockReturnValue(true);
+    app.filePreviewDetachUrl = '/api/sessions/s1/file-raw?path=doc.pdf';
+
+    app.detachFilePreview();
+
+    expect(app.openInHostWindow).toHaveBeenCalledWith('/api/sessions/s1/file-raw?path=doc.pdf');
+    expect(windowStub.open).not.toHaveBeenCalled();
+    expect(overlay.classList.contains('visible')).toBe(false);
+  });
+
+  it('keeps the overlay and toasts when the host could not open a window', () => {
+    const { app, overlay, windowStub } = loadApp();
+    app.openInHostWindow = vi.fn().mockReturnValue(false);
+    app.filePreviewDetachUrl = '/api/sessions/s1/file-raw?path=doc.pdf';
+
+    app.detachFilePreview();
+
+    expect(windowStub.open).not.toHaveBeenCalled();
+    expect(overlay.classList.contains('visible')).toBe(true);
+    expect(app.showToast).toHaveBeenCalledWith(expect.stringContaining('Could not open'), 'error');
   });
 
   it('does nothing when no preview is armed', () => {

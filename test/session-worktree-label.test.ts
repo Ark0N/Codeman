@@ -45,6 +45,24 @@ describe('worktree fields through the unified merge (#266)', () => {
     expect(merged[0].gitBranch).toBeUndefined();
   });
 
+  it('names the worktree of a LIVE session from its folder layout (no transcript record yet)', () => {
+    const merged = mergeUnifiedSessions({
+      live: [{ id: 'live1', name: 'w1-fix-login', mode: 'codex', workingDir: '/repo/.claude/worktrees/fix-login' }],
+    });
+    expect(merged[0]).toMatchObject({ worktreeName: 'fix-login', worktreeRepo: '/repo' });
+  });
+
+  it('lets a transcript record win over the layout, and ignores a subfolder of a worktree', () => {
+    const fromTranscript = mergeUnifiedSessions({
+      history: [historyRow({ worktreeName: 'named-by-claude', worktreeRepo: '/elsewhere' })],
+    });
+    expect(fromTranscript[0]).toMatchObject({ worktreeName: 'named-by-claude', worktreeRepo: '/elsewhere' });
+    const sub = mergeUnifiedSessions({
+      live: [{ id: 'live2', name: 'x', workingDir: '/repo/.claude/worktrees/fix-login/src' }],
+    });
+    expect(sub[0].worktreeName).toBeUndefined();
+  });
+
   it('finds a session by worktree name and by branch', () => {
     const items = [
       { sessionId: 'a', worktreeName: 'autodev', sources: ['history'] },

@@ -20,6 +20,24 @@ const FILE_BROWSER_SHOW_HIDDEN_KEY = 'codeman:fileBrowserShowHidden';
 // a huge log is a partial read rather than a download the viewer throws away.
 const TEXT_PREVIEW_MAX_BYTES = 512 * 1024;
 const TEXT_PREVIEW_MAX_LINES = 500;
+// A markdown document gets the route's ceiling instead of the 500-line preview
+// cap: a rendered README cut mid-way reads as the whole document.
+const MARKDOWN_PREVIEW_MAX_LINES = 10000;
+const MARKDOWN_EXTS = new Set(['md', 'markdown']);
+// File Viewer text-view prefs: per-device, in their own localStorage keys for
+// the same reason as FILE_BROWSER_SHOW_HIDDEN_KEY (the app-settings object is
+// rebuilt from the settings modal on save, so a key toggled from the viewer
+// would be dropped on the next save).
+const FILE_PREVIEW_PREF_KEYS = {
+  mdRendered: 'codeman:filePreviewMdRendered',
+  htmlRendered: 'codeman:filePreviewHtmlRendered',
+  lineNumbers: 'codeman:filePreviewLineNumbers',
+  wrap: 'codeman:filePreviewWrap',
+  expanded: 'codeman:filePreviewExpanded',
+};
+const FILE_PREVIEW_PREF_DEFAULTS = { mdRendered: true, htmlRendered: true, lineNumbers: false, wrap: true, expanded: false };
+// Back/forward list of previews opened from one overlay session (links between documents).
+const FILE_PREVIEW_HISTORY_MAX = 50;
 const AWAY_DIGEST_SECTIONS = [
   ['needsAttention', 'Needs Attention'],
   ['completed', 'Completed'],
@@ -339,25 +357,99 @@ Object.assign(CodemanApp.prototype, {
     return true;
   },
 
+  /**
+   * Save what had focus before a search-first overlay takes it.
+   *
+   * The Command Palette and the Session Manager both call `search.focus()` on
+   * open, and both used to close by removing the `active` class and nothing
+   * else. Hiding the focused input does not hand focus back to anyone — the
+   * browser drops it on `<body>` — so after Escape closed the overlay every
+   * keystroke went nowhere and the user had to click the terminal to type
+   * again (measured: `document.activeElement` is BODY afterwards and the
+   * terminal emits no onData at all). Every close path has the same hole, so
+   * the restore lives in the close functions, not in the global Escape chain.
+   *
+   * ⚠️ Deliberately only the save/restore half of {@link FocusTrap}, not the
+   * whole thing. `FocusTrap.activate()` moves focus to the first focusable
+   * element, which in both of these overlays is not the search box — adopting
+   * it wholesale would fix the focus loss by breaking the thing Cmd+K exists
+   * for, typing a filter the moment it opens.
+   */
+  _rememberOverlayFocus(key) {
+    this[key] = (typeof document !== 'undefined' && document.activeElement) || null;
+  },
+
+  /**
+   * Hand focus back to whatever {@link _rememberOverlayFocus} saved.
+   *
+   * ⚠️ The terminal fallback is gated on there being an active session: an
+   * overlay opened from the welcome screen has no terminal to return to, and
+   * focusing one on a phone summons the on-screen keyboard over a screen that
+   * has no input on it.
+   *
+   * ⚠️ A focus that already left the overlay is kept, not overridden. The
+   * Session Manager's row menu ("Switch to session", "Open folder") calls
+   * selectSession(), which focuses the terminal, BEFORE closeSessionManager();
+   * restoring there would pull focus back to the header button that opened the
+   * modal. Only a focus still inside `modal`, or one dropped on `<body>`, is
+   * the overlay's to hand back.
+   */
+  _restoreOverlayFocus(key, modal) {
+    const prev = this[key];
+    this[key] = null;
+    const body = typeof document !== 'undefined' ? document.body : null;
+    const current = typeof document !== 'undefined' ? document.activeElement : null;
+    if (current && current !== body && modal?.contains?.(current) === false) return;
+    // `isConnected === false` means the element was removed while the overlay
+    // was open (a re-render of the tab strip, say); anything else — including
+    // a stub with no such property — is treated as still focusable.
+    if (prev && prev !== body && prev.isConnected !== false && typeof prev.focus === 'function') {
+      prev.focus();
+      return;
+    }
+    // ⚠️ `activeSessionId` alone only covers the welcome screen. On a touch device
+    // with the keyboard down, focus sits on `<body>`, so focusing the terminal here
+    // would summon the on-screen keyboard — `selectSession()` deliberately skips the
+    // focus for exactly that reason, and this would override it. The app's own
+    // predicate already encodes the rule (true on desktop, on touch only while the
+    // keyboard is open); the optional call keeps the vm test harness working.
+    if (this.activeSessionId && this._shouldFocusTerminalForTabSwitch?.() !== false) {
+      this.terminal?.focus?.();
+    }
+  },
+
   openCommandPalette() {
     const modal = document.getElementById('commandPaletteModal');
     const search = document.getElementById('commandPaletteSearch');
     if (!modal || !search) return;
 
     this.commandPaletteActiveIndex = 0;
+    this._resetCommandPaletteAgent();
     search.value = '';
     modal.classList.add('active');
 
     this._wireCommandPalette();
     this.renderCommandPalette();
 
+    // BEFORE the steal, not after: `search.focus()` below is what loses the
+    // caller's focus, so the read has to happen while it is still there.
+    this._rememberOverlayFocus('_commandPalettePrevFocus');
     search.focus();
     search.select?.();
   },
 
   closeCommandPalette() {
     const modal = document.getElementById('commandPaletteModal');
-    if (modal) modal.classList.remove('active');
+    // ⚠️ Bail out when it was not open. The global Escape handler calls this on
+    // EVERY Escape (app.js), in the CAPTURE phase, so an unconditional restore
+    // runs before the focused element's own Escape handler and steals focus into
+    // the terminal: keys typed after Escape in split Pane B land in Pane A, keys
+    // typed in any text field land in the terminal, and the inline tab rename's
+    // Escape fires the input's blur (which commits) before its own handler
+    // (which cancels), turning a cancel into a rename.
+    if (!modal?.classList?.contains('active')) return;
+    modal.classList.remove('active');
+    this._restoreOverlayFocus('_commandPalettePrevFocus', modal);
   },
 
   _wireCommandPalette() {
@@ -374,6 +466,11 @@ Object.assign(CodemanApp.prototype, {
     });
 
     search?.addEventListener('keydown', async (e) => {
+      if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && this._commandPaletteArrowCyclesAgent(e)) {
+        e.preventDefault();
+        this._cycleCommandPaletteAgent(e.key === 'ArrowRight' ? 1 : -1);
+        return;
+      }
       if (e.key === 'ArrowDown') {
         e.preventDefault();
         this.moveCommandPaletteSelection(1);
@@ -403,7 +500,22 @@ Object.assign(CodemanApp.prototype, {
       }
     });
 
+    // Clicking an agent arrow must leave focus in the search box, or the
+    // Left/Right/Enter keys stop reaching the palette after the first click.
+    list?.addEventListener?.('mousedown', (e) => {
+      if (e.target?.closest?.('[data-palette-agent-cycle]')) e.preventDefault?.();
+    });
+
     list?.addEventListener?.('click', (e) => {
+      // The agent arrows sit inside the new-session row: they change the agent
+      // and must not also activate (launch) the row they are drawn in.
+      const cycle = e.target?.closest?.('[data-palette-agent-cycle]');
+      if (cycle) {
+        e.preventDefault?.();
+        e.stopPropagation?.();
+        this._cycleCommandPaletteAgent(cycle.dataset.paletteAgentCycle === 'prev' ? -1 : 1);
+        return;
+      }
       const row = e.target?.closest?.('[data-command-index]');
       if (!row) return;
       this.commandPaletteActiveIndex = Number(row.dataset.commandIndex) || 0;
@@ -444,16 +556,108 @@ Object.assign(CodemanApp.prototype, {
   },
 
   _buildCommandPaletteNewSessionItem(query = '') {
-    const mode = this.runMode || this._runMode || 'claude';
-    const labels = { claude: 'Claude', opencode: 'OpenCode', codex: 'Codex', gemini: 'Gemini', antigravity: 'Antigravity', pi: 'Pi', grok: 'Grok', deepseek: 'DeepSeek', omp: 'OMP' };
-    const caseName = this._findCommandPaletteCaseMatch(query) || document.getElementById('quickStartCase')?.value || 'testcase';
+    const caseName = this._commandPaletteCaseName(query);
+    const agent = this._commandPaletteAgent(caseName);
+    const mode = agent?.id || this.runMode || this._runMode || 'claude';
+    const labels = { claude: 'Claude', opencode: 'OpenCode', codex: 'Codex', gemini: 'Gemini', antigravity: 'Antigravity', pi: 'Pi', grok: 'Grok', deepseek: 'DeepSeek', omp: 'OMP', copilot: 'Copilot' };
     return {
       id: 'new-session',
       type: 'new-session',
       caseName,
+      mode,
       title: 'New session',
-      subtitle: `Run ${labels[mode] || mode} in ${caseName}`,
+      subtitle: `Run ${agent?.label || labels[mode] || mode} in ${caseName}`,
     };
+  },
+
+  /** The case a new session from the palette starts in: the case the query names, else the Run button's case. */
+  _commandPaletteCaseName(query = '') {
+    return this._findCommandPaletteCaseMatch(query) || document.getElementById('quickStartCase')?.value || 'testcase';
+  },
+
+  /** The case of the new-session row on screen (the palette's last render), for the agent switch. */
+  _commandPaletteRowCase() {
+    const row = (this.commandPaletteItems || []).find((item) => item?.type === 'new-session');
+    return row ? row.caseName : this._commandPaletteCaseName(document.getElementById('commandPaletteSearch')?.value || '');
+  },
+
+  /**
+   * The agents the new-session row can start in `caseName`: the server-injected
+   * CLI catalog's enabled entries that the toolbar Run menu offers for that case,
+   * in catalog order. An agent entry goes through the Run menu's own rule,
+   * _runModeAvailableForCase (session-ui.js): the host's CLIs for a local or
+   * remote case, the container's for a Docker case. A non-agent entry (Shell) is
+   * never gated, as in the Run menu. The vm test harness may load this file
+   * without session-ui.js, and then the host's isCliAvailable() decides. The ids
+   * are DATA from the registry, never a list kept here. Empty on a page rendered
+   * without the catalog; that and a single entry both leave the row on the Run
+   * button's mode (see _commandPaletteAgent).
+   */
+  _commandPaletteAgentChoices(caseName = this._commandPaletteRowCase()) {
+    const catalog = typeof window !== 'undefined' && Array.isArray(window.__codemanCliCatalog) ? window.__codemanCliCatalog : [];
+    const offered = (id) =>
+      typeof this._runModeAvailableForCase === 'function'
+        ? this._runModeAvailableForCase(id, caseName)
+        : (this.isCliAvailable?.(id) ?? true);
+    return catalog
+      .filter((cli) => cli && typeof cli.id === 'string' && cli.enabled && (cli.kind !== 'agent' || offered(cli.id)))
+      .map((cli) => ({ id: cli.id, label: (typeof cli.label === 'string' && cli.label.trim()) || cli.id }));
+  },
+
+  /**
+   * The agent the new-session row will start in `caseName`: the one picked with
+   * the switch since the palette opened, else the Run button's mode, else the
+   * first offered. Null when fewer than two are offered: with one entry there is
+   * nothing to pick, so the row keeps the Run button's mode as it did before the
+   * switch existed, and a Run mode the case cannot start fails the way the Run
+   * button would, instead of the palette quietly starting the one entry offered
+   * (often Shell).
+   */
+  _commandPaletteAgent(caseName = this._commandPaletteRowCase()) {
+    const choices = this._commandPaletteAgentChoices(caseName);
+    if (choices.length < 2) return null;
+    const runMode = this.runMode || this._runMode;
+    return (
+      choices.find((c) => c.id === this._commandPaletteAgentId) || choices.find((c) => c.id === runMode) || choices[0]
+    );
+  },
+
+  /**
+   * Each time the palette opens it forgets the last pick, so the row starts on
+   * the Run button's mode (see _commandPaletteAgent). That default is resolved
+   * per render, not here: the query can move the row to another case, which may
+   * offer the Run button's mode when the first case did not.
+   */
+  _resetCommandPaletteAgent() {
+    this._commandPaletteAgentId = null;
+  },
+
+  _cycleCommandPaletteAgent(delta) {
+    const caseName = this._commandPaletteRowCase();
+    const choices = this._commandPaletteAgentChoices(caseName);
+    if (choices.length < 2) return;
+    const at = Math.max(0, choices.findIndex((c) => c.id === this._commandPaletteAgent(caseName)?.id));
+    this._commandPaletteAgentId = choices[(((at + delta) % choices.length) + choices.length) % choices.length].id;
+    this.renderCommandPalette();
+  },
+
+  /**
+   * Left/Right change the agent only while the new-session row is highlighted,
+   * and the caret is at either query boundary, with no selection. Both arrows
+   * stay in picker navigation after typing a case name; inside the query they
+   * still edit text, as do modified arrows and selection changes.
+   */
+  _commandPaletteArrowCyclesAgent(e) {
+    const active = (this.commandPaletteItems || [])[this.commandPaletteActiveIndex || 0];
+    if (active?.type !== 'new-session') return false;
+    if (this._commandPaletteAgentChoices(active.caseName).length < 2) return false;
+    if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return false;
+    const input = e.target;
+    const value = typeof input?.value === 'string' ? input.value : '';
+    const start = Number.isFinite(input?.selectionStart) ? input.selectionStart : value.length;
+    const end = Number.isFinite(input?.selectionEnd) ? input.selectionEnd : start;
+    if (start !== end) return false;
+    return start <= 0 || end >= value.length;
   },
 
   _findCommandPaletteCaseMatch(query = '') {
@@ -509,17 +713,38 @@ Object.assign(CodemanApp.prototype, {
         const active = index === this.commandPaletteActiveIndex ? ' active' : '';
         const icon = item.type === 'new-session' ? '+' : item.type === 'browse-sessions' ? '≡' : '›';
         const browse = item.type === 'browse-sessions' ? ' command-palette-item--browse' : '';
+        const agent = item.type === 'new-session' ? this._renderCommandPaletteAgentPicker(item.mode, item.caseName) : '';
         return `
-          <button class="command-palette-item${active}${browse}" type="button" data-command-index="${index}">
+          <button class="command-palette-item${active}${browse}${agent ? ' command-palette-item--agent' : ''}" type="button" data-command-index="${index}">
             <span class="command-palette-icon" aria-hidden="true">${icon}</span>
             <span class="command-palette-text">
               <span class="command-palette-title">${escapeHtml(item.title)}</span>
               <span class="command-palette-subtitle">${escapeHtml(item.subtitle || '')}</span>
-            </span>
+            </span>${agent}
           </button>
         `;
       })
       .join('');
+  },
+
+  /**
+   * The new-session row's agent switch: arrows either side of the agent's logo
+   * and name. Spans, not buttons: the row itself is a <button>. The switch is
+   * aria-hidden (no nested buttons; the row's subtitle already names the agent),
+   * and its arrows work by click through data-palette-agent-cycle. Nothing is
+   * drawn when there is nothing to choose between.
+   */
+  _renderCommandPaletteAgentPicker(mode, caseName) {
+    const choices = this._commandPaletteAgentChoices(caseName);
+    if (choices.length < 2) return '';
+    const agent = choices.find((c) => c.id === mode) || choices[0];
+    return `
+            <span class="command-palette-agent" aria-hidden="true" title="Agent for the new session (Left/Right to change)">
+              <span class="command-palette-agent-arrow" data-palette-agent-cycle="prev">&lsaquo;</span>
+              <span class="run-mode-dot ${escapeHtml(agent.id)}" aria-hidden="true"></span>
+              <span class="command-palette-agent-label">${escapeHtml(agent.label)}</span>
+              <span class="command-palette-agent-arrow" data-palette-agent-cycle="next">&rsaquo;</span>
+            </span>`;
   },
 
   moveCommandPaletteSelection(delta) {
@@ -564,7 +789,16 @@ Object.assign(CodemanApp.prototype, {
           caseSelect.value = item.caseName;
         }
       }
-      await this.run();
+      // A one-shot launch of the picked agent: the same temporary _runMode swap
+      // the custom-model entries and worktree launches use, so run() keeps its
+      // launch lock and per-mode paths and the Run button's mode is untouched.
+      const previousRunMode = this._runMode;
+      if (item.mode) this._runMode = item.mode;
+      try {
+        await this.run();
+      } finally {
+        this._runMode = previousRunMode;
+      }
     }
   },
 
@@ -618,6 +852,7 @@ Object.assign(CodemanApp.prototype, {
         });
       }
       search.value = '';
+      this._rememberOverlayFocus('_sessionManagerPrevFocus');
       search.focus();
     }
     await this._loadSessionManagerList('');
@@ -625,7 +860,10 @@ Object.assign(CodemanApp.prototype, {
 
   closeSessionManager() {
     const modal = document.getElementById('sessionManagerModal');
-    if (modal) modal.classList.remove('active');
+    // Same guard as closeCommandPalette — see the note there.
+    if (!modal?.classList?.contains('active')) return;
+    modal.classList.remove('active');
+    this._restoreOverlayFocus('_sessionManagerPrevFocus', modal);
   },
 
   /** Replace the Session Manager list body with a single status line. */
@@ -3946,6 +4184,9 @@ Object.assign(CodemanApp.prototype, {
    * unknown workingDir answers false, leaving the historical path untouched.
    */
   _isExternalPreviewPath(filePath, sessionId) {
+    // `~/…` (a terminal or response-viewer link): only the server knows the home
+    // of the session's host, and only the attachment route expands it.
+    if (typeof filePath === 'string' && filePath.startsWith('~/')) return true;
     if (typeof filePath !== 'string' || !filePath.startsWith('/')) return false;
     const workingDir = this.sessions.get(sessionId)?.workingDir;
     if (!workingDir) return false;
@@ -3954,7 +4195,7 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
-   * Register an out-of-workspace path as a live external attachment and return
+   * Register a file path as a live external attachment and return
    * its id, so the preview can render it through the by-id attachment routes.
    *
    * `notify: false` keeps this quiet: the caller is already opening the file in
@@ -3963,7 +4204,7 @@ Object.assign(CodemanApp.prototype, {
    * full attachment guard (blocked secret trees, extension allowlist, symlinks
    * resolved), so a refusal here is a policy answer worth showing verbatim.
    *
-   * @returns {Promise<{attachmentId?: string, size?: number, error?: string}>}
+   * @returns {Promise<{attachmentId?: string, size?: number, error?: string, status?: number}>}
    */
   async _registerExternalPreview(filePath, sessionId) {
     try {
@@ -3979,21 +4220,36 @@ Object.assign(CodemanApp.prototype, {
       const reason = result?.error || `Cannot open this file (HTTP ${res.status})`;
       // The registry's type answer is a policy term, not an explanation, and the
       // user just clicked a file they can see on disk. Say what IS previewable
-      // from outside the workspace instead.
+      // through this lookup instead, using the path's actual workspace scope.
       if (/unsupported/i.test(reason)) {
         const ext = (filePath.split('.').pop() || '').toLowerCase();
+        const target = this._isExternalPreviewPath(filePath, sessionId)
+          ? `.${ext} from outside the session workspace`
+          : `"${filePath}" through the attachment lookup`;
         return {
-          error: `Cannot preview .${ext} from outside the session workspace (images, video, audio, PDF, Office documents and text files only).`,
+          status: res.status,
+          error: `Cannot preview ${target} (images, video, audio, PDF, Office documents and text files only).`,
         };
       }
-      return { error: reason };
+      return { error: reason, status: res.status };
     } catch (err) {
       return { error: err.message || 'Cannot open this file' };
     }
   },
 
-  async openFilePreview(filePath, sessionId = this.activeSessionId, attachmentId = null) {
+  /**
+   * @param {object} [options]
+   * @param {{folderId: string, name: string}} [options.folderFile] A file of a
+   *   granted folder (folder grid): rendered from the folder's by-name routes, so
+   *   paging through 300 renders never touches the attachment registry.
+   */
+  async openFilePreview(filePath, sessionId = this.activeSessionId, attachmentId = null, options = {}) {
     if (!sessionId || !filePath) return;
+    const folderFile = options.folderFile || null;
+    // Prev/next only while browsing a folder grid; a preview opened from anywhere
+    // else ends that browsing.
+    if (!folderFile && this.folderGrid) this.folderGrid.index = null;
+    this._updateFolderPreviewNav(folderFile ? null : this._previewFolderPath(filePath, sessionId, attachmentId));
 
     const overlay = this.$('filePreviewOverlay');
     const titleEl = this.$('filePreviewTitle');
@@ -4001,6 +4257,15 @@ Object.assign(CodemanApp.prototype, {
     const footerEl = this.$('filePreviewFooter');
 
     if (!overlay || !bodyEl) return;
+
+    this._recordFilePreviewHistory(filePath, sessionId, attachmentId, options);
+    this._bindFilePreviewChrome();
+
+    // Only the newest load may write: paging ←/→ through a folder starts the next
+    // load while the previous one still awaits its fetch, and its late answer would
+    // put the previous file's text under the next file's title.
+    const load = (this._filePreviewLoad = (this._filePreviewLoad || 0) + 1);
+    const stale = () => load !== this._filePreviewLoad;
 
     // Edit mode: reset any prior editor state whenever a preview (re)loads.
     this._resetFilePreviewEdit();
@@ -4012,14 +4277,42 @@ Object.assign(CodemanApp.prototype, {
     this.filePreviewDetachUrl = '';
     const detachBtn = this.$('filePreviewDetachBtn');
     if (detachBtn) detachBtn.hidden = true;
+    // Same for the text-view toggles: they act on the text this load has not
+    // fetched yet, and an image or PDF has nothing for them to toggle.
+    this.filePreviewText = null;
+    this.filePreviewPage = null;
+    this.filePreviewPageRefused = false;
+    this._updateFilePreviewToolbar('none');
 
     // Show overlay with loading state
     overlay.classList.add('visible');
+    this._applyFilePreviewExpanded();
     titleEl.textContent = filePath;
     bodyEl.innerHTML = '<div class="binary-message">Loading...</div>';
     footerEl.textContent = '';
 
     const ext = (filePath.split('.').pop() || '').toLowerCase();
+
+    // HTML renders as a page: the server mints a sandboxed /html-view URL for the
+    // file's directory (html-view-routes.ts), so relative CSS, scripts and images
+    // resolve, and the page runs in an opaque origin that cannot reach Codeman.
+    // The Page pill switches to the source view below (with its Edit button), and
+    // a refused mint (remote case, broad folder, hidden directory) falls through
+    // to that source view on its own.
+    if (!attachmentId && rendersAsPage(filePath) && this._filePreviewPref('htmlRendered')) {
+      const pageUrl = await this._mintHtmlViewUrl(filePath, sessionId);
+      if (pageUrl) {
+        footerEl.textContent = 'HTML';
+        this.filePreviewPage = { filePath, sessionId };
+        this.filePreviewDetachUrl = pageUrl;
+        if (detachBtn) detachBtn.hidden = false;
+        bodyEl.innerHTML = `<iframe src="${escapeHtml(pageUrl)}" title="${escapeHtml(filePath)}" sandbox="allow-scripts allow-forms allow-popups allow-modals allow-downloads"></iframe>`;
+        this._updateFilePreviewToolbar('page');
+        return;
+      }
+      // The pill would only retry a page the server just refused.
+      this.filePreviewPageRefused = true;
+    }
 
     // Out-of-workspace path: mint an attachment id up front. Every branch below
     // talks to a workspace-confined route, so without this the image/PDF ones
@@ -4027,8 +4320,9 @@ Object.assign(CodemanApp.prototype, {
     // for a file that is sitting right there on disk.
     let externalError = '';
     let externalSize = 0;
-    if (!attachmentId && this._isExternalPreviewPath(filePath, sessionId)) {
+    if (!attachmentId && !folderFile && this._isExternalPreviewPath(filePath, sessionId)) {
       const external = await this._registerExternalPreview(filePath, sessionId);
+      if (stale()) return;
       attachmentId = external.attachmentId || null;
       externalError = external.error || '';
       externalSize = external.size || 0;
@@ -4045,9 +4339,14 @@ Object.assign(CodemanApp.prototype, {
     // (html/htm arrive as a download there by design — file-raw serves them
     // attachment-only so widening READ never widens RUN.)
     const officeDoc = ext === 'docx' || ext === 'pptx';
+    const byIdBase = attachmentId
+      ? `/api/sessions/${sessionId}/attachments/${encodeURIComponent(attachmentId)}`
+      : folderFile
+        ? `/api/sessions/${sessionId}/folders/${encodeURIComponent(folderFile.folderId)}/files/${encodeURIComponent(folderFile.name)}`
+        : null;
     this.filePreviewDetachUrl = CodemanBase.url(
-      attachmentId
-        ? `/api/sessions/${sessionId}/attachments/${encodeURIComponent(attachmentId)}/${officeDoc ? 'preview' : 'raw'}`
+      byIdBase
+        ? `${byIdBase}/${officeDoc ? 'preview' : 'raw'}`
         : officeDoc
           ? `/api/sessions/${sessionId}/file-preview?path=${encodeURIComponent(filePath)}`
           : `/api/sessions/${sessionId}/file-raw?path=${encodeURIComponent(filePath)}`
@@ -4057,8 +4356,9 @@ Object.assign(CodemanApp.prototype, {
     // Registered attachment: render straight from its by-id routes — images and
     // PDFs inline, Office docs via the server-converted PDF preview, text fetched
     // raw. (Workspace-path previews fall through to the file-content endpoint.)
-    if (attachmentId) {
-      const base = CodemanBase.url(`/api/sessions/${sessionId}/attachments/${encodeURIComponent(attachmentId)}`);
+    // A folder-grid file renders the same way, from its folder's by-name routes.
+    if (byIdBase) {
+      const base = CodemanBase.url(byIdBase);
       const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg']);
       // VIDEO/AUDIO mirror VIDEO_ATTACHMENT_EXTENSIONS/AUDIO_ATTACHMENT_EXTENSIONS
       // (src/attachment-registry.ts, the single source); the frontend cannot import
@@ -4068,6 +4368,7 @@ Object.assign(CodemanApp.prototype, {
       // Size when we just registered the file ourselves, so a path opened from a
       // link reads like a workspace preview instead of a bare "PNG". History
       // cards arrive with an id and no size and keep the short form.
+      if (folderFile && !externalSize) externalSize = options.size || 0;
       footerEl.textContent = externalSize ? `${this.formatFileSize(externalSize)} • ${ext}` : ext.toUpperCase();
       if (IMAGE_EXTS.has(ext)) {
         bodyEl.innerHTML = `<img src="${escapeHtml(`${base}/raw`)}" alt="${escapeHtml(filePath)}">`;
@@ -4083,6 +4384,8 @@ Object.assign(CodemanApp.prototype, {
         bodyEl.innerHTML = `<iframe src="${escapeHtml(`${base}/raw`)}" title="${escapeHtml(filePath)}"></iframe>`;
       } else if (ext === 'docx' || ext === 'pptx') {
         bodyEl.innerHTML = `<iframe src="${escapeHtml(`${base}/preview`)}" title="${escapeHtml(filePath)}"></iframe>`;
+      } else if (ext === 'xlsx') {
+        this._openSpreadsheetPreview(bodyEl, `${base}/raw`, externalSize);
       } else {
         try {
           // Bounded like the workspace text preview: a Range for the first
@@ -4093,17 +4396,26 @@ Object.assign(CodemanApp.prototype, {
           const res = await fetch(`${base}/raw`, { headers: { Range: `bytes=0-${TEXT_PREVIEW_MAX_BYTES - 1}` } });
           if (!res.ok) throw new Error('Failed to load attachment');
           const text = await res.text();
+          if (stale()) return;
           const clippedByBytes = res.status === 206 && text.length >= TEXT_PREVIEW_MAX_BYTES;
           const lines = text.split('\n');
-          const clippedByLines = lines.length > TEXT_PREVIEW_MAX_LINES;
-          const shown = clippedByLines ? lines.slice(0, TEXT_PREVIEW_MAX_LINES).join('\n') : text;
-          bodyEl.innerHTML = `<pre><code>${escapeHtml(shown)}</code></pre>`;
+          // Markdown keeps every line the Range read returned: the byte bound is
+          // what protects the tab, and a rendered document cut at 500 lines
+          // reads as the whole document.
+          const lineCap = MARKDOWN_EXTS.has(ext) ? Infinity : TEXT_PREVIEW_MAX_LINES;
+          const clippedByLines = lines.length > lineCap;
+          const shown = clippedByLines ? lines.slice(0, lineCap).join('\n') : text;
           this.filePreviewContent = shown;
+          // attachmentId: a card's filePath is the bare file name, so the
+          // rebase pass must know there is no directory to resolve against.
+          this.filePreviewText = { ext, sessionId, filePath, attachmentId: attachmentId || folderFile?.folderId };
+          this._renderFilePreviewText();
           if (clippedByLines || clippedByBytes) {
-            const note = clippedByLines ? `showing first ${TEXT_PREVIEW_MAX_LINES} lines` : 'showing the start of the file';
+            const note = clippedByLines ? `showing first ${lineCap} lines` : 'showing the start of the file';
             footerEl.textContent = `${footerEl.textContent} (${note})`;
           }
         } catch (err) {
+          if (stale()) return;
           bodyEl.innerHTML = `<div class="binary-message">Error: ${escapeHtml(err.message)}</div>`;
         }
       }
@@ -4136,21 +4448,30 @@ Object.assign(CodemanApp.prototype, {
       try {
         const res = await fetch(`/api/sessions/${sessionId}/file-raw?path=${encodeURIComponent(filePath)}`);
         if (!res.ok) throw new Error('Failed to load image');
-        const blobUrl = URL.createObjectURL(new Blob([await res.text()], { type: 'image/svg+xml' }));
+        const svgText = await res.text();
+        if (stale()) return;
+        const blobUrl = URL.createObjectURL(new Blob([svgText], { type: 'image/svg+xml' }));
         bodyEl.innerHTML = `<img src="${blobUrl}" alt="${escapeHtml(filePath)}">`;
         const img = bodyEl.querySelector('img');
         if (img) img.onload = () => URL.revokeObjectURL(blobUrl);
       } catch (err) {
+        if (stale()) return;
         bodyEl.innerHTML = `<div class="binary-message">Error: ${escapeHtml(err.message)}</div>`;
       }
       return;
     }
 
+    // 500 lines is what keeps a huge log from locking the tab in one <pre>;
+    // markdown is rendered as a document and takes the route's ceiling instead.
+    const lineCap = MARKDOWN_EXTS.has(ext) ? MARKDOWN_PREVIEW_MAX_LINES : TEXT_PREVIEW_MAX_LINES;
     try {
-      const res = await fetch(`/api/sessions/${sessionId}/file-content?path=${encodeURIComponent(filePath)}&lines=500`);
+      const res = await fetch(
+        `/api/sessions/${sessionId}/file-content?path=${encodeURIComponent(filePath)}&lines=${lineCap}`
+      );
       if (!res.ok) throw new Error('Failed to load file');
 
       const result = await res.json();
+      if (stale()) return;
       if (!result.success) throw new Error(result.error || 'Failed to load file');
 
       const data = result.data;
@@ -4167,15 +4488,19 @@ Object.assign(CodemanApp.prototype, {
       } else if (data.type === 'audio') {
         bodyEl.innerHTML = `<audio src="${escapeHtml(CodemanBase.url(data.url))}" controls autoplay preload="metadata"></audio>`;
         footerEl.textContent = `${this.formatFileSize(data.size)} \u2022 ${data.extension}`;
+      } else if (data.type === 'spreadsheet') {
+        this._openSpreadsheetPreview(bodyEl, CodemanBase.url(data.url), data.size);
+        footerEl.textContent = `${this.formatFileSize(data.size)} \u2022 ${data.extension}`;
       } else if (data.type === 'binary') {
         const downloadHref = CodemanBase.url(`/api/sessions/${sessionId}/file-raw?path=${encodeURIComponent(filePath)}&download=true`);
         bodyEl.innerHTML = `<div class="binary-message">Binary file (${this.formatFileSize(data.size)})<br>Cannot preview<br><a href="${escapeHtml(downloadHref)}" download>Download</a></div>`;
         footerEl.textContent = data.extension || 'binary';
       } else {
-        // Text content
+        // Text content: rendered markdown or plain text, per the viewer's toggles.
         this.filePreviewContent = data.content;
-        bodyEl.innerHTML = `<pre><code>${escapeHtml(data.content)}</code></pre>`;
-        const truncNote = data.truncated ? ` (showing 500/${data.totalLines} lines)` : '';
+        this.filePreviewText = { ext, sessionId, filePath };
+        this._renderFilePreviewText();
+        const truncNote = data.truncated ? ` (showing ${lineCap}/${data.totalLines} lines)` : '';
         footerEl.textContent = `${data.totalLines} lines \u2022 ${this.formatFileSize(data.size)}${truncNote}`;
         // Edit affordance only when the server says an edit=1 re-fetch would
         // succeed (workspace text file inside the allowlist and size cap).
@@ -4186,14 +4511,410 @@ Object.assign(CodemanApp.prototype, {
         }
       }
     } catch (err) {
+      if (stale()) return;
       console.error('Failed to preview file:', err);
       bodyEl.innerHTML = `<div class="binary-message">Error: ${escapeHtml(err.message)}</div>`;
     }
   },
 
+  // ===== Folder grid =====
+
+  /**
+   * Show every previewable file of a folder as a grid (absolute or `~/` path on the
+   * session's host). The server grants the folder an id (`POST …/folders`), and the
+   * grid and the previews it opens fetch files by `folderId + name` only.
+   *
+   * Opened from a clicked folder path: when the server finds a FILE there after all,
+   * it falls back to the file preview, i.e. what a click did before folders were links.
+   */
+  async openFolderGrid(folderPath, sessionId = this.activeSessionId) {
+    if (!sessionId || !folderPath) return;
+    const overlay = this.$('folderGridOverlay');
+    const body = this.$('folderGridBody');
+    if (!overlay || !body) return;
+    this._bindFolderGridKeys();
+    // Two quick opens (a chip, then its parent): only the newer one may render.
+    const load = (this._folderGridLoad = (this._folderGridLoad || 0) + 1);
+    let result = null;
+    let status = 0;
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/folders`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: folderPath }),
+      });
+      status = res.status;
+      result = await res.json().catch(() => null);
+    } catch (err) {
+      if (load !== this._folderGridLoad) return;
+      this.showToast(`Cannot open folder: ${err.message || err}`, 'error');
+      return;
+    }
+    if (load !== this._folderGridLoad) return;
+    if (!result?.success || !result.data) {
+      const reason = result?.error || `HTTP ${status}`;
+      if (status === 400 && /not a folder/i.test(reason)) {
+        this.openFilePreview(folderPath, sessionId);
+        return;
+      }
+      this.showToast(`Cannot open folder ${folderPath}: ${reason}`, 'error');
+      return;
+    }
+    this.folderGrid = { sessionId, ...result.data, index: null };
+    this._renderFolderGrid();
+    overlay.classList.add('visible');
+    body.scrollTop = 0;
+  },
+
+  closeFolderGrid() {
+    // A listing still on its way must not reopen the grid that was just closed.
+    this._folderGridLoad = (this._folderGridLoad || 0) + 1;
+    this.$('folderGridOverlay')?.classList.remove('visible');
+    const body = this.$('folderGridBody');
+    // Drop the tiles: lazy <img>s still loading would keep fetching otherwise.
+    if (body) body.innerHTML = '';
+    this.folderGrid = null;
+    this._updateFolderPreviewNav(null);
+  },
+
+  folderGridUp() {
+    const grid = this.folderGrid;
+    if (!grid || grid.path === '/') return;
+    this.openFolderGrid(grid.path.slice(0, grid.path.lastIndexOf('/')) || '/', grid.sessionId);
+  },
+
+  _renderFolderGrid() {
+    const grid = this.folderGrid;
+    if (!grid) return;
+    const title = this.$('folderGridTitle');
+    const foldersEl = this.$('folderGridFolders');
+    const body = this.$('folderGridBody');
+    const footer = this.$('folderGridFooter');
+    title.textContent = grid.path;
+    title.title = grid.path;
+    const upBtn = this.$('folderGridUpBtn');
+    if (upBtn) upBtn.disabled = grid.path === '/';
+
+    foldersEl.innerHTML = '';
+    for (const name of grid.folders) {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'folder-grid-chip';
+      chip.textContent = `${name}/`;
+      chip.onclick = () => this.openFolderGrid(`${grid.path === '/' ? '' : grid.path}/${name}`, grid.sessionId);
+      foldersEl.appendChild(chip);
+    }
+
+    body.innerHTML = '';
+    if (grid.files.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'folder-grid-empty';
+      empty.textContent = 'No previewable files in this folder.';
+      body.appendChild(empty);
+    }
+    grid.files.forEach((file, index) => {
+      const tile = document.createElement('button');
+      tile.type = 'button';
+      tile.className = 'folder-grid-tile';
+      tile.title = `${file.name} • ${this.formatFileSize(file.size)}`;
+      tile.dataset.index = String(index);
+      const thumb = document.createElement('div');
+      thumb.className = 'folder-grid-thumb';
+      const label = file.extension.toUpperCase();
+      const route = this._folderFileUrl(grid, file.name, '');
+      // Images load themselves (lazily — a folder can hold hundreds of renders);
+      // PDF/Office show their first page where the server can render one (local
+      // folders), everything else a type label.
+      const src =
+        file.attachmentType === 'image'
+          ? `${route}/raw`
+          : ['pdf', 'docx', 'pptx'].includes(file.extension)
+            ? `${route}/thumbnail`
+            : null;
+      if (src) {
+        const img = document.createElement('img');
+        img.loading = 'lazy';
+        img.decoding = 'async';
+        img.alt = file.name;
+        img.src = src;
+        img.onerror = () => {
+          thumb.textContent = label;
+        };
+        thumb.appendChild(img);
+      } else {
+        thumb.textContent = label;
+      }
+      const name = document.createElement('span');
+      name.className = 'folder-grid-name';
+      name.textContent = file.name;
+      tile.append(thumb, name);
+      tile.onclick = () => this._openFolderGridFile(index);
+      body.appendChild(tile);
+    });
+
+    const count = `${grid.files.length} file${grid.files.length === 1 ? '' : 's'}`;
+    const subfolders = grid.folders.length ? ` • ${grid.folders.length} folder${grid.folders.length === 1 ? '' : 's'}` : '';
+    footer.textContent = `${count}${subfolders}${grid.truncated ? ' (folder too large — showing the first entries)' : ''}`;
+  },
+
+  _folderFileUrl(grid, name, suffix) {
+    return CodemanBase.url(
+      `/api/sessions/${grid.sessionId}/folders/${encodeURIComponent(grid.folderId)}/files/${encodeURIComponent(name)}${suffix}`
+    );
+  },
+
+  _openFolderGridFile(index) {
+    const grid = this.folderGrid;
+    const file = grid?.files[index];
+    if (!file) return;
+    const body = this.$('folderGridBody');
+    body?.querySelectorAll('.folder-grid-tile.current').forEach((t) => t.classList.remove('current'));
+    const tile = body?.querySelector(`.folder-grid-tile[data-index="${index}"]`);
+    tile?.classList.add('current');
+    tile?.scrollIntoView({ block: 'nearest' });
+    this.openFilePreview(`${grid.path === '/' ? '' : grid.path}/${file.name}`, grid.sessionId, null, {
+      folderFile: { folderId: grid.folderId, name: file.name },
+      size: file.size,
+    });
+    // After openFilePreview: it resets the index for previews from elsewhere.
+    grid.index = index;
+    grid.lastIndex = index;
+    this._updateFolderPreviewNav(null);
+  },
+
+  /** Page through the open folder from its preview (‹ › buttons, ←/→). */
+  stepFolderPreview(delta) {
+    const grid = this.folderGrid;
+    if (!grid || grid.index === null || grid.files.length === 0) return;
+    if (this.filePreviewEdit?.dirty && !confirm('Discard unsaved changes?')) return;
+    const next = (grid.index + delta + grid.files.length) % grid.files.length;
+    this._openFolderGridFile(next);
+  },
+
+  // ═══════════════════════════════════════════════════════════════
+  // File Viewer window: back/forward between previews, expand, resize
+  // ═══════════════════════════════════════════════════════════════
+
+  /**
+   * Remember a preview in the back/forward list. A navigation that came FROM the
+   * list (stepFilePreviewHistory) is not recorded again, and neither is a reload
+   * of the file already showing (the MD/Page toggles reopen the same file). Opening
+   * something new while standing mid-list drops the forward entries, as a browser does.
+   */
+  _recordFilePreviewHistory(filePath, sessionId, attachmentId, options) {
+    const h = (this.filePreviewHistory = this.filePreviewHistory || { entries: [], index: -1 });
+    if (!this._filePreviewHistoryStepping) {
+      const cur = h.entries[h.index];
+      const same =
+        cur && cur.filePath === filePath && cur.sessionId === sessionId && (cur.attachmentId || null) === (attachmentId || null);
+      if (!same) {
+        h.entries.length = h.index + 1;
+        h.entries.push({ filePath, sessionId, attachmentId: attachmentId || null, options });
+        if (h.entries.length > FILE_PREVIEW_HISTORY_MAX) h.entries.shift();
+        h.index = h.entries.length - 1;
+      }
+    }
+    this._updateFilePreviewHistoryNav();
+  },
+
+  /** Back (-1) / forward (+1) through the previews opened in this overlay session. */
+  stepFilePreviewHistory(delta) {
+    const h = this.filePreviewHistory;
+    if (!h) return;
+    const target = h.index + delta;
+    if (target < 0 || target >= h.entries.length) return;
+    if (this.filePreviewEdit?.dirty && !confirm('Discard unsaved changes?')) return;
+    h.index = target;
+    const e = h.entries[target];
+    // openFilePreview records synchronously, before its first await, so the flag
+    // only needs to cover the call itself.
+    this._filePreviewHistoryStepping = true;
+    try {
+      // A folder-grid page goes through the grid so index, lastIndex and the highlighted
+      // tile follow; otherwise the next ‹ › would continue from the newer file.
+      const folderFile = e.options?.folderFile;
+      if (folderFile && folderFile.folderId === this.folderGrid?.folderId) {
+        const index = this.folderGrid.files.findIndex((f) => f.name === folderFile.name);
+        if (index !== -1) return this._openFolderGridFile(index);
+      }
+      return this.openFilePreview(e.filePath, e.sessionId, e.attachmentId, e.options || {});
+    } finally {
+      this._filePreviewHistoryStepping = false;
+    }
+  },
+
+  /** Buttons show once there is somewhere to go; each is disabled at its end of the list. */
+  _updateFilePreviewHistoryNav() {
+    const h = this.filePreviewHistory;
+    const multi = !!h && h.entries.length > 1;
+    const back = this.$('filePreviewBackBtn');
+    const fwd = this.$('filePreviewForwardBtn');
+    if (back) {
+      back.hidden = !multi;
+      back.disabled = !multi || h.index <= 0;
+    }
+    if (fwd) {
+      fwd.hidden = !multi;
+      fwd.disabled = !multi || h.index >= h.entries.length - 1;
+    }
+  },
+
+  /** Expand button: fill the screen, remembered across opens. */
+  toggleFilePreviewExpanded() {
+    this._setFilePreviewPref('expanded', !this._filePreviewPref('expanded'));
+    this._applyFilePreviewExpanded();
+  },
+
+  _applyFilePreviewExpanded() {
+    const on = this._filePreviewPref('expanded');
+    const win = this.$('filePreviewOverlay')?.querySelector?.('.file-preview-window');
+    win?.classList?.toggle('expanded', on);
+    // The label stays "Expand" and aria-pressed carries the state, like MD, Lines and
+    // Wrap, so a screen reader never announces "Restore size, pressed".
+    this.$('filePreviewExpandBtn')?.setAttribute('aria-pressed', on ? 'true' : 'false');
+  },
+
+  /**
+   * One-time wiring for the window chrome: Alt+←/→ for back/forward (capture phase
+   * so the terminal behind the overlay never types the arrow) and the corner grip.
+   */
+  _bindFilePreviewChrome() {
+    if (this._filePreviewChromeBound) return;
+    this._filePreviewChromeBound = true;
+    document.addEventListener(
+      'keydown',
+      (ev) => {
+        if (!ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey) return;
+        if (ev.key !== 'ArrowLeft' && ev.key !== 'ArrowRight') return;
+        if (!this.$('filePreviewOverlay')?.classList.contains('visible')) return;
+        const t = ev.target;
+        if (t && (t.isContentEditable || (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) && !t.classList?.contains('xterm-helper-textarea')))) return;
+        // Swallowed even at the ends of the list: otherwise the terminal behind the overlay
+        // types it as word-left/right, and on a header button the browser's own Alt+← goes Back.
+        ev.preventDefault();
+        ev.stopPropagation();
+        const h = this.filePreviewHistory;
+        const delta = ev.key === 'ArrowLeft' ? -1 : 1;
+        if (!h || h.index + delta < 0 || h.index + delta >= h.entries.length) return;
+        this.stepFilePreviewHistory(delta);
+      },
+      true
+    );
+    this._bindFilePreviewResize();
+  },
+
+  /** Drag the corner grip to size the window; the window is centred, so the delta counts twice. */
+  _bindFilePreviewResize() {
+    const grip = this.$('filePreviewResize');
+    const win = grip?.parentElement;
+    if (!grip || !win) return;
+    grip.addEventListener('pointerdown', (ev) => {
+      if (ev.button !== 0) return; // a right-click on the grip must not start a resize
+      ev.preventDefault();
+      const startX = ev.clientX;
+      const startY = ev.clientY;
+      const startW = win.offsetWidth;
+      const startH = win.offsetHeight;
+      grip.setPointerCapture?.(ev.pointerId);
+      const move = (e) => {
+        const w = Math.max(320, Math.min(window.innerWidth * 0.96, startW + 2 * (e.clientX - startX)));
+        const h = Math.max(240, Math.min(window.innerHeight * 0.94, startH + 2 * (e.clientY - startY)));
+        win.style.width = `${Math.round(w)}px`;
+        win.style.height = `${Math.round(h)}px`;
+      };
+      const up = () => {
+        grip.removeEventListener('pointermove', move);
+        grip.removeEventListener('pointerup', up);
+        grip.removeEventListener('pointercancel', up);
+      };
+      grip.addEventListener('pointermove', move);
+      grip.addEventListener('pointerup', up);
+      grip.addEventListener('pointercancel', up);
+    });
+  },
+
+  /** "Show folder" in the preview: the grid of the previewed file's folder. */
+  openFolderOfPreview() {
+    const target = this.filePreviewFolderTarget;
+    if (!target) return;
+    this.closeFilePreview();
+    this.openFolderGrid(target.dir, target.sessionId);
+  },
+
+  /**
+   * The folder a previewed file lives in, or null when that is unknown — an
+   * attachment card carries only a bare file name.
+   */
+  _previewFolderPath(filePath, sessionId, attachmentId) {
+    if (typeof filePath !== 'string' || (attachmentId && !filePath.includes('/'))) return null;
+    const workingDir = this.sessions?.get?.(sessionId)?.workingDir;
+    const resolved = typeof resolveLinkedFilePath === 'function' ? resolveLinkedFilePath(filePath, workingDir) : filePath;
+    if (!resolved.startsWith('/') && !resolved.startsWith('~/')) return null;
+    const cut = resolved.lastIndexOf('/');
+    return { dir: resolved.slice(0, cut) || '/', sessionId };
+  },
+
+  /** Show prev/next while browsing a folder grid, else "Show folder" when the file's folder is known. */
+  _updateFolderPreviewNav(folderTarget) {
+    const browsing = !!this.folderGrid && this.folderGrid.index !== null && this.folderGrid.files.length > 1;
+    const prev = this.$('filePreviewPrevBtn');
+    const next = this.$('filePreviewNextBtn');
+    if (prev) prev.hidden = !browsing;
+    if (next) next.hidden = !browsing;
+    if (folderTarget !== undefined) this.filePreviewFolderTarget = folderTarget;
+    const inGrid = !!this.folderGrid && this.folderGrid.index !== null;
+    const folderBtn = this.$('filePreviewFolderBtn');
+    if (folderBtn) folderBtn.hidden = inGrid || !this.filePreviewFolderTarget;
+  },
+
+  /**
+   * ←/→ page the folder preview, Escape steps back (preview → grid → closed).
+   * Capture phase + stopPropagation: the terminal keeps keyboard focus under the
+   * overlays, and an arrow key that reached xterm would be typed into the session.
+   */
+  _bindFolderGridKeys() {
+    if (this._folderGridKeysBound) return;
+    this._folderGridKeysBound = true;
+    document.addEventListener(
+      'keydown',
+      (ev) => {
+        const grid = this.folderGrid;
+        if (!grid || ev.altKey || ev.ctrlKey || ev.metaKey) return;
+        const previewOpen = this.$('filePreviewOverlay')?.classList.contains('visible');
+        const gridOpen = this.$('folderGridOverlay')?.classList.contains('visible');
+        if (!gridOpen) return;
+        const t = ev.target;
+        const typing =
+          t && (t.isContentEditable || (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) && !t.classList?.contains('xterm-helper-textarea')));
+        if (typing || this.filePreviewEdit) return;
+        let handled = true;
+        if (previewOpen && grid.index !== null && ev.key === 'ArrowLeft') this.stepFolderPreview(-1);
+        else if (previewOpen && grid.index !== null && ev.key === 'ArrowRight') this.stepFolderPreview(1);
+        // Grid alone: an arrow opens the last viewed tile (or the first), so it
+        // pages the folder instead of landing in the terminal behind the grid.
+        else if (!previewOpen && (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight') && grid.files.length)
+          this._openFolderGridFile(grid.lastIndex ?? 0);
+        else if (ev.key === 'Escape') {
+          if (previewOpen) this.closeFilePreview();
+          else this.closeFolderGrid();
+        } else handled = false;
+        if (handled) {
+          ev.preventDefault();
+          ev.stopPropagation();
+        }
+      },
+      true
+    );
+  },
+
   closeFilePreview() {
     if (this.filePreviewEdit?.dirty && !confirm('Discard unsaved changes?')) return;
     this._resetFilePreviewEdit();
+    // Back on the grid (if one is open underneath): its current tile stays marked.
+    if (this.folderGrid) this.folderGrid.index = null;
+    this._updateFolderPreviewNav(null);
+    this.filePreviewHistory = null;
+    this._updateFilePreviewHistoryNav();
     const overlay = this.$('filePreviewOverlay');
     if (overlay) {
       overlay.classList.remove('visible');
@@ -4203,6 +4924,8 @@ Object.assign(CodemanApp.prototype, {
     // audible and keeps streaming from the server. Closing has to stop it.
     this._stopFilePreviewMedia();
     this.filePreviewContent = '';
+    this.filePreviewText = null;
+    this._updateFilePreviewToolbar('none');
     this.filePreviewDetachUrl = '';
     const detachBtn = this.$('filePreviewDetachBtn');
     if (detachBtn) detachBtn.hidden = true;
@@ -4219,6 +4942,12 @@ Object.assign(CodemanApp.prototype, {
    */
   detachFilePreview() {
     if (!this.filePreviewDetachUrl) return;
+    const hosted = this.openInHostWindow?.(this.filePreviewDetachUrl) ?? null;
+    if (hosted !== null) {
+      if (hosted) this.closeFilePreview();
+      else this.showToast('Could not open a new window for this preview', 'error');
+      return;
+    }
     const win = window.open(this.filePreviewDetachUrl, '_blank');
     if (!win) {
       this.showToast('Pop-up blocked: allow pop-ups for this site to detach previews', 'error');
@@ -4237,6 +4966,9 @@ Object.assign(CodemanApp.prototype, {
    * the in-flight network fetch and puts the element back in NETWORK_EMPTY.
    */
   _stopFilePreviewMedia() {
+    // A spreadsheet preview owns a fetch and a Web Worker; emptying the body
+    // leaves both running, so tear them down with the rest of the media.
+    this._disposeSpreadsheetPreview();
     const bodyEl = this.$('filePreviewBody');
     if (!bodyEl) return;
     for (const media of bodyEl.querySelectorAll('video, audio')) {
@@ -4249,6 +4981,273 @@ Object.assign(CodemanApp.prototype, {
       }
     }
     bodyEl.innerHTML = '';
+  },
+
+  /**
+   * Render an XLSX into the preview body via spreadsheet-preview.js, which
+   * parses it in a Web Worker (the ExcelJS bundle loads there, on demand, and
+   * never on page load). `url` is a raw route; the renderer adds `?preview=true`
+   * so the server applies its preview size cap. Superseded by the next
+   * _stopFilePreviewMedia(), which runs on every open and on close.
+   */
+  _openSpreadsheetPreview(bodyEl, url, size) {
+    this._disposeSpreadsheetPreview();
+    const renderer = window.CodemanSpreadsheetPreview;
+    if (!renderer?.open) {
+      bodyEl.innerHTML = '<div class="binary-message">Spreadsheet preview is unavailable.</div>';
+      return;
+    }
+    bodyEl.textContent = '';
+    const token = {};
+    this._spreadsheetPreviewToken = token;
+    this._spreadsheetPreview = renderer.open({
+      container: bodyEl,
+      url,
+      size,
+      isCurrent: () => this._spreadsheetPreviewToken === token,
+    });
+  },
+
+  _disposeSpreadsheetPreview() {
+    const handle = this._spreadsheetPreview;
+    this._spreadsheetPreview = null;
+    this._spreadsheetPreviewToken = null;
+    try {
+      handle?.dispose();
+    } catch (err) {
+      console.warn('Failed to dispose spreadsheet preview:', err);
+    }
+  },
+
+  // ═══════════════════════════════════════════════════════════════
+  // File Viewer text view: rendered markdown, line numbers, wrap
+  // ═══════════════════════════════════════════════════════════════
+
+  _filePreviewPref(name) {
+    try {
+      const stored = localStorage.getItem(FILE_PREVIEW_PREF_KEYS[name]);
+      if (stored === '1') return true;
+      if (stored === '0') return false;
+    } catch {
+      /* private mode: fall through to the default */
+    }
+    return FILE_PREVIEW_PREF_DEFAULTS[name];
+  },
+
+  _setFilePreviewPref(name, on) {
+    try {
+      localStorage.setItem(FILE_PREVIEW_PREF_KEYS[name], on ? '1' : '0');
+    } catch {
+      /* private mode: the toggle still applies for this page load */
+    }
+  },
+
+  /**
+   * Paint the loaded text (filePreviewContent) into the preview body: a
+   * rendered document for .md/.markdown while the MD toggle is on, otherwise
+   * plain text with one span per line so the Lines toggle can number them.
+   * The MD toggle re-runs this without a refetch.
+   *
+   * Markdown goes through the same pipeline as the Response Viewer
+   * (`_renderMarkdown`: marked + the DOMPurify allowlist), never a second
+   * parser, and is built inside a <template>: a detached div with innerHTML
+   * already set starts fetching every <img src>, so the document's relative
+   * image paths would hit the server as /docs/img.png 404s before
+   * `_rebaseFilePreviewMarkdownRefs` rewrote them. `breaks: false` because a
+   * file is not a chat message: a paragraph hard-wrapped in the source is one
+   * paragraph, as on GitHub.
+   */
+  _renderFilePreviewText() {
+    const info = this.filePreviewText;
+    const bodyEl = this.$('filePreviewBody');
+    if (!info || !bodyEl) return;
+    const isMarkdown = MARKDOWN_EXTS.has(info.ext);
+    const rendered = isMarkdown && this._filePreviewPref('mdRendered');
+    if (rendered) {
+      // data-i18n-skip: the translator's MutationObserver would otherwise
+      // rewrite the document's own headings and paragraphs.
+      const tmpl = document.createElement('template');
+      tmpl.innerHTML = `<div class="rv-text file-preview-md" data-i18n-skip>${this._renderMarkdown(this.filePreviewContent, { breaks: false })}</div>`;
+      const doc = tmpl.content.firstElementChild;
+      this._rebaseFilePreviewMarkdownRefs(doc, info);
+      this._linkifyFilePaths(doc);
+      // The linkifier's absolute paths name no session; give them the
+      // preview's, like the rebased links, or they open in the active tab's.
+      for (const a of doc.querySelectorAll('a.rv-path:not([data-session-id])')) a.dataset.sessionId = info.sessionId;
+      bodyEl.replaceChildren(tmpl.content);
+      // The Response Viewer's click delegate (path links, code-block copy
+      // buttons, loopback links): container-bound and idempotent, so binding it
+      // on the body once serves every preview.
+      this._bindResponseViewerInteractions(bodyEl);
+    } else {
+      const pre = document.createElement('pre');
+      pre.className = 'file-preview-text';
+      pre.classList.toggle('wrap', this._filePreviewPref('wrap'));
+      pre.classList.toggle('show-lines', this._filePreviewPref('lineNumbers'));
+      const code = document.createElement('code');
+      // One span per line joined by real newlines: empty lines survive, select
+      // and copy return the exact text, and the gutter counter hangs off the
+      // spans' ::before so the numbers are never part of the text.
+      code.innerHTML = this.filePreviewContent
+        .split('\n')
+        .map((line) => `<span class="fp-line">${escapeHtml(line)}</span>`)
+        .join('\n');
+      pre.appendChild(code);
+      bodyEl.replaceChildren(pre);
+    }
+    this._updateFilePreviewToolbar(rendered ? 'markdown' : 'text');
+  },
+
+  /**
+   * Point a rendered document's workspace references at the file it came from.
+   *
+   * Images are rebased onto the workspace-confined file-raw route under the
+   * document's directory, root-relative ones (`/docs/x.png`) under the
+   * workspace root as on GitHub (the server refuses escapes, so `..` is safe
+   * to forward). Whatever fails to load degrades to its alt text with one
+   * error handler: a remote image the page CSP blocks, a 404 for a document
+   * outside the workspace, an SVG that file-raw serves as a download. Links
+   * take the `a.rv-path` shape the Response Viewer delegate already opens in
+   * this overlay, minus the target/rel `_renderMarkdown` gave them, which
+   * would otherwise open <origin>/docs/x.md in a new tab, and carry the
+   * preview's own session so a document opened from another session's
+   * attachment card resolves against that workspace, not the active tab's.
+   *
+   * A preview opened by attachment id under a bare file name (attachment
+   * cards and the history drawer: the registry keeps no relative path) has no
+   * directory to resolve against, and the workspace root is the wrong one for
+   * docs/report.md and for a file outside the workspace alike. Its workspace
+   * refs degrade instead: images to their alt text, links to their text,
+   * rather than a missing image or a silently different file.
+   */
+  _rebaseFilePreviewMarkdownRefs(root, { sessionId, filePath, attachmentId }) {
+    const dir = filePath.includes('/') ? filePath.slice(0, filePath.lastIndexOf('/') + 1) : '';
+    const unresolvable = !!attachmentId && !filePath.startsWith('/');
+    // Workspace ref = no scheme, not protocol-relative (//host), not a fragment.
+    const isWorkspaceRef = (ref) =>
+      !!ref && !/^[a-z][a-z0-9+.-]*:/i.test(ref) && !ref.startsWith('//') && !ref.startsWith('#');
+    // GitHub-style `img.png#gh-dark-mode-only`, `doc.md#section` and
+    // `img.png?raw=true`: neither fragment nor query is part of the path.
+    // marked percent-encodes destinations (`my image.png` arrives as
+    // `my%20image.png`), so decode before the route encodes again, or file-raw
+    // looks for a file literally named `my%20image.png`; a malformed escape
+    // keeps the ref as written. `.` and `..` segments are collapsed so the
+    // title reads `README.md`, not `docs/../README.md`; a `..` that climbs
+    // past the start is kept and left for the server to refuse.
+    const resolveRef = (ref) => {
+      let rel = ref.split('#')[0].split('?')[0];
+      try {
+        rel = decodeURIComponent(rel);
+      } catch {
+        /* malformed escape: keep the ref as written */
+      }
+      const parts = [];
+      for (const seg of (rel.startsWith('/') ? rel.slice(1) : dir + rel).split('/')) {
+        if (seg === '.' || (seg === '' && parts.length)) continue;
+        if (seg === '..' && parts.length && parts[parts.length - 1] !== '..' && parts[parts.length - 1] !== '') parts.pop();
+        else parts.push(seg);
+      }
+      return parts.join('/');
+    };
+    for (const img of root.querySelectorAll('img[src]')) {
+      const src = img.getAttribute('src') || '';
+      if (unresolvable && isWorkspaceRef(src)) {
+        img.replaceWith(img.getAttribute('alt') || src);
+        continue;
+      }
+      if (isWorkspaceRef(src)) {
+        const path = resolveRef(src);
+        img.setAttribute('src', CodemanBase.url(`/api/sessions/${sessionId}/file-raw?path=${encodeURIComponent(path)}`));
+      }
+      img.addEventListener('error', () => img.replaceWith(img.getAttribute('alt') || src), { once: true });
+    }
+    for (const a of root.querySelectorAll('a[href]')) {
+      const href = a.getAttribute('href') || '';
+      if (!isWorkspaceRef(href)) continue;
+      if (unresolvable) {
+        a.replaceWith(...a.childNodes);
+        continue;
+      }
+      a.className = 'rv-path';
+      a.dataset.path = resolveRef(href);
+      a.dataset.sessionId = sessionId;
+      a.setAttribute('href', '#');
+      a.removeAttribute('target');
+      a.removeAttribute('rel');
+    }
+  },
+
+  /**
+   * Show the toggles that apply to the current view: MD for a markdown file in
+   * either view, Page for an HTML file in either view (`'page'` = rendered),
+   * Lines/Wrap for the plain-text view only; `'none'` (loading, image, media,
+   * PDF, edit mode) hides them all.
+   */
+  _updateFilePreviewToolbar(view) {
+    const set = (id, shown, pressed) => {
+      const btn = this.$(id);
+      if (!btn) return;
+      btn.hidden = !shown;
+      if (shown) btn.setAttribute('aria-pressed', String(pressed));
+    };
+    const isMarkdown = view !== 'none' && MARKDOWN_EXTS.has(this.filePreviewText?.ext || '');
+    set('filePreviewMdBtn', isMarkdown, view === 'markdown');
+    // Page: shown on a rendered HTML page, and on its source view when that view
+    // can be re-rendered (a bare attachment-card name has no path to mint from).
+    const text = this.filePreviewText;
+    const htmlSource =
+      view === 'text' &&
+      !this.filePreviewPageRefused &&
+      rendersAsPage(text?.filePath) &&
+      (!text.attachmentId || text.filePath.startsWith('/'));
+    set('filePreviewPageBtn', view === 'page' || htmlSource, view === 'page');
+    set('filePreviewLinesBtn', view === 'text', this._filePreviewPref('lineNumbers'));
+    set('filePreviewWrapBtn', view === 'text', this._filePreviewPref('wrap'));
+  },
+
+  /** Mint the sandboxed page URL for an HTML file; null when the server refuses. */
+  async _mintHtmlViewUrl(filePath, sessionId) {
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/html-view`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: filePath }),
+      });
+      const result = await res.json().catch(() => ({}));
+      return res.ok && result.success ? CodemanBase.url(result.data.url) : null;
+    } catch {
+      return null;
+    }
+  },
+
+  /** Page pill: flip between the rendered page and the source view of an HTML file. */
+  toggleFilePreviewPage() {
+    const target = this.filePreviewPage || this.filePreviewText;
+    if (!target) return;
+    this._setFilePreviewPref('htmlRendered', !this._filePreviewPref('htmlRendered'));
+    return this.openFilePreview(target.filePath, target.sessionId);
+  },
+
+  toggleFilePreviewMd() {
+    this._setFilePreviewPref('mdRendered', !this._filePreviewPref('mdRendered'));
+    this._renderFilePreviewText();
+  },
+
+  toggleFilePreviewLines() {
+    this._toggleFilePreviewTextClass('lineNumbers', 'show-lines');
+  },
+
+  toggleFilePreviewWrap() {
+    this._toggleFilePreviewTextClass('wrap', 'wrap');
+  },
+
+  /** Lines and Wrap are pure class flips on the <pre>; no re-render needed. */
+  _toggleFilePreviewTextClass(pref, className) {
+    const on = !this._filePreviewPref(pref);
+    this._setFilePreviewPref(pref, on);
+    const pre = this.$('filePreviewBody')?.querySelector(':scope > pre.file-preview-text');
+    if (pre) pre.classList.toggle(className, on);
+    this._updateFilePreviewToolbar('text');
   },
 
   // ═══════════════════════════════════════════════════════════════
@@ -4318,6 +5317,8 @@ Object.assign(CodemanApp.prototype, {
     textarea.addEventListener('input', () => this._onFilePreviewEditInput());
     bodyEl.innerHTML = '';
     bodyEl.appendChild(textarea);
+    // The MD/Lines/Wrap toggles act on the text view this textarea replaced.
+    this._updateFilePreviewToolbar('none');
     // Deliberately no autofocus: on phones that would pop the OS keyboard
     // before the user has scrolled to the line they want to change.
 
@@ -4746,7 +5747,7 @@ Object.assign(CodemanApp.prototype, {
           <div class="attachment-history-empty-title">No attachments yet</div>
           <div>Show a file here by running:</div>
           <code>codeman attach /absolute/path/to/file.pptx</code>
-          <div>Supports .pptx, .docx, .pdf, .png, .md, and .txt.</div>
+          <div>Supports .pptx, .docx, .xlsx, .pdf, .png, .md, and .txt.</div>
         </div>
       `;
       return;
@@ -5502,7 +6503,8 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
-   * `duration` defaults to 3000ms for every toast type. A message worth
+   * `duration` defaults to the "Toast display time" preference (3000ms unless changed in
+   * Settings → Notifications) for every toast type. A message worth
    * reading rather than glancing at (e.g. "Session started on the native
    * backend — could not apply the custom endpoint: <the actual reason>")
    * passes an explicit `opts.duration: 0` at its own call site instead of
@@ -5514,7 +6516,7 @@ Object.assign(CodemanApp.prototype, {
    * regardless of duration.
    */
   showToast(message, type = 'info', opts = {}) {
-    const { duration = 3000, action } = opts;
+    const { duration = this.notificationManager?.getToastDurationMs?.() ?? 3000, action } = opts;
     const toast = document.createElement('div');
     toast.className = `toast toast-${type}`;
 
@@ -5545,16 +6547,7 @@ Object.assign(CodemanApp.prototype, {
     closeBtn.onclick = (e) => { e.stopPropagation(); dismiss(); };
     toast.appendChild(closeBtn);
 
-    // Cache toast container reference
-    if (!this._toastContainer) {
-      this._toastContainer = document.querySelector('.toast-container');
-      if (!this._toastContainer) {
-        this._toastContainer = document.createElement('div');
-        this._toastContainer.className = 'toast-container';
-        document.body.appendChild(this._toastContainer);
-      }
-    }
-    this._toastContainer.appendChild(toast);
+    this._toastStack().appendChild(toast);
 
     requestAnimationFrame(() => toast.classList.add('show'));
 
@@ -5566,6 +6559,189 @@ Object.assign(CodemanApp.prototype, {
     // to update or dismiss itself once its own condition resolves (e.g. a "loading model"
     // toast a poll loop dismisses once the model reports ready).
     return { dismiss, setMessage: (text) => { msgSpan.textContent = text; } };
+  },
+
+  /** The fixed toast stack (`.toast-container`), created on first use and cached. */
+  _toastStack() {
+    if (!this._toastContainer) {
+      this._toastContainer = document.querySelector('.toast-container');
+      if (!this._toastContainer) {
+        this._toastContainer = document.createElement('div');
+        this._toastContainer.className = 'toast-container';
+        document.body.appendChild(this._toastContainer);
+      }
+    }
+    return this._toastContainer;
+  },
+
+  /**
+   * A security notice (security-notices.json) as its own card in the toast stack: shield,
+   * "Security notice" eyebrow, the notice's title and message, its link as the primary
+   * button, a quiet Dismiss and the ×. Same container as every toast, so it never fights
+   * the z-index stack. Sticky: only the user ends it.
+   *
+   * The notice's own text (title, message, link label) is already in the UI language, so it
+   * is set with textContent and carries `data-i18n-skip`; the card's own copy ("Security
+   * notice", "Dismiss", the × label) is application text and translates as usual.
+   *
+   * `opts.onClose(reason)` fires ONCE, and only on a user action: `'link'`, `'dismiss'` or
+   * `'close'`. Never on the handle's own `dismiss()`, which does not mean the user saw it.
+   *
+   * @param {{id: string, title: string, message: string, label: string, url: string}} notice
+   * @param {{onClose?: (reason: string) => void}} [opts]
+   */
+  showSecurityNotice(notice, opts = {}) {
+    const card = this._noticeCard('security-notice', opts.onClose);
+    const main = this._noticeEl('div', 'security-notice-main');
+    main.append(this._noticeEl('div', 'security-notice-eyebrow', 'Security notice'));
+    main.append(...this._noticeTextBlock(notice));
+    const actions = this._noticeEl('div', 'security-notice-actions');
+    const link = this._noticeLinkButton(notice, card, () => card.close('link'));
+    if (link) actions.append(link);
+    actions.append(this._noticeButton('security-notice-quiet', 'Dismiss', () => card.close('dismiss')));
+    main.append(actions);
+    card.el.append(this._noticeIcon('shield', 'security-notice-icon'), main, card.closeButton);
+    card.mount();
+    return { dismiss: () => card.close(null) };
+  },
+
+  /**
+   * The once-per-release update toast when security notices ride INSIDE it
+   * (CodemanSecurityNotices.plan in constants.js decides that; with no notice the plain
+   * showToast toast is used, unchanged). Styled as the security card: the release text as
+   * before (translated by the same i18n.js pattern), one warning section per notice, then
+   * each notice's link button beside "See what's new".
+   *
+   * Sticky, since it carries a warning. `onNoticeSeen(id)` records a notice: the × records
+   * every notice in the card, a notice's link records that one and closes the card. "See
+   * what's new" opens the release notes and leaves the card up, because the warning in it
+   * has not been answered yet.
+   *
+   * @param {{text: string, releaseUrl: string, notices: Array<object>, onNoticeSeen: (id: string) => void}} opts
+   */
+  showUpdateNotice({ text, releaseUrl, notices, onNoticeSeen }) {
+    const seen = (id) => { try { onNoticeSeen?.(id); } catch (err) { console.error('[notice] onNoticeSeen failed:', err); } };
+    const card = this._noticeCard('security-notice update-notice', (reason) => {
+      if (reason === 'close') for (const notice of notices) seen(notice.id);
+    });
+    const main = this._noticeEl('div', 'security-notice-main');
+    main.append(this._noticeEl('p', 'update-notice-text', text));
+    const actions = this._noticeEl('div', 'security-notice-actions');
+    for (const notice of notices) {
+      const section = this._noticeEl('section', 'security-notice-section');
+      const head = this._noticeEl('div', 'security-notice-section-head');
+      head.append(this._noticeIcon('shield'), this._noticeEl('span', 'security-notice-eyebrow', 'Security notice'));
+      section.append(head, ...this._noticeTextBlock(notice));
+      main.append(section);
+      const link = this._noticeLinkButton(notice, card, () => { seen(notice.id); card.close('link'); });
+      if (link) actions.append(link);
+    }
+    actions.append(
+      this._noticeButton(
+        'security-notice-secondary',
+        "See what's new",
+        card.act(() => window.open(releaseUrl, '_blank', 'noopener,noreferrer'))
+      )
+    );
+    main.append(actions);
+    card.el.append(this._noticeIcon('update', 'security-notice-icon update-notice-icon'), main, card.closeButton);
+    card.mount();
+    return { dismiss: () => card.close(null) };
+  },
+
+  /**
+   * The shell both notice cards share: role=alert, the ×, mount and a once-only close.
+   * A closing card stays in the DOM for its 200 ms fade, so close() also makes it inert, and
+   * `act(fn)` wraps a button's handler to do nothing once the card is closing (a double click
+   * on a link used to open it twice; the × and Dismiss go through close(), already once-only).
+   */
+  _noticeCard(className, onUserClose) {
+    const el = this._noticeEl('div', className);
+    el.setAttribute('role', 'alert');
+    el.setAttribute('aria-live', 'assertive');
+    let closed = false;
+    const close = (reason) => {
+      if (closed) return;
+      closed = true;
+      el.inert = true;
+      el.classList.remove('show');
+      setTimeout(() => el.remove(), 200);
+      if (reason && typeof onUserClose === 'function') {
+        try { onUserClose(reason); } catch (err) { console.error('[notice] onClose failed:', err); }
+      }
+    };
+    const closeButton = this._noticeButton('security-notice-close', '×', () => close('close'));
+    closeButton.setAttribute('aria-label', 'Close');
+    const mount = () => {
+      this._toastStack().appendChild(el);
+      requestAnimationFrame(() => el.classList.add('show'));
+    };
+    const act = (fn) => () => { if (!closed) fn(); };
+    return { el, closeButton, close, mount, act };
+  },
+
+  /** The notice's own title (when it has one) and message: textContent, never translated. */
+  _noticeTextBlock(notice) {
+    const parts = [];
+    if (notice.title) parts.push(this._noticeEl('div', 'security-notice-title', notice.title, true));
+    parts.push(this._noticeEl('p', 'security-notice-body', notice.message, true));
+    return parts;
+  },
+
+  /**
+   * The notice's link as the primary button, or null when the link is not https.
+   * selectSecurityNotices() already drops such a notice; the URL is checked again here, at the
+   * sink, because showSecurityNotice/showUpdateNotice take any object. Opened with noopener
+   * AND noreferrer: noopener alone still sends this instance's origin (a tailnet name, a tunnel
+   * URL) to the linked site as the Referer.
+   */
+  _noticeLinkButton(notice, card, after) {
+    const url = notice.url;
+    if (!window.CodemanSecurityNotices?.urlOk?.(url)) return null;
+    return this._noticeButton(
+      'security-notice-primary',
+      notice.label,
+      card.act(() => { window.open(url, '_blank', 'noopener,noreferrer'); after(); }),
+      true
+    );
+  },
+
+  _noticeButton(className, label, onClick, untranslated = false) {
+    const btn = this._noticeEl('button', className, label, untranslated);
+    btn.type = 'button';
+    btn.onclick = (e) => { e.stopPropagation(); onClick(); };
+    return btn;
+  },
+
+  _noticeEl(tag, className, text, untranslated = false) {
+    const el = document.createElement(tag);
+    el.className = className;
+    if (text !== undefined) el.textContent = text;
+    if (untranslated) el.setAttribute('data-i18n-skip', '');
+    return el;
+  },
+
+  /** Inline SVG icons (no asset): `shield` (with an exclamation) or `update` (arrow up). */
+  _noticeIcon(kind, wrapperClass) {
+    const NS = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(NS, 'svg');
+    for (const [k, v] of Object.entries({
+      viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '2',
+      'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true', focusable: 'false',
+    })) svg.setAttribute(k, v);
+    const shapes = kind === 'shield'
+      ? [['path', { d: 'M12 3 4.5 6v5.2c0 4.5 3.1 8.4 7.5 9.8 4.4-1.4 7.5-5.3 7.5-9.8V6L12 3z' }], ['path', { d: 'M12 8.5v4.5' }], ['path', { d: 'M12 16.5h.01' }]]
+      : [['circle', { cx: '12', cy: '12', r: '9' }], ['path', { d: 'M12 16.5v-9' }], ['path', { d: 'm8.5 11 3.5-3.5 3.5 3.5' }]];
+    for (const [tag, attrs] of shapes) {
+      const shape = document.createElementNS(NS, tag);
+      for (const [k, v] of Object.entries(attrs)) shape.setAttribute(k, v);
+      svg.appendChild(shape);
+    }
+    if (!wrapperClass) return svg;
+    const wrap = this._noticeEl('span', wrapperClass);
+    wrap.setAttribute('aria-hidden', 'true');
+    wrap.appendChild(svg);
+    return wrap;
   },
 
   /**
@@ -5687,13 +6863,29 @@ Object.assign(CodemanApp.prototype, {
     // Skip polling when system stats display is hidden
     const statsEl = document.getElementById('headerSystemStats');
     if (!statsEl || statsEl.style.display === 'none') return;
+    // One request at a time: the poll fires every 2 s, and a slow answer (a cold WSL sampler, a hung
+    // server) must not pile up requests behind it.
+    if (this._systemStatsPending) return;
+    this._systemStatsPending = true;
 
     try {
-      const res = await fetch('/api/system/stats');
+      // Opt-in readings are only requested while their header setting is on (default off).
+      const settings = this.loadAppSettingsFromStorage?.() ?? {};
+      const wanted = ['gpu', settings.showGpuStats, 'cpumhz', settings.showCpuMhz];
+      const query = [];
+      for (let i = 0; i < wanted.length; i += 2) if (wanted[i + 1] === true) query.push(`${wanted[i]}=1`);
+      const res = await fetch('/api/system/stats' + (query.length ? '?' + query.join('&') : ''), {
+        signal:
+          typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+            ? AbortSignal.timeout(8000)
+            : undefined,
+      });
       const stats = await res.json();
       this.updateSystemStatsDisplay(stats.data);
     } catch (err) {
       // Silently fail - system stats are not critical
+    } finally {
+      this._systemStatsPending = false;
     }
   },
 
@@ -5718,6 +6910,11 @@ Object.assign(CodemanApp.prototype, {
       }
     }
 
+    // Rings for the Compact header style, kept current in every style (two
+    // style writes a poll) so switching styles never shows an empty ring.
+    this._setStatRing('statCpuRing', stats.cpu);
+    this._setStatRing('statMemRing', stats.memory?.percent);
+
     if (memEl && memBar) {
       const memGB = (stats.memory.usedMB / 1024).toFixed(1);
       memEl.textContent = `${memGB}G`;
@@ -5733,6 +6930,74 @@ Object.assign(CodemanApp.prototype, {
         memBar.classList.add('medium');
       }
     }
+
+    // After the MEM block, so nothing in the optional readings can stop MEM updating.
+    this._updateHostSensors(stats);
+  },
+
+  /**
+   * The opt-in readings after CPU and MEM: GPU load, GPU memory and GPU clock (the GPU Stats setting) and the CPU clock. An item
+   * shows only while its setting is on AND the host reported it, so a machine without a readable GPU just
+   * has nothing extra in the header.
+   */
+  _updateHostSensors(stats) {
+    const settings = this.loadAppSettingsFromStorage?.() ?? {};
+    const show = (id, visible) => {
+      const el = this.$(id);
+      if (el) el.hidden = !visible;
+    };
+    const fill = (valueId, ringId, barId, percent, text) => {
+      const value = this.$(valueId);
+      if (value) {
+        value.textContent = text;
+        value.classList.toggle('high', percent > 80);
+      }
+      this._setStatRing(ringId, percent);
+      const bar = this.$(barId);
+      if (bar) bar.style.width = `${Math.min(100, percent)}%`;
+    };
+    const gpu = settings.showGpuStats === true ? stats.gpu : undefined;
+    show('statGpuItem', Boolean(gpu));
+    if (gpu) fill('statGpu', 'statGpuRing', 'statGpuBar', gpu.percent, `${gpu.percent}%`);
+    // Graphics memory: the amount in use whenever it is known, with a ring only when the total is too (an
+    // integrated GPU under WSL, where Windows reports usage but the share of RAM is a guess, may have none).
+    show('statVramItem', Boolean(gpu && gpu.memUsedMB !== undefined));
+    if (gpu && gpu.memUsedMB !== undefined) {
+      const used = `${(gpu.memUsedMB / 1024).toFixed(1)}G`;
+      const ring = this.$('statVramRing');
+      // Ringless, the Compact style's rings-only step hides the whole item (styles.css) instead of an empty one.
+      this.$('statVramItem')?.classList.toggle('stat-item--ringless', gpu.memPercent === undefined);
+      if (gpu.memPercent !== undefined) {
+        fill('statVram', 'statVramRing', 'statVramBar', gpu.memPercent, used);
+        if (ring) ring.style.display = '';
+      } else {
+        const vram = this.$('statVram');
+        if (vram) vram.textContent = used;
+        if (ring) ring.style.display = 'none';
+      }
+    }
+    // The GPU clock is a third GPU Stats item (the host may not report one: Windows has none for Intel).
+    show('statGpuMhzItem', Boolean(gpu && gpu.mhz !== undefined));
+    const gpuMhzEl = gpu && gpu.mhz !== undefined ? this.$('statGpuMhz') : null;
+    if (gpuMhzEl) gpuMhzEl.textContent = `${gpu.mhz} MHz`;
+    const cpuMhz = settings.showCpuMhz === true && stats.cpuMhz !== undefined ? stats.cpuMhz : undefined;
+    show('statCpuMhzItem', cpuMhz !== undefined);
+    const cpuMhzEl = cpuMhz !== undefined ? this.$('statCpuMhz') : null;
+    if (cpuMhzEl) cpuMhzEl.textContent = `${cpuMhz} MHz`;
+  },
+
+  /**
+   * Fill one stat ring (Compact header style) to `percent`, clamped to 0-100,
+   * and flag it `high` above 80%, the same threshold at which the value next
+   * to it turns red.
+   */
+  _setStatRing(id, percent) {
+    const ring = this.$(id);
+    if (!ring) return;
+    const value = Number(percent);
+    const fill = Number.isFinite(value) ? Math.round(Math.min(100, Math.max(0, value))) : 0;
+    ring.style.setProperty('--pu', String(fill));
+    ring.classList.toggle('high', fill > 80);
   },
 
   // ─── Clipboard ──────────────────────────────────────────────────────────────

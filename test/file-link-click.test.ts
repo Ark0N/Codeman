@@ -4,7 +4,7 @@
  * Tests that file paths displayed in terminal output are clickable
  * and open the log viewer window correctly.
  *
- * Port allocation: 3154 (see CLAUDE.md test port table)
+ * Port allocation: ephemeral port
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
@@ -14,8 +14,7 @@ import { writeFileSync, mkdirSync, rmSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-const TEST_PORT = 3154;
-const baseUrl = `http://localhost:${TEST_PORT}`;
+let baseUrl: string;
 const BROWSER_TIMEOUT = 30000;
 
 // Helper to run agent-browser commands
@@ -97,8 +96,9 @@ describe('File Link Click Tests', () => {
     testLogFile = join(testDir, 'test.log');
     writeFileSync(testLogFile, '=== Test Log Started ===\n');
 
-    server = new WebServer(TEST_PORT, false, true);
+    server = new WebServer(0, false, true);
     await server.start();
+    baseUrl = `http://localhost:${server.boundPort}`;
     await new Promise((r) => setTimeout(r, 1000));
 
     // Test if browser is available

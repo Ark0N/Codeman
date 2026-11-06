@@ -4,8 +4,8 @@
  *
  * PR #361 once made it reconcile `showPlanUsageLimits` on first read: if the
  * key was absent, the route persisted `true`. But readJsonConfig() answers
- * `{}` for ANY read failure (parse error, EACCES, EMFILE, a read landing inside
- * PUT's non-atomic write), not only ENOENT, and every page load calls this
+ * `{}` for ANY read failure (parse error, EACCES, EMFILE, and at the time a read
+ * landing inside PUT's non-atomic write), not only ENOENT, and every page load calls this
  * route, so one unlucky read replaced the whole settings file with a one-key
  * file. The default now lives in the readers instead: an absent key means ON
  * to readPlanUsageTelemetryEnabled() (pinned in test/hooks-config.test.ts) and

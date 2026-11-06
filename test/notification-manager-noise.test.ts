@@ -23,6 +23,7 @@ type Manager = {
   getStorageKey: () => string;
   normalizePreferences: (preferences: Record<string, unknown>) => NotificationPreferences;
   notify: (notification: Record<string, unknown>) => void;
+  getToastDurationMs: () => number;
 };
 
 const openWindows: JSDOM[] = [];
@@ -48,6 +49,10 @@ function loadManager(
       STUCK_THRESHOLD_DEFAULT_MS: number;
       GROUPING_TIMEOUT_MS: number;
       NOTIFICATION_LIST_CAP: number;
+      AUTO_CLOSE_NOTIFICATION_MS: number;
+      DEFAULT_TOAST_DURATION_MS: number;
+      MIN_NOTIFICATION_DURATION_MS: number;
+      MAX_NOTIFICATION_DURATION_MS: number;
     };
   win.MobileDetection = {
     getDeviceType: () => device.deviceType ?? 'desktop',
@@ -56,6 +61,10 @@ function loadManager(
   win.STUCK_THRESHOLD_DEFAULT_MS = 600_000;
   win.GROUPING_TIMEOUT_MS = 5_000;
   win.NOTIFICATION_LIST_CAP = 100;
+  win.AUTO_CLOSE_NOTIFICATION_MS = 8_000;
+  win.DEFAULT_TOAST_DURATION_MS = 3_000;
+  win.MIN_NOTIFICATION_DURATION_MS = 1_000;
+  win.MAX_NOTIFICATION_DURATION_MS = 300_000;
   win.requestAnimationFrame = ((callback: FrameRequestCallback) => {
     callback(0);
     return 1;
@@ -66,6 +75,7 @@ function loadManager(
   }
 
   win.eval(`
+    window.escapeHtml = (value) => String(value).replace(/[&<>"']/g, (c) => '&#' + c.charCodeAt(0) + ';');
     ${SOURCE}
     window.__testNotificationManager = NotificationManager;
   `);
@@ -146,5 +156,25 @@ describe('notification noise defaults', () => {
 
     expect(manager.preferences.enabled).toBe(false);
     expect(manager.getStorageKey()).toBe('codeman-notification-prefs-mobile');
+  });
+});
+
+describe('notification display time', () => {
+  it('defaults to 3s toasts and 8s browser notifications', () => {
+    const { manager } = loadManager();
+    expect(manager.getToastDurationMs()).toBe(3000);
+    expect((manager.preferences as unknown as Record<string, number>).browserAutoCloseMs).toBe(8000);
+  });
+
+  it('honours a configured toast time and clamps unusable values', () => {
+    const { manager } = loadManager({ toastDurationMs: 15_000 });
+    expect(manager.getToastDurationMs()).toBe(15_000);
+
+    const clamp = (value: unknown) =>
+      (manager.normalizePreferences({ toastDurationMs: value }) as unknown as Record<string, number>).toastDurationMs;
+    expect(clamp(10)).toBe(1000);
+    expect(clamp(9_999_999)).toBe(300_000);
+    expect(clamp('soon')).toBe(3000);
+    expect(clamp(undefined)).toBe(3000);
   });
 });

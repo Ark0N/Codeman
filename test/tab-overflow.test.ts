@@ -78,6 +78,22 @@ describe('tab overflow layout policy', () => {
     // A single overflowing tab must not wrap (need at least 2 to form a second row).
     expect(helper.shouldAutoWrapTabs({ ...base, tabCount: 1, scrollWidth: 1400, clientWidth: 760 })).toBe(false);
   });
+
+  it('wraps a strip whose case cluster already wraps inside itself, though nothing overflows', () => {
+    // A case wider than the whole strip is capped at its width and wraps in its
+    // box, so the strip has rows that scrollWidth never shows. Without the wrap,
+    // the lineage routing room (row gap, spine channel) is never reserved.
+    const helper = loadTabOverflowHelper();
+    const fits = { manualTwoRows: false, tabCount: 12, scrollWidth: 800, clientWidth: 800 };
+
+    expect(helper.shouldAutoWrapTabs({ ...fits, deviceType: 'desktop', innerWrap: true })).toBe(true);
+    expect(helper.shouldAutoWrapTabs({ ...fits, deviceType: 'desktop', innerWrap: false })).toBe(false);
+    // The other guards still win.
+    expect(helper.shouldAutoWrapTabs({ ...fits, deviceType: 'tablet', innerWrap: true })).toBe(false);
+    expect(helper.shouldAutoWrapTabs({ ...fits, deviceType: 'desktop', manualTwoRows: true, innerWrap: true })).toBe(
+      false
+    );
+  });
 });
 
 // Issue #257: the phone tab strip scrolls horizontally, so the active tab can

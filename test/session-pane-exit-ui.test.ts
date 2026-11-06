@@ -92,10 +92,27 @@ describe('the exited-agent badge in a tab', () => {
     expect(tab.querySelector('.tab-name')?.nextElementSibling?.className).toBe('tab-exited-badge');
   });
 
-  it('marks the badge data-i18n-skip, like the other generated status text', () => {
+  it('leaves the badge to the translator (zh-CN) and remembers its English', () => {
     const tab = makeTab();
     applyPaneExitBadge(tab, { status: 0, at: 1 });
-    expect(badge(tab)?.hasAttribute('data-i18n-skip')).toBe(true);
+    expect(badge(tab)?.hasAttribute('data-i18n-skip')).toBe(false);
+    expect((badge(tab) as unknown as HTMLElement).dataset.label).toBe('exited (0)');
+  });
+
+  it('a translated badge and accessible name survive an unchanged pass; a change writes the new English', () => {
+    // The translator rewrites both in zh-CN. Comparing with the DOM would write
+    // the English back on every incremental pass for it to translate again.
+    const tab = makeTab();
+    applyPaneExitBadge(tab, { status: 3, at: 1 });
+    const el = badge(tab) as unknown as HTMLElement;
+    el.textContent = '已退出（3）';
+    tab.setAttribute('aria-label', 'w1-case 会话，智能体已退出（3）');
+    applyPaneExitBadge(tab, { status: 3, at: 1 });
+    expect(el.textContent).toBe('已退出（3）');
+    expect(tab.getAttribute('aria-label')).toBe('w1-case 会话，智能体已退出（3）');
+    applyPaneExitBadge(tab, { signal: 9, at: 2 });
+    expect(el.textContent).toBe('exited (signal 9)');
+    expect(tab.getAttribute('aria-label')).toBe('w1-case session, agent exited (signal 9)');
   });
 
   it('hides the badge from assistive technology, like its sibling badges', () => {
@@ -115,8 +132,12 @@ describe('the exited-agent badge in a tab', () => {
   });
 
   it('builds the full render path accessible name from the same helper', () => {
-    expect(appJs).toContain('aria-label="${escapeHtml(paneExitAriaLabel(name, paneExitBadge))}"');
-    expect(appJs).toContain('<span class="tab-exited-badge" data-i18n-skip aria-hidden="true">');
+    expect(appJs).toContain(
+      'aria-label="${escapeHtml(paneExitAriaLabel(name, paneExitBadge))}" data-aria-source="${escapeHtml(paneExitAriaLabel(name, paneExitBadge))}"'
+    );
+    expect(appJs).toContain(
+      '<span class="tab-exited-badge" data-label="${escapeHtml(paneExitBadge)}" aria-hidden="true">'
+    );
   });
 
   it('updates the text in place rather than stacking a second badge', () => {

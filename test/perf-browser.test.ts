@@ -5,7 +5,7 @@
  * terminal input latency, subagent window management, settings modal,
  * SSE connection speed, and rendering under load.
  *
- * Port: 3210 (perf-browser tests)
+ * Port: ephemeral
  *
  * Run: npx vitest run test/perf-browser.test.ts
  */
@@ -14,8 +14,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
 import { WebServer } from '../src/web/server.js';
 
-const PORT = 3210;
-const BASE_URL = `http://localhost:${PORT}`;
+let baseUrl: string;
 
 // Thresholds (ms)
 const THRESHOLDS = {
@@ -53,7 +52,7 @@ async function freshPage(): Promise<{ context: BrowserContext; page: Page }> {
 }
 
 async function navigateAndWait(page: Page): Promise<void> {
-  await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+  await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
   // Wait for app.js to initialize (app-loaded class added to body)
   await page.waitForFunction(() => document.body.classList.contains('app-loaded'), {
     timeout: 5000,
@@ -69,7 +68,8 @@ async function createSession(page: Page, name: string): Promise<string> {
       body: JSON.stringify({ workingDir: '/tmp', name: n }),
     });
     const data = await res.json();
-    return data.id ?? data.session?.id;
+    // POST /api/sessions answers in the { success, data: { session } } envelope.
+    return data.data?.session?.id;
   }, name);
   return result as string;
 }
@@ -119,8 +119,9 @@ async function getHeapMB(page: Page): Promise<number> {
 // ─── Setup / Teardown ─────────────────────────────────────
 
 beforeAll(async () => {
-  server = new WebServer(PORT, false, true); // testMode
+  server = new WebServer(0, false, true); // testMode
   await server.start();
+  baseUrl = `http://localhost:${server.boundPort}`;
   browser = await chromium.launch({ headless: true });
 }, 30_000);
 
@@ -143,7 +144,7 @@ describe('Page load performance', () => {
     ({ context, page } = await freshPage());
 
     const wallTiming = await measure(async () => {
-      await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+      await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
     });
     const navigationTiming = await getBrowserNavigationTiming(page);
 
@@ -157,7 +158,7 @@ describe('Page load performance', () => {
     ({ context, page } = await freshPage());
 
     const timing = await measure(async () => {
-      await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+      await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
       await page.waitForFunction(() => document.body.classList.contains('app-loaded'), {
         timeout: 5000,
       });
@@ -189,7 +190,7 @@ describe('Page load performance', () => {
 
   it('loading skeleton disappears after init', async () => {
     ({ context, page } = await freshPage());
-    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+    await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
 
     // Skeleton should be visible initially
     const skeletonVisible = await page.locator('.loading-skeleton').isVisible();

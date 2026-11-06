@@ -17,7 +17,28 @@
  * Port: N/A (app.inject).
  */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
+
+// Unreachable-mount seam: `stat()` of a path under this root never settles (a hard
+// network mount that went away), so the bounded path probe can be driven to its
+// stall cap. Every other stat is the real one. The short timeout is read at import.
+const deadMount = vi.hoisted(() => {
+  process.env.CODEMAN_PATH_PROBE_TIMEOUT_MS = '200';
+  return { root: '/mnt/codeman-clone-test-dead', releases: [] as Array<() => void> };
+});
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  const stat = ((path: string, ...rest: unknown[]) => {
+    if (String(path).startsWith(deadMount.root + '/')) {
+      return new Promise((resolve) => deadMount.releases.push(() => resolve({} as never)));
+    }
+    return (actual.stat as (...a: unknown[]) => unknown)(path, ...rest);
+  }) as typeof actual.stat;
+  return { ...actual, stat, default: { ...actual, stat } };
+});
+afterAll(() => {
+  delete process.env.CODEMAN_PATH_PROBE_TIMEOUT_MS;
+});
 import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyCookie from '@fastify/cookie';
 import { execFileSync } from 'node:child_process';
@@ -38,6 +59,8 @@ import { installRouteErrorHandler } from '../../src/web/route-error-handler.js';
 import { ApiErrorCode, httpStatusForErrorCode } from '../../src/types.js';
 import { registerCaseRoutes } from '../../src/web/routes/case-routes.js';
 import { isGitAvailable } from '../../src/git-clone.js';
+import { probePath } from '../../src/utils/index.js';
+import { MAX_STALLED_PATH_PROBES } from '../../src/config/path-probe.js';
 
 const CASES_DIR = join(homedir(), 'codeman-cases');
 const gitPresent = isGitAvailable();
@@ -250,6 +273,25 @@ describe.skipIf(!gitPresent)('POST /api/cases/clone — real clone', () => {
     expect(body.data.warnings.join(' ')).toMatch(/Kept the repository/);
     // Repo-shipped hooks run on this machine: the response has to say so.
     expect(body.data.warnings.join(' ')).toMatch(/ships its own \.claude/);
+  });
+
+  it('still warns about repo-supplied .claude settings while unrelated mounts are unreachable', async () => {
+    const dead = Array.from({ length: MAX_STALLED_PATH_PROBES }, (_, i) => `${deadMount.root}/nas-${i}/project`);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      // Engage the probe's stall cap: every new bounded probe is now refused.
+      expect(await Promise.all(dead.map((p) => probePath(p)))).toEqual(dead.map(() => 'unknown'));
+
+      created.push('warns-under-cap');
+      const res = await clone({ name: 'warns-under-cap', repository: origin });
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(true);
+      expect(body.data.warnings.join(' ')).toMatch(/ships its own \.claude/);
+    } finally {
+      deadMount.releases.splice(0).forEach((release) => release());
+      await new Promise((r) => setTimeout(r, 0));
+      warn.mockRestore();
+    }
   });
 
   it('installs Codeman hooks alongside whatever the repo shipped', async () => {

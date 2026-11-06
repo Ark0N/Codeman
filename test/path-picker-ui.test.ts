@@ -225,6 +225,60 @@ describe('mobile filesystem picker actions', () => {
     expect(terminalHarness.cjkClear).toHaveBeenCalled();
   });
 
+  it('sends a picked path to the tile or Pane B that holds the keyboard, never the parked main overlay', () => {
+    const appendText = vi.fn();
+    const sendInput = vi.fn();
+    const _sendInputAsync = vi.fn();
+    const mainFocus = vi.fn();
+    const tileFocus = vi.fn();
+    const app = {
+      activeSessionId: 'session-1',
+      _localEchoEnabled: true,
+      _localEchoOverlay: { appendText },
+      terminal: { focus: mainFocus },
+      sendInput,
+      _sendInputAsync,
+      _focusedPane: () => ({ terminal: { focus: tileFocus }, sessionId: 'tile-2', isPrimary: false, tile: {} }),
+    };
+
+    terminalHarness.mixin.insertTerminalText.call(app, '/mnt/d/AI/project');
+
+    expect(_sendInputAsync).toHaveBeenCalledWith('tile-2', '/mnt/d/AI/project');
+    expect(appendText).not.toHaveBeenCalled();
+    expect(sendInput).not.toHaveBeenCalled();
+    expect(tileFocus).toHaveBeenCalledOnce();
+    expect(mainFocus).not.toHaveBeenCalled();
+  });
+
+  it('clears the prompt of the tile or Pane B that holds the keyboard with Ctrl+U, leaving the main overlay alone', () => {
+    const clear = vi.fn();
+    const sendInput = vi.fn(() => Promise.resolve());
+    const _sendInputAsync = vi.fn();
+    const showToast = vi.fn();
+    const tileFocus = vi.fn();
+    const app = {
+      activeSessionId: 'session-1',
+      _inputFlushTimeout: null,
+      _pendingInput: 'main pane text',
+      _localEchoEnabled: true,
+      _localEchoOverlay: { getFlushed: () => ({ count: 0, text: '' }), clear, suppressBufferDetection: vi.fn() },
+      sendInput,
+      _sendInputAsync,
+      showToast,
+      terminal: { focus: vi.fn() },
+      _focusedPane: () => ({ terminal: { focus: tileFocus }, sessionId: 'tile-2', isPrimary: false, tile: {} }),
+    };
+
+    terminalHarness.mixin.clearTerminalInput.call(app);
+
+    expect(_sendInputAsync).toHaveBeenCalledWith('tile-2', '\x15');
+    expect(sendInput).not.toHaveBeenCalled();
+    expect(clear).not.toHaveBeenCalled();
+    expect(app._pendingInput).toBe('main pane text');
+    expect(showToast).toHaveBeenCalledWith('Input cleared', 'success');
+    expect(tileFocus).toHaveBeenCalledOnce();
+  });
+
   it('uses Ctrl+U to clear the TUI-owned prompt when local echo is disabled', () => {
     const sendInput = vi.fn(() => Promise.resolve());
     const app = {

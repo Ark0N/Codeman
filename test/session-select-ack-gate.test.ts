@@ -5,9 +5,10 @@
  * `selectSession()` acknowledges the session's idle approval item server-side
  * (`markIdleAlertSeen` → `POST /api/approvals/session/:id/viewed`), which is
  * what makes "I checked it" survive a reload and reach the user's other
- * devices. Three call sites are the APP choosing a session rather than the
- * user: the boot restore, a solo (popped-out) window opening its target, and
- * the fallback after the active session is deleted. Those pass `auto: true`
+ * devices. Four call sites are the APP choosing a session rather than the
+ * user: the boot restore, a solo (popped-out) window opening its target, a
+ * `#session=<id>` link from another page, and the fallback after the active
+ * session is deleted. Those pass `auto: true`
  * and must not spend the alert, or a yellow tab would clear itself every time
  * the page loaded and the user would never see it.
  *
@@ -109,8 +110,62 @@ describe('selectSession acknowledgement gate', () => {
     });
   });
 
+  describe('with the tile grid open (tile-grid.js)', () => {
+    // A plain stand-in for the grid: the branch reads only `open` and `has(id)`.
+    function withGrid(app: ReturnType<typeof makeApp>, tiled: string[]) {
+      const a = app as Record<string, unknown>;
+      a._tileGrid = { open: true, has: (id: string) => tiled.includes(id) };
+      a._selectTiledSession = vi.fn();
+      a.closeTileGrid = vi.fn();
+      a._connectWs = vi.fn();
+      return a;
+    }
+
+    it('a tiled session goes to its tile, never the main terminal, and the tile decides the ack', async () => {
+      const app = withGrid(makeApp('other'), [SID]);
+      await (app.selectSession as (id: string) => Promise<void>)(SID);
+      expect(app._selectTiledSession).toHaveBeenCalledWith(SID, {});
+      expect(app._cleanupPreviousSession).not.toHaveBeenCalled();
+      expect(app._connectWs).not.toHaveBeenCalled();
+      // The branch returns before the main path's own acknowledgement line.
+      expect(app.markIdleAlertSeen).not.toHaveBeenCalled();
+    });
+
+    it('passes `auto` through, so an app-driven focus stays unacknowledged', async () => {
+      const app = withGrid(makeApp('other'), [SID]);
+      await (app.selectSession as (id: string, o: object) => Promise<void>)(SID, { auto: true });
+      expect(app._selectTiledSession).toHaveBeenCalledWith(SID, { auto: true });
+    });
+
+    it('an `auto` selection of a session that is not tiled leaves the grid open and acknowledges nothing', async () => {
+      const app = withGrid(makeApp('other'), []);
+      await (app.selectSession as (id: string, o: object) => Promise<void>)(SID, { auto: true });
+      expect(app.closeTileGrid).not.toHaveBeenCalled();
+      expect(app._cleanupPreviousSession).not.toHaveBeenCalled();
+      expect(app.markIdleAlertSeen).not.toHaveBeenCalled();
+    });
+
+    it('a user-initiated one leaves the grid (remembered) and switches normally, acknowledging', async () => {
+      const app = withGrid(makeApp('other'), []);
+      await (app.selectSession as (id: string) => Promise<void>)(SID).catch(() => {});
+      expect(app.closeTileGrid).toHaveBeenCalledWith({ keepStored: true, reselect: false });
+      expect(app._cleanupPreviousSession).toHaveBeenCalled();
+      expect(app.markIdleAlertSeen).toHaveBeenCalledWith(SID);
+    });
+
+    it('`leaveTiles` leaves it too, without acknowledging an `auto` pick', async () => {
+      const app = withGrid(makeApp('other'), []);
+      await (app.selectSession as (id: string, o: object) => Promise<void>)(SID, {
+        auto: true,
+        leaveTiles: true,
+      }).catch(() => {});
+      expect(app.closeTileGrid).toHaveBeenCalledTimes(1);
+      expect(app.markIdleAlertSeen).not.toHaveBeenCalled();
+    });
+  });
+
   describe('the call sites the app drives itself', () => {
-    // Source guard: these three are the reason the flag exists. If a refactor
+    // Source guard: these call sites are the reason the flag exists. If a refactor
     // moves or reformats them, fail loudly rather than silently going back to
     // "every page load clears the user's yellow tab".
     it.each([
@@ -118,6 +173,7 @@ describe('selectSession acknowledgement gate', () => {
       ['boot restore, first tab fallback', 'this.selectSession(this.sessionOrder[0], { auto: true });'],
       ['solo window opening its target', 'this.selectSession(this.soloSessionId, { auto: true });'],
       ['fallback after the active session is removed', 'this.selectSession(nextSessionId, { auto: true });'],
+      ['a #session=<id> link from another page', 'this.selectSession(id, { auto: true, leaveTiles: true });'],
     ])('%s passes auto: true', (_label, call) => {
       expect(APP_SOURCE).toContain(call);
     });
@@ -126,7 +182,8 @@ describe('selectSession acknowledgement gate', () => {
       // Alt+1..9 and Alt+[/] are a human asking for that tab, so they keep
       // acknowledging; only app-chosen selections are tagged.
       expect(APP_SOURCE).toContain('this.selectSession(live[idx]);');
-      expect(APP_SOURCE).toContain('this.selectSession(this.sessionOrder[nextIndex]);');
+      // Swipes walk the drawn order (`order` is sessionOrder or the strip's), same call.
+      expect(APP_SOURCE).toContain('this.selectSession(order[nextIndex]);');
     });
   });
 });

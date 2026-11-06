@@ -283,12 +283,14 @@ Object.assign(CodemanApp.prototype, {
       wizardRect = wizardContent.getBoundingClientRect();
     }
 
-    // Read tab rects for normal mode (only tabs that are actually needed)
+    // Read tab rects for normal mode (only tabs that are actually needed).
+    // Only a painted row is cached: a row a search or filter hid has no line
+    // (_paintedSessionTab), rather than one drawn from the viewport's corner.
     if (!wizardOpen) {
       for (const { agentId } of visibleSubagentWindows) {
         const parentSessionId = this.subagentParentMap.get(agentId);
         if (!parentSessionId || rects.has('tab:' + parentSessionId)) continue;
-        const tab = document.querySelector(`.session-tab[data-id="${parentSessionId}"]`);
+        const tab = this._paintedSessionTab(parentSessionId);
         if (tab) rects.set('tab:' + parentSessionId, tab.getBoundingClientRect());
       }
     }
@@ -397,7 +399,7 @@ Object.assign(CodemanApp.prototype, {
 
         const tabRect = rects.get('tab:' + parentSessionId);
         if (!tabRect) {
-          // Tab not in DOM (might be scrolled out or session closed)
+          // Tab not painted (session closed, collapsed group, or hidden by a search)
           continue;
         }
 
@@ -691,8 +693,8 @@ Object.assign(CodemanApp.prototype, {
       }
     }
 
-    // Get parent TAB element for spawn animation
-    const parentTab = parentSessionId ? document.querySelector(`.session-tab[data-id="${parentSessionId}"]`) : null;
+    // Get parent TAB element for spawn animation (a hidden row spawns normally)
+    const parentTab = this._paintedSessionTab(parentSessionId);
 
     // Create window element
     const win = document.createElement('div');

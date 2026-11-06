@@ -105,7 +105,9 @@ The warning points at three ways to secure the instance:
 2. `--host 127.0.0.1` + an authenticated tunnel (`cloudflared` / `tailscale serve`).
 3. `--allow-unauthenticated-network` / `CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK=1`
    — explicitly accept the risk (downgrades the warning to a one‑line note). This
-   flag is **only** an acknowledgement; it does not change reachability.
+   flag is **only** an acknowledgement; it does not change reachability. It covers
+   the bind and nothing else: it does **not** let the managed Cloudflare tunnel
+   start without a password, which has its own opt‑in (§2, the tunnel caveat).
 
 `CODEMAN_API_URL` (used by hooks/child processes) is always derived as a loopback
 address (`0.0.0.0`/`localhost`/`::1` → `127.0.0.1`) so in‑process hooks reach the
@@ -149,7 +151,7 @@ by presence in a server‑side map, so they cannot be forged offline.
 
 ### Rate limiting / lockout recovery
 
-Failed auth is tracked **per IP**: 10 failures → `429`, with a 15‑minute decay.
+Failed logins are tracked **per IP**: 10 failures (`AUTH_FAILURE_MAX`) → `429`, with a 15‑minute decay. Multi-user mode replaces that with three buckets, all with the same decay: a wider per-IP **pre-gate** of 50 failures (`AUTH_IP_FAILURE_MAX`), checked before the scrypt verify, which bounds scrypt cost from one source and tolerates many users behind one egress IP; a **per-(username, IP)** gate of 10 failures (`AUTH_FAILURE_MAX`), also checked before the verify, which is what caps verified guesses against one account from one source; and a **per-username** bucket, checked after the verify, that answers `429` to failed guesses from the 10th on, from any IP (the count is incremented before the check). The last two exist in multi-user mode only. So the wider per-IP cap does not widen guessing against any one account from one IP, and other IPs cannot lock an account out.
 The QR path has its own separate limiter.
 
 The lockout check sits **after** the cookie/credential checks (step 4, not first).
@@ -158,6 +160,22 @@ immediately** even while an attacker is hammering the same IP — important beca
 all traffic through a tunnel shares one source IP (loopback). Wrong credentials
 are still counted and still hit the `429` at the threshold, so brute‑force
 protection is unchanged.
+The two multi-user pre-verify gates are the exception: once the per-IP pre-gate
+or an account's (username, IP) gate trips, even a correct password from that IP
+gets `429` until the decay (for the pair gate, only for that account; the same
+account from another IP still logs in), which is why the per-IP cap is the
+widest. The per-username bucket stays after the verify on purpose: checked
+first, a username-wide lockout let throwaway IPs keep a known account (admin
+included) locked out even with the right password.
+Both pre-verify gates count a request the moment it passes them, before its
+verify starts, so a burst of concurrent attempts cannot all slip through on one
+stale count; a correct password then clears its slot with the rest, and a
+failure is not counted a second time. A verify still in flight therefore holds a
+slot, even one carrying the right password, but identical credentials from the
+same IP that arrive during it share that verify, its slot and its outcome, and
+skip both gates: they add no guess and no scrypt work. So a browser replaying its
+cached login on many parallel requests after a restart (cookie sessions live in
+memory) is not refused by the slots its own password filled.
 
 ---
 
@@ -193,8 +211,15 @@ requests as local:
 **Mitigation:** set `CODEMAN_PASSWORD` whenever a loopback‑connecting tunnel is
 up — it gates everything except the (secret‑gated) hook exemption and is the
 documented practice; since COD‑55 enabling the managed tunnel **refuses** to start
-without it unless `CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK=1` explicitly
-acknowledges the exposure. Prefer `tailscale serve` (below), which authenticates
+without a login (`CODEMAN_PASSWORD` or multi‑user mode) unless
+`CODEMAN_ALLOW_UNAUTHENTICATED_TUNNEL=1` / `--allow-unauthenticated-tunnel`
+acknowledges the exposure, or the request carries `acknowledgeUnauthTunnel: true`
+(what the browser sends after its confirm). The network acknowledgement
+(`CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK`) does **not** count: the installer writes
+it for every LAN install without a password, so it once turned a click on the
+welcome screen's tunnel link into a public, login‑free URL with no confirm. With
+no login the browser asks before every enable, whatever the server would accept,
+reading `loginConfigured` from `GET /api/tunnel/status`. Prefer `tailscale serve` (below), which authenticates
 at the tailnet layer so untrusted clients never reach the loopback port at all.
 
 ### Host‑header & Origin allowlist (DNS‑rebinding & CSRF defense)
@@ -354,8 +379,9 @@ is by id (`GET /api/sessions/:id/attachments/:attachmentId/raw`, same download c
 the `/root` and `/etc` trees, extendable via `attachmentBlockedPaths` /
 `CODEMAN_ATTACHMENT_BLOCKED_PATHS`) on every request. Unlike the workspace file
 routes, attachments are intentionally **cross‑workspace** — so the effective gate
-is the blocklist + a 6‑extension allowlist (`png/pdf/docx/pptx/md/txt`), not
-realpath containment.
+is the blocklist + an extension allowlist (`SUPPORTED_ATTACHMENT_EXTENSIONS` in
+`src/attachment-registry.ts`: images, pdf/docx/pptx/xlsx, audio/video, md/txt and
+other text), not realpath containment.
 
 Two registration paths, with **different trust**:
 
@@ -372,6 +398,23 @@ Two registration paths, with **different trust**:
   regardless of the global confine setting — a passive magic link cannot expose a
   file outside the session's own workspace. Cross‑workspace attach must go through
   the explicit POST path above.
+
+**Folder grid grants** (`POST /api/sessions/:id/folders`, `src/folder-listing.ts`)
+follow the explicit-POST trust level: a deliberate, Origin‑guarded request, allowed
+cross‑workspace subject to the same guard (blocklist on the folder AND on every
+listed file, `confineToWorkspace` when set, hidden entries and unsupported types
+left out). The grant is an id for a resolved folder; files are served by
+`folderId` + a bare file name only (no `/`, `..` or NUL, supported type), and each
+request re‑runs `resolveServableAttachmentPath` on the joined path, so a file that
+was swapped for a symlink to a blocked target after listing is still refused.
+The file a symlink resolves to is held to the attachment gate as well (supported
+extension, regular file), so a supported-looking name cannot serve an arbitrary
+file, and a FIFO or device node is never opened.
+In multi‑user mode a regular user is held to the filesystem path picker's rule
+(`folderAllowedForUser`): the folder, and again each served file after symlink
+resolution, must sit inside their own `userSpacePath` or the session's
+`workingDir`, else 403. User spaces live inside `homedir()`, so without it one user
+could list and read another's space.
 
 ### SSE log‑tail route — intentional extra read roots
 
@@ -528,7 +571,19 @@ A saved dashboard URL renders as a tab, served through Codeman's own origin at `
 - **The proxy is exempt from cookie auth and the Origin/CSRF guard, and that is deliberate.** The iframe is sandboxed without `allow-same-origin`, so it is opaque‑origin: its requests are cross‑site, meaning the `SameSite=lax` session cookie is never attached and its writes and WS upgrades arrive with `Origin: null`. The credential is instead a 192‑bit capability in the path, minted only by an authenticated `POST /api/webviews/:id/open`, held in memory (a restart invalidates every one), rolling TTL, bound to the minting user, and granting nothing but "relay bytes to this one saved URL". ⚠️ **The Host allowlist is NOT bypassed**, so DNS‑rebinding protection is unaffected. A second `Referer`‑keyed form exists for root‑absolute assets and is the only exemption decided by a request‑supplied header, so it is fenced to safe methods on non‑`/api`, non‑`/ws`, non‑`/q` paths. Edges pinned by `test/webview-auth-exemption.test.ts`.
 - **The lost‑frame recovery page is the third unauthenticated 200, and the only one decided by request headers alone.** The proxy's runtime shim masks `/webview/<cap>/` off the page's own URL so a single‑page app routes on the path it expects; a navigation the page then starts itself (`location.reload()`, a root‑absolute `location.href`) lands on Codeman's root with no capability anywhere, no cookie (opaque origin) and a Referer naming the masked page. `serveLostWebviewFrame()` in `middleware/auth.ts` recognises it by shape (`GET`/`HEAD`, `Sec-Fetch-Dest: iframe` or `frame`, `Accept: text/html`, `Sec-Fetch-Mode: navigate` or absent) and answers, BEFORE the credential checks and without counting an auth failure, with a static page whose only content is a `postMessage` of the lost path to the parent tab (`default-src 'none'` plus the hash of that one script, `no-store`, `referrer: no-referrer`, no reflected input). It is fenced to paths that are NOT registered routes and never `/api/`, `/ws/` or `/q/`, with one carve‑out: `/` itself, because the landing page masks to exactly `/` and its reload otherwise rendered Codeman's app shell inside the web tab. `/` is admitted only when the request carries neither the `codeman_session` cookie nor an `Authorization` header: nothing in Codeman frames its own root and a sandboxed frame has neither, while a framed `/` that does carry credentials still gets the shell. On a passwordless install no auth hook runs, so the index route applies the same test itself (`isLostWebviewRootFrame`). ⚠️ Known property, accepted rather than mitigated: those headers are trivially set by a non‑browser client, so an unauthenticated caller can distinguish a registered route (401) from a non‑route (200) and enumerate the route table; the routes are public in `docs/api-reference.md`, so nothing is learned. Pinned by `test/webview-auth-exemption.test.ts` (password) and `test/webview-lost-root-frame.test.ts` (passwordless).
 - **Sandboxed by default; `allow-same-origin` is an explicit per‑dashboard opt‑in.** A proxied page is same‑origin with Codeman, so without the sandbox its JavaScript could read the Codeman document and call the agent‑spawning API. ⚠️ In BOTH modes the `Authorization` header and the `codeman_session` cookie are stripped before the upstream request, because a trusted (same‑origin) frame makes the browser attach Codeman's own Basic‑auth credentials to every proxied request; forwarding them would hand `CODEMAN_PASSWORD` to the dashboard.
+- **Rendered HTML files (`/html-view/<capability>/`) are the other capability-gated route that skips cookie auth.** A clicked `.html` file renders through it so an agent's report can be viewed from any device. The exemption is narrower than the proxy's: `GET`/`HEAD` only (plus the page's CORS preflight, which `registerSecurityHeaders` answers itself with `Access-Control-Allow-Methods: GET, HEAD` and never hands to a route), the capability in the path only (no `Referer` form), and it is a separate store, so a web-tab capability never opens a page and vice versa. The capability is minted by an authenticated `POST /api/sessions/:id/html-view` (session ownership via `findSessionOrFail`, the attachment guard for out-of-workspace files), held in memory with a rolling TTL and revoked with the web-tab ones on logout, admin logout and user deletion. Every response carries `Content-Security-Policy: sandbox` without `allow-same-origin`, so the page is opaque-origin even when opened as a top-level tab and cannot read Codeman's document, cookies or API. **Network access is open, by the owner's decision (2026-10-13):** that `sandbox` directive is the whole policy (it replaces Codeman's own `default-src 'self'` CSP and carries no fetch directive), so a rendered page behaves like a file opened from disk in a browser. What a page CAN do: load scripts, styles, fonts, images and media from any host (an agent's dashboard pulling Chart.js from a CDN), make fetch, XHR, WebSocket, beacon and form requests to any host, and read the files of its own folder through its capability. What it CANNOT do: act as Codeman's origin, read Codeman's cookies or document, use Codeman's API (a write arrives with `Origin: null` and the Origin guard refuses it; a read's response stays unreadable, because Codeman answers CORS only for its own localhost origins, and with a password set the request carries no session cookie either), or read any folder other than its own. The accepted consequence is that a page can send what it can read, its own folder, to any host, which is why the folder rules below are the boundary that matters. `Referrer-Policy: no-referrer` keeps the capability URL out of the `Referer` the page's third-party requests carry. Pinned by the exact-header test in `test/routes/html-view-routes.test.ts`. It may read its own directory tree (non-dot, asset-allowlisted, realpath-confined, blocklist applied; the dot and extension rules hold for the symlink-resolved target as well as the requested name), so minting is refused for an HTML file in a hidden directory or directly in a broad root (`/`, home, `/tmp`, `/var/tmp` and `$TMPDIR`, the cases and user-space roots, a drive's mount point) or in a directory above one (`/home`, `/Users`). Pinned by `test/routes/html-view-routes.test.ts` and the html-view block in `test/webview-auth-exemption.test.ts`.
 - **Not an open relay, and not a privilege boundary.** `resolveUpstreamUrl()` refuses anything leaving the saved origin, and cross‑origin redirects are handed back unchanged rather than followed. The proxy does reach whatever the SERVER can reach, which is not an escalation for someone who already commands `--dangerously-skip-permissions` agents, but in multi‑user mode it means a non‑admin's dashboard is fetched from the server's network position. Saved URLs are validated to plain http(s) with no embedded credentials, and there is deliberately **no magic‑link path**: terminal output can never create a webview (the mistake the attachment scanner had to be walled off from). The one refused destination class is link‑local and cloud‑metadata addresses (`169.254.0.0/16`, `fe80::/10`, `fd00:ec2::254`, `168.63.129.16`, `100.100.100.200`, `metadata.google.internal`): `webview-egress-policy.ts` refuses them at save time, and `webview-egress.ts` re‑judges the RESOLVED address at connect time through a `lookup` hook on the proxy's undici Agent and on its WebSocket client, so a DNS name pointing into those ranges is refused as well. Loopback and RFC1918 stay allowed on purpose. Capabilities are revoked on logout, admin logout and user deletion, and proxied responses carry `Referrer-Policy: same-origin` so a dashboard cannot hand the capability‑bearing URL to a third‑party host it links.
+
+---
+
+## 10c. Webhook notifications (outbound channel)
+
+Opt-in and off by default: the server POSTs the Web Push events (permission prompts, questions, idle, errors, respawn blocked, crash-loop breaker, Ralph completion) to one URL an admin configures, formatted for ntfy, Slack, Discord or generic JSON. Source: `src/webhook-notify.ts`, routes in `src/web/routes/webhook-routes.ts`. User guide: [`wiki/Notifications-And-Approvals.md`](wiki/Notifications-And-Approvals.md).
+
+- **A second server-side outbound channel through the web-tab egress guard (§10b).** Delivery goes through `webviewFetch`, so link-local and cloud-metadata targets are refused at save time and again on the RESOLVED address at connect time; redirects are not followed (`redirect: 'manual'`) and each send is bounded by a 5 s timeout. Loopback and RFC1918 stay allowed on purpose (a self-hosted ntfy is the point), so **Send test** works as a blind reachability probe (status, refused or timed out, never a response body) for whoever may call it. Web tabs already give that caller full LAN reach with bodies, so nothing new is exposed.
+- **The URL is a bearer secret** (anyone holding a Slack or Discord webhook URL can post as it). It lives in `~/.codeman/webhook.json` (0600, tmp+rename), is kept out of `settings.json` (which every logged-in user reads through `GET /api/settings`), is never returned (`GET /api/webhook` gives scheme + host only), and never appears in a log line, a delivery result or an error message.
+- **Discord bridge** (`src/discord-bridge.ts`, [setup](discord-bridge.md)): the bot token lives in `~/.codeman/discord.json` (0600, tmp+rename) and is never returned by the Discord routes, logged or put in an error, and the attachment, folder and download routes refuse the file. A session whose folder is the home directory can still read it through its own file viewer, which serves that workspace without the blocklist. Inbound replies are typed into a session only from `allowedUserIds`, in the configured guild, inside a thread the bridge created; anything else is dropped unread. A reply becomes one printable line plus Enter, capped at 1000 characters and one per second per tab. Posts send `allowed_mentions` limited to the allowlisted ids, so agent output cannot ping a server. **Files:** an attachment is fetched only from Discord's own HTTPS hosts (no redirects followed), at most 5 per reply and 8 MB each, saved 0600 under `<tab folder>/.codeman-discord/` with the name reduced to `[A-Za-z0-9._-]`; a file a CLI sends must be a regular file whose real path (symlinks followed) lies inside its own tab's folder and is not on the attachment blocklist (`isBlockedAttachmentPath`, since a tab's folder can be the home directory), which stops a sensitive file being uploaded by mistake, and remote sessions send and receive none. A received file is untrusted content to whatever opens it. **What the checks do not stop:** the agent runs as the same OS user, so the path check prevents accidental uploads, not a determined agent that pastes a file's contents into the message. **What leaves the machine:** a permission or question alert sends the rendered screen (whatever the agent printed), and a finished turn or an error sends the CLI's whole last message, read from its transcript (up to 8 posts of 1,900 characters). `idle_prompt` is a warning, so with the default scope every Claude turn left unanswered for a minute is posted, and with **Which events** set to Everything every turn end is; treat the Discord server as holding that output. **Multi-user:** the bridge is one allowlist for the whole server, so an allowlisted Discord account can type into every user's sessions; only an admin can configure it. **Startup hint:** a fixed text (no user input) is added to Claude's system prompt; no other CLI is sent it. The bridge only dials out (REST and the gateway WebSocket), so it needs no inbound exposure. A Discord account on the allowlist can drive agents that run shell commands: it needs 2FA.
+- **It carries session data to a third party.** Titles and bodies include session names, tool names and error text, all agent- or user-controlled, so Discord gets `allowed_mentions: { parse: [] }` and Slack's `& < >` are escaped: agent output cannot ping a channel. In multi-user mode all three routes are admin-only and the channel is instance-wide: it receives every user's session events, the same reach an admin's own Web Push has, which means non-admins' session details leave the box at the admin's choice.
 
 ---
 
@@ -540,7 +595,8 @@ A saved dashboard URL renders as a tab, served through Codeman's own origin at `
 | `--host` / `CODEMAN_HOST` | Bind host (default `127.0.0.1`) |
 | `CODEMAN_ALLOWED_HOSTS` | Extra `Host`/`Origin` allowlist entries for reverse proxies (comma‑separated; exact host, or leading‑dot `.suffix` for subdomains) — see §3 |
 | `--base-url` / `CODEMAN_BASE_URL` | Sub‑path prefix Codeman is mounted under behind a reverse proxy, e.g. `/codeman` (default `/`); the proxy must forward the prefix unchanged. Independent of `CODEMAN_ALLOWED_HOSTS` |
-| `--allow-unauthenticated-network` / `CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK` | Acknowledge an unauthenticated non‑loopback bind (downgrades the warning) |
+| `--allow-unauthenticated-network` / `CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK` | Acknowledge an unauthenticated non‑loopback bind (downgrades the warning). Does not cover the tunnel |
+| `--allow-unauthenticated-tunnel` / `CODEMAN_ALLOW_UNAUTHENTICATED_TUNNEL` | Let the managed Cloudflare tunnel start without a login (the browser still asks first). Never written by the installer |
 | `--https` | Enable TLS (adds HSTS) |
 | `CODEMAN_INSTANCE` | Scope tmux socket + data dir for isolation |
 | `CODEMAN_GESTURE=1` | Make the gesture overlay available (widens CSP) |

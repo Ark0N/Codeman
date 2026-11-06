@@ -52,15 +52,35 @@ export interface CustomModelHost {
   defaultModelId?: string;
   /**
    * Discovered context-window size (tokens) per model id, keyed by the same strings as
-   * `models`. Populated opportunistically during discovery (`custom-model-routes.ts`) from
-   * llama.cpp/llama-swap's `GET /props?model=<id>` — the plain OpenAI-shaped `/v1/models`
-   * response has no such field. Only ever probed for a model the server already reports as
-   * loaded (llama-swap's `status.value === 'loaded'`); an unloaded one is deliberately never
-   * probed, since llama-swap treats `/props?model=` as a routing hint that can trigger an
-   * actual (slow, GPU-swapping) model load as a side effect of merely asking. A model this
-   * has no entry for simply gets no context-length env override applied — never a guess.
+   * `models`. Populated only by discovery (`custom-model-routes.ts`), from the strongest
+   * source the server offers: the llama-swap launch command reported by `GET /running`
+   * (the source of truth for a loaded model), then llama.cpp's `GET /props?model=<id>`
+   * `n_ctx` (only ever probed for a model the server already reports as loaded, since
+   * llama-swap treats `/props?model=` as a routing hint that can trigger an actual
+   * (slow, GPU-swapping) model load as a side effect of merely asking), then the model's
+   * own `GET /v1/models` entry (`context_length`, else `context_window`, which current
+   * llama-swap, Bifrost and OpenRouter-style servers each state to varying degrees). A
+   * model with no entry here falls back to the endpoint's `defaultContextLength`; with
+   * neither, it simply gets no context-length env override applied, never a guess.
    */
   modelContextLengths?: Record<string, number>;
+  /**
+   * Discovered number of parallel server slots per model id, keyed like `modelContextLengths`
+   * but populated only for models the server reports loaded (a listing never states a slot
+   * count, unlike `contextLengths`, which every entry can supply). Read from the launch command's
+   * `--parallel`/`-np` when it states one, otherwise from llama.cpp's own `/props`
+   * `total_slots` (a llama-server started without `--parallel` picks the count itself, so
+   * the command cannot say). llama-server splits its context across these slots (by default
+   * they share one unified KV pool) and Claude Code sends several requests at once (the
+   * main session plus each parallel subagent), so with N slots each request can only rely
+   * on roughly `contextLength / N` tokens. Used only by the context warning; a model this
+   * has no entry for is treated as a single slot, never a guess. The division always uses
+   * `modelContextLengths` (the launch command's figure, or `/props` only when the command states
+   * none): `/props` never widens the pool. An explicit `--parallel N` whose context came from
+   * `/props` is recorded as 1 slot, because that figure is already per slot, and that also
+   * overwrites any count an earlier round stored.
+   */
+  modelSlotCounts?: Record<string, number>;
   /**
    * Discovered file size (GB) per model id, keyed by the same strings as `models`.
    * Populated during discovery by parsing llama-swap's own `description` field for an
@@ -72,6 +92,29 @@ export interface CustomModelHost {
    * server-side check relies on.
    */
   modelSizesGB?: Record<string, number>;
+  /**
+   * User-set fallback context length (tokens), applied via
+   * `resolveCustomModelContextLength()` at every read site (the swap route, the
+   * quick-start route, boot recovery) only when `modelContextLengths` has no entry for
+   * the selected model (a gateway that states no per-model figure, a model never loaded
+   * yet). It is the model's WHOLE window, never a per-slot figure: the Claude floor
+   * check divides it by any stored slot count exactly like a discovered figure. Never
+   * written by discovery, so a value set in the endpoint editor survives every
+   * re-discovery sweep; unset keeps the long-standing behaviour of letting each CLI
+   * assume its own default.
+   */
+  defaultContextLength?: number;
+}
+
+/**
+ * The context window to apply for `modelId` on `host`: the discovered per-model figure when
+ * discovery has one, else the endpoint's user-set `defaultContextLength`, else undefined
+ * (no override applied, never a guess). ONE helper for every read site: the swap route,
+ * the quickstart route and boot recovery each re-write the CLI's config files, and a site
+ * that forgot the fallback silently loses the endpoint default on the next respawn.
+ */
+export function resolveCustomModelContextLength(host: CustomModelHost, modelId: string): number | undefined {
+  return host.modelContextLengths?.[modelId] ?? host.defaultContextLength;
 }
 
 export function customModelHostsPath(configDir: string): string {

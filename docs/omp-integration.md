@@ -163,9 +163,13 @@ remote user's home, so resolving locally would pin a stranger's id. See
 
 ## Known gaps
 
-- **No idle/completion hook.** Idle detection falls back to output-stabilization
-  like every other external CLI. If omp ever ships a hooks system, a Codeman hook
-  POSTing to `/api/hook-event` would be the highest-value follow-up.
+- **No idle/completion hook.** Idle detection reads the screen instead: the
+  registry entry's `workDetect` names omp's `╰─` input row as the glyph that arms
+  the idle check, and the status bar's spinner plus elapsed time (` ⠼ 14s > ⬢ …`)
+  or the `⎋ Working…` row as the working line, measured on omp 18.8.6 and 18.0.11.
+  Without it an omp session that had started a turn never left `busy`. If omp ever
+  ships a hooks system, a Codeman hook POSTing to `/api/hook-event` would still be
+  the highest-value follow-up.
 - **Killing a pane mid-turn loses the conversation for real.** `tmux kill-session`
   before an in-TUI `/exit` beats omp's own session-file flush — confirmed by direct
   testing (kill after a clean `/exit` resumes correctly; kill without `/exit` first

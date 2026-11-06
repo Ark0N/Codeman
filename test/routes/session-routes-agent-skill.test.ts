@@ -10,16 +10,25 @@
  * Uses app.inject(), so no real HTTP port is needed.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyCookie from '@fastify/cookie';
 import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { createMockRouteContext, type MockRouteContext } from '../mocks/index.js';
 import { installRouteErrorHandler } from '../../src/web/route-error-handler.js';
 import { registerSessionRoutes } from '../../src/web/routes/session-routes.js';
+import { resolveCliLaunchError } from '../../src/utils/cli-launcher.js';
+
+// External CLIs are pre-flighted (is the binary there?) before anything touches the
+// workspace; CI has none installed, so the pre-flight is stubbed to "can start" and one
+// test flips it to a refusal.
+vi.mock('../../src/utils/cli-launcher.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/utils/cli-launcher.js')>();
+  return { ...actual, resolveCliLaunchError: vi.fn().mockResolvedValue(null) };
+});
 
 const MARKER_PREFIX = '<!-- codeman-managed-agent-skill';
 
@@ -102,6 +111,58 @@ describe('POST /api/sessions agent-skill injection', () => {
     expect(res.statusCode).toBe(200);
     expect(harness.ctx.getAgentSkillEnabled).not.toHaveBeenCalled();
     expect(existsSync(skillDir())).toBe(false);
+  });
+
+  it('gives a codex session the skill in .agents/skills, where codex looks, and none in .claude', async () => {
+    harness = await createHarness(true);
+
+    const res = await harness.app.inject({
+      method: 'POST',
+      url: '/api/sessions',
+      payload: { name: 'skill-codex', mode: 'codex', workingDir },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const skillMd = await readFile(join(workingDir, '.agents', 'skills', 'codeman', 'SKILL.md'), 'utf-8');
+    expect(skillMd.startsWith('---\nname: codeman')).toBe(true);
+    expect(skillMd).toContain(MARKER_PREFIX);
+    expect(existsSync(join(workingDir, '.agents', 'skills', 'codeman', 'reference', 'endpoints.md'))).toBe(true);
+    expect(existsSync(skillDir())).toBe(false);
+
+    // The preamble cache is seeded for it too, so the skill's §0 is the two-line loader
+    // in codex as in claude (nothing in the preamble is claude-specific).
+    const sessionId = (JSON.parse(res.body) as { session: { id: string } }).session.id;
+    const preamble = join(process.env.XDG_CACHE_HOME || join(homedir(), '.cache'), `codeman-agent-${sessionId}.sh`);
+    expect(existsSync(preamble)).toBe(true);
+  });
+
+  it('gives a pi session nothing: a project skill would put up pi\'s trust prompt', async () => {
+    harness = await createHarness(true);
+
+    const res = await harness.app.inject({
+      method: 'POST',
+      url: '/api/sessions',
+      payload: { name: 'skill-pi', mode: 'pi', workingDir },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(existsSync(join(workingDir, '.agents'))).toBe(false);
+    expect(existsSync(join(workingDir, '.pi'))).toBe(false);
+    expect(harness.ctx.getAgentSkillEnabled).not.toHaveBeenCalled();
+  });
+
+  it('writes nothing when the CLI cannot start (pre-flight refusal)', async () => {
+    vi.mocked(resolveCliLaunchError).mockResolvedValueOnce('codex not found');
+    harness = await createHarness(true);
+
+    const res = await harness.app.inject({
+      method: 'POST',
+      url: '/api/sessions',
+      payload: { name: 'skill-codex-missing', mode: 'codex', workingDir },
+    });
+
+    expect(JSON.parse(res.body).success).toBe(false);
+    expect(existsSync(join(workingDir, '.agents'))).toBe(false);
   });
 
   it('defaults an omitted mode to claude and injects', async () => {

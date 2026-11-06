@@ -22,13 +22,18 @@ transcript: what it was asked to do, what it is doing, and what it returned.
 This is the feature that makes a fan-out legible. Without it, a lead session that spawned
 eight workers looks like a stalled terminal for several minutes.
 
-## Session lineage arcs
+## Session lineage lines
 
-The tab strip draws a coloured arc from a parent tab to any tab it spawned, one colour per
-child. That covers the other direction of fan-out: not subagents inside one session, but
-whole sessions started by an agent through the API.
+The tab strip draws lines from every tab to the tabs it spawned. That covers the other
+direction of fan-out: not subagents inside one session, but whole sessions started by an
+agent through the API.
 
-Desktop only, on by default, and toggled in **App Settings → Appearance**. Arcs are skipped
+The lines form one tree per spawning tab, in that tab's colour, and run only through the
+gaps between tab rows, so they never cover a tab name or the terminal. Select a tab and its
+family (the tabs it spawned, or its parent and siblings) is drawn thicker and brighter. A
+dashed branch means that child is working.
+
+Desktop only, on by default, and toggled in **App Settings → Appearance**. Lines are skipped
 for tabs scrolled out of view.
 
 See [Driving Codeman From An Agent](Driving-Codeman-From-An-Agent) for the spawning side.
@@ -42,7 +47,8 @@ in the CLI's own environment:
 CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
 ```
 
-and turn the per-case **Agent Teams** toggle on in the case settings gear.
+and turn the per-case **Agent Teams** toggle on under **Case settings…** at the bottom of the case
+picker (the gear beside the case button on a phone).
 
 Codeman watches the team directory and matches teammates to the session leading them.
 Teammates are in-process threads rather than separate CLI processes, so they show up as

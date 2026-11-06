@@ -5,7 +5,7 @@
 <h2 align="center">Mission control for AI coding agents</h2>
 
 <p align="center">
-  <em>Claude Code &bull; OpenCode &bull; Codex &bull; Antigravity &bull; Gemini &bull; Pi &bull; Grok &bull; DeepSeek &bull; OMP &bull; Terminal - One Dashboard &bull; Any Device</em>
+  <em>Claude Code &bull; OpenCode &bull; Codex &bull; Antigravity &bull; Gemini &bull; Pi &bull; Grok &bull; DeepSeek &bull; OMP &bull; Copilot &bull; Terminal - One Dashboard &bull; Any Device</em>
 </p>
 
 <p align="center">
@@ -17,10 +17,7 @@
   <a href="https://github.com/Ark0N/Codeman/stargazers"><img src="https://img.shields.io/github/stars/Ark0N/Codeman?style=flat-square&color=eab308" alt="GitHub stars"></a>
   <a href="https://github.com/Ark0N/Codeman/graphs/contributors"><img src="https://img.shields.io/github/contributors/Ark0N/Codeman?style=flat-square&color=3b82f6" alt="Contributors"></a>
   <a href="https://github.com/Ark0N/Codeman/commits/master"><img src="https://img.shields.io/github/commit-activity/t/Ark0N/Codeman?style=flat-square&color=1e3a5f" alt="Total commits"></a>
-</p>
-
-<p align="center">
-  ⭐ <strong>Like Codeman? <a href="https://github.com/Ark0N/Codeman">Give it a star on GitHub!</a></strong> It takes one click and helps more people find the project. ⭐
+  <a href="https://github.com/NipunaRanasinghe/awesome-ai-agents"><img src="https://img.shields.io/badge/Featured_in-Awesome_AI_Agents-2ea44f?style=flat-square" alt="Featured in Awesome AI Agents"></a>
 </p>
 
 <p align="center">
@@ -28,10 +25,10 @@
 </p>
 
 <p align="center">
-  <img src="docs/images/subagent-demo-20260724.gif" alt="Codeman — parallel subagent visualization" width="900">
+  <img src="docs/images/tiles-crt-stats-1600-20261010.gif" alt="Codeman tile grid: six live agents (DeepSeek Harness, Claude Code, Pi, Codex, OpenCode and a shell) powering on and off with the CRT animation, with the live header strip showing CPU, memory and Claude plan usage" width="800">
 </p>
 
-**Codeman** is a self-hosted mission control for AI coding agents. It spawns Claude Code, OpenCode, Codex, Antigravity, Gemini, Pi, Grok, DeepSeek Harness, or OMP inside persistent tmux sessions, streams the real terminal to any browser, and keeps agents productive after you walk away: it re-prompts on idle, resumes when a usage limit resets, runs scheduled jobs, and shows every background agent working in real time.
+**Codeman** is a self-hosted mission control for AI coding agents. It spawns Claude Code, OpenCode, Codex, Antigravity, Gemini, Pi, Grok, DeepSeek Harness, OMP, or GitHub Copilot CLI inside persistent tmux sessions, streams the real terminal to any browser, and keeps agents productive after you walk away: it re-prompts on idle, resumes when a usage limit resets, runs scheduled jobs, and shows every background agent working in real time.
 
 Get started in one line (macOS & Linux, Windows via WSL):
 
@@ -46,15 +43,16 @@ codeman web
 
 The installer asks before every system change, and re-running the same line updates in place. Full details: [Quick Start - Installation](#quick-start---installation).
 
-- **One dashboard, nine CLIs** - run [Claude Code, OpenCode, Codex, Antigravity, Gemini, Pi, Grok, DeepSeek, or OMP](#more-features) per session (plus plain shell), locally, [in Docker](#isolated-docker-sessions), or [over SSH](#remote-ssh-sessions), with your own dashboards open as [web tabs](#more-features) beside them
+- **One dashboard, ten CLIs** - run [Claude Code, OpenCode, Codex, Antigravity, Gemini, Pi, Grok, DeepSeek, OMP, or GitHub Copilot](#more-features) per session (plus plain shell), locally, [in Docker](#isolated-docker-sessions), or [over SSH](#remote-ssh-sessions), with your own dashboards open as [web tabs](#more-features) beside them
 - **Truly phone-friendly** - a [touch-optimized terminal](#mobile-optimized-web-ui) with instant local echo, QR login, swipe navigation, and push notifications
 - **Runs while you sleep** - [idle detection + respawn cycling](#respawn-controller) and auto-resume when a subscription limit resets, for 24+ hour unattended runs
 - **See your agents think** - [live floating windows](#live-agent-visualization) for every subagent and teammate, with real-time transcripts
+- **Agents can drive it too** - the [codeman skill](#the-agent-skill-start-here) (for every agent CLI), [`codeman agent`](#codeman-agent--session-to-session-verbs-in-every-cli-mode) and an [MCP server](#mcp-server-codeman-mcp-drive-codeman-from-any-mcp-client) let one agent start workers in any CLI, prompt them, wait for them and collect their answers
 - **Nothing gets lost** - tmux persistence across restarts and network drops, exactly-once input delivery, full-scrollback replay
 - **Self-hosted and private** - loopback-only by default, MIT licensed, no telemetry, runs entirely on your machine
 
 <p align="center">
-  <img src="docs/images/codeman-tour-20260724.png" alt="Codeman dashboard tour: session tabs per case, one-click Run for new agents, live plan usage in the header" width="900">
+  <img src="docs/images/codeman-tour-20261010.png" alt="Codeman dashboard tour: session tabs per case, one-click Run for new agents, live plan usage in the header" width="900">
 </p>
 
 ---
@@ -73,7 +71,7 @@ This installs Node.js, tmux and a build toolchain if missing (node-pty ships no 
 - **Re-run to update.** The same one-liner updates a finished install in place: local changes in `~/.codeman/app` are stashed (never discarded), and a running service is restarted and verified. If a first install was interrupted, re-running resumes the full setup instead. `install.sh status` prints the URLs and the QR code again; `install.sh update`, `install.sh tailscale` and `install.sh uninstall` also exist.
 - **Flags for the impatient.** `curl -fsSL https://getcodeman.com/install | bash -s -- --tailscale --service` answers the questions from the command line (`--lan`, `--local`, `--run`, `--no-start`, `--name <n>`, `--port <n>`, `--yes` too). **CI / headless:** without a terminal attached, steps that would change your system abort with instructions instead of running silently; set `CODEMAN_NONINTERACTIVE=1` to approve them for automation.
 
-You'll need at least one AI coding CLI installed — [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [OpenCode](https://opencode.ai), [Codex](https://developers.openai.com/codex/cli), [Antigravity](https://antigravity.google), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Pi](https://pi.dev), [Grok Build](https://github.com/xai-org/grok-build), [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), or [OMP](https://github.com/can1357/oh-my-pi) (any combination works; Gemini CLI is enterprise-only since Google's consumer cutover, and Antigravity is its successor). The installer detects whichever of the nine is present; if none is found, it offers to install any of them from a menu (DeepSeek excepted, since its npm package installs only a launcher with no runnable profile), or you can skip and install one yourself later. After install:
+You'll need at least one AI coding CLI installed — [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [OpenCode](https://opencode.ai), [Codex](https://developers.openai.com/codex/cli), [Antigravity](https://antigravity.google), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Pi](https://pi.dev), [Grok Build](https://github.com/xai-org/grok-build), [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), [OMP](https://github.com/can1357/oh-my-pi), or [GitHub Copilot CLI](https://github.com/github/copilot-cli) (any combination works; Gemini CLI is enterprise-only since Google's consumer cutover, and Antigravity is its successor). The installer detects whichever of the ten is present; if none is found, it offers to install any of them from a menu (DeepSeek excepted, since its npm package installs only a launcher with no runnable profile), or you can skip and install one yourself later. After install:
 
 ```bash
 codeman web
@@ -216,6 +214,8 @@ The most responsive AI coding agent experience on any phone. Full xterm.js termi
 
 - **Keyboard accessory bar** — `/init`, `/clear`, `/compact` quick-action buttons above the virtual keyboard; destructive commands require a double-press to confirm, so you never fire one by accident; on Codex sessions the bar also shows `⇧←` / `⇧→` (Shift+Left / Shift+Right: edit the last queued message / return through the prompt stack)
 - **Dedicated Enter button** — replays the keypress through the terminal, so text buffered by local echo is flushed first rather than stranded
+- **Attach button**: the picture icon beside the mic opens the system photo and file sheet without raising the keyboard. Photos and camera-roll videos (mp4, mov, webm, up to 1 GB) upload into the session's folder and their path lands on your prompt, unsent
+- **Paste in a shell**: a multi-line paste goes in as one block and waits for your Enter, instead of running line by line as it arrives
 - **Swipe navigation & smart keyboard handling** — swipe left/right to switch sessions; toolbar and terminal shift up when the keyboard opens (`visualViewport` API)
 - **Built for phones** — safe-area insets for notch and home indicator, 44px touch targets, bottom-sheet case picker, native momentum scrolling; on a folding phone (iPhone Duo) dialogs stay clear of the hinge, and opening or closing the device is never mistaken for the keyboard
 
@@ -260,7 +260,7 @@ Click **+ New Session** (or **Quick Start**). A session is one AI CLI running in
 | Field                        | What it does                                                                                                        |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------- |
 | **Working directory / case** | The folder the agent operates in. A "case" is just a named working dir Codeman remembers. **Add Case** creates one from scratch, links an existing folder, or clones a GitHub repo straight into one (**Clone Repo**). |
-| **CLI / run mode**           | `Claude` (default), `OpenCode`, `Codex`, `Antigravity`, `Gemini`, `Pi`, `Grok`, `DeepSeek`, `OMP`, or `Terminal` (plain shell). |
+| **CLI / run mode**           | `Claude` (default), `OpenCode`, `Codex`, `Antigravity`, `Gemini`, `Pi`, `Grok`, `DeepSeek`, `OMP`, `Copilot`, or `Terminal` (plain shell). |
 | **Model**                    | Per-session model (App Settings → Models → New Claude sessions). A soft default — `/model` still works in-session.                  |
 | **Effort / Ultracode**       | Reasoning effort (`low`–`max`) or `ultracode` for dynamic multi-agent workflows. Switchable anytime with `/effort`. |
 
@@ -268,18 +268,18 @@ Hit start — Codeman spawns the CLI via a real PTY and streams it to your brows
 
 ### 3. Read the dashboard
 
-- **Tabs (top)** — one per session. `Alt+1`-`9` to jump, `Ctrl+Tab` for next, drag to reorder (tab order syncs across your devices). Prefer a list? **App Settings → Appearance → Tabs** moves it into a left sidebar with a filter box (`Alt+B` collapses it) or a vertical rail whose rows sort by activity: blocked on you first, then longest running, then most recently quiet.
+- **Tabs (top)** — one per session. `Alt+1`-`9` to jump, `Ctrl+Tab` for next, drag to reorder (tab order syncs across your devices). Prefer a list? **App Settings → Appearance → Tabs** moves it into a left sidebar with a filter box (`Alt+B` collapses it) or a vertical rail whose rows sort by activity: blocked on you first, then longest running, then most recently quiet. The rail also has a **Search sessions** box, named **tab groups** (a group's menu starts a **New session** straight into it), and a **Focus** section of shortcuts to the tabs you keep coming back to.
 - **Terminal (center)** — a real `xterm.js` terminal; full TUIs render correctly. Type directly and press **Enter** to send. `Shift+Enter` inserts a newline.
 - **Side panels** — Respawn, Orchestrator, Cron, Subagents, Settings (toggled from the toolbar).
 
 ### 4. Talk to the agent
 
 - **Type prompts** straight into the terminal — input is delivered exactly-once even across reconnects (a dropped link never loses or double-sends a prompt).
-- **Paste or drag-and-drop images** directly into the session.
+- **Paste, drop or attach images, videos and documents** (PDF, Office files, zip and plain text) directly into the session. They are saved in a hidden `.codeman-uploads/` folder in the workspace (it ignores itself in git and is swept after 7 days), and the file's path lands on your prompt, unsent.
 - **Voice input** — `Ctrl+Shift+V` (Deepgram Nova-3, or this machine's Claude Code login with no API key; auto-silence stop).
-- **Attachments** — register external files/docs and preview Office/PDF inline; any file path an agent prints is clickable, in the terminal and in the chat view.
-- **When it needs you** — the tab turns yellow (waiting for input) or red (a question is blocking). The **Approvals Inbox** _(opt-in)_ queues every pending prompt across sessions, answerable from the header bell or the phone home screen, and 🧠 **Read My Mind** _(opt-in)_ drafts your next prompt from the case's goals and recent work.
-- **Copy what you see** — `Shift+drag` selects text even while the CLI owns the mouse, right-click copies it, and Auto Copy _(opt-in)_ copies a selection the moment you release it.
+- **Attachments** — register external files/docs and preview Office/PDF inline; any file path an agent prints is clickable, in the terminal and in the chat view, including `~/` and relative paths and paths broken across lines. An `.html` report opens as a real page, Markdown opens rendered, and a folder opens as a grid of its files.
+- **When it needs you** — the tab turns yellow (waiting for input) or red (a question is blocking). The **Approvals Inbox** _(opt-in)_ queues the prompts waiting on you from Claude Code, Codex and DeepSeek Harness sessions in one list. Claude prompts are answerable from the header bell, Claude dialogs also from the phone home screen, and a Claude permission prompt also from a push notification's Approve/Deny buttons; Codex and DeepSeek items are alerts that tell you to answer in the terminal, and prompts from the other CLIs do not enter it. 🧠 **Read My Mind** _(opt-in)_ drafts your next prompt from the case's goals and recent work.
+- **Copy what you see** — `Shift+drag` selects text even while the CLI owns the mouse, right-click copies it, and Auto Copy _(opt-in)_ copies a selection the moment you release it. A program that copies with OSC 52 (Claude Code's `/copy`, a tmux yank, vim) puts the text on your browser's clipboard too.
 
 ### 5. Make it autonomous
 
@@ -298,7 +298,7 @@ Hit start — Codeman spawns the CLI via a real PTY and streams it to your brows
 
 ### 7. Operate & maintain
 
-- **App Settings** — model, effort, permission startup mode, theme/skin, terminal font family and weight, entrance animations, notifications, display toggles, per-CLI options, a synced custom display name, and per-device English/Simplified Chinese UI language.
+- **App Settings** — model, effort, permission startup mode, theme/skin, terminal font family and weight, entrance and tile animations (their own **Animations** section), notifications (with adjustable toast and browser-notification display times), display toggles, per-CLI options, a synced custom display name, and per-device English/Simplified Chinese UI language. **Apply** saves without closing Settings.
 - **Run it in the background** — `codeman web -d` detaches from your shell (`--status`, `--stop`); `codeman service install` makes it a systemd user unit / macOS LaunchAgent that survives reboots. Both verify the server actually answers before reporting success, and both refuse to start a second server on one data dir. See [Keep it running in the background](#quick-start---installation).
 - **Self-update** — git-clone installs update in place from **App Settings → System → Updates**.
 - **Deploy your own changes** — see [Development](#development).
@@ -385,6 +385,21 @@ Beyond single-session respawn, the **Orchestrator** turns a high-level goal into
 
 Run **20 parallel sessions** with full visibility — real-time xterm.js terminals at 60fps, per-session token and cost tracking, tab-based navigation, and one-click management.
 
+### Tile Grid
+
+<p align="center">
+  <img src="docs/images/tile-grid-20261009.gif" alt="Tile grid: the Tiles button opens six live sessions side by side (DeepSeek Harness, Claude Code, Codex, a shell, OpenCode and Pi), and a second click returns to a single session" width="800">
+</p>
+
+Watch and drive up to **six sessions side by side** in one window. Click **Tiles** in the header (or press `Ctrl+Shift+G`) and your sessions open as a grid of live terminals: every tile takes your keystrokes and shows its agent's logo, model and state in its header. Right-click **Tiles** to choose 2, 4 or 6 tiles, and drag a tile by its header to move it. Click **Tiles** again to return to a single session. Desktop only (a window about 1180px wide or more). Full guide: [Tile Grid](docs/wiki/Tile-Grid.md).
+
+- **Opens what matters**: with no grid arranged yet, it fills the tiles with the sessions that are working first, then the ones waiting on you, then the most recently used, and always includes the one you are on.
+- **Keeps your layout**: once you arrange a grid (which session sits where, empty cells, tile count, divider sizes, the focused and zoomed tile), the Tiles button brings it back exactly, and so does a page reload while it was open.
+- **Tile animations** _(opt-in)_: **App Settings → Animations → Tile Animations** makes the grid open with a show: **CRT** (each tile switches on as a hot line, as in the GIF at the top), **Fly from tab**, **Deal**, **Beam down**, **Cascade**, **Pop** or **Soft**. Nothing moves under reduced motion.
+- **Scrolls like the main terminal**: the mouse wheel scrolls a fullscreen Claude conversation inside its tile, a Codex tile pages its transcript, and `Shift+wheel` scrolls the tile's local history.
+- **Detach Tiles** _(beta, opt-in)_: with **App Settings → Appearance → Detach Tiles** on, drag a tile's header out of the browser and it pops out into its own window; drop it on another Codeman window's tiles and it moves there.
+- **Hands-free**: with the [gesture overlay](#more-features) on, pinch a tile and carry it onto another tile to swap them, onto an empty cell to move it, or carry a tab onto the grid to add it.
+
 ### Persistent Sessions
 
 Every session runs inside **tmux** — sessions survive server restarts, network drops, and machine sleep. Auto-recovery on startup with dual redundancy. Ghost session discovery finds orphaned tmux sessions. Managed sessions are environment-tagged so the agent won't kill its own session.
@@ -418,7 +433,7 @@ The title is templated into the served HTML on first byte, so it's correct from 
 ### Tab Alerts
 
 <p align="center">
-  <img src="docs/images/tab-alerts-glow-20260815.gif" alt="Session tabs: a regular active tab beside a yellow waiting-for-input tab and a red needs-decision tab, both with a breathing glow" width="900">
+  <a href="docs/images/codeman-tab-states-20261010.png"><img src="docs/images/codeman-tab-states-20261010.gif" alt="Tab states, annotated: a working tab with a spinning green ring, a red tab blocked on the agent's question shown below it, and a yellow tab whose turn is done, both alert tabs breathing" width="900"></a>
 </p>
 
 Every tab tells you its state at a glance. A running session keeps its green status dot. When a session stops and waits for input, its tab turns **yellow**: steady ring, tinted background, yellow dot, with a slow breathing glow on top. When a permission prompt or question is **blocking** the agent, the tab turns **red** with a faster pulse. The base tint never blinks off, so even a split-second glance (or a screenshot) reads the true state; the ring stays visible while the tab is selected, and a page reload re-arms pending alerts from the server, so a blocked session can never hide behind a fresh-looking tab.
@@ -444,9 +459,12 @@ PTY Output → 16ms Server Batch → DEC 2026 Wrap → SSE → Client rAF → xt
 ## More Features
 
 - **Background daemon & service install** — `codeman web -d` runs the server detached with a pidfile, `~/.codeman/web.log`, and verified startup (it polls the server until it answers, so a port clash never reads as success); `codeman service install` writes a systemd user unit (Linux) or LaunchAgent (macOS) with your shell's PATH baked in, so an nvm or Homebrew `node`, `tmux` and `claude` are actually found. Secrets are never written into unit files
+- **Diagnostics in Settings** — **App Settings → System → Diagnostics → Run checks** runs `codeman doctor` on the server and lists Node, tmux, every agent CLI and the optional office tools with versions, paths and install hints. Besides the `PATH`, it also looks in each CLI's usual install directories (`~/.local/bin`, `~/.npm-global/bin` and the like), so most installs are found under a service with a minimal `PATH`. Admin only in multi-user mode.
 - **Self-update** — git-clone installs under systemd/launchd update in place from **App Settings → System → Updates**: it detects the latest release, auto-stashes a dirty tree, and streams build progress across the service restart (npm installs report as non-updatable)
+- **Git status in the bottom bar** — off by default (**App Settings → Header & Panels → Bottom bar → Git status**, per device). A small indicator at the right of the bottom bar shows the active session's repository at a glance: `● 3` uncommitted files, `↑ 2` commits not pushed, `⚠` merge conflicts, `✓` all committed and pushed. Click it for a draggable window listing the staged, not-staged, untracked and conflicted files (grouped under collapsed folders, or as a flat list if you turn that setting off) and the unpushed commits; **click a file to see its diff** (new files as all additions, deleted files as all removals), with **Open file** to jump to the viewer. A folder that holds several projects gets one collapsible section per repository found up to two levels down, all collapsed until you open them. **Fetch** in that window's header runs `git fetch` for the repositories it lists, on your click or on an interval you turn on (**App Settings → Bottom bar**, off by default; **Session Options → Git** overrides both the switch and the interval per session). Sessions open on the same folder share one run and each sees its result. Apart from that fetch Codeman never fetches or changes the repo, so "behind" is as of the last fetch; not shown for Docker or remote sessions.
 - **Clone a GitHub repo as a case** — paste a repository URL into **Add Case → Clone Repo** and Codeman clones it into `~/codeman-cases/<name>` and registers it as a normal case, ready to run an agent in. It preflights the URL while you type (tells you whether it can be cloned anonymously and offers the repo's real branches and tags for the optional branch/tag field), fills the case name in from the URL, and lets you pick which CLI the Run button should use. Public repositories over `https://`; Codeman never collects or stores credentials
-- **Multi-CLI** — run **Claude Code**, **OpenCode**, **Codex**, **Antigravity**, **Gemini**, **Pi**, **Grok**, **DeepSeek Harness**, or **OMP** per session; env-var prefixes auto-gate (`CLAUDE_CODE_*` vs `OPENCODE_*` vs `CODEX_*` vs `ANTIGRAVITY_*` vs `GEMINI_*`/`GOOGLE_*` vs `PI_*` vs `GROK_*`/`XAI_*` vs `DSH_*`/`DEEPSEEK_*` vs `OMP_*`). See [`docs/opencode-integration.md`](docs/opencode-integration.md), [`docs/pi-integration.md`](docs/pi-integration.md), [`docs/grok-integration.md`](docs/grok-integration.md), [`docs/deepseek-integration.md`](docs/deepseek-integration.md) and [`docs/omp-integration.md`](docs/omp-integration.md)
+- **Create a case in a custom folder** — tick **Create in a custom folder** in **Add Case → Create New**, pick a parent folder (Browse included) and a name, and Codeman scaffolds the new case there instead of `~/codeman-cases`. The target must be a new or empty folder; system directories, your home folder itself, credential trees such as `~/.ssh`, and Codeman's own data folder are refused. Admin only in multi-user mode.
+- **Multi-CLI** — run **Claude Code**, **OpenCode**, **Codex**, **Antigravity**, **Gemini**, **Pi**, **Grok**, **DeepSeek Harness**, **OMP**, or **GitHub Copilot CLI** per session; env-var prefixes auto-gate (`CLAUDE_CODE_*` vs `OPENCODE_*` vs `CODEX_*` vs `ANTIGRAVITY_*` vs `GEMINI_*`/`GOOGLE_*` vs `PI_*` vs `GROK_*`/`XAI_*` vs `DSH_*`/`DEEPSEEK_*` vs `OMP_*` vs `COPILOT_*`). See [`docs/opencode-integration.md`](docs/opencode-integration.md), [`docs/pi-integration.md`](docs/pi-integration.md), [`docs/grok-integration.md`](docs/grok-integration.md), [`docs/deepseek-integration.md`](docs/deepseek-integration.md) [`docs/omp-integration.md`](docs/omp-integration.md) and [`docs/copilot-integration.md`](docs/copilot-integration.md)
 - **Custom model endpoints** _(new in 1.29.0, HTTP API for now)_ — point a session's CLI at any OpenAI-compatible endpoint instead of its native backend: a local llama.cpp, llama-swap, Ollama or vLLM box, or a cloud gateway such as Azure AI Foundry or OpenRouter. Save an endpoint once (`POST /api/model-endpoints`; its models are discovered from `/v1/models`), apply it to a session (`POST /api/sessions/:id/custom-model`), and the CLI restarts in place on that endpoint. Verified live for Claude, OpenCode, Pi, Grok and OMP; Codex, Gemini and DeepSeek have documented gaps, Antigravity has no mechanism. A toolbar picker is the follow-up. See [`docs/custom-model-endpoints.md`](docs/custom-model-endpoints.md)
 - **Web tabs** — open Grafana, Uptime Kuma, a Vite dev server or any dashboard URL as a tab beside your sessions (Run dropdown → **Web / URL** → **Add URL**). Dashboards are proxied through Codeman's own origin, so an `http://` target works from a phone over HTTPS and through the tunnel, single-page apps route on their own paths, and a frame that reloads recovers itself. A `localhost` link an agent prints opens as a web tab automatically. See [`docs/web-tabs.md`](docs/web-tabs.md)
 - **Docker sessions** — run a case inside an isolated, hardened container. One checkbox on **Create New** spins up a container with sensible defaults and starts the agent inside it; multiple sessions share one per-case container, or attach a case to a container you already run; export a container + its workspace to a portable `.tar.gz` to move it to another machine. See [`docs/docker-cases.md`](docs/docker-cases.md)
@@ -457,10 +475,17 @@ PTY Output → 16ms Server Batch → DEC 2026 Wrap → SSE → Client rAF → xt
 - **Gesture control** _(opt-in)_ — a MediaPipe hand-tracking overlay to grab/drag session windows and pinch buttons, hands-free. Enable with `CODEMAN_GESTURE=1` + App Settings → Terminal & Input
 - **Multi-monitor span** _(macOS)_ — one click opens a browser window maximized across all displays, so floating agent/gesture panels can cross the physical seam
 - **File Viewer button** _(opt-in)_ — a header button that toggles the built-in file browser panel with one tap; enable under App Settings → Header & Panels → Header buttons
+- **HTML reports open as pages**: click an `.html` path an agent printed (a test report, a coverage page, a dashboard) and the File Viewer shows it as a real page, with the scripts, styles, images and data files from its folder; the **Page** pill switches to the source and its Edit button. The page runs sandboxed with an opaque origin, so it cannot read Codeman's cookies, call Codeman's API or read files outside its own folder. Network access stays open, so a dashboard that loads Chart.js or fonts from a CDN works as it would from disk. Broad folders (`/`, your home, `/tmp`) are refused, so give a report a folder of its own. A `.md` path clicked in the terminal opens rendered too
+- **Clickable paths and the folder grid**: paths written as `~/…`, relative to the session folder, or broken across terminal lines are clickable in the terminal and the Response Viewer, and so are folders: a folder opens a grid of its files (renders, screenshots, reports) that you page through with the arrow keys
+- **OSC 52 clipboard**: a program in a session that sets the clipboard with OSC 52 (Claude Code's `/copy`, a tmux yank, vim) puts the text on your browser's clipboard, in the main terminal and in every tile. Clipboard read requests are refused, and replaying a buffer never copies
+- **MCP server sync** _(opt-in)_: copies the user-level MCP servers each installed CLI has (Claude, Codex, Gemini, OpenCode, Antigravity, and GitHub Copilot CLI) into the others' own config files. Additive only, a server you switched off is never copied, **Preview** shows the changes first, and the previous file is kept as `.codeman-bak`. App Settings → Agents & CLIs; admin only in multi-user mode
 - **CJK / IME input** — full composition support for Chinese / Japanese / Korean, with Ctrl- and Alt-modified navigation keys passed through to the CLI
-- **Plan usage in the header** — live Claude subscription usage (the 5-hour and weekly windows) from a statusline exporter Codeman hands to `claude` at spawn and never writes into your settings files, plus Codex limits from its own app-server; per device, on for desktops and off for phones
-- **Session list, your way** — the header strip, a left sidebar with a filter box, or a vertical rail whose detailed rows carry created and state stamps and sort by activity; the phone home screen and the desktop home rail use the same order
-- **Terminal looks** — seven skins, four of them light, per-device font family and weight (the bundled JetBrains Mono covers weights 100 to 800), and opt-in entrance animations for tabs, agent windows, the terminal pane and connection lines
+- **Discord bridge**: opt-in and two-way: Codeman posts to a private Discord server when an agent needs you, in a thread per tab with what is on its screen, and types your reply (and any file you attach) into that tab, so a blocked agent can be answered from your phone off-network. Agents can ask for you with `codeman notify`. Outbound connections only; least-privilege bot setup in [docs/discord-bridge.md](docs/discord-bridge.md). See the [wiki page](docs/wiki/Discord-Bridge.md)
+- **Config backups** — timestamped copies of the files that hold your customization (settings, CLI overrides, custom endpoints, webhook, linked cases, remote and Docker hosts, saved dashboards and, in multi-user mode, accounts), made at startup and whenever one changes. On by default into `~/.codeman/backups/config`; the folder, how many to keep (2–500) and how long (days, 0 = no limit) are settings, with **Back up now** and a verified **Restore** in Settings → System. Retention only ever deletes folders Codeman made and never the newest. See the [wiki page](docs/wiki/Config-Backups.md)
+- **Plan usage in the header** — live Claude subscription usage (the 5-hour and weekly windows) from a statusline exporter Codeman hands to `claude` at spawn and never writes into your settings files, plus Codex limits from its own app-server and the GitHub Copilot monthly premium-request quota (the server asks `api.github.com` for it every 10 minutes with Copilot's own sign-in token: on by default while Copilot CLI is installed and signed in, and turning off Plan Usage Limits stops it); per device, on for desktops and off for phones
+- **Prompt-cache readout**: each Claude session shows whether its prompt cache is warm (`cache:until HH:MM`) or cold, in the footer (when you have no statusline of your own) and in Session Options → Respawn, with the cost of a re-cache and a note after a compaction. Display only; it survives a restart
+- **Session list, your way** — the header strip, a left sidebar with a filter box, or a vertical rail whose detailed rows carry created and state stamps and sort by activity; the phone home screen and the desktop home rail use the same order. On the rail, **Search sessions** narrows the list to the tabs that match, across every group, and a tab with an alert stays visible even when its name does not. Named **tab groups** collapse, reorder and take drags; a group's menu has **New session**, and a worker an agent spawns lands right after its parent (**Spawned tabs follow their parent**, off by default, keeps it moving with the parent). **Add to Focus** pins a shortcut to any tab in a section at the top of the rail, and **CLI Logos on Tabs** can be switched off per device
+- **Terminal looks** — seven skins, four of them light, per-device font family and weight (the bundled JetBrains Mono covers weights 100 to 800), and opt-in animations for tabs, agent windows, the terminal pane, connection lines and [tile-grid tiles](#tile-grid), all in App Settings → Animations (with a lab to try them)
 - **OS notifications & hostname-aware titles** — desktop alerts and tab titles are prefixed `codeman:<host>` so multi-host setups stay unambiguous
 
 ---
@@ -492,6 +517,7 @@ Point a case at another machine and run the agent **there**, over SSH, with the 
 - **Shared sessions**: several clients can attach the same remote session at different window sizes without clamping each other; discovery shows a "shared" badge with the client count.
 - **Injection-safe**: every ssh command line flows through a single shell-escaping builder, and host/path/identity fields are schema-guarded.
 - **Files too**: previews, downloads and text reads in a remote case go over the same ssh connection (one `realpath` + `stat` probe, then a streamed `cat`, `Range` seeking included), so a clicked path opens the file on the machine the agent is on. Nothing is copied to the Codeman host; editing and Office previews answer a clear 400 instead of a misleading 404.
+- **Full scrollback**: loading a remote session's history reads it from the remote tmux in one bounded ssh round trip, so a session keeps its whole scrollback after a reattach or a tab switch, with no rows lost where the history meets the live screen.
 
 Set it up under **New Case → Remote** (host, user, identity file, optional jump host). Full design: [`docs/remote-sessions.md`](docs/remote-sessions.md).
 
@@ -556,9 +582,11 @@ loginctl enable-linger $USER
 1. First request → browser shows Basic Auth prompt (username: `admin` or `CODEMAN_USERNAME`)
 2. On success → server issues a `codeman_session` cookie (24h TTL, auto-extends on activity)
 3. Subsequent requests authenticate silently via cookie
-4. 10 failed attempts per IP → 429 rate limit (15-minute decay)
+4. 10 failed attempts per IP → 429 rate limit (15-minute decay). In multi-user mode the per-IP cap is 50, and each account allows 10 failed guesses per IP; past either, even a correct password from that IP waits for the decay, while the account still logs in from another IP
 
 **Always set `CODEMAN_PASSWORD`** before exposing via tunnel — without it, anyone with the URL has full access to your sessions.
+
+The tunnel Codeman manages (App Settings → System → Remote access) refuses to start without a login (`CODEMAN_PASSWORD` or multi-user mode) unless `CODEMAN_ALLOW_UNAUTHENTICATED_TUNNEL=1` or `codeman web --allow-unauthenticated-tunnel` acknowledges the exposure, or you accept the browser's confirm, which it asks before every enable while no login is set. `CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK` covers only the network bind: it does not let the tunnel start.
 
 </details>
 
@@ -646,7 +674,7 @@ By default Codeman launches sessions with `--dangerously-skip-permissions`, so t
 
 - **Loopback by default** — the server binary binds `127.0.0.1`, reachable only from the same machine, so the no-password default is safe out of the box (the guided installer asks about network access and configures the binding + password for you). Binding a non-loopback host without `CODEMAN_PASSWORD` _starts but prints a loud warning_ with three concrete fixes (set a password, loopback + an authenticated tunnel, or explicitly acknowledge with `--allow-unauthenticated-network`)
 - **Optional auth, real sessions** — HTTP Basic via `CODEMAN_USERNAME` (default `admin`) / `CODEMAN_PASSWORD`. Success issues an opaque 256-bit `codeman_session` cookie (`randomBytes(32)`) — validated server-side, not client-signed, so it can't be forged offline (24h TTL, auto-extend, device-context audit log)
-- **Per-IP rate limiting** — 10 failed attempts → `429` with `Retry-After` (15-min decay). A valid cookie or correct password recovers _immediately_ even while an attacker hammers the same IP — important because all tunnel traffic shares one loopback IP. QR auth has its own separate limiter
+- **Per-IP rate limiting** — 10 failed attempts → `429` with `Retry-After` (15-min decay). A valid cookie or correct password recovers _immediately_ even while an attacker hammers the same IP — important because all tunnel traffic shares one loopback IP. Multi-user mode allows 50 failures per IP instead, plus 10 failed guesses per account from one IP; both are checked before the password, so past either a correct password from that IP also waits for the decay, while the account still logs in from another IP. QR auth has its own separate limiter
 - **Configurable permission mode** - `--dangerously-skip-permissions` is only the default. **App Settings → Agents & CLIs → Claude → Startup Mode** can switch new sessions to Anthropic's classifier-guarded `auto` mode (low-prompt, needs Claude Code 2.1.207+), `normal` prompting, or an explicit allowed-tools list. In multi-user mode, non-granted users are forced to `auto`, and shell sessions / skip-permissions require an explicit per-user grant
 
 ### Always-on browser hardening (v0.9.5)
@@ -661,8 +689,8 @@ These run for **every** request — before auth, even on the default no-password
 
 ### Input, files & headers
 
-- **Schema-validated inputs** — every API body is checked with Zod v4 schemas; a `CLAUDE_CODE_*` / `OPENCODE_*` / `CODEX_*` / `ANTIGRAVITY_*` / `GEMINI_*` / `GOOGLE_*` / `PI_*` / `GROK_*` / `XAI_*` / `DSH_*` / `DEEPSEEK_*` / `OMP_*` env-prefix allowlist gates which settings each CLI can receive, and the keys that could redirect a CLI's traffic (base URLs, config homes) are clamped for non-admin users
-- **Path containment** — file routes `realpath` before boundary checks (no TOCTOU); `..`, absolute paths, and symlinks resolving outside the working dir are rejected. Caps: 10 MB text preview / 2 GB raw & download (`CODEMAN_MAX_DOWNLOAD_BYTES`; bodies stream and answer `Range` requests, so the cap is a sanity bound rather than memory protection); `/api/download` blocklists sensitive paths (`.env`, `*credentials*`, `~/.ssh/`, `.aws/credentials`). SVG/HTML is served `octet-stream` + `nosniff` + attachment so it downloads rather than executes
+- **Schema-validated inputs** — every API body is checked with Zod v4 schemas; a `CLAUDE_CODE_*` / `OPENCODE_*` / `CODEX_*` / `ANTIGRAVITY_*` / `GEMINI_*` / `GOOGLE_*` / `PI_*` / `GROK_*` / `XAI_*` / `DSH_*` / `DEEPSEEK_*` / `OMP_*` / `COPILOT_*` env-prefix allowlist gates which settings each CLI can receive, and the keys that could redirect a CLI's traffic (base URLs, config homes) are clamped for non-admin users
+- **Path containment** — file routes `realpath` before boundary checks (no TOCTOU); `..`, absolute paths, and symlinks resolving outside the working dir are rejected. Caps: 10 MB text preview / 2 GB raw & download (`CODEMAN_MAX_DOWNLOAD_BYTES`; bodies stream and answer `Range` requests, so the cap is a sanity bound rather than memory protection); `/api/download` blocklists sensitive paths (`.env`, `*credentials*`, `~/.ssh/`, `.aws/credentials`). SVG/HTML is served `octet-stream` + `nosniff` + attachment so it downloads rather than executes. The one place HTML renders is the File Viewer's page view: a separate `/html-view/<capability>/` address scoped to the file's own folder, served under `Content-Security-Policy: sandbox` without `allow-same-origin`, so the page has an opaque origin and can never read Codeman's cookies or drive its API; hidden folders and broad roots (`/`, home, `/tmp`) are refused, and the capabilities are revoked on logout
 - **Security headers** — `Content-Security-Policy` (`default-src 'self'`, every exception enumerated), `X-Content-Type-Options: nosniff`, `X-Frame-Options: SAMEORIGIN`, HSTS over HTTPS, and CORS reflected **only** for `localhost` / `127.0.0.1` / `::1`
 
 ### Supply chain & isolation
@@ -696,7 +724,7 @@ The web UI remains the primary surface; see **[docs/tui.md](docs/tui.md)** for t
 
 | Shortcut                        | Action                                                        |
 | ------------------------------- | ------------------------------------------------------------- |
-| `Ctrl/Cmd+W`                    | Kill active session                                           |
+| `Ctrl+W`                        | Not a Codeman shortcut: it reaches the terminal (delete the previous word). **Close Session** has no default key and can be bound in App Settings → Shortcuts |
 | `Ctrl/Cmd/Option+K`             | Find open session or start a new one                          |
 | `Ctrl/Cmd+Tab`                  | Next session                                                  |
 | `Alt/Option+[` / `Alt/Option+]` | Previous / next session                                       |
@@ -709,6 +737,10 @@ The web UI remains the primary surface; see **[docs/tui.md](docs/tui.md)** for t
 | `Ctrl/Cmd+L`                    | Clear terminal                                                |
 | `Ctrl+Shift+R`                  | Restore terminal size                                         |
 | `Ctrl+Shift+V`                  | Toggle voice input                                            |
+| `Ctrl+Shift+G`                  | Open or close the tile grid                                   |
+| `Alt+Shift+Arrows`              | Focus the tile to the left, right, above or below             |
+| `Ctrl+Shift+Arrows`             | Move the focused tile one place (into an empty cell, or swap) |
+| `Alt+Shift+Enter`               | Zoom the focused tile, or restore the grid                    |
 | `Ctrl/Cmd +` / `-`              | Font size                                                     |
 | `Ctrl/Cmd+?`                    | Keyboard help                                                 |
 | `Shift+Enter`                   | Insert newline (sent to terminal)                             |
@@ -726,19 +758,23 @@ For AI agents and automation that control Codeman without a browser: an agent th
 
 ### The agent skill (start here)
 
-Everything in this section also ships as a **Claude Code skill** in [`skills/codeman`](skills/codeman/SKILL.md). Install it once and you never paste API docs into a prompt again. You ask for what you want in plain English, and the agent already sitting inside a Codeman session loads the recipes and drives the API itself.
+Everything in this section also ships as an **agent skill**, [`skills/codeman`](skills/codeman/SKILL.md), in the `SKILL.md` format Claude Code, Codex, Gemini CLI, OpenCode, Grok, OMP and most other agent CLIs read. Install it once and you never paste API docs into a prompt again. You ask for what you want in plain English, and the agent already sitting inside a Codeman session loads the recipes and drives the API itself. Full guide, with every install route, the recordings and what it will and will not do on its own: [The Codeman Skill](https://github.com/Ark0N/Codeman/wiki/Codeman-Skill).
+
+<p align="center">
+  <a href="docs/images/codeman-skill-crt-20261010.png"><img src="docs/images/codeman-skill-crt-20261010.gif" alt="A real codeman skill run: one short prompt typed into Claude Code, the tile grid powering on, then a DeepSeek Harness worker on a local qwen model and a Claude Code worker powering on as new tiles, with lineage lines from the lead to both" width="900"></a>
+</p>
 
 #### Step 1: install it
 
 | How            | Command                                                    | Scope                                                                                      |
 | -------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| Skills CLI     | `npx skills add Ark0N/Codeman --skill codeman -g`          | Global, works for any skills-aware agent                                                   |
+| Skills CLI     | `npx skills add Ark0N/Codeman --skill codeman -g`          | Global, for any skills-aware agent ([skills.sh](https://skills.sh)); the way to give it to pi |
 | Claude Code plugin | `/plugin marketplace add Ark0N/Codeman` then `/plugin install codeman@codeman` | Global, through Claude Code's plugin manager; `/plugin update codeman` follows releases. Pick this OR a `codeman skill install`, not both: a Claude Code with both lists the skill twice (`codeman` and `codeman:codeman`) |
 | Bundled CLI    | `codeman skill install`                                    | Global (`~/.claude/skills/codeman`), for npm installs that never cloned the repo            |
-| Bundled CLI    | `codeman skill install --case <name>`                      | One case only                                                                              |
-| Web UI         | App Settings → Agents & CLIs → Claude → **Agent Skill**    | Auto-injects into each case on Claude session create (`agentSkillEnabled`, SYNCED, default off) |
+| Bundled CLI    | `codeman skill install --case <name> [--mode <mode>]`      | One case only; `--mode codex` (or any other run mode) writes it where that CLI looks for skills |
+| Web UI         | App Settings → Agents & CLIs → All agent CLIs → **Codeman Agent Skill** | Auto-injects into each case on session create, where that session's CLI looks: `.claude/skills/` for Claude Code, `.agents/skills/` for Codex, Gemini CLI, OpenCode, Antigravity, Grok, DeepSeek and OMP; not pi, whose project skills trigger a trust prompt (`agentSkillEnabled`, SYNCED, default off) |
 
-`codeman skill uninstall [--case <name>]` reverses the CLI installs, and never touches a `skills/codeman` you wrote yourself.
+`codeman skill uninstall [--case <name>]` reverses the CLI installs (with `--case`, every Codeman-managed copy in that case, whichever CLI's directory it sits in), and never touches a `skills/codeman` you wrote yourself.
 
 #### Step 2: ask for things
 
@@ -752,9 +788,19 @@ That is the entire interface. No curl, no endpoint names, no session ids. These 
 | _"Have a claude worker on `refactor-auth` summarize `src/session.ts`, then close it."_     | Spawns, runs the readiness ladder (first-run trust dialog included), send-and-wait, reads the clean transcript answer, deletes. |
 | _"Watch session w4 and tell me if it gets stuck on a permission prompt."_                  | Blocks on the `blocked` signal and surfaces the question to **you**. It never answers another session's prompt itself. |
 
+One short line is enough. Here a Claude Code lead gets `use codeman to start 5 claude workers, one per TODO item`, and five real Claude Code workers power on, shown side by side in the tile grid:
+
+<p align="center">
+  <img src="docs/images/codeman-skill-grid-20261015.gif" alt="A real codeman skill run in the tile grid: the lead Claude Code session powers on as the only tile, the prompt use codeman to start 5 claude workers, one per TODO item is typed, then five Claude Code worker sessions power on as new tiles one after another with the CRT animation, and all six agents work at once" width="900">
+</p>
+
 #### Step 3: nothing
 
-The agent deletes every session it started. Watch the tabs appear and disappear in the dashboard while it works.
+The agent deletes every session it started. Watch the tabs appear and disappear in the dashboard while it works. With eight workers, each one gets its own tab, and a lineage line runs back to the lead that spawned it:
+
+<p align="center">
+  <img src="docs/images/codeman-skill-tabs-20261015.gif" alt="A real codeman skill run in the normal view: the prompt use codeman to start 8 claude workers, one per TODO item is typed, eight worker tabs power on left to right while lineage lines draw from the lead to each one, then clicking a worker tab shows a live Claude Code worker receiving its task" width="900">
+</p>
 
 #### A real run, start to finish
 
@@ -783,15 +829,17 @@ Those `DONE_<task>_<random>` strings are the skill's **split marker** trick, and
 | [`reference/recipes.md`](skills/codeman/reference/recipes.md)       | 8 worked flows: claude, DeepSeek Harness and shell workers, fan-out, blocked-worker watch, messaging fan-out. On demand. |
 | [`reference/endpoints.md`](skills/codeman/reference/endpoints.md)   | Full endpoint tables, error codes, per-mode signal table, capacity limits. On demand.        |
 | [`reference/messaging.md`](skills/codeman/reference/messaging.md)   | Talking to claude workers directly via Claude Code cross-session messaging. On demand.       |
+| [`reference/history.md`](skills/codeman/reference/history.md)       | Reading saved Codex conversations offline with `codeman history read`: selectors, filters, forks, budgets. On demand. |
+| [`reference/inspection-and-staging.md`](skills/codeman/reference/inspection-and-staging.md) | Experimental and opt-in: bounded pane inspection and guarded submission with `codeman agent inspect`, `stage` and `submit`. On demand. |
 
 Every recipe in there was verified against a live server, and the comments record the failure modes that were measured rather than guessed.
 
 #### Two things worth knowing
 
-- **It self-gates.** Outside a Codeman session (`CODEMAN_MUX` unset) the skill refuses to act and does not guess an API URL, so a global install costs an unrelated Claude Code session nothing.
+- **It self-gates.** It acts inside a Codeman-managed session. Outside one (`CODEMAN_MUX` unset) it only reads saved Codex conversations offline (`codeman history read`) and refuses everything else, and it never guesses an API URL, so a global install costs an unrelated Claude Code session nothing.
 - **It is deliberately conservative.** Unprompted, it may only spawn sessions, prompt them, and delete ones **it created in that same conversation, by exact id**, through a fail-closed guard that refuses to delete the agent's own session. Deleting a case (which erases a real directory of your code), bulk kills, respawn/ralph/cron/orchestrator changes and settings writes all require you to ask, naming the target.
 
-⚠️ Turning `agentSkillEnabled` back off **does not remove already-injected copies** (a create-time sweep would yank the skill out from under other live sessions sharing that `.claude/` dir). Remove them per case with `codeman skill uninstall --case <name>`.
+⚠️ Turning `agentSkillEnabled` back off **does not remove already-injected copies** (a create-time sweep would yank the skill out from under other live sessions sharing that workspace). Remove them per case with `codeman skill uninstall --case <name>`.
 
 ---
 
@@ -810,13 +858,13 @@ When a CLI runs in a Codeman-managed session, these environment variables are se
 
 ### Rules of the road (read before you POST)
 
-1. **Single-line input, ending in `\r`.** Programmatic input is sent as literal text, and Enter fires **only when the input contains a carriage return**: `{"input":"run tests\r"}`. Without the `\r` the text sits on the session's prompt unsubmitted (and a combined `wait` runs its full timeout on a turn that never started). Embedded newlines are stripped rather than rejected, so `"echo A\necho B\r"` runs the joined command `echo Aecho B`: send one line per call.
+1. **Input must end in `\r`.** Programmatic input is sent as literal text, and Enter fires **only when the input contains a carriage return**: `{"input":"run tests\r"}`. Without the `\r` the text sits on the session's prompt unsubmitted (and a combined `wait` runs its full timeout on a turn that never started). With `useMux`, embedded newlines are kept and the lines go in as one paste, so `"echo A\necho B\r"` runs both commands in a shell; the check that re-presses a stranded Enter cannot reliably recognise a multi-line paste, so put long multi-line content in a file the agent is told to read.
 2. **Make input idempotent.** Include a stable `clientId` and a monotonic per-session `seq` on `POST …/input`. The server de-duplicates, so a retry after a dropped connection can't double-deliver a prompt.
 3. **Auth.** If `CODEMAN_PASSWORD` is set, send HTTP Basic auth (user `admin` or `CODEMAN_USERNAME`) or a `codeman_session` cookie. The default loopback install is passwordless. A missing `Origin` header is allowed, so plain `curl` works; cross-site browser origins are rejected (CSRF guard). ⚠️ A `401` replies with the bare string `Unauthorized`, **not** the JSON envelope, so piping it into `jq` throws a parse error instead of showing the failure: check the status before parsing.
 4. **Response envelope.** Most endpoints return `{ "success": true, "data": … }` (errors: `{ "success": false, "error", "errorCode" }`). A few legacy GETs return bare bodies — **handle both** (`body.data ?? body`).
 5. **`/api/v1/*`** is a stable alias of `/api/*`.
 6. **Wait instead of polling, and don't treat a timeout as an error.** The wait endpoints answer with HTTP `200` and `wait.timedOut: true` when nothing happened in time, so loop over short waits (60s is the default) rather than issuing one long call, because tunnels cut idle connections. `wait.timeoutMs` tells you the timeout the server actually applied after clamping (600s ceiling).
-7. **Only `claude` and `deepseek` sessions emit `stop` and `blocked`.** Those two come from hooks (Claude Code's own, and the DeepSeek Harness status bridge); `shell` and the other external CLIs (opencode/codex/gemini/antigravity/pi/grok/omp) accept only `idle`, `working` and `exit`. Asking for `stop` explicitly on those is a `400`; omitting `until` is always safe. ⚠️ On a `shell` session `idle` fires **once**, at startup, and never again, so send-and-wait there can only time out; synchronize hook-less sessions with a `wait-output` marker.
+7. **Only `claude` and `deepseek` sessions emit `stop`; `codex` emits `blocked` too.** Those come from hooks (Claude Code's own, and the DeepSeek Harness status bridge), except codex's `blocked`, which Codeman reads off its screen while an approval, question or trust dialog is up (answer it in the terminal). `shell` and the other external CLIs (opencode/gemini/antigravity/pi/grok/omp) accept only `idle`, `working` and `exit`, and codex adds `blocked`. Asking for `stop` explicitly on those is a `400`; omitting `until` is always safe. ⚠️ On a `shell` session `idle` fires **once**, at startup, and never again, so send-and-wait there can only time out; synchronize hook-less sessions with a `wait-output` marker.
 8. **Nothing reports "ready", so wait for it explicitly.** A new session answers `{"signal":"exit","immediate":true}` (that means *not started*, not *crashed*) until its PID exists, and a `claude` worker in a fresh case then sits on the CLI's trust dialog. Prompt it there and the wait resolves on `idle` in ~2s looking exactly like a finished turn, while the text sits stuck in the dialog. Recipe 2b below is the sequence that avoids it.
 
 ### Recipes
@@ -894,7 +942,7 @@ for _ in $(seq 1 10); do
 done
 printf '%s\n' "$TXT"
 
-# 5b. Other modes (shell/opencode/gemini/antigravity/pi/grok/omp) have no transcript:
+# 5b. Other modes (shell/opencode/gemini/antigravity/pi/grok/omp/copilot) have no transcript:
 #     read the terminal. ⚠️ Use terminal?tail=, NOT /output: the latter's textOutput
 #     is empty for every tmux-backed (i.e. every interactive) session. tail counts
 #     BYTES, and what comes back is terminal data, ANSI included.
@@ -929,9 +977,97 @@ codeman session list                     #      list sessions
 codeman session logs <id>                #      tail output
 codeman task add "fix the failing test"  # (t)  queue a task
 codeman attach <path>                    #      show an attachment card for a local file
+codeman notify "<message>" [--urgent] [--file <path>]  # post to this tab's Discord thread (see the Discord bridge)
 codeman tui --list                       #      numbered session list (plain text when piped)
 codeman tui 3                            #      attach to session 3 of that list
 ```
+
+### `codeman agent` — session-to-session verbs in every CLI mode
+
+The skill above drives the API with `curl` and `jq` from a preamble Codeman seeds per session. Where it does not reach (a `pi` or `shell` session, a machine without `jq`), the same environment is still there (`CODEMAN_MUX=1`, `CODEMAN_SESSION_ID`, `CODEMAN_API_URL` are exported into every pane), so `codeman agent` packages the same verbs as commands. It is a thin client over the endpoints listed under [API](#api): auth and ownership apply to every endpoint, including bounded inspection and guarded input. The `inspect`, `stage` and `submit` commands and their HTTP routes are **experimental** and **opt-in**: turn on **Experimental agent coordination** in App Settings (`agentCoordinationEnabled`, synced, off by default; until then the routes answer `403 FORBIDDEN` naming it). Their commands, flags, paths, payloads and behavior may change or be removed in minor or patch releases, so pin a compatible version when automating them; see [Experimental agent coordination](docs/versioning-policy.md#experimental-agent-coordination). One line in a case's `AGENTS.md` is enough: *"other sessions: `codeman agent --help`"*.
+
+```bash
+codeman agent ls                                          # sessions; * marks this one
+SID=$(codeman agent spawn scratch-1 --mode claude)        # quick-start + wait for the composer where the mode has a ready mark
+SID=$(codeman agent spawn --working-dir ~/src/app --mode codex)   # no case: an existing directory (cwd by default)
+codeman agent send "$SID" 'review src/, then say DONE' --until stop,exit --timeout 300000   # --wait = default signal set
+codeman agent read "$SID"                                 # last answer (as the server reads it for that mode)
+codeman agent read "$SID" --tail 3000                     # terminal tail, ANSI stripped (every mode)
+codeman agent inspect "$SID" --max-bytes 8192 --json     # recent evidence + opaque cursor (pane snapshots are labeled)
+codeman agent stage "$SID" --message-file /tmp/prompt.txt --json  # no Enter; known local Codex composer only
+codeman agent submit "$SID" --stage-id "$STAGE_ID" --confirm-sha "$SHA256" --json  # one conditional Enter
+codeman agent send "$SID" 'run the tests, then print WORKDONE followed by _4711'   # hook-less modes (opencode, pi, …): ask for the marker in halves …
+codeman agent wait "$SID" --match WORKDONE_4711           # … and wait on the joined form, which the prompt's echo never contains
+codeman agent interrupt "$SID"                            # a bare ESC, conversation intact
+codeman agent post "$SID" 'context for later, not a prompt'   # stored in its inbox, not typed into the pane
+codeman agent inbox --wait --timeout 300000               # your own inbox: blocks while nothing is new
+codeman agent ack <msg-id>                                # remove what you handled (read never removes)
+codeman agent rm "$SID"                                   # any session except this one
+```
+
+Rules the commands enforce rather than document: they refuse outside a Codeman session and never guess a URL; `send` transmits printable text plus Enter only (a control byte such as `Ctrl+C` is `app_exit` in opencode — ESC exists solely as `interrupt`, which never appends Enter); `rm` refuses an empty id, an unprovable self id and a prefix match in either direction. Ids may be the 8-character prefixes `ls` prints (resolved through the list; an ambiguous prefix refuses, anything shorter than 8 characters refuses on every verb). A prompt that starts with `-` goes after `--` (`send "$SID" -- "- fix the bug"`). The echo of the prompt you sent is output too: a `--match` marker that appears verbatim in the prompt matches at once, before the worker has done anything, so the prompt asks for it in halves. A remote session whose host is asleep answers a fire-and-forget `send` with `buffered` (Codeman wakes the host and types the prompt once the pane is back) or `dropped` (over the wake buffer's cap, nothing will be typed: exit `1`). Exit codes: `0` delivered/matched/signal, `1` error, `2` timeout, `3` the worker exited or the wait ended without an answer (`delivered:false`, `ended:true`), `4` refused. `spawn` prints the id alone on stdout (prose goes to stderr), so `SID=$(…)` captures exactly the id. `spawn` with no case, or with `--working-dir`, starts the worker in that existing directory through `POST /api/v1/sessions` plus `POST /api/v1/sessions/:id/interactive` (or `/shell`) instead of quick-start, so no case is created and the directory is never labelled agent scratch; an empty `--working-dir` refuses (exit `4`) rather than falling back to cwd, and so does a cwd that is your home directory (Codeman's hooks would land in `~/.claude`), which needs an explicit `--working-dir ~`; if the start fails it still prints the created id and exits `1`. `--json` prints the envelope's `data` for every verb, except a directory `spawn`, which prints `{ sessionId, workingDir, created: true }`, plus `ready` when a readiness wait ran, `readinessError` when that call failed, and `startupError` when the start failed. `--until stop` on a mode without hook signals is the server's 400, passed through — the marker path (`--match`) is the answer there, exactly as for the skill.
+
+### `codeman history read`: saved Codex conversations, offline
+
+`codeman history read` reads Codex's own saved rollouts (`$CODEX_HOME/sessions`, else `~/.codex/sessions`) straight from disk: no server, no managed session, nothing written. Unlike `codeman agent` it works anywhere, including on a machine where Codeman is not running.
+
+```bash
+codeman history read --session-id 019fc604                         # one conversation, by native id or 8+ character prefix
+codeman history read --root-session-id <uuid> --topic auth          # a conversation and every sub-agent or fork under it
+codeman history read --file /path/to/rollout.jsonl --format text
+```
+
+Filters keep whole user/assistant turns (`--topic` is a literal, case-insensitive match; `--after`/`--before` are inclusive UTC dates). A forked or spawned thread's copy of its parent's history is dropped, so every record belongs to the thread that wrote it. Output is JSON by default and carries `complete: false` whenever the evidence is partial (a file that could not be attributed, a compressed `.jsonl.zst` rollout, a record a running Codex is still writing, an unknown ancestor). Every bound fails closed and is raisable: `--metadata-bytes` (attributing the store, default 1 GiB), `--max-entries` (default 65536), `--scan-bytes` (the selected transcripts, default 16 MiB) and `--max-bytes` (output, default 8192). The full reference is [`skills/codeman/reference/history.md`](skills/codeman/reference/history.md).
+
+### MCP server (`codeman mcp`): drive Codeman from any MCP client
+
+`codeman mcp` is a [Model Context Protocol](https://modelcontextprotocol.io) server on stdio, so any MCP client (Claude Code, Claude Desktop, Codex, Gemini CLI, Cursor, ...) can start Codeman sessions in any installed agent CLI, prompt them, wait for them, read their answers and clean up, from inside Codeman or from outside it. Like `codeman agent`, it is a client of the HTTP API. The MCP server adds no routes of its own, and auth and ownership are unchanged.
+
+```bash
+# Claude Code
+claude mcp add codeman -e CODEMAN_API_URL=https://127.0.0.1:3000 -- codeman mcp
+```
+
+```json
+{
+  "mcpServers": {
+    "codeman": {
+      "command": "codeman",
+      "args": ["mcp"],
+      "env": { "CODEMAN_API_URL": "https://127.0.0.1:3000" }
+    }
+  }
+}
+```
+
+```toml
+# Codex (~/.codex/config.toml): raise the 60 s default tool timeout for long waits
+[mcp_servers.codeman]
+command = "codeman"
+args = ["mcp"]
+env = { CODEMAN_API_URL = "https://127.0.0.1:3000" }
+env_vars = ["CODEMAN_MUX", "CODEMAN_SESSION_ID"]  # Codex passes MCP servers a minimal env; these let it know the Codeman session it runs in
+tool_timeout_sec = 120
+```
+
+The JSON form is what Claude Desktop, Cursor and Gemini CLI take. Add `"CODEMAN_PASSWORD"` to `env` when the server has a password (or let it read the data dir's `.env`). Without the `codeman` command on PATH (a git checkout run without the installer), use `node /path/to/Codeman/dist/index.js mcp`.
+
+| Tool | Does |
+| ---- | ---- |
+| `list_sessions` | Every session you can see, with its run mode, status, folder, and whether these tools may prompt it |
+| `start_session` | A new worker in a case (a fresh scratch folder, or an existing case) in any installed CLI; waits until it can take a prompt |
+| `send_prompt` | Types a one-line prompt and presses Enter; optionally waits for the end of the turn |
+| `wait_for_session` | Waits for a signal (`stop`, `blocked`, `idle`, `working`, `exit`) or a literal marker in the output |
+| `read_output` | The last answer, the whole conversation, or the last bytes of the terminal |
+| `interrupt_session` | One Escape: stops the current turn, keeps the conversation |
+| `delete_session` | Closes a worker (its case folder stays) |
+
+Rules the server enforces rather than documents:
+
+- **It never guesses a server.** The URL comes from `CODEMAN_API_URL` or `--url`; without one it still starts and lists its tools, and every call says how to configure it.
+- **Only its own sessions.** Prompting, interrupting and deleting are limited to sessions this server started (and, run inside a Codeman session, that session's own workers). Listing, reading and waiting work on everything. `codeman mcp --allow-any-session` lifts the limit, for a user who wants an assistant to drive their existing tabs. It never acts on the session it runs in.
+- **Waits fit the client.** A wait defaults to 45 s (Codex cuts MCP tools off at 60 s by default) and is capped at 600 s; `timed_out` / `still_working` means call again.
+- **Both protocol eras.** It answers the 2026-07-28 revision (per-request `_meta`, `server/discover`) and the `initialize` handshake of 2024-11-05 to 2025-11-25.
 
 ### Hooks (events flowing _back_ to Codeman)
 
@@ -957,6 +1093,7 @@ REST over Fastify — **~230 handlers across 25 route modules**, plus an SSE str
 | `GET`    | `/api/sessions/:id/last-response` | The last answer as clean text, read from the transcript (claude, codex, deepseek) |
 | `GET`    | `/api/sessions/:id/wait`   | Block until a signal fires (`?until=stop,idle,exit&timeout=&fresh=`); a timeout is a `200` |
 | `GET`    | `/api/sessions/:id/wait-output` | Block until a literal string appears (`?match=&nocase=&from=now\|buffer&timeout=`) |
+| `POST` / `GET` | `/api/sessions/:id/inbox` | Agent inbox: post `{text}` / read every pending message (`?wait=` blocks while nothing is new); `POST …/inbox/ack {ids}` removes them, receiver only |
 | `GET`    | `/api/sessions/unified`    | Unified live + history list (Session Manager) — `?q=&limit=`                       |
 | `POST`   | `/api/sessions/:id/pin`    | Pin/unpin in the Session Manager (`{pinned}`)                                      |
 | `PUT`    | `/api/session-order`       | Sync tab order across devices (`{order: [ids]}`)                                   |
@@ -1046,7 +1183,7 @@ flowchart TB
         end
 
         subgraph External["External"]
-            CLI["AI CLI<br/><small>Claude Code / OpenCode / Codex / Antigravity / Gemini / Pi / Grok / DeepSeek / OMP</small>"]
+            CLI["AI CLI<br/><small>Claude Code / OpenCode / Codex / Antigravity / Gemini / Pi / Grok / DeepSeek / OMP / GitHub Copilot</small>"]
             BG["Background Agents<br/><small>(Task tool)</small>"]
         end
     end
@@ -1113,7 +1250,7 @@ Full details: [`docs/archive/code-structure-findings.md`](docs/archive/code-stru
 
 [![npm](https://img.shields.io/npm/v/xterm-zerolag-input?style=flat-square&color=22c55e)](https://www.npmjs.com/package/xterm-zerolag-input)
 
-Instant keystroke feedback overlay for xterm.js. Eliminates perceived input latency over high-RTT connections by rendering typed characters immediately as a pixel-perfect DOM overlay. Zero dependencies, 6.1 kB gzipped, configurable prompt detection, CJK/emoji wide-character support, full state machine with 238 tests.
+Instant keystroke feedback overlay for xterm.js. Eliminates perceived input latency over high-RTT connections by rendering typed characters immediately as a pixel-perfect DOM overlay. Zero dependencies, 5.7 kB minified and gzipped, configurable prompt detection, CJK/emoji wide-character support, full state machine with 276 tests. Typing cost does not grow with prompt length.
 
 ```bash
 npm install xterm-zerolag-input

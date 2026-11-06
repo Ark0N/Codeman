@@ -4,8 +4,8 @@ Saved, named jobs that start a session and send it a prompt on a schedule. Cron 
 sessions: *every weekday at 03:00, open a Claude session in `~/proj` and tell it to update
 dependencies and open a PR.*
 
-The ⏰ **Cron** header button is opt-in. Turn it on in
-**App Settings → Header & Panels**.
+The ⏰ **Cron** button in the bottom toolbar is opt-in. Turn it on under
+**App Settings → Header & Panels → Scheduling**.
 
 ## Creating a job
 
@@ -51,10 +51,11 @@ or a server restart shifts later runs slightly. That drift is accepted rather th
 
 ## Prompts are single line
 
-This is the rule people trip over. Programmatic input into an agent session is single line
-everywhere in Codeman, because the terminal UIs these CLIs use treat a newline as submit. A
-multi-line prompt would be silently mangled, so it is **rejected** instead: the form refuses
-it, and a prompt file whose contents are multi-line fails the run with a clear message.
+This is the rule people trip over. A cron job fires with nobody watching, and the check that
+re-presses an Enter the agent ignored cannot reliably recognise a multi-line paste in the
+composer, so a multi-line prompt could sit there unsent. In `paste` mode the newlines would
+reach the agent as keys. So a multi-line prompt is **rejected**: the form refuses it, and a
+prompt file whose contents are multi-line fails the run with a clear message.
 
 For anything longer than a sentence, put the instructions in a file and make the prompt tell
 the agent to read it:
@@ -96,11 +97,19 @@ The skip policy has the details you would want it to have:
 
 Every fire is recorded per job, with a status:
 
-| Status    | Meaning                                                              |
-| --------- | -------------------------------------------------------------------- |
-| `created` | The run started and a session was created.                            |
-| `skipped` | The concurrency policy blocked it. Not counted as a run.              |
-| `failed`  | The prompt could not be resolved, or the working directory was gone.  |
+| Status            | Meaning                                                           |
+| ----------------- | ----------------------------------------------------------------- |
+| `created`         | The run record was created; the session has not started yet.       |
+| `session_started` | The session started; prompt delivery is still pending.             |
+| `prompt_sent`     | The prompt was sent to the session.                                |
+| `skipped`         | The concurrency policy blocked it. Not counted as a run.           |
+| `failed`          | Prompt resolution, session launch, or prompt delivery failed.      |
+
+History records whether the session started and the prompt was delivered, **not whether
+the agent's task succeeded**. `prompt_sent` is not a task-completion signal.
+If the session is closed during the readiness wait or the server restarts before
+delivery, a run can remain `session_started` indefinitely with `finishedAt: null`;
+clients must not poll forever waiting for a terminal status.
 
 The schedule is advanced **before** the session launches, so a slow start cannot cause the
 same job to re-trigger.

@@ -8,7 +8,7 @@ import type {
   FontStyle,
 } from './types.js';
 import { getCellDimensions } from './cell-dimensions.js';
-import { findPrompt, readTextAfterPrompt } from './prompt-finder.js';
+import { findPrompt, readTextAfterPrompt, promptRowInViewport } from './prompt-finder.js';
 import { renderOverlay, charCellWidth } from './overlay-renderer.js';
 
 const DEFAULT_PROMPT: PromptFinder = { type: 'character', char: '>', offset: 2 };
@@ -67,6 +67,11 @@ export class ZerolagInputAddon implements XtermAddon {
   private _flushedOffset = 0;
   private _flushedText = '';
   private _bufferDetectDone = false;
+  // IME text still being composed: drawn after the pending text, never sent.
+  private _composition = '';
+  // Rows from the top of the screen that are actually visible (see setRowLimit);
+  // null means all of them.
+  private _rowLimit: number | null = null;
 
   // Render cache
   private _lastRenderKey = '';
@@ -120,17 +125,16 @@ export class ZerolagInputAddon implements XtermAddon {
     // Cache font properties
     this._cacheFont();
 
-    // Scroll detection: hide overlay when scrolled away from bottom
+    // Scroll detection: hide the overlay while the cursor row is scrolled out of view
     this._scrollHandler = () => {
       try {
-        const buf = this._terminal!.buffer.active;
-        if (buf.viewportY !== buf.baseY) {
+        if (!promptRowInViewport(this._terminal!)) {
           this._overlay!.style.display = 'none';
           if (this._scrollTimer) {
             clearTimeout(this._scrollTimer);
             this._scrollTimer = null;
           }
-        } else if (this._pendingText || this._flushedOffset > 0) {
+        } else if (this._hasContent()) {
           if (this._scrollTimer) clearTimeout(this._scrollTimer);
           this._scrollTimer = setTimeout(() => {
             this._scrollTimer = null;
@@ -206,8 +210,14 @@ export class ZerolagInputAddon implements XtermAddon {
    * - `'flushed'`: A character was removed from text already sent to the PTY.
    *   The consumer SHOULD send backspace to the PTY.
    * - `false`: Nothing to remove. The consumer should NOT send backspace.
+   *
+   * Any IME composition is dropped in every case, and the overlay is repainted
+   * without it (hidden when nothing else is left).
    */
   removeChar(): 'pending' | 'flushed' | false {
+    // A backspace that reaches the overlay means no composition is open.
+    const droppedComposition = this._composition.length > 0;
+    this._composition = '';
     if (this._pendingText.length > 0) {
       this._pendingText = this._pendingText.slice(0, -1);
       if (this._pendingText.length > 0 || this._flushedOffset > 0) {
@@ -243,6 +253,9 @@ export class ZerolagInputAddon implements XtermAddon {
       return 'flushed';
     }
 
+    // Nothing to remove, but a composition-only overlay is still on screen
+    // drawing the text dropped above.
+    if (droppedComposition) this._hide();
     return false;
   }
 
@@ -252,6 +265,7 @@ export class ZerolagInputAddon implements XtermAddon {
    */
   clear(): void {
     this._pendingText = '';
+    this._composition = '';
     this._flushedOffset = 0;
     this._flushedText = '';
     this._bufferDetectDone = false;
@@ -297,7 +311,7 @@ export class ZerolagInputAddon implements XtermAddon {
   clearFlushed(): void {
     this._flushedOffset = 0;
     this._flushedText = '';
-    if (this._pendingText) {
+    if (this._pendingText || this._composition) {
       this._render();
     } else {
       this._hide();
@@ -312,10 +326,39 @@ export class ZerolagInputAddon implements XtermAddon {
    * that move the prompt.
    */
   rerender(): void {
-    if (this._pendingText || this._flushedOffset > 0) {
+    if (this._hasContent()) {
       this._lastRenderKey = '';
       this._render();
     }
+  }
+
+  /**
+   * Bound the layout to the first `limit` rows of the screen, or to all of them
+   * with `null`. It narrows the bound the overlay already keeps itself on
+   * screen with (`totalRows`, see _layoutRows), never adds a second one.
+   *
+   * For a host that keeps the terminal taller than the box showing it and
+   * scrolls the screen element instead (e.g. holding the PTY's rows while an
+   * on-screen keyboard covers the bottom): the composer must grow upward from
+   * the last row the user can SEE, not from the terminal's last row, which is
+   * under the keyboard.
+   */
+  setRowLimit(limit: number | null): void {
+    const next = limit !== null && Number.isFinite(limit) && limit > 0 ? Math.trunc(limit) : null;
+    if (next === this._rowLimit) return;
+    this._rowLimit = next;
+    this.rerender();
+  }
+
+  /**
+   * The `totalRows` bound handed to renderOverlay: the one place that decides
+   * where the block stops growing downward. The terminal's rows, narrowed by
+   * setRowLimit when the host shows fewer; a limit above the terminal's rows
+   * changes nothing.
+   */
+  private _layoutRows(): number {
+    const rows = this._terminal!.rows;
+    return this._rowLimit !== null ? Math.min(this._rowLimit, rows) : rows;
   }
 
   /**
@@ -325,7 +368,7 @@ export class ZerolagInputAddon implements XtermAddon {
   refreshFont(): void {
     this._cacheFont();
     this._lastRenderKey = '';
-    if (this._pendingText || this._flushedOffset > 0) this._render();
+    if (this._hasContent()) this._render();
   }
 
   // ─── Buffer detection ─────────────────────────────────────────────
@@ -391,7 +434,37 @@ export class ZerolagInputAddon implements XtermAddon {
     this._options.prompt = finder;
     this._lastPromptPos = null;
     this._lastRenderKey = '';
-    if (this._pendingText || this._flushedOffset > 0) this._render();
+    if (this._hasContent()) this._render();
+  }
+
+  // ─── IME composition ──────────────────────────────────────────────
+
+  /**
+   * Show text an IME is still composing as an underlined tail after the
+   * pending text, wrapped and kept on screen like the rest of the overlay.
+   * Pass `''` to remove it.
+   *
+   * Visual only: the composition is never part of `pendingText`, `hasPending`
+   * or anything a consumer sends. When the IME commits, the consumer adds the
+   * committed text the usual way (`addChar`/`appendText`) and clears the
+   * composition. `clear()` and `removeChar()` drop it too.
+   */
+  setComposition(text: string): void {
+    // One visual line of provisional text: control characters and line breaks
+    // would break the cell grid.
+    const next = typeof text === 'string' ? text.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, '') : '';
+    if (next === this._composition) return;
+    this._composition = next;
+    if (this._hasContent()) {
+      this._render();
+    } else {
+      this._hide();
+    }
+  }
+
+  /** Text an IME is still composing, drawn after `pendingText` (never sent). */
+  get composition(): string {
+    return this._composition;
   }
 
   // ─── Prompt utilities ─────────────────────────────────────────────
@@ -425,7 +498,13 @@ export class ZerolagInputAddon implements XtermAddon {
     return this._pendingText;
   }
 
-  /** Whether there is any overlay content (pending or flushed). */
+  /**
+   * Whether there is pending or flushed text. Excludes the IME composition,
+   * which is never sent, so an overlay showing only a composition reports
+   * `false` while still on screen. To re-place the overlay after output or a
+   * resize, call `rerender()` unconditionally: it is a no-op when there is
+   * nothing to draw.
+   */
   get hasPending(): boolean {
     return this._pendingText.length > 0 || this._flushedOffset > 0;
   }
@@ -442,6 +521,10 @@ export class ZerolagInputAddon implements XtermAddon {
   }
 
   // ─── Private methods ──────────────────────────────────────────────
+
+  private _hasContent(): boolean {
+    return this._pendingText.length > 0 || this._flushedOffset > 0 || this._composition.length > 0;
+  }
 
   private _getPromptOffset(): number {
     const prompt = this._options.prompt ?? DEFAULT_PROMPT;
@@ -505,7 +588,7 @@ export class ZerolagInputAddon implements XtermAddon {
 
   private _render(): void {
     if (!this._terminal || !this._overlay) return;
-    if (!this._pendingText && !(this._flushedOffset > 0)) {
+    if (!this._hasContent()) {
       this._overlay.style.display = 'none';
       return;
     }
@@ -513,8 +596,8 @@ export class ZerolagInputAddon implements XtermAddon {
     try {
       const buf = this._terminal.buffer.active;
 
-      // Hide overlay when scrolled up — prompt is at bottom, not in viewport
-      if (buf.viewportY !== buf.baseY) {
+      // Hide the overlay while the cursor row is scrolled out of view
+      if (!promptRowInViewport(this._terminal)) {
         this._overlay.style.display = 'none';
         return;
       }
@@ -563,12 +646,18 @@ export class ZerolagInputAddon implements XtermAddon {
         }
       }
 
+      // The composition is a styled tail after everything the user has typed.
+      const compositionStart = [...displayText].length;
+      displayText += this._composition;
+
       // Skip redundant re-renders — include text content to detect
       // same-length changes (e.g., setFlushed with different text)
       // `rows` is part of the key: the layout is clamped to the visible rows
-      // (see renderOverlay), so a keyboard opening — which changes rows without
-      // changing the text — must not be skipped as a redundant render.
-      const renderKey = `${displayText}:${startCol}:${activePrompt.row}:${activePrompt.col}:${totalCols}:${this._terminal.rows}:${this._flushedOffset}`;
+      // (see renderOverlay), so a keyboard opening, which changes rows or the
+      // row limit without changing the text, must not be skipped as a
+      // redundant render.
+      const totalRows = this._layoutRows();
+      const renderKey = `${displayText}:${compositionStart}:${startCol}:${activePrompt.row}:${activePrompt.col}:${totalCols}:${totalRows}:${this._flushedOffset}`;
       if (renderKey === this._lastRenderKey && this._overlay.style.display !== 'none') return;
       this._lastRenderKey = renderKey;
 
@@ -608,6 +697,7 @@ export class ZerolagInputAddon implements XtermAddon {
 
       renderOverlay(this._overlay, {
         lines,
+        compositionStart: this._composition ? compositionStart : undefined,
         startCol,
         totalCols,
         cellW,
@@ -615,7 +705,7 @@ export class ZerolagInputAddon implements XtermAddon {
         charTop,
         charHeight,
         promptRow: activePrompt.row,
-        totalRows: this._terminal.rows,
+        totalRows,
         font: this._font,
         showCursor: this._options.showCursor,
         cursorColor,

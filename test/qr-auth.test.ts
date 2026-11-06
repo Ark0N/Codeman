@@ -14,14 +14,12 @@
  * 12. QR auth bypass in auth middleware
  * 13. GET /api/tunnel/qr SVG endpoint (auth/no-auth, caching, errors)
  *
- * Port: 3162 (qr-auth tests), 3163 (qr-svg endpoint tests)
+ * Port: ephemeral (`new WebServer(0, …)`, read back through `boundPort`)
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { TunnelManager } from '../src/tunnel-manager.js';
 import { WebServer } from '../src/web/server.js';
 
-const QR_AUTH_PORT = 3162;
-const QR_SVG_PORT = 3163;
 const TEST_PASS = 'qr-test-pass-xyz';
 const TEST_USER = 'admin';
 
@@ -312,9 +310,9 @@ describe('QR Auth Integration', () => {
   beforeAll(async () => {
     process.env.CODEMAN_PASSWORD = TEST_PASS;
     process.env.CODEMAN_USERNAME = TEST_USER;
-    server = new WebServer(QR_AUTH_PORT, false, true);
+    server = new WebServer(0, false, true);
     await server.start();
-    baseUrl = `http://localhost:${QR_AUTH_PORT}`;
+    baseUrl = `http://localhost:${server.boundPort}`;
   });
 
   afterAll(async () => {
@@ -608,9 +606,9 @@ describe('QR SVG Endpoint (GET /api/tunnel/qr)', () => {
   beforeAll(async () => {
     process.env.CODEMAN_PASSWORD = TEST_PASS;
     process.env.CODEMAN_USERNAME = TEST_USER;
-    server = new WebServer(QR_SVG_PORT, false, true);
+    server = new WebServer(0, false, true);
     await server.start();
-    baseUrl = `http://localhost:${QR_SVG_PORT}`;
+    baseUrl = `http://localhost:${server.boundPort}`;
   });
 
   afterAll(async () => {

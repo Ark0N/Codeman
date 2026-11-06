@@ -1,0 +1,534 @@
+/**
+ * @fileoverview Clickable file paths beyond the rooted absolute form: `~/…`,
+ * relative paths, and paths a program broke over lines itself.
+ *
+ * - `findFilePathLinks` / `resolveLinkedFilePath` / `terminalPathLine`
+ *   (constants.js) on the shapes real agent output has: Claude Code echoes an
+ *   attached image as `› [image] ~/…/garage.png`, scripts print
+ *   `builds/captures/…png`, and Claude Code wraps tool output a few columns
+ *   short of the edge, so a long path arrives as `…/captures/2` + `026-10-10/x.png`.
+ * - The terminal link provider turns those into ONE link and opens the resolved
+ *   path (relative against the session's working directory, `~/` as is).
+ * - The server expands `~/` (local: this host's home; remote: the probe on the
+ *   remote host), so the attachment route can serve it.
+ *
+ * Real code under test: constants.js + terminal-ui.js in a `vm` context, and
+ * the shipped attachment registry / probe script.
+ */
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import vm from 'node:vm';
+import { afterAll, describe, expect, it, vi } from 'vitest';
+import { registerExternalAttachment } from '../src/attachment-registry.js';
+import { buildRemoteProbeCommand, parseRemoteProbeOutput } from '../src/remote-files.js';
+
+type Line = {
+  startRow: number;
+  endRow: number;
+  text: string;
+  offsetToCell: (o: number) => { row: number; col: number };
+};
+type Helpers = {
+  findFilePathLinks: (text: string) => Array<{ path: string; index: number }>;
+  resolveLinkedFilePath: (path: string, workingDir?: string) => string;
+  terminalPathLine: (buffer: unknown, row: number, cols: number, maxRows?: number) => Line | null;
+};
+
+const read = (f: string) => readFileSync(resolve(import.meta.dirname, `../src/web/public/${f}`), 'utf8');
+
+function loadHelpers(): Helpers {
+  const context = vm.createContext({});
+  vm.runInContext(
+    `${read('constants.js')}\nglobalThis.__h = { findFilePathLinks, resolveLinkedFilePath, terminalPathLine };`,
+    context,
+    { filename: 'constants.js' }
+  );
+  return (context as { __h: Helpers }).__h;
+}
+
+const { findFilePathLinks, resolveLinkedFilePath, terminalPathLine } = loadHelpers();
+const paths = (text: string) => findFilePathLinks(text).map((f) => f.path);
+
+/** An xterm buffer stand-in: hard-broken rows (no `isWrapped`), as Claude Code emits them. */
+function buffer(lines: string[], cols = 80, wrappedRows = new Set<number>()) {
+  return {
+    length: lines.length,
+    getLine: (row: number) =>
+      row >= 0 && row < lines.length
+        ? {
+            isWrapped: wrappedRows.has(row),
+            translateToString: (trim?: boolean) => (trim ? lines[row].replace(/\s+$/, '') : lines[row].padEnd(cols)),
+          }
+        : undefined,
+  };
+}
+
+// Verbatim from a live pane (2026-10-10): the tool output wrapped at ~64 columns.
+const BROKEN = [
+  '  ⎿  BILD /mnt/build/neon_getaway-mgr-hebel/builds/captures/2',
+  '     026-10-10/ghost1b_gameplay.png err=0 kamera=(1108,13,811',
+  '     ) blick=',
+];
+const BROKEN_PATH = '/mnt/build/neon_getaway-mgr-hebel/builds/captures/2026-10-10/ghost1b_gameplay.png';
+
+describe('findFilePathLinks', () => {
+  it('links home-relative and relative paths', () => {
+    expect(paths('  › [image] ~/repos/neon-menu/assets/ui/backgrounds/garage_plate.png (1.1MB)')).toEqual([
+      '~/repos/neon-menu/assets/ui/backgrounds/garage_plate.png',
+    ]);
+    expect(paths('2 Bericht: refs/shaderpatch_pixel_1010/BERICHT.md. Alle 12')).toEqual([
+      'refs/shaderpatch_pixel_1010/BERICHT.md',
+    ]);
+    expect(paths('./a.md ../b.json look_montage.png')).toEqual(['./a.md', '../b.json', 'look_montage.png']);
+  });
+
+  it('keeps brackets, `=` and trailing punctuation out of a relative path', () => {
+    expect(paths('1. Garage-BG (garage_plate.png) — Bühne')).toEqual(['garage_plate.png']);
+    expect(paths('OUT=builds/captures/x.png, "shots/b.webp"')).toEqual(['builds/captures/x.png', 'shots/b.webp']);
+    expect(paths('see src/a.ts:120.')).toEqual(['src/a.ts']);
+  });
+
+  it("keeps a shell prompt's trailing `$` or `#` out of the folder it links", () => {
+    expect(paths('arkon@tnode:~/default/claudeman$ ls')).toEqual(['~/default/claudeman']);
+    expect(paths('root@c:/workspace/app# ls')).toEqual(['/workspace/app']);
+  });
+
+  it('still finds rooted absolute paths, and never a relative path inside one', () => {
+    expect(paths('sign-off from /mnt/raid1/x/refs/look_montage.png.')).toEqual(['/mnt/raid1/x/refs/look_montage.png']);
+    // Unknown root: not linked at all (no `nix/store/…` cut out of it).
+    expect(paths('/nix/store/abc-x/share/icon.png')).toEqual([]);
+    // `/etc` stays out on purpose (the server refuses that tree).
+    expect(paths('/etc/app/config.json')).toEqual([]);
+  });
+
+  it('never cuts a path out of a web URL, but keeps file:// paths', () => {
+    expect(paths('https://x.io/a/home/b.png?img=c.png')).toEqual([]);
+    expect(paths('file:///home/joe/x.png')).toEqual(['/home/joe/x.png']);
+  });
+
+  it('reports where each path starts', () => {
+    const text = 'a ~/x.png b /tmp/y.pdf c z.md';
+    for (const { path, index } of findFilePathLinks(text)) expect(text.slice(index, index + path.length)).toBe(path);
+  });
+});
+
+describe('resolveLinkedFilePath', () => {
+  it('resolves relative paths against the working directory, collapsing . and ..', () => {
+    expect(resolveLinkedFilePath('builds/x.png', '/mnt/ws')).toBe('/mnt/ws/builds/x.png');
+    expect(resolveLinkedFilePath('./a/./b.md', '/mnt/ws/')).toBe('/mnt/ws/a/b.md');
+    expect(resolveLinkedFilePath('../other/x.png', '/mnt/ws')).toBe('/mnt/other/x.png');
+  });
+
+  it('leaves absolute and ~/ paths alone, and relative ones without a working directory', () => {
+    expect(resolveLinkedFilePath('/tmp/a.png', '/mnt/ws')).toBe('/tmp/a.png');
+    expect(resolveLinkedFilePath('~/a.png', '/mnt/ws')).toBe('~/a.png');
+    expect(resolveLinkedFilePath('a.png', undefined)).toBe('a.png');
+  });
+});
+
+describe('terminalPathLine', () => {
+  it('glues a path broken short of the edge back together, from either row', () => {
+    for (const row of [0, 1]) {
+      const line = terminalPathLine(buffer(BROKEN), row, 80)!;
+      expect([line.startRow, line.endRow]).toEqual([0, 1]);
+      const [found] = findFilePathLinks(line.text);
+      expect(found.path).toBe(BROKEN_PATH);
+      // The cells are exact on both rows: after `  ⎿  BILD ` and after the 5-column indent.
+      expect(line.offsetToCell(found.index)).toEqual({ row: 0, col: 10 });
+      expect(line.offsetToCell(found.index + found.path.length - 1)).toEqual({ row: 1, col: 34 });
+    }
+    expect(terminalPathLine(buffer(BROKEN), 2, 80)).toMatchObject({ startRow: 2, endRow: 2 });
+  });
+
+  it('follows a path over three rows', () => {
+    const rows = ['x /tmp/claude-1001/-home-joe-cases', '  -neon/de4576ce-aaaaaaaaaaaaa', '  -56b4/shot.png'];
+    const line = terminalPathLine(buffer(rows), 1, 80)!;
+    expect(paths(line.text)).toEqual(['/tmp/claude-1001/-home-joe-cases-neon/de4576ce-aaaaaaaaaaaaa-56b4/shot.png']);
+  });
+
+  it('does not glue lines that are not a broken path', () => {
+    // A shorter line ending on a directory, then a longer one: not a wrap.
+    expect(terminalPathLine(buffer(['cd /mnt/raid1/foo', '  file.png erstellt']), 0, 80)).toMatchObject({ endRow: 0 });
+    // A chain that never reaches a file is dropped.
+    const listing = terminalPathLine(buffer(['cd ~/repos/neon', 'ls', 'a.png']), 2, 80)!;
+    expect(paths(listing.text)).toEqual(['a.png']);
+    // A path that already ended, and a next line opening a new rooted path.
+    expect(terminalPathLine(buffer(['see /tmp/a/b.png', 'c/d.png']), 0, 80)).toMatchObject({ endRow: 0 });
+    expect(terminalPathLine(buffer(['/home/joe/dir/', '/home/x.png']), 0, 80)).toMatchObject({ endRow: 0 });
+    expect(terminalPathLine(buffer(['see (/mnt/raid1/folder)', '  file.conf)']), 0, 80)).toMatchObject({ endRow: 0 });
+    expect(terminalPathLine(buffer(['see (/mnt/raid1/folder', '  /mnt/other/file.conf)']), 0, 80)).toMatchObject({
+      endRow: 0,
+    });
+  });
+
+  // `git ls-files`, `find` and `ls -R` print one path per row. An extensionless
+  // entry (a directory, `Dockerfile`, `.gitignore`) followed by an entry that is
+  // equal or shorter looked exactly like a path broken short of the edge, and the
+  // two were glued: `src/components` + `src/index.ts` linked `src/componentssrc/index.ts`
+  // and the real `src/index.ts` link was gone (Ark0N, PR #604, round 2).
+  describe('a listing is never glued into one path', () => {
+    const LISTING = [
+      'src/components',
+      'src/index.ts',
+      'src/lib',
+      './index.ts',
+      '../docs/README.md',
+      'packages/gesture-control/.gitignore',
+      'packages/gesture-control/README.md',
+      'packages/gesture-control/package.json',
+      'data/runs/a.jsonl',
+      'data/runs/b.jsonl',
+      'data/runs/c.jsonl',
+      'data/runs/d.json',
+    ];
+
+    it('keeps every row its own line', () => {
+      const buf = buffer(LISTING, 120);
+      LISTING.forEach((entry, row) => {
+        const line = terminalPathLine(buf, row, 120)!;
+        expect([line.startRow, line.endRow], entry).toEqual([row, row]);
+        expect(line.text, entry).toBe(entry);
+      });
+    });
+
+    it('links the entry that used to be swallowed', () => {
+      const buf = buffer(LISTING, 120);
+      expect(paths(terminalPathLine(buf, 1, 120)!.text)).toEqual(['src/index.ts']);
+    });
+
+    it('still glues a path whose next row opens on a different directory (a real wrap)', () => {
+      // The control: `…/captures/2` + `026-10-10/…` has a `/` in its head too.
+      const line = terminalPathLine(buffer(BROKEN), 0, 80)!;
+      expect([line.startRow, line.endRow]).toEqual([0, 1]);
+      expect(paths(line.text)).toEqual([BROKEN_PATH]);
+    });
+  });
+});
+
+type Link = {
+  text: string;
+  range: { start: { x: number; y: number }; end: { x: number; y: number } };
+  activate: (ev: unknown, text: string) => void;
+};
+type Provider = { provideLinks: (line: number, cb: (links: Link[] | undefined) => void) => void };
+
+function loadApp() {
+  const CodemanApp = function CodemanApp(this: unknown) {};
+  const context = vm.createContext({
+    window: {},
+    document: {
+      body: { classList: { contains: () => false } },
+      activeElement: null,
+      addEventListener: vi.fn(),
+      getElementById: () => null,
+    },
+    CodemanApp,
+    console: { warn: vi.fn(), log: vi.fn(), debug: vi.fn() },
+    _crashDiag: { log: vi.fn() },
+    performance: { now: () => 0 },
+    requestAnimationFrame: () => 1,
+    setTimeout: () => 1,
+    MobileDetection: { isTouchDevice: () => false },
+    DEC_SYNC_STRIP_RE: /\x1b\[\?2026[hl]/g,
+    TERMINAL_CHUNK_SIZE: 32 * 1024,
+  });
+  vm.runInContext(read('constants.js'), context, { filename: 'constants.js' });
+  vm.runInContext(read('terminal-ui.js'), context, { filename: 'terminal-ui.js' });
+  const app = new (CodemanApp as unknown as new () => Record<string, any>)();
+  app.activeSessionId = 's1';
+  app.sessions = new Map([['s1', { workingDir: '/mnt/build/neon_getaway-mgr-hebel' }]]);
+  app.openFilePreview = vi.fn();
+  app.openLogViewerWindow = vi.fn();
+  app._registerExternalPreview = vi.fn(async () => ({ attachmentId: 'att-fixture' }));
+  app.showToast = vi.fn();
+  app._isExternalPreviewPath = (p: string) => p.startsWith('~/');
+  return app;
+}
+
+function linksOn(lines: string[], row: number, cols = 80, wrappedRows = new Set<number>()) {
+  const app = loadApp();
+  app.terminal = { cols, registerLinkProvider: vi.fn(), buffer: { active: buffer(lines, cols, wrappedRows) } };
+  const provider = app.registerFilePathLinkProvider() as Provider;
+  let out: Link[] = [];
+  provider.provideLinks(row, (links) => {
+    out = links || [];
+  });
+  return { app, links: out };
+}
+
+describe('terminal link provider', () => {
+  it.each(['svg', 'markdown', 'avif', 'bmp', 'ico', 'zip'])(
+    'keeps the workspace opener for a hard-wrapped .%s rejected by the attachment registry',
+    async (extension) => {
+      for (const row of [1, 2]) {
+        const path = `/home/me/proj/out/system_architecture.${extension}`;
+        const { app, links } = linksOn(
+          ['Saved the diagram (/home/me/proj/out/system_archi', `  tecture.${extension}).`],
+          row,
+          120
+        );
+        app.sessions = new Map([['s1', { workingDir: '/home/me/proj' }]]);
+        app._registerExternalPreview.mockResolvedValue({ status: 400, error: 'Unsupported attachment type' });
+        await links[0].activate({}, links[0].text);
+        const opener = extension === 'zip' ? app.openLogViewerWindow : app.openFilePreview;
+        expect(opener).toHaveBeenCalledWith(path, 's1');
+        expect(app._registerExternalPreview.mock.calls).toEqual([[path, 's1']]);
+        expect(app.showToast).not.toHaveBeenCalled();
+      }
+    }
+  );
+
+  it.each([
+    [
+      ['Saved the screenshot (/home/me/proj/out/ghost1b_game', '  play.png).'],
+      '/home/me/proj/out/ghost1b_gameplay.png',
+    ],
+    [
+      ['  ⎿  Wrote (/mnt/build/neon/builds/captures/ghost1b_gamepl', '     ay.png) ok'],
+      '/mnt/build/neon/builds/captures/ghost1b_gameplay.png',
+    ],
+    [
+      ['Saved the screenshot (/home/me/proj/out/ghost1b_', '  very_long_game', '  play.png).'],
+      '/home/me/proj/out/ghost1b_very_long_gameplay.png',
+    ],
+  ])('preserves a parenthesised filename without spaces across hard wraps: %s', async (rows, path) => {
+    for (let row = 1; row <= rows.length; row++) {
+      const { app, links } = linksOn(rows, row, 120);
+      expect(links.map((link) => link.text)).toEqual([path]);
+      await links[0].activate({}, links[0].text);
+      expect(app.openFilePreview).toHaveBeenCalledWith(path, 's1');
+      expect(app._registerExternalPreview.mock.calls).toEqual([[path, 's1']]);
+    }
+  });
+
+  it('uses the spaced filename only when the unspaced hard-wrap target is missing', async () => {
+    const path = '/mnt/user/Scratch/Kobo/Set-KoboCovers/Kobo eReader.conf';
+    const rows = [
+      'Found it: I prepared a corrected configuration (/mnt/user/Scratch/Kobo/Set-KoboCovers/Kobo',
+      '  eReader.conf).',
+    ];
+    for (const row of [1, 2]) {
+      const { app, links } = linksOn(rows, row, 120);
+      const unspaced = path.replace('Kobo eReader', 'KoboeReader');
+      expect(links.map((link) => link.text)).toEqual([unspaced]);
+      expect(links[0].range.end).toEqual({ x: '  eReader.conf'.length + 1, y: 2 });
+      app._registerExternalPreview.mockImplementation(async (candidate: string) =>
+        candidate === path ? { attachmentId: 'att-fixture' } : { status: 404, error: 'File not found' }
+      );
+      await links[0].activate({}, links[0].text);
+      expect(app.openLogViewerWindow).toHaveBeenCalledWith(path, 's1');
+      expect(app._registerExternalPreview.mock.calls).toEqual([
+        [unspaced, 's1'],
+        [path, 's1'],
+      ]);
+    }
+  });
+
+  it.each([403, 500, 503])('does not try another path after a guarded lookup returns HTTP %s', async (status) => {
+    const { app, links } = linksOn(['Saved (/mnt/data/Kobo', '  eReader.conf).'], 1, 120);
+    app._registerExternalPreview.mockResolvedValue({ status, error: 'Lookup refused' });
+    await links[0].activate({}, links[0].text);
+    expect(app._registerExternalPreview).toHaveBeenCalledTimes(1);
+    expect(app.openLogViewerWindow).toHaveBeenCalledWith('/mnt/data/KoboeReader.conf', 's1');
+    expect(app.showToast).not.toHaveBeenCalled();
+  });
+
+  it('keeps the original opener when the lookup cannot reach the server', async () => {
+    const { app, links } = linksOn(['Saved (/mnt/data/Kobo', '  eReader.conf).'], 1, 120);
+    app._registerExternalPreview.mockResolvedValue({ error: 'Connection lost' });
+    await links[0].activate({}, links[0].text);
+    expect(app._registerExternalPreview).toHaveBeenCalledTimes(1);
+    expect(app.openLogViewerWindow).toHaveBeenCalledWith('/mnt/data/KoboeReader.conf', 's1');
+  });
+
+  it('never looks up a spaced name for a hard-wrapped Bash( row, which holds a command', async () => {
+    const { app, links } = linksOn(['Bash(/mnt/data/Kobo', '  eReader.conf)'], 1, 120);
+    await links[0].activate({}, links[0].text);
+    expect(app._registerExternalPreview).not.toHaveBeenCalled();
+    expect(app.openLogViewerWindow).toHaveBeenCalledWith('/mnt/data/KoboeReader.conf', 's1');
+  });
+
+  it('uses the original opener when both hard-wrap filenames are missing', async () => {
+    for (const row of [1, 2]) {
+      const { app, links } = linksOn(['Saved (/mnt/data/Kobo', '  eReader.conf).'], row, 120);
+      app._registerExternalPreview.mockResolvedValue({ status: 404, error: 'Attachment file not found' });
+      await links[0].activate({}, links[0].text);
+      expect(app._registerExternalPreview.mock.calls).toEqual([
+        ['/mnt/data/KoboeReader.conf', 's1'],
+        ['/mnt/data/Kobo eReader.conf', 's1'],
+      ]);
+      expect(app.openLogViewerWindow).toHaveBeenCalledWith('/mnt/data/KoboeReader.conf', 's1');
+      expect(app.showToast).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each(['Path: ', '- ', '- Path: ', '  Path: '])(
+    'resolves the filename without its parenthesised prefix %j',
+    async (prefix) => {
+      for (const row of [1, 2]) {
+        const { app, links } = linksOn([`Saved the notes (${prefix}/home/me/proj/out/My`, '  Notes.md).'], row, 120);
+        app._registerExternalPreview
+          .mockResolvedValueOnce({ status: 404, error: 'Attachment file not found' })
+          .mockResolvedValueOnce({ attachmentId: 'att-spaced' });
+        expect(links.map((link) => link.text)).toEqual(['/home/me/proj/out/MyNotes.md']);
+        await links[0].activate({}, links[0].text);
+        expect(app._registerExternalPreview.mock.calls).toEqual([
+          ['/home/me/proj/out/MyNotes.md', 's1'],
+          ['/home/me/proj/out/My Notes.md', 's1'],
+        ]);
+        expect(app.openFilePreview).toHaveBeenCalledWith('/home/me/proj/out/My Notes.md', 's1');
+      }
+    }
+  );
+
+  it.each([400, 403, 500, 503])('does not open an unregistered spaced alternative after HTTP %s', async (status) => {
+    const { app, links } = linksOn(['Saved (/mnt/data/Kobo', '  eReader.conf).'], 1, 120);
+    app._registerExternalPreview
+      .mockResolvedValueOnce({ status: 404, error: 'File not found' })
+      .mockResolvedValueOnce({ status, error: 'Alternative unavailable' });
+    await links[0].activate({}, links[0].text);
+    expect(app._registerExternalPreview.mock.calls).toEqual([
+      ['/mnt/data/KoboeReader.conf', 's1'],
+      ['/mnt/data/Kobo eReader.conf', 's1'],
+    ]);
+    expect(app.openFilePreview).not.toHaveBeenCalled();
+    expect(app.openLogViewerWindow).not.toHaveBeenCalled();
+    expect(app.showToast).toHaveBeenCalledWith('Alternative unavailable', 'error');
+  });
+
+  it('keeps the session selected at click time while a path lookup is pending', async () => {
+    const { app, links } = linksOn(['Saved (/mnt/data/Kobo', '  eReader.conf).'], 1, 120);
+    const pending = links[0].activate({}, links[0].text);
+    app.activeSessionId = 'another-session';
+    await pending;
+    expect(app._registerExternalPreview).toHaveBeenCalledWith('/mnt/data/KoboeReader.conf', 's1');
+    expect(app.openLogViewerWindow).toHaveBeenCalledWith('/mnt/data/KoboeReader.conf', 's1');
+  });
+
+  it('opens the complete parenthesised configuration path from either wrapped row', () => {
+    const path = '/mnt/user/Scratch/Kobo/Set-KoboCovers/Kobo eReader.conf';
+    const text = `Found it: I prepared a corrected configuration (${path}).`;
+    const split = text.indexOf(' eReader') + 1;
+    const rows = [text.slice(0, split), text.slice(split)];
+    for (const row of [1, 2]) {
+      const { app, links } = linksOn(rows, row, split, new Set([1]));
+      expect(links.map((link) => link.text)).toEqual([path]);
+      expect(links[0].range.start).toEqual({ x: text.indexOf(path) + 1, y: 1 });
+      expect(links[0].range.end).toEqual({ x: 'eReader.conf'.length + 1, y: 2 });
+      links[0].activate({}, links[0].text);
+      expect(app.openLogViewerWindow).toHaveBeenCalledWith(path, 's1');
+    }
+  });
+
+  it('links a broken path once, across both rows, and opens the whole path', () => {
+    const { app, links } = linksOn(BROKEN, 2);
+    expect(links.map((l) => l.text)).toEqual([BROKEN_PATH]);
+    expect(links[0].range.start).toEqual({ x: 11, y: 1 });
+    expect(links[0].range.end.y).toBe(2);
+    links[0].activate({}, links[0].text);
+    expect(app.openFilePreview).toHaveBeenCalledWith(BROKEN_PATH, 's1');
+  });
+
+  it('opens a relative path resolved against the working directory', () => {
+    const { app, links } = linksOn(['  ⎿  wrote builds/captures/2026-10-10/a.png'], 1);
+    links[0].activate({}, links[0].text);
+    expect(app.openFilePreview).toHaveBeenCalledWith(
+      '/mnt/build/neon_getaway-mgr-hebel/builds/captures/2026-10-10/a.png',
+      's1'
+    );
+  });
+
+  it('opens a ~/ path as is, in the preview (the server expands it), even for text', () => {
+    const { app, links } = linksOn(['  › [image] ~/repos/x/garage.png', 'notes ~/logs/run.log'], 2);
+    links[0].activate({}, links[0].text);
+    expect(app.openFilePreview).toHaveBeenCalledWith('~/logs/run.log', 's1');
+    expect(app.openLogViewerWindow).not.toHaveBeenCalled();
+  });
+
+  it('opens a relative text file in the log viewer by its resolved path', () => {
+    const { app, links } = linksOn(['tail logs/run.log'], 1);
+    links[0].activate({}, links[0].text);
+    expect(app.openLogViewerWindow).toHaveBeenCalledWith('/mnt/build/neon_getaway-mgr-hebel/logs/run.log', 's1');
+  });
+
+  it('routes .md/.markdown and .html/.htm in every link form to the preview, other text to the log viewer', () => {
+    // The rendered markdown viewer and the HTML page view (rendersAsPage) apply to
+    // `~/`, relative and hard-wrapped links exactly as to rooted ones.
+    const WS = '/mnt/build/neon_getaway-mgr-hebel';
+    const cases: Array<[string[], number, string, 'preview' | 'log']> = [
+      [['wrote ~/notes/plan.md'], 1, '~/notes/plan.md', 'preview'],
+      [['wrote ~/site/index.html'], 1, '~/site/index.html', 'preview'],
+      [['wrote docs/README.markdown'], 1, `${WS}/docs/README.markdown`, 'preview'],
+      [['wrote report/index.htm'], 1, `${WS}/report/index.htm`, 'preview'],
+      [['wrote ./notes/plan.md'], 1, `${WS}/notes/plan.md`, 'preview'],
+      [['wrote out/data.json'], 1, `${WS}/out/data.json`, 'log'],
+      [
+        ['  ⎿  WROTE /mnt/build/neon_getaway-mgr-hebel/builds/reports/2', '     026-10-10/summary.md done', ''],
+        2,
+        `${WS}/builds/reports/2026-10-10/summary.md`,
+        'preview',
+      ],
+      [
+        ['  ⎿  WROTE /mnt/build/neon_getaway-mgr-hebel/builds/reports/2', '     026-10-10/page.html done', ''],
+        2,
+        `${WS}/builds/reports/2026-10-10/page.html`,
+        'preview',
+      ],
+    ];
+    for (const [lines, row, expected, where] of cases) {
+      const { app, links } = linksOn(lines, row);
+      expect(links.length, expected).toBe(1);
+      links[0].activate({}, links[0].text);
+      if (where === 'preview') {
+        expect(app.openFilePreview, expected).toHaveBeenCalledWith(expected, 's1');
+        expect(app.openLogViewerWindow, expected).not.toHaveBeenCalled();
+      } else {
+        expect(app.openLogViewerWindow, expected).toHaveBeenCalledWith(expected, 's1');
+        expect(app.openFilePreview, expected).not.toHaveBeenCalled();
+      }
+    }
+  });
+
+  it('never adds a path link overlapping a URL link', () => {
+    const { links } = linksOn(['see https://x.io/view?img=shots/a.png now'], 1);
+    expect(links.map((l) => l.text)).toEqual(['https://x.io/view?img=shots/a.png']);
+  });
+});
+
+describe('server: ~/ expands on the session host', () => {
+  const root = mkdtempSync(join(tmpdir(), 'codeman-tilde-'));
+  afterAll(() => rmSync(root, { recursive: true, force: true }));
+
+  it('a local session registers ~/… against this host home', async () => {
+    // test/setup.ts points HOME at a temp dir, so this never touches the real home.
+    const dir = join(homedir(), 'tilde-link-test');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'shot.png'), 'PNG');
+    try {
+      const event = await registerExternalAttachment('tilde-session', '~/tilde-link-test/shot.png', {});
+      expect(event.attachmentId).toMatch(/^att_/);
+      expect(event.size).toBe(3);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('a relative path is still refused', async () => {
+    await expect(registerExternalAttachment('tilde-session', 'shots/a.png', {})).rejects.toThrow(/absolute/);
+  });
+
+  it('the remote probe expands ~/ to the remote $HOME, and reports the absolute path', () => {
+    writeFileSync(join(root, 'remote.png'), 'PNGPNG');
+    const requested = ['~/remote.png', '~/missing.png'];
+    const stdout = execFileSync('sh', ['-c', buildRemoteProbeCommand(requested)], {
+      env: { ...process.env, HOME: root },
+    }).toString();
+    const [found, missing] = parseRemoteProbeOutput(stdout, requested);
+    expect(found).toMatchObject({ kind: 'file', size: 6 });
+    expect(found?.realPath.endsWith('/remote.png')).toBe(true);
+    expect(found?.realPath.startsWith('/')).toBe(true);
+    expect(missing).toBeNull();
+  });
+});

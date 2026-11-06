@@ -78,7 +78,7 @@ input for the session, and came back from localStorage on each reload.
 - `_sendInputAsync()` splits a paste over the frame limit into in-limit frames
   (`CodemanInputLimit.split`, constants.js, never cutting a surrogate pair). They
   go out in seq order, so the PTY sees one contiguous stream. A paste over
-  `PASTE_MAX_CHARS` (1 MiB), or an oversized `useMux` write (line-oriented, never
+  `PASTE_MAX_CHARS` (1 MiB), or an oversized `useMux` write (one paste plus its own Enter, never
   split), is refused with a toast and never queued.
 - The WebSocket answers an oversized sequenced frame with
   `{t:'ia', seq, err:'too_large', max}`; the client drops it with a toast. A

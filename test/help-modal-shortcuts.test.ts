@@ -31,14 +31,16 @@ function escapeRegExp(value: string): string {
 
 function expectShortcut(html: string, keys: string[], label: string): void {
   const keyPattern = keys.map((key) => `<kbd>${escapeRegExp(key)}</kbd>`).join('\\s*\\+\\s*');
-  expect(html).toMatch(new RegExp(`${keyPattern}.*?${label}`, 'i'));
+  expect(html).toMatch(new RegExp(`${keyPattern}.*?${escapeRegExp(label)}`, 'i'));
 }
 
 describe('help modal shortcuts', () => {
   const helpModal = normalizedHtml(extractElementById(INDEX_HTML, 'helpModal'));
 
   it('documents implemented global and tab shortcuts', () => {
-    expectShortcut(helpModal, ['Ctrl', 'W'], 'Close Session');
+    // Ctrl+W is NOT an app shortcut: it is delete-word in the terminal, and as
+    // Close Session it killed sessions with no confirm (ctrl-w-never-closes.test.ts).
+    expect(helpModal).not.toMatch(/<kbd>Ctrl<\/kbd>\s*\+\s*<kbd>W<\/kbd>/i);
     expectShortcut(helpModal, ['Ctrl', 'Tab'], 'Next Session');
     expectShortcut(helpModal, ['Alt/Option', '['], 'Previous / Next Session');
     expectShortcut(helpModal, ['Alt/Option', ']'], 'Previous / Next Session');
@@ -49,6 +51,15 @@ describe('help modal shortcuts', () => {
     expect(helpModal).not.toMatch(/Ctrl<\/kbd>\s*\+\s*<kbd>\/<\/kbd>.*?Show Shortcuts/i);
     expectShortcut(helpModal, ['Ctrl', 'Shift', 'V'], 'Voice Input');
     expectShortcut(helpModal, ['Escape'], 'Close Panels');
+    expectShortcut(helpModal, ['Alt/Option', 'ArrowLeft'], 'File Viewer Back / Forward');
+  });
+
+  it('documents the tile grid chords', () => {
+    expectShortcut(helpModal, ['Ctrl', 'Shift', 'G'], 'Toggle Tile Grid');
+    expectShortcut(helpModal, ['Alt/Option', 'Shift', 'Arrows'], 'Focus Tile Left / Right / Up / Down');
+    expectShortcut(helpModal, ['Alt/Option', 'Shift', 'Enter'], 'Zoom Focused Tile');
+    expectShortcut(helpModal, ['Ctrl/Cmd', 'Click'], 'Add the Session to the Tile Grid');
+    expectShortcut(helpModal, ['Right-click'], 'Choose How Many Tiles (2, 4 or 6)');
   });
 
   it('documents terminal input shortcuts without advertising stale run shortcuts', () => {

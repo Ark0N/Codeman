@@ -9,7 +9,7 @@
  */
 
 import type { ClaudeMode, EffortLevel } from './types.js';
-import { isEffortLevel } from './types.js';
+import { isAdvisorModel, isEffortLevel } from './types.js';
 import { getAugmentedPath } from './utils/index.js';
 import { compareVersions } from './utils/dependency-checker.js';
 import { dataPath } from './config/instance.js';
@@ -52,6 +52,25 @@ function buildPermissionArgs(claudeMode: ClaudeMode, allowedTools?: string): str
 export function buildEffortCliArgs(effort?: EffortLevel): string[] {
   if (!effort || !isEffortLevel(effort)) return [];
   return effort === 'ultracode' ? ['--settings', '{"ultracode":true}'] : ['--effort', effort];
+}
+
+/**
+ * The `--settings` keys that switch on Claude Code's advisor tool for one session: a
+ * stronger model the main model consults at decision points (code.claude.com/docs/en/advisor).
+ * Returns `{}` for an absent or non-allowlisted value, so callers can spread it unconditionally.
+ *
+ * ⚠️ Carried as the `advisorModel` SETTINGS key, never the `--advisor` flag. The flag EXITS at
+ * launch on any pairing the CLI refuses (`claude --advisor haiku` prints "cannot be used as an
+ * advisor" and exits 1, as does a Fable advisor still awaiting usage-credit consent), which
+ * would leave a dead pane on every spawn and respawn. The settings key degrades instead: the
+ * CLI simply does not attach an advisor it cannot use. It is a SOFT default either way:
+ * `/advisor` still switches or turns it off inside the running session.
+ *
+ * ⚠️ Claude Code reads only ONE `--settings` flag per invocation, so this must be merged into
+ * the same JSON object as ultracode and the statusLine exporter, never rendered on its own.
+ */
+export function buildAdvisorSettings(advisorModel?: string): { advisorModel?: string } {
+  return isAdvisorModel(advisorModel) ? { advisorModel } : {};
 }
 
 /**
@@ -111,6 +130,7 @@ export function buildNameCliArgs(sessionName: string | undefined, cliVersion: st
  * @param effort - Optional effort level, injected via --settings (overridable in-session)
  * @param sessionName - Optional Codeman session name, passed as `--name` (version-gated)
  * @param cliVersion - Installed Claude CLI version for the `--name` gate (null = omit the flag)
+ * @param advisorModel - Optional advisor model, merged into the one `--settings` JSON (see buildAdvisorSettings)
  * @returns Array of CLI arguments
  */
 export function buildInteractiveArgs(
@@ -120,11 +140,21 @@ export function buildInteractiveArgs(
   allowedTools?: string,
   effort?: EffortLevel,
   sessionName?: string,
-  cliVersion?: string | null
+  cliVersion?: string | null,
+  advisorModel?: string
 ): string[] {
   const args = [...buildPermissionArgs(claudeMode, allowedTools), '--session-id', sessionId];
   if (model) args.push('--model', model);
-  args.push(...buildEffortCliArgs(effort));
+  const effortArgs = buildEffortCliArgs(effort);
+  const advisor = buildAdvisorSettings(advisorModel);
+  if (advisor.advisorModel === undefined) {
+    args.push(...effortArgs);
+  } else if (effortArgs[0] === '--settings') {
+    // One --settings flag only: fold the advisor into ultracode's JSON object.
+    args.push('--settings', JSON.stringify({ ...JSON.parse(effortArgs[1]), ...advisor }));
+  } else {
+    args.push(...effortArgs, '--settings', JSON.stringify(advisor));
+  }
   args.push(...buildNameCliArgs(sessionName, cliVersion));
   return args;
 }

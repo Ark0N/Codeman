@@ -61,6 +61,20 @@ describe('generateClaudeMd', () => {
       expect(result).toContain('CODEMAN_MUX=1');
     });
 
+    it('should tell the agent to print absolute paths of files it creates', () => {
+      const result = generateClaudeMd('my-project');
+
+      expect(result).toContain('full absolute path');
+      expect(result).toContain('clickable');
+    });
+
+    it('should point the agent at the codeman skill', () => {
+      const result = generateClaudeMd('my-project');
+
+      expect(result).toContain('`codeman` skill');
+      expect(result).toContain('codeman skill install');
+    });
+
     it('should include workflow rules', () => {
       const result = generateClaudeMd('my-project');
 

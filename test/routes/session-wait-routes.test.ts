@@ -34,6 +34,7 @@ import { installRouteErrorHandler } from '../../src/web/route-error-handler.js';
 import { ApiErrorCode, httpStatusForErrorCode } from '../../src/types.js';
 import { createMockRouteContext, type MockRouteContext } from '../mocks/index.js';
 import { sessionWaits } from '../../src/web/session-wait-registry.js';
+import { approvalInbox } from '../../src/web/approval-inbox.js';
 import { MAX_WAIT_MS, MIN_WAIT_MS, MAX_WAITERS_TOTAL, MAX_WAITERS_PER_OWNER } from '../../src/config/agent-wait.js';
 
 // Distinct per file on purpose: the three wait suites share the process-wide
@@ -460,6 +461,80 @@ describe('GET /api/sessions/:id/wait: modes that install no hooks', () => {
     const res = await app.inject({ method: 'GET', url: `/api/sessions/${SESSION_ID}/wait?until=idle,exit` });
     expect(res.statusCode).toBe(200);
     expect(res.json().data.wait.until).toEqual(['idle', 'exit']);
+  });
+});
+
+describe('GET /api/sessions/:id/wait: blocked read off a codex screen', () => {
+  /** The listener deps the screen-blocked raise reaches; nothing else matters here. */
+  function stubDeps() {
+    return {
+      broadcast: vi.fn(),
+      broadcastSessionStateDebounced: vi.fn(),
+      sendPushNotifications: vi.fn(),
+      getRunSummaryTracker: vi.fn(() => undefined),
+    };
+  }
+
+  afterEach(() => {
+    approvalInbox.resolveForSession(SESSION_ID, 'session_ended');
+  });
+
+  it('accepts until=blocked for codex, whose dialogs are read off its screen', async () => {
+    const { app, ctx } = await harness();
+    ctx.sessions.get(SESSION_ID)!.mode = 'codex';
+    const res = await app.inject({ method: 'GET', url: `/api/sessions/${SESSION_ID}/wait?until=blocked&timeout=1000` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data.wait.until).toEqual(['blocked']);
+  });
+
+  it('answers blocked at once for a dialog already on screen, and only to a caller who asked', async () => {
+    // A hook-raised blocked is an edge; this one is a level the server is still reading,
+    // so a caller who asks after the dialog appeared does not wait out its timeout.
+    const { app, ctx } = await harness();
+    const session = ctx.sessions.get(SESSION_ID)! as unknown as {
+      mode: string;
+      status: string;
+      screenBlocked?: boolean;
+    };
+    session.mode = 'codex';
+    session.status = 'idle';
+    session.screenBlocked = true;
+
+    const asked = await app.inject({ method: 'GET', url: `/api/sessions/${SESSION_ID}/wait?until=idle,blocked` });
+    expect(asked.json().data.wait).toMatchObject({ signal: 'blocked', immediate: true });
+
+    // Such a pane is idle too, and a caller that asked for idle alone keeps getting idle.
+    const idle = await app.inject({ method: 'GET', url: `/api/sessions/${SESSION_ID}/wait?until=idle` });
+    expect(idle.json().data.wait).toMatchObject({ signal: 'idle', immediate: true });
+  });
+
+  it('wakes a parked until=blocked waiter when the session raises a screen-read dialog', async () => {
+    const { app, ctx } = await harness();
+    const session = ctx.sessions.get(SESSION_ID)!;
+    session.mode = 'codex';
+    attachSessionListeners(session as never, createSessionListeners(session as never, stubDeps() as never));
+
+    const pending = app.inject({ method: 'GET', url: `/api/sessions/${SESSION_ID}/wait?until=blocked&timeout=600000` });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(sessionWaits.signalWaiterCount(SESSION_ID)).toBe(1);
+
+    session.emit('blockedChanged', true, '› 1. Yes, proceed (y)\n  Press enter to confirm or esc to cancel');
+
+    const body = (await pending).json();
+    expect(body.data.wait).toMatchObject({ signal: 'blocked', immediate: false, timedOut: false });
+    expect(approvalInbox.getForSession(SESSION_ID)?.answerInTerminal).toBe(true);
+
+    // ...and the dialog leaving the screen resolves the item it opened.
+    session.emit('blockedChanged', false, null);
+    expect(approvalInbox.getForSession(SESSION_ID)).toBeUndefined();
+  });
+
+  it('still refuses until=stop for codex: nothing on a screen says a turn ended', async () => {
+    const { app, ctx } = await harness();
+    ctx.sessions.get(SESSION_ID)!.mode = 'codex';
+    const res = await app.inject({ method: 'GET', url: `/api/sessions/${SESSION_ID}/wait?until=stop,blocked` });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toContain('Signal(s) stop never fire for codex');
   });
 });
 

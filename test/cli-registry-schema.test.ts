@@ -55,6 +55,65 @@ describe('customModelInjection.launchModel', () => {
   });
 });
 
+/** Mutates the shipped deepseek configDir recipe (the one real-home-linking entry) and expects rejection. */
+function expectRejectedOnDeepSeek(mutate: (recipe: Record<string, unknown>) => void, because: string): void {
+  const entry = baseEntry('deepseek');
+  const recipe = (entry.capabilities as Record<string, unknown>).customModelInjection as Record<string, unknown>;
+  mutate(recipe);
+  const result = CliEntrySchema.safeParse(entry);
+  expect(result.success, `expected rejection: ${because}`).toBe(false);
+}
+
+describe('configDir real-home linking (linkFromRealHome / realHomeFallback)', () => {
+  it('rejects a realHomeFallback that is not a single relative path segment', () => {
+    // The consumer joins it under the user's home, so any of these escapes that home:
+    // and bare `.` IS that home: linking through it would expose the whole tree
+    // unshielded instead of just the declared segments.
+    for (const bad of ['../x', '.dsh/evil', '/.dsh', '..', '.']) {
+      expectRejectedOnDeepSeek((r) => {
+        r.realHomeFallback = bad;
+      }, `realHomeFallback ${JSON.stringify(bad)}`);
+    }
+  });
+
+  it('accepts a shipped-style dot-prefixed segment', () => {
+    const entry = baseEntry('deepseek');
+    expect(CliEntrySchema.safeParse(entry).success).toBe(true); // ships as `.dsh`
+    const recipe = (entry.capabilities as Record<string, unknown>).customModelInjection as Record<string, unknown>;
+    recipe.realHomeFallback = '.dsh-relocated';
+    expect(CliEntrySchema.safeParse(entry).success).toBe(true);
+  });
+
+  it('requires realHomeFallback whenever linkFromRealHome is declared', () => {
+    expectRejectedOnDeepSeek((r) => {
+      delete r.realHomeFallback;
+    }, 'without it the consumer would have to hardcode a per-CLI home default');
+  });
+
+  it('rejects a linked entry that collides with fileName', () => {
+    // A symlink at the generated file's own name would write THROUGH into the user's real config.
+    expectRejectedOnDeepSeek((r) => {
+      r.linkFromRealHome = ['cordis.patch.yml', 'profiles'];
+    }, 'linkFromRealHome containing fileName');
+  });
+
+  it('requires linkFromRealHomeDirs to be a subset of linkFromRealHome', () => {
+    // types.ts documents the rule; a name absent from the linked list names nothing,
+    // so the create-missing-directory behaviour would silently never apply to it.
+    expectRejectedOnDeepSeek((r) => {
+      r.linkFromRealHome = ['profiles', 'settings.yaml'];
+      r.linkFromRealHomeDirs = ['profiles', 'sessions'];
+    }, 'linkFromRealHomeDirs naming an unlinked entry');
+    // The shipped recipe is a valid subset (deepseek: profiles and sessions are dirs
+    // of the three linked entries) and keeps loading.
+    const entry = baseEntry('deepseek');
+    const recipe = (entry.capabilities as Record<string, unknown>).customModelInjection as Record<string, unknown>;
+    expect(recipe.linkFromRealHome).toEqual(['profiles', 'sessions', 'settings.yaml']);
+    expect(recipe.linkFromRealHomeDirs).toEqual(['profiles', 'sessions']);
+    expect(CliEntrySchema.safeParse(entry).success).toBe(true);
+  });
+});
+
 describe('the shipped catalog', () => {
   it('validates every stock entry exactly as shipped', () => {
     // If this fails, the catalog cannot load at all — every other test here is downstream.
@@ -183,6 +242,126 @@ describe('workDetect.workingLine is guarded like every other config regex', () =
       expect(compileVersionRegex(src), `${entry.id} declares an awaitingLine the guard refuses`).not.toBeNull();
     }
   });
+
+  it('holds the optional composerFooterLine to the same guard', () => {
+    // Run over the rows under the composer each time guarded input reads the pane.
+    for (const composerFooterLine of ['(a+)+b', 'a'.repeat(201), '([unclosed', '']) {
+      expectRejected((e) => {
+        (e.capabilities as Record<string, unknown>).workDetect = {
+          promptGlyph: '>',
+          workingLine: 'working',
+          composerFooterLine,
+        };
+      }, 'guarded input tests it against pane rows a clis.json override can supply');
+    }
+  });
+
+  it('accepts every shipped composerFooterLine', () => {
+    for (const entry of STOCK_CLIS) {
+      const src = entry.capabilities.workDetect?.composerFooterLine;
+      if (!src) continue;
+      expect(compileVersionRegex(src), `${entry.id} declares a composerFooterLine the guard refuses`).not.toBeNull();
+    }
+  });
+
+  it('holds the optional composerPopupLine to the same guard, and accepts the shipped one', () => {
+    // Run over the rows just above the composer each time guarded input reads the pane.
+    for (const composerPopupLine of ['(a+)+b', 'a'.repeat(201), '([unclosed', '']) {
+      expectRejected((e) => {
+        (e.capabilities as Record<string, unknown>).workDetect = {
+          promptGlyph: '>',
+          workingLine: 'working',
+          composerPopupLine,
+        };
+      }, 'guarded input tests it against pane rows a clis.json override can supply');
+    }
+    for (const entry of STOCK_CLIS) {
+      const src = entry.capabilities.workDetect?.composerPopupLine;
+      if (src)
+        expect(compileVersionRegex(src), `${entry.id} declares a composerPopupLine the guard refuses`).not.toBeNull();
+    }
+  });
+
+  it('takes only short runs of ASCII punctuation as composer trigger characters', () => {
+    for (const field of ['composerCommandPrefixes', 'composerCompletionSigils']) {
+      for (const value of ['', 'a', '/a', '/ ', '/\t', '\u00a7', '!!!!!!!!!']) {
+        expectRejected(
+          (e) => {
+            (e.capabilities as Record<string, unknown>).workDetect = {
+              promptGlyph: '>',
+              workingLine: 'working',
+              [field]: value,
+            };
+          },
+          `${field} ${JSON.stringify(value)} would refuse letters, spaces or an unbounded set`
+        );
+      }
+      const entry = baseEntry();
+      (entry.capabilities as Record<string, unknown>).workDetect = {
+        promptGlyph: '>',
+        workingLine: 'working',
+        [field]: '/!@$',
+      };
+      expect(CliEntrySchema.safeParse(entry).success, field).toBe(true);
+    }
+  });
+
+  it('holds the optional blockedLine to the same guard', () => {
+    // Run over the foot of a capture at every settle and on a timer while a dialog is
+    // up, and a clis.json override can set it.
+    for (const blockedLine of ['(a+)+b', 'a'.repeat(201), '([unclosed', '']) {
+      expectRejected(
+        (e) => {
+          (e.capabilities as Record<string, unknown>).workDetect = {
+            promptGlyph: '>',
+            workingLine: 'working',
+            blockedLine,
+          };
+        },
+        `blockedLine ${JSON.stringify(blockedLine.slice(0, 20))} must be refused at LOAD time`
+      );
+    }
+  });
+
+  it('bounds the blockedLine window and refuses one with no pattern', () => {
+    for (const blockedLines of [0, 25, 2.5]) {
+      expectRejected((e) => {
+        (e.capabilities as Record<string, unknown>).workDetect = {
+          promptGlyph: '>',
+          workingLine: 'working',
+          blockedLine: 'Press enter to confirm$',
+          blockedLines,
+        };
+      }, 'a config file must not be able to widen the search to the whole pane');
+    }
+    expectRejected((e) => {
+      (e.capabilities as Record<string, unknown>).workDetect = {
+        promptGlyph: '>',
+        workingLine: 'working',
+        blockedLines: 4,
+      };
+    }, 'a window with nothing to search is a typo whose failure is otherwise silent');
+  });
+
+  it('accepts a blockedLine with its window, and every shipped one', () => {
+    const entry = baseEntry();
+    (entry.capabilities as Record<string, unknown>).workDetect = {
+      promptGlyph: '>',
+      workingLine: 'working',
+      blockedLine: 'Press enter to confirm$',
+      blockedLines: 24,
+    };
+    expect(CliEntrySchema.safeParse(entry).success).toBe(true);
+    let shipped = 0;
+    for (const stock of STOCK_CLIS) {
+      const src = stock.capabilities.workDetect?.blockedLine;
+      if (!src) continue;
+      shipped++;
+      expect(compileVersionRegex(src), `${stock.id} declares a blockedLine the guard refuses`).not.toBeNull();
+      expect(CliEntrySchema.safeParse(JSON.parse(JSON.stringify(stock))).success).toBe(true);
+    }
+    expect(shipped).toBeGreaterThan(0);
+  });
 });
 
 describe('no shell text can reach the command line', () => {
@@ -291,6 +470,57 @@ describe('cross-field integrity', () => {
   });
 });
 
+describe('capabilities.launchDefaults', () => {
+  /** Codex with its shipped launch defaults replaced by `launchDefaults` (or with them unchanged). */
+  function codexWith(mutate: (entry: Record<string, unknown>) => void): boolean {
+    const entry = baseEntry('codex');
+    mutate(entry);
+    return CliEntrySchema.safeParse(entry).success;
+  }
+  const setDefaults = (value: unknown) => (e: Record<string, unknown>) => {
+    (e.capabilities as Record<string, unknown>).launchDefaults = value;
+  };
+
+  it('ships on codex alone, keyed by launch param', () => {
+    const declaring = STOCK_CLIS.filter((e) => e.capabilities.launchDefaults !== undefined).map((e) => e.id);
+    expect(declaring).toEqual(['codex']);
+    expect(codexWith(() => {})).toBe(true);
+  });
+
+  it('rejects a param the entry never declared', () => {
+    // Filled into the config object and then read by nothing: a silent no-op, like a
+    // privilegedParams clamp naming the wrong param.
+    expect(codexWith(setDefaults({ effort: 'codexReasoningEffort' }))).toBe(false);
+  });
+
+  it('rejects a settings key outside the closed list', () => {
+    // An override must not be able to pour an arbitrary setting onto a command line.
+    expect(codexWith(setDefaults({ model: 'claudeModel' }))).toBe(false);
+    expect(codexWith(setDefaults({ model: 'codexmodel' }))).toBe(false);
+  });
+
+  it('rejects an empty map', () => {
+    expect(codexWith(setDefaults({}))).toBe(false);
+  });
+
+  it('refuses an entry with no legacyConfigField to fill', () => {
+    // Without one the params are read off the request body itself, where `model` is
+    // claude's per-session field, not this CLI's.
+    expect(
+      codexWith((e) => {
+        delete (e.launch as Record<string, unknown>).legacyConfigField;
+      })
+    ).toBe(false);
+    // The same entry without launch defaults is fine: the refusal is about the pair.
+    expect(
+      codexWith((e) => {
+        delete (e.launch as Record<string, unknown>).legacyConfigField;
+        delete (e.capabilities as Record<string, unknown>).launchDefaults;
+      })
+    ).toBe(true);
+  });
+});
+
 describe('the env allowlist cannot be widened by config', () => {
   it('requires a prefix to end with an underscore', () => {
     expectRejected((e) => {
@@ -362,5 +592,71 @@ describe('capability shapes', () => {
     expectRejected((e) => {
       (e.capabilities as Record<string, unknown>).transcript = 'some-future-format';
     }, 'a transcript reader that does not exist would silently read nothing');
+  });
+  it('takes transcriptPageKeys as an optional boolean, absent meaning no paging', () => {
+    for (const value of [true, false]) {
+      const entry = baseEntry();
+      (entry.capabilities as Record<string, unknown>).transcriptPageKeys = value;
+      expect(CliEntrySchema.safeParse(entry).success, `transcriptPageKeys=${value}`).toBe(true);
+    }
+    const absent = baseEntry();
+    delete (absent.capabilities as Record<string, unknown>).transcriptPageKeys;
+    expect(CliEntrySchema.safeParse(absent).success).toBe(true);
+    expectRejected((e) => {
+      (e.capabilities as Record<string, unknown>).transcriptPageKeys = 'yes';
+    }, 'transcriptPageKeys is a boolean');
+  });
+
+  it("takes keyboardHold as an optional 'inline', absent meaning the keyboard resizes", () => {
+    const inline = baseEntry();
+    (inline.capabilities as Record<string, unknown>).keyboardHold = 'inline';
+    expect(CliEntrySchema.safeParse(inline).success).toBe(true);
+    const absent = baseEntry();
+    delete (absent.capabilities as Record<string, unknown>).keyboardHold;
+    expect(CliEntrySchema.safeParse(absent).success).toBe(true);
+    for (const value of [true, 'fullscreen', '']) {
+      expectRejected(
+        (e) => {
+          (e.capabilities as Record<string, unknown>).keyboardHold = value;
+        },
+        `keyboardHold=${JSON.stringify(value)} names no renderer kind`
+      );
+    }
+  });
+
+  it('declares keyboardHold for exactly the inline renderer measured losing lines on a height change', () => {
+    // Claude Code 2.1.306's inline renderer was measured dropping transcript lines from
+    // tmux on keyboard-driven height changes; every other stock entry resizes.
+    const holding = STOCK_CLIS.filter((e) => e.capabilities.keyboardHold === 'inline').map((e) => e.id as string);
+    expect(holding).toEqual(['claude']);
+  });
+
+  it('declares which CLIs get the wheel forwarded, and whether a version gates it', () => {
+    // Claude forwards from 2.1.187 (fullscreen only); tracked Codex and Copilot
+    // forward without a version gate. Unmeasured entries stay 'never'.
+    const mode = (id: string) => STOCK_CLIS.find((e) => (e.id as string) === id)?.capabilities.wheelForward;
+    expect(mode('copilot')).toEqual({ mode: 'always' });
+    expect(mode('claude')).toEqual({ mode: 'version-gated', minVersion: '2.1.187' });
+    const forwarding = STOCK_CLIS.filter((e) => e.capabilities.wheelForward.mode !== 'never').map(
+      (e) => e.id as string
+    );
+    expect(forwarding.sort()).toEqual(['claude', 'codex', 'copilot']);
+    expect(CliEntrySchema.safeParse(baseEntry('copilot')).success).toBe(true);
+  });
+
+  it('declares transcriptPageKeys for exactly the CLIs measured to page on PageUp/PageDown', () => {
+    // claude (repaint mode), codex, opencode and copilot (all on the alternate screen) were
+    // measured paging their own transcript on PageUp/PageDown; no other stock entry has been.
+    const paging = STOCK_CLIS.filter((e) => e.capabilities.transcriptPageKeys === true).map((e) => e.id as string);
+    expect(paging.sort()).toEqual(['claude', 'codex', 'copilot', 'opencode']);
+  });
+});
+
+describe('observed mouse-tracking wheel policy', () => {
+  it('advertises and validates tracked Codex forwarding without a fictitious minimum version', () => {
+    const codex = STOCK_CLIS.find((e) => e.id === 'codex')!;
+    expect(codex.capabilities.wheelForward).toEqual({ mode: 'always' });
+    expect(CliEntrySchema.safeParse(codex).success).toBe(true);
+    expect(codex.capabilities.transcriptPageKeys).toBe(true);
   });
 });

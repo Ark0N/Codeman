@@ -55,6 +55,7 @@ function makeApp() {
     getCaseSettings: () => ({}),
     buildEnvOverrides: () => ({}),
     getEffortSetting: () => undefined,
+    getAdvisorSetting: () => undefined,
     selectSession: vi.fn(async () => {}),
   };
 }
@@ -146,6 +147,7 @@ describe('resumeHistorySession: row retirement is gated on actual continuation',
     ['opencode', 'openCodeConfig'],
     ['pi', 'piConfig'],
     ['grok', 'grokConfig'],
+    ['copilot', 'copilotConfig'],
     ['omp', 'ompConfig'],
   ])('retires the old row for %s (continueSession is wired via %s)', async (mode, configKey) => {
     const app = makeApp();

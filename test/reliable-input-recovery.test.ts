@@ -42,7 +42,7 @@ describe('the duplicate ACK carries what the client needs', () => {
 
 describe('the client lifts itself over the watermark', () => {
   const handler = appSource.slice(
-    appSource.indexOf('_onWsInputAck(seq, msg)'),
+    appSource.indexOf('_onWsInputAck(seq, msg, sessionId'),
     appSource.indexOf('/** Called from ws.onopen')
   );
 

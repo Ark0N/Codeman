@@ -6,15 +6,17 @@ opening the session.
 
 ## The signals, cheapest first
 
-| Surface                | Reaches you                                       | Default |
-| ---------------------- | ------------------------------------------------- | ------- |
-| Tab alert              | While the dashboard is open                        | On      |
-| Browser title flash    | Another tab in the same browser                    | On      |
-| Desktop notification   | Another window on the same machine                 | Opt-in  |
-| Push notification      | Anywhere, even with no tab open                    | Opt-in  |
-| Approvals Inbox        | One queue across every session                     | Opt-in  |
-| Phone overview         | Phone home screen, NEEDS YOU section               | On      |
-| Away Digest            | Afterwards, as a summary                           | Opt-in  |
+| Surface                        | Reaches you                                      | Default |
+| ------------------------------ | ------------------------------------------------ | ------- |
+| Tab alert                      | While the dashboard is open                      | On      |
+| Browser title flash            | Another tab in the same browser                  | On      |
+| Desktop notification           | Another window on the same machine               | Opt-in  |
+| Push notification              | Anywhere, even with no tab open                  | Opt-in  |
+| Webhook (ntfy, Slack, Discord) | Anywhere, with no browser or subscription at all | Opt-in  |
+| Discord bridge (two-way)       | Anywhere, and you can answer in a thread per tab | Opt-in  |
+| Approvals Inbox                | One queue for Claude, Codex and DeepSeek prompts | Opt-in  |
+| Phone overview                 | Phone home screen, NEEDS YOU section             | On      |
+| Away Digest                    | Afterwards, as a summary                         | Opt-in  |
 
 ## Tab alerts
 
@@ -33,8 +35,13 @@ reloading the dashboard while a permission dialog is blocking a session does not
 with a normal-looking tab.
 
 For Claude sessions, these come from Claude Code's hooks and are precise about *why* the
-session stopped; DeepSeek Harness sessions report the same states themselves. For the other
-CLIs there are no hooks, so you get the coarser output-based signal.
+session stopped; DeepSeek Harness sessions report the same states themselves. Codex has no
+hooks, but its dialogs are distinctive enough to read off the screen, so a Codex session
+waiting on an approval, a question or the "Trust this folder?" prompt turns red too, and
+clears a few seconds after you answer. For the other CLIs there are no hooks and no dialog
+reading, so you get only the coarser working and idle state: read off the screen for
+OpenCode, Gemini CLI, Pi, OMP and Antigravity, and unreliable for Grok Build, which
+declares nothing Codeman can read it from.
 
 ## Window title and OS notifications
 
@@ -60,14 +67,66 @@ Setup:
 
 Once subscribed, a blocking prompt reaches your phone even from a locked screen.
 
+## Discord bridge: answer from your phone
+
+A webhook is one-way. To also **reply** to a blocked agent, use the [Discord Bridge](Discord-Bridge): a
+thread per tab, your reply typed into that tab, files in both directions.
+
+## Webhooks: ntfy, Slack, Discord
+
+**Opt-in, off by default. One channel for the whole server.**
+
+Push needs a browser that subscribed once. A webhook needs nothing on the client side: the
+server itself posts each alert to an ntfy topic, a Slack or Discord incoming webhook, or any
+URL as plain JSON. That makes it the option for a headless box nobody has opened in a browser,
+and for a team channel.
+
+It carries the same events as push: permission prompts, questions, idle sessions, session
+errors, blocked respawns, a stopped crash loop and Ralph task completion. "Response complete"
+is included only when **Which events** is set to **Everything**; the default, **Needs
+attention**, skips it. A session that is watching its own work stays quiet here too.
+
+Setup, in **App Settings → Notifications → Webhook**:
+
+1. Pick the **Service**. ntfy gets a title, a priority and a tag per urgency; Slack and
+   Discord get a bold title line; **Generic JSON** posts `{ event, title, body, urgency,
+   sessionId, sessionName, host, at }`.
+2. Paste the **Webhook URL** and turn on **Send alerts to a webhook**.
+3. Press **Save**, either the group's own button or the main Settings Save, then **Send test**.
+   Send test saves anything you changed first, so it always tests what is on screen.
+
+The status line under the group shows the last delivery: when it worked, or why it did not
+(an HTTP status, a timeout, a refused connection).
+
+Behaviour worth knowing:
+
+- **The URL is a secret.** Anyone holding a Slack or Discord webhook URL can post as it, and
+  anyone who knows an ntfy topic can read it. Codeman keeps it in its own file,
+  `~/.codeman/webhook.json` (readable by its owner only), never in the shared settings, and
+  never shows it again: once saved, the box is empty and the hint shows only the scheme and
+  host. Paste a new URL to replace it, or press **Remove URL** to delete it from the server
+  (which also turns the channel off).
+- **On public ntfy.sh, pick a long random topic.** Topics there are not private; the name is
+  the only thing keeping strangers out.
+- **Local targets work.** A self-hosted ntfy on your LAN or on the same machine is fine.
+  Link-local and cloud-metadata addresses are refused, both when you save and when the
+  message is sent, and redirects are not followed.
+- **Repeats are folded.** The same event for the same session within three seconds is sent
+  once, so a flapping prompt cannot flood a channel.
+- **Multi-user mode: admins only, and it sees everything.** Only an admin can see or change
+  the webhook, and it receives every user's session events (session names, tool names, error
+  text). Point it somewhere every user would be comfortable with.
+
 ## The Approvals Inbox
 
 **Opt-in, off by default. Claude sessions, plus DeepSeek Harness sessions, whose terminal
-front door reports its prompts to Codeman.**
+front door reports its prompts to Codeman, and Codex sessions, whose dialogs Codeman reads
+off the screen.** DeepSeek and Codex cards are alerts: they say "Answer in the terminal" and
+carry no answer buttons, because Codeman cannot verify a keystroke into those dialogs.
 
-One queue of every prompt currently waiting on a human, across all your sessions, answerable
-in place. When you have eight workers running, this is the difference between checking eight
-tabs and checking one list.
+One queue of the prompts currently waiting on a human, across all your sessions, with the
+Claude ones answerable in place. When you have eight workers running, this is the difference
+between checking eight tabs and checking one list.
 
 Turn it on in **App Settings**. Surfaces:
 
@@ -88,17 +147,20 @@ Behaviour worth knowing:
   sending, and refuses with a conflict if the dialog is no longer there. Otherwise your
   keystroke would land in the composer as stray text.
 - **Permission and question items clear only on definitive signals**: the turn ending, the
-  dialog completing, an answer, a supersede, the session exiting, or a 12 hour timeout. They
-  do not clear on a heuristic "looks busy again" signal, because that signal is wrong often
-  enough to lose a real prompt.
+  dialog completing, an answer, a supersede, the session exiting, or a 12 hour timeout. A
+  Codex item also clears a few seconds after its dialog leaves the screen, and a DeepSeek
+  Harness item when the harness reports it is working again. They do not clear on a
+  heuristic "looks busy again" signal, because that signal is wrong often enough to lose a
+  real prompt.
 - **In memory only.** Restarting the server clears the queue; the prompts themselves are
   still sitting in the sessions.
 
 ### Approve and Deny from the notification
 
-With the inbox enabled, push notifications carry **Approve** and **Deny** buttons. Those are
-handled by the service worker directly, so they work with no tab open: tap Approve on a
-locked phone and the agent continues.
+With the inbox enabled, push notifications for a Claude permission prompt carry **Approve**
+and **Deny** buttons. Those are handled by the service worker directly, so they work with no
+tab open: tap Approve on a locked phone and the agent continues. A Codex or DeepSeek Harness
+notification carries no Approve or Deny, since those dialogs are answered in the terminal.
 
 With the inbox off, the buttons are stripped from the notification payload entirely rather
 than being shown and failing.
@@ -138,8 +200,9 @@ current sessions, then past ones. Rows use the same language as the tab strip: a
 when fine, pulsing while working, yellow when waiting for input, red when a question is
 pending.
 
-Answer strips let you resolve a prompt straight from the home screen without opening the
-session.
+With the Approvals Inbox on, answer strips let you resolve a Claude permission or question
+dialog straight from the home screen without opening the session. A Codex or DeepSeek
+Harness strip offers **Answer in terminal** instead, which opens the session.
 
 ## The Away Digest
 
@@ -152,7 +215,8 @@ It is the morning-after view for an overnight run. Enable its header button in
 ## Recommended setup for unattended runs
 
 1. HTTPS access, ideally Tailscale. See [Remote Access](Remote-Access).
-2. Push notifications subscribed, with Codeman installed to the home screen on iOS.
+2. Push notifications subscribed, with Codeman installed to the home screen on iOS, or a
+   webhook to ntfy if no browser will ever be open.
 3. Approvals Inbox on.
 4. Auto-resume on usage limit on, for each session you leave running. See
    [Keeping Agents Running](Keeping-Agents-Running).
@@ -162,11 +226,13 @@ from the lock screen.
 
 ## Gotchas
 
-- **No push over plain HTTP.** It is a browser requirement, not a Codeman one.
+- **No push over plain HTTP.** It is a browser requirement, not a Codeman one. A webhook
+  has no such requirement, since the server sends it.
 - **iOS needs the home screen install.** A Safari tab will never receive push.
 - **The bell is invisible at zero.** That is deliberate, not a broken setting.
 - **Approvals need real signals.** They are built on hook events, which Claude emits and
-  DeepSeek Harness reports itself; the other CLIs do neither.
+  DeepSeek Harness reports itself, and on Codex's dialogs as its screen shows them; the
+  other CLIs give neither.
 - **A stale menu answer is refused, not sent.** If you answer a card for a dialog that has
   since gone away, Codeman declines rather than typing a digit into the composer.
 

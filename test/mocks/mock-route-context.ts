@@ -56,8 +56,15 @@ export function createMockRouteContext(options?: {
       runSessionDeletion: vi.fn(async (_removed, action) => action()),
       runStaleSessionCleanup: vi.fn(async (_activeIds, action) => action(new Set())),
       reconcileAfterRestoration: vi.fn(async () => {}),
+      caseDefaultGroup: vi.fn(async () => ({ groupId: null, groups: [] })),
+      setCaseDefaultGroup: vi.fn(async (_owner: string, _caseName: string, groupId: string | null) => ({
+        groupId,
+        groups: [],
+      })),
+      forgetCaseDefaultGroup: vi.fn(async () => {}),
     },
     cleanupSession: vi.fn(async () => {}),
+    forgetEditHistory: vi.fn(),
     setupSessionListeners: vi.fn(async () => {}),
     persistSessionState: vi.fn(),
     persistSessionStateNow: vi.fn(),
@@ -82,6 +89,9 @@ export function createMockRouteContext(options?: {
     setupTimedRespawn: vi.fn(),
     restoreRespawnController: vi.fn(),
     saveRespawnConfig: vi.fn(),
+
+    // -- KeepWarmPort --
+    keepWarm: { schedule: vi.fn(), rescheduleAll: vi.fn(), remove: vi.fn() },
 
     // -- ConfigPort --
     store: {
@@ -164,6 +174,7 @@ export function createMockRouteContext(options?: {
     scheduledRuns: new Map(),
     teamWatcher: { getTeams: vi.fn(() => []), getTeamTasks: vi.fn(() => []), hasActiveTeammates: vi.fn(() => false) },
     tunnelManager: null,
+    allowUnauthenticatedTunnel: false,
     pushStore: null,
     startScheduledRun: vi.fn(),
     stopScheduledRun: vi.fn(),

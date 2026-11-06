@@ -920,6 +920,8 @@ const mode = cmd.includes('opencode') ? 'opencode' : 'claude';
 
 > **DEFERRED**: This entire phase (except `waitForOpenCodeReady()`) is out of MVP scope. Idle detection, ANSI content filter, working/busy state tracking, and token parsing are all deferred until we have real PTY output data from stable OpenCode sessions. Only the basic TUI ready detection from `waitForOpenCodeReady()` is needed for the MVP and is included in Phase 3.
 
+> **Update 2026-10-09 (working/idle shipped, from measured data):** the registry entry now declares `capabilities.workDetect` for opencode, measured on a live opencode 1.3.0 pane (pane captures every 250-300 ms through real turns at 40, 60, 120 and 200 columns, plus the raw PTY stream). Every composer row starts with a `┃` bar, which arms the shared screen-probed idle check; a running turn puts an 8-cell knight-rider spinner (`⬝■■■■■■⬝  esc interrupt`) at the head of the footer row, redrawn about every 40 ms, and `[⬝■]{8}` is the working line. The label is not the anchor: tmux ships `esc` and `interrupt` as separate words joined by cursor moves, and below about 45 columns the footer wraps it. At rest the TUI is silent (no cursor or timer redraws), and a pending permission prompt replaces the composer and stops the spinner, so it reads as idle. Before this, a turn that ran a tool latched the session `busy` for good (the tool row's braille spinner tripped the generic spinner detector, and nothing ever armed the idle check). Token parsing and the ANSI content filter remain deferred.
+
 ### Goal
 Detect OpenCode's state from terminal output (idle, working, ready).
 

@@ -239,6 +239,14 @@ describe('gitNonInteractiveEnv', () => {
   it("does not override a user's own GIT_SSH_COMMAND", () => {
     expect(gitNonInteractiveEnv({ GIT_SSH_COMMAND: 'ssh -F /custom' }).GIT_SSH_COMMAND).toBe('ssh -F /custom');
   });
+
+  // Issue #568. CI runs in an English locale, so the real-git tests below cannot
+  // catch a revert: only this assertion fails if the pin is dropped.
+  it("pins git's messages to English over the host's locale, since classifyGitFailure() matches English stderr", () => {
+    const env = gitNonInteractiveEnv({ LC_ALL: 'de_DE.UTF-8', LANG: 'de_DE.UTF-8', LANGUAGE: 'de' });
+    expect(env.LC_ALL).toBe('C');
+    expect(env.LANG).toBe('C');
+  });
 });
 
 describe('parseLsRemoteOutput', () => {

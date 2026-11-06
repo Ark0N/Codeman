@@ -556,6 +556,52 @@ describe('file-routes attachment path guard (COD-53)', () => {
     });
   });
 
+  // ===== XLSX: client-side preview, same guard and routes =====
+  // xlsx joins the extension allowlist so the overlay can preview a workbook
+  // outside the workspace by id. Nothing else about the pipeline changes; only
+  // `?preview=true` adds a tighter size cap because the browser parses it.
+  describe('xlsx attachments', () => {
+    async function registerXlsx(size: number) {
+      mockedStat.mockResolvedValue({ size, isFile: () => true, mtimeMs: 5 } as never);
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/attachments`,
+        payload: { path: '/tmp/report.xlsx', notify: false },
+      });
+      expect(res.statusCode).toBe(200);
+      return JSON.parse(res.body).data as { attachmentId: string; attachmentType: string };
+    }
+
+    it('registers an xlsx as a spreadsheet attachment', async () => {
+      const data = await registerXlsx(2048);
+      expect(data.attachmentType).toBe('spreadsheet');
+    });
+
+    it('still refuses xls and ods (download-only, no preview)', async () => {
+      for (const path of ['/tmp/legacy.xls', '/tmp/open.ods']) {
+        const res = await harness.app.inject({
+          method: 'POST',
+          url: `/api/sessions/${harness.ctx._sessionId}/attachments`,
+          payload: { path, notify: false },
+        });
+        expect(res.statusCode, path).toBe(400);
+      }
+    });
+
+    it('caps a ?preview=true fetch at 10 MB but still serves a plain download', async () => {
+      const { attachmentId } = await registerXlsx(11 * 1024 * 1024);
+      const base = `/api/sessions/${harness.ctx._sessionId}/attachments/${attachmentId}/raw`;
+
+      const preview = await harness.app.inject({ method: 'GET', url: `${base}?preview=true` });
+      expect(preview.statusCode).toBe(413);
+      expect(JSON.parse(preview.body).error).toMatch(/too large to preview/i);
+
+      mockedCreateReadStream.mockReturnValue(Readable.from([Buffer.from('PK')]) as never);
+      const download = await harness.app.inject({ method: 'GET', url: `${base}?preview=true&download=true` });
+      expect(download.statusCode).toBe(200);
+    });
+  });
+
   // ===== Quiet registration (click-to-preview) =====
   // The file-preview overlay registers a clicked out-of-workspace path to mint
   // an id it can render by. It is already putting the file on screen, so the

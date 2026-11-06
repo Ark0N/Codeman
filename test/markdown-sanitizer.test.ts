@@ -165,6 +165,16 @@ describe('COD-56 markdown sanitizer (DOMPurify allowlist)', () => {
         expect(sanitize(html).toLowerCase()).not.toContain(tag);
       });
     }
+
+    // DOM clobbering: <img name="app"> makes document.app that image, and inline
+    // onclick="app.…()" handlers resolve `app` on the document before the global,
+    // so a rendered README could break every button until a reload.
+    it('drops name= (marked never emits it; it clobbers document.<name>)', () => {
+      const out = sanitize('<img name="app" src="https://example.com/x.png" alt="x"><a name="app" href="#a">a</a>');
+      expect(out).not.toMatch(/\sname\s*=/i);
+      expect(out).toContain('src="https://example.com/x.png"');
+      expect(out).toContain('href="#a"');
+    });
   });
 
   describe('legitimate markdown-rendered HTML survives', () => {

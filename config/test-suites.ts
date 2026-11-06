@@ -19,8 +19,18 @@
  * why these are a runnable suite (`npm run test:browser`) rather than skipped.
  */
 export const BROWSER_TEST_GLOBS = [
+  'test/wrapped-file-paths.browser.test.ts',
+  'test/command-palette-agent-arrows.browser.test.ts',
+  'test/tmux-capture-sgr.browser.test.ts',
   'test/tab-rail-resize.browser.test.ts',
+  'test/tab-activation.browser.test.ts',
+  'test/tab-layout-editing.browser.test.ts',
+  'test/tab-rail-search.browser.test.ts',
+  'test/tab-focus.browser.test.ts',
   'test/session-sidebar-ux.browser.test.ts',
+  'test/header-divider.browser.test.ts',
+  'test/tab-strip-corner.browser.test.ts',
+  'test/header-host-sensors.browser.test.ts',
   'test/session-options-responsive.browser.test.ts',
   'test/inline-rename.test.ts',
   'test/opencode-resize.test.ts',
@@ -31,8 +41,25 @@ export const BROWSER_TEST_GLOBS = [
   'test/capture-geometry-retry.browser.test.ts',
   'test/codex-predictive-echo.test.ts', // also needs a real codex binary
   'test/split-pane-terminal.browser.test.ts',
+  'test/terminal-tile-scroll.browser.test.ts',
+  'test/codex-wheel-routing.browser.test.ts',
+  'test/terminal-touch-paging.browser.test.ts',
+  'test/shift-enter-keypress.browser.test.ts',
+  'test/key-tester.browser.test.ts',
+  'test/webhook-settings.browser.test.ts',
+  'test/case-custom-path.browser.test.ts',
+  'test/doctor-settings.browser.test.ts',
+  'test/git-status.browser.test.ts',
+  'test/edit-history.browser.test.ts',
   'test/split-pane-orchestration.browser.test.ts',
   'test/split-pane-auto-collapse.browser.test.ts',
+  'test/spreadsheet-preview.browser.test.ts',
+  'test/mobile-ime-preview.browser.test.ts',
+  'test/run-mode-menu-scroll.browser.test.ts',
+  'test/markdown-anchor-links.browser.test.ts',
+  'test/fullscreen-tab-switch-capture.browser.test.ts',
+  'test/terminal-touch-swipe-axis.browser.test.ts',
+  'test/phone-press-feedback.browser.test.ts',
 ];
 
 /**

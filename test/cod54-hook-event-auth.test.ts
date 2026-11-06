@@ -19,7 +19,7 @@
  *  - tunnel NOT running + good secret → not 401 (allowed)
  *  - rate limiting: rapid unauthorized hook POSTs eventually 429
  *
- * Port: 3230 (tunnel-running), 3231 (tunnel-down), 3232 (rate-limit)
+ * Port: ephemeral (`new WebServer(0, …)`, read back through `boundPort`)
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { WebServer } from '../src/web/server.js';
@@ -28,9 +28,6 @@ import { TunnelManager } from '../src/tunnel-manager.js';
 import { getHookSecret, HOOK_SECRET_HEADER } from '../src/config/hook-secret.js';
 import { AUTH_FAILURE_MAX } from '../src/config/auth-config.js';
 
-const TUNNEL_UP_PORT = 3230;
-const TUNNEL_DOWN_PORT = 3231;
-const RATE_LIMIT_PORT = 3232;
 const TEST_USER = 'admin';
 const TEST_PASS = 'cod54-test-password';
 
@@ -58,9 +55,9 @@ describe('COD-54 hook-event auth — tunnel running requires secret', () => {
     process.env.CODEMAN_USERNAME = TEST_USER;
     // Force the middleware's tunnel check to report "running".
     isRunningSpy = vi.spyOn(TunnelManager.prototype, 'isRunning').mockReturnValue(true);
-    server = new WebServer(TUNNEL_UP_PORT, false, true);
+    server = new WebServer(0, false, true);
     await server.start();
-    baseUrl = `http://localhost:${TUNNEL_UP_PORT}`;
+    baseUrl = `http://localhost:${server.boundPort}`;
   });
 
   afterAll(async () => {
@@ -97,9 +94,9 @@ describe('COD-91 hook-event auth — tunnel down ALSO requires the secret', () =
     process.env.CODEMAN_USERNAME = TEST_USER;
     // Tunnel NOT running — loopback-only normal prod case.
     isRunningSpy = vi.spyOn(TunnelManager.prototype, 'isRunning').mockReturnValue(false);
-    server = new WebServer(TUNNEL_DOWN_PORT, false, true);
+    server = new WebServer(0, false, true);
     await server.start();
-    baseUrl = `http://localhost:${TUNNEL_DOWN_PORT}`;
+    baseUrl = `http://localhost:${server.boundPort}`;
   });
 
   afterAll(async () => {
@@ -130,9 +127,9 @@ describe('COD-54 hook-event auth — rate limiting', () => {
     process.env.CODEMAN_USERNAME = TEST_USER;
     // Tunnel running so unauthorized (no-secret) hook POSTs are rejected and counted.
     isRunningSpy = vi.spyOn(TunnelManager.prototype, 'isRunning').mockReturnValue(true);
-    server = new WebServer(RATE_LIMIT_PORT, false, true);
+    server = new WebServer(0, false, true);
     await server.start();
-    baseUrl = `http://localhost:${RATE_LIMIT_PORT}`;
+    baseUrl = `http://localhost:${server.boundPort}`;
   });
 
   afterAll(async () => {

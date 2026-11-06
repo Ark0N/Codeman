@@ -1,5 +1,6 @@
 /**
- * Working/idle detection for an interactive agent pane, Claude's and Codex's.
+ * Working/idle detection for an interactive agent pane, Claude's, Codex's, pi's, opencode's, omp's
+ * Gemini CLI's and Antigravity's.
  *
  * The bug this pins: Claude redraws the composer (`❯`) about once a second all
  * the way through a turn, so the old "saw a ❯, wait 2s, call it idle" rule
@@ -13,12 +14,17 @@
  * work exactly as before.
  *
  * The status-line fixtures below are verbatim captures from live panes
- * (`tmux -L codeman capture-pane -p`) on Claude Code 2.1.220 and Codex CLI 0.152.1.
+ * (`tmux -L codeman capture-pane -p`) on Claude Code 2.1.220, Codex CLI 0.152.1, pi 1.1.0,
+ * opencode 1.3.0, omp 18.8.6 / 18.0.11, Gemini CLI 0.63.0 (its turns driven by a local
+ * stand-in for the Gemini API, since the CLI's look does not depend on the backend) and
+ * Antigravity `agy` 1.3.3.
  */
 import { describe, expect, it, vi, afterEach } from 'vitest';
 import { Session } from '../src/session.js';
 import { getCli } from '../src/config/cli-registry/index.js';
 import { CLAUDE_WORKING_LINE_PATTERN } from '../src/utils/regex-patterns.js';
+import { stripAnsi } from '../src/utils/index.js';
+import { promptStillInComposer } from '../src/session-submit-verifier.js';
 import {
   trackActivityStreak,
   isSustainedActivity,
@@ -44,7 +50,10 @@ function feed(session: Session, data: string): void {
  * A session whose mux reports a fixed (or scripted) screen, so the pane probe has
  * something to read. Only `capturePaneText` is exercised by these paths.
  */
-function withFakePane(screen: string | (() => string), mode: 'claude' | 'codex' = 'claude'): Session {
+function withFakePane(
+  screen: string | (() => string),
+  mode: 'claude' | 'codex' | 'pi' | 'opencode' | 'omp' | 'gemini' | 'antigravity' = 'claude'
+): Session {
   const read = typeof screen === 'function' ? screen : () => screen;
   const mux = {
     isAvailable: () => true,
@@ -71,6 +80,118 @@ const CODEX_FINISHED =
   '  gpt-5.6-sol high · Context 57% left · ~/innovi/irisplus-ent-2 · main\n';
 /** Codex's own composer repaint, the frame that arms the idle confirmation. */
 const CODEX_COMPOSER_REPAINT = '\x1b[31;1H\x1b[38;5;246m›\xa0\x1b[39m\x1b[0m';
+
+/**
+ * pi's pane, verbatim from a live pi 1.1.0 capture (rules shortened): no composer glyph,
+ * the composer sits between two `─` rules, and a running turn puts a braille spinner and
+ * its status into the TOP rule. At rest both rules are plain.
+ */
+const PI_RULE = '─'.repeat(48);
+const PI_FOOTER = '~/codeman-cases/testcase\n0.8%/253k (auto)            qwen3.8-27b-pi • xhigh\n';
+const PI_WORKING = ` say ok\n── ⠏ Working ${PI_RULE}\n\n${PI_RULE}\n${PI_FOOTER}`;
+const PI_AT_REST = ` Error: Retry failed after 3 attempts: Connection error.\n${PI_RULE}\n\n${PI_RULE}\n${PI_FOOTER}`;
+/** One spinner frame on the wire: pi rewrites the whole top rule each time (~80 ms). */
+const PI_SPINNER_FRAME = `\x1b[35;1H\x1b(B\x1b[m\x1b[A\x1b[K\x1b[95m── ⠼\x1b[39m \x1b[95mWorking ${PI_RULE}`;
+/** The turn's last repaint: the top rule drawn plain again. */
+const PI_RULE_REPAINT = `\x1b[35;1H\x1b(B\x1b[m\x1b[A\x1b[K${PI_RULE}`;
+
+/**
+ * opencode's pane, verbatim from live opencode 1.3.0 captures (rows shortened). Every
+ * composer row starts with a `┃` bar; a running turn puts an 8-cell spinner at the head
+ * of the footer row, which is plain key hints at rest.
+ */
+const OC_RULE = '▀'.repeat(48);
+const OC_COMPOSER = `  ┃\n  ┃\n  ┃\n  ┃  Build  qwen3.8-27b Qwen 5090\n  ╹${OC_RULE}\n`;
+const OC_WORKING =
+  '  ┃\n  ┃  $ sleep 12; echo done\n  ┃\n     ▣  Build · qwen3.8-27b\n' +
+  `${OC_COMPOSER}   ■⬝⬝⬝⬝⬝⬝⬝  esc interrupt                 tab agents  ctrl+p commands\n`;
+const OC_AT_REST =
+  '     It is commonly used to insert deliberate delays between automated tasks.\n\n' +
+  `     ▣  Build · qwen3.8-27b · 16.3s\n${OC_COMPOSER}                           tab agents  ctrl+p commands\n`;
+/** The 200-column layout at rest: a right-hand sidebar with the todo list and version. */
+const OC_AT_REST_WIDE =
+  '  ┃  [✓] check disk                                  ▼ Todo\n' +
+  '  ┃  [✓] check memory                                [✓] check disk\n' +
+  '  ┃  [•] summarize                                   [✓] check memory\n' +
+  `     ▣  Build · qwen3.8-27b · 11.9s                   [•] summarize\n${OC_COMPOSER}` +
+  '                           tab agents  ctrl+p commands    • OpenCode 1.3.0\n';
+/** At 40 columns the footer wraps its own label; the spinner run stays whole. */
+const OC_WORKING_PHONE =
+  `  ┃  Build  qwen3.8-27b Qwen 5090\n  ╹${'▀'.repeat(35)}\n` +
+  '   ⬝⬝⬝⬝⬝⬝⬝⬝  esc   tab     ctrl+p\n             interragents  commands\n             upt\n';
+/** A permission prompt replaces the composer, with its own bars, and stops the spinner. */
+const OC_PERMISSION =
+  '     ▣  Build · qwen3.8-27b\n  ┃\n  ┃  △ Permission required\n' +
+  '  ┃    # Echo permission-check to test bash tool\n  ┃\n  ┃  $ echo permission-check\n  ┃\n  ┃\n' +
+  '  ┃   Allow once   Allow always   Reject            ctrl+f fullscreen  ⇆ select  enter confirm\n  ┃\n';
+/** One spinner frame on the wire (~40 ms apart through a turn), verbatim. */
+const OC_SPINNER_FRAME =
+  '\x1b[?2026h\x1b[39;4H\x1b[38;2;103;175;249m\x1b[48;2;10;10;10m■\x1b[38;2;92;156;245m■' +
+  '\x1b[38;2;33;50;75m⬝⬝⬝⬝⬝⬝\x1b[35;6H\x1b(B\x1b[m\x1b[?2026l';
+/** A running tool row: its braille spinner is what used to latch the session busy. */
+const OC_TOOL_ROW =
+  '\x1b[18;3H\x1b[38;2;10;10;10m┃\x1b[38;2;255;255;255m  \x1b[38;2;128;128;128m⠋\x1b[38;2;255;255;255m ' +
+  '\x1b[38;2;128;128;128mSleep for 12 seconds then print done';
+/** The composer's agent/model row repainted, verbatim. */
+const OC_COMPOSER_REPAINT =
+  '\x1b[37;3H\x1b[38;2;92;156;245m\x1b[48;2;10;10;10m┃\x1b[38;2;255;255;255m\x1b[48;2;30;30;30m  ' +
+  '\x1b[38;2;92;156;245mBuild \x1b[38;2;255;255;255m \x1b[38;2;238;238;238mqwen3.8-27b\x1b[38;2;255;255;255m ' +
+  '\x1b[38;2;128;128;128mQwen 5090';
+/** The turn's last chunk, verbatim: it blanks the spinner and carries no `┃`. */
+const OC_TURN_END =
+  '\x1b[?2026h\x1b[32;28H\x1b[38;2;128;128;128m\x1b[48;2;10;10;10m · 16.3s\x1b[39;4H\x1b[38;2;255;255;255m        ' +
+  '\x1b[2C             \x1b[35;6H\x1b(B\x1b[m\x1b[?2026l';
+
+/**
+ * omp's pane, verbatim from live omp 18.8.6 and 18.0.11 captures (rules shortened): the
+ * input row is `╰─`, and a running turn swaps the status bar's leading `π` for a braille
+ * spinner plus the elapsed time, with a `⎋ Working…` row above it.
+ */
+const OMP_BAR_TAIL = '⬢ hang > 📁 ~/work ▶─────────5%' + '─'.repeat(40);
+const OMP_WORKING = ` say ok\n\n  ⎋ Working…\n ⠼ 14s > ${OMP_BAR_TAIL}\n╰─\n`;
+/** 18.0.11 pads the elapsed time with two spaces; past a minute it reads `1m`. */
+const OMP_WORKING_OLD = ` say ok\n\n  ⎋ Working…\n ⠼ 2s  > ${OMP_BAR_TAIL}\n╰─\n`;
+const OMP_WORKING_LONG = ` ⠧ 1m > ${OMP_BAR_TAIL}\n╰─\n`;
+const OMP_AT_REST = ` say ok\n\n π > ${OMP_BAR_TAIL}\n╰─\n`;
+/** One spinner frame on the wire: the Working row and the bar, never the input row. */
+const OMP_SPINNER_FRAME =
+  '\x1b[19;1H\x1b[0m\x1b[K \x1b[38;5;248m ⎋\x1b[39m \x1b[38;5;243mWorki\x1b[39;38;5;248mng\x1b[39;1;38;5;39m…\x1b[22;39m\n' +
+  `\x1b[20;1H\x1b[0m\x1b[K\x1b[48;5;233;39m \x1b[38;5;39m⠼ 5s\x1b[39m \x1b[38;5;236m>\x1b[39m ${OMP_BAR_TAIL}`;
+/** The input row omp redraws when a turn is submitted and when it ends. */
+const OMP_INPUT_REPAINT = '\x1b[20;1H\x1b[0m\x1b[K\x1b[38;5;239m╰─ \x1b[39;38;5;254;39m      \x1b[0m';
+
+/**
+ * Gemini CLI's pane, verbatim from live 0.63.0 captures (bars shortened). The composer
+ * sits between a `▄` bar and a `▀` bar, and a running turn draws a spinner line above it.
+ */
+const GEM_COMPOSER =
+  `${'─'.repeat(40)}\n YOLO Ctrl+Y\n${'▄'.repeat(40)}\n *   Type your message or @path/to/file\n` +
+  `${'▀'.repeat(40)}\n workspace               sandbox\n /tmp/.../gem-turn       no sandbox   …\n`;
+const GEM_WORKING =
+  '╭──────────────────────────────────╮\n│ ⊶  Shell sleep 8; echo done      │\n' +
+  `╰──────────────────────────────────╯\n ⠦ Thinking... (esc to cancel, 6s)\n${GEM_COMPOSER}`;
+const GEM_AT_REST =
+  '✦ The sleep command pauses the shell for\n  the number of seconds it is given,\n' +
+  `  before printing done.\n${GEM_COMPOSER}`;
+/**
+ * Default approval mode: the confirmation replaces the composer and the spinner stops.
+ * The submitted prompt above it is echoed between the composer's own bars.
+ */
+const GEM_CONFIRM =
+  `${'▄'.repeat(40)}\n > Run sleep 8 in the shell, then explain what sleep does.\n${'▀'.repeat(40)}\n` +
+  '╭──────────────────────────────────╮\n│ ? Shell  sleep 8; echo done      │\n' +
+  '│ Allow execution of [Shell]?      │\n│                                  │\n' +
+  '│ ● 1. Allow once                  │\n│   2. Allow for this session      │\n' +
+  '│   3. No, suggest changes (esc)   │\n╰──────────────────────────────────╯\n';
+/** One spinner frame on the wire (every ~80 ms), verbatim: the line starts with a cursor move. */
+const GEM_SPINNER_FRAME =
+  '\x1b[9;1H\x1b(B\x1b[m \x1b[38;5;111m⠧\x1b[39m \x1b[38;5;231m\x1b[3mThinking...\x1b(B\x1b[m ' +
+  `\x1b[38;5;145m(esc to cancel, 8s)\r\n\x1b[15;1H\x1b[49m\x1b[38;5;59m${'▀'.repeat(40)}`;
+/** The turn's last repaint, verbatim (shortened): no spinner line, the composer bars redrawn. */
+const GEM_TURN_END =
+  `\x1b[?2026h\x1b[11;1H\x1b(B\x1b[m \x1b[38;5;211mYOLO\x1b[38;5;145m Ctrl+Y\x1b[13;1H\x1b[38;5;59m${'▄'.repeat(40)}` +
+  '\x1b[14;1H\x1b[39m\x1b[48;5;59m \x1b[38;5;211m* \x1b[39m\x1b[7m \x1b(B\x1b[m\x1b[38;5;145m\x1b[48;5;59m Type your message' +
+  ` or @path/to/file\x1b[39m \x1b[15;1H\x1b[49m\x1b[38;5;59m${'▀'.repeat(40)}\x1b[?2026l`;
 
 /** A composer repaint: the frame Claude ships roughly once a second while working. */
 const COMPOSER_REPAINT =
@@ -252,11 +373,11 @@ describe('Session interactive idle detection', () => {
 
   it('does not mark an uncharacterised CLI working off raw activity', () => {
     vi.useFakeTimers();
-    // Gemini and OpenCode render their own TUIs, and Codeman knows neither one's glyph,
-    // so nothing would arm the idle confirmation and a session marked working here would
-    // never recover. A CLI that names no glyph therefore reports no work at all.
-    expect(getCli('gemini')?.capabilities.workDetect).toBeUndefined();
-    const session = new Session({ workingDir: '/tmp', mode: 'gemini' });
+    // Grok renders its own TUI, and Codeman knows no glyph for it, so nothing would arm
+    // the idle confirmation and a session marked working here would never recover. A CLI
+    // that names no glyph therefore reports no work at all.
+    expect(getCli('grok')?.capabilities.workDetect).toBeUndefined();
+    const session = new Session({ workingDir: '/tmp', mode: 'grok' });
     const events: string[] = [];
     session.on('working', () => events.push('working'));
 
@@ -296,6 +417,216 @@ describe('Session interactive idle detection', () => {
   });
 });
 
+/**
+ * The launch settle (`_armPaneSettle` / `_settlePaneStartup`, 3 s after `startInteractive()`
+ * started a pane). The bug this pins: it set the status to idle WITHOUT an event, and when
+ * the launch paint never marked the pane working, the later idle confirmation found the
+ * status already idle and announced nothing either. The browser kept the `busy` the spawn
+ * broadcast, so a fresh codex, pi or opencode tile spun "working" for as long as it sat at
+ * its composer (measured on the 1.36.0 beta: `lastPromptTime: 0`, never an idle edge).
+ * A RESTORED pane of a CLI without work detection never got the settle at all.
+ */
+describe('external CLI launch settle', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  type LaunchInternals = { _resetBuffers(): void; _armPaneSettle(isRestored: boolean): void };
+
+  /** Codex at its composer after launch, verbatim from the beta pane that showed the bug. */
+  const CODEX_READY =
+    '  >_ OpenAI Codex (v0.162.0)\n     ~/codeman-cases/testcase\n› Ask Codex to do anything\n' +
+    '  GPT-6-Luna default · ~/codeman-cases/testcase\n  ? for shortcuts\n';
+
+  /** A session as `startInteractive()` leaves it: spawn-time `busy`, settle armed if it applies. */
+  function launch(session: Session, isRestored = false): string[] {
+    const internals = session as unknown as LaunchInternals;
+    const events: string[] = [];
+    session.on('idle', () => events.push('idle'));
+    session.on('working', () => events.push('working'));
+    session.on('needsRefresh', () => events.push('needsRefresh'));
+    internals._resetBuffers();
+    internals._armPaneSettle(isRestored);
+    return events;
+  }
+
+  it('announces a codex pane that paints its composer and goes quiet after the timer', () => {
+    vi.useFakeTimers();
+    const session = withFakePane(CODEX_READY, 'codex');
+    const events = launch(session);
+
+    // The composer arms the confirmation, but a second paint keeps the pane
+    // from going quiet until after the 3 s timer has fired.
+    feed(session, CODEX_COMPOSER_REPAINT);
+    vi.advanceTimersByTime(600);
+    feed(session, '\x1b[33;3H\x1b[2m? for shortcuts\x1b[0m');
+    vi.advanceTimersByTime(60_000);
+
+    expect(events).toEqual(['idle', 'needsRefresh']);
+    expect(session.status).toBe('idle');
+    expect(session.isWorking).toBe(false);
+  });
+
+  it('announces a codex pane whose launch paint never arms the confirmation', () => {
+    vi.useFakeTimers();
+    const session = withFakePane(CODEX_READY, 'codex');
+    const events = launch(session);
+
+    feed(session, '\x1b[1;3H>_ OpenAI Codex (v0.162.0)');
+    vi.advanceTimersByTime(3000);
+
+    expect(events).toEqual(['idle', 'needsRefresh']);
+    expect(session.status).toBe('idle');
+
+    // A composer repaint later on (a tile resize) must not announce it twice.
+    feed(session, CODEX_COMPOSER_REPAINT);
+    vi.advanceTimersByTime(60_000);
+    expect(events).toEqual(['idle', 'needsRefresh']);
+  });
+
+  it('does not announce twice when the confirmation already concluded before the timer', () => {
+    vi.useFakeTimers();
+    const session = withFakePane(CODEX_READY, 'codex');
+    const events = launch(session);
+
+    feed(session, CODEX_COMPOSER_REPAINT);
+    vi.advanceTimersByTime(60_000);
+
+    expect(events).toEqual(['idle', 'needsRefresh']);
+    expect(session.status).toBe('idle');
+  });
+
+  it('leaves a codex pane that is already working to its own confirmation', () => {
+    vi.useFakeTimers();
+    let screen = CODEX_WORKING;
+    const session = withFakePane(() => screen, 'codex');
+    const events = launch(session);
+
+    for (let i = 0; i < 4; i++) {
+      feed(session, CODEX_COMPOSER_REPAINT);
+      vi.advanceTimersByTime(1000);
+    }
+    vi.advanceTimersByTime(10_000);
+
+    // The timer fired mid-turn and did not call the turn over.
+    expect(events).toEqual(['working', 'needsRefresh']);
+    expect(session.status).toBe('busy');
+
+    screen = CODEX_FINISHED;
+    vi.advanceTimersByTime(20_000);
+    expect(events).toEqual(['working', 'needsRefresh', 'idle']);
+    expect(session.status).toBe('idle');
+  });
+
+  it('settles a CLI without work detection even when a launch spinner latched it working', () => {
+    vi.useFakeTimers();
+    // Nothing arms an idle confirmation for a CLI that names no composer glyph, so
+    // the launch timer is the only thing that can ever settle this pane.
+    expect(getCli('grok')?.capabilities.workDetect).toBeUndefined();
+    const session = new Session({ workingDir: '/tmp', mode: 'grok' });
+    const events = launch(session);
+
+    feed(session, '\x1b[5;3H⠋ Loading');
+    expect(session.isWorking).toBe(true);
+    vi.advanceTimersByTime(3000);
+
+    expect(events).toEqual(['working', 'idle', 'needsRefresh']);
+    expect(session.status).toBe('idle');
+    expect(session.isWorking).toBe(false);
+  });
+
+  it('never announces idle for a codex pane prompted before the timer, so a send-and-wait is not ended early', () => {
+    vi.useFakeTimers();
+    let screen = CODEX_READY;
+    const session = withFakePane(() => screen, 'codex');
+    const events = launch(session);
+
+    // A prompt 2 s in: its turn has not been marked working when the timer fires.
+    vi.advanceTimersByTime(2000);
+    session.markPromptSubmitted();
+    screen = CODEX_WORKING;
+    vi.advanceTimersByTime(1000);
+
+    expect(events).toEqual(['needsRefresh']);
+    expect(session.status).toBe('busy');
+
+    for (let i = 0; i < 4; i++) {
+      feed(session, CODEX_COMPOSER_REPAINT);
+      vi.advanceTimersByTime(1000);
+    }
+    screen = CODEX_FINISHED;
+    vi.advanceTimersByTime(30_000);
+
+    // The turn's own end is the one idle edge.
+    expect(events.filter((e) => e === 'idle')).toEqual(['idle']);
+    expect(events[events.length - 1]).toBe('idle');
+    expect(session.status).toBe('idle');
+  });
+
+  it('still settles a prompted CLI without work detection, which has nothing else to settle it', () => {
+    vi.useFakeTimers();
+    const session = new Session({ workingDir: '/tmp', mode: 'grok' });
+    const events = launch(session);
+
+    vi.advanceTimersByTime(2000);
+    session.markPromptSubmitted();
+    vi.advanceTimersByTime(1000);
+
+    expect(events).toEqual(['idle', 'needsRefresh']);
+  });
+
+  it('settles a RESTORED pane of a CLI without work detection, without a refetch', () => {
+    vi.useFakeTimers();
+    // A Codeman restart re-attaches every surviving pane through startInteractive(),
+    // which leaves it busy; grok and deepseek have no glyph that would ever clear that.
+    for (const mode of ['grok', 'deepseek', 'shell'] as const) {
+      expect(getCli(mode)?.capabilities.workDetect).toBeUndefined();
+      const session = new Session({ workingDir: '/tmp', mode });
+      const events = launch(session, true);
+      expect(session.status).toBe('busy');
+
+      vi.advanceTimersByTime(3000);
+
+      expect(events).toEqual(['idle']);
+      expect(session.status).toBe('idle');
+    }
+  });
+
+  it('leaves a RESTORED claude or codex pane to its own glyph, so a restart mid-turn is not called idle', () => {
+    vi.useFakeTimers();
+    for (const mode of ['claude', 'codex'] as const) {
+      const session = new Session({ workingDir: '/tmp', mode });
+      const events = launch(session, true);
+
+      vi.advanceTimersByTime(3000);
+
+      expect(events).toEqual([]);
+      expect(session.status).toBe('busy');
+    }
+  });
+
+  it('arms nothing for a NEW claude pane, which waits for its ❯ instead', () => {
+    vi.useFakeTimers();
+    const session = new Session({ workingDir: '/tmp', mode: 'claude' });
+    const events = launch(session);
+
+    vi.advanceTimersByTime(3000);
+
+    expect(events).toEqual([]);
+  });
+
+  it('does nothing for a session stopped before the timer', () => {
+    vi.useFakeTimers();
+    const session = withFakePane(CODEX_READY, 'codex');
+    const events = launch(session);
+    (session as unknown as { _isStopped: boolean })._isStopped = true;
+
+    vi.advanceTimersByTime(3000);
+
+    expect(events).toEqual([]);
+  });
+});
+
 describe("codex's work-detection descriptor", () => {
   const codex = getCli('codex')?.capabilities.workDetect;
 
@@ -319,6 +650,480 @@ describe("codex's work-detection descriptor", () => {
   it('names the glyph Codex actually draws on its composer row', () => {
     expect(CODEX_COMPOSER_REPAINT).toContain(codex!.promptGlyph);
     expect(CODEX_WORKING).toContain(codex!.promptGlyph);
+  });
+});
+
+describe("pi's work-detection descriptor", () => {
+  const pi = getCli('pi')?.capabilities.workDetect;
+
+  it('matches the spinner pi embeds in its composer rule while a turn runs', () => {
+    expect(new RegExp(pi!.workingLine).test(PI_WORKING)).toBe(true);
+    // The stream detector reads the ANSI-stripped chunk.
+    expect(new RegExp(pi!.workingLine).test(stripAnsi(PI_SPINNER_FRAME))).toBe(true);
+  });
+
+  it('does not match the plain rules of a pane at rest', () => {
+    expect(new RegExp(pi!.workingLine).test(PI_AT_REST)).toBe(false);
+  });
+
+  it('names a glyph every pi repaint carries, so the idle check can arm', () => {
+    expect(PI_SPINNER_FRAME).toContain(pi!.promptGlyph);
+    expect(PI_RULE_REPAINT).toContain(pi!.promptGlyph);
+  });
+
+  it('leaves the submit verifier unable to press Enter on a pi pane', () => {
+    // The verifier reads the last row starting with the glyph, which for pi is a bare
+    // rule with no prompt text in it: it must stand down, never report "unsubmitted".
+    expect(promptStillInComposer(PI_AT_REST, 'say ok', pi!.promptGlyph)).toBe(false);
+    expect(promptStillInComposer(PI_WORKING, 'say ok', pi!.promptGlyph)).toBe(false);
+  });
+});
+
+describe('pi interactive idle detection', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('marks a pi turn working, and lets it end', () => {
+    vi.useFakeTimers();
+    let screen = PI_WORKING;
+    const session = withFakePane(() => screen, 'pi');
+    const events: string[] = [];
+    session.on('working', () => events.push('working'));
+    session.on('idle', () => events.push('idle'));
+
+    // Eight seconds of spinner frames: every one carries the rule glyph, which must
+    // not end the turn while the pane is still animating.
+    for (let i = 0; i < 80; i++) {
+      feed(session, PI_SPINNER_FRAME);
+      vi.advanceTimersByTime(100);
+    }
+    expect(events).toEqual(['working']);
+    expect(session.status).toBe('busy');
+
+    // Turn over. Before pi declared its rule and spinner, nothing ever armed the idle
+    // check (pi never draws `❯`), so the session stayed busy for good.
+    screen = PI_AT_REST;
+    feed(session, PI_RULE_REPAINT);
+    vi.advanceTimersByTime(20_000);
+
+    expect(events).toEqual(['working', 'idle']);
+    expect(session.status).toBe('idle');
+  });
+
+  it('settles a reattached pi pane that is at rest', () => {
+    vi.useFakeTimers();
+    // A restored pane starts in the `busy` that startInteractive() sets and gets no
+    // launch timer; the reattach repaint is what has to bring it to idle.
+    const session = withFakePane(PI_AT_REST, 'pi');
+    (session as unknown as { _status: string })._status = 'busy';
+    const events: string[] = [];
+    session.on('idle', () => events.push('idle'));
+
+    feed(session, PI_RULE_REPAINT);
+    vi.advanceTimersByTime(20_000);
+
+    expect(events).toEqual(['idle']);
+    expect(session.status).toBe('idle');
+  });
+});
+
+describe("opencode's work-detection descriptor", () => {
+  const oc = getCli('opencode')?.capabilities.workDetect;
+
+  it('matches the spinner at the head of the footer while a turn runs, at any width', () => {
+    expect(new RegExp(oc!.workingLine).test(OC_WORKING)).toBe(true);
+    // Below ~45 columns the footer wraps `esc interrupt`, which is why the label is not the anchor.
+    expect(new RegExp(oc!.workingLine).test(OC_WORKING_PHONE)).toBe(true);
+    // The stream detector reads the ANSI-stripped chunk.
+    expect(new RegExp(oc!.workingLine).test(stripAnsi(OC_SPINNER_FRAME))).toBe(true);
+  });
+
+  it('does not match a pane at rest, the wide sidebar layout or a pending permission prompt', () => {
+    expect(new RegExp(oc!.workingLine).test(OC_AT_REST)).toBe(false);
+    expect(new RegExp(oc!.workingLine).test(OC_AT_REST_WIDE)).toBe(false);
+    expect(new RegExp(oc!.workingLine).test(OC_PERMISSION)).toBe(false);
+  });
+
+  it('names the bar the composer, the transcript and a running tool row are drawn with', () => {
+    expect(OC_COMPOSER_REPAINT).toContain(oc!.promptGlyph);
+    expect(OC_TOOL_ROW).toContain(oc!.promptGlyph);
+    expect(OC_AT_REST).toContain(oc!.promptGlyph);
+  });
+
+  it('leaves the submit verifier unable to press Enter on an opencode pane', () => {
+    // The last `┃` row is the composer's agent/model row, or the permission box's closing
+    // bar: never the prompt text, so the verifier stands down rather than re-pressing Enter.
+    const typed = OC_COMPOSER.replace('  ┃\n  ┃\n', '  ┃\n  ┃  say ok\n');
+    expect(promptStillInComposer(typed, 'say ok', oc!.promptGlyph)).toBe(false);
+    expect(promptStillInComposer(OC_AT_REST, 'say ok', oc!.promptGlyph)).toBe(false);
+    expect(promptStillInComposer(OC_WORKING, 'sleep 12', oc!.promptGlyph)).toBe(false);
+    expect(promptStillInComposer(OC_PERMISSION, 'Echo permission-check', oc!.promptGlyph)).toBe(false);
+  });
+});
+
+describe('opencode interactive idle detection', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** A turn's worth of spinner frames, 40 ms apart, as opencode ships them. */
+  function spin(session: Session, ms: number): void {
+    for (let t = 0; t < ms; t += 40) {
+      feed(session, OC_SPINNER_FRAME);
+      vi.advanceTimersByTime(40);
+    }
+  }
+
+  it('lets a turn that ran a tool end, instead of latching busy', () => {
+    vi.useFakeTimers();
+    let screen = OC_WORKING;
+    const session = withFakePane(() => screen, 'opencode');
+    const events: string[] = [];
+    session.on('working', () => events.push('working'));
+    session.on('idle', () => events.push('idle'));
+
+    // The tool row's braille marks the pane working; its bar arms the idle check, which
+    // must not end the turn while the spinner still animates.
+    feed(session, OC_TOOL_ROW);
+    spin(session, 8000);
+    expect(events).toEqual(['working']);
+    expect(session.status).toBe('busy');
+
+    // Before opencode declared its bar and spinner, nothing ever armed the idle check
+    // (opencode never draws `❯`), so this session stayed busy for good.
+    screen = OC_AT_REST;
+    feed(session, OC_TURN_END);
+    vi.advanceTimersByTime(20_000);
+
+    expect(events).toEqual(['working', 'idle']);
+    expect(session.status).toBe('idle');
+  });
+
+  it('marks a text-only turn working off the spinner, with no braille anywhere', () => {
+    vi.useFakeTimers();
+    let screen = OC_WORKING;
+    const session = withFakePane(() => screen, 'opencode');
+    const events: string[] = [];
+    session.on('working', () => events.push('working'));
+    session.on('idle', () => events.push('idle'));
+
+    feed(session, OC_COMPOSER_REPAINT);
+    spin(session, 4000);
+    expect(events).toEqual(['working']);
+
+    screen = OC_AT_REST;
+    feed(session, OC_TURN_END);
+    vi.advanceTimersByTime(20_000);
+    expect(events).toEqual(['working', 'idle']);
+  });
+
+  it('reads a pending permission prompt as idle, and ends the resumed turn too', () => {
+    vi.useFakeTimers();
+    let screen = OC_WORKING;
+    const session = withFakePane(() => screen, 'opencode');
+    const events: string[] = [];
+    session.on('working', () => events.push('working'));
+    session.on('idle', () => events.push('idle'));
+
+    feed(session, OC_TOOL_ROW);
+    spin(session, 3000);
+
+    // The prompt replaces the composer and the pane goes silent: waiting on the user.
+    screen = OC_PERMISSION;
+    feed(session, '\x1b[30;3H\x1b[38;2;250;178;131m┃\x1b[38;2;255;255;255m  △ Permission required');
+    vi.advanceTimersByTime(10_000);
+    expect(events).toEqual(['working', 'idle']);
+    expect(session.status).toBe('idle');
+
+    // Allowed: the composer comes back (its bar re-arms the check) and the spinner resumes.
+    screen = OC_WORKING;
+    feed(session, OC_COMPOSER_REPAINT);
+    spin(session, 4000);
+    expect(events).toEqual(['working', 'idle', 'working']);
+
+    screen = OC_AT_REST;
+    feed(session, OC_TURN_END);
+    vi.advanceTimersByTime(20_000);
+    expect(events).toEqual(['working', 'idle', 'working', 'idle']);
+    expect(session.status).toBe('idle');
+  });
+
+  it('settles a reattached opencode pane that is at rest', () => {
+    vi.useFakeTimers();
+    // A restored pane starts in the `busy` that startInteractive() sets and, now that
+    // opencode declares work detection, gets no launch timer: tmux's reattach repaint
+    // carries the composer's bar, and that is what has to bring it to idle.
+    const session = withFakePane(OC_AT_REST, 'opencode');
+    (session as unknown as { _status: string })._status = 'busy';
+    const events: string[] = [];
+    session.on('idle', () => events.push('idle'));
+
+    feed(session, OC_COMPOSER_REPAINT);
+    vi.advanceTimersByTime(20_000);
+
+    expect(events).toEqual(['idle']);
+    expect(session.status).toBe('idle');
+  });
+});
+
+describe("gemini's work-detection descriptor", () => {
+  const gem = getCli('gemini')?.capabilities.workDetect;
+  const working = () => new RegExp(gem!.workingLine);
+
+  it('matches the spinner line while a turn runs, on screen and on the wire', () => {
+    expect(working().test(GEM_WORKING)).toBe(true);
+    // The stream detector reads the ANSI-stripped chunk, where a cursor move, not a
+    // newline, opens the spinner line: the `(esc to cancel` half is what matches there.
+    expect(working().test(stripAnsi(GEM_SPINNER_FRAME))).toBe(true);
+    // A long loading phrase can push the suffix onto the next line on a narrow pane
+    // (constructed, not captured): the spinner frame opening its line still matches.
+    expect(working().test(' ⠦ Reticulating the splines for your\n  request... (esc to cancel,\n')).toBe(true);
+  });
+
+  it('does not match a pane at rest, nor a pending tool confirmation', () => {
+    expect(working().test(GEM_AT_REST)).toBe(false);
+    expect(working().test(GEM_CONFIRM)).toBe(false);
+  });
+
+  it('names the composer bar every repaint carries, so the idle check can arm', () => {
+    expect(GEM_SPINNER_FRAME).toContain(gem!.promptGlyph);
+    expect(GEM_TURN_END).toContain(gem!.promptGlyph);
+    expect(GEM_AT_REST).toContain(gem!.promptGlyph);
+  });
+
+  it('leaves the submit verifier unable to press Enter on a gemini pane', () => {
+    // The last row starting with `▀` is a bar, never prompt text, even when the echoed
+    // prompt sits just above it while a confirmation waits.
+    const typed = GEM_COMPOSER.replace('Type your message or @path/to/file', 'say ok');
+    expect(promptStillInComposer(typed, 'say ok', gem!.promptGlyph)).toBe(false);
+    expect(promptStillInComposer(GEM_AT_REST, 'say ok', gem!.promptGlyph)).toBe(false);
+    expect(promptStillInComposer(GEM_CONFIRM, 'Run sleep 8 in the shell', gem!.promptGlyph)).toBe(false);
+  });
+});
+
+describe('gemini interactive idle detection', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function spin(session: Session, ms: number): void {
+    for (let t = 0; t < ms; t += 80) {
+      feed(session, GEM_SPINNER_FRAME);
+      vi.advanceTimersByTime(80);
+    }
+  }
+
+  it('lets a turn end, instead of latching busy', () => {
+    vi.useFakeTimers();
+    let screen = GEM_WORKING;
+    const session = withFakePane(() => screen, 'gemini');
+    const events: string[] = [];
+    session.on('working', () => events.push('working'));
+    session.on('idle', () => events.push('idle'));
+
+    spin(session, 8000);
+    expect(events).toEqual(['working']);
+    expect(session.status).toBe('busy');
+
+    // Before gemini declared its bar and spinner line, nothing ever armed the idle check
+    // (gemini never draws `❯`), so this session stayed busy for good.
+    screen = GEM_AT_REST;
+    feed(session, GEM_TURN_END);
+    vi.advanceTimersByTime(20_000);
+
+    expect(events).toEqual(['working', 'idle']);
+    expect(session.status).toBe('idle');
+  });
+
+  it('reads a pending tool confirmation as idle, and ends the resumed turn too', () => {
+    vi.useFakeTimers();
+    let screen = GEM_WORKING;
+    const session = withFakePane(() => screen, 'gemini');
+    const events: string[] = [];
+    session.on('working', () => events.push('working'));
+    session.on('idle', () => events.push('idle'));
+
+    spin(session, 3000);
+
+    // The confirmation replaces the composer and the pane goes silent: waiting on the user.
+    screen = GEM_CONFIRM;
+    feed(session, `\x1b[5;1H${'▀'.repeat(40)}\x1b[7;1H│ Allow execution of [Shell]?`);
+    vi.advanceTimersByTime(10_000);
+    expect(events).toEqual(['working', 'idle']);
+
+    // Allowed: the spinner line returns with every repaint carrying the bar.
+    screen = GEM_WORKING;
+    spin(session, 4000);
+    expect(events).toEqual(['working', 'idle', 'working']);
+
+    screen = GEM_AT_REST;
+    feed(session, GEM_TURN_END);
+    vi.advanceTimersByTime(20_000);
+    expect(events).toEqual(['working', 'idle', 'working', 'idle']);
+    expect(session.status).toBe('idle');
+  });
+
+  it('settles a reattached gemini pane that is at rest', () => {
+    vi.useFakeTimers();
+    const session = withFakePane(GEM_AT_REST, 'gemini');
+    (session as unknown as { _status: string })._status = 'busy';
+    const events: string[] = [];
+    session.on('idle', () => events.push('idle'));
+
+    feed(session, GEM_TURN_END);
+    vi.advanceTimersByTime(20_000);
+
+    expect(events).toEqual(['idle']);
+    expect(session.status).toBe('idle');
+  });
+});
+
+/**
+ * Antigravity's (`agy` 1.3.3) pane, verbatim from live captures (rules shortened). A running
+ * turn animates an 8-dot braille frame and a label one row above the composer, and the
+ * footer reads `esc to cancel`; at rest the footer reads `? for shortcuts`. The composer
+ * row is `>`, which the echoed prompt starts with as well.
+ */
+const AGY_RULE = '─'.repeat(48);
+const AGY_FOOTER_REST = '? for shortcuts                                  Gemini 3.8 Flash · medium\n';
+const AGY_FOOTER_WORKING = 'esc to cancel                                    Gemini 3.8 Flash · medium\n';
+const AGY_WORKING = `> say ok\n⣷  Generating...\n${AGY_RULE}\n>\n${AGY_RULE}\n${AGY_FOOTER_WORKING}`;
+const AGY_AT_REST = `  ok\n${AGY_RULE}\n>\n${AGY_RULE}\n${AGY_FOOTER_REST}`;
+/** A shell call replaces the composer with a confirmation list and the spinner stops. */
+const AGY_CONFIRM =
+  '> Run the shell command: sleep 6 && echo done\n   sleep 6 && echo done\nRun this command?\n' +
+  "> 1. Yes, run command\n  2. Yes, and always allow in this conversation for commands that start with 'sleep'\n" +
+  '  4. No, cancel\n  ↑/↓ Navigate · tab Amend · ctrl+g edit/expand command\n';
+/** One spinner frame on the wire, verbatim: the glyph is not one of SPINNER_PATTERN's. */
+const AGY_SPINNER_FRAME = '\r\n\x1b[34;1m> say ok\x1b[m\x1b[K\r\n⣷  \x1b[90mGenerating...\x1b[m\x1b[K\r\n';
+/** The turn's last repaint, verbatim (shortened): the footer hint comes back. */
+const AGY_TURN_END = `${AGY_RULE}\x1b[m\r\n\x1b[90m? for shortcuts\x1b[m\x1b[80X\x1b[80C\x1b[2mGemini 3.8 Flash · medium\r`;
+
+describe("antigravity's work-detection descriptor", () => {
+  const agy = getCli('antigravity')?.capabilities.workDetect;
+  const working = () => new RegExp(agy!.workingLine);
+
+  it('matches every frame of the spinner and every label, on screen and on the wire', () => {
+    expect(working().test(AGY_WORKING)).toBe(true);
+    expect(working().test(stripAnsi(AGY_SPINNER_FRAME))).toBe(true);
+    for (const frame of ['⣯', '⡿', '⣻', '⣾', '⣷', '⣟', '⢿', '⣽']) {
+      for (const label of ['Generating...', 'Working...', 'Loading...']) {
+        expect(working().test(`${frame}  ${label}`)).toBe(true);
+      }
+    }
+  });
+
+  it('does not match a pane at rest, a pending confirmation, or prose', () => {
+    expect(working().test(AGY_AT_REST)).toBe(false);
+    expect(working().test(AGY_CONFIRM)).toBe(false);
+    expect(working().test('Loading... is what the spinner label reads\n')).toBe(false);
+    // An answer that quotes the spinner row mid-line must not hold the tab busy.
+    expect(working().test(`  ok\n  it matches \`⣯  Generating...\` in the pane\n${AGY_RULE}\n>\n`)).toBe(false);
+  });
+
+  it('names the footer hint the turn end carries, and no working repaint does', () => {
+    expect(AGY_TURN_END).toContain(agy!.promptGlyph);
+    expect(AGY_AT_REST).toContain(agy!.promptGlyph);
+    expect(AGY_WORKING).not.toContain(agy!.promptGlyph);
+    expect(AGY_SPINNER_FRAME).not.toContain(agy!.promptGlyph);
+  });
+
+  it('leaves the submit verifier unable to press Enter on an antigravity pane', () => {
+    // The composer row starts with `>`, but the glyph is the footer hint, so a prompt
+    // typed into the composer (or echoed above it) is never read as "still unsubmitted".
+    const typed = AGY_AT_REST.replace('>\n', '> say ok\n');
+    expect(promptStillInComposer(typed, 'say ok', agy!.promptGlyph)).not.toBe(true);
+    expect(promptStillInComposer(AGY_WORKING, 'say ok', agy!.promptGlyph)).not.toBe(true);
+    expect(promptStillInComposer(AGY_CONFIRM, 'Run the shell command', agy!.promptGlyph)).not.toBe(true);
+  });
+});
+
+describe('antigravity interactive activity', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function spin(session: Session, ms: number): void {
+    for (let t = 0; t < ms; t += 100) {
+      feed(session, AGY_SPINNER_FRAME);
+      vi.advanceTimersByTime(100);
+    }
+  }
+
+  it('shows a turn as working, and lets it end instead of latching busy', () => {
+    vi.useFakeTimers();
+    let screen = AGY_WORKING;
+    const session = withFakePane(() => screen, 'antigravity');
+    (session as unknown as { _status: string })._status = 'idle';
+    const events: string[] = [];
+    session.on('working', () => events.push('working'));
+    session.on('idle', () => events.push('idle'));
+
+    // Before antigravity declared its spinner line no frame ever marked the tab working.
+    spin(session, 4000);
+    expect(events).toEqual(['working']);
+    expect(session.status).toBe('busy');
+
+    screen = AGY_AT_REST;
+    feed(session, AGY_TURN_END);
+    vi.advanceTimersByTime(20_000);
+
+    expect(events).toEqual(['working', 'idle']);
+    expect(session.status).toBe('idle');
+  });
+
+  it('keeps a pending shell confirmation working until it is answered, and ends the resumed turn too', () => {
+    vi.useFakeTimers();
+    let screen = AGY_WORKING;
+    const session = withFakePane(() => screen, 'antigravity');
+    (session as unknown as { _status: string })._status = 'idle';
+    const events: string[] = [];
+    session.on('working', () => events.push('working'));
+    session.on('idle', () => events.push('idle'));
+
+    spin(session, 3000);
+    expect(events).toEqual(['working']);
+
+    screen = AGY_CONFIRM;
+    feed(session, 'Run this command?\r\n');
+    vi.advanceTimersByTime(60_000);
+    // The footer hint is not drawn under the confirmation, so nothing arms the idle check:
+    // the pane stays working (unlike gemini, whose bar returns on every repaint) until the
+    // user answers and the turn ends below.
+    expect(events).toEqual(['working']);
+    expect(session.status).toBe('busy');
+    screen = AGY_WORKING;
+    spin(session, 3000);
+    screen = AGY_AT_REST;
+    feed(session, AGY_TURN_END);
+    vi.advanceTimersByTime(20_000);
+
+    expect(events[0]).toBe('working');
+    expect(events[events.length - 1]).toBe('idle');
+    expect(session.status).toBe('idle');
+  });
+});
+
+describe('antigravity reattach', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // Declaring workDetect turns off the 3 s settle for a restored pane, so a reattached agy pane
+  // depends on the footer hint arriving in tmux's attach repaint to leave `busy`.
+  it('settles a reattached antigravity pane that is at rest', () => {
+    vi.useFakeTimers();
+    const session = withFakePane(AGY_AT_REST, 'antigravity');
+    (session as unknown as { _status: string })._status = 'busy';
+    const events: string[] = [];
+    session.on('idle', () => events.push('idle'));
+
+    feed(session, AGY_TURN_END);
+    vi.advanceTimersByTime(20_000);
+
+    expect(events).toEqual(['idle']);
+    expect(session.status).toBe('idle');
   });
 });
 
@@ -361,5 +1166,79 @@ describe('wire activity stamp across recovery', () => {
     const session = new Session({ workingDir: '/tmp', mode: 'claude' });
     (session as unknown as SessionInternals)._handleTerminalOutput('x');
     expect(session.lastActivityAt).toBeGreaterThanOrEqual(before);
+  });
+});
+
+describe("omp's work-detection descriptor", () => {
+  const omp = getCli('omp')?.capabilities.workDetect;
+
+  it('matches the status bar and Working row omp draws while a turn runs', () => {
+    const re = new RegExp(omp!.workingLine);
+    expect(re.test(OMP_WORKING)).toBe(true);
+    expect(re.test(OMP_WORKING_OLD)).toBe(true);
+    expect(re.test(OMP_WORKING_LONG)).toBe(true);
+    // The stream detector reads the ANSI-stripped chunk.
+    expect(re.test(stripAnsi(OMP_SPINNER_FRAME))).toBe(true);
+  });
+
+  it('does not match a pane at rest', () => {
+    expect(new RegExp(omp!.workingLine).test(OMP_AT_REST)).toBe(false);
+  });
+
+  it('names the input row omp redraws, so the idle check can arm', () => {
+    expect(OMP_INPUT_REPAINT).toContain(omp!.promptGlyph);
+  });
+
+  it('lets the submit verifier tell a submitted prompt from a stranded one', () => {
+    // Submitted (or queued for steering mid-turn): the input row is empty again.
+    expect(promptStillInComposer(OMP_AT_REST, 'say ok', omp!.promptGlyph)).toBe(false);
+    // Still sitting in the input row: the one case where pressing Enter again is right.
+    expect(promptStillInComposer(OMP_AT_REST.replace('╰─\n', '╰─ say ok\n'), 'say ok', omp!.promptGlyph)).toBe(true);
+  });
+});
+
+describe('omp interactive idle detection', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('marks an omp turn working, and lets it end', () => {
+    vi.useFakeTimers();
+    let screen = OMP_WORKING;
+    const session = withFakePane(() => screen, 'omp');
+    const events: string[] = [];
+    session.on('working', () => events.push('working'));
+    session.on('idle', () => events.push('idle'));
+
+    // The submit redraws the input row, then eight seconds of spinner frames.
+    feed(session, OMP_INPUT_REPAINT);
+    for (let i = 0; i < 80; i++) {
+      feed(session, OMP_SPINNER_FRAME);
+      vi.advanceTimersByTime(100);
+    }
+    expect(events).toEqual(['working']);
+    expect(session.status).toBe('busy');
+
+    // Turn over: omp redraws the input row with the bar back to `π`.
+    screen = OMP_AT_REST;
+    feed(session, OMP_INPUT_REPAINT);
+    vi.advanceTimersByTime(20_000);
+
+    expect(events).toEqual(['working', 'idle']);
+    expect(session.status).toBe('idle');
+  });
+
+  it('settles a reattached omp pane that is at rest', () => {
+    vi.useFakeTimers();
+    const session = withFakePane(OMP_AT_REST, 'omp');
+    (session as unknown as { _status: string })._status = 'busy';
+    const events: string[] = [];
+    session.on('idle', () => events.push('idle'));
+
+    feed(session, OMP_INPUT_REPAINT);
+    vi.advanceTimersByTime(20_000);
+
+    expect(events).toEqual(['idle']);
+    expect(session.status).toBe('idle');
   });
 });

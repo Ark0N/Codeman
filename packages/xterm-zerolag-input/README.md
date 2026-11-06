@@ -8,8 +8,8 @@
     <a href="https://www.npmjs.com/package/xterm-zerolag-input"><img src="https://img.shields.io/npm/v/xterm-zerolag-input?style=flat-square&color=22c55e" alt="npm"></a>
     <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-1e3a5f?style=flat-square" alt="MIT"></a>
     <img src="https://img.shields.io/badge/Dependencies-0-22c55e?style=flat-square" alt="Zero dependencies">
-    <img src="https://img.shields.io/badge/Size-6.1%20kB%20gzip-22c55e?style=flat-square" alt="6.1 kB gzipped">
-    <img src="https://img.shields.io/badge/Tests-227-22c55e?style=flat-square" alt="175 tests">
+    <img src="https://img.shields.io/badge/Size-5.7%20kB%20gzip-22c55e?style=flat-square" alt="5.7 kB minified and gzipped">
+    <img src="https://img.shields.io/badge/Tests-276-22c55e?style=flat-square" alt="276 tests">
     <img src="https://img.shields.io/badge/xterm.js-v5%20%7C%20v7+-3b82f6?style=flat-square" alt="xterm.js v5 and v7+">
   </p>
 </p>
@@ -60,12 +60,13 @@ Since 0.2.0 the package ships **two addons for two kinds of TUIs**:
 | | |
 |---|---|
 | **Survives full-screen TUIs** | Ink, blessed, and friends repaint the whole screen constantly. The overlay is a separate DOM layer they cannot reach, so it does not get clobbered. |
-| **Pixel-matched to the canvas** | Each character is its own absolutely-positioned `<span>` at exact cell coordinates, so it does not drift out of the grid like normal DOM text flow. |
+| **Pixel-matched to the canvas** | Each character is its own `<span>`, exactly as wide as its cells and snapped to the grid, so it does not drift out of the grid like normal DOM text flow. |
+| **Cheap per keystroke** | Only the line that changed is rebuilt, and each line is one paint layer, so a keystroke costs the same in a 4,000-character prompt as in a short one. |
 | **Wide characters included** | CJK, fullwidth forms and emoji render double-width and position by visual column, using the terminal's Unicode addon when one is loaded. |
 | **Backspace that actually works** | A three-layer cascade (unsent, in-flight, already on screen) tells you exactly what to forward to the PTY, so editing works through any mix of typed, flushed and tab-completed text. |
 | **You keep control of input** | The addon never hooks `onData` for you. You decide what gets echoed and what gets forwarded, which is what makes char-at-a-time, buffered, and multi-session tab switching all possible. |
-| **Small and self-contained** | 6.1 kB gzipped, zero runtime dependencies, dual CJS/ESM with full type declarations. |
-| **Proven under load** | Extracted from [Codeman](https://getcodeman.com), hardened over thousands of hours of real remote and mobile usage, 175 tests over every state transition. |
+| **Small and self-contained** | 5.7 kB minified and gzipped, zero runtime dependencies, dual CJS/ESM with full type declarations. |
+| **Proven under load** | Extracted from [Codeman](https://getcodeman.com), hardened over thousands of hours of real remote and mobile usage, 276 tests over every state transition. |
 
 Built for anything that puts a terminal behind a network hop: SSH web clients, cloud IDEs, mobile terminals, Kubernetes and container consoles, remote agent dashboards, browser-based dev environments.
 
@@ -106,10 +107,10 @@ terminal.onData((data) => {
   }
 });
 
-// 3. Re-render after terminal output (for full-screen TUI frameworks like Ink)
-terminal.onWriteParsed(() => {
-  if (zerolag.hasPending) zerolag.rerender();
-});
+// 3. Re-render after terminal output (for full-screen TUI frameworks like Ink).
+//    Unconditional: rerender() is a no-op when there is nothing to draw, and
+//    hasPending would miss an overlay that shows only an IME composition.
+terminal.onWriteParsed(() => zerolag.rerender());
 ```
 
 That is the whole integration. Everything below is for tuning it.
@@ -128,7 +129,7 @@ This library answers all three:
 
 - a **DOM overlay** on its own z-index layer, which Ink cannot touch
 - **bottom-up buffer scanning** for the prompt instead of trusting the cursor
-- **one absolutely-positioned `<span>` per character** at exact cell-grid coordinates
+- **one `<span>` per character**, sized to its cells and snapped to the cell grid
 
 ---
 
@@ -186,7 +187,7 @@ If one terminal hosts several CLIs with different prompts, swap the strategy in 
 zerolag.setPrompt({ type: 'character', char: '❯', offset: 2 });
 ```
 
-`setPrompt()` clears the cached prompt position and re-renders if anything is pending, so a mode switch cannot leave the overlay pinned to the old column.
+`setPrompt()` clears the cached prompt position and re-renders if the overlay has anything to draw, so a mode switch cannot leave the overlay pinned to the old column.
 
 ---
 
@@ -202,8 +203,10 @@ Implements the xterm.js `ITerminalAddon` interface. It deliberately does **not**
 |--------|---------|-------------|
 | `addChar(char)` | `void` | Add a single printable character. Auto-detects existing buffer text on the first keystroke. |
 | `appendText(text)` | `void` | Append multiple characters (paste). |
-| `removeChar()` | `'pending'` \| `'flushed'` \| `false` | Remove the last character. See [backspace handling](#backspace-handling). |
-| `clear()` | `void` | Clear all state and hide the overlay. Call on Enter, Ctrl+C, Escape. |
+| `removeChar()` | `'pending'` \| `'flushed'` \| `false` | Remove the last character and drop any IME composition. See [backspace handling](#backspace-handling). |
+| `clear()` | `void` | Clear all state, the composition included, and hide the overlay. Call on Enter, Ctrl+C, Escape. |
+| `setComposition(text)` | `void` | Show text an IME is still composing as an underlined tail after the typed text. Pass `''` to remove it. See [IME composition](#ime-composition). |
+| `setRowLimit(limit)` | `void` | Narrow the row bound the overlay keeps itself on screen with (normally `terminal.rows`) to the first `limit` screen rows, so it grows upward from the last of them; `null` restores all rows, and a limit above `terminal.rows` changes nothing. For hosts that keep the terminal taller than the box showing it, e.g. while an on-screen keyboard covers the bottom. |
 
 ### Backspace handling
 
@@ -216,6 +219,19 @@ Implements the xterm.js `ITerminalAddon` interface. It deliberately does **not**
 | `false` | Nothing to remove | Do nothing |
 
 The cascade order is pending text, then flushed text, then auto-detected buffer text (which is what makes backspace work after tab completion). Backspace "just works" across any combination of typed, in-flight and completed text.
+
+### IME composition
+
+While an input method (Japanese kana, Chinese pinyin, Korean) is still composing, the text is not committed yet, so it is not in `pendingText` either. `setComposition(text)` draws it as an underlined, `aria-hidden` tail right after the pending and flushed text, using the same wrapping and on-screen layout as the rest of the overlay.
+
+```typescript
+const textarea = terminal.textarea!;
+textarea.addEventListener('compositionupdate', (e) => zerolag.setComposition(e.data));
+textarea.addEventListener('compositionend', () => zerolag.setComposition(''));
+// xterm then emits the committed text through onData: add it with addChar()/appendText() as usual.
+```
+
+The composition is visual only: it is never part of `pendingText`, `hasPending` or `state`, so it can never be sent. Control characters and line breaks are stripped from it. `clear()` and `removeChar()` drop it. Because `hasPending` excludes it, re-place the overlay after output or a resize with an unconditional `rerender()`, not one gated on `hasPending`.
 
 ### Flushed text
 
@@ -242,7 +258,7 @@ Finds text that exists after the prompt but was never typed through the overlay.
 
 | Method | Description |
 |--------|-------------|
-| `rerender()` | Force a re-render. Call after buffer reloads, screen redraws, resizes and reconnects. |
+| `rerender()` | Force a re-render. Call after buffer reloads, screen redraws, resizes and reconnects. A no-op when there is nothing to draw, so it needs no guard. |
 | `refreshFont()` | Re-cache font and color properties from the terminal. Call after a font size or theme change. |
 
 ### Prompt
@@ -258,7 +274,8 @@ Finds text that exists after the prompt but was never typed through the overlay.
 | Property | Type | Description |
 |----------|------|-------------|
 | `pendingText` | `string` | Unacknowledged text (read-only) |
-| `hasPending` | `boolean` | `true` if the overlay has any content |
+| `hasPending` | `boolean` | `true` if there is pending or flushed text. Excludes the IME composition, so it can be `false` while the overlay still shows one |
+| `composition` | `string` | The text set by `setComposition()`, `''` when none (read-only) |
 | `state` | `ZerolagInputState` | Full snapshot: `pendingText`, `flushedLength`, `flushedText`, `visible`, `promptPosition` |
 
 ### Options
@@ -493,15 +510,23 @@ div.xterm-screen (position: relative)
 
 ### Per-character grid alignment
 
-Each character is an absolutely-positioned `<span>`:
+Each line is an absolutely-positioned `<div>` at its row, and each character is a `<span>` in a flex row inside it, as wide as the cells it covers:
 
 ```
-left  = visualColumn * cellWidth   (CSS pixels)
-top   = lineIndex    * cellHeight  (CSS pixels)
-width = cellWidth * charCellWidth  (1 cell, or 2 for wide characters)
+line top    = lineIndex * cellHeight                     (CSS pixels)
+edge(col)   = round(col * cellWidth * 4) / 4             (snapped to a quarter pixel)
+span width  = edge(col + charCellWidth) - edge(col)      (1 cell, or 2 for wide characters)
 ```
 
-Positioning by visual column instead of letting the browser lay out text is what removes sub-pixel drift.
+A span starts where the widths before it add up to. Normal DOM text drifts because glyph advances that the layout engine cannot store exactly carry their rounding into every later cell. A quarter pixel is stored exactly by Blink and WebKit (1/64 px layout units) and Gecko (1/60 px app units), so the snapped widths always add up to the snapped edge: no drift at any column, and every edge stays within 1/8 px of `col * cellWidth`.
+
+The spans are deliberately not absolutely positioned. A positioned element gets its own paint layer, and with one per character the browser had to re-layerize and repaint thousands of them on every keystroke of a long prompt. The font, colour, line height, centring and ligature settings are set once per line and inherited.
+
+### Rendering cost
+
+Each render compares every line with what the previous render left in the overlay and rebuilds only the lines whose text or position changed. Typing a character changes only the last line, so a keystroke costs one line of DOM work, layout and paint, however long the prompt. A font, colour, cell size or Unicode version change rebuilds everything, and so does anything else emptying the overlay element.
+
+Measured in headless Chromium with a 6x CPU slowdown standing in for a phone, typing into a prompt of about 4,100 characters: 0.4.x took a median 813 ms per frame (513 ms of script, style and layout per keystroke), this version 17 ms (8.6 ms). At about 300 characters, 0.4.x already missed 60 fps (54 ms frames).
 
 ### Font matching
 
@@ -522,13 +547,13 @@ While flushed text exists the prompt column is locked, so a full-screen redraw c
 
 ### Scroll awareness
 
-The overlay hides when the viewport is scrolled up (`viewportY !== baseY`) and re-renders, debounced, when you scroll back to the bottom.
+The overlay hides while the cursor row is scrolled out of the viewport and re-renders, debounced, when it scrolls back into view. A viewport parked a few rows above the bottom keeps painting as long as the cursor row is on screen. A buffer that reports no `cursorY` keeps the bottom-only rule.
 
 ---
 
 ## Known limitations
 
-- **Canvas and WebGL font mismatch**: minor sub-pixel differences are still possible. Per-character absolute positioning keeps them small.
+- **Canvas and WebGL font mismatch**: minor sub-pixel differences are still possible. Per-character cells snapped to a quarter pixel keep them under 1/8 px.
 - **Grapheme clusters**: widths are summed per code point, so ZWJ emoji sequences (for example 👨‍👩‍👧) and combining marks can be over-counted. Single-code-point emoji and CJK are correct.
 - **Password prompts**: the overlay will happily show characters the server is not echoing. Call `clear()` when you detect a no-echo prompt.
 - **Prompt characters in output**: if your prompt marker also appears in command output, detection can latch onto the wrong line. Use a regex or a custom finder.

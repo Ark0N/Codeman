@@ -47,10 +47,45 @@ describe('xterm private-API dependency guard', () => {
     expect(
       lock.packages['node_modules/@xterm/xterm']?.version,
       'xterm moved off the verified version — re-verify _kickRenderer in a real browser ' +
-        '(terminal-ui.js: _core._renderService._renderDebouncer._animationFrame), then update ' +
-        'VERIFIED_XTERM_VERSION here. The accessor is optional-chained, so a renamed field ' +
+        '(terminal-ui.js: _core._renderService._renderDebouncer._animationFrame) AND the ' +
+        'CompositionHelper fields installEditSync() uses (terminal-keycode229-recovery.js: ' +
+        '_handleAnyTextareaChanges, _coreService, _isComposing, _isSendingComposition, _dataAlreadySent) ' +
+        'and the mouse-encoding read _shouldForwardTouchToApp makes (terminal-ui.js: ' +
+        '_core.coreMouseService.activeEncoding), then update VERIFIED_XTERM_VERSION here. ' +
+        'The accessor is optional-chained, so a renamed field ' +
         'degrades to a silent no-op and the freeze it heals comes back unnoticed.'
     ).toBe(VERIFIED_XTERM_VERSION);
+  });
+
+  // terminal-keycode229-recovery.js swaps in an edit-based replacement for xterm's
+  // CompositionHelper._handleAnyTextareaChanges (Android autocorrect = delete + insert, which xterm's
+  // append-only diff duplicates). It reaches `_compositionHelper`, `_coreService`, `_isComposing`,
+  // `_isSendingComposition` and `_dataAlreadySent`; if xterm renames any of them the install quietly
+  // falls back to xterm's own handler and the duplication returns (or, for `_isSendingComposition`, a
+  // composition xterm finalizes at an Enter keydown is sent twice). terminal-ui.js's
+  // _shouldForwardTouchToApp reads `_core.coreMouseService.activeEncoding` to forward a touch drag
+  // only to an app that asked for SGR mouse reports; if either name changes the read is undefined
+  // and touch quietly stops forwarding to native SGR tracking apps. Property names survive
+  // minification, so a string check on the shipped bundle catches a rename on upgrade.
+  it('still ships the composition-helper and mouse-service fields terminal input depends on', () => {
+    const bundle = readFileSync(resolve(root, 'node_modules/@xterm/xterm/lib/xterm.js'), 'utf8');
+    for (const name of [
+      '_handleAnyTextareaChanges',
+      '_compositionHelper',
+      '_coreService',
+      '_isComposing',
+      '_isSendingComposition',
+      '_dataAlreadySent',
+      'coreMouseService',
+      'activeEncoding',
+    ]) {
+      expect(
+        bundle,
+        `xterm no longer mentions ${name}: re-verify terminal-keycode229-recovery.js installEditSync() ` +
+          'against the new CompositionHelper, and terminal-ui.js _shouldForwardTouchToApp against the ' +
+          'new CoreMouseService (both in src/web/public), before bumping VERIFIED_XTERM_VERSION'
+      ).toContain(name);
+    }
   });
 
   // If someone deletes the watchdog, this guard is pointless noise — keep the

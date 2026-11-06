@@ -1,6 +1,11 @@
 /**
  * @fileoverview Static guard: no NEW CLI-id branch in the two files PR B2 touched
- * (`session-ui.js`, `mobile-overview.js`), mirroring
+ * (`session-ui.js`, `mobile-overview.js`), plus the files that draw a session
+ * header's harness logo and model (`constants.js`, `terminal-split.js`,
+ * `tile-grid.js`: the logo's `run-mode-dot <cliId>` class is the id as DATA),
+ * and `terminal-tile.js`, whose wheel paging and click reports reach the
+ * primary pane's CLI rules through terminal-ui.js and must not grow a copy of
+ * them, mirroring
  * `test/cli-registry-no-id-branching.test.ts` for the backend registry.
  *
  * Deliberately scoped to ONLY these two files, not all of `src/web/public/`.
@@ -21,7 +26,17 @@ import { fileURLToPath } from 'node:url';
 import { STOCK_CLIS } from '../src/config/cli-registry/stock.js';
 
 const PUBLIC = fileURLToPath(new URL('../src/web/public/', import.meta.url));
-const SCANNED_FILES = ['session-ui.js', 'mobile-overview.js'];
+const SCANNED_FILES = [
+  'session-ui.js',
+  'mobile-overview.js',
+  'constants.js',
+  'terminal-split.js',
+  'tile-grid.js',
+  'terminal-tile.js',
+  // The command palette's new-session agent picker reads its agents from the
+  // injected catalog; panels-ui.js carries no id branch, so keep it that way.
+  'panels-ui.js',
+];
 
 /**
  * Every currently-surviving branch, each with the COUNT of physical call
@@ -88,6 +103,27 @@ const ALLOWED_BRANCHES: Record<string, { count: number; reason: string }> = {
   "session-ui.js::mode !== 'shell'": {
     count: 2,
     reason: 'display filter: the "CLIs found inside the container" summaries omit shell, which is not an agent CLI',
+  },
+
+  // tile-grid.js: a tile's Attach re-attaches through the same route pair the
+  // primary pane uses, and that pair is split by mode on the server side.
+  "tile-grid.js::mode === 'shell'": {
+    count: 1,
+    reason: 'attach route: a shell session attaches through /shell, an agent through /interactive',
+  },
+
+  // terminal-tile.js: the pane's two shell-only mechanisms, both mirrors of the
+  // primary pane's own shell checks (terminal-ui.js / app.js). Its wheel
+  // paging and click reports name no CLI: they ask terminal-ui.js's gates.
+  "terminal-tile.js::mode !== 'shell'": {
+    count: 2,
+    reason:
+      'Ctrl+Z reaches the PTY only in a shell (job control), and the scroll-to-top history pull is shell-only, ' +
+      'both as in the primary pane',
+  },
+  "terminal-tile.js::mode === 'shell'": {
+    count: 1,
+    reason: 'the load query: a shell loads the bounded tail= window instead of a full capture, as in the primary pane',
   },
 
   // mobile-overview.js: shell is exempt from the isCliAvailable() gate the
@@ -177,8 +213,8 @@ function actualCounts(): Map<string, number> {
   return counts;
 }
 
-describe('no NEW CLI-id branching in session-ui.js / mobile-overview.js (PR B2)', () => {
-  it('scans both files (sanity)', () => {
+describe('no NEW CLI-id branching in the scanned frontend files', () => {
+  it('scans every listed file (sanity)', () => {
     // If this drops to zero the scanner or the file list drifted and every
     // assertion below would pass vacuously.
     const scannedBytes = SCANNED_FILES.reduce((n, f) => n + readFileSync(PUBLIC + f, 'utf-8').length, 0);

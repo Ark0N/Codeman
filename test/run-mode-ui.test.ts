@@ -6,6 +6,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import vm from 'node:vm';
+import postcss, { type AtRule } from 'postcss';
 import { describe, expect, it } from 'vitest';
 
 function loadRunModeHarness() {
@@ -177,7 +178,9 @@ describe('Run launch synchronization', () => {
     // once. Confirmed live: adding `this.terminal.clear()` to `_runCliMode`
     // left this test 32/32 green under the old pattern.
     const bodies = new Map<string, string>();
-    const header = /^ {2}async (_?run[A-Za-z]*)\(\w*\) \{$/gm;
+    // Any parameter list (`(mode, options = {})` included), never `\(\w*\)`
+    // alone, or a launcher that grew a second parameter silently drops out.
+    const header = /^ {2}async (_?run[A-Za-z]*)\([^)\n]*\) \{$/gm;
     for (let m = header.exec(src); m; m = header.exec(src)) {
       const start = m.index + m[0].length;
       const end = src.indexOf('\n  },', start);
@@ -453,7 +456,15 @@ describe('Codex quick start settings', () => {
         const src = readFileSync(resolve(import.meta.dirname, `../src/web/public/${file}`), 'utf8');
         vm.runInContext(src, context, { filename: file });
       }
-      return { app: new (CodemanApp as any)(), welcomeCliActions, tunnelBtn, runModeCliOptions, modeBtns, menu };
+      return {
+        app: new (CodemanApp as any)(),
+        welcomeCliActions,
+        tunnelBtn,
+        runModeCliOptions,
+        modeBtns,
+        menu,
+        context,
+      };
     }
 
     const ALL_OFF = {
@@ -470,11 +481,26 @@ describe('Codex quick start settings', () => {
       cloudflared: false,
     };
 
+    // Every welcome launcher in DOM order: the primary button, then the chips
+    // inside their group. A launcher is anything carrying data-mode; the walk
+    // stops there, so a button's own logo spans are never mistaken for one.
+    function launchers(container: any): any[] {
+      return container.children.flatMap((c: any) =>
+        typeof c === 'string' ? [] : c.dataset?.mode ? [c] : launchers(c)
+      );
+    }
+    const offeredModes = (container: any) => launchers(container).map((btn: any) => btn.dataset.mode);
+    // The visible label sits in a .welcome-label span (it ellipsizes a long custom
+    // label) as one text node; a bare string child would be one too.
+    const textOf = (btn: any) =>
+      btn.children
+        .map((c: any) => (typeof c === 'string' ? c : c?.className === 'welcome-label' ? c.textContent : ''))
+        .join('');
+
     it('renders only enabled and available registry entries on the welcome screen', () => {
       const { app, welcomeCliActions, tunnelBtn } = loadUi({ ...ALL_OFF, claude: true, 'custom-agent': true });
       app.applyWelcomeCliVisibility();
-      const offered = welcomeCliActions.children.map((btn: any) => btn.dataset.mode);
-      expect(offered).toEqual(['claude', 'custom-agent', 'shell']);
+      expect(offeredModes(welcomeCliActions)).toEqual(['claude', 'custom-agent', 'shell']);
       // #200 originally DELETED the tunnel button and its QR outright; it is gated
       // on cloudflared instead, so a box that has cloudflared keeps the feature.
       expect(tunnelBtn.style.display).toBe('none');
@@ -485,7 +511,7 @@ describe('Codex quick start settings', () => {
 
       const withPi = loadUi({ ...ALL_OFF, pi: true });
       withPi.app.applyWelcomeCliVisibility();
-      expect(withPi.welcomeCliActions.children.map((btn: any) => btn.dataset.mode)).toEqual(['pi', 'shell']);
+      expect(offeredModes(withPi.welcomeCliActions)).toEqual(['pi', 'shell']);
     });
 
     it('gates every run mode in the dropdown, antigravity included, and never shell', () => {
@@ -509,13 +535,133 @@ describe('Codex quick start settings', () => {
       expect(runModeCliOptions.children.map((btn: any) => btn.dataset.mode)).not.toContain('shell');
     });
 
-    it('labels welcome buttons "Run <label>", the strings i18n.js translates ("Run Claude Code")', () => {
+    it('labels the primary "Run <label>" and each chip by name, with "Run <label>" as its tooltip', () => {
+      // "Run Claude Code" / "Run Shell" are the strings i18n.js translates: the
+      // primary carries one as ONE text node (i18n matches whole nodes), and a
+      // chip carries one as its title and accessible name, both translated
+      // attributes, beside the bare CLI name it shows.
       const { app, welcomeCliActions } = loadUi({ ...ALL_OFF, claude: true });
       app.applyWelcomeCliVisibility();
-      const texts = welcomeCliActions.children.map((btn: any) =>
-        btn.children.filter((c: unknown) => typeof c === 'string').join('')
+      const [primary, ...chips] = launchers(welcomeCliActions);
+      expect(textOf(primary)).toBe('Run Claude Code');
+      expect(chips.map(textOf)).toEqual(['Shell']);
+      expect(chips.map((chip: any) => chip.title)).toEqual(['Run Shell']);
+      // Each label is its own span, so a long one ellipsizes instead of overflowing.
+      expect(primary.children.filter((c: any) => c?.className === 'welcome-label')).toHaveLength(1);
+      expect(chips[0].children.filter((c: any) => c?.className === 'welcome-label')).toHaveLength(1);
+    });
+
+    it('promotes the first AGENT in catalog order to the primary, chosen by kind and order, never by id', () => {
+      const primaryOf = (flags: Record<string, boolean> | undefined, catalog = CATALOG) => {
+        const { app, welcomeCliActions } = loadUi(flags, catalog);
+        app.applyWelcomeCliVisibility();
+        const first = welcomeCliActions.children[0];
+        return first ? { mode: first.dataset.mode, className: first.className } : null;
+      };
+      expect(primaryOf(undefined)).toEqual({ mode: 'claude', className: 'welcome-primary' });
+      // Claude missing or disabled: the next agent takes the slot, not a hardcoded fallback.
+      expect(primaryOf({ ...ALL_OFF, opencode: true, codex: true })?.mode).toBe('opencode');
+      const noClaude = CATALOG.map((cli) => (cli.id === 'claude' ? { ...cli, enabled: false } : cli));
+      expect(primaryOf(undefined, noClaude)?.mode).toBe('opencode');
+      // A shell listed first never outranks an agent after it...
+      const shellFirst = [CATALOG[CATALOG.length - 1], ...CATALOG.slice(0, -1)];
+      expect(primaryOf({ ...ALL_OFF, codex: true }, shellFirst)?.mode).toBe('codex');
+      // ...and a custom agent at the head of the catalog is the primary like any other.
+      const customFirst = [
+        { id: 'my-agent', label: 'My Agent', shortBadge: 'MA', kind: 'agent', enabled: true },
+        ...CATALOG,
+      ];
+      expect(primaryOf({ ...ALL_OFF, 'my-agent': true, claude: true }, customFirst)?.mode).toBe('my-agent');
+      // Only the shell left: it is the primary rather than an empty screen.
+      expect(primaryOf({ ...ALL_OFF })?.mode).toBe('shell');
+    });
+
+    it('renders the rest as chips in catalog order, carrying the CLI id only as data', () => {
+      const { app, welcomeCliActions } = loadUi(undefined);
+      app.applyWelcomeCliVisibility();
+      expect(welcomeCliActions.children).toHaveLength(2);
+      const [primary, chipRow] = welcomeCliActions.children;
+      expect(chipRow.className).toBe('welcome-chips');
+      expect(chipRow.children.map((chip: any) => chip.dataset.mode)).toEqual(
+        CATALOG.map((cli) => cli.id).filter((id) => id !== primary.dataset.mode)
       );
-      expect(texts).toEqual(['Run Claude Code', 'Run Shell']);
+      for (const btn of launchers(welcomeCliActions)) {
+        const id = btn.dataset.mode;
+        // The logo is the shared Run-menu slot, so styles.css draws the brand mark
+        // (or the plain fallback dot of an id it has no mark for).
+        const logos: any[] = [];
+        const collect = (el: any) =>
+          el.children.forEach((c: any) => {
+            if (typeof c === 'string') return;
+            if (String(c.className).startsWith('run-mode-dot')) logos.push(c);
+            collect(c);
+          });
+        collect(btn);
+        expect(logos.map((l) => l.className)).toEqual([`run-mode-dot ${id}`]);
+        // No per-id class on the button itself, so no rule can restyle one CLI.
+        expect(btn.className).not.toContain(id);
+        expect(typeof btn.onclick).toBe('function');
+      }
+    });
+
+    it('styles the launchers from skin tokens only, with no per-CLI welcome rule left', () => {
+      const css = readFileSync(resolve(import.meta.dirname, '../src/web/public/styles.css'), 'utf8');
+      const mobileCss = readFileSync(resolve(import.meta.dirname, '../src/web/public/mobile.css'), 'utf8');
+      const html = readFileSync(resolve(import.meta.dirname, '../src/web/public/index.html'), 'utf8');
+      // The old look was one gradient per CLI (.welcome-btn-codex, …) plus skin
+      // overrides of the same classes; any survivor would re-tint one launcher.
+      expect(css).not.toMatch(/\.welcome-btn\b/);
+      expect(mobileCss).not.toMatch(/\.welcome-btn\b/);
+      const rule = (selector: string) => {
+        const at = css.indexOf(`\n${selector} {`);
+        expect(at, `${selector} rule`).toBeGreaterThan(-1);
+        return css.slice(at, css.indexOf('}', at));
+      };
+      expect(rule('.welcome-primary')).toContain('var(--accent-grad-a)');
+      expect(rule('.welcome-chip')).toContain('var(--control-bg)');
+      expect(rule('.welcome-chip')).toContain('var(--control-border)');
+      // Light skins: the tunnel spinner's track follows the link's text colour (the
+      // shared track is translucent white), and a running tunnel reads as a pill.
+      expect(rule('.welcome-tunnel-link .tunnel-spinner')).toContain('currentColor');
+      expect(rule('.welcome-tunnel-link.active')).toContain('background:');
+      expect(rule('.welcome-label')).toContain('text-overflow: ellipsis');
+      expect(rule('.welcome-primary')).toContain('max-width: 100%');
+      expect(rule('.welcome-chip')).toContain('max-width: 100%');
+      // Hover motion stays off for anyone who asked for less of it.
+      expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\) \{\s*\.welcome-primary,/);
+      // The tunnel keeps its id and handler, is no longer a launcher, and sits
+      // between the launchers and the QR it reveals.
+      expect(html).toMatch(
+        /class="welcome-tunnel-link" id="welcomeTunnelBtn"[^>]*onclick="app\.toggleTunnelFromWelcome\(\)"/
+      );
+      const actions = html.indexOf('id="welcomeCliActions"');
+      const tunnel = html.indexOf('id="welcomeTunnelBtn"');
+      expect(actions).toBeGreaterThan(-1);
+      expect(tunnel).toBeGreaterThan(actions);
+      expect(html.indexOf('id="welcomeQr"')).toBeGreaterThan(tunnel);
+    });
+
+    it('never gives a phone shorter launcher chips than a tablet', () => {
+      // styles.css sizes chips for touch screens under (pointer: coarse);
+      // mobile.css's phone block loads later at equal specificity and wins on
+      // every phone, so a lower height there shrank the phone's chips below the
+      // tablet's (36px against 40px).
+      const chipHeights = (file: string, media: string) => {
+        const heights: number[] = [];
+        const css = readFileSync(resolve(import.meta.dirname, `../src/web/public/${file}`), 'utf8');
+        postcss.parse(css).walkRules('.welcome-chip', (rule) => {
+          if (rule.parent?.type !== 'atrule' || (rule.parent as AtRule).params !== media) return;
+          rule.walkDecls('height', (d) => {
+            heights.push(parseFloat(d.value));
+          });
+        });
+        return heights;
+      };
+      const touch = chipHeights('styles.css', '(pointer: coarse)');
+      const phone = chipHeights('mobile.css', '(max-width: 599px)');
+      expect(touch).toEqual([40]);
+      expect(phone.length).toBeGreaterThan(0);
+      for (const h of phone) expect(h).toBeGreaterThanOrEqual(Math.max(...touch));
     });
 
     it('falls back to the first ENABLED agent when the chosen run mode is disabled, never a hardcoded claude', () => {
@@ -539,13 +685,41 @@ describe('Codex quick start settings', () => {
       expect(src).not.toContain('data-mode="codex"');
     });
 
+    it('keeps Claude-only session options for claude even though it is a registry agent', () => {
+      const catalog = CATALOG.map((cli) => ({ ...cli, external: cli.id !== 'claude' && cli.id !== 'shell' }));
+      const { context } = loadUi(undefined, catalog);
+      expect(context.isExternalCliSession('claude')).toBe(false);
+      expect(context.isExternalCliSession('shell')).toBe(false);
+      expect(context.isExternalCliSession('codex')).toBe(true);
+      expect(context.isExternalCliSession('custom-agent')).toBe(true);
+    });
+
+    it('keeps the served external flag when App Settings resyncs the catalog from /api/clis', () => {
+      const catalog = CATALOG.map((cli) => ({ ...cli, external: cli.id !== 'claude' && cli.id !== 'shell' }));
+      const { app, context } = loadUi(undefined, catalog);
+      // /api/clis rows: no capabilities, so no `external`.
+      app._cliList = CATALOG.map((cli) => ({ ...cli, installed: true }));
+      app.runMode = 'claude';
+      app._syncCliLaunchCatalog();
+      expect(context.isExternalCliSession('claude')).toBe(false);
+      expect(context.isExternalCliSession('codex')).toBe(true);
+    });
+
+    it('gates Session Options on isExternalCliSession, not the launch-path check', () => {
+      const src = readFileSync(resolve(import.meta.dirname, '../src/web/public/session-ui.js'), 'utf8');
+      const open = src.slice(src.indexOf('\n  openSessionOptions('));
+      const body = open.slice(0, open.indexOf('\n  },'));
+      expect(body).toContain('isExternalCliSession(session.mode)');
+      expect(body).not.toContain('isExternalCliRunMode(');
+    });
+
     it('shows everything when the flags were never injected', () => {
       // A cached page from a build without the injection, or a solo popup. Hiding
       // every run button on a doubt would leave a working install nothing to click.
       const { app, welcomeCliActions, modeBtns, menu } = loadUi(undefined);
       app.applyWelcomeCliVisibility();
       app._refreshRunModeAvailability(menu);
-      expect(welcomeCliActions.children.map((btn: any) => btn.dataset.mode)).toContain('claude');
+      expect(offeredModes(welcomeCliActions)).toContain('claude');
       expect(modeBtns.gemini.style.display).toBe('flex');
     });
   });
@@ -731,10 +905,92 @@ describe('case selector refresh', () => {
     expect(app.run).toHaveBeenCalledTimes(1);
   });
 
+  it('ends the picker with "New or link a case…" and "Case settings…" rows that replaced the toolbar buttons', () => {
+    const elements: Record<string, any> = {};
+    const listeners: Record<string, (event: any) => void> = {};
+    let listClick: ((event: any) => void) | null = null;
+    const CodemanApp = function CodemanApp(this: any) {};
+    elements.quickStartCase = { value: 'Alpha', dataset: {} };
+    elements.quickStartCaseSearch = {
+      value: '',
+      dataset: {},
+      setAttribute: vi.fn(),
+      removeAttribute: vi.fn(),
+      addEventListener: vi.fn((event: string, handler: (event: any) => void) => {
+        listeners[event] = handler;
+      }),
+      select: vi.fn(),
+      blur: vi.fn(),
+    };
+    elements.quickStartCaseList = {
+      innerHTML: '',
+      classList: { add: vi.fn(), remove: vi.fn() },
+      addEventListener: vi.fn((event: string, handler: (event: any) => void) => {
+        if (event === 'click') listClick = handler;
+      }),
+    };
+    elements.quickStartCasePicker = { contains: () => true };
+    const context = vm.createContext({
+      CodemanApp,
+      localStorage: { getItem: () => null, setItem: () => {} },
+      document: { getElementById: (id: string) => elements[id] ?? null, addEventListener: vi.fn() },
+      console,
+      escapeHtml: (s: string) => s,
+      setInterval: () => 1,
+      clearInterval: () => {},
+      fetch: () => new Promise(() => {}),
+    });
+    const sessionUi = readFileSync(resolve(import.meta.dirname, '../src/web/public/session-ui.js'), 'utf8');
+    vm.runInContext(sessionUi, context, { filename: 'session-ui.js' });
+    const app = new (CodemanApp as any)();
+    app.cases = [{ name: 'Alpha' }, { name: 'zeta' }];
+    app.updateDirDisplayForCase = vi.fn();
+    app.updateMobileCaseLabel = vi.fn();
+    app.saveLastUsedCase = vi.fn();
+    app.updateCasePickerInput = vi.fn();
+    app.run = vi.fn(async () => {});
+    app.showCreateCaseModal = vi.fn();
+    app.toggleCaseSettings = vi.fn();
+    app.setupQuickStartCasePicker();
+
+    // Both rows render after the last case, also when nothing matches.
+    app.openCasePicker('');
+    const html = elements.quickStartCaseList.innerHTML;
+    const lastCase = html.lastIndexOf('data-case="');
+    expect(html.indexOf('data-case-action="add"')).toBeGreaterThan(lastCase);
+    expect(html.indexOf('data-case-action="settings"')).toBeGreaterThan(html.indexOf('data-case-action="add"'));
+    app.openCasePicker('no-such-case');
+    expect(elements.quickStartCaseList.innerHTML).toContain('No cases match');
+    expect(elements.quickStartCaseList.innerHTML).toContain('data-case-action="add"');
+
+    // The arrow keys walk past the cases (Alpha, testcase, zeta) onto the rows; Enter runs one.
+    app.openCasePicker('');
+    for (let i = 0; i < 3; i++) listeners.keydown({ key: 'ArrowDown', preventDefault: vi.fn() });
+    expect(elements.quickStartCaseList.innerHTML).toMatch(
+      /class="case-combobox-action active"[^>]*data-case-action="add"/
+    );
+    listeners.keydown({ key: 'Enter', preventDefault: vi.fn() });
+    expect(app.showCreateCaseModal).toHaveBeenCalledTimes(1);
+    expect(app.run).not.toHaveBeenCalled();
+
+    // A click on the settings row opens the case settings popover.
+    app.openCasePicker('');
+    const settingsRow = { dataset: { caseAction: 'settings' } };
+    listClick!({ target: { closest: (sel: string) => (sel === '.case-combobox-action' ? settingsRow : null) } });
+    expect(app.toggleCaseSettings).toHaveBeenCalledTimes(1);
+
+    // The toolbar buttons themselves are gone.
+    const html2 = readFileSync(resolve(import.meta.dirname, '../src/web/public/index.html'), 'utf8');
+    expect(html2).not.toContain('class="btn-case-add"');
+    expect(html2).not.toContain('class="btn-case-settings"');
+  });
+
   it('creates remote shell sessions by caseName instead of remote display path', async () => {
     const elements: Record<string, any> = {
       quickStartCase: { value: 'gpu-work' },
-      shellCount: { value: '1' },
+      // The toolbar's one instance stepper, shared by Run and Run Shell since
+      // the second (#shellCount) group was removed.
+      tabCount: { value: '1' },
     };
     const requests: Array<{ url: string; body?: any }> = [];
     const CodemanApp = function CodemanApp(this: any) {};
@@ -868,6 +1124,45 @@ describe('case selector refresh', () => {
       method: 'PUT',
       body: { lastUsedCase: 'kept-case' },
     });
+  });
+});
+
+describe('toolbar instance count', () => {
+  // Run Shell used to carry its own `#shellCount` stepper next to the Run one.
+  // It was removed (#428), so every launch path reads #tabCount through
+  // _readTabCount(), and an absent stepper (phones and tablets hide the group)
+  // has to read as 1, not throw.
+  function loadCounter(elements: Record<string, any>) {
+    const CodemanApp = function CodemanApp(this: any) {};
+    const context = vm.createContext({
+      CodemanApp,
+      localStorage: { getItem: () => null, setItem: () => {} },
+      document: { getElementById: (id: string) => elements[id] ?? null },
+      console,
+    });
+    const sessionUi = readFileSync(resolve(import.meta.dirname, '../src/web/public/session-ui.js'), 'utf8');
+    vm.runInContext(sessionUi, context, { filename: 'session-ui.js' });
+    return new (CodemanApp as any)();
+  }
+
+  it('reads the shared stepper and falls back to 1 when it is absent', () => {
+    expect(loadCounter({ tabCount: { value: '3' } })._readTabCount()).toBe(3);
+    expect(loadCounter({})._readTabCount()).toBe(1);
+    expect(loadCounter({ tabCount: { value: '' } })._readTabCount()).toBe(1);
+    expect(loadCounter({ tabCount: { value: '0' } })._readTabCount()).toBe(1);
+    expect(loadCounter({ tabCount: { value: '99' } })._readTabCount()).toBe(20);
+  });
+
+  it('no longer exposes the removed shell stepper handlers', () => {
+    const app = loadCounter({ tabCount: { value: '1' } });
+    expect(app.incrementShellCount).toBeUndefined();
+    expect(app.decrementShellCount).toBeUndefined();
+  });
+
+  it('ships one stepper in the toolbar markup, not two', () => {
+    const html = readFileSync(resolve(import.meta.dirname, '../src/web/public/index.html'), 'utf8');
+    expect(html).not.toContain('id="shellCount"');
+    expect(html.match(/class="tab-count-group"/g)).toHaveLength(1);
   });
 });
 
@@ -1227,4 +1522,65 @@ describe('Grok quick start', () => {
     expect(names).toEqual(['w1-grok-case', 'w2-grok-case', 'w3-grok-case']);
     expect(selected).toEqual(['sess-gk-0']);
   });
+});
+
+describe('case lookup before a local launch', () => {
+  function loadLaunchHarness(caseAnswer: Record<string, unknown>) {
+    const elements: Record<string, any> = {
+      quickStartCase: { value: 'nas-case' },
+      tabCount: { value: '1' },
+    };
+    const requests: Array<{ url: string; method?: string }> = [];
+    const written: string[] = [];
+    const CodemanApp = function CodemanApp(this: any) {};
+    const context = vm.createContext({
+      CodemanApp,
+      localStorage: { getItem: () => null, setItem: () => {} },
+      document: { getElementById: (id: string) => elements[id] ?? null },
+      fetch: async (url: string, init?: { method?: string }) => {
+        requests.push({ url, method: init?.method });
+        if (url === '/api/cases/nas-case') return { json: async () => caseAnswer };
+        if (url === '/api/cases' && init?.method === 'POST') {
+          return {
+            json: async () => ({
+              success: true,
+              data: { case: { name: 'nas-case', path: '/home/u/codeman-cases/nas-case' } },
+            }),
+          };
+        }
+        // Anything past the case lookup is out of scope here: stop the launch.
+        throw new Error(`stop: ${url}`);
+      },
+      console,
+    });
+    const sessionUi = readFileSync(resolve(import.meta.dirname, '../src/web/public/session-ui.js'), 'utf8');
+    vm.runInContext(sessionUi, context, { filename: 'session-ui.js' });
+    const app = new (CodemanApp as any)();
+    app.terminal = { clear: () => {}, writeln: (line: string) => written.push(line), focus: () => {} };
+    app.sessions = new Map();
+    app.cases = [];
+    app.getTerminalDimensions = () => null;
+    app._readTabCount = () => 1;
+    app.loadAppSettingsFromStorage = () => ({});
+    app.getCaseSettings = () => ({});
+    return { app, requests, written };
+  }
+
+  const unreachable = { success: false, error: 'Case folder is not responding', errorCode: 'OPERATION_FAILED' };
+  const missing = { success: false, error: 'Case not found', errorCode: 'NOT_FOUND' };
+
+  for (const launcher of ['runClaude', 'runShell'] as const) {
+    it(`${launcher} never creates a case when the lookup could not tell whether it exists`, async () => {
+      const { app, requests, written } = loadLaunchHarness(unreachable);
+      await app[launcher]();
+      expect(requests.some((r) => r.url === '/api/cases' && r.method === 'POST')).toBe(false);
+      expect(written.join('\n')).toContain('Case folder is not responding');
+    });
+
+    it(`${launcher} creates the case when the lookup says it does not exist`, async () => {
+      const { app, requests } = loadLaunchHarness(missing);
+      await app[launcher]();
+      expect(requests.some((r) => r.url === '/api/cases' && r.method === 'POST')).toBe(true);
+    });
+  }
 });

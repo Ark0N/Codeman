@@ -4,6 +4,7 @@
  * Extracted from the package.json one-liner for readability and debuggability.
  *
  * Steps:
+ *   0. Preflight: the build-time packages resolve (nothing is touched before it)
  *   1. TypeScript compilation
  *   2. Copy static assets (web/public, templates)
  *   3. Build vendor xterm bundles
@@ -13,6 +14,7 @@
  */
 
 import { execSync } from 'child_process';
+import { createRequire } from 'module';
 import { appendFileSync, readFileSync, writeFileSync, renameSync } from 'fs';
 import { createHash } from 'crypto';
 import { fileURLToPath } from 'url';
@@ -23,6 +25,31 @@ const ROOT = join(fileURLToPath(import.meta.url), '..', '..');
 function run(label, cmd) {
   console.log(`\n[build] ${label}`);
   execSync(cmd, { stdio: 'inherit', cwd: ROOT, shell: true });
+}
+
+// 0. Preflight: resolve the build-time packages the asset stage reads only AFTER it has
+// deleted dist/web/public (step 2), before anything is touched. A tree whose node_modules
+// predate them (a deploy that pulled but never ran `npm install`) used to fail mid-build
+// with dist/web/public already wiped, so the running server kept serving an index.html
+// whose hashed assets were gone. Keep the list in step with every require.resolve in
+// scripts/prepare-spreadsheet-assets.mjs (test/spreadsheet-assets.test.ts checks it).
+// Only specifiers that resolve without an exports map in the way: a subpath of a package
+// that has one (@xterm/*) can throw ERR_PACKAGE_PATH_NOT_EXPORTED while installed.
+// A hand-run of the asset stage alone (past a blocked tsc) skips this check.
+const BUILD_TIME_MODULES = ['exceljs/dist/exceljs.min.js', 'fflate'];
+const requireFromBuild = createRequire(import.meta.url);
+const missingModules = BUILD_TIME_MODULES.filter((specifier) => {
+  try {
+    requireFromBuild.resolve(specifier);
+    return false;
+  } catch {
+    return true;
+  }
+});
+if (missingModules.length > 0) {
+  console.error(`[build] missing build dependency: ${missingModules.join(', ')}`);
+  console.error('[build] run `npm install` first, then `npm run build` again. Nothing was built or deleted.');
+  process.exit(1);
 }
 
 // 1. TypeScript compilation
@@ -49,6 +76,9 @@ run('xterm-addon-serialize', 'npx esbuild node_modules/@xterm/addon-serialize/li
 run('xterm-addon-webgl', 'cp node_modules/@xterm/addon-webgl/lib/addon-webgl.js dist/web/public/vendor/xterm-addon-webgl.min.js');
 run('xterm-addon-unicode11', 'npx esbuild node_modules/@xterm/addon-unicode11/lib/addon-unicode11.js --minify --outfile=dist/web/public/vendor/xterm-addon-unicode11.min.js');
 run('xterm-zerolag-input', 'npx esbuild packages/xterm-zerolag-input/src/zerolag-input-addon.ts --bundle --minify --format=iife --global-name=XtermZerolagInput --outfile=dist/web/public/vendor/xterm-zerolag-input.js');
+// XLSX preview parser bundles: loaded only inside spreadsheet-preview-worker.js,
+// never by the page (see scripts/prepare-spreadsheet-assets.mjs).
+run('spreadsheet preview vendors', 'node scripts/prepare-spreadsheet-assets.mjs dist/web/public/vendor');
 
 // Append global aliases so app.js can use `new LocalEchoOverlay(terminal)`
 appendFileSync(
@@ -83,11 +113,14 @@ appendFileSync(
 
 // 4. Minify frontend assets
 run('minify input-cjk.js', 'npx esbuild dist/web/public/input-cjk.js --minify --outfile=dist/web/public/input-cjk.js --allow-overwrite');
+run('minify mobile-ime-preview.js', 'npx esbuild dist/web/public/mobile-ime-preview.js --minify --outfile=dist/web/public/mobile-ime-preview.js --allow-overwrite');
 run('minify terminal-keycode229-recovery.js', 'npx esbuild dist/web/public/terminal-keycode229-recovery.js --minify --outfile=dist/web/public/terminal-keycode229-recovery.js --allow-overwrite');
 run('minify i18n.js', 'npx esbuild dist/web/public/i18n.js --minify --outfile=dist/web/public/i18n.js --allow-overwrite');
 run('minify sanitize-html.js', 'npx esbuild dist/web/public/sanitize-html.js --minify --outfile=dist/web/public/sanitize-html.js --allow-overwrite');
+run('minify tab-layout-browser.js', 'npx esbuild dist/web/public/tab-layout-browser.js --minify --outfile=dist/web/public/tab-layout-browser.js --allow-overwrite');
 run('minify app.js', 'npx esbuild dist/web/public/app.js --minify --outfile=dist/web/public/app.js --allow-overwrite');
 run('minify tab-rail-resize.js', 'npx esbuild dist/web/public/tab-rail-resize.js --minify --outfile=dist/web/public/tab-rail-resize.js --allow-overwrite');
+run('minify header-divider.js', 'npx esbuild dist/web/public/header-divider.js --minify --outfile=dist/web/public/header-divider.js --allow-overwrite');
 run('minify terminal-ui.js', 'npx esbuild dist/web/public/terminal-ui.js --minify --outfile=dist/web/public/terminal-ui.js --allow-overwrite');
 run('minify respawn-ui.js', 'npx esbuild dist/web/public/respawn-ui.js --minify --outfile=dist/web/public/respawn-ui.js --allow-overwrite');
 run('minify ralph-panel.js', 'npx esbuild dist/web/public/ralph-panel.js --minify --outfile=dist/web/public/ralph-panel.js --allow-overwrite');
@@ -111,10 +144,13 @@ console.log('\n[build] content-hash cache busting');
     'notification-manager.js',
     'keyboard-accessory.js',
     'input-cjk.js',
+    'mobile-ime-preview.js',
     'terminal-keycode229-recovery.js',
     'sanitize-html.js',
+    'tab-layout-browser.js',
     'app.js',
     'tab-rail-resize.js',
+    'header-divider.js',
     'terminal-ui.js',
     'respawn-ui.js',
     'ralph-panel.js',
@@ -125,6 +161,7 @@ console.log('\n[build] content-hash cache busting');
     'api-client.js',
     'subagent-windows.js',
     'image-input.js',
+    'spreadsheet-preview.js',
     'vendor/xterm-zerolag-input.js',
     'vendor/xterm-predictive-echo.js',
   ];

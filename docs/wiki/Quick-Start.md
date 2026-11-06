@@ -42,7 +42,7 @@ To make a new one, click **+** next to the picker. The Add Case dialog has three
 
 | Tab               | Use it when                                                                                                        |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------ |
-| **Create New**    | Starting a fresh project. Creates `~/codeman-cases/<name>` and scaffolds a `CLAUDE.md` into it.                     |
+| **Create New**    | Starting a fresh project. Creates `~/codeman-cases/<name>` and scaffolds a `CLAUDE.md` into it. Tick **Create in a custom folder** to put it somewhere else instead. |
 | **Clone Repo**    | Working on an existing repo: public, or private once this machine's git can authenticate (the Docker image can include `gh`/`az` helpers for this). Paste the URL; Codeman preflights it as you type, offers the repo's real branches and tags, and fills in the case name. |
 | **Link Existing** | The code is already on disk. Point at the folder, with **Browse** if you would rather click than type.               |
 
@@ -131,7 +131,7 @@ the tmux server or rebooting the machine.
 | To do this                | Do that                                                             |
 | ------------------------- | ------------------------------------------------------------------- |
 | Interrupt the current turn | `Ctrl+C` with nothing selected, or the **Stop** button.            |
-| Close one session          | `Ctrl+W`, or the tab's close control.                              |
+| Close one session          | The tab's close control (`Ctrl+W` is delete-word in the terminal). |
 | Stop the server, keep agents | `codeman web --stop`. The tmux sessions stay alive.              |
 | Stop everything            | `tmux -L codeman kill-server`.                                     |
 

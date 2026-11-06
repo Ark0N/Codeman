@@ -5,7 +5,7 @@
 <h2 align="center">AI 编程智能体的任务控制中心</h2>
 
 <p align="center">
-  <em>Claude Code &bull; OpenCode &bull; Codex &bull; Antigravity &bull; Gemini &bull; Pi &bull; Grok &bull; DeepSeek &bull; OMP &bull; 终端 —— 统一仪表盘 &bull; 任意设备</em>
+  <em>Claude Code &bull; OpenCode &bull; Codex &bull; Antigravity &bull; Gemini &bull; Pi &bull; Grok &bull; DeepSeek &bull; OMP &bull; Copilot &bull; 终端 —— 统一仪表盘 &bull; 任意设备</em>
 </p>
 
 <p align="center">
@@ -21,19 +21,16 @@
   <a href="https://github.com/Ark0N/Codeman/stargazers"><img src="https://img.shields.io/github/stars/Ark0N/Codeman?style=flat-square&color=eab308" alt="GitHub stars"></a>
   <a href="https://github.com/Ark0N/Codeman/graphs/contributors"><img src="https://img.shields.io/github/contributors/Ark0N/Codeman?style=flat-square&color=3b82f6" alt="Contributors"></a>
   <a href="https://github.com/Ark0N/Codeman/commits/master"><img src="https://img.shields.io/github/commit-activity/t/Ark0N/Codeman?style=flat-square&color=1e3a5f" alt="Total commits"></a>
+  <a href="https://github.com/NipunaRanasinghe/awesome-ai-agents"><img src="https://img.shields.io/badge/Featured_in-Awesome_AI_Agents-2ea44f?style=flat-square" alt="Featured in Awesome AI Agents"></a>
 </p>
 
 <p align="center">
-  ⭐ <strong>喜欢 Codeman？<a href="https://github.com/Ark0N/Codeman">在 GitHub 上给它点个 Star 吧！</a></strong>只需轻点一下，就能帮助更多人发现这个项目。⭐
-</p>
-
-<p align="center">
-  <img src="docs/images/subagent-demo-20260724.gif" alt="Codeman — 并行子智能体可视化" width="900">
+  <img src="docs/images/tiles-crt-stats-1600-20261010.gif" alt="Codeman 平铺视图：六个实时智能体（DeepSeek Harness、Claude Code、Pi、Codex、OpenCode 和一个 shell）以 CRT 动画开启与关闭，顶部实时显示 CPU、内存和 Claude 套餐用量" width="800">
 </p>
 
 > 本文档由英文版 [`README.md`](README.md) 翻译而来。如有出入，以英文版为准。
 
-**Codeman** 是一个自托管的 AI 编程智能体任务控制中心。它在持久化的 tmux 会话里拉起 Claude Code、OpenCode、Codex、Antigravity、Gemini、Pi、Grok、DeepSeek Harness 或 OMP，把真实的终端流式传到任意浏览器，并在你离开之后让智能体继续干活：空闲时重新提示、用量限额重置后自动续跑、按计划执行任务，还能实时展示每一个后台智能体的工作。
+**Codeman** 是一个自托管的 AI 编程智能体任务控制中心。它在持久化的 tmux 会话里拉起 Claude Code、OpenCode、Codex、Antigravity、Gemini、Pi、Grok、DeepSeek Harness、OMP 或 GitHub Copilot CLI，把真实的终端流式传到任意浏览器，并在你离开之后让智能体继续干活：空闲时重新提示、用量限额重置后自动续跑、按计划执行任务，还能实时展示每一个后台智能体的工作。
 
 一行命令即可安装（macOS 和 Linux，Windows 通过 WSL）：
 
@@ -48,15 +45,16 @@ codeman web
 
 安装器在每次系统改动前都会先询问；重跑同一条命令即可原地更新。详见[快速开始 — 安装](#快速开始--安装)。
 
-- **一个仪表盘，九个 CLI**：每个会话可选 [Claude Code、OpenCode、Codex、Antigravity、Gemini、Pi、Grok、DeepSeek 或 OMP](#更多特性)（外加普通 shell），在本机、[Docker 容器](#隔离的-docker-会话)或 [SSH 远程主机](#远程-ssh-会话)上运行，你自己的仪表盘也能作为 [Web 标签页](#更多特性)并排打开
+- **一个仪表盘，十个 CLI**：每个会话可选 [Claude Code、OpenCode、Codex、Antigravity、Gemini、Pi、Grok、DeepSeek、OMP 或 GitHub Copilot](#更多特性)（外加普通 shell），在本机、[Docker 容器](#隔离的-docker-会话)或 [SSH 远程主机](#远程-ssh-会话)上运行，你自己的仪表盘也能作为 [Web 标签页](#更多特性)并排打开
 - **真正的手机友好**：[触控优化的终端](#移动端优化的-web-ui)，即时本地回显、二维码登录、滑动导航与推送通知
 - **睡觉时也在跑**：[空闲检测 + 重生循环](#重生控制器respawn-controller)，订阅限额重置后自动续跑，支持 24 小时以上的无人值守运行
 - **看见智能体在想什么**：每个子智能体和团队成员都有[实时浮动窗口](#实时智能体可视化)，附带实时活动记录
+- **智能体也能驱动它**：[codeman 技能](#智能体技能从这里开始)（适用于所有智能体 CLI）、[`codeman agent`](#codeman-agent每种-cli-模式都能用的会话间命令) 和一个 [MCP 服务器](#mcp-服务器codeman-mcp从任意-mcp-客户端驱动-codeman)，让一个智能体在任意 CLI 里拉起工作会话、给它们发提示、等它们完成并收回答案
 - **什么都不会丢**：tmux 让会话挺过重启和断网，输入精确一次送达，完整的回滚缓冲区回放
 - **自托管、私有**：默认仅环回、MIT 许可、无遥测，完全运行在你自己的机器上
 
 <p align="center">
-  <img src="docs/images/codeman-tour-20260724.png" alt="Codeman 仪表盘导览：按项目分组的会话标签页、一键 Run 启动新智能体、页头实时用量" width="900">
+  <img src="docs/images/codeman-tour-20261010.png" alt="Codeman 仪表盘导览：按项目分组的会话标签页、一键 Run 启动新智能体、页头实时用量" width="900">
 </p>
 
 ---
@@ -67,14 +65,15 @@ codeman web
 curl -fsSL https://getcodeman.com/install | bash
 ```
 
-该脚本会在缺失时自动安装 Node.js、tmux 和一套构建工具链（node-pty 没有 Linux 预编译包，需要从源码编译），把 Codeman 克隆到 `~/.codeman/app` 并完成构建。几点须知：
+该脚本会在缺失时自动安装 Node.js、tmux 和一套构建工具链（node-pty 没有 Linux 预编译包，需要从源码编译），把 Codeman 克隆到 `~/.codeman/app` 并完成构建。它会先看看机器上已有什么，最多问三个问题，然后无人值守地完成所有工作，最后给出访问 URL 和一个供手机扫描的二维码。几点须知：
 
-- **先询问，后改动。** 所有系统级改动（安装软件包、下载 AI CLI）都会先征求确认；结束时的菜单可选择：直接在本终端运行、安装为后台服务（systemd/launchd，开机自启），或暂不启动。不选就不会有任何后台进程。
-- **怎么访问，由你决定。** 安装器提供三种到达仪表盘的方式：**Tailscale**（环回绑定，由 `tailscale serve` 代理，得到带真实证书的 `https://<机器名>.<tailnet>.ts.net`，用你的 tailnet 当登录，无需密码）、**局域网内任意设备**（`0.0.0.0`，会提示设置一个强烈推荐的密码），或**仅本机**（`127.0.0.1`，最安全）。绑定网络却跳过密码需要显式确认，并以醒目警告收尾。高亮的默认项反映机器上已有的状态（已在用 Tailscale 时默认 Tailscale，重跑时沿用现有绑定），直接回车绝不会引入新软件。手动运行的 `codeman web` 仍默认仅环回。
-- **重跑即更新。** 再次运行同一条命令即可原地更新已完成的安装：`~/.codeman/app` 中的本地改动会被 stash（绝不丢弃），运行中的服务会自动重启并校验。若首次安装中途失败，重跑会继续完成完整的安装流程。也可以使用 `install.sh update` 与 `install.sh uninstall`。
-- **CI / 无终端环境：** 没有终端时，涉及系统改动的步骤会带着说明中止，而不是静默执行；在自动化场景设置 `CODEMAN_NONINTERACTIVE=1` 即可批准这些步骤。
+- **三个问题，全部在开头问完。** 仪表盘怎么访问、（可选）这台机器在你的 tailnet 里叫什么，以及是否把 Codeman 作为后台服务运行（systemd/launchd，开机自启；直接回车即为「是」）。所有需要你出面的事，包括对所有缺失软件包的一次性同意、一次 sudo 密码和 Tailscale 登录，都在构建之前完成，所以编译期间你可以走开。
+- **怎么访问，由你决定。** 安装器提供三种到达仪表盘的方式：**Tailscale**（环回绑定，由 `tailscale serve` 代理，得到带真实证书的 `https://<机器名>.<tailnet>.ts.net`，用你的 tailnet 当登录，无需密码）、**局域网内任意设备**（`0.0.0.0`，会提示设置一个强烈推荐的密码），或**仅本机**（`127.0.0.1`，最安全）。绑定网络却跳过密码需要显式确认，并以醒目警告收尾。高亮的默认项反映机器上已有的状态（已在用 Tailscale 时默认 Tailscale，重跑时沿用现有绑定），直接回车绝不会引入新软件。如果你节点上的 `:443` 已被别的应用占用，Codeman 会改用 `https://<机器名>.<tailnet>.ts.net/codeman` 或第二个端口，而不是把它替换掉。手动运行的 `codeman web` 仍默认仅环回。
+- **名字由你来定。** 默认情况下，URL 用的是这台机器在 tailnet 里现有的名字。第二个问题答「是」会把机器改名为 `codeman-<hostname>`（这也会改掉它在 SSH 里的名字，所以默认是「否」）；之后也可以用 `install.sh name` 来改。
+- **重跑即更新。** 再次运行同一条命令即可原地更新已完成的安装：`~/.codeman/app` 中的本地改动会被 stash（绝不丢弃），运行中的服务会自动重启并校验。若首次安装中途失败，重跑会继续完成完整的安装流程。`install.sh status` 会再次打印 URL 和二维码；另外还有 `install.sh update`、`install.sh tailscale` 和 `install.sh uninstall`。
+- **给急性子的参数。** `curl -fsSL https://getcodeman.com/install | bash -s -- --tailscale --service` 直接在命令行上回答这些问题（还有 `--lan`、`--local`、`--run`、`--no-start`、`--name <n>`、`--port <n>`、`--yes`）。**CI / 无终端环境：** 没有终端时，涉及系统改动的步骤会带着说明中止，而不是静默执行；在自动化场景设置 `CODEMAN_NONINTERACTIVE=1` 即可批准这些步骤。
 
-你至少需要安装一个 AI 编程 CLI —— [Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[OpenCode](https://opencode.ai)、[Codex](https://developers.openai.com/codex/cli)、[Antigravity](https://antigravity.google)、[Gemini CLI](https://github.com/google-gemini/gemini-cli)、[Pi](https://pi.dev)、[Grok Build](https://github.com/xai-org/grok-build)、[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 或 [OMP](https://github.com/can1357/oh-my-pi)（任意组合均可；自 Google 面向消费者停售后，Gemini CLI 仅限企业版，Antigravity 是其继任者）。安装器会自动检测这九个中已安装的任意一个；若一个都没有，会给出一个菜单让你安装其中任意一个（DeepSeek 除外，它的 npm 包只装一个启动器，没有可运行的 profile），也可以选择跳过、稍后自行安装。安装完成后：
+你至少需要安装一个 AI 编程 CLI —— [Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[OpenCode](https://opencode.ai)、[Codex](https://developers.openai.com/codex/cli)、[Antigravity](https://antigravity.google)、[Gemini CLI](https://github.com/google-gemini/gemini-cli)、[Pi](https://pi.dev)、[Grok Build](https://github.com/xai-org/grok-build)、[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)、[OMP](https://github.com/can1357/oh-my-pi) 或 [GitHub Copilot CLI](https://github.com/github/copilot-cli)（任意组合均可；自 Google 面向消费者停售后，Gemini CLI 仅限企业版，Antigravity 是其继任者）。安装器会自动检测这十个中已安装的任意一个；若一个都没有，会给出一个菜单让你安装其中任意一个（DeepSeek 除外，它的 npm 包只装一个启动器，没有可运行的 profile），也可以选择跳过、稍后自行安装。安装完成后：
 
 ```bash
 codeman web
@@ -217,6 +216,8 @@ Codeman 依赖 tmux，因此 Windows 用户需要 [WSL](https://learn.microsoft.
 
 - **键盘配件栏** —— 在虚拟键盘上方提供 `/init`、`/clear`、`/compact` 快捷按钮；破坏性命令需双击确认，绝不误触；在 Codex 会话上还会显示 `⇧←` / `⇧→`（Shift+Left / Shift+Right：编辑上一条排队的消息 / 在提示栈里回退）
 - **独立的 Enter 按钮** —— 以按键方式回放，先冲刷本地回显缓冲的文本，不会让内容滞留在屏幕上
+- **附件按钮**：麦克风旁边的图片图标会直接打开系统的照片与文件面板，不会弹出键盘。照片和相册里的视频（mp4、mov、webm，最大 1 GB）会上传到会话所在的文件夹，文件路径落在你的提示里，但不会自动发送
+- **在 shell 里粘贴**：多行粘贴会作为一整块插入并等你按 Enter，而不是一边到达一边逐行执行
 - **滑动导航与智能键盘处理** —— 左右滑动切换会话；键盘弹出时工具栏与终端整体上移（`visualViewport` API）
 - **为手机而生** —— 刘海与 Home 指示条的安全区适配、44px 触控目标、底部抽屉式 case 选择器、原生惯性滚动；折叠屏手机（iPhone Duo）上对话框会避开铰链，开合设备也绝不会被误判成键盘弹出
 
@@ -225,7 +226,7 @@ codeman web --https
 # 在手机上打开：https://<你的IP>:3000
 ```
 
-> `localhost` 走纯 HTTP 即可。从其他设备访问时请使用 `--https`，或使用 [Tailscale](https://tailscale.com/)（推荐）：安装器可以替你配好（在网络访问提示处选择 **Tailscale**，或在已有安装上运行 `bash ~/.codeman/app/install.sh tailscale`）。这样你会得到带真实证书的 `https://<你的机器>.<tailnet>.ts.net`：只对你的 tailnet 可见、无需密码，手机上的 PWA 安装和推送通知也都能用。
+> `localhost` 走纯 HTTP 即可。从其他设备访问时请使用 `--https`，或使用 [Tailscale](https://tailscale.com/)（推荐）：安装器可以替你配好（在网络访问提示处选择 **Tailscale**，或在已有安装上运行 `bash ~/.codeman/app/install.sh tailscale`）。这样你会得到带真实证书的 `https://<你的机器>.<tailnet>.ts.net`：只对你的 tailnet 可见、无需密码，手机上的 PWA 安装和推送通知也都能用。安装器最后会给出这个 URL 和一个可扫描的二维码，之后随时可以用 `bash ~/.codeman/app/install.sh status` 再次打印。
 
 ### 安全的二维码认证
 
@@ -261,7 +262,7 @@ codeman service install           # systemd/launchd 服务：重启后自动回�
 | 字段                   | 作用                                                                                        |
 | ---------------------- | ------------------------------------------------------------------------------------------- |
 | **工作目录 / case**    | 智能体操作的文件夹。「case」就是一个 Codeman 记住的命名工作目录。**Add Case** 可以从零创建、链接一个已有文件夹，或把一个 GitHub 仓库直接克隆成 case（**Clone Repo**）。 |
-| **CLI / 运行模式**     | `Claude`（默认）、`OpenCode`、`Codex`、`Antigravity`、`Gemini`、`Pi`、`Grok`、`DeepSeek`、`OMP` 或 `Terminal`（普通 shell）。 |
+| **CLI / 运行模式**     | `Claude`（默认）、`OpenCode`、`Codex`、`Antigravity`、`Gemini`、`Pi`、`Grok`、`DeepSeek`、`OMP`、`Copilot` 或 `Terminal`（普通 shell）。 |
 | **模型**               | 每会话模型（App Settings → Models → New Claude sessions）。软默认值 —— 会话内 `/model` 依然有效。 |
 | **Effort / Ultracode** | 推理力度（`low`–`max`），或用 `ultracode` 开启动态多智能体工作流。随时可用 `/effort` 切换。 |
 
@@ -269,18 +270,18 @@ codeman service install           # systemd/launchd 服务：重启后自动回�
 
 ### 3. 读懂仪表盘
 
-- **标签（顶部）** —— 每个会话一个。`Alt+1`–`9` 跳转，`Ctrl+Tab` 下一个，拖拽排序（标签顺序会跨设备同步）。更喜欢列表？**App Settings → Appearance → Tabs** 可以把它挪进左侧边栏（带筛选框，`Alt+B` 折叠）或一条竖向导轨，导轨的行按活动状态排序：先是等你处理的，然后是跑得最久的，最后是刚刚安静下来的。
+- **标签（顶部）** —— 每个会话一个。`Alt+1`–`9` 跳转，`Ctrl+Tab` 下一个，拖拽排序（标签顺序会跨设备同步）。更喜欢列表？**App Settings → Appearance → Tabs** 可以把它挪进左侧边栏（带筛选框，`Alt+B` 折叠）或一条竖向导轨，导轨的行按活动状态排序：先是等你处理的，然后是跑得最久的，最后是刚刚安静下来的。导轨上还有一个 **Search sessions** 搜索框、命名的**标签分组**（分组菜单里的 **New session** 会直接在该组里新建会话），以及一个 **Focus** 区，放着你常回去的那些标签的快捷方式。
 - **终端（中央）** —— 真实的 `xterm.js` 终端；完整 TUI 正常渲染。直接输入并按 **Enter** 发送。`Shift+Enter` 插入换行。
 - **侧边面板** —— Respawn、Orchestrator、Cron、Subagents、Settings（从工具栏切换）。
 
 ### 4. 与智能体对话
 
 - **直接在终端输入提示** —— 即使跨越重连，输入也是精确一次送达（连接中断绝不会丢失或重复发送提示）。
-- **粘贴或拖放图片**，直接进入会话。
+- **粘贴、拖放或附加图片、视频和文档**（PDF、Office 文件、zip 和纯文本），直接进入会话。它们保存在工作区里一个隐藏的 `.codeman-uploads/` 文件夹中（它在 git 里会忽略自己，7 天后被清理），文件路径会落在你的提示里，但不会自动发送。
 - **语音输入** —— `Ctrl+Shift+V`（Deepgram Nova-3，或者直接用这台机器的 Claude Code 登录、不需要任何 API key；自动静音停止）。
-- **附件** —— 注册外部文件/文档，并内联预览 Office/PDF；智能体打印出的任何文件路径都可以点击，终端里和对话视图里都行。
-- **需要你的时候** —— 标签会变黄（等待输入）或变红（有个问题挡住了它）。**审批收件箱（Approvals Inbox）**（可选启用）把所有会话里等着你的提示排成一个队列，可以从页头的铃铛或手机首页直接作答；🧠 **Read My Mind**（可选启用）会根据这个 case 的目标和最近的工作替你起草下一条提示。
-- **看到什么就能复制什么** —— `Shift+拖动` 在 CLI 接管了鼠标时也能选中文本，右键复制选中内容，自动复制（Auto Copy，可选启用）在松开鼠标的瞬间就复制。
+- **附件** —— 注册外部文件/文档，并内联预览 Office/PDF；智能体打印出的任何文件路径都可以点击，终端里和对话视图里都行，包括 `~/` 路径、相对路径和被折成多行的路径。`.html` 报告会以真实网页打开，Markdown 会渲染后打开，文件夹则以其文件的网格打开。
+- **需要你的时候** —— 标签会变黄（等待输入）或变红（有个问题挡住了它）。**审批收件箱（Approvals Inbox）**（可选启用）把 Claude Code、Codex 和 DeepSeek Harness 会话里等着你的提示排成一个队列。Claude 的提示可以在页头的铃铛里直接作答，Claude 的对话框也可以在手机首页作答，Claude 的权限请求还可以用推送通知上的 Approve/Deny 按钮作答；Codex 和 DeepSeek 的条目只是提醒，会告诉你去终端里作答；其他 CLI 的提示不会进入收件箱。🧠 **Read My Mind**（可选启用）会根据这个 case 的目标和最近的工作替你起草下一条提示。
+- **看到什么就能复制什么** —— `Shift+拖动` 在 CLI 接管了鼠标时也能选中文本，右键复制选中内容，自动复制（Auto Copy，可选启用）在松开鼠标的瞬间就复制。用 OSC 52 复制的程序（Claude Code 的 `/copy`、tmux 的 yank、vim）也会把文本放进你浏览器的剪贴板。
 
 ### 5. 让它自主运行
 
@@ -299,7 +300,7 @@ codeman service install           # systemd/launchd 服务：重启后自动回�
 
 ### 7. 运维与维护
 
-- **App Settings** —— 模型、effort、权限启动模式、主题/皮肤、终端字体与字重、入场动画、通知、显示开关、各 CLI 的专属选项，以及跨设备同步的自定义显示名称和按设备保存的英文/简体中文界面语言。
+- **App Settings** —— 模型、effort、权限启动模式、主题/皮肤、终端字体与字重、入场与平铺动画（有自己的 **Animations** 分区）、通知（toast 和浏览器通知的显示时长可调）、显示开关、各 CLI 的专属选项，以及跨设备同步的自定义显示名称和按设备保存的英文/简体中文界面语言。**Apply** 按钮保存设置但不关闭设置窗口。
 - **让它在后台运行** —— `codeman web -d` 脱离你的 shell（`--status`、`--stop`）；`codeman service install` 把它装成 systemd 用户单元 / macOS LaunchAgent，重启后自动回来。两者都会先确认服务器真正应答再报告成功，也都拒绝在同一个数据目录上启动第二个服务器。见[让它在后台一直运行](#快速开始--安装)。
 - **自更新** —— git-clone 安装可在 **App Settings → System → Updates** 中原地更新。
 - **部署你自己的改动** —— 见[开发](#开发)。
@@ -386,6 +387,21 @@ WATCHING → IDLE DETECTED → SEND UPDATE → /clear → /init → CONTINUE →
 
 运行 **20 个并行会话**且全程可见 —— 60fps 的实时 xterm.js 终端、按会话的 token 与成本跟踪、基于标签的导航，以及一键管理。
 
+### 平铺网格
+
+<p align="center">
+  <img src="docs/images/tile-grid-20261009.gif" alt="平铺网格：点击平铺按钮，六个实时会话并排打开（DeepSeek Harness、Claude Code、Codex、一个 shell、OpenCode 和 Pi），再点击一次即回到单个会话" width="800">
+</p>
+
+在一个窗口里并排查看和操作最多**六个会话**。点击顶栏的**平铺**按钮（或按 `Ctrl+Shift+G`），会话会以实时终端网格的形式打开：每个窗格都能直接接收键盘输入，并在窗格标题栏中显示智能体的图标、模型和状态。右键单击**平铺**可选择 2、4 或 6 个窗格，按住窗格标题栏拖动即可移动窗格。再次点击**平铺**即回到单个会话。仅限桌面端（窗口宽度约 1180px 以上）。完整说明：[Tile Grid](docs/wiki/Tile-Grid.md)（英文）。
+
+- **先开重要的**：还没有排好网格时，它会先放正在工作的会话，然后是等你处理的，再是最近用过的，并且总会包含你当前所在的会话。
+- **记住你的布局**：一旦你排好网格（哪个会话在哪、空着的格子、窗格数、分隔条大小、聚焦和放大的窗格），平铺按钮会原样恢复它，网格打开时刷新页面也一样。
+- **平铺动画**（可选启用）：**App Settings → Animations → Tile Animations** 让网格华丽登场：**CRT**（每个窗格像老显像管一样以一道亮线开机，就是顶部 GIF 里那样）、**Fly from tab**、**Deal**、**Beam down**、**Cascade**、**Pop** 或 **Soft**。开启「减少动态效果」时一切静止。
+- **滚动和主终端一样**：鼠标滚轮会在窗格里滚动全屏 Claude 的对话，Codex 窗格会翻页查看它的记录，`Shift+滚轮` 滚动窗格的本地历史。
+- **分离窗格（Detach Tiles）**（测试版，可选启用）：打开 **App Settings → Appearance → Detach Tiles** 后，把窗格标题栏拖出浏览器，它就弹出成独立窗口；拖到另一个 Codeman 窗口的窗格上，它就移到那边。
+- **徒手操作**：开启[手势叠加层](#更多特性)后，捏住一个窗格拖到另一个窗格上即可交换，拖到空格子上即可移动，把一个标签拖进网格即可加入。
+
 ### 持久化会话
 
 每个会话都运行在 **tmux** 内 —— 会话可在服务器重启、网络中断与机器休眠后存续。启动时自动恢复，具备双重冗余。幽灵会话发现机制能找到孤立的 tmux 会话。受管会话带有环境标签，因此智能体不会杀掉自己的会话。
@@ -419,7 +435,7 @@ codeman web --title-hostname dev-box       # codeman:dev-box（用于覆盖嘈�
 ### 标签提醒（Tab Alerts）
 
 <p align="center">
-  <img src="docs/images/tab-alerts-glow-20260815.gif" alt="会话标签：一个普通的活动标签，旁边是黄色的等待输入标签和红色的需要决定标签，都带着呼吸式光晕" width="900">
+  <a href="docs/images/codeman-tab-states-20261010.png"><img src="docs/images/codeman-tab-states-20261010.gif" alt="标签状态（带标注）：一个绿色描边在转的工作中标签，一个被智能体的问题挡住的红色标签（问题显示在它下方），以及一个回合已完成的黄色标签，两个提醒标签都在呼吸闪烁" width="900"></a>
 </p>
 
 每个标签一眼就能看出状态。运行中的会话保持绿色状态点。会话停下来等待输入时，标签变**黄**：稳定的描边、着色的背景、黄色的点，上面叠一层缓慢的呼吸光晕。当权限提示或提问**挡住**了智能体，标签变**红**，脉动更快。底色永远不会闪灭，所以哪怕只瞥一眼（或截一张图）也能读到真实状态；标签被选中时描边依然可见，页面刷新后会从服务端重新装载待处理的提醒，因此一个被挡住的会话绝不可能藏在一个看起来正常的标签后面。
@@ -445,9 +461,12 @@ PTY 输出 → 16ms 服务端批处理 → DEC 2026 包裹 → SSE → 客户端
 ## 更多特性
 
 - **后台守护进程与服务安装** —— `codeman web -d` 以脱离终端的方式运行服务器，带 pid 文件、`~/.codeman/web.log` 和经过校验的启动（它会轮询到服务器应答为止，所以端口冲突绝不会被当成成功）；`codeman service install` 写入一个 systemd 用户单元（Linux）或 LaunchAgent（macOS），并把你 shell 的 PATH 一并写进去，这样 nvm 或 Homebrew 装的 `node`、`tmux` 和 `claude` 才真的找得到。机密永远不会写进单元文件
+- **设置里的诊断**：**App Settings → System → Diagnostics → Run checks** 会在服务器上运行 `codeman doctor`，列出 Node、tmux、每个智能体 CLI 以及可选的 Office 工具，附带版本、路径和安装提示。除了 `PATH`，它还会查找每个 CLI 惯常的安装目录（`~/.local/bin`、`~/.npm-global/bin` 之类），所以即使服务只拿到一个最小的 `PATH`，大多数安装也能被找到。多用户模式下仅管理员可用
 - **自更新** —— systemd/launchd 管理下的 git-clone 安装可在 **App Settings → System → Updates** 中原地更新：它会检测最新发行版，自动暂存（stash）脏工作树，并在服务重启期间流式展示构建进度（npm 安装会被报告为不可更新）
+- **底栏里的 Git 状态**：默认关闭（**App Settings → Header & Panels → Bottom bar → Git status**，按设备生效）。底栏右侧的一个小指示器让你一眼看清当前会话所在仓库的状态：`● 3` 表示未提交的文件，`↑ 2` 表示未推送的提交，`⚠` 表示合并冲突，`✓` 表示全部已提交并推送。点击它会打开一个可拖动的窗口，列出已暂存、未暂存、未跟踪和有冲突的文件（按折叠的文件夹分组，关掉该设置则显示为平铺列表）以及未推送的提交；**点击文件即可查看它的 diff**（新文件全部显示为新增，已删除的文件全部显示为删除），**Open file** 可直接跳到查看器。一个包含多个项目的文件夹，会为向下两层内找到的每个仓库各给一个可折叠分区，打开之前全部折叠。只读且离线（Codeman 绝不 fetch，也绝不改动仓库）；Docker 和远程会话不显示
 - **把 GitHub 仓库克隆成 case** —— 在 **Add Case → Clone Repo** 里粘贴一个仓库 URL，Codeman 会把它克隆到 `~/codeman-cases/<name>` 并注册为普通 case，随时可以跑智能体。输入时它会预检 URL（告诉你能否匿名克隆，并为可选的分支/标签字段提供仓库真实的分支与标签），从 URL 里填好 case 名，还让你选 Run 按钮该用哪个 CLI。支持 `https://` 的公开仓库；Codeman 绝不收集或保存凭据
-- **多 CLI** —— 每个会话可选 **Claude Code**、**OpenCode**、**Codex**、**Antigravity**、**Gemini**、**Pi**、**Grok**、**DeepSeek Harness** 或 **OMP**；环境变量前缀自动隔离（`CLAUDE_CODE_*`、`OPENCODE_*`、`CODEX_*`、`ANTIGRAVITY_*`、`GEMINI_*`/`GOOGLE_*`、`PI_*`、`GROK_*`/`XAI_*`、`DSH_*`/`DEEPSEEK_*` 与 `OMP_*`）。详见 [`docs/opencode-integration.md`](docs/opencode-integration.md)、[`docs/pi-integration.md`](docs/pi-integration.md)、[`docs/grok-integration.md`](docs/grok-integration.md)、[`docs/deepseek-integration.md`](docs/deepseek-integration.md) 与 [`docs/omp-integration.md`](docs/omp-integration.md)
+- **在自定义文件夹里创建 case**：在 **Add Case → Create New** 里勾选 **Create in a custom folder**，选一个父文件夹（可用 Browse 浏览）和一个名字，Codeman 就会在那里而不是 `~/codeman-cases` 里搭建新 case。目标必须是一个新的或空的文件夹；系统目录、你的主目录本身、`~/.ssh` 这类凭据目录，以及 Codeman 自己的数据目录都会被拒绝。多用户模式下仅管理员可用
+- **多 CLI** —— 每个会话可选 **Claude Code**、**OpenCode**、**Codex**、**Antigravity**、**Gemini**、**Pi**、**Grok**、**DeepSeek Harness**、**OMP** 或 **GitHub Copilot CLI**；环境变量前缀自动隔离（`CLAUDE_CODE_*`、`OPENCODE_*`、`CODEX_*`、`ANTIGRAVITY_*`、`GEMINI_*`/`GOOGLE_*`、`PI_*`、`GROK_*`/`XAI_*`、`DSH_*`/`DEEPSEEK_*`、`OMP_*` 与 `COPILOT_*`）。详见 [`docs/opencode-integration.md`](docs/opencode-integration.md)、[`docs/pi-integration.md`](docs/pi-integration.md)、[`docs/grok-integration.md`](docs/grok-integration.md)、[`docs/deepseek-integration.md`](docs/deepseek-integration.md)、[`docs/omp-integration.md`](docs/omp-integration.md) 与 [`docs/copilot-integration.md`](docs/copilot-integration.md)
 - **自定义模型端点**（1.29.0 新增，目前仅 HTTP API）—— 让某个会话的 CLI 指向任意 OpenAI 兼容端点，而不是它自己的官方后端：本地的 llama.cpp、llama-swap、Ollama 或 vLLM 机器，也可以是 Azure AI Foundry、OpenRouter 这类云端网关。端点只需保存一次（`POST /api/model-endpoints`，模型列表从它的 `/v1/models` 自动发现），再应用到会话（`POST /api/sessions/:id/custom-model`），CLI 就会在原地重启并接上该端点。Claude、OpenCode、Pi、Grok 与 OMP 已实测通过；Codex、Gemini 与 DeepSeek 存在已记录的缺口，Antigravity 没有可用机制。工具栏选择器是下一步。详见 [`docs/custom-model-endpoints.md`](docs/custom-model-endpoints.md)
 - **Web 标签页** —— 把 Grafana、Uptime Kuma、一个 Vite 开发服务器或任何仪表盘 URL 作为标签页打开在会话旁边（Run 下拉菜单 → **Web / URL** → **Add URL**）。仪表盘通过 Codeman 自己的源代理，因此 `http://` 目标在手机上走 HTTPS 也能用、走隧道也能用；单页应用能在自己的路径上正常路由，页面自己重载后也能自行恢复。智能体打印出的 `localhost` 链接会自动以 Web 标签页打开。详见 [`docs/web-tabs.md`](docs/web-tabs.md)
 - **Docker 会话** —— 在隔离且加固的容器中运行 case。**Create New** 上勾选一个复选框即可用合理的默认值启动容器并在其中启动智能体；同一 case 的多个会话共享一个容器，也可以把 case 挂到你已经在跑的容器上；可将容器连同工作区导出为可移植的 `.tar.gz`，迁移到另一台机器。详见 [`docs/docker-cases.md`](docs/docker-cases.md)
@@ -458,10 +477,15 @@ PTY 输出 → 16ms 服务端批处理 → DEC 2026 包裹 → SSE → 客户端
 - **手势控制** _(可选)_ —— 一个 MediaPipe 手部追踪叠加层，可徒手抓取/拖动会话窗口并捏合按钮。用 `CODEMAN_GESTURE=1` + App Settings → Terminal & Input 启用
 - **多显示器横跨** _(macOS)_ —— 一键打开一个横跨所有显示器最大化的浏览器窗口，让浮动的智能体/手势面板可以跨越物理拼接缝
 - **文件查看器按钮** _(可选)_ —— 页头新增一个按钮，一键切换内置文件浏览器面板；在 App Settings → Header & Panels → Header buttons 中启用
+- **HTML 报告以网页打开**：点击智能体打印出的 `.html` 路径（测试报告、覆盖率页面、仪表盘），文件查看器会把它显示成一个真实网页，并带上同一文件夹里的脚本、样式、图片和数据文件；**Page** 胶囊按钮可切到源码及其 Edit 按钮。页面在沙箱里以不透明源运行，所以它读不到 Codeman 的 cookie、调不了 Codeman 的 API，也读不了自己文件夹以外的文件。网络访问保持开放，因此从 CDN 加载 Chart.js 或字体的仪表盘和直接从磁盘打开时一样能用。范围过大的文件夹（`/`、你的主目录、`/tmp`）会被拒绝，所以请给报告一个单独的文件夹。在终端里点击的 `.md` 路径也会渲染后打开
+- **可点击的路径与文件夹网格**：写成 `~/…`、相对于会话文件夹或被折成多行的路径，在终端和回复查看器（Response Viewer）里都能点击，文件夹也可以：点击文件夹会打开它的文件网格（渲染图、截图、报告），用方向键翻看
+- **OSC 52 剪贴板**：会话里的程序用 OSC 52 设置剪贴板时（Claude Code 的 `/copy`、tmux 的 yank、vim），文本会进入你浏览器的剪贴板，主终端和每个平铺窗格都一样。读取剪贴板的请求一律拒绝，回放缓冲区也绝不会触发复制
+- **MCP 服务器同步**（可选启用）：把每个已安装 CLI 的用户级 MCP 服务器（Claude、Codex、Gemini、OpenCode、Antigravity，以及 GitHub Copilot CLI）复制进其他 CLI 自己的配置文件。只增不改，你关掉的服务器绝不会被复制，**Preview** 会先列出改动，原文件保留为 `.codeman-bak`。位于 App Settings → Agents & CLIs；多用户模式下仅管理员可用
 - **CJK / 输入法支持** —— 完整支持中文 / 日文 / 韩文的组合输入，Ctrl、Alt 修饰的导航键也会原样透传给 CLI
 - **页头里的套餐用量** —— 页头实时显示 Claude 订阅用量（5 小时窗口与每周窗口），数据来自 Codeman 在拉起 `claude` 时临时交给它的 statusline 导出器，绝不会写进你的设置文件；Codex 的限额则来自它自己的 app-server。按设备生效：桌面默认开，手机默认关
-- **会话列表，随你摆** —— 页头横条、带筛选框的左侧边栏，或一条竖向导轨，导轨的详细行带有创建时间与状态时长并按活动状态排序；手机首页和桌面首页导轨用的是同一套顺序
-- **终端外观** —— 七套皮肤（其中四套浅色）、按设备保存的字体与字重（内置的 JetBrains Mono 覆盖 100 到 800 的字重），以及可选启用的入场动画，覆盖标签、智能体窗口、终端面板和连接线
+- **提示缓存状态**：每个 Claude 会话都会显示它的提示缓存是热的（`cache:until HH:MM`）还是冷的，显示在页脚（前提是你没有自己的 statusline）和 Session Options → Respawn 中，并给出重新缓存的代价，压缩上下文后还会附一条说明。只做显示，重启后依然保留
+- **会话列表，随你摆** —— 页头横条、带筛选框的左侧边栏，或一条竖向导轨，导轨的详细行带有创建时间与状态时长并按活动状态排序；手机首页和桌面首页导轨用的是同一套顺序。导轨上的 **Search sessions** 会把列表筛到名字匹配的标签，跨所有分组；带提醒的标签即使名字不匹配也始终可见。命名的**标签分组**可以折叠、重排和拖入拖出；分组菜单里有 **New session**，智能体拉起的工作会话会落在它的父会话后面（**Spawned tabs follow their parent**，默认关闭，开启后它会跟着父会话移动）。**Add to Focus** 会在导轨顶部的一个区里为任意标签放一个快捷方式，**CLI Logos on Tabs** 可以按设备关闭
+- **终端外观** —— 七套皮肤（其中四套浅色）、按设备保存的字体与字重（内置的 JetBrains Mono 覆盖 100 到 800 的字重），以及可选启用的动画，覆盖标签、智能体窗口、终端面板、连接线和[平铺网格的窗格](#平铺网格)，全部位于 App Settings → Animations（附带一个试玩用的动画实验室）
 - **操作系统通知与主机名感知标题** —— 桌面提醒与标签标题以 `codeman:<host>` 为前缀，使多主机配置不再含糊
 
 ---
@@ -476,7 +500,7 @@ PTY 输出 → 16ms 服务端批处理 → DEC 2026 包裹 → SSE → 客户端
 - **默认加固** —— 非 root、`--cap-drop ALL`、`no-new-privileges`、PID/内存上限，绝不使用 `--privileged` 或 docker socket；**密封（sealed）** 配置（不注入主机凭据、关闭网络）只需一个开关。
 - **无感认证、凭据隔离** —— 主机上的 Claude / Codex / Antigravity / Gemini / OpenCode / Pi / Grok / OMP 登录在容器内开箱即用：凭据在启动时以只读种子方式复制注入，onboarding/信任提示已预先答复，不会弹出登录向导。容器保留自己的副本，绝不回写主机的凭据存储；跨边界共享的只有对话转录，导出文件也绝不包含机密。
 - **挂到你已经在跑的容器上** —— 在 Docker 面板勾选 **Attach to an existing container**，就能把 case 链接到一个现成容器，而不是新建一个。Codeman 只 `exec` 进去，绝不启动、停止、重启或删除它；一个被接管的容器可以在不同目录下支撑多个 case，**复制一个已有 case** 会用同一容器上的兄弟 case 预填表单。多用户模式下仅管理员可用，因为容器的挂载属于启动它的人。
-- **迁移到另一台机器** —— 把容器的完整环境（工具链 + 工作区）导出为可移植的 `.tar.gz`，在另一台机器上导入到新案例即可继续。
+- **迁移到另一台机器** —— 把容器的完整环境（工具链 + 工作区）导出为可移植的 `.tar.gz`，在另一台机器上用 `docker load` 载入，再导入到一个新案例即可继续。
 - **持久耐用** —— Codeman 重启后重连会回到同一个存活的智能体；容器停止/重启后则从绑定挂载的转录恢复对话。
 
 前置条件：只需 Docker（或 Podman）。智能体基础镜像会在首次使用时自动构建，构建进度实时显示在 UI 中（也可用 `node scripts/build-agent-image.mjs` 预构建）。完整指南：[`docs/docker-cases.md`](docs/docker-cases.md)。
@@ -493,6 +517,7 @@ PTY 输出 → 16ms 服务端批处理 → DEC 2026 包裹 → SSE → 客户端
 - **共享会话**：多个客户端可以以不同窗口尺寸同时附着同一个远程会话而互不挤压；发现列表会显示带客户端计数的「shared」徽标。
 - **注入安全**：所有 ssh 命令行都经由单一的 shell 转义构建器生成，主机/路径/身份文件字段均有模式校验。
 - **文件也行**：远程 case 里的预览、下载和文本读取走同一条 ssh 连接（一次 `realpath` + `stat` 探测，然后流式 `cat`，支持 `Range` 拖动进度），所以点一个路径打开的就是智能体所在那台机器上的文件。什么都不会复制到 Codeman 主机；编辑和 Office 预览会明确返回 400，而不是一个误导性的 404。
+- **完整的回滚历史**：加载远程会话的历史时，会通过一次有上限的 ssh 往返直接从远程 tmux 读取，所以重新附着或切换标签之后，会话依然保有完整的回滚缓冲区，历史与实时屏幕衔接处也不会丢行。
 
 在 **New Case → Remote** 中配置（主机、用户、身份文件、可选跳板机）。完整设计：[`docs/remote-sessions.md`](docs/remote-sessions.md)。
 
@@ -557,9 +582,11 @@ loginctl enable-linger $USER
 1. 首次请求 → 浏览器弹出 Basic Auth 提示（用户名：`admin` 或 `CODEMAN_USERNAME`）
 2. 成功后 → 服务端签发 `codeman_session` cookie（24 小时 TTL，活动时自动延长）
 3. 后续请求通过 cookie 静默认证
-4. 同一 IP 失败 10 次 → 429 速率限制（15 分钟衰减）
+4. 同一 IP 失败 10 次 → 429 速率限制（15 分钟衰减）。多用户模式下每个 IP 的上限为 50 次，且同一 IP 对每个账户最多 10 次失败；超过任一上限后，来自该 IP 的正确密码也须等待衰减，但该账户仍可从其他 IP 登录
 
 通过隧道暴露前**务必设置 `CODEMAN_PASSWORD`** —— 否则任何拿到 URL 的人都能完全访问你的会话。
+
+Codeman 自己管理的隧道（App Settings → System → Remote access）在没有登录（`CODEMAN_PASSWORD` 或多用户模式）时拒绝启动，除非用 `CODEMAN_ALLOW_UNAUTHENTICATED_TUNNEL=1` 或 `codeman web --allow-unauthenticated-tunnel` 确认这种暴露，或者你在浏览器的确认框里点了同意；没有登录时，每次开启前浏览器都会先问。`CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK` 只管网络绑定，并不能让隧道启动。
 
 </details>
 
@@ -645,9 +672,9 @@ Codeman 默认用 `--dangerously-skip-permissions` 启动会话，因此 Web UI 
 
 ### 网络与访问
 
-- **默认仅环回** —— 绑定 `127.0.0.1`，仅可从本机访问，因此「无密码」默认配置开箱即安全。在未设置 `CODEMAN_PASSWORD` 的情况下绑定非环回主机会*启动但打印一条醒目警告*，并给出三个具体修复方案（设置密码、环回 + 一个带认证的隧道，或用 `--allow-unauthenticated-network` 显式确认）
+- **默认仅环回** —— 服务器程序本身绑定 `127.0.0.1`，仅可从本机访问，因此「无密码」默认配置开箱即安全（引导式安装器会询问网络访问方式，并替你配置绑定和密码）。在未设置 `CODEMAN_PASSWORD` 的情况下绑定非环回主机会*启动但打印一条醒目警告*，并给出三个具体修复方案（设置密码、环回 + 一个带认证的隧道，或用 `--allow-unauthenticated-network` 显式确认）
 - **可选认证，真实会话** —— 通过 `CODEMAN_USERNAME`（默认 `admin`）/ `CODEMAN_PASSWORD` 的 HTTP Basic 认证。成功后签发一个不透明的 256 位 `codeman_session` cookie（`randomBytes(32)`）—— 服务端校验，而非客户端签名，因此无法离线伪造（24h TTL、自动延长、设备上下文审计日志）
-- **按 IP 速率限制** —— 失败 10 次 → `429` 并带 `Retry-After`（15 分钟衰减）。即便攻击者在同一 IP 上猛攻，有效 cookie 或正确密码也能*立即*恢复 —— 这很重要，因为所有隧道流量共享同一个环回 IP。二维码认证有自己独立的限制器
+- **按 IP 速率限制** —— 失败 10 次 → `429` 并带 `Retry-After`（15 分钟衰减）。即便攻击者在同一 IP 上猛攻，有效 cookie 或正确密码也能*立即*恢复 —— 这很重要，因为所有隧道流量共享同一个环回 IP。多用户模式下每个 IP 改为 50 次，同一 IP 对每个账户另有 10 次失败上限；两者都在校验密码之前检查，超过任一上限后，来自该 IP 的正确密码也须等待衰减，但该账户仍可从其他 IP 登录。二维码认证有自己独立的限制器
 - **可配置的权限模式**：`--dangerously-skip-permissions` 只是默认值。**App Settings → Agents & CLIs → Claude → Startup Mode** 可以把新会话切换为 Anthropic 的分类器护栏 `auto` 模式（低打扰，需要 Claude Code 2.1.207+）、`normal` 提示模式，或一份显式的允许工具列表。多用户模式下，未获授权的用户会被强制为 `auto`，shell 会话与跳过权限需要按用户显式授权
 
 ### 始终开启的浏览器加固（v0.9.5）
@@ -662,8 +689,8 @@ Codeman 默认用 `--dangerously-skip-permissions` 启动会话，因此 Web UI 
 
 ### 输入、文件与响应头
 
-- **模式校验的输入** —— 每个 API 请求体都用 Zod v4 模式检查；一个 `CLAUDE_CODE_*` / `OPENCODE_*` / `CODEX_*` / `ANTIGRAVITY_*` / `GEMINI_*` / `GOOGLE_*` / `PI_*` / `GROK_*` / `XAI_*` / `DSH_*` / `DEEPSEEK_*` / `OMP_*` 环境变量前缀允许列表把控每个 CLI 能接收哪些设置，而那些能把 CLI 流量改道的键（base URL、配置目录）对非管理员用户会被钳制
-- **路径限定** —— 文件路由在边界检查前先 `realpath`（无 TOCTOU）；`..`、绝对路径、以及解析到工作目录之外的符号链接都会被拒绝。上限：10 MB 文本预览 / 2 GB 原始与下载（`CODEMAN_MAX_DOWNLOAD_BYTES`；响应体是流式的并支持 `Range` 请求，所以这个上限只是合理性边界，不是内存保护）；`/api/download` 对敏感路径（`.env`、`*credentials*`、`~/.ssh/`、`.aws/credentials`）做黑名单。SVG/HTML 以 `octet-stream` + `nosniff` + attachment 提供，因此会被下载而非执行
+- **模式校验的输入** —— 每个 API 请求体都用 Zod v4 模式检查；一个 `CLAUDE_CODE_*` / `OPENCODE_*` / `CODEX_*` / `ANTIGRAVITY_*` / `GEMINI_*` / `GOOGLE_*` / `PI_*` / `GROK_*` / `XAI_*` / `DSH_*` / `DEEPSEEK_*` / `OMP_*` / `COPILOT_*` 环境变量前缀允许列表把控每个 CLI 能接收哪些设置，而那些能把 CLI 流量改道的键（base URL、配置目录）对非管理员用户会被钳制
+- **路径限定** —— 文件路由在边界检查前先 `realpath`（无 TOCTOU）；`..`、绝对路径、以及解析到工作目录之外的符号链接都会被拒绝。上限：10 MB 文本预览 / 2 GB 原始与下载（`CODEMAN_MAX_DOWNLOAD_BYTES`；响应体是流式的并支持 `Range` 请求，所以这个上限只是合理性边界，不是内存保护）；`/api/download` 对敏感路径（`.env`、`*credentials*`、`~/.ssh/`、`.aws/credentials`）做黑名单。SVG/HTML 以 `octet-stream` + `nosniff` + attachment 提供，因此会被下载而非执行。HTML 唯一会被渲染的地方是文件查看器的网页视图：一个独立的 `/html-view/<capability>/` 地址，只覆盖该文件所在的文件夹，响应带 `Content-Security-Policy: sandbox` 且不含 `allow-same-origin`，因此页面是不透明源，永远读不到 Codeman 的 cookie，也驱动不了它的 API；隐藏文件夹和范围过大的根目录（`/`、主目录、`/tmp`）会被拒绝，退出登录时这些凭证也会被吊销
 - **安全响应头** —— `Content-Security-Policy`（`default-src 'self'`，每个例外都逐条列举）、`X-Content-Type-Options: nosniff`、`X-Frame-Options: SAMEORIGIN`、HTTPS 下的 HSTS，以及**仅**对 `localhost` / `127.0.0.1` / `::1` 反射的 CORS
 
 ### 供应链与隔离
@@ -697,7 +724,7 @@ Web UI 仍是主要界面；完整指南见 **[docs/tui.md](docs/tui.md)**（英
 
 | 快捷键                          | 动作                                                     |
 | ------------------------------- | -------------------------------------------------------- |
-| `Ctrl/Cmd+W`                    | 杀掉当前会话                                             |
+| `Ctrl+W`                        | 不是 Codeman 快捷键：它会到达终端（删除前一个词）。**Close Session** 默认没有按键，可在 App Settings → Shortcuts 里绑定 |
 | `Ctrl/Cmd/Option+K`             | 查找已打开的会话或新建一个                               |
 | `Ctrl/Cmd+Tab`                  | 下一个会话                                               |
 | `Alt/Option+[` / `Alt/Option+]` | 上一个 / 下一个会话                                      |
@@ -710,6 +737,10 @@ Web UI 仍是主要界面；完整指南见 **[docs/tui.md](docs/tui.md)**（英
 | `Ctrl/Cmd+L`                    | 清屏                                                     |
 | `Ctrl+Shift+R`                  | 恢复终端尺寸                                             |
 | `Ctrl+Shift+V`                  | 切换语音输入                                             |
+| `Ctrl+Shift+G`                  | 打开或关闭平铺网格                                       |
+| `Alt+Shift+方向键`              | 聚焦左、右、上、下方的窗格                               |
+| `Ctrl+Shift+方向键`             | 把聚焦的窗格移动一格（移进空格子，或与邻居交换）         |
+| `Alt+Shift+Enter`               | 放大聚焦的窗格，或恢复网格                               |
 | `Ctrl/Cmd +` / `-`              | 字体大小                                                 |
 | `Ctrl/Cmd+?`                    | 键盘帮助                                                 |
 | `Shift+Enter`                   | 插入换行（发送到终端）                                   |
@@ -727,19 +758,23 @@ Web UI 仍是主要界面；完整指南见 **[docs/tui.md](docs/tui.md)**（英
 
 ### 智能体技能（从这里开始）
 
-这一节的所有内容也打包成了一个 **Claude Code 技能**，位于 [`skills/codeman`](skills/codeman/SKILL.md)。装一次，就再也不用把 API 文档粘进提示词。你用大白话说想要什么，已经坐在 Codeman 会话里的智能体会自己加载配方并驱动 API。
+这一节的所有内容也打包成了一个**智能体技能**，位于 [`skills/codeman`](skills/codeman/SKILL.md)，采用 Claude Code、Codex、Gemini CLI、OpenCode、Grok、OMP 以及大多数其他智能体 CLI 都能读取的 `SKILL.md` 格式。装一次，就再也不用把 API 文档粘进提示词。你用大白话说想要什么，已经坐在 Codeman 会话里的智能体会自己加载配方并驱动 API。完整说明（所有安装方式、录屏，以及它会自己做什么、不会做什么）：[The Codeman Skill](https://github.com/Ark0N/Codeman/wiki/Codeman-Skill)（英文）。
+
+<p align="center">
+  <a href="docs/images/codeman-skill-crt-20261010.png"><img src="docs/images/codeman-skill-crt-20261010.gif" alt="一次真实的 codeman 技能运行：在 Claude Code 里输入一句简短的提示，平铺网格开机，然后一个跑在本地 qwen 模型上的 DeepSeek Harness 工作会话和一个 Claude Code 工作会话作为新窗格开机，主会话到两者之间画出派生连线" width="900"></a>
+</p>
 
 #### 第 1 步：安装
 
 | 方式             | 命令                                                       | 范围                                                                                       |
 | ---------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| Skills CLI       | `npx skills add Ark0N/Codeman --skill codeman -g`          | 全局，任何支持技能的智能体都能用                                                           |
+| Skills CLI       | `npx skills add Ark0N/Codeman --skill codeman -g`          | 全局，任何支持技能的智能体都能用（[skills.sh](https://skills.sh)）；给 pi 装技能就用这个方式 |
 | Claude Code 插件 | `/plugin marketplace add Ark0N/Codeman`，然后 `/plugin install codeman@codeman` | 全局，通过 Claude Code 自带的插件管理器；`/plugin update codeman` 跟随新版本。与 `codeman skill install` 二选一：两者都装会让技能出现两次（`codeman` 和 `codeman:codeman`） |
 | 内置 CLI         | `codeman skill install`                                    | 全局（`~/.claude/skills/codeman`），给那些从 npm 安装、从未克隆过仓库的用户                |
-| 内置 CLI         | `codeman skill install --case <name>`                      | 仅一个 case                                                                                |
-| Web UI           | App Settings → Agents & CLIs → Claude → **Agent Skill**    | 每次在某个 case 创建 Claude 会话时自动注入（`agentSkillEnabled`，跨设备同步，默认关闭）    |
+| 内置 CLI         | `codeman skill install --case <name> [--mode <mode>]`      | 仅一个 case；`--mode codex`（或任何其他运行模式）会把它写到那个 CLI 查找技能的位置          |
+| Web UI           | App Settings → Agents & CLIs → All agent CLIs → **Codeman Agent Skill** | 每次创建会话时自动注入到 case 里该会话的 CLI 查找技能的位置：Claude Code 是 `.claude/skills/`，Codex、Gemini CLI、OpenCode、Antigravity、Grok、DeepSeek 和 OMP 是 `.agents/skills/`；pi 除外，因为它的项目级技能会触发信任提示（`agentSkillEnabled`，跨设备同步，默认关闭） |
 
-`codeman skill uninstall [--case <name>]` 可以撤销 CLI 安装，并且绝不会碰你自己写的 `skills/codeman`。
+`codeman skill uninstall [--case <name>]` 可以撤销 CLI 安装（带 `--case` 时，删除该 case 里所有由 Codeman 管理的副本，不论它在哪个 CLI 的目录里），并且绝不会碰你自己写的 `skills/codeman`。
 
 #### 第 2 步：开口要
 
@@ -753,9 +788,19 @@ Web UI 仍是主要界面；完整指南见 **[docs/tui.md](docs/tui.md)**（英
 | _「让一个 claude 工作会话在 `refactor-auth` 上总结 `src/session.ts`，然后关掉它。」_  | 拉起、走完就绪阶梯（包括首次运行的信任对话框）、发送并等待、读取干净的 transcript 答案、删除。 |
 | _「盯着会话 w4，如果它卡在权限提示上就告诉我。」_                                      | 阻塞在 `blocked` 信号上，并把问题交给**你**。它绝不会替另一个会话回答提示。                    |
 
+一句简短的话就够了。下面这个 Claude Code 主会话收到 `use codeman to start 5 claude workers, one per TODO item`，五个真实的 Claude Code 工作会话依次开机，并排显示在平铺网格里：
+
+<p align="center">
+  <img src="docs/images/codeman-skill-grid-20261015.gif" alt="一次真实的 codeman 技能运行（平铺网格）：主 Claude Code 会话作为唯一的窗格开机，输入提示 use codeman to start 5 claude workers, one per TODO item，然后五个 Claude Code 工作会话以 CRT 动画依次作为新窗格开机，六个智能体同时工作" width="900">
+</p>
+
 #### 第 3 步：没有了
 
-智能体会删掉它启动的每一个会话。你可以在仪表盘里看着标签出现又消失。
+智能体会删掉它启动的每一个会话。你可以在仪表盘里看着标签出现又消失。起八个工作会话时，每个都有自己的标签，还有一条派生连线连回启动它的主会话：
+
+<p align="center">
+  <img src="docs/images/codeman-skill-tabs-20261015.gif" alt="一次真实的 codeman 技能运行（普通视图）：输入提示 use codeman to start 8 claude workers, one per TODO item，八个工作会话标签从左到右依次开机，主会话到每个标签之间画出派生连线，然后点开一个工作会话标签，看到一个正在接收任务的真实 Claude Code 工作会话" width="900">
+</p>
 
 #### 一次真实的运行，从头到尾
 
@@ -784,15 +829,17 @@ deleted 9f2d8e5f, aff9c691, be9f1f15    标签消失
 | [`reference/recipes.md`](skills/codeman/reference/recipes.md)       | 8 个完整流程：claude、DeepSeek Harness 与 shell 工作会话、扇出、盯住被卡住的工作会话、消息扇出。按需加载。 |
 | [`reference/endpoints.md`](skills/codeman/reference/endpoints.md)   | 完整端点表、错误码、各模式的信号表、容量限制。按需加载。                                     |
 | [`reference/messaging.md`](skills/codeman/reference/messaging.md)   | 通过 Claude Code 跨会话消息直接和 claude 工作会话对话。按需加载。                            |
+| [`reference/history.md`](skills/codeman/reference/history.md)       | 用 `codeman history read` 离线读取已保存的 Codex 对话：选择器、过滤条件、分叉、预算。按需加载。 |
+| [`reference/inspection-and-staging.md`](skills/codeman/reference/inspection-and-staging.md) | 实验性功能，需要手动开启：用 `codeman agent inspect`、`stage` 和 `submit` 做有界的窗格检查和受保护的提交。按需加载。 |
 
 里面的每一个配方都在真实服务器上验证过，注释记录的是实测出来而不是猜出来的失败模式。
 
 #### 两件值得知道的事
 
-- **它会自我门禁。** 不在 Codeman 会话里（`CODEMAN_MUX` 未设置）时，技能拒绝动作，也不去猜 API 地址，所以全局安装对无关的 Claude Code 会话没有任何代价。
+- **它会自我门禁。** 它在 Codeman 管理的会话里工作。不在这样的会话里（`CODEMAN_MUX` 未设置）时，它只会离线读取已保存的 Codex 对话（`codeman history read`），其他一律拒绝，也从不去猜 API 地址，所以全局安装对无关的 Claude Code 会话没有任何代价。
 - **它刻意保守。** 未经提示，它只会拉起会话、给它们发提示，并删除**它在同一段对话里自己创建的**会话（按精确 id，经由一个拒绝删除智能体自身会话的失败即关闭守卫）。删除 case（会抹掉一个真实的代码目录）、批量杀会话、改动 respawn/ralph/cron/orchestrator 以及写设置，都需要你开口并指名目标。
 
-⚠️ 把 `agentSkillEnabled` 关回去**不会删掉已经注入的副本**（在创建时做清扫，会把技能从共用同一个 `.claude/` 目录的其他活动会话脚下抽走）。要删就按 case 删：`codeman skill uninstall --case <name>`。
+⚠️ 把 `agentSkillEnabled` 关回去**不会删掉已经注入的副本**（在创建时做清扫，会把技能从共用同一个工作区的其他活动会话脚下抽走）。要删就按 case 删：`codeman skill uninstall --case <name>`。
 
 ---
 
@@ -811,13 +858,13 @@ deleted 9f2d8e5f, aff9c691, be9f1f15    标签消失
 
 ### 行路规则（POST 之前先读）
 
-1. **只发单行输入，而且必须以 `\r` 结尾。** 编程输入按字面文本发送，**只有当输入里含回车符时才会触发 Enter**：`{"input":"run tests\r"}`。少了 `\r`，文本就停在会话的输入框里不被提交（同一次调用里的 `wait` 还会在一个压根没开始的回合上耗满整个超时）。内嵌的换行会被剥掉而不是报错，因此 `"echo A\necho B\r"` 执行的是拼起来的 `echo Aecho B`：一次调用只发一行。
+1. **输入必须以 `\r` 结尾。** 编程输入按字面文本发送，**只有当输入里含回车符时才会触发 Enter**：`{"input":"run tests\r"}`。少了 `\r`，文本就停在会话的输入框里不被提交（同一次调用里的 `wait` 还会在一个压根没开始的回合上耗满整个超时）。使用 `useMux` 时内嵌的换行会保留，各行作为一次粘贴送入，因此 `"echo A\necho B\r"` 在 shell 里会执行两条命令；但重新按下滞留 Enter 的检查无法可靠识别多行粘贴，所以较长的多行内容最好写进文件，让 agent 自己去读。
 2. **让输入幂等。** 在 `POST …/input` 上带上稳定的 `clientId` 和按会话单调递增的 `seq`。服务端会去重，因此连接中断后的重试不会重复投递提示。
 3. **认证。** 若设置了 `CODEMAN_PASSWORD`，发送 HTTP Basic 认证（用户 `admin` 或 `CODEMAN_USERNAME`）或 `codeman_session` cookie。默认的环回安装无密码。缺失的 `Origin` 头被允许，因此普通 `curl` 可用；跨站的浏览器 origin 会被拒绝（CSRF 防护）。⚠️ `401` 回的是裸字符串 `Unauthorized`，**不是** JSON 信封，直接喂给 `jq` 只会抛解析错误而看不到真正的失败原因：先看状态码，再解析。
 4. **响应信封。** 多数端点返回 `{ "success": true, "data": … }`（错误：`{ "success": false, "error", "errorCode" }`）。少数遗留 GET 返回裸响应体 —— **两种都要处理**（`body.data ?? body`）。
 5. **`/api/v1/*`** 是 `/api/*` 的稳定别名。
 6. **用等待代替轮询，别把超时当成错误。** 等待类端点在没等到事情发生时也以 HTTP `200` 加 `wait.timedOut: true` 应答，所以要循环调用短等待（默认 60 秒），而不是发一个超长的调用：隧道会掐断空闲连接。`wait.timeoutMs` 告诉你服务端钳制之后真正采用的超时（上限 600 秒）。
-7. **只有 `claude` 与 `deepseek` 会话会发出 `stop` 与 `blocked`。** 这两个来自 hook（Claude Code 自己的，以及 DeepSeek Harness 的状态桥接）；`shell` 与其他外部 CLI（opencode/codex/gemini/antigravity/pi/grok/omp）只接受 `idle`、`working` 与 `exit`。在这些模式上显式索要 `stop` 会得到 `400`；不传 `until` 则永远安全。⚠️ `shell` 会话的 `idle` 只在启动时触发**一次**，此后再也不会，所以在那里用「发送并等待」只能等到超时：没有 hook 的会话请用 `wait-output` 标记来同步。
+7. **只有 `claude` 与 `deepseek` 会话会发出 `stop`；`codex` 还会发出 `blocked`。** 它们来自 hook（Claude Code 自己的，以及 DeepSeek Harness 的状态桥接），codex 的 `blocked` 除外：批准、提问或信任对话框出现时，Codeman 从它的屏幕上读出这个信号（请在终端里回答）。`shell` 与其他外部 CLI（opencode/gemini/antigravity/pi/grok/omp）只接受 `idle`、`working` 与 `exit`，codex 另外接受 `blocked`。在这些模式上显式索要 `stop` 会得到 `400`；不传 `until` 则永远安全。⚠️ `shell` 会话的 `idle` 只在启动时触发**一次**，此后再也不会，所以在那里用「发送并等待」只能等到超时：没有 hook 的会话请用 `wait-output` 标记来同步。
 8. **没有任何东西会报告「就绪」，得自己显式等。** 新会话在 PID 出现之前一律回答 `{"signal":"exit","immediate":true}`（意思是*还没启动*，不是*崩了*），而全新 case 里的 `claude` 工作会话接着会停在 CLI 的信任对话框上。此时给它发提示，等待会在约 2 秒后因 `idle` 解除，看上去和一个跑完的回合一模一样，而文本其实卡在对话框里。下面的配方 2b 就是避开它的顺序。
 
 ### 常用配方
@@ -891,7 +938,7 @@ for _ in $(seq 1 10); do
 done
 printf '%s\n' "$TXT"
 
-# 5b. 其他模式（shell/opencode/gemini/antigravity/pi/grok/omp）没有 transcript，读终端。
+# 5b. 其他模式（shell/opencode/gemini/antigravity/pi/grok/omp/copilot）没有 transcript，读终端。
 #     ⚠️ 用 terminal?tail=，不要用 /output：后者的 textOutput 对每个由 tmux 承载的
 #     （也就是每个交互式）会话都是空的。tail 按字节计，返回的是含 ANSI 的终端数据。
 curl -s "$API/api/sessions/$SID/terminal?tail=8000" | jq -r '.data.terminalBuffer'
@@ -928,6 +975,76 @@ codeman attach <path>                    #      为本地文件显示一张附�
 codeman tui --list                       #      带编号的会话列表（管道输出时为纯文本）
 codeman tui 3                            #      附着到该列表里的第 3 个会话
 ```
+
+### `codeman agent`：每种 CLI 模式都能用的会话间命令
+
+上面的技能靠 Codeman 为每个会话写入的一段前导脚本，用 `curl` 和 `jq` 驱动 API。在它够不着的地方（`pi` 或 `shell` 会话、没有 `jq` 的机器），同样的环境依然存在（每个面板里都导出了 `CODEMAN_MUX=1`、`CODEMAN_SESSION_ID`、`CODEMAN_API_URL`），所以 `codeman agent` 把同一批动词打包成了命令。它只是 [API](#api) 一节所列端点之上的一层薄客户端：没有新路由，没有新的传输方式，认证和归属规则不变。在 case 的 `AGENTS.md` 里写一行就够了：*"other sessions: `codeman agent --help`"*。
+
+```bash
+codeman agent ls                                          # 列出会话；* 标记当前这个
+SID=$(codeman agent spawn scratch-1 --mode claude)        # quick-start，并在该模式有就绪标记时等到输入框出现
+codeman agent send "$SID" 'review src/, then say DONE' --until stop,exit --timeout 300000   # --wait = 默认信号集
+codeman agent read "$SID"                                 # 最后一条回答（按服务端对该模式的读取方式）
+codeman agent read "$SID" --tail 3000                     # 终端尾部，已去掉 ANSI（所有模式）
+codeman agent send "$SID" 'run the tests, then print WORKDONE followed by _4711'   # 没有 hook 的模式（opencode、pi 等）：让它分两半输出标记……
+codeman agent wait "$SID" --match WORKDONE_4711           # ……然后等拼接后的形式，提示本身的回显里永远不会出现它
+codeman agent interrupt "$SID"                            # 只发一个 ESC，对话保持完整
+codeman agent rm "$SID"                                   # 除当前会话外的任何会话
+```
+
+这些规则由命令强制执行，而不只是写在文档里：在 Codeman 会话之外它们拒绝运行，也绝不猜测 URL；`send` 只发送可打印文本加 Enter（像 `Ctrl+C` 这样的控制字节在 opencode 里就是 `app_exit`，所以 ESC 只以 `interrupt` 的形式存在，而且它从不追加 Enter）；`rm` 拒绝空 id、无法证明不是自己的 id，以及任一方向的前缀匹配。id 可以用 `ls` 打印的 8 字符前缀（通过列表解析；有歧义的前缀会被拒绝，短于 8 个字符的 id 在所有动词上都会被拒绝）。以 `-` 开头的提示要放在 `--` 之后（`send "$SID" -- "- fix the bug"`）。
+
+你发出的提示的回显也算输出：如果 `--match` 标记原样出现在提示里，它会立刻匹配，工作会话还什么都没做，所以提示要让它分两半输出。主机正在休眠的远程会话，对不等待结果的 `send` 会回答 `buffered`（Codeman 唤醒主机，等面板恢复后再敲入提示）或 `dropped`（超出唤醒缓冲区的上限，什么都不会敲入：退出码 `1`）。退出码：`0` 已送达/已匹配/收到信号，`1` 错误，`2` 超时，`3` 工作会话已退出或等待在没有回答的情况下结束（`delivered:false`、`ended:true`），`4` 被拒绝。`spawn` 在 stdout 上只打印 id（说明文字走 stderr），所以 `SID=$(…)` 恰好拿到 id。`--json` 让每个动词打印响应信封里的 `data`。在没有 hook 信号的模式上使用 `--until stop`，会原样透传服务端的 400：那里的答案是标记路径（`--match`），和技能完全一样。
+
+### MCP 服务器（`codeman mcp`）：从任意 MCP 客户端驱动 Codeman
+
+`codeman mcp` 是一个走 stdio 的 [Model Context Protocol](https://modelcontextprotocol.io) 服务器，因此任何 MCP 客户端（Claude Code、Claude Desktop、Codex、Gemini CLI、Cursor 等）都能在任意已安装的智能体 CLI 里启动 Codeman 会话、给它们发提示、等它们完成、读取回答并清理，无论是在 Codeman 内部还是外部。和 `codeman agent` 一样，它是 HTTP API 的客户端。MCP 服务器自己不新增任何路由，认证和归属规则不变。
+
+```bash
+# Claude Code
+claude mcp add codeman -e CODEMAN_API_URL=https://127.0.0.1:3000 -- codeman mcp
+```
+
+```json
+{
+  "mcpServers": {
+    "codeman": {
+      "command": "codeman",
+      "args": ["mcp"],
+      "env": { "CODEMAN_API_URL": "https://127.0.0.1:3000" }
+    }
+  }
+}
+```
+
+```toml
+# Codex（~/.codex/config.toml）：为长时间等待调高默认 60 秒的工具超时
+[mcp_servers.codeman]
+command = "codeman"
+args = ["mcp"]
+env = { CODEMAN_API_URL = "https://127.0.0.1:3000" }
+env_vars = ["CODEMAN_MUX", "CODEMAN_SESSION_ID"]  # Codex 只给 MCP 服务器一个最小环境；这两个变量让它知道自己运行在哪个 Codeman 会话里
+tool_timeout_sec = 120
+```
+
+JSON 形式适用于 Claude Desktop、Cursor 和 Gemini CLI。服务器设置了密码时，在 `env` 里加上 `"CODEMAN_PASSWORD"`（或者让它读取数据目录里的 `.env`）。如果 PATH 上没有 `codeman` 命令（没走安装器的 git 检出），改用 `node /path/to/Codeman/dist/index.js mcp`。
+
+| 工具 | 作用 |
+| ---- | ---- |
+| `list_sessions` | 你能看到的每个会话，附带运行模式、状态、文件夹，以及这些工具是否可以给它发提示 |
+| `start_session` | 在一个 case 里（全新的临时文件夹或已有的 case）用任意已安装的 CLI 起一个新工作会话；等到它能接收提示为止 |
+| `send_prompt` | 输入一行提示并按 Enter；可选择等到这一回合结束 |
+| `wait_for_session` | 等待一个信号（`stop`、`blocked`、`idle`、`working`、`exit`）或输出里的一个字面标记 |
+| `read_output` | 最后一条回答、整段对话，或终端的最后若干字节 |
+| `interrupt_session` | 一次 Escape：停止当前回合，保留对话 |
+| `delete_session` | 关闭一个工作会话（它的 case 文件夹会保留） |
+
+这些规则由服务器强制执行，而不只是写在文档里：
+
+- **它绝不猜测服务器。** URL 来自 `CODEMAN_API_URL` 或 `--url`；没有配置时它照样启动并列出工具，每次调用都会说明该如何配置。
+- **只动自己的会话。** 发提示、中断和删除只限于这个服务器自己启动的会话（以及它运行在某个 Codeman 会话里时，该会话自己的工作会话）。列出、读取和等待对所有会话都可用。`codeman mcp --allow-any-session` 会解除这个限制，适合想让助手驱动自己现有标签的用户。它永远不会对自己所在的会话下手。
+- **等待时长适配客户端。** 一次等待默认 45 秒（Codex 默认在 60 秒时切断 MCP 工具），上限 600 秒；返回 `timed_out` / `still_working` 时再调用一次即可。
+- **两个协议时代都支持。** 它既能应答 2026-07-28 版本（每个请求带 `_meta`、`server/discover`），也能应答 2024-11-05 到 2025-11-25 的 `initialize` 握手。
 
 ### Hook（事件*回流*到 Codeman）
 
@@ -1042,7 +1159,7 @@ flowchart TB
         end
 
         subgraph External["外部"]
-            CLI["AI CLI<br/><small>Claude Code / OpenCode / Codex / Antigravity / Gemini / Pi / Grok / DeepSeek / OMP</small>"]
+            CLI["AI CLI<br/><small>Claude Code / OpenCode / Codex / Antigravity / Gemini / Pi / Grok / DeepSeek / OMP / GitHub Copilot</small>"]
             BG["后台智能体<br/><small>(Task 工具)</small>"]
         end
     end
@@ -1109,7 +1226,7 @@ npm test                    # 运行测试（与 CI 相同；浏览器/移动端
 
 [![npm](https://img.shields.io/npm/v/xterm-zerolag-input?style=flat-square&color=22c55e)](https://www.npmjs.com/package/xterm-zerolag-input)
 
-为 xterm.js 提供即时按键反馈的叠加层。通过把输入的字符立即渲染为像素级精准的 DOM 叠加层，消除高 RTT 连接下的感知输入延迟。零依赖、gzip 后 6.1 kB、可配置的提示符检测、CJK/emoji 宽字符支持、带 238 个测试的完整状态机。
+为 xterm.js 提供即时按键反馈的叠加层。通过把输入的字符立即渲染为像素级精准的 DOM 叠加层，消除高 RTT 连接下的感知输入延迟。零依赖、压缩并 gzip 后 5.7 kB、可配置的提示符检测、CJK/emoji 宽字符支持、带 276 个测试的完整状态机。输入开销不随提示词长度增长。
 
 ```bash
 npm install xterm-zerolag-input

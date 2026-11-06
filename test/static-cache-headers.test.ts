@@ -11,7 +11,9 @@
  *
  * That contract is load-bearing: assets are served `immutable` for a year, and
  * `index.html` must revalidate every time or a deploy leaves browsers on stale
- * markup (see `cacheBustAssets` in server.ts).
+ * markup (see `cacheBustAssets` in server.ts). The JSON data files the page fetches at
+ * runtime (whats-new.json, security-notices.json) revalidate too. No HTML is left behind the static
+ * plugin (every page has its own route), so the HTML half is asserted on the route.
  *
  * These tests drive a REAL WebServer on purpose. Asserting against an inline
  * re-registration of the plugin would keep passing after a revert in server.ts.
@@ -20,8 +22,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { WebServer } from '../src/web/server.js';
-
-const TEST_PORT = 3183;
 
 /**
  * Fetch and fully drain the body. Both halves matter for teardown: an unconsumed
@@ -39,9 +39,9 @@ describe('static asset Cache-Control headers', () => {
   let baseUrl: string;
 
   beforeAll(async () => {
-    server = new WebServer(TEST_PORT, false, true);
+    server = new WebServer(0, false, true);
     await server.start();
-    baseUrl = `http://localhost:${TEST_PORT}`;
+    baseUrl = `http://localhost:${server.boundPort}`;
   });
 
   afterAll(async () => {
@@ -61,18 +61,6 @@ describe('static asset Cache-Control headers', () => {
     expect(res.headers.get('cache-control')).toBe('public, max-age=31536000, immutable');
   });
 
-  it('makes static HTML revalidate so deploys are picked up', async () => {
-    // ⚠️ upload.html, NOT index.html. `/index.html` has its own explicit route that
-    // answers from renderIndexHtml() and never reaches @fastify/static, so asserting
-    // on it passes even with setHeaders fully broken (verified: reverting server.ts
-    // to the v9 form fails the two /app.js tests and leaves an index.html assertion
-    // green). upload.html has no route of its own, so it is the only HTML that
-    // actually exercises the `.html` branch of setHeaders.
-    const res = await get(`${baseUrl}/upload.html`);
-    expect(res.status).toBe(200);
-    expect(res.headers.get('cache-control')).toBe('no-cache');
-  });
-
   it('lets a route keep the Cache-Control it set, so sw.js stays uncached', async () => {
     // Regression guard for the OTHER half of the v10 change. setHeaders runs for
     // sendFile() too, and v10 moved it from the raw response onto the reply, which
@@ -84,6 +72,17 @@ describe('static asset Cache-Control headers', () => {
     const res = await get(`${baseUrl}/sw.js`);
     expect(res.status).toBe(200);
     expect(res.headers.get('cache-control')).toBe('no-cache, no-store');
+  });
+
+  it('makes the runtime JSON data files revalidate instead of pinning them for a year', async () => {
+    // whats-new.json is rewritten every release and security-notices.json by hand; neither is
+    // content-hashed or `?v=`-busted, so an `immutable` copy could outlive the release that
+    // replaced it, and a security notice added later would never reach that browser.
+    for (const file of ['security-notices.json', 'whats-new.json', 'manifest.json']) {
+      const res = await get(`${baseUrl}/${file}`);
+      expect(res.status, file).toBe(200);
+      expect(res.headers.get('cache-control'), file).toBe('no-cache');
+    }
   });
 
   it('serves the rendered index with no-cache too, via its own route', async () => {

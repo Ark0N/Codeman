@@ -4,6 +4,14 @@
 **Author**: Claude (session with Tim), 2026-09-15
 **Scope**: v1 only. v2 items are named and explicitly deferred, not designed.
 
+> **Update (tile grid, PR 1):** Pane B is now a `TerminalTile`
+> (`terminal-tile.js`) and is no longer as plain as this spec describes: it
+> reconnects after a drop, delivers input exactly once, has clickable paths
+> and image paste, sizes its PTY without a floor and adopts `zc` columns, and
+> the app-level terminal shortcuts follow the focused pane. Ctrl+W no longer
+> closes anything (Close Session has no default key).
+> See `docs/tile-grid-plan.md` and `architecture-invariants#split-pane-sessions`.
+
 ## Problem
 
 Codeman's terminal area shows exactly one active session (pane) at a time —
@@ -84,7 +92,15 @@ view needs a wide viewport). So:
   keyboard accessory bar. On a desktop, typing directly into an xterm
   instance with no overlay is exactly how Codeman behaved before the local-
   echo overlay existed for touch devices — normal, not degraded, for a
-  keyboard-and-mouse user.
+  keyboard-and-mouse user. (Since moved to `TerminalTile`, terminal-tile.js,
+  which has gained three pieces of the primary pane: hollow-buffer wheel
+  paging (#555) and the desktop click report for a CLI with
+  `cliMouseTracking` on, both through the primary pane's gates aimed at the
+  tile, and its own keyCode-229 soft-keyboard controller
+  (terminal-keycode229-recovery.js: the #441 next-keydown drain and #541's
+  edit-based diff, so an Android autocorrect is not sent twice). The 1180px
+  width gate is all that keeps a phone out, and a wide Android tablet clears
+  it. See that file's fileoverview.)
 
 If this asymmetry actually bothers you in daily use, promoting Pane B to full
 parity is a scoped v2 (extract the shared logic already once you have two

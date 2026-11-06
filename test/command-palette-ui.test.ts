@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import vm from 'node:vm';
 import { describe, expect, it, vi } from 'vitest';
 
-function loadPaletteHarness(overrides: Record<string, any> = {}) {
+function loadPaletteHarness(overrides: Record<string, any> = {}, { sessionUi = false } = {}) {
   const elements: Record<string, any> = {};
   const listeners: Record<string, (event: any) => void> = {};
   const CodemanApp = function CodemanApp(this: any) {};
@@ -70,6 +70,12 @@ function loadPaletteHarness(overrides: Record<string, any> = {}) {
 
   const panelsUi = readFileSync(resolve(import.meta.dirname, '../src/web/public/panels-ui.js'), 'utf8');
   vm.runInContext(panelsUi, context, { filename: 'panels-ui.js' });
+  // session-ui.js loads after panels-ui.js in index.html. Opt-in: it also brings
+  // the real selectQuickStartCase, which the case-pick tests above stub around.
+  if (sessionUi) {
+    const sessionUiSrc = readFileSync(resolve(import.meta.dirname, '../src/web/public/session-ui.js'), 'utf8');
+    vm.runInContext(sessionUiSrc, context, { filename: 'session-ui.js' });
+  }
 
   const app = new (CodemanApp as any)();
   app.sessions = new Map([
@@ -111,7 +117,7 @@ function loadPaletteHarness(overrides: Record<string, any> = {}) {
   app.getSessionName = (session: any) =>
     session.name || session.workingDir?.split('/').pop() || app.getShortId(session.id);
 
-  return { app, elements, listeners };
+  return { app, elements, listeners, makeClassList };
 }
 
 describe('Command-K session palette', () => {
@@ -341,6 +347,358 @@ describe('Command-K session palette', () => {
   });
 });
 
+const PALETTE_CATALOG = [
+  { id: 'claude', label: 'Claude Code', kind: 'agent', enabled: true },
+  { id: 'shell', label: 'Shell', kind: 'shell', enabled: true },
+  { id: 'codex', label: 'Codex', kind: 'agent', enabled: true },
+  { id: 'opencode', label: 'OpenCode', kind: 'agent', enabled: true },
+  { id: 'gemini', label: 'Gemini', kind: 'agent', enabled: false },
+];
+
+/** A palette whose agent list comes from the injected CLI catalog, codex not installed. */
+function loadAgentPalette(catalog: any[] = PALETTE_CATALOG, options: { sessionUi?: boolean } = {}) {
+  const available: Record<string, boolean> = { claude: true, shell: true, codex: false, opencode: true, gemini: true };
+  const harness = loadPaletteHarness(
+    { window: { __codemanCliCatalog: catalog, __codemanCliAvailable: available } },
+    options
+  );
+  // Mirrors settings-ui.js isCliAvailable(): unknown reads as available.
+  harness.app.isCliAvailable = (id: string) => available[id] !== false;
+  harness.app._runMode = 'claude';
+  return harness;
+}
+
+function arrow(key: 'ArrowLeft' | 'ArrowRight', caret: number, value = '') {
+  return {
+    key,
+    preventDefault: vi.fn(),
+    stopPropagation: vi.fn(),
+    target: { value, selectionStart: caret, selectionEnd: caret },
+  };
+}
+
+describe('Command-K new-session agent picker', () => {
+  it('offers the enabled, installed CLIs from the registry catalog, in catalog order', () => {
+    const { app } = loadAgentPalette();
+
+    expect(app._commandPaletteAgentChoices().map((c: any) => c.id)).toEqual(['claude', 'shell', 'opencode']);
+  });
+
+  it('starts on the Run button mode and labels the row from the catalog', () => {
+    const { app, elements } = loadAgentPalette();
+    app._runMode = 'opencode';
+
+    app.openCommandPalette();
+    const item = app.buildCommandPaletteItems('flux').find((i: any) => i.type === 'new-session');
+
+    expect(item).toMatchObject({ mode: 'opencode', subtitle: 'Run OpenCode in flux-player' });
+    expect(elements.commandPaletteList.innerHTML).toContain('data-palette-agent-cycle="next"');
+    expect(elements.commandPaletteList.innerHTML).toContain('run-mode-dot opencode');
+  });
+
+  it('keeps the switch out of the row button accessible name and gives its tooltip a zh-CN entry', () => {
+    const { app, elements } = loadAgentPalette();
+    app.openCommandPalette();
+    const html = elements.commandPaletteList.innerHTML;
+    const title = 'Agent for the new session (Left/Right to change)';
+
+    // No nested buttons inside the row's <button>: the subtitle names the agent.
+    expect(html).toContain(`class="command-palette-agent" aria-hidden="true" title="${title}"`);
+    expect(html).not.toContain('role="button"');
+    expect(html).not.toContain('aria-label=');
+    const i18n = readFileSync(resolve(import.meta.dirname, '../src/web/public/i18n.js'), 'utf8');
+    expect(i18n.split(`'${title}':`).length - 1).toBe(1);
+  });
+
+  it('falls back to the first offered agent when the Run button mode is not offered', () => {
+    const { app } = loadAgentPalette();
+    app._runMode = 'codex'; // not installed
+
+    app.openCommandPalette();
+
+    expect(app.buildCommandPaletteItems('').find((i: any) => i.type === 'new-session').mode).toBe('claude');
+  });
+
+  it('cycles the agent with Right/Left on the new-session row, wrapping', async () => {
+    const { app, listeners, elements } = loadAgentPalette();
+    app.openCommandPalette();
+    elements.commandPaletteSearch.value = 'nomatch';
+    app.renderCommandPalette();
+    expect(app.commandPaletteItems[app.commandPaletteActiveIndex].type).toBe('new-session');
+
+    const right = arrow('ArrowRight', 7, 'nomatch');
+    await listeners['search:keydown'](right);
+    expect(right.preventDefault).toHaveBeenCalled();
+    expect(app.commandPaletteItems[app.commandPaletteActiveIndex]).toMatchObject({ mode: 'shell' });
+    expect(elements.commandPaletteList.innerHTML).toContain('Run Shell in');
+
+    await listeners['search:keydown'](arrow('ArrowLeft', 0, 'nomatch'));
+    await listeners['search:keydown'](arrow('ArrowLeft', 0, 'nomatch'));
+    expect(app.commandPaletteItems[app.commandPaletteActiveIndex]).toMatchObject({ mode: 'opencode' });
+  });
+
+  it('cycles both ways at the end of a typed case query without moving its caret', async () => {
+    const { app, listeners, elements } = loadAgentPalette();
+    app.openCommandPalette();
+    elements.commandPaletteSearch.value = 'nomatch';
+    app.renderCommandPalette();
+    const left = arrow('ArrowLeft', 7, 'nomatch');
+    await listeners['search:keydown'](left);
+    expect(left.preventDefault).toHaveBeenCalled();
+    expect(app.commandPaletteItems[app.commandPaletteActiveIndex].mode).toBe('opencode');
+    const right = arrow('ArrowRight', 7, 'nomatch');
+    await listeners['search:keydown'](right);
+    expect(right.preventDefault).toHaveBeenCalled();
+    expect(app.commandPaletteItems[app.commandPaletteActiveIndex].mode).toBe('claude');
+  });
+
+  it('leaves Left/Right to the caret inside the query', async () => {
+    const { app, listeners, elements } = loadAgentPalette();
+    app.openCommandPalette();
+    elements.commandPaletteSearch.value = 'nomatch';
+    app.renderCommandPalette();
+
+    const left = arrow('ArrowLeft', 3, 'nomatch');
+    const right = arrow('ArrowRight', 3, 'nomatch');
+    await listeners['search:keydown'](left);
+    await listeners['search:keydown'](right);
+
+    expect(left.preventDefault).not.toHaveBeenCalled();
+    expect(right.preventDefault).not.toHaveBeenCalled();
+    expect(app.commandPaletteItems[app.commandPaletteActiveIndex].mode).toBe('claude');
+  });
+
+  it.each(['altKey', 'ctrlKey', 'metaKey', 'shiftKey'])(
+    'preserves %s arrow editing at query boundaries',
+    async (modifier) => {
+      const { app, listeners, elements } = loadAgentPalette();
+      app.openCommandPalette();
+      elements.commandPaletteSearch.value = 'nomatch';
+      app.renderCommandPalette();
+      const event = { ...arrow('ArrowLeft', 7, 'nomatch'), [modifier]: true };
+      await listeners['search:keydown'](event);
+      expect(event.preventDefault).not.toHaveBeenCalled();
+      expect(app.commandPaletteItems[app.commandPaletteActiveIndex].mode).toBe('claude');
+    }
+  );
+
+  it('does not cycle while a session row is highlighted', async () => {
+    const { app, listeners } = loadAgentPalette();
+    app.openCommandPalette();
+    expect(app.commandPaletteItems[0].type).toBe('session');
+
+    const right = arrow('ArrowRight', 0);
+    await listeners['search:keydown'](right);
+
+    expect(right.preventDefault).not.toHaveBeenCalled();
+    expect(app.buildCommandPaletteItems('').find((i: any) => i.type === 'new-session').mode).toBe('claude');
+  });
+
+  it('cycles from the row arrows without launching', async () => {
+    const { app, listeners } = loadAgentPalette();
+    app.openCommandPalette();
+    const cycle = { dataset: { paletteAgentCycle: 'next' } };
+    const event = {
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+      target: { closest: (sel: string) => (sel === '[data-palette-agent-cycle]' ? cycle : null) },
+    };
+
+    listeners['list:click'](event);
+
+    expect(app.run).not.toHaveBeenCalled();
+    expect(app.buildCommandPaletteItems('').find((i: any) => i.type === 'new-session').mode).toBe('shell');
+  });
+
+  it('launches the chosen agent once, without changing the Run button mode', async () => {
+    const { app } = loadAgentPalette();
+    app.setRunMode = vi.fn();
+    let modeDuringRun: string | undefined;
+    app.run = vi.fn(async () => {
+      modeDuringRun = app._runMode;
+    });
+    app.openCommandPalette();
+    app._cycleCommandPaletteAgent(2); // claude -> shell -> opencode
+
+    app.commandPaletteItems = app.buildCommandPaletteItems('nomatch');
+    app.commandPaletteActiveIndex = 0;
+    await app.activateCommandPaletteItem();
+
+    expect(app.run).toHaveBeenCalledTimes(1);
+    expect(modeDuringRun).toBe('opencode');
+    expect(app._runMode).toBe('claude');
+    expect(app.setRunMode).not.toHaveBeenCalled();
+  });
+
+  it('restores the Run button mode even when the launch throws', async () => {
+    const { app } = loadAgentPalette();
+    app.run = vi.fn(async () => {
+      throw new Error('boom');
+    });
+    app.openCommandPalette();
+    app._cycleCommandPaletteAgent(1);
+    app.commandPaletteItems = app.buildCommandPaletteItems('nomatch');
+    app.commandPaletteActiveIndex = 0;
+
+    await expect(app.activateCommandPaletteItem()).rejects.toThrow('boom');
+    expect(app._runMode).toBe('claude');
+  });
+
+  it('draws no picker when only one agent is offered', () => {
+    const { app, elements } = loadAgentPalette([{ id: 'claude', label: 'Claude Code', kind: 'agent', enabled: true }]);
+
+    app.openCommandPalette();
+
+    expect(elements.commandPaletteList.innerHTML).not.toContain('data-palette-agent-cycle');
+  });
+
+  it('keeps the Run button mode when a single other agent is offered', async () => {
+    // Only Shell is offered while the Run button names claude: with nothing to
+    // pick between, the row keeps the Run button's mode, as before the picker
+    // existed, so run() answers a missing claude with its install hint instead
+    // of the palette silently starting Shell.
+    const { app, elements } = loadAgentPalette(PALETTE_CATALOG.slice(0, 2));
+    app.isCliAvailable = (id: string) => id !== 'claude';
+    let modeDuringRun: string | undefined;
+    app.run = vi.fn(async () => {
+      modeDuringRun = app._runMode;
+    });
+
+    app.openCommandPalette();
+    elements.commandPaletteSearch.value = 'nomatch';
+    app.renderCommandPalette();
+    const index = app.commandPaletteItems.findIndex((i: any) => i.type === 'new-session');
+
+    expect(app.commandPaletteItems[index]).toMatchObject({ mode: 'claude', subtitle: 'Run Claude in plex-previews' });
+    expect(elements.commandPaletteList.innerHTML).not.toContain('data-palette-agent-cycle');
+    await app.activateCommandPaletteItem(index);
+    expect(modeDuringRun).toBe('claude');
+    expect(app._runMode).toBe('claude');
+  });
+});
+
+/** The toolbar Run menu's entries, as renderRegistryRunOptions() and index.html draw them. */
+function fakeRunMenu(modes: string[]) {
+  const options = modes.map((mode) => ({ dataset: { mode }, style: { display: 'PRISTINE' } }));
+  return {
+    options,
+    querySelectorAll: (selector: string) => (selector === '.run-mode-option[data-mode]' ? options : []),
+    querySelector: () => null,
+    prepend: vi.fn(),
+  };
+}
+const shownByRunMenu = (menu: ReturnType<typeof fakeRunMenu>) =>
+  menu.options.filter((option) => option.style.display === 'flex').map((option) => option.dataset.mode);
+
+/**
+ * A palette with session-ui.js loaded, so the agent list goes through the Run
+ * menu's real availability rule. Host flags as in loadAgentPalette (no codex
+ * here); the active case is a Docker case with the given `docker` record.
+ */
+function loadDockerPalette(docker: Record<string, any>) {
+  const harness = loadAgentPalette(PALETTE_CATALOG, { sessionUi: true });
+  harness.app.cases = [
+    { name: 'plex-previews' },
+    { name: 'far', location: 'remote' },
+    { name: 'dock', location: 'docker', docker },
+  ];
+  harness.elements.quickStartCase.value = 'dock';
+  harness.app.selectQuickStartCase = vi.fn();
+  // The Run menu's live container probe is a docker exec round trip; here it
+  // never lands, which is also what a probe still in flight looks like.
+  harness.app._probeDockerCaseModes = vi.fn();
+  return harness;
+}
+
+const ADOPTED = { owned: false, hostId: 'local', container: 'dev-box', availableModes: ['shell', 'claude', 'codex'] };
+
+describe('Command-K new-session agents follow the Run menu for the row case', () => {
+  it('offers a Docker case its container agents and starts on a container-only Run mode', async () => {
+    // codex is missing on the host but ships in the container, and the Run
+    // button is on it (picked from the Run menu, which gates on the container).
+    const { app, elements } = loadDockerPalette(ADOPTED);
+    app._runMode = 'codex';
+    let modeDuringRun: string | undefined;
+    app.run = vi.fn(async () => {
+      modeDuringRun = app._runMode;
+    });
+
+    app.openCommandPalette();
+    elements.commandPaletteSearch.value = 'nomatch';
+    app.renderCommandPalette();
+    const index = app.commandPaletteItems.findIndex((i: any) => i.type === 'new-session');
+
+    expect(app._commandPaletteAgentChoices('dock').map((c: any) => c.id)).toEqual(['claude', 'shell', 'codex']);
+    expect(app.commandPaletteItems[index]).toMatchObject({
+      caseName: 'dock',
+      mode: 'codex',
+      subtitle: 'Run Codex in dock',
+    });
+    expect(elements.commandPaletteList.innerHTML).toContain('run-mode-dot codex');
+
+    // The same agents the Run menu shows for this case.
+    const menu = fakeRunMenu(['claude', 'codex', 'opencode', 'shell']);
+    app._refreshRunModeAvailability(menu);
+    expect(shownByRunMenu(menu)).toEqual(['claude', 'codex']);
+
+    await app.activateCommandPaletteItem(index);
+    expect(modeDuringRun).toBe('codex');
+    expect(app._runMode).toBe('codex');
+  });
+
+  it('offers every enabled agent for an owned container nothing has probed yet, and then follows the probe', () => {
+    // An owned container runs the base image, which ships every CLI, and before
+    // its first session there is nothing to probe: like the Run menu, an unknown
+    // list does not gate, so a probe still in flight cannot empty the row.
+    const { app } = loadDockerPalette({ owned: true, hostId: 'local', container: 'codeman-dock' });
+    app._runMode = 'codex';
+
+    app.openCommandPalette();
+
+    expect(app._commandPaletteAgentChoices('dock').map((c: any) => c.id)).toEqual([
+      'claude',
+      'shell',
+      'codex',
+      'opencode',
+    ]);
+    expect(app.commandPaletteItems.find((i: any) => i.type === 'new-session').mode).toBe('codex');
+    // The palette reads what the Run menu learned; it never starts a docker exec itself.
+    expect(app._probeDockerCaseModes).not.toHaveBeenCalled();
+    const menu = fakeRunMenu(['claude', 'codex', 'opencode', 'shell']);
+    app._refreshRunModeAvailability(menu);
+    expect(shownByRunMenu(menu)).toEqual(['claude', 'codex', 'opencode']);
+
+    // Once the live probe has landed, both follow it.
+    app._dockerCaseModes = { dock: ['shell', 'opencode'] };
+    expect(app._commandPaletteAgentChoices('dock').map((c: any) => c.id)).toEqual(['shell', 'opencode']);
+    app._refreshRunModeAvailability(menu);
+    expect(shownByRunMenu(menu)).toEqual(['opencode']);
+  });
+
+  it('keeps the host rule for local and remote cases, and follows the case the query names', () => {
+    const { app, elements } = loadDockerPalette(ADOPTED);
+    elements.quickStartCase.value = 'plex-previews';
+    app._runMode = 'codex'; // missing on the host
+    const row = () => app.commandPaletteItems.find((i: any) => i.type === 'new-session');
+
+    app.openCommandPalette();
+
+    expect(app._commandPaletteAgentChoices('plex-previews').map((c: any) => c.id)).toEqual([
+      'claude',
+      'shell',
+      'opencode',
+    ]);
+    expect(app._commandPaletteAgentChoices('far').map((c: any) => c.id)).toEqual(['claude', 'shell', 'opencode']);
+    expect(row()).toMatchObject({ caseName: 'plex-previews', mode: 'claude' });
+
+    // Typing the Docker case's name moves the row there, where the container
+    // has the Run button's codex, so the row starts on it.
+    elements.commandPaletteSearch.value = 'dock';
+    app.renderCommandPalette();
+    expect(row()).toMatchObject({ caseName: 'dock', mode: 'codex' });
+  });
+});
+
 describe('Session Manager unified list', () => {
   it('maps UnifiedSessionItem fields to the history-record shape and routes clicks by liveness', async () => {
     const { app, elements } = loadPaletteHarness({
@@ -477,6 +835,150 @@ describe('Session Manager unified list', () => {
     expect(appended).toHaveLength(1);
     expect(appended[0].textContent).toBe('unified list unavailable');
     expect(appended[0].textContent).not.toBe('No sessions found');
+  });
+});
+
+describe('overlay focus restoration (Escape must not strand the keyboard)', () => {
+  /**
+   * Both overlays focus their search box on open. Closing them used to leave
+   * focus on <body>, so after Escape every keystroke went nowhere until the
+   * user clicked the terminal — measured in a real browser against a shell
+   * session: activeElement BODY, zero onData for anything typed afterwards.
+   */
+  function focusHarness() {
+    const terminalTextarea = { focus: vi.fn(), isConnected: true };
+    const priorElement = { focus: vi.fn(), isConnected: true, tagName: 'TEXTAREA' };
+    const body = { tagName: 'BODY' };
+    let active: any = priorElement;
+    // The harness builds its element map internally, so getElementById reads it
+    // through this binding, filled in once the harness returns.
+    let els: Record<string, any> = {};
+    const { app, elements, makeClassList } = loadPaletteHarness({
+      document: {
+        getElementById: (id: string) => els[id] ?? null,
+        get activeElement() {
+          return active;
+        },
+        body,
+      },
+    });
+    els = elements;
+    app.terminal = { focus: terminalTextarea.focus };
+    app.activeSessionId = 'sess-beta';
+    // The overlay's own focus() is what moves focus in a real browser; the
+    // fake document needs the same transition or the test proves nothing.
+    elements.commandPaletteSearch.focus = vi.fn(() => {
+      active = elements.commandPaletteSearch;
+    });
+    // The restore keeps a focus that already left the overlay, so the modal has
+    // to know its own search box is inside it, as the real DOM does.
+    elements.commandPaletteModal.contains = (el: any) => el === elements.commandPaletteSearch;
+    // Same wiring for the Session Manager. A real classList: the close guard
+    // reads `contains('active')`, and a stub without it reports "not open" and
+    // skips the restore.
+    const installSessionManager = () => {
+      const search: any = { value: '', addEventListener: vi.fn() };
+      search.focus = vi.fn(() => {
+        active = search;
+      });
+      elements.sessionManagerSearch = search;
+      elements.sessionManagerModal = {
+        classList: makeClassList(),
+        addEventListener: vi.fn(),
+        contains: (el: any) => el === search,
+      };
+      elements.sessionManagerList = { replaceChildren: vi.fn(), appendChild: vi.fn() };
+      app._loadSessionManagerList = vi.fn();
+    };
+    return {
+      app,
+      elements,
+      priorElement,
+      terminalTextarea,
+      body,
+      makeClassList,
+      installSessionManager,
+      setActive: (v: any) => (active = v),
+    };
+  }
+
+  it('returns focus to whatever had it when the command palette closes', () => {
+    const { app, priorElement } = focusHarness();
+    app.openCommandPalette();
+    expect(priorElement.focus).not.toHaveBeenCalled();
+    app.closeCommandPalette();
+    expect(priorElement.focus).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to the terminal when the prior element is gone, but only with a live session', () => {
+    const { app, priorElement, terminalTextarea } = focusHarness();
+    app.openCommandPalette();
+    priorElement.isConnected = false;
+    app.closeCommandPalette();
+    expect(priorElement.focus).not.toHaveBeenCalled();
+    expect(terminalTextarea.focus).toHaveBeenCalledTimes(1);
+  });
+
+  it('never focuses the terminal from the welcome screen (a phone would pop the keyboard)', () => {
+    const { app, priorElement, terminalTextarea } = focusHarness();
+    app.activeSessionId = null;
+    app.openCommandPalette();
+    priorElement.isConnected = false;
+    app.closeCommandPalette();
+    expect(terminalTextarea.focus).not.toHaveBeenCalled();
+  });
+
+  it('does not restore focus to <body>, which is the bug itself', () => {
+    const { app, terminalTextarea, body, setActive } = focusHarness();
+    setActive(body);
+    app.openCommandPalette();
+    app.closeCommandPalette();
+    expect(terminalTextarea.focus).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves focus alone when neither overlay was open — the path every Escape takes', () => {
+    // app.js's global Escape handler calls both close methods on EVERY Escape,
+    // in the capture phase. Nothing was saved, so an unguarded restore would fall
+    // through to the terminal and steal focus from split Pane B, from any text
+    // field, and turn the inline rename's Escape into a commit.
+    const { app, elements, terminalTextarea, priorElement, makeClassList } = focusHarness();
+    elements.sessionManagerModal = { classList: makeClassList(), addEventListener: vi.fn() };
+    app.closeCommandPalette();
+    app.closeSessionManager();
+    expect(terminalTextarea.focus).not.toHaveBeenCalled();
+    expect(priorElement.focus).not.toHaveBeenCalled();
+  });
+
+  it('does not focus the terminal on touch while the keyboard is down', () => {
+    const { app, terminalTextarea, body, setActive } = focusHarness();
+    app._shouldFocusTerminalForTabSwitch = () => false;
+    setActive(body);
+    app.openCommandPalette();
+    app.closeCommandPalette();
+    expect(terminalTextarea.focus).not.toHaveBeenCalled();
+  });
+
+  it('restores focus on the session manager too, not just the palette', async () => {
+    const { app, priorElement, installSessionManager } = focusHarness();
+    installSessionManager();
+    await app.openSessionManager();
+    app.closeSessionManager();
+    expect(priorElement.focus).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the terminal focus the row menu gave it when the session manager closes', async () => {
+    // "Switch to session" and "Open folder" (terminal-ui.js) call selectSession(),
+    // which focuses the terminal on desktop, and only THEN closeSessionManager().
+    // Opened from its header button, the saved focus is that button, so an
+    // unconditional restore pulled focus off the session the user just picked.
+    const { app, priorElement, terminalTextarea, installSessionManager, setActive } = focusHarness();
+    installSessionManager();
+    await app.openSessionManager();
+    app.selectSession = vi.fn(() => setActive(terminalTextarea));
+    app.selectSession('sess-alpha');
+    app.closeSessionManager();
+    expect(priorElement.focus).not.toHaveBeenCalled();
+    expect(terminalTextarea.focus).not.toHaveBeenCalled();
   });
 });
 

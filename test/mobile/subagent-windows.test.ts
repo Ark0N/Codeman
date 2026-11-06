@@ -1,7 +1,7 @@
-// Port 3202 - Mobile subagent window card tests
+// Ephemeral port - Mobile subagent window card tests
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { Page, BrowserContext } from 'playwright';
-import { PORTS, SELECTORS, SUBAGENT, KEYBOARD, WAIT } from './helpers/constants.js';
+import { SELECTORS, SUBAGENT, KEYBOARD, WAIT } from './helpers/constants.js';
 import { createTestServer, stopTestServer } from './helpers/server.js';
 import { createDevicePage, closeAllBrowsers } from './helpers/browser.js';
 import { showKeyboard, hideKeyboard } from './helpers/keyboard-sim.js';
@@ -9,8 +9,7 @@ import { getCSSProperty, getCSSNumericValue } from './helpers/assertions.js';
 import { REPRESENTATIVE_DEVICES } from './devices.js';
 import type { WebServer } from '../src/web/server.js';
 
-const PORT = PORTS.SUBAGENT_WINDOWS;
-const BASE_URL = `http://localhost:${PORT}`;
+let baseUrl: string;
 
 const standardPhone = REPRESENTATIVE_DEVICES['standard-phone']; // iPhone 14 Pro
 
@@ -78,7 +77,8 @@ describe('Mobile Subagent Windows', () => {
   let server: WebServer;
 
   beforeAll(async () => {
-    server = await createTestServer(PORT);
+    server = await createTestServer();
+    baseUrl = `http://localhost:${server.boundPort}`;
   });
 
   afterAll(async () => {
@@ -93,7 +93,7 @@ describe('Mobile Subagent Windows', () => {
     let page: Page;
 
     beforeAll(async () => {
-      ({ context, page } = await createDevicePage(standardPhone, BASE_URL, 'chromium'));
+      ({ context, page } = await createDevicePage(standardPhone, baseUrl, 'chromium'));
       await page.waitForTimeout(WAIT.PAGE_SETTLE);
     });
 
@@ -187,7 +187,7 @@ describe('Mobile Subagent Windows', () => {
 
   describe('Stacking', () => {
     it('windows stack from top when keyboard hidden', async () => {
-      const { context, page } = await createDevicePage(standardPhone, BASE_URL, 'chromium');
+      const { context, page } = await createDevicePage(standardPhone, baseUrl, 'chromium');
       try {
         await page.waitForTimeout(WAIT.PAGE_SETTLE);
 
@@ -240,7 +240,7 @@ describe('Mobile Subagent Windows', () => {
     });
 
     it('windows stack from bottom when keyboard visible', async () => {
-      const { context, page } = await createDevicePage(standardPhone, BASE_URL, 'chromium');
+      const { context, page } = await createDevicePage(standardPhone, baseUrl, 'chromium');
       try {
         await page.waitForTimeout(WAIT.PAGE_SETTLE);
 
@@ -289,7 +289,7 @@ describe('Mobile Subagent Windows', () => {
     });
 
     it('stacking recalculates on keyboard toggle', async () => {
-      const { context, page } = await createDevicePage(standardPhone, BASE_URL, 'chromium');
+      const { context, page } = await createDevicePage(standardPhone, baseUrl, 'chromium');
       try {
         await page.waitForTimeout(WAIT.PAGE_SETTLE);
 
@@ -379,7 +379,7 @@ describe('Mobile Subagent Windows', () => {
 
   describe('Interactions', () => {
     it('minimize button hides the window body', async () => {
-      const { context, page } = await createDevicePage(standardPhone, BASE_URL, 'chromium');
+      const { context, page } = await createDevicePage(standardPhone, baseUrl, 'chromium');
       try {
         await page.waitForTimeout(WAIT.PAGE_SETTLE);
         await injectMockSubagentWindow(page, 'minimize-test', 0);
@@ -432,7 +432,7 @@ describe('Mobile Subagent Windows', () => {
     });
 
     it('minimize button toggles: second click restores window', async () => {
-      const { context, page } = await createDevicePage(standardPhone, BASE_URL, 'chromium');
+      const { context, page } = await createDevicePage(standardPhone, baseUrl, 'chromium');
       try {
         await page.waitForTimeout(WAIT.PAGE_SETTLE);
         await injectMockSubagentWindow(page, 'toggle-test', 0);
@@ -490,7 +490,7 @@ describe('Mobile Subagent Windows', () => {
     let page: Page;
 
     beforeAll(async () => {
-      ({ context, page } = await createDevicePage(standardPhone, BASE_URL, 'chromium'));
+      ({ context, page } = await createDevicePage(standardPhone, baseUrl, 'chromium'));
       await page.waitForTimeout(WAIT.PAGE_SETTLE);
       await injectMockSubagentWindow(page, 'content-test-agent', 0);
     });
@@ -556,7 +556,7 @@ describe('Mobile Subagent Windows', () => {
 
   describe('Multiple Windows', () => {
     it('can render multiple subagent windows simultaneously', async () => {
-      const { context, page } = await createDevicePage(standardPhone, BASE_URL, 'chromium');
+      const { context, page } = await createDevicePage(standardPhone, baseUrl, 'chromium');
       try {
         await page.waitForTimeout(WAIT.PAGE_SETTLE);
 
@@ -583,7 +583,7 @@ describe('Mobile Subagent Windows', () => {
     });
 
     it('windows do not overlap when properly stacked', async () => {
-      const { context, page } = await createDevicePage(standardPhone, BASE_URL, 'chromium');
+      const { context, page } = await createDevicePage(standardPhone, baseUrl, 'chromium');
       try {
         await page.waitForTimeout(WAIT.PAGE_SETTLE);
 

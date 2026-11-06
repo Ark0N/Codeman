@@ -70,6 +70,7 @@ export type AttachmentDetectedType =
   | 'pdf'
   | 'document'
   | 'presentation'
+  | 'spreadsheet'
   | 'markdown'
   | 'text';
 

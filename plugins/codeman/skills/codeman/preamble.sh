@@ -1,4 +1,7 @@
-# ---- Codeman agent preamble 1.30.1 (seeded by Codeman at session spawn; the SKILL.md §0 bootstrap rewrites it when missing or stale) ----
+# ---- Codeman agent preamble 1.44.0 (seeded by Codeman at session spawn; the SKILL.md §0 bootstrap rewrites it when missing or stale) ----
+# Positional parameters are always written with braces, ${1} and never a bare dollar-digit: Claude Code
+# replaces a bare one in a skill body with the matching word of the skill's arguments, and §0 is pasted
+# from that body (test/agent-skill.test.ts pins it).
 API="${CODEMAN_API_URL:?CODEMAN_API_URL not set; refusing to guess}"
 SELF="${CODEMAN_SESSION_ID:?CODEMAN_SESSION_ID not set}"
 # Credentials, cheapest first. Your session has usually INHERITED the server's
@@ -7,7 +10,7 @@ SELF="${CODEMAN_SESSION_ID:?CODEMAN_SESSION_ID not set}"
 # reads. The data dir is wherever the hook-secret file lives. Values may be
 # quoted or `export`-prefixed.
 ENV_FILE="${CODEMAN_HOOK_SECRET_FILE:+${CODEMAN_HOOK_SECRET_FILE%hook-secret}.env}"
-envval() { sed -n "s/^\(export \)\{0,1\}$1=//p" "$ENV_FILE" | tail -1 | sed 's/^"\(.*\)"$/\1/; s/^'\''\(.*\)'\''$/\1/'; }
+envval() { sed -n "s/^\(export \)\{0,1\}${1}=//p" "$ENV_FILE" | tail -1 | sed 's/^"\(.*\)"$/\1/; s/^'\''\(.*\)'\''$/\1/'; }
 if [ -z "${CODEMAN_PASSWORD:-}" ] && [ -n "$ENV_FILE" ] && [ -f "$ENV_FILE" ]; then
   CODEMAN_USERNAME=$(envval CODEMAN_USERNAME)
   CODEMAN_PASSWORD=$(envval CODEMAN_PASSWORD)
@@ -15,9 +18,9 @@ fi
 AUTH=(); [ -n "${CODEMAN_PASSWORD:-}" ] && AUTH=(-u "${CODEMAN_USERNAME:-admin}:$CODEMAN_PASSWORD")
 # -k: harmless on http, required on https (self-signed cert).
 # X-Codeman-Parent-Session: tags workers YOU spawn as your children, so the web UI can
-# draw the lineage. Set once here and every present and future create call carries it;
-# it is ignored on every other endpoint. Purely cosmetic (see §5.1) and it can never
-# fail a spawn, so there is no case where you would want to leave it off.
+# draw the lineage. Set once here and every present and future create call carries it.
+# The agent inbox reads it too, as "who is calling" (§5.15); every other endpoint ignores
+# it. It can never fail a spawn, so there is no case where you would want to leave it off.
 # X-Codeman-Agent-Origin: marks a case directory a spawn CREATES as agent scratch, so the
 # user can find and delete it long after your workers are gone (§5.14). Same deal: set
 # once, cosmetic, never fails a spawn, and it labels only directories Codeman creates.
@@ -42,15 +45,15 @@ delete_session() {
 
 # ---- fast path: the four verbs, already written. §1 composes them. ----
 _composer_up() {   # <sid> <timeoutMs> -> "true"/"false". `shift+tab` is the one token
-  "${CURL[@]}" -G "$API/api/v1/sessions/$1/wait-output" \
+  "${CURL[@]}" -G "$API/api/v1/sessions/${1}/wait-output" \
     --data-urlencode 'match=shift+tab' --data-urlencode 'from=buffer' \
-    --data-urlencode "timeout=$2" | jq -r '.data.wait.matched // false'
+    --data-urlencode "timeout=${2}" | jq -r '.data.wait.matched // false'
 }
 _dsh_up() {        # <sid> <timeoutMs> -> "true"/"false". The DeepSeek Harness TUI's
   # composer glyph. Override with DSH_READY_MARK for a profile that draws another one.
-  "${CURL[@]}" -G "$API/api/v1/sessions/$1/wait-output" \
+  "${CURL[@]}" -G "$API/api/v1/sessions/${1}/wait-output" \
     --data-urlencode "match=${DSH_READY_MARK:-❯}" --data-urlencode 'from=buffer' \
-    --data-urlencode "timeout=$2" | jq -r '.data.wait.matched // false'
+    --data-urlencode "timeout=${2}" | jq -r '.data.wait.matched // false'
 }
 # ---- the workspace-trust dialog: READ the screen, never press Enter blind ----
 # Claude Code 2.1.252 dropped the option numbers, REVERSED them, and highlights
@@ -66,7 +69,7 @@ _trust_key() {     # <sid> -> "confirm" | "move" | "" (nothing safe to press)
   # full=1 returns the RENDERED pane; a claude pane keeps no tmux history, so that
   # is the current frame rather than every repaint since launch. tail -1 anyway,
   # because the freshest marked row is the only one still true.
-  "${CURL[@]}" -G "$API/api/v1/sessions/$1/terminal" --data-urlencode 'full=1' \
+  "${CURL[@]}" -G "$API/api/v1/sessions/${1}/terminal" --data-urlencode 'full=1' \
     | jq -r '.data.terminalBuffer // empty' \
     | sed -e "s/$(printf '\033')\[[0-9;?]*[a-zA-Z]//g" -e "s/$(printf '\033')[()][AB0]//g" \
     | tr -d ' \t' | grep -i '❯[0-9.]*\(yes,itrustthisfolder\|no,exit\)' | tail -1 \
@@ -84,7 +87,7 @@ _composer_text() { # <sid> -> the composer's text with ALL whitespace removed: "
   # the LAST `❯` line: Claude Code echoes a submitted prompt with the same glyph higher
   # up in the transcript, so only the last one says whether the text was taken.
   local t
-  t=$("${CURL[@]}" -G "$API/api/v1/sessions/$1/terminal" --data-urlencode 'full=1' \
+  t=$("${CURL[@]}" -G "$API/api/v1/sessions/${1}/terminal" --data-urlencode 'full=1' \
     | jq -r '.data.terminalBuffer // empty' \
     | sed -e "s/$(printf '\033')\[[0-9;?]*[a-zA-Z]//g" -e "s/$(printf '\033')[()][AB0]//g" \
     | tr -d '\r' | grep -a '^[[:space:]]*❯' | tail -1)
@@ -94,7 +97,7 @@ _composer_text() { # <sid> -> the composer's text with ALL whitespace removed: "
   printf '%s' "$t" | sed 's/^[[:space:]]*❯//' | tr -d '[:space:]' | sed "s/$(printf '\302\240')//g"
 }
 _accept_trust() {  # <sid> -> 0 once it has answered the dialog, 1 if it could not
-  local sid="$1" k i=1
+  local sid="${1}" k i=1
   while [ "$i" -le 6 ]; do
     k=$(_trust_key "$sid")
     [ -n "$k" ] || return 1   # no dialog on screen, or a layout this cannot read
@@ -118,6 +121,11 @@ _accept_trust() {  # <sid> -> 0 once it has answered the dialog, 1 if it could n
 # rather than handed back, because a worker that never drew its composer would eat the
 # task prompt with its trust dialog. There is deliberately no pid poll: wait-output
 # already blocks until the composer draws, and pid!=null proved startup, never readiness.
+# CODEMAN_WORKER_ADVISOR=opus (or fable / sonnet) gives every CLAUDE worker spawned while
+# it is set Claude Code's advisor tool: a stronger model the worker consults before
+# committing to an approach, on a recurring error and before declaring the task done.
+# Other modes ignore it. A value the server refuses fails the spawn (INVALID_INPUT); an
+# advisor that ranks below the worker's model is accepted but never attached by claude.
 spawn_worker() {
   local name="${1:?spawn_worker needs a case name}" mode="${2:-claude}" q sid cp r
   # parentSessionId doubles the CURL header, so a spawn_worker copied off the shared
@@ -129,12 +137,19 @@ spawn_worker() {
   # server clamps this back to `workspace-write` for an owner without the grant.
   # Spawn by hand (§5.1) when you want a worker that asks.
   q=$("${CURL[@]}" -X POST "$API/api/v1/quick-start" -H 'Content-Type: application/json' \
-      -d "$(jq -nc --arg n "$name" --arg m "$mode" --arg p "$SELF" \
+      -d "$(jq -nc --arg n "$name" --arg m "$mode" --arg p "$SELF" --arg a "${CODEMAN_WORKER_ADVISOR:-}" \
         '{caseName:$n,mode:$m,parentSessionId:$p}
-         + (if $m == "deepseek" then {deepSeekConfig:{permissionMode:"danger-full-access"}} else {} end)')")
+         + (if $m == "deepseek" then {deepSeekConfig:{permissionMode:"danger-full-access"}} else {} end)
+         + (if $m == "claude" and $a != "" then {advisorModel:$a} else {} end)')")
   sid=$(jq -r 'if .success then .data.sessionId else empty end' <<<"$q")
   # NOT retryable in a loop: every quick-start failure code is terminal (§5.1).
   [ -n "$sid" ] || { jq -c '{error,errorCode}' <<<"$q" >&2; return 1; }
+  # A server without advisor support DROPS the field instead of refusing it, so read it
+  # back: a worker silently missing the advisor it was asked for is worth one line.
+  if [ "$mode" = claude ] && [ -n "${CODEMAN_WORKER_ADVISOR:-}" ] &&
+     [ "$("${CURL[@]}" "$API/api/v1/sessions/$sid" | jq -r '.data.advisorModel // empty')" != "$CODEMAN_WORKER_ADVISOR" ]; then
+    echo "worker $sid: this Codeman server ignored CODEMAN_WORKER_ADVISOR (no advisor support); it runs without one" >&2
+  fi
   if [ "$mode" = deepseek ]; then
     # The one non-claude mode with REAL end-of-turn signals: its TUI reports
     # idle/working/blocked to Codeman, so sendwait, until=stop and the Approvals
@@ -223,6 +238,16 @@ spawn_workers() {
 # pane clearly finished means that profile, so switch that worker to markers.
 sendwait() {
   local sid="${1:?}" p="${2:?}" seq="${3:-$(date +%s)}" body r c head n=0 tmp bg i
+  # One line, like every other waiting sender (`toSingleLine`, `codeman agent send`,
+  # the TUI): the server pastes a multi-line prompt as one block, and the loop below,
+  # like the server's own submit check, cannot recognise a pasted block that is still
+  # on the composer, so a prompt like `Review this:\n- item 1` would sit unsent for
+  # the whole re-wait. Each line is trimmed, blank lines are dropped, the rest are
+  # joined with a space. For a long multi-line task, write a file and send its path.
+  case "$p" in *$'\n'*|*$'\r'*)
+    p=$(printf '%s\n' "$p" | tr '\r' '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^$/d' | paste -sd ' ' -) ;;
+  esac
+  [ -n "$p" ] || { echo "sendwait: empty prompt" >&2; return 1; }
   # `wait:"stop,exit"`, never the `wait:true` default set: that set also carries
   # `idle`, which is INFERRED from output stabilization and flaps mid-turn. On a
   # dsh worker whose TUI repaints rarely the session reads `idle` while the model
@@ -283,7 +308,7 @@ sendwait() {
 last_text() {
   local t="" prev="${2:-}"
   for _ in $(seq 1 15); do
-    t=$("${CURL[@]}" "$API/api/v1/sessions/$1/last-response" | jq -r '.data.text // empty')
+    t=$("${CURL[@]}" "$API/api/v1/sessions/${1}/last-response" | jq -r '.data.text // empty')
     [ -n "$t" ] && [ "$t" != "$prev" ] && { printf '%s\n' "$t"; return 0; }
     sleep 1
   done
@@ -294,4 +319,4 @@ last_text() {
 # The stamp is the LAST line on purpose (a truncated write leaves it unset) and is kept
 # bare on purpose: the write condition above anchors on it with $, so an inline comment
 # here would fail that match and rewrite this file on every single bootstrap.
-CODEMAN_PREAMBLE=1.30.1
+CODEMAN_PREAMBLE=1.44.0

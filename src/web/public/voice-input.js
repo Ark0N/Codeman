@@ -554,6 +554,11 @@ const VoiceInput = {
   _analyserSource: null, // MediaStreamSource for level meter
   _audioContext: null, // AudioContext for level meter
   _levelAnimFrame: null, // rAF handle for level meter
+  // The session dictation was started FOR, captured in start(). Transcripts
+  // arrive seconds later and the green send button / compose overlay can be
+  // used later still; reading app.activeSessionId at that point sent the text
+  // to whatever tab the user had switched to in the meantime.
+  _targetSessionId: null,
 
   init() {
     this._initRecognition();
@@ -663,10 +668,12 @@ const VoiceInput = {
 
   start() {
     if (this.isRecording) return;
-    if (!app.activeSessionId) {
+    const target = app._focusedPane?.()?.sessionId || app.activeSessionId;
+    if (!target) {
       app.showToast('No active session', 'warning');
       return;
     }
+    this._targetSessionId = target;
     this._retryCount = 0;
 
     const provider = this._resolveProvider();
@@ -959,8 +966,31 @@ const VoiceInput = {
     this.stop();
   },
 
+  /** The session this dictation belongs to (see _targetSessionId). */
+  _targetSession() {
+    return this._targetSessionId || app.activeSessionId;
+  },
+
+  /**
+   * Send text to the dictation's own session. The active session keeps going
+   * through app.sendInput() exactly as before; any other session goes straight
+   * to the durable queue with the same useMux flag sendInput() passes.
+   */
+  _sendToTarget(target, text) {
+    if (target === app.activeSessionId) return app.sendInput(text);
+    // Closed while dictating: say so instead of queueing text for a session
+    // that will only answer 404 (and never typing it into some other tab).
+    if (app.sessions && !app.sessions.has(target)) {
+      app.showToast?.('That session has closed; dictation not sent', 'warning');
+      return Promise.resolve();
+    }
+    app._sendInputAsync(target, text, { useMux: true });
+    return Promise.resolve();
+  },
+
   _insertText(text) {
-    if (!app.activeSessionId || !text.trim()) return;
+    const target = this._targetSession();
+    if (!target || !text.trim()) return;
     const trimmed = text.trim();
     const mode = this._getDeepgramConfig().insertMode || 'direct';
 
@@ -975,14 +1005,32 @@ const VoiceInput = {
         this._showComposeOverlay(trimmed);
       }
     } else {
-      // Direct mode: inject into local echo overlay if available, else send to PTY
-      if (app._localEchoEnabled && app._localEchoOverlay) {
+      // Direct mode: inject into local echo overlay if available, else send to PTY.
+      // The overlay belongs to the ACTIVE session's terminal, so text dictated
+      // for any other session must not be typed into it. It also belongs to the
+      // MAIN terminal, which the tile grid parks (display: none): with tiles
+      // open the text would sit in an invisible overlay the focused tile never
+      // sees, so it goes straight to the session instead.
+      const isActive = target === app.activeSessionId;
+      const tilesOpen = !!app._tilesOwnTerminal?.();
+      if (isActive && !tilesOpen && app._localEchoEnabled && app._localEchoOverlay) {
         app._localEchoOverlay.appendText(trimmed);
       } else {
-        app.sendInput(trimmed).catch(() => {});
+        this._sendToTarget(target, trimmed).catch(() => {});
       }
       this._showVoiceSendBtn();
-      setTimeout(() => { if (app.terminal) app.terminal.focus(); }, 150);
+      setTimeout(() => {
+        if (!isActive) return;
+        // With the grid open the keyboard belongs to the focused tile; the
+        // parked main terminal cannot take focus. Split view keeps the main
+        // terminal, even if Pane B took focus meanwhile (it is not the target).
+        if (app._tilesOwnTerminal?.()) {
+          const pane = app._focusedPane?.();
+          if (pane?.sessionId === target) pane.terminal?.focus();
+        } else if (app.terminal) {
+          app.terminal.focus();
+        }
+      }, 150);
     }
   },
 
@@ -1008,10 +1056,16 @@ const VoiceInput = {
 
     // Click handler
     this._voiceSendHandler = () => {
-      if (!app.activeSessionId) return;
+      const target = this._targetSession();
+      if (!target) return;
       // Simulate Enter key: if local echo is active, flush its buffer + send \r;
-      // otherwise just send \r directly to the PTY
-      if (app._localEchoEnabled && app._localEchoOverlay) {
+      // otherwise just send \r directly to the PTY. Both the overlay and the
+      // predictions belong to the ACTIVE session's MAIN terminal, so a
+      // dictation for another session, or for a tile while the grid has the
+      // main terminal parked, just sends its Enter there.
+      if (target !== app.activeSessionId || app._tilesOwnTerminal?.()) {
+        this._sendToTarget(target, '\r').catch(() => {});
+      } else if (app._localEchoEnabled && app._localEchoOverlay) {
         const text = app._localEchoOverlay.pendingText || '';
         app._localEchoOverlay.clear();
         app._localEchoOverlay.suppressBufferDetection();
@@ -1065,7 +1119,7 @@ const VoiceInput = {
     const send = () => {
       const val = textarea.value.trim();
       overlay.remove();
-      if (val) app.sendInput(val + '\r').catch(() => {});
+      if (val) this._sendToTarget(this._targetSession(), val + '\r').catch(() => {});
     };
     const cancel = () => overlay.remove();
     const newInput = () => {

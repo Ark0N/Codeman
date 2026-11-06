@@ -761,13 +761,35 @@ export class SubagentWatcher extends EventEmitter {
    * by workingDir alone would kill subagents belonging to OTHER sessions.
    */
   async killSubagentsForSession(workingDir: string, sessionId?: string): Promise<void> {
-    const subagents = this.getSubagentsForSession(workingDir);
-    for (const agent of subagents) {
-      if (agent.status === 'active' || agent.status === 'idle') {
-        // Only kill subagents belonging to this specific session
-        if (sessionId && agent.sessionId !== sessionId) continue;
-        await this.killSubagent(agent.agentId);
+    const targets = this.getSubagentsForSession(workingDir).filter(
+      // Only kill subagents belonging to this specific session
+      (agent) => (agent.status === 'active' || agent.status === 'idle') && (!sessionId || agent.sessionId === sessionId)
+    );
+    if (targets.length === 0) return;
+
+    // ONE process scan for the lot. This used to call killSubagent() per agent, and
+    // each call ran its own `pgrep -f claude` plus a /proc read per match (~85ms on a
+    // box with ~100 matching processes), so closing a session right after a workflow
+    // paid that once per recently active subagent. The match rules are
+    // findSubagentProcess()'s: getClaudePids() skips CODEMAN_MUX=1 processes too.
+    const pidMap = await this.getClaudePids();
+    const signalled = new Set<number>();
+    for (const agent of targets) {
+      // The liveness checker may have completed it while the scan ran.
+      if (agent.status !== 'active' && agent.status !== 'idle') continue;
+      for (const [pid, procInfo] of pidMap) {
+        if (signalled.has(pid)) continue;
+        if (procInfo.environ.includes(agent.sessionId) || procInfo.cmdline.includes(agent.sessionId)) {
+          signalled.add(pid);
+          try {
+            process.kill(pid, 'SIGTERM');
+          } catch {
+            // Process may have already exited
+          }
+          break; // one process per agent, as killSubagent() does
+        }
       }
+      this.markSubagentAsCompleted(agent);
     }
   }
 

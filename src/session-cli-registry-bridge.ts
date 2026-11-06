@@ -17,10 +17,11 @@
  * @module session-cli-registry-bridge
  */
 
+import { getDiscordStartupHint } from './discord-bridge.js';
 import type { CliEntry } from './config/cli-registry/types.js';
 import { renderLaunch, type EngineValues, type ParamValues } from './config/cli-registry/argv.js';
 import { matchesPattern } from './config/cli-registry/patterns.js';
-import { buildEffortCliArgs, sanitizeCliSessionName } from './session-cli-builder.js';
+import { buildAdvisorSettings, buildEffortCliArgs, sanitizeCliSessionName } from './session-cli-builder.js';
 import { compareVersions } from './utils/dependency-checker.js';
 import { getClaudeCliVersion } from './utils/claude-cli-resolver.js';
 import { launcherDefaultTarget } from './utils/cli-launcher.js';
@@ -33,6 +34,7 @@ import type {
   EffortLevel,
   GeminiConfig,
   GrokConfig,
+  CopilotConfig,
   OmpConfig,
   OpenCodeConfig,
   PiConfig,
@@ -50,10 +52,13 @@ export interface SpawnBridgeOptions {
   antigravityConfig?: AntigravityConfig;
   piConfig?: PiConfig;
   grokConfig?: GrokConfig;
+  copilotConfig?: CopilotConfig;
   deepSeekConfig?: DeepSeekConfig;
   ompConfig?: OmpConfig;
   resumeSessionId?: string;
   effort?: EffortLevel;
+  /** Claude advisor model; rides the same `--settings` JSON as ultracode (see buildAdvisorSettings). */
+  advisorModel?: string;
   sessionName?: string;
   claudeCliVersion?: string | null;
   /**
@@ -64,6 +69,12 @@ export interface SpawnBridgeOptions {
    * rendered as two independent params.
    */
   statusLineCommand?: string;
+  /**
+   * Add `idleCompaction: false` to the same `--settings` JSON: Codeman's prompt-cache keep-warm
+   * owns the idle policy for this launch. Decided (keep-warm on, exporter injected, version gate
+   * passed) by TmuxManager._resolveIdleCompactionOptOut, which records it on the mux record.
+   */
+  idleCompactionOff?: boolean;
 }
 
 /**
@@ -165,6 +176,20 @@ function resolveGatesPassed(entry: CliEntry, resolveVersion: () => string | null
 }
 
 /**
+ * Whether `mode`'s `capabilities.gates[gate]` passes, through the same fail-closed resolution
+ * the launch template uses (an unknown version passes no gate). For a launch-time decision that
+ * is also recorded, like the `idleCompaction` opt-out. `claudeCliVersion` as in
+ * SpawnBridgeOptions: undefined probes the local CLI, null means unknown.
+ */
+export function launchGatePasses(mode: string, gate: string, claudeCliVersion?: string | null): boolean {
+  const entry = getCli(mode);
+  if (!entry?.capabilities.gates[gate]) return false;
+  return resolveGatesPassed(entry, () =>
+    claudeCliVersion !== undefined ? claudeCliVersion : getClaudeCliVersion()
+  ).has(gate);
+}
+
+/**
  * Render the spawn command for `entry` from the legacy option bag. Returns `undefined` for a
  * `shell`-kind entry (or any entry declaring no launch variants), which callers take as "fall
  * back to the local login-shell resolution" — shell has no CLI to template.
@@ -198,19 +223,35 @@ export function buildSpawnCommandFromRegistry(entry: CliEntry, options: SpawnBri
     engineValues.effortLevel = effortValue;
   }
 
-  // Fold the ephemeral plan-usage statusLine exporter (see resolveStatusLineCliCommand in
-  // hooks-config.ts) into the SAME `--settings` JSON object as ultracode/ effort, since Claude
-  // Code accepts only one `--settings` flag per invocation — rendering them as two independent
-  // params would let the second one silently win. Claude-only in practice (statusLineCommand
-  // is resolved claude-mode-only upstream), but this merge is mode-agnostic.
-  if ((effortFlag === '--settings' && effortValue) || options.statusLineCommand) {
-    const settingsObj: Record<string, unknown> =
-      effortFlag === '--settings' && effortValue ? JSON.parse(effortValue) : {};
+  // Fold the advisor model and the ephemeral plan-usage statusLine exporter (see
+  // resolveStatusLineCliCommand in hooks-config.ts) into the SAME `--settings` JSON object as
+  // ultracode/ effort, since Claude Code accepts only one `--settings` flag per invocation:
+  // rendering them as independent params would let the last one silently win. Claude-only in
+  // practice: only claude's launch template renders this engine value, so another CLI's
+  // session carrying an advisorModel launches exactly as before.
+  // Key order (ultracode, advisorModel, statusLine, idleCompaction) keeps a launch without an
+  // advisor or keep-warm byte-identical to one from before either existed.
+  const advisorSettings = buildAdvisorSettings(options.advisorModel);
+  if (
+    (effortFlag === '--settings' && effortValue) ||
+    advisorSettings.advisorModel ||
+    options.statusLineCommand ||
+    options.idleCompactionOff
+  ) {
+    const settingsObj: Record<string, unknown> = {
+      ...(effortFlag === '--settings' && effortValue ? JSON.parse(effortValue) : {}),
+      ...advisorSettings,
+    };
     if (options.statusLineCommand) {
       settingsObj.statusLine = { type: 'command', command: options.statusLineCommand };
     }
+    if (options.idleCompactionOff) settingsObj.idleCompaction = false;
     engineValues.effortSettingsJson = JSON.stringify(settingsObj);
   }
+
+  // The Discord bridge's startup hint: undefined (so the flag is omitted) unless the bridge and its
+  // `startupHint` setting are on. Claude-only in practice, like the settings object above.
+  engineValues.appendSystemPrompt = getDiscordStartupHint();
 
   // Preserves buildSpawnCommand's original fallback exactly: an EXPLICIT `undefined` probes
   // the local claude CLI (getClaudeCliVersion, null under vitest); an explicit `null` means

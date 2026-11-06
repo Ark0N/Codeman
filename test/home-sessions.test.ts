@@ -155,7 +155,7 @@ describe('home sessions column: model', () => {
     ]);
   });
 
-  it('labels a row with its case and a short backend badge', () => {
+  it('labels a row with its case; an agent CLI carries its mode for the logo', () => {
     const app = loadHomeSessionsApp({
       sessions: sessionMap([{ id: 'a', name: 'w1-claudeman', mode: 'codex' }]),
       sessionOrder: ['a'],
@@ -164,33 +164,39 @@ describe('home sessions column: model', () => {
 
     const [row] = app.buildHomeSessionRows();
     expect(row.caseName).toBe('claudeman');
-    expect(row.modeBadge).toBe('cx');
-    // claude is the default backend and gets no badge — the strip does the same.
+    // Agent CLIs show their logo (drawn from row.mode), not a text badge, the
+    // same as the strip; test/tab-harness-logo.test.ts pins the markup.
+    expect(row.mode).toBe('codex');
+    expect(row.modeBadge).toBe('');
     const plain = loadHomeSessionsApp({
       sessions: sessionMap([{ id: 'a', mode: 'claude' }]),
       sessionOrder: ['a'],
       cases: CASES,
     });
-    expect(plain.buildHomeSessionRows()[0].modeBadge).toBe('');
+    expect(plain.buildHomeSessionRows()[0].mode).toBe('claude');
   });
 
-  it('badges every non-claude backend, so a new run mode cannot read as claude here', () => {
-    // The badge map is a per-mode lookup with a '' fallback, so a mode missing from it
-    // is indistinguishable from claude in this rail while the tab strip badges it fine.
+  it('gives only the shell a text badge, and every backend its own mode', () => {
     for (const [mode, badge] of [
       ['shell', 'sh'],
-      ['opencode', 'oc'],
-      ['codex', 'cx'],
-      ['gemini', 'gm'],
-      ['antigravity', 'ag'],
-      ['pi', 'pi'],
+      ['claude', ''],
+      ['opencode', ''],
+      ['codex', ''],
+      ['gemini', ''],
+      ['antigravity', ''],
+      ['pi', ''],
+      ['grok', ''],
+      ['deepseek', ''],
+      ['omp', ''],
     ] as const) {
       const app = loadHomeSessionsApp({
         sessions: sessionMap([{ id: 'a', mode }]),
         sessionOrder: ['a'],
         cases: CASES,
       });
-      expect(app.buildHomeSessionRows()[0].modeBadge).toBe(badge);
+      const [row] = app.buildHomeSessionRows();
+      expect(row.modeBadge, mode).toBe(badge);
+      expect(row.mode, mode).toBe(mode);
     }
   });
 });

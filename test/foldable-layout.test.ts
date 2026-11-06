@@ -298,7 +298,7 @@ describe('fold reserved region: every centred overlay is covered', () => {
   it('finds the overlays it is meant to guard', () => {
     // A rename that empties this list would turn every assertion below into a
     // no-op, so the count is pinned.
-    expect(CENTRED_OVERLAYS.length).toBe(7);
+    expect(CENTRED_OVERLAYS.length).toBe(8);
   });
 
   it.each(CENTRED_OVERLAYS.map((o) => [o.selector, o] as const))('%s keeps its dialog out of the hinge', (_, o) => {

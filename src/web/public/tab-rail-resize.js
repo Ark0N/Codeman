@@ -298,7 +298,9 @@ Object.assign(CodemanApp.prototype, {
   },
 
   closeTabRailActionMenu(options = {}) {
-    const menu = document.querySelector('.tab-rail-action-menu');
+    // The group menu borrows this class for its look but has its own owner
+    // (closeTabGroupMenu); removing its DOM here would strand its listeners.
+    const menu = document.querySelector('.tab-rail-action-menu:not(.tab-layout-group-action-menu)');
     const trigger = this._tabRailActionMenuTrigger;
     menu?.remove();
     if (this._tabRailActionMenuOutside) {
@@ -317,6 +319,7 @@ Object.assign(CodemanApp.prototype, {
     event.preventDefault();
     event.stopPropagation();
     this.closeTabRailActionMenu();
+    this.closeTabGroupMenu?.();
     const trigger = event.currentTarget;
     const menu = document.createElement('div');
     menu.className = 'tab-rail-action-menu';
@@ -325,12 +328,38 @@ Object.assign(CodemanApp.prototype, {
     const settings = this.loadAppSettingsFromStorage();
     const actions = [
       { label: 'Session options', run: () => this.openSessionOptions(sessionId) },
-      ...(settings.showTabDetachButton || this.detachedSessions?.has(sessionId)
-        ? [{ label: 'Open in a new window', run: () => this.detachSession(sessionId) }]
+      // The row's "+" (showTabNewButton on) as a menu item: a keyboard route beside
+      // Enter or Space on the "+" itself, and its only route in the compact rail,
+      // which hides it. Session rows only: tiles share this menu and carry no "+".
+      ...(document.documentElement.classList.contains('tabs-show-new') && trigger.closest('.session-tab')
+        ? [{ label: 'New session here…', run: () => this.openTabNewSessionMenu({ currentTarget: trigger }, sessionId) }]
         : []),
+      // Focus and group placement (vertical rail with a tab layout only; [] elsewhere).
+      ...(this._tabRefFocusActions?.({ kind: 'session', id: sessionId }) || []),
+      ...(this._tabRefMoveActions?.({ kind: 'session', id: sessionId }) || []),
+      // A tile (Detach Tiles on) opens its own size, over where it is: the
+      // keyboard's way to what dragging its header out of the window does.
+      ...(this._tileGrid?.has?.(sessionId) && this._tileDetachAllowed?.()
+        ? [{ label: 'Open in a new window', run: () => this.detachTile(sessionId) }]
+        : (this.tabDetachButtonEnabled?.(settings) ?? settings.showTabDetachButton) ||
+            this.detachedSessions?.has(sessionId)
+          ? [{ label: 'Open in a new window', run: () => this.detachSession(sessionId) }]
+          : []),
       { label: 'Close session', className: 'danger', run: () => this.requestCloseSession(sessionId) },
     ];
     for (const action of actions) {
+      // A note (a child session's placement) is plain text, not a menu item: it
+      // takes no focus and no arrow stop, and describes the menu instead.
+      if (action.note) {
+        const note = document.createElement('div');
+        note.className = 'tab-rail-action-menu-note';
+        note.setAttribute('role', 'none');
+        note.id = 'tabRailActionMenuNote';
+        note.textContent = action.label;
+        menu.setAttribute('aria-describedby', note.id);
+        menu.appendChild(note);
+        continue;
+      }
       const button = document.createElement('button');
       button.type = 'button';
       button.setAttribute('role', 'menuitem');

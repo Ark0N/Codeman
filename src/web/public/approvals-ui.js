@@ -261,6 +261,10 @@ Object.assign(CodemanApp.prototype, {
         `onkeydown="if(event.key==='Enter')app.answerApprovalIdleText('${id}')">` +
         `<button class="approval-btn approval-btn-primary" onclick="app.answerApprovalIdleText('${id}')">Send</button>` +
         `</div>`;
+    } else if (item.answerInTerminal) {
+      // Supervised-hook CLIs (DeepSeek Harness): keystrokes are unverifiable, so
+      // Approve/Deny would hit the answer route and fail. Offer only Open session.
+      actions = `<span class="approval-terminal-hint" data-i18n-skip>Answer in the terminal</span>`;
     } else if (item.options && item.options.length) {
       actions = item.options
         .map(

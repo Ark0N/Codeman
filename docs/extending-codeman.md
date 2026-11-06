@@ -163,9 +163,14 @@ respawn, Ralph, the orchestrator, search, and admin. Each route module carries a
 If the caller is an agent running _inside_ a Codeman session, install the packaged
 agent skill instead of teaching it these calls by hand: `skills/codeman` in the repo
 (`npx skills add Ark0N/Codeman --skill codeman -g`, or `codeman skill install
-[--case <name>]`, or the synced `agentSkillEnabled` App Setting for automatic
-per-case injection on Claude session create). The skill carries the guard, the
-safety rules, and verified wait/orchestration recipes.
+[--case <name>] [--mode <mode>]`, or the synced `agentSkillEnabled` App Setting for
+automatic per-case injection on session create, into the directory each CLI scans for
+skills). The skill carries the guard, the safety rules, and verified
+wait/orchestration recipes.
+
+If the caller speaks the Model Context Protocol (Claude Desktop, Cursor, Codex, any MCP
+client), point it at `codeman mcp` instead: seven tools over these same endpoints,
+configured with `CODEMAN_API_URL`. See the README section "MCP server".
 
 The common ones:
 
@@ -178,7 +183,7 @@ curl -u admin:$PASS -X POST http://127.0.0.1:3000/api/v1/sessions \
   -H 'Content-Type: application/json' \
   -d '{"workingDir":"/home/me/project","mode":"claude"}'
 
-# Send a prompt (single-line only, and it must end with \r: Enter is sent only
+# Send a prompt (it must end with \r: Enter is sent only
 # when the input contains a carriage return; without it the text sits on the
 # session's prompt unsubmitted)
 curl -u admin:$PASS -X POST http://127.0.0.1:3000/api/v1/sessions/$ID/input \
@@ -215,17 +220,18 @@ whether your integration works, and the last one is what actually bites:
   to die in the field.
 - **`wait.timeoutMs`** is the timeout after server-side clamping (600 s ceiling by
   default). Read it rather than assuming you got what you asked for.
-- **`stop` and `blocked` only exist for `claude` sessions**, and on a `shell` session
-  even `idle` fires only once at startup, so send-and-wait there can only time out.
+- **`stop` only exists for `claude` (and `deepseek`) sessions, `blocked` also for
+  `codex`** (read off its screen), and on a `shell` session even `idle` fires only once
+  at startup, so send-and-wait there can only time out.
   See the Gotchas below.
 
 ⚠️ **There is no readiness signal, and skipping readiness is the failure that looks
 like success.** A session reports `idle` before its CLI has spawned, and a `claude`
 worker in a brand-new case comes up on the CLI's **trust dialog**, which has a ❯
-prompt of its own. Prompt it at that moment and the text lands in the dialog, the
-`\r` does not get past it, and the session's startup `idle` lands inside the wait
-window: the wait resolves on `idle` in a couple of seconds with `timedOut: false`,
-indistinguishable from a finished turn. Wait for the pid, then wait for the
+prompt of its own. Prompt it at that moment and the text lands in the dialog,
+whose highlighted option is `No, exit`, so the prompt's `\r` quits the CLI. Codeman
+holds the session's `idle` while the dialog is on screen, which makes waiting for
+`idle` safe but still not a readiness signal. Wait for the pid, then wait for the
 composer, answering the dialog only as the bounded fallback.
 
 ⚠️ **Answering it is not "press Enter".** Claude Code 2.1.252 dropped the options'
@@ -288,8 +294,8 @@ if ! jq -e '.data.wait.matched' <<<"$R" >/dev/null; then
 fi
 
 # 3. Send the prompt AND register the wait in one call, so the answer cannot be
-#    the previous turn's idle state. Single line only, ending in \r (otherwise
-#    Enter is never sent and this wait times out on a turn that never started).
+#    the previous turn's idle state. It must end in \r (otherwise Enter is never
+#    sent and this wait times out on a turn that never started).
 W=$("${CURL[@]}" -X POST "$API/api/v1/sessions/$SID/input" \
   -H 'Content-Type: application/json' \
   -d '{"input":"Run the test suite and summarize the failures\r","useMux":true,
@@ -338,6 +344,42 @@ codeman ralph start|stop|status|reset    codeman users add|passwd|list
 codeman status | list | attach <path>    codeman doctor
 ```
 
+### Opening a session from your own page
+
+To send someone from your page to one session, link to the dashboard with the
+session id in the fragment, as in `http://127.0.0.1:3000/#session=<id>`. The
+dashboard selects that tab when it loads. It also removes the fragment from its
+own URL, so a later link to the same session still counts as a change.
+
+Keep reusing one named window to make later links fast:
+
+```js
+window.open(`${codeman}/#session=${encodeURIComponent(id)}`, 'codeman');
+```
+
+When that window already shows the dashboard, only the fragment differs. The
+browser therefore keeps the page loaded, and the dashboard switches tabs without
+reloading it. A session the window has shown before appears at once. A session
+your page has only just created may not be listed yet, so the dashboard waits
+for its `session:created` event and selects it then. That wait lasts at most 30
+seconds: a link whose session never appears (a closed session, a typo, or in
+multi-user mode another user's session) is dropped with a "Session not found"
+notice. Clicking another tab, going Home or opening a web tab also ends the
+wait, so a session that turns up later never takes the screen from the person.
+
+When your page holds the window reference (`const win = window.open(...)`),
+prefer `win.location.replace(url)` for later links: it still fires `hashchange`
+without a reload, but adds no history entry, so Back in the dashboard window
+does not turn into a silent no-op.
+
+Following a link does not count as someone looking at the session, so it
+leaves the session's idle alert in place. The alert clears when the person
+clicks the tab or types into the session. A link to a session that is popped
+out into its own window asks that window to come forward, as clicking its tab does.
+
+A link to `/session/<id>` opens a page showing that session alone, and that
+page loads from scratch for every link.
+
 ## Seam 4: Hooks
 
 Claude Code hooks post to `POST /api/v1/hook-event` from inside an agent session.
@@ -372,14 +414,16 @@ Every one of these has cost somebody real time.
   shipped bugs more than once.
 - **`text/plain` bodies stay raw.** Auto-parsing them as JSON enabled
   simple-request CSRF, so it is deliberate. Send `application/json`.
-- **Prompts are single-line and must end with `\r`.** The server splits your text
-  and Enter into two separate tmux writes (Ink needs them apart), but it sends the
-  Enter **only when the input contains a carriage return**. Without it your text
-  sits on the prompt unsubmitted, which is the single most common "the wait
-  endpoints don't work" report: the wait runs its full timeout on a turn that never
-  started. Newlines inside the string are stripped rather than rejected, so
-  `"echo A\necho B\r"` runs the single joined command `echo Aecho B`: send one line
-  per call.
+- **Prompts must end with `\r`.** The server splits your text and Enter into two
+  separate tmux writes (Ink needs them apart), but it sends the Enter **only when
+  the input contains a carriage return**. Without it your text sits on the prompt
+  unsubmitted, which is the single most common "the wait endpoints don't work"
+  report: the wait runs its full timeout on a turn that never started. With
+  `useMux`, newlines inside the string are kept: the text goes in as one paste and
+  the Enter after it submits all of it, so `"echo A\necho B\r"` runs both commands
+  in a shell. The check that re-presses a stranded Enter cannot reliably recognise
+  a multi-line paste, so a long multi-line prompt to a just-started agent is still
+  safer in a file it is told to read.
 - **`wait-output`'s `from=now` is not "printed after you asked".** tmux repaints
   the visible screen on attach, on resize, and on any TUI redraw, and a repaint
   arrives as ordinary output, so text already on screen can satisfy a fresh wait.
@@ -397,9 +441,11 @@ Every one of these has cost somebody real time.
   a multi-word match is unreliable there. Match one short space-free token, ideally
   one you printed yourself, and keep it out of the typed line (your own keystrokes
   echo into the stream).
-- **`stop` and `blocked` never fire for `shell`, `opencode`, `codex`, `gemini`,
-  `antigravity` or `pi` sessions.** They come from Claude Code hooks, which no other mode
-  installs, so only `idle`, `working` and `exit` exist there. Asking for them
+- **`stop` and `blocked` never fire for `shell`, `opencode`, `gemini`, `antigravity` or
+  `pi` sessions, and `stop` never for `codex`.** They come from Claude Code hooks, which
+  no other mode installs, so only `idle`, `working` and `exit` exist there. The exception
+  is `blocked` on `codex`, which Codeman raises from the approval, question and trust
+  dialogs it reads off codex's screen. Asking for them
   explicitly is a `400`; omitting `until` is safe, since the server drops them from
   the default set and echoes what it actually waited on as `wait.until`. Even in
   `claude` mode, a Docker case needs `CODEMAN_DOCKER_BRIDGE_HOOKS=1` for hooks to

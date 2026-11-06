@@ -5,7 +5,6 @@ import { join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { safeRmHomeTree } from './mocks/index.js';
 
-const TEST_PORT = 3120;
 const CASES_DIR = join(homedir(), 'codeman-cases');
 
 /**
@@ -22,9 +21,9 @@ describe('Session Cleanup', () => {
 
   beforeAll(async () => {
     testWorkingDir = mkdtempSync(join(tmpdir(), 'codeman-cleanup-test-'));
-    server = new WebServer(TEST_PORT, false, true);
+    server = new WebServer(0, false, true);
     await server.start();
-    baseUrl = `http://localhost:${TEST_PORT}`;
+    baseUrl = `http://localhost:${server.boundPort}`;
   });
 
   afterEach(() => {
@@ -218,9 +217,9 @@ describe('Resource Management', () => {
   const createdCases: string[] = [];
 
   beforeAll(async () => {
-    server = new WebServer(TEST_PORT + 1, false, true);
+    server = new WebServer(0, false, true);
     await server.start();
-    baseUrl = `http://localhost:${TEST_PORT + 1}`;
+    baseUrl = `http://localhost:${server.boundPort}`;
   });
 
   afterAll(async () => {

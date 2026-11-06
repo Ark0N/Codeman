@@ -116,15 +116,46 @@ seconds in. Current versions confirm against the actual screen before believing 
 
 ### A session is stuck showing busy
 
-For non-Claude CLIs, idle detection is output-based and coarser by necessity: those CLIs
-expose no hooks. A session that has genuinely gone quiet will settle. If it never does,
-interrupt it (`Ctrl+C` with nothing selected).
+For Grok Build the busy and idle status is unreliable: it exposes no hooks and declares no
+working line, so after launch Codeman has only generic cues to go on (Claude's `❯` prompt
+marker, a braille spinner glyph), which it may not draw. Codex, OpenCode, Gemini CLI, Pi,
+OMP and Antigravity get the same screen check Claude does, so a session of theirs that has
+genuinely gone quiet will settle. An Antigravity session waiting on a shell-command approval
+("Run this command?") shows busy until you answer it: `agy` draws nothing Codeman reads as
+"at rest" while that list is up. If a session never settles, interrupt it (`Ctrl+C` with
+nothing selected).
 
 ### The agent asks about bypass permissions every time
 
 That prompt comes from Claude Code, not Codeman. Codeman's default is to start with
 permission prompts skipped, which is what the security model is built around. If you would
 rather it prompted, change **App Settings → Agents & CLIs → Claude → Startup Mode**.
+
+### My settings were reset, or a CLI I enabled is gone
+
+Something rewrote a file in `~/.codeman/` (a hand edit, a restart that loaded a bad file, a
+test run pointed at the real data directory). If [Config Backups](Config-Backups) was on,
+which is the default, you have copies:
+
+1. Open **Settings → System → Config backups** and pick the newest backup from before the
+   change. The list shows when each was made and what it holds.
+2. **Restore** it, reload the page, and restart Codeman if the response's `restartRequired`
+   list is not empty.
+
+A reset `settings.json` also drops the backup folder setting. If you use a custom folder, enter
+it again and save before looking for the list; until then the list shows the default folder.
+After a reinstall of the data directory the old backups are unlisted because the instance has a
+new id; see [Config Backups](Config-Backups) for how to make them visible again.
+
+A backup is never dated earlier than the newest one, so if the clock was once set to a far
+future date, every later backup keeps that date. Delete the future-dated backup folder to
+return to normal dating.
+
+Without the UI: the backups are plain folders in `~/.codeman/backups/config/`
+(`cfg-YYYYMMDD-HHMMSS`); copy the file you need back over the one in `~/.codeman/`.
+
+Not covered: `state.json` (cron jobs and respawn presets live there). A backup only exists
+from the moment the feature first ran, so a reset that happened before that cannot be undone.
 
 ### Sessions vanished after a reboot
 
@@ -156,6 +187,20 @@ CODEMAN_INSTANCE=beta CODEMAN_PORT=5000 codeman web
 `codeman web -d` and `codeman service install` both refuse to start a second server on one
 data directory for exactly this reason.
 
+### `Context size has been exceeded` from a local llama.cpp model
+
+Sessions pointed at a llama.cpp or llama-swap endpoint (see [Custom Model
+Endpoints](Custom-Model-Endpoints)) fail with `500 Context size has been exceeded`, usually
+when Claude Code runs subagents, or an agent fails with `Prompt is too long` while the main
+session carries on. The server runs several parallel slots that share one pool of context,
+and every Claude Code request carries about 40K tokens of its own system prompt and tools, so
+a few concurrent requests use the pool up. Start the model with a single slot by adding
+`--parallel 1` to its launch command, or give it a context large enough that each slot holds
+40K tokens. Check the current count with `GET /props` on the server (on llama-swap,
+`GET /props?model=<id>` for a loaded model): `total_slots` is the number of slots. `n_ctx` is the
+shared context only when the slot count is automatic; with an explicit `--parallel N` it is the
+size of each slot.
+
 ## The terminal
 
 ### I cannot scroll back through history
@@ -173,8 +218,8 @@ Things to try:
 
 ### The wheel does nothing in a Codex session
 
-Codex ignores the mouse reports that forwarding would send, so Codeman does not forward
-there. Scrolling is local, and `Shift+Wheel` behaves the same way.
+Codex with mouse tracking on gets the wheel forwarded like fullscreen Claude; otherwise
+it pages its transcript or scrolls locally, while `Shift+Wheel` always uses local scrollback.
 
 ### Selected text is invisible on a light skin
 

@@ -163,6 +163,12 @@ export interface CellDimensions {
 /** Parameters for the overlay renderer. */
 export interface RenderParams {
   lines: string[];
+  /**
+   * Index (in code points, across all `lines`) where IME composition text
+   * begins. Characters from there on are drawn underlined and marked
+   * `data-zerolag-composition`. Omit when nothing is being composed.
+   */
+  compositionStart?: number;
   startCol: number;
   totalCols: number;
   cellW: number;

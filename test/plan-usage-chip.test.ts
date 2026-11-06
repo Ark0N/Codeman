@@ -139,4 +139,44 @@ describe('header plan usage chip', () => {
     expect(chip.innerHTML).toContain('12%');
     expect(chip.title).toContain('Codex plan usage');
   });
+
+  it('shows Copilot as a monthly window with request counts in the tooltip', () => {
+    const { CodemanApp, chip } = loadCodemanAppClass();
+    const app = Object.create((CodemanApp as { prototype: object }).prototype) as UsageApp;
+
+    app.updatePlanUsageChip({
+      fiveHour: { usedPercentage: 10, resetAt: 1000 },
+      sevenDay: { usedPercentage: 20, resetAt: 2000 },
+      copilot: { monthly: { usedPercentage: 24.3, resetAt: 3000, used: 1215, limit: 5000 } },
+    });
+
+    expect(chip.innerHTML).toContain('class="pu-provider">Copilot</span>');
+    expect(chip.innerHTML).toContain('mo');
+    expect(chip.innerHTML).toContain('24%');
+    expect(chip.title).toContain('Copilot plan usage');
+    expect(chip.title).toContain('1215 of 5000 requests');
+    // Only Copilot's own row carries a monthly window.
+    const claudeRow = chip.innerHTML.slice(0, chip.innerHTML.indexOf('Copilot'));
+    expect(claudeRow).not.toContain('>mo<');
+  });
+
+  it('shows a lone Copilot row without a provider label or a Claude placeholder', () => {
+    const { CodemanApp, chip } = loadCodemanAppClass();
+    const app = Object.create((CodemanApp as { prototype: object }).prototype) as UsageApp;
+
+    app.updatePlanUsageChip({ copilot: { monthly: { usedPercentage: 80, resetAt: 3000 } } });
+
+    expect(chip.innerHTML).toContain('80%');
+    expect(chip.innerHTML).not.toContain('pu-provider');
+    expect(chip.innerHTML).not.toContain('pu-win-idle');
+  });
+
+  it('renders no Copilot row when the provider reports nothing', () => {
+    const { CodemanApp, chip } = loadCodemanAppClass();
+    const app = Object.create((CodemanApp as { prototype: object }).prototype) as UsageApp;
+
+    app.updatePlanUsageChip({ sevenDay: { usedPercentage: 30, resetAt: 2000 }, copilot: null });
+
+    expect(chip.innerHTML).not.toContain('Copilot');
+  });
 });

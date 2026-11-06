@@ -1,16 +1,15 @@
-// Port 3206 - Screenshot comparison tests
+// Ephemeral port - Screenshot comparison tests
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { BrowserContext, Page } from 'playwright';
 import type { WebServer } from '../src/web/server.js';
 import { createTestServer, stopTestServer } from './helpers/server.js';
 import { createDevicePage, closeAllBrowsers } from './helpers/browser.js';
-import { PORTS, SELECTORS, VISUAL, VISUAL_BREAKPOINTS, WAIT } from './helpers/constants.js';
+import { SELECTORS, VISUAL, VISUAL_BREAKPOINTS, WAIT } from './helpers/constants.js';
 import { showKeyboard, hideKeyboard } from './helpers/keyboard-sim.js';
 import { compareScreenshot, assertScreenshotMatch } from './helpers/visual.js';
 import { REPRESENTATIVE_DEVICES } from './devices.js';
 
-const PORT = PORTS.VISUAL_REGRESSION;
-const BASE_URL = `http://localhost:${PORT}`;
+let baseUrl: string;
 
 let server: WebServer;
 
@@ -20,7 +19,8 @@ const KEY_BREAKPOINTS = [320, 375, 393, 430, 768, 1024] as const;
 
 describe('Visual Regression', () => {
   beforeAll(async () => {
-    server = await createTestServer(PORT);
+    server = await createTestServer();
+    baseUrl = `http://localhost:${server.boundPort}`;
   });
 
   afterAll(async () => {
@@ -49,7 +49,7 @@ describe('Visual Regression', () => {
         defaultBrowserType: 'chromium' as const,
       };
 
-      const { context, page } = await createDevicePage(device, BASE_URL);
+      const { context, page } = await createDevicePage(device, baseUrl);
       try {
         await page.waitForTimeout(WAIT.PAGE_SETTLE);
         const result = await compareScreenshot(page, `landing-${width}w`);
@@ -76,7 +76,7 @@ describe('Visual Regression', () => {
         defaultBrowserType: 'chromium' as const,
       };
 
-      const { context, page } = await createDevicePage(device, BASE_URL);
+      const { context, page } = await createDevicePage(device, baseUrl);
       try {
         await page.waitForTimeout(WAIT.PAGE_SETTLE);
         // Show keyboard via DOM manipulation (works on all engines)
@@ -109,7 +109,7 @@ describe('Visual Regression', () => {
         defaultBrowserType: 'chromium' as const,
       };
 
-      const { context, page } = await createDevicePage(device, BASE_URL);
+      const { context, page } = await createDevicePage(device, baseUrl);
       try {
         await page.waitForTimeout(WAIT.PAGE_SETTLE);
 
@@ -143,7 +143,7 @@ describe('Visual Regression', () => {
   describe('Representative Devices', () => {
     for (const [category, device] of Object.entries(REPRESENTATIVE_DEVICES)) {
       it(`${device.name} (${category}) landing page`, async () => {
-        const { context, page } = await createDevicePage(device, BASE_URL);
+        const { context, page } = await createDevicePage(device, baseUrl);
         try {
           await page.waitForTimeout(WAIT.PAGE_SETTLE);
           const name = `device-${device.name.toLowerCase().replace(/[^a-z0-9]/g, '-')}`;

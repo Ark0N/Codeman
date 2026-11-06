@@ -1,406 +1,15 @@
 // src/web/public/terminal-split.js
 
 /**
- * @fileoverview SplitTerminalPane — a second, independent live terminal pane
- * ("Pane B") for split-view sessions. Deliberately plainer than the primary
- * pane (this.terminal/this._ws in terminal-ui.js): no local-echo overlay, no
- * CJK IME, no touch/mobile handlers, no keyboard accessory bar. Desktop-only
- * feature by nature — see docs/split-pane-sessions-plan.md.
+ * @fileoverview Split-pane orchestration: opens a second live session
+ * ("Pane B") beside the active one, in a TerminalTile (terminal-tile.js), with
+ * a draggable divider, a session picker, and auto-collapse when either
+ * session ends. Desktop-only; see docs/split-pane-sessions-plan.md.
  *
- * @dependency vendor/xterm.js, vendor/xterm-addon-fit.js
- * @dependency constants.js (window.CodemanTerminalFont, DEFAULT_SCROLLBACK, TERMINAL_TAIL_SIZE, TERMINAL_CHUNK_SIZE)
- * @dependency terminal-ui.js (codemanCurrentXtermTheme, codemanCurrentSkinIsLight)
- * @loadorder 7.5 of 16 — loaded after terminal-ui.js, before respawn-ui.js
+ * @dependency terminal-tile.js (window.TerminalTile)
+ * @dependency constants.js (window.CodemanSplitPane, SPLIT_PANE_MIN_WIDTH)
+ * @loadorder 7.5 of 16, loaded after terminal-tile.js and before tile-grid.js
  */
-
-(function (global) {
-  /**
-   * Minimal chunked write for Pane B's own xterm instance — write() in
-   * TERMINAL_CHUNK_SIZE slices, yielding a frame between each, instead of one
-   * giant synchronous write that blocks the main thread while parsing a long
-   * scrollback. Deliberately NOT the primary pane's chunkedTerminalWrite
-   * (terminal-ui.js): that one is wired into session-switch generation
-   * counters and the live-output gate this simpler, independently
-   * created/destroyed pane has no equivalent of.
-   */
-  function writeChunked(terminal, buffer, isDestroyed) {
-    if (!buffer) return Promise.resolve();
-    if (buffer.length <= TERMINAL_CHUNK_SIZE) {
-      terminal.write(buffer);
-      return Promise.resolve();
-    }
-    // Resolves once the LAST chunk is written (or the pane was destroyed
-    // mid-replay), so _loadBuffer() below can hold its single-flight flag
-    // across the whole replay rather than just the fetch that precedes it.
-    return new Promise((resolve) => {
-      let offset = 0;
-      const writeNext = () => {
-        if (isDestroyed() || !terminal) {
-          resolve();
-          return;
-        }
-        const chunk = buffer.slice(offset, offset + TERMINAL_CHUNK_SIZE);
-        offset += chunk.length;
-        terminal.write(chunk);
-        if (offset < buffer.length) {
-          if (typeof requestAnimationFrame === 'function') requestAnimationFrame(writeNext);
-          else setTimeout(writeNext, 16);
-        } else {
-          resolve();
-        }
-      };
-      writeNext();
-    });
-  }
-
-  class SplitTerminalPane {
-    constructor(sessionId, mountEl, opts = {}) {
-      this.sessionId = sessionId;
-      this.mountEl = mountEl;
-      this.sessionMode = opts.mode;
-      this.fontSettings = opts.fontSettings || {};
-      // Live reference (not a snapshot) to the app's detachedSessions Set —
-      // detaching this session AFTER the split is already open must still be
-      // seen by _sendResize() below, or it re-creates the exact PTY-size
-      // fight the split picker already refuses to open at pick time.
-      this.detachedSessions = opts.detachedSessions;
-      this.terminal = null;
-      this.fitAddon = null;
-      this.ws = null;
-      this._wsReady = false;
-      this._destroyed = false;
-      // Single-flight state for _loadBuffer()/_refreshBuffer() below.
-      this._bufferLoading = false;
-      this._bufferRefreshPending = false;
-    }
-
-    async connect() {
-      const savedFontSize = parseInt(localStorage.getItem('codeman-font-size'), 10);
-      this.terminal = new Terminal({
-        theme: { ...global.codemanCurrentXtermTheme() },
-        fontFamily: global.CodemanTerminalFont.resolve(this.fontSettings.terminalFontFamily),
-        ...global.CodemanTerminalFont.resolveWeights(this.fontSettings),
-        fontSize: Number.isFinite(savedFontSize) ? savedFontSize : 14,
-        lineHeight: 1.2,
-        cursorBlink: false,
-        cursorStyle: 'block',
-        minimumContrastRatio: global.codemanCurrentSkinIsLight() ? 4.5 : 1,
-        scrollback: DEFAULT_SCROLLBACK,
-        allowTransparency: true,
-        allowProposedApi: true,
-      });
-
-      this.fitAddon = new FitAddon.FitAddon();
-      this.terminal.loadAddon(this.fitAddon);
-      this.terminal.open(this.mountEl);
-      this.fitAddon.fit();
-
-      this.terminal.onData((data) => {
-        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-          this.ws.send(JSON.stringify({ t: 'i', d: data }));
-        }
-      });
-
-      // Pane B has no gates of its own by default, so every app-level chord
-      // that the document capture-phase handler (app.js) only preventDefault()s
-      // — never stopPropagation()s — reaches xterm here too and writes its raw
-      // byte/escape sequence into THIS session's PTY on top of whatever the app
-      // action already did to Pane A (COD-153; mirrors the primary pane's own
-      // gates at terminal-ui.js's attachCustomKeyEventHandler: command palette,
-      // Alt+1-9/[/] tab nav, Alt+B sidebar toggle, Ctrl+Z suspend, Shift/Ctrl+Enter
-      // newline, and smart-copy Ctrl+C/Ctrl+Shift+C). Routed through the same
-      // registry-aware predicates so a rebind or a disable restores plain
-      // terminal behavior here too. Ctrl+V is deliberately left on xterm's own
-      // default (plain-text paste): Pane B has no image-paste trap to route it
-      // to, so intercepting it here would only break paste.
-      this.terminal.attachCustomKeyEventHandler((ev) => {
-        if (ev.isComposing || ev.key === 'Process' || ev.keyCode === 229) return true;
-        if (
-          ev.altKey &&
-          !ev.ctrlKey &&
-          !ev.shiftKey &&
-          /^(Digit[1-9]|BracketLeft|BracketRight|KeyK)$/.test(ev.code || '')
-        ) {
-          return false;
-        }
-        if (ev.type === 'keydown' && global.app?.shouldOpenCommandPaletteFromShortcut?.(ev)) {
-          return false;
-        }
-        if (ev.type === 'keydown' && global.app?.shouldToggleSessionSidebarFromShortcut?.(ev)) {
-          return false;
-        }
-        // Ctrl+Z (SIGTSTP/job-control suspend): mirrors terminal-ui.js's own
-        // swallow — in a plain shell session this is the user's own
-        // job-control tool and must reach the PTY, but in every other mode
-        // (claude/omp/pi/codex/...) it silently stops an unattended agent
-        // loop dead. Pane B has its own PTY/session and must not send a
-        // suspend into a non-shell one just because the primary pane's own
-        // gate lives elsewhere.
-        if (
-          ev.type === 'keydown' &&
-          ev.key.toLowerCase() === 'z' &&
-          ev.ctrlKey &&
-          !ev.altKey &&
-          !ev.metaKey &&
-          !ev.shiftKey &&
-          this.sessionMode !== 'shell'
-        ) {
-          return false;
-        }
-        // Shift+Enter / Ctrl+Enter: insert a newline instead of submitting.
-        // Mirrors terminal-ui.js's own handling — xterm sends plain \r for
-        // every Enter variant, so an Ink app (Claude Code) can't tell a
-        // newline from a submit. Without this gate, Pane B's onData would
-        // send that bare \r straight over the WS and submit an incomplete
-        // prompt instead of adding a line to it. Targets THIS pane's own
-        // session (this.sessionId), never the primary pane's
-        // activeSessionId, and has no local-echo overlay of its own to flush
-        // first (Pane B is deliberately plainer — see the fileoverview).
-        if (ev.key === 'Enter' && (ev.shiftKey || ev.ctrlKey) && ev.type === 'keydown') {
-          fetch(`/api/sessions/${this.sessionId}/send-key`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ key: ev.ctrlKey ? 'C-Enter' : 'S-Enter' }),
-          }).catch(() => {
-            /* Best-effort, matching this pane's tolerance elsewhere. */
-          });
-          return false;
-        }
-        // Smart copy (mirrors terminal-ui.js's Ctrl+C gate, #211): with a
-        // selection, Ctrl+C copies THIS pane's own selection instead of
-        // sending ^C; with none, plain Ctrl+C must fall through unchanged or
-        // the interrupt key is lost. Ctrl+Shift+C is different: it is the
-        // explicit, never-falls-through copy chord, and the predicate above
-        // does not distinguish it from plain Ctrl+C — ev.shiftKey does, below.
-        // xterm's own evaluateKeyboardEvent routes a shifted ctrl-letter into
-        // a branch that assigns c.key only for a couple of special cases
-        // ("_"->US, "@"->NUL), neither of which is "c", so it emits NOTHING
-        // for Ctrl+Shift+C either way — this is not about an accidental
-        // interrupt byte reaching the PTY (verified live: it does not).
-        // Gating this whole block on hasSelection() (an earlier draft) meant
-        // that with no selection Ctrl+Shift+C skipped straight to `return
-        // true`, silently ceding the keystroke to the BROWSER's own handling
-        // (e.g. Chrome's Inspect-Element binding) with no feedback and no
-        // attempt to copy, unlike Pane A, which always intercepts it.
-        // Re-implemented against this.terminal rather than reusing
-        // app.copyTerminalSelection(), which reads app.terminal — Pane A's —
-        // and would copy the wrong pane's selection.
-        if (ev.type === 'keydown' && global.app?.shouldCopyTerminalSelectionFromShortcut?.(ev)) {
-          const raw = this.terminal?.getSelection?.() || '';
-          const isColumnSelection = this.terminal?._core?._selectionService?._activeSelectionMode === 3;
-          // Both clean options are read for THIS pane, never the primary one:
-          // the gutter width comes from this.sessionId's own run mode, and the
-          // partial-first-line flag from this terminal's own selection range.
-          // Passing neither left Pane B keeping a margin Pane A dropped, on the
-          // same split and the same keystroke.
-          const range = global.app?._normalisedSelectionRange?.(this.terminal);
-          const selection = isColumnSelection
-            ? raw
-            : (global.CodemanCopySelection?.clean?.(raw, {
-                margin: global.app?._cliGutterColumns?.(this.sessionId) ?? 0,
-                firstLinePartial: !!range && range.start.x > 0,
-              }) ?? raw);
-          if (selection.trim()) {
-            ev.preventDefault();
-            void global.app._copyText?.(selection).then((ok) => {
-              this.terminal?.clearSelection?.();
-              global.app.showToast?.(ok ? 'Copied to clipboard' : 'Failed to copy', ok ? 'success' : 'error');
-            });
-            return false;
-          }
-          // Nothing worth copying — clear for feedback (a padding-only
-          // selection cleans to '' and this press still falls through to the
-          // PTY as 0x03, matching the primary pane's own rule).
-          if (this.terminal?.hasSelection?.()) {
-            this.terminal.clearSelection?.();
-            global.app.showToast?.('Nothing to copy', 'warning');
-          }
-          // Ctrl+Shift+C never falls through, even with nothing to copy —
-          // matches terminal-ui.js's own ev.shiftKey branch.
-          if (ev.shiftKey) {
-            ev.preventDefault();
-            return false;
-          }
-        }
-        return true;
-      });
-
-      // Load existing scrollback before going live. The WS below is
-      // subscribe-only (ws-routes.ts sends nothing on connect, only future
-      // 'terminal' events), so without this Pane B stays blank until the
-      // target session happens to produce new output. It LOOKED
-      // intermittent rather than always-broken because _sendResize() below
-      // often nudges the shared session's real tmux window to a new size,
-      // and tmux repaints its current screen on resize — that repaint was
-      // getting captured and streamed here, incidentally populating the
-      // pane. When Pane B's computed dimensions happened to already match
-      // the session's last-known size, Session.resize() (session.ts) skips
-      // the resize as a no-op, no repaint fires, and the pane stayed blank.
-      // The await covers the whole chunked replay, not just the fetch, so a
-      // live frame from the socket below can never land in the middle of it.
-      await this._loadBuffer();
-      if (this._destroyed) return;
-
-      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const url = `${proto}//${location.host}${window.CodemanBase.base}/ws/sessions/${this.sessionId}/terminal`;
-      this.ws = new WebSocket(url);
-
-      this.ws.onopen = () => {
-        this._wsReady = true;
-        this._sendResize();
-      };
-
-      this.ws.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data);
-          if (msg.t === 'o') {
-            this.terminal.write(msg.d);
-          } else if (msg.t === 'c') {
-            this.terminal.clear();
-          } else if (msg.t === 'r') {
-            // Server-triggered refresh (SSE backpressure cleared, terminal
-            // data was dropped). The primary pane routes this to
-            // _onSessionNeedsRefresh (app.js:2990) — Pane B has its own
-            // buffer loader for the same reason connect() does.
-            this._refreshBuffer();
-          }
-        } catch {
-          /* Malformed frame — ignore, matches primary pane's tolerance. */
-        }
-      };
-
-      // Mirror app.js's onclose/onerror pattern (app.js:2905-2964): _wsReady
-      // must go false on a drop or fit()/_sendResize() silently no-ops on a
-      // closed socket per the WebSocket spec (no exception, no log). No
-      // reconnect logic here — Pane B is deliberately plainer than the
-      // primary pane (see the fileoverview above); a drop just stops
-      // resizing until the parent recreates the pane. But onData already
-      // silently drops keystrokes while _wsReady is false (below), so
-      // without a visible marker a dropped socket left Pane B looking
-      // normal while it quietly ate everything typed into it. v1 scope is
-      // "say so", not reconnect — collapsing the split would lose the
-      // user's place in Pane B's scrollback for a transient blip.
-      this.ws.onclose = () => {
-        this._wsReady = false;
-        this.terminal?.write('\r\n\x1b[2m[Pane B disconnected — close and reopen the split to reconnect]\x1b[0m\r\n');
-      };
-
-      this.ws.onerror = () => {
-        // onclose fires after onerror — cleanup happens there.
-      };
-    }
-
-    // Fetches and writes the session's current scrollback. Used both by
-    // connect() (initial load) and by the `{t:'r'}` server-refresh frame
-    // (below) — the primary pane's own _onSessionNeedsRefresh (app.js) is
-    // scoped to `this.activeSessionId` and clears/rewrites the primary
-    // terminal, neither of which applies to this independent pane, so this is
-    // a standalone equivalent rather than a call into it.
-    //
-    // Mirrors the primary pane's own mode check (app.js's selectSession /
-    // _onSessionNeedsRefresh): a shell session can retain hundreds of
-    // thousands of plain scrollback lines, so pulling `?full=1` there parses
-    // an unbounded, server-capped (up to terminalBufferMaxBytes, 32MB) body
-    // into a 50000-line xterm on every load. Non-shell (TUI) sessions still
-    // get one full replay. `fetch` here goes through the global wrapper
-    // (constants.js), which already prefixes CodemanBase — unlike the raw
-    // WebSocket URL above, which does not.
-    //
-    // Single-flight: the flag is held across the fetch AND the chunked write
-    // (writeChunked resolves after its last chunk), so two replays can never
-    // interleave their chunks into one terminal. A second call while one is
-    // in flight is dropped here; _refreshBuffer() is the caller that queues
-    // a trailing re-run instead.
-    async _loadBuffer() {
-      if (this._bufferLoading) return;
-      this._bufferLoading = true;
-      try {
-        const query = this.sessionMode === 'shell' ? `tail=${TERMINAL_TAIL_SIZE}` : 'full=1';
-        const res = await fetch(`/api/sessions/${this.sessionId}/terminal?${query}`);
-        const payload = (await res.json())?.data ?? {};
-        if (payload.terminalBuffer && this.terminal) {
-          await writeChunked(this.terminal, payload.terminalBuffer, () => this._destroyed);
-        }
-      } catch {
-        /* Best-effort — live output still arrives once the socket connects. */
-      } finally {
-        this._bufferLoading = false;
-      }
-      if (this._bufferRefreshPending && !this._destroyed) {
-        this._bufferRefreshPending = false;
-        this._refreshBuffer();
-      }
-    }
-
-    // The `{t:'r'}` server-refresh path: clear, then replay. Two refresh
-    // frames in a row used to start two concurrent replays, each clearing
-    // the terminal under the other's chunked write. A refresh that arrives
-    // mid-replay is COALESCED into one trailing re-run rather than ignored:
-    // the in-flight fetch may predate the drop the new frame is reporting,
-    // and no further frame is coming to correct stale content.
-    _refreshBuffer() {
-      if (this._bufferLoading) {
-        this._bufferRefreshPending = true;
-        return;
-      }
-      this.terminal?.clear();
-      void this._loadBuffer();
-    }
-
-    // Local reflow only — no PTY resize frame. Split out so a divider drag
-    // can reflow both panes at the browser's paint rate (rAF) while sending
-    // the actual `{t:'z'}` resize once, at drag end, matching the primary
-    // pane's own convention (throttledResize in terminal-ui.js).
-    localFit() {
-      if (!this.fitAddon) return;
-      this.fitAddon.fit();
-    }
-
-    fit() {
-      this.localFit();
-      this._sendResize();
-    }
-
-    _sendResize() {
-      if (!this._wsReady || !this.fitAddon) return;
-      // One PTY cannot hold two sizes (mirrors sendResize's own
-      // detachedElsewhere yield in terminal-ui.js): the session got detached
-      // to its own window AFTER this split was opened, so its own window now
-      // owns the PTY's size and Pane B must stand aside.
-      if (this.detachedSessions?.has(this.sessionId)) return;
-      const dims = this.fitAddon.proposeDimensions();
-      if (!dims) return;
-      // Send the real proposed dimensions unclamped, matching the primary
-      // pane's convention (terminal-ui.js's getTerminalDimensions()) — the
-      // server enforces its own valid range ([1,500]/[1,200] in ws-routes.ts).
-      // A 40/10 floor here misreported Pane B's real width to the PTY at the
-      // divider's own reachable 20% floor position, causing real
-      // output-wrapping bugs.
-      this.ws.send(JSON.stringify({ t: 'z', c: dims.cols, r: dims.rows, v: 'desktop' }));
-    }
-
-    destroy() {
-      this._destroyed = true;
-      if (this.ws) {
-        this.ws.onopen = null;
-        this.ws.onmessage = null;
-        // onclose fires asynchronously AFTER close(); without this it ran
-        // its "disconnected" write against a pane already torn down.
-        this.ws.onclose = null;
-        this.ws.onerror = null;
-        this.ws.close();
-        this.ws = null;
-      }
-      if (this.terminal) {
-        this.terminal.dispose();
-        this.terminal = null;
-      }
-      this.fitAddon = null;
-    }
-  }
-
-  global.SplitTerminalPane = SplitTerminalPane;
-})(window);
 
 Object.assign(CodemanApp.prototype, {
   /**
@@ -437,6 +46,9 @@ Object.assign(CodemanApp.prototype, {
     // the old exact-node check below) bubbled straight through to
     // `document` and self-closed the menu it just opened.
     event?.stopPropagation();
+    // The tile grid and the split are never open together (tile-grid.js); the
+    // Split button shows as unavailable meanwhile.
+    if (this._tilesOwnTerminal?.()) return;
     if (this._splitPane) {
       this.closeSplitPane();
       return;
@@ -530,6 +142,8 @@ Object.assign(CodemanApp.prototype, {
     // see _applySplitButtonVisibility's comment for why both a JS check and
     // a CSS backstop exist.
     if (window.innerWidth < SPLIT_PANE_MIN_WIDTH) return;
+    // Never beside the tile grid: the main terminal is parked while it is open.
+    if (this._tilesOwnTerminal?.()) return;
     // No active session means there is no `.terminal-wrap` to split against
     // (the welcome overlay is showing) — without this, a split opened from
     // the home screen still created the container and connected Pane B, just
@@ -544,7 +158,7 @@ Object.assign(CodemanApp.prototype, {
     // B's own session tab while split can otherwise land here with
     // sessionId === activeSessionId: two live WebSockets to the same
     // session, each independently claiming PTY dimensions via its own `{t:'z',...}`
-    // resize frame. Refuse before creating any DOM or SplitTerminalPane.
+    // resize frame. Refuse before creating any DOM or TerminalTile.
     if (sessionId === this.activeSessionId) return;
     // The picker's own exclusions (buildSplitPickerSessions in constants.js),
     // re-applied here: the menu can sit open while a listed session's CLI
@@ -570,22 +184,38 @@ Object.assign(CodemanApp.prototype, {
 
     const paneB = document.createElement('div');
     paneB.className = 'terminal-pane-b';
-    paneB.innerHTML = `
-      <div class="terminal-pane-b-header">
-        <span class="session-name">${escapeHtml(session?.name || 'Session')}</span>
-        <button type="button" class="terminal-pane-b-close" onclick="app.closeSplitPane()" aria-label="Close split">&times;</button>
-      </div>
-      <div class="terminal-pane-b-container"></div>
-    `;
+    // Pane B's header: the harness logo, the name and the model, as on a grid
+    // tile, and the close button at a tile button's size.
+    const headerB = this._buildSplitPaneHeader();
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'tile-btn tile-remove terminal-pane-b-close';
+    close.title = 'Close split';
+    close.setAttribute('aria-label', 'Close split');
+    close.textContent = '\u00D7';
+    close.addEventListener('click', () => this.closeSplitPane());
+    headerB.el.appendChild(close);
+    const bodyB = document.createElement('div');
+    bodyB.className = 'terminal-pane-b-container';
+    paneB.append(headerB.el, bodyB);
+    // Pane A is the main terminal, which has no header of its own: while the
+    // split is open it gets the same strip, so each session in the split view
+    // names its harness and model. It takes height from the main terminal,
+    // which the opening resize below fits through syncTerminalGeometry (#464);
+    // closeSplitPane gives it back.
+    const headerA = this._buildSplitPaneHeader();
+    headerA.el.classList.add('terminal-pane-a-header');
+    this._splitHeaders = { a: headerA, b: headerB };
 
     parent.insertBefore(container, wrap);
+    wrap.insertBefore(headerA.el, wrap.firstChild);
     container.appendChild(wrap);
     wrap.style.flexBasis = '50%';
     container.appendChild(divider);
     container.appendChild(paneB);
     paneB.style.flexBasis = '50%';
 
-    this._splitPane = new window.SplitTerminalPane(sessionId, paneB.querySelector('.terminal-pane-b-container'), {
+    this._splitPane = new window.TerminalTile(sessionId, bodyB, {
       mode: session?.mode,
       fontSettings: this.loadAppSettingsFromStorage?.() || {},
       detachedSessions: this.detachedSessions,
@@ -595,6 +225,7 @@ Object.assign(CodemanApp.prototype, {
          initial load — live output still arrives once/if the socket connects. */
     });
     this._splitSessionId = sessionId;
+    this._renderSplitChrome();
 
     // Pane A just went from full width to 50%, but nothing has told its
     // session's PTY/tmux window about it yet — the passive ResizeObserver in
@@ -622,6 +253,9 @@ Object.assign(CodemanApp.prototype, {
     this._splitPane.destroy();
     this._splitPane = null;
     this._splitSessionId = null;
+    // Before the refit below, so the main terminal gets its full height back.
+    this._splitHeaders?.a.el.remove();
+    this._splitHeaders = null;
     this._updateSplitButtonState(false);
 
     const container = document.querySelector('.terminal-split-container');
@@ -632,14 +266,16 @@ Object.assign(CodemanApp.prototype, {
     parent.insertBefore(wrap, container);
     container.remove();
 
-    if (this.fitAddon) this.fitAddon.fit();
+    // Pane A takes the whole width back and, with its header strip gone, its
+    // whole height: through syncTerminalGeometry (#464), never a bare
+    // fitAddon.fit(). sendResize fits that way as its first step.
     // The Pane-A-ends branch of the _onSessionDeleted wrapper below collapses the split
     // while activeSessionId is still the id the server just removed, so a
     // resize from here would be aimed at a session that no longer exists;
-    // the promoted session gets its own resize from selectSession().
-    if (!options.skipPrimaryResize) {
-      this.sendResize?.(this.activeSessionId, { force: true })?.catch?.(() => {});
-    }
+    // the promoted session gets its own resize from selectSession(), and the
+    // terminal is only refitted here.
+    if (options.skipPrimaryResize) this.syncTerminalGeometry?.();
+    else this.sendResize?.(this.activeSessionId, { force: true })?.catch?.(() => {});
   },
 
   // A click on .btn-split does one of two things — open the picker, or
@@ -647,6 +283,92 @@ Object.assign(CodemanApp.prototype, {
   // nothing on the button said which. `.split-open` + aria-pressed give it
   // the same active-state language as the codebase's other toggle buttons
   // (keyboard-accessory's Ctrl key, the voice-input mic).
+  /**
+   * A split pane's header strip: the harness logo, the session name and the
+   * model, the three a grid tile's header shows. Built from nodes (the name
+   * and the model are untrusted text) and painted by _renderSplitChrome.
+   */
+  _buildSplitPaneHeader() {
+    const el = document.createElement('div');
+    el.className = 'terminal-pane-b-header';
+    const harness = document.createElement('span');
+    harness.className = 'split-harness run-mode-dot';
+    harness.setAttribute('role', 'img');
+    const title = document.createElement('span');
+    title.className = 'split-title';
+    const name = document.createElement('span');
+    // `.session-name` is one of the translator's skipped surfaces (user text).
+    name.className = 'session-name';
+    // As on a tile: the name inside is never translated, the tooltip may be,
+    // and screen readers hear the model once, in the logo's accessible name.
+    const model = document.createElement('span');
+    model.className = 'split-model';
+    model.setAttribute('aria-hidden', 'true');
+    model.hidden = true;
+    const modelName = document.createElement('span');
+    modelName.setAttribute('data-i18n-skip', '');
+    model.appendChild(modelName);
+    title.append(name, model);
+    el.append(harness, title);
+    return { el, harness, name, model, modelName };
+  },
+
+  /**
+   * Both split headers from their sessions: Pane A shows the active session,
+   * Pane B its own. Runs after every tab render, so a rename or a model
+   * change reaches them; unchanged values write nothing.
+   */
+  _renderSplitChrome() {
+    const headers = this._splitHeaders;
+    if (!headers || !this._splitPane) return;
+    for (const [parts, id] of [
+      [headers.a, this.activeSessionId],
+      [headers.b, this._splitSessionId],
+    ]) {
+      const session = id ? this.sessions.get(id) : null;
+      if (!session) continue;
+      const name = this.getSessionName?.(session) || session.name || 'Session';
+      if (parts.nameValue !== name) {
+        parts.nameValue = name;
+        parts.name.textContent = name;
+      }
+      this._paintSessionHarness(parts, session, 'split-harness');
+    }
+  },
+
+  /**
+   * Paints a session header's harness logo and model: a grid tile's, and the
+   * split panes'. The logo is PR #532's `run-mode-dot <cliId>` slot (the id is
+   * data, never a branch), the model is text (describeSessionHarness,
+   * constants.js). Diffs against the values it last wrote, kept on `parts`,
+   * never against the DOM, which the translator may have rewritten: an
+   * unchanged session writes nothing, and this runs on every tab render.
+   *
+   * @param {{harness: HTMLElement, model: HTMLElement, modelName: HTMLElement}} parts - the
+   *   header's nodes (the model's box and the name inside it); the memo lives here too
+   * @param {object} session - the session the header shows
+   * @param {string} logoClass - the header's own class for its logo
+   */
+  _paintSessionHarness(parts, session, logoClass) {
+    const harness = window.CodemanSessionHarness.describeSessionHarness(session, window.__codemanCliCatalog);
+    const cls = `${logoClass} run-mode-dot${harness.id ? ` ${harness.id}` : ''}`;
+    if (parts.harnessClass !== cls) {
+      parts.harnessClass = cls;
+      parts.harness.className = cls;
+    }
+    if (parts.harnessTitle !== harness.title) {
+      parts.harnessTitle = harness.title;
+      parts.harness.title = harness.title;
+      parts.harness.setAttribute('aria-label', harness.title);
+      parts.model.title = harness.title;
+    }
+    if (parts.modelValue !== harness.model) {
+      parts.modelValue = harness.model;
+      parts.modelName.textContent = harness.model;
+      parts.model.hidden = !harness.model;
+    }
+  },
+
   _updateSplitButtonState(open) {
     const btn = document.querySelector('.btn-split');
     if (!btn) return;
@@ -667,10 +389,9 @@ Object.assign(CodemanApp.prototype, {
     // frame). Coalesced to one call per animation frame below — a raw
     // mousemove stream fires far faster than the browser repaints, and
     // without the rAF gate each event did a full xterm reflow on BOTH
-    // panes AND sent Pane B a `{t:'z'}` resize frame (SplitTerminalPane has
-    // no client-side "dims unchanged" skip), which fanned out into a
-    // `tmux resize-window` child plus a SIGWINCH per frame — roughly fifty
-    // of each dragging across half a wide viewport.
+    // panes AND sent Pane B a `{t:'z'}` resize frame, which fanned out
+    // into a `tmux resize-window` child plus a SIGWINCH per frame, roughly
+    // fifty of each dragging across half a wide viewport.
     const applyDragPercent = (clientX) => {
       const container = divider.parentElement;
       // The split can auto-collapse mid-drag (the other pane's session
@@ -806,6 +527,15 @@ CodemanApp.prototype._onSessionDeleted = function (data) {
 // this, Pane A rebinds to a session that Pane B's independent WebSocket is
 // still attached to — two live WebSockets to one session, each claiming PTY
 // dimensions via its own `{t:'z',...}` resize frame.
+// Every tab render (any session change: a rename, a model switch) refreshes
+// the split headers too, the way tile-grid.js refreshes the tile headers.
+const _splitOriginalRenderSessionTabsImmediate = CodemanApp.prototype._renderSessionTabsImmediate;
+CodemanApp.prototype._renderSessionTabsImmediate = function (...args) {
+  const result = _splitOriginalRenderSessionTabsImmediate.apply(this, args);
+  this._renderSplitChrome?.();
+  return result;
+};
+
 const _originalSelectSession = CodemanApp.prototype.selectSession;
 CodemanApp.prototype.selectSession = function (sessionId, ...args) {
   if (this._splitPane && this._splitSessionId === sessionId) {
