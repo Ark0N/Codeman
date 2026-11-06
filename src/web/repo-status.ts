@@ -41,6 +41,7 @@ import { createRequire } from 'node:module';
 import { promisify } from 'node:util';
 import { EXEC_TIMEOUT_MS } from '../config/exec-timeout.js';
 import { gitNonInteractiveEnv, redactGitCredentials } from '../git-clone.js';
+import { gitSpawnAllowed } from '../utils/git-availability.js';
 import { getInstallInfo } from './self-update.js';
 import type { RepoIncomingCommit, RepoRemoteRole, RepoRemoteStatus, RepositoryStatusResult } from '../types/update.js';
 
@@ -242,6 +243,8 @@ interface GitResult {
  * spawn would block the event loop for the whole wait.
  */
 async function runGit(args: string[], cwd: string, timeout = EXEC_TIMEOUT_MS): Promise<GitResult> {
+  // Never Apple's placeholder git on a Mac without developer tools (utils/git-availability.ts).
+  if (!gitSpawnAllowed()) return { ok: false, stdout: '', stderr: 'git is not installed' };
   try {
     const { stdout } = await execFileAsync('git', args, {
       cwd,
