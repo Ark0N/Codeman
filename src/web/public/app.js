@@ -10879,6 +10879,9 @@ class CodemanApp {
       // An SSE resync (handleInit) that landed mid-request rebuilds the list from
       // the server, which still had the session then.
       if (this.sessions.has(sessionId)) this._onSessionDeleted({ id: sessionId });
+      // The home screen read the outside-sessions list when the tab went, before this
+      // delete landed, so its row would say "Go to tab" with no tab until the next poll.
+      if (session?.adopt) void this.loadForeignSessions?.();
       if (killMux) {
         this.showToast('Session closed and tmux killed', 'success');
       } else {

@@ -14,6 +14,21 @@
  * is pure and unit-testable, instead of in a shell string that is embedded three
  * different ways and can only be debugged against a real host.
  *
+ * The one thing the script does decide is whether a server is safe to ask, because
+ * only the script can. A tmux server that stopped answering holds its client
+ * forever, and from outside a container or across ssh no signal reaches that
+ * client: a timeout kills `docker exec` or `ssh`, never what they started. So each
+ * server gets a bounded ping first, and one that misses it costs its own rows and
+ * a `CMFH` line, not the whole scan.
+ *
+ * ⚠️ The ping exists because a watchdog around `list-panes` cannot work. A tmux
+ * client hands dups of its stdout to the server, so a stopped server keeps our
+ * stdout pipe open after the client is dead (measured: SIGTERM ended the client at
+ * once and no EOF came in the 2.5 s that were watched, while the server stayed
+ * stopped). Nothing reading that pipe can finish, and the same hold would keep
+ * `docker exec` and `ssh` waiting on it. The ping's stdout is /dev/null, so only a
+ * server that just answered ever gets the real one.
+ *
  * ⚠️ The script MUST NOT contain a single quote. It is wrapped in single quotes
  * to cross `ssh <host> '<script>'` and `docker exec <c> sh -lc '<script>'`. That
  * is the single-quote dual of the "no double quotes in the docker launch chain"
@@ -71,7 +86,7 @@
 import { collectDescendants } from './proc-tree.js';
 import { listClis } from './config/cli-registry/registry.js';
 import { withRemoteTmuxPath } from './remote-hosts.js';
-import { FOREIGN_MAX_PANES, FOREIGN_MAX_PROCS, FOREIGN_MAX_SOCKETS } from './config/foreign-tmux.js';
+import { FOREIGN_MAX_PANES, FOREIGN_MAX_PROCS, FOREIGN_SOCKET_TIMEOUT_SECONDS } from './config/foreign-tmux.js';
 import type { ForeignPaneProbe, ForeignTmuxLocationKind } from './types/foreign-tmux.js';
 import type { SessionAdopt, SessionMode } from './types/session.js';
 
@@ -92,6 +107,7 @@ const REJOIN = '\t';
 const PANE_MARKER = 'CMFP';
 const PROC_MARKER = 'CMFQ';
 const SOCKET_MARKER = 'CMFS';
+const HUNG_MARKER = 'CMFH';
 
 /**
  * The probe, as POSIX sh. NO SINGLE QUOTES (see @fileoverview).
@@ -99,6 +115,7 @@ const SOCKET_MARKER = 'CMFS';
  * Emits, in order:
  *   CMFS<sep><socket path>                        (one per readable socket)
  *   CMFP<sep><socket><sep>...<sep>name<sep>path   (one per pane on that socket)
+ *   CMFH<sep><socket path>                        (a server that did not answer)
  *   CMFQ                                          (marker; ps rows follow)
  *   <pid> <ppid> <argv...>
  *
@@ -135,11 +152,32 @@ export function buildForeignProbeScript(): string {
   // server (that is exactly where tmux puts them). A socket at an arbitrary
   // `tmux -S /custom/path` is deliberately out of scope: finding it would mean
   // walking the filesystem for sockets.
+  //
+  // `-u` because a POSIX locale otherwise rewrites every non-ASCII byte tmux prints
+  // to `_` (measured in a container: session `会话` listed as `____`), and a name
+  // read wrong is a name the guard then cannot find.
+  //
+  // The ping (see @fileoverview) runs in the background beside a watchdog, the POSIX
+  // spelling of `timeout`, which macOS does not ship. A stale socket answers at once
+  // with status 1 and is skipped, so the ping costs a live server one extra spawn and
+  // a dead one none. `has-session` cannot start a server on a stale socket.
+  // ⚠️ The watchdog says it fired with its own exit status, 7: a tmux client ended by
+  // SIGTERM exits 0 (measured), so the ping's status cannot tell. It prints the marker
+  // BEFORE the kill and the loop reaps it, or the line could land after `CMFQ` and
+  // parse as a process row. The `trap` ends the `sleep` with it, so a scan does not
+  // leave one behind per socket. `\$Z` is for the trap to expand: it is set before Z
+  // exists, so a socket that answers at once wins that race.
+  const watchdog =
+    `( trap "kill \\$Z 2>/dev/null; exit" TERM; sleep ${FOREIGN_SOCKET_TIMEOUT_SECONDS} >/dev/null 2>&1 & Z=$!; ` +
+    `wait $Z && { echo "${HUNG_MARKER} $S"; kill $P; exit 7; } ) & W=$!`;
+  const ping =
+    `tmux -S "$S" has-session >/dev/null 2>&1 & P=$!; ${watchdog}; ` +
+    'wait $P; R=$?; kill $W 2>/dev/null; wait $W 2>/dev/null; [ $? -ne 7 ] && [ $R -eq 0 ] || continue';
   return [
     'TD=${TMUX_TMPDIR:-/tmp}',
     'U=$(id -u 2>/dev/null || echo 0)',
-    `for S in $TD/tmux-$U/*; do [ -S "$S" ] || continue; echo "${SOCKET_MARKER} $S"; ` +
-      `tmux -S "$S" list-panes -a -F "${fmt}" 2>/dev/null; done`,
+    `for S in $TD/tmux-$U/*; do [ -S "$S" ] || continue; echo "${SOCKET_MARKER} $S"; ${ping}; ` +
+      `tmux -u -S "$S" list-panes -a -F "${fmt}" 2>/dev/null; done`,
     `echo ${PROC_MARKER}`,
     'ps -eo pid=,ppid=,args= 2>/dev/null || ps ax -o pid=,ppid=,args= 2>/dev/null || true',
   ].join('; ');
@@ -157,15 +195,18 @@ export interface ForeignProbeOutput {
   argvByPid: Map<number, string>;
   /** Sockets seen, in scan order (may exceed the pane list when a socket is empty). */
   sockets: string[];
+  /** Sockets whose server missed the per-socket bound, so their rows are absent. */
+  hungSockets: string[];
 }
 
 /** Parse one probe's stdout. Never throws: a malformed row is skipped, not fatal. */
 export function parseForeignProbeOutput(stdout: string): ForeignProbeOutput {
   const panes: ForeignPaneProbe[] = [];
   const sockets: string[] = [];
+  const hungSockets: string[] = [];
   const byParent = new Map<number, number[]>();
   const argvByPid = new Map<number, string>();
-  if (!stdout) return { panes, byParent, argvByPid, sockets };
+  if (!stdout) return { panes, byParent, argvByPid, sockets, hungSockets };
 
   let inProcs = false;
   let procCount = 0;
@@ -197,7 +238,12 @@ export function parseForeignProbeOutput(stdout: string): ForeignProbeOutput {
 
     if (line.startsWith(`${SOCKET_MARKER} `)) {
       const sock = line.slice(SOCKET_MARKER.length + 1);
-      if (sock && sockets.length < FOREIGN_MAX_SOCKETS && !sockets.includes(sock)) sockets.push(sock);
+      if (sock && !sockets.includes(sock)) sockets.push(sock);
+      continue;
+    }
+
+    if (line.startsWith(`${HUNG_MARKER} `)) {
+      hungSockets.push(line.slice(HUNG_MARKER.length + 1));
       continue;
     }
 
@@ -233,7 +279,7 @@ export function parseForeignProbeOutput(stdout: string): ForeignProbeOutput {
     });
   }
 
-  return { panes, byParent, argvByPid, sockets };
+  return { panes, byParent, argvByPid, sockets, hungSockets };
 }
 
 // ===========================================================================
@@ -465,6 +511,18 @@ export function isCodemanOwnedPane(
  */
 const ADOPTABLE_TEXT = /^[\p{L}\p{N}\p{M} _.+=@#%,~^!/-]+$/u;
 
+/**
+ * Names `new-session -t` reads as target syntax instead of as a name.
+ *
+ * ⚠️ The guard's `has-session -t '=<name>'` looks up by name, the join does not, so
+ * these pass the guard and then join something else. Measured on tmux 3.4: `@1` and
+ * `%1` joined the session holding that window or pane, and input typed in the tab
+ * reached it; `=eq`, `@zz`, `%zz`, `~` and a bare `=` made a new group with a fresh
+ * shell on the foreign server. `~foo` and `! + - ^` joined their own windows, so a
+ * plain first-character rule would refuse them for nothing.
+ */
+const TMUX_TARGET_SYNTAX = /^[=@%]|^~$/;
+
 /** Same rule, plus the path separator and no `..` climbing. */
 export function isAdoptableSocketPath(socketPath: string): boolean {
   if (!socketPath || socketPath.length > 4096) return false;
@@ -476,6 +534,7 @@ export function isAdoptableSocketPath(socketPath: string): boolean {
 /** True when this session name can cross the launch chain safely. */
 export function isAdoptableSessionName(sessionName: string): boolean {
   if (!sessionName || sessionName.length > 256) return false;
+  if (TMUX_TARGET_SYNTAX.test(sessionName)) return false;
   return ADOPTABLE_TEXT.test(sessionName);
 }
 
@@ -583,10 +642,18 @@ export interface ForeignAttachTarget {
  * The tmux invocation that joins a foreign session, as ONE line of POSIX sh.
  *
  * Shape and why:
+ *   command -v tmux || { echo no tmux; exit 127; } ;
  *   tmux -S <sock> has-session -t '=<target>' || { echo gone; exit 1; } ;
  *   tmux -S <sock> kill-session -t '=<view>' 2>/dev/null ;
- *   exec tmux -S <sock> new-session -t <target> -s <view> ; set destroy-unattached on ; set status off
+ *   exec tmux -u -S <sock> new-session -t <target> -s <view> ; set destroy-unattached on ; set status off
  *
+ * - ⚠️ `command -v` first because the guard below fires on ANY failure, and "tmux is
+ *   not on this PATH" (exit 127, hidden by the `2>/dev/null`) must not be told to the
+ *   user as "your session is gone" while it is running.
+ * - `-u` on the client: in a POSIX locale it otherwise writes the tab as if the
+ *   terminal were ASCII (measured: `_ hello qqq ____` for `❯ hello ─── 你好`). Only
+ *   the join needs it, since the guard prints nothing and tmux compares a target
+ *   name as bytes in any locale.
  * - ⚠️ The `has-session` guard comes FIRST because `new-session -t` does not fail
  *   on a missing target, it invents one. Measured on tmux 3.4: with `work` gone it
  *   joined `work-prod`, with nothing matching it created a fresh shell, and on a
@@ -595,10 +662,12 @@ export interface ForeignAttachTarget {
  *   owner exits their session the next Codeman restart would leave a new shell on
  *   their machine, in their container or on their ssh host. `=` is what makes the
  *   check exact (no prefix match), and `2>/dev/null` keeps tmux's own "no server"
- *   noise out of the pane — the message we print says it better.
- * - ⚠️ The `=` prefix cannot go on `new-session -t` itself: tmux reads it as part of
- *   the name and creates a group literally called `=work`. It has to be a separate
- *   `has-session`.
+ *   noise out of the pane: the message we print says it better. The check only holds
+ *   for a name `new-session -t` also reads as a name, which is what
+ *   `isAdoptableSessionName` keeps true (see `TMUX_TARGET_SYNTAX`).
+ * - ⚠️ The `=` prefix cannot stand in for that check on `new-session -t`: with the
+ *   target gone tmux takes it as part of the name and creates a group literally
+ *   called `=work`. It has to be a separate `has-session`.
  * - `new-session -t` creates a session in the target's GROUP: same windows, our
  *   own session options and current window (NOT our own size — see @fileoverview
  *   for the measurement that disproved that).
@@ -646,14 +715,30 @@ export function buildForeignTmuxInvocation(target: ForeignAttachTarget): string 
   const gone = fshq(
     `Codeman: session ${target.targetSession} is gone. Codeman never creates a session it does not own.`
   );
+  const noTmux = fshq('Codeman: tmux was not found here, so the session could not be opened. It may still be running.');
+  const tmuxCheck = `command -v tmux >/dev/null 2>&1 || { echo ${noTmux}; exit 127; }`;
   const guard = `tmux -S ${sock} has-session -t ${exact} 2>/dev/null || { echo ${gone}; exit 1; }`;
   // Our own leftover view from a previous adoption of the same Codeman session.
   const dropStaleView = `tmux -S ${sock} kill-session -t ${fshq(`=${target.viewSession}`)} 2>/dev/null || true`;
   const group =
-    `exec tmux -S ${sock} new-session -t ${t} -s ${v} \\; ` +
+    `exec tmux -u -S ${sock} new-session -t ${t} -s ${v} \\; ` +
     `set-option -t ${v} destroy-unattached on \\; ` +
     `set-option -t ${v} status off`;
-  return `${guard} ; ${dropStaleView} ; ${group}`;
+  return `${tmuxCheck} ; ${guard} ; ${dropStaleView} ; ${group}`;
+}
+
+/**
+ * The attach line as the `bash -c` argument of the wrapper's `respawn-pane`.
+ *
+ * That argument sits in double quotes in a string `execSync` hands to `sh -c`, where
+ * `JSON.stringify` leaves `$` and backticks live and single quotes protect nothing.
+ * The ssh attach is the line that notices: its `$HOME` and `$PATH` belong to the far
+ * end (`foreignRemoteShellCommand`), and were being expanded HERE, so a tmux in the
+ * remote `~/.local/bin` was found by discovery and then missed by the attach. This
+ * escapes them for that one parse, so the line reaches `bash` as written.
+ */
+export function quoteAdoptLaunch(launchCmd: string): string {
+  return JSON.stringify(launchCmd).replace(/[$`]/g, '\\$&');
 }
 
 /** Local adoption: run the invocation directly in the wrapper pane. */
@@ -686,7 +771,10 @@ export function buildForeignDockerAttachCommand(opts: ForeignDockerAttachOptions
   const running =
     `${opts.dockerBase} inspect -f ${fshq('{{.State.Running}}')} ${name} 2>/dev/null | grep -qx true ` +
     `|| { echo ${notRunning}; exit 1; }`;
-  const exec = `exec ${opts.dockerBase} exec -it ${name} sh -lc ${fshq(buildForeignTmuxInvocation(opts))}`;
+  // The same terminal `resolveDockerLaunchOptions` gives an owned container's exec:
+  // `docker exec -it` defaults to TERM=xterm, which holds the tab to 8 colours.
+  const terminal = '-e TERM=xterm-256color -e COLORTERM=truecolor';
+  const exec = `exec ${opts.dockerBase} exec -it ${terminal} ${name} sh -lc ${fshq(buildForeignTmuxInvocation(opts))}`;
   return [inspect, running, exec].join(' ; ');
 }
 

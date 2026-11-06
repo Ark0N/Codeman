@@ -37,6 +37,15 @@ import type { SessionPort, EventPort, RespawnPort, ConfigPort, InfraPort } from 
 /** Cap on a remote `@fix_plan.md` read over ssh (a task list, not a document). */
 const MAX_REMOTE_FIX_PLAN_BYTES = 1024 * 1024;
 
+/**
+ * An adopted session's `workingDir` is the neutral wrapper folder `/tmp`, not a workspace.
+ * Using it would write a predictable name into a folder anyone can write to, and read one
+ * back, while the agent in the pane never sees either file.
+ */
+function refuseAdoptedRalphFile(file: string) {
+  return createErrorResponse(ApiErrorCode.INVALID_INPUT, `${file} is not available for an adopted session`);
+}
+
 export function registerRalphRoutes(
   app: FastifyInstance,
   ctx: SessionPort & EventPort & RespawnPort & ConfigPort & InfraPort
@@ -208,6 +217,7 @@ export function registerRalphRoutes(
   app.post('/api/sessions/:id/fix-plan/write', async (req) => {
     const { id } = req.params as { id: string };
     const session = findSessionOrFail(ctx, id, req);
+    if (session.isAdopted) return refuseAdoptedRalphFile('@fix_plan.md');
     // A remote session's workingDir is a path on the remote host. Writing it with local fs would land
     // the file in a same-named local folder (or fail), and remote writes are out of scope by design
     // (src/remote-files.ts is read-only), so it is refused, like the File Viewer's remote edit.
@@ -244,6 +254,7 @@ export function registerRalphRoutes(
   app.post('/api/sessions/:id/fix-plan/read', async (req) => {
     const { id } = req.params as { id: string };
     const session = findSessionOrFail(ctx, id, req);
+    if (session.isAdopted) return refuseAdoptedRalphFile('@fix_plan.md');
 
     const workingDir = session.workingDir;
     if (!workingDir) {
@@ -291,6 +302,7 @@ export function registerRalphRoutes(
     const { id } = req.params as { id: string };
     const { content } = parseBody(RalphPromptWriteSchema, req.body, 'Invalid request body');
     const session = findSessionOrFail(ctx, id, req);
+    if (session.isAdopted) return refuseAdoptedRalphFile('@ralph_prompt.md');
     // Same rule as fix-plan/write: never write a remote session's file on the local disk.
     if (session.remote) {
       return createErrorResponse(

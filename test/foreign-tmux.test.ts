@@ -6,8 +6,9 @@
  * would quietly undo. Each one has a comment naming what actually went wrong.
  */
 
-import { execSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { execSync, spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer, type Server } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
@@ -26,8 +27,14 @@ import {
   buildForeignDockerViewKillCommand,
   buildForeignTmuxInvocation,
   foreignCliSignatures,
+  quoteAdoptLaunch,
 } from '../src/foreign-tmux.js';
-import { foreignDockerProbeArgv, foreignRemoteProbeCommand } from '../src/foreign-tmux-discovery.js';
+import {
+  candidatesFrom,
+  foreignDockerProbeArgv,
+  foreignRemoteProbeCommand,
+  runForeignProbe,
+} from '../src/foreign-tmux-discovery.js';
 import { buildAdoptSessionCommand } from '../src/tmux-manager.js';
 import type { RemoteHost, SessionAdopt } from '../src/types/session.js';
 import { PROC_WALK_MAX_NODES } from '../src/proc-tree.js';
@@ -74,6 +81,20 @@ describe('buildForeignProbeScript', () => {
     expect(s).toContain('${TMUX_TMPDIR:-/tmp}');
     expect(s).toContain('$TD/tmux-$U/*');
   });
+
+  it('asks tmux for UTF-8, so a POSIX locale cannot rewrite a name into underscores', () => {
+    // Measured in a POSIX-locale container: without `-u` a session called `会话` was
+    // listed as `____`, the guard then looked for `____`, and the tab opened dead.
+    expect(buildForeignProbeScript()).toContain('tmux -u -S "$S" list-panes');
+  });
+
+  it('pings each server with stdout at /dev/null before it gets the real one', () => {
+    // A client hands dups of its stdout to the server, so a stopped server holds our
+    // pipe open after the client dies and no reader of that pipe can ever finish.
+    const s = buildForeignProbeScript();
+    expect(s).toContain('tmux -S "$S" has-session >/dev/null 2>&1 &');
+    expect(s.indexOf('has-session')).toBeLessThan(s.indexOf('list-panes'));
+  });
 });
 
 describe('parseForeignProbeOutput', () => {
@@ -115,6 +136,19 @@ describe('parseForeignProbeOutput', () => {
     const out = parseForeignProbeOutput(`${row}\nCMFQ\n`);
     expect(out.panes[0].paneCurrentPath).toBe('/srv/x');
     expect(out.panes[0].sessionName).toBe('my\tname');
+  });
+
+  it('lists every socket it swept, however many there are', () => {
+    // There used to be a cap here that only trimmed this list while the loop went on
+    // to every socket anyway. A real cap in glob order would be worse: `codeman*`
+    // sorts before `default`, so a box with many instances would never reach it.
+    const lines = Array.from({ length: 40 }, (_, i) => `CMFS /tmp/tmux-0/s${i}`);
+    expect(parseForeignProbeOutput(lines.join('\n')).sockets).toHaveLength(40);
+  });
+
+  it('records a server that did not answer', () => {
+    const out = parseForeignProbeOutput(`CMFS /tmp/tmux-0/hung\nCMFH /tmp/tmux-0/hung\nCMFQ\n`);
+    expect(out.hungSockets).toEqual(['/tmp/tmux-0/hung']);
   });
 });
 
@@ -201,6 +235,22 @@ describe('adoptability gate (security)', () => {
     }
   });
 
+  it('refuses a name tmux reads as target syntax rather than as a name', () => {
+    // `has-session -t '=<name>'` finds these by name, but `new-session -t <name>` does
+    // not. Measured on tmux 3.4: `@1` and `%1` joined the session holding that window or
+    // pane, so input typed in the tab reached someone else's pane, and `=eq`, `=`, `@zz`,
+    // `%zz` and `~` made a new group with a fresh shell on the foreign server.
+    for (const n of ['@1', '%1', '@zz', '%zz', '=eq', '=', '~']) expect(isAdoptableSessionName(n)).toBe(false);
+  });
+
+  it('keeps the names that only look like target syntax', () => {
+    // Each of these joined its own windows on tmux 3.4. `! + - ^` are window tokens, and
+    // a `-t` of the session type never reads them as such.
+    for (const n of ['!', '+', '-', '^', '^x', '+x', '-dash', '!bang', '~foo', 'a~b', 'a@b', 'x=y', 'x%y', '40']) {
+      expect(isAdoptableSessionName(n)).toBe(true);
+    }
+  });
+
   it('holds the socket path to the same rule, plus absoluteness', () => {
     // A socket is `tmux -L <name>` under a user-controlled directory, so its
     // path is attacker-influenceable in exactly the same way.
@@ -278,6 +328,29 @@ describe('attach command builders', () => {
         sshTarget: 'u@h',
       })
     ).toContain('has-session');
+  });
+
+  it('attaches as a UTF-8 client whatever the locale says', () => {
+    // Measured in a POSIX-locale container: without `-u` the tab read `_ hello qqq ____`
+    // for `❯ hello ─── 你好`, with `client_utf8=0`.
+    expect(buildForeignTmuxInvocation(target)).toContain("exec tmux -u -S '/tmp/tmux-0/default' new-session -t");
+  });
+
+  it('says tmux is missing instead of calling a live session gone', () => {
+    // `has-session ... 2>/dev/null ||` fires for any failure, exit 127 included, so an
+    // ssh host where tmux is off the PATH used to print that the session was gone.
+    const emptyBin = mkdtempSync(join(tmpdir(), 'foreign-no-tmux-'));
+    try {
+      const run = spawnSync('/bin/sh', ['-c', buildForeignTmuxInvocation(target)], {
+        encoding: 'utf-8',
+        env: { PATH: emptyBin },
+      });
+      expect(run.status).toBe(127);
+      expect(run.stdout).toMatch(/tmux was not found/);
+      expect(run.stdout).not.toMatch(/is gone/);
+    } finally {
+      rmSync(emptyBin, { recursive: true, force: true });
+    }
   });
 
   it('sets destroy-unattached so the view dies with our pane', () => {
@@ -371,6 +444,11 @@ describe('attach command builders', () => {
 
     it('carries the engine flags it was given', () => {
       expect(cmd).toContain('docker --context ci');
+    });
+
+    it('gives the client the same terminal an owned container gets', () => {
+      // `docker exec -it` defaults to TERM=xterm, which held the tab to 8 colours.
+      expect(cmd).toContain("exec -it -e TERM=xterm-256color -e COLORTERM=truecolor 'my-box' sh -lc");
     });
   });
 
@@ -478,7 +556,8 @@ describe('the docker and ssh transports', () => {
         },
         'abc12345'
       );
-      expect(cmd).toContain("podman --context 'my ctx' exec -it 'box' sh -lc");
+      expect(cmd).toContain("podman --context 'my ctx' exec -it ");
+      expect(cmd).toContain("'box' sh -lc");
     });
 
     it('goes through the saved connection for an ssh host', () => {
@@ -534,6 +613,210 @@ describe('the docker and ssh transports', () => {
       expect(out).toContain('<-S></tmp/tmux-1000/my sock><has-session><-t><=my work>');
       expect(out).toContain('<new-session><-t><my work><-s><codeman-view-abc12345><;><set-option>');
     });
+
+    it('leaves the PATH line for the far end to expand', () => {
+      // The launch string crosses execSync's `sh -c` inside double quotes, where single
+      // quotes protect nothing, so `$HOME` and `$PATH` used to become THIS host's values
+      // and a tmux in the remote `~/.local/bin` was found by discovery and missed here.
+      writeFileSync(join(bin, 'ssh'), '#!/bin/sh\nfor last; do :; done\nprintf "%s\\n" "$last"\n', { mode: 0o755 });
+      const launch = buildForeignRemoteAttachCommand({
+        socketPath: '/tmp/tmux-1000/default',
+        targetSession: 'work',
+        viewSession: 'codeman-view-abc12345',
+        sshArgs: ['ssh', '-o BatchMode=yes'],
+        sshTarget: 'me@host',
+      });
+      const out = execSync(`bash -c ${quoteAdoptLaunch(launch)}`, {
+        encoding: 'utf-8',
+        env: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}` },
+      });
+      expect(out).toContain('$HOME/.local/bin');
+      expect(out).toContain(':$PATH"');
+      expect(out).not.toContain(home);
+    });
+  });
+
+  describe('quoteAdoptLaunch', () => {
+    const echoed = (text: string) => execSync(`printf '%s' ${quoteAdoptLaunch(text)}`, { encoding: 'utf-8' });
+
+    it('hands the text through one sh parse untouched', () => {
+      const text = 'echo $HOME `id` "q" \\ and \\$x';
+      expect(echoed(text)).toBe(text);
+    });
+
+    it('is what both launch sites use', () => {
+      // Create and respawn build the same string. Fixing only one would leave a wrapper
+      // whose first attach works and whose re-attach after a restart does not.
+      const src = readFileSync(join(import.meta.dirname, '../src/tmux-manager.ts'), 'utf-8');
+      expect(src.match(/adopt \? quoteAdoptLaunch\(launchCmd\) : JSON\.stringify\(launchCmd\)/g)).toHaveLength(2);
+      expect(src.match(/bash -c \$\{JSON\.stringify\(launchCmd\)\}/g)).toBeNull();
+    });
+  });
+});
+
+describe('a tmux server that stops answering', () => {
+  // A real server SIGSTOPped on a scratch socket cost 12 s, every row on the machine and
+  // a stuck client per scan. The stand-in tmux below hangs the same way for one socket.
+  // /tmp rather than tmpdir(): a unix socket path has to fit in about 100 bytes.
+  let root: string;
+  let bin: string;
+  let servers: Server[];
+
+  const listen = (path: string) =>
+    new Promise<Server>((resolve, reject) => {
+      const server = createServer();
+      server.once('error', reject);
+      server.listen(path, () => resolve(server));
+    });
+
+  beforeEach(async () => {
+    root = mkdtempSync('/tmp/cmfp-');
+    bin = join(root, 'bin');
+    const sockets = join(root, `tmux-${process.getuid?.() ?? 0}`);
+    mkdirSync(bin);
+    mkdirSync(sockets);
+    servers = await Promise.all(['a', 'hung', 'z'].map((name) => listen(join(sockets, name))));
+    writeFileSync(
+      join(bin, 'tmux'),
+      [
+        '#!/bin/sh',
+        `echo "$*" >> ${root}/calls`,
+        'case "$*" in *"/hung "*) exec sleep 30 ;; esac',
+        'case "$*" in *has-session*) exit 0 ;; esac',
+        'for a; do case "$a" in */tmux-*) S=$a ;; esac; done',
+        `printf 'CMFP\\t%s\\t7\\t0\\t1\\t100\\t0\\t%%%%0\\tbash\\twork\\t/srv\\n' "$S"`,
+      ].join('\n'),
+      { mode: 0o755 }
+    );
+  });
+
+  afterEach(async () => {
+    await Promise.all(servers.map((s) => new Promise((resolve) => s.close(resolve))));
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const probe = (script: string) =>
+    runForeignProbe(['env', `TMUX_TMPDIR=${root}`, `PATH=${bin}:${process.env.PATH}`, 'sh', '-c', script]);
+
+  it('costs only its own rows, and the scan still finishes', async () => {
+    const startedAt = Date.now();
+    const run = await probe(buildForeignProbeScript());
+    expect(Date.now() - startedAt).toBeLessThan(6000);
+    expect(run.ok).toBe(true);
+    const out = parseForeignProbeOutput(run.stdout);
+    expect(out.panes.map((p) => p.socketPath.split('/').pop())).toEqual(['a', 'z']);
+    expect(out.hungSockets.map((s) => s.split('/').pop())).toEqual(['hung']);
+    // The script ran on past the hung socket to the marker that ends the sweep.
+    expect(run.stdout).toContain('CMFQ');
+    // ⚠️ The point of the ping: a server that missed it never receives our stdout.
+    const calls = readFileSync(join(root, 'calls'), 'utf-8');
+    expect(calls).toMatch(/\/hung has-session/);
+    expect(calls).not.toMatch(/\/hung list-panes/);
+  });
+
+  it('never lists, let alone starts, a server on a stale socket', async () => {
+    writeFileSync(
+      join(bin, 'tmux'),
+      `#!/bin/sh\necho "$*" >> ${root}/calls\ncase "$*" in *has-session*) exit 1 ;; esac\n`,
+      { mode: 0o755 }
+    );
+    await probe(buildForeignProbeScript());
+    const calls = readFileSync(join(root, 'calls'), 'utf-8');
+    expect(calls).toMatch(/has-session/);
+    expect(calls).not.toMatch(/list-panes|new-session|start-server/);
+  });
+
+  it('says so in a note, and keeps the rows it did read', () => {
+    const stdout = [
+      'CMFS /tmp/tmux-0/default',
+      'CMFP\\t/tmp/tmux-0/default\\t900\\t0\\t1\\t1788092500\\t0\\t%1\\tbash\\tscratch\\t/home/me',
+      'CMFH /tmp/tmux-0/stopped',
+      'CMFH /tmp/tmux-0/codeman-other',
+      'CMFQ',
+    ].join('\n');
+    const notes: string[] = [];
+    const rows = candidatesFrom(stdout, 'local', 'local', {}, 'local', notes);
+    expect(rows.map((r) => r.sessionName)).toEqual(['scratch']);
+    // Another Codeman's socket is not a session this list would ever show.
+    expect(notes).toEqual(['local: 1 tmux server(s) did not answer, sessions on them are not listed']);
+    // The adopt route reads a note with `skipped` in it as a refusal rather than as a
+    // location it could not reach, and this one is the second kind.
+    expect(notes[0]).not.toMatch(/skipped/);
+  });
+});
+
+describe.skipIf(spawnSync('tmux', ['-V']).status !== 0)('a real stopped tmux server', () => {
+  it('costs a scan the ping and nothing more, though it holds stdout past its client', async () => {
+    // The stand-in above cannot show this. Only a real server takes a dup of the client's
+    // stdout, and that is what kept a scan waiting after the client was dead.
+    const root = mkdtempSync('/tmp/cmfr-');
+    const sockets = join(root, `tmux-${process.getuid?.() ?? 0}`);
+    mkdirSync(sockets);
+    const stopped = join(sockets, 'stopped');
+    const env = { ...process.env, TMUX: '' };
+    const tmux = (...args: string[]) => spawnSync('tmux', ['-S', stopped, ...args], { encoding: 'utf-8', env });
+    let serverPid = 0;
+    try {
+      expect(tmux('-f', '/dev/null', 'new-session', '-d', '-s', 'held', 'sleep 60').status).toBe(0);
+      serverPid = Number(tmux('display-message', '-p', '#{pid}').stdout);
+      expect(serverPid).toBeGreaterThan(0);
+      process.kill(serverPid, 'SIGSTOP');
+
+      const startedAt = Date.now();
+      const run = await runForeignProbe(['env', `TMUX_TMPDIR=${root}`, 'sh', '-c', buildForeignProbeScript()]);
+
+      expect(Date.now() - startedAt).toBeLessThan(6000);
+      expect(run.ok).toBe(true);
+      const out = parseForeignProbeOutput(run.stdout);
+      expect(out.hungSockets).toEqual([stopped]);
+      expect(out.panes).toEqual([]);
+    } finally {
+      if (serverPid > 0) process.kill(serverPid, 'SIGCONT');
+      tmux('kill-server');
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 20000);
+});
+
+describe('runForeignProbe', () => {
+  const alive = (pid: number) =>
+    spawnSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf-8' }).stdout.trim();
+
+  it('reaches the whole process group at the deadline and keeps what was read', async () => {
+    // A timeout that signals only `sh` left its tmux child stuck on the hung server, one
+    // more per scan, for as long as the home screen stayed open.
+    const run = await runForeignProbe(['sh', '-c', 'echo first; sleep 60 & echo $!; wait'], { timeoutMs: 400 });
+    expect(run.ok).toBe(false);
+    const [first, pid] = run.stdout.trim().split('\n');
+    expect(first).toBe('first');
+    await vi.waitFor(() => expect(alive(Number(pid))).toMatch(/^(Z.*)?$/), { timeout: 2000 });
+  });
+
+  it('answers at the deadline even when something outside the group holds the pipe', async () => {
+    // What a stopped tmux server does. `setsid` is the stand-in for it: out of the group,
+    // so the kill misses it, and it keeps the write end of stdout open.
+    if (spawnSync('sh', ['-c', 'command -v setsid']).status !== 0) return;
+    const startedAt = Date.now();
+    const run = await runForeignProbe(['sh', '-c', 'echo first; setsid sleep 3 & exit 0'], { timeoutMs: 300 });
+    expect(Date.now() - startedAt).toBeLessThan(2000);
+    expect(run).toEqual({ stdout: 'first\n', ok: false });
+  });
+
+  it('stops a probe that floods instead of holding it in memory', async () => {
+    const run = await runForeignProbe(['sh', '-c', 'while :; do echo aaaaaaaa; done'], {
+      maxBytes: 4096,
+      timeoutMs: 5000,
+    });
+    expect(run.ok).toBe(false);
+    expect(run.stdout.length).toBeLessThanOrEqual(4096);
+  });
+
+  it('keeps the output of a command that failed', async () => {
+    expect(await runForeignProbe(['sh', '-c', 'echo partial; exit 3'])).toEqual({ stdout: 'partial\n', ok: false });
+  });
+
+  it('answers rather than throws when the command cannot start', async () => {
+    expect(await runForeignProbe(['/nonexistent/probe'])).toEqual({ stdout: '', ok: false });
   });
 });
 

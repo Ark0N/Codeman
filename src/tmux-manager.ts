@@ -29,6 +29,7 @@ import {
   buildForeignAttachCommand,
   buildForeignDockerAttachCommand,
   buildForeignRemoteAttachCommand,
+  quoteAdoptLaunch,
 } from './foreign-tmux.js';
 import { execSync, exec, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -2730,13 +2731,11 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       // ⚠️ An adopted pane is never `cd`'d: it only attaches, and its `workingDir`
       // is the neutral wrapper folder, not where the foreign pane is.
       const launchCmd = remote || docker || adopt ? fullCmd : `cd ${JSON.stringify(workingDir)} && ${fullCmd}`;
-      execSync(
-        `${this.tmux()} respawn-pane -k -c ${TMUX_LAUNCH_CWD} -t "${muxName}" bash -c ${JSON.stringify(launchCmd)}`,
-        {
-          timeout: EXEC_TIMEOUT_MS,
-          stdio: 'ignore',
-        }
-      );
+      const launchArg = adopt ? quoteAdoptLaunch(launchCmd) : JSON.stringify(launchCmd);
+      execSync(`${this.tmux()} respawn-pane -k -c ${TMUX_LAUNCH_CWD} -t "${muxName}" bash -c ${launchArg}`, {
+        timeout: EXEC_TIMEOUT_MS,
+        stdio: 'ignore',
+      });
 
       // Wait for tmux session to be queryable
       await new Promise((resolve) => setTimeout(resolve, TMUX_CREATION_WAIT_MS));
@@ -2994,12 +2993,10 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       // ⚠️ An adopted pane is never `cd`'d: it only attaches, and its `workingDir`
       // is the neutral wrapper folder, not where the foreign pane is.
       const launchCmd = remote || docker || adopt ? fullCmd : `cd ${JSON.stringify(workingDir)} && ${fullCmd}`;
-      await execAsync(
-        `${this.tmux()} respawn-pane -k -c ${TMUX_LAUNCH_CWD} -t "${muxName}" bash -c ${JSON.stringify(launchCmd)}`,
-        {
-          timeout: EXEC_TIMEOUT_MS,
-        }
-      );
+      const launchArg = adopt ? quoteAdoptLaunch(launchCmd) : JSON.stringify(launchCmd);
+      await execAsync(`${this.tmux()} respawn-pane -k -c ${TMUX_LAUNCH_CWD} -t "${muxName}" bash -c ${launchArg}`, {
+        timeout: EXEC_TIMEOUT_MS,
+      });
       // Wait for the respawned process to start
       await new Promise((resolve) => setTimeout(resolve, TMUX_CREATION_WAIT_MS));
       // The pane now runs a fresh command, so whatever the last read observed of

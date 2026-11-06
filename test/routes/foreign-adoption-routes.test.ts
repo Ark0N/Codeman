@@ -14,7 +14,8 @@
  *
  * Port: none (app.inject()).
  */
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
@@ -101,6 +102,43 @@ describe('adopted sessions refuse every auto-op that drives the pane', () => {
     expect(res.json().success).toBe(false);
     expect(res.json().error).toMatch(/adopted/i);
     await h.app.close();
+  });
+
+  // ⚠️ Neither of these is a mock-only concern: an adopted session's `workingDir` is the
+  // neutral wrapper folder `/tmp`, so a live one wrote `/tmp/@ralph_prompt.md` on the host
+  // and answered success, a predictable name in a folder anyone can write to.
+  describe.each([
+    ['fix-plan/write', {}],
+    ['fix-plan/read', {}],
+    ['ralph-prompt/write', { content: 'prompt' }],
+  ])('POST %s', (route, payload) => {
+    let dir: string;
+    beforeEach(() => {
+      dir = mkdtempSync(join(tmpdir(), 'adopted-ralph-'));
+      writeFileSync(join(dir, '@fix_plan.md'), '- [ ] task\n');
+    });
+    afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+    const post = async (isAdopted: boolean) => {
+      const h = await createRouteTestHarness(registerRalphRoutes, { sessionId: SID });
+      const ralphTracker = { todos: [], generateFixPlanMarkdown: () => '', importFixPlanMarkdown: () => 0 };
+      Object.assign(h.ctx._session as object, { isAdopted, workingDir: dir, ralphTracker });
+      const res = await h.app.inject({ method: 'POST', url: `/api/sessions/${SID}/${route}`, payload });
+      await h.app.close();
+      return res.json();
+    };
+
+    it('refuses an adopted session and touches nothing', async () => {
+      const before = readdirSync(dir);
+      const body = await post(true);
+      expect(body.success).toBe(false);
+      expect(body.error).toMatch(/adopted/i);
+      expect(readdirSync(dir)).toEqual(before);
+    });
+
+    it('still answers for a session Codeman started', async () => {
+      expect((await post(false)).success).toBe(true);
+    });
   });
 });
 

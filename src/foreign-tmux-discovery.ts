@@ -15,8 +15,8 @@
  * ## ⚠️ The probe must not cross an extra shell
  *
  * The script contains `$TMUX_TMPDIR` and `$(id -u)`, which the INNER shell has to
- * expand. Local and docker therefore spawn with an argv array (`execFile`), where
- * no outer shell exists to eat them first. Remote is the exception: the ssh
+ * expand. Local and docker therefore spawn with an argv array, where no outer
+ * shell exists to eat them first. Remote is the exception: the ssh
  * command line is a string like every other ssh call in this codebase, so the
  * script is wrapped in SINGLE quotes there — which is exactly why
  * `buildForeignProbeScript()` may not contain one.
@@ -26,11 +26,19 @@
  * inner loop iterating over the literal `/tmux-/*` and reporting zero sessions on
  * a machine that had three.
  *
+ * ## A probe that goes wrong still answers
+ *
+ * All three transports go through `runForeignProbe`, which never rejects and hands
+ * back what it read. A timeout has to reach the whole process tree, not just the
+ * `sh` on top (the same rule as `runFetch` in git-fetch.ts): signalling only `sh`
+ * left its tmux child stuck on a stopped server, one more per scan, for as long as
+ * the home screen stayed open. And a scan cut short keeps the rows it already has,
+ * since one bad server must not empty the list of a machine with good ones.
+ *
  * @module foreign-tmux-discovery
  */
 
-import { execFile, exec } from 'node:child_process';
-import { promisify } from 'node:util';
+import { spawn, type ChildProcess } from 'node:child_process';
 import {
   buildForeignProbeScript,
   classifyForeignPaneMode,
@@ -45,20 +53,93 @@ import { dockerEngineArgv, readDockerCases, readDockerHosts } from './docker-hos
 import { buildSshConnectionArgs, readRemoteHosts, remoteSshTarget, shellescape } from './remote-hosts.js';
 import { runWithRemoteSshLimit } from './remote-ssh-limiter.js';
 import { resolveTmuxSocketName, getDataDir } from './config/instance.js';
-import { FOREIGN_CACHE_TTL_MS, FOREIGN_PROBE_MAX_BYTES, FOREIGN_PROBE_TIMEOUT_MS } from './config/foreign-tmux.js';
+import {
+  FOREIGN_CACHE_TTL_MS,
+  FOREIGN_PROBE_KILL_GRACE_MS,
+  FOREIGN_PROBE_MAX_BYTES,
+  FOREIGN_PROBE_TIMEOUT_MS,
+} from './config/foreign-tmux.js';
 import type { ForeignDiscoveryResult, ForeignTmuxSession } from './types/foreign-tmux.js';
 import type { DockerCase, DockerHost, RemoteHost, SessionDocker } from './types/session.js';
 
-const execFileAsync = promisify(execFile);
-const execAsync = promisify(exec);
-
 const IS_TEST_MODE = process.env.VITEST === 'true' || process.env.NODE_ENV === 'test';
 
-const PROBE_OPTS = {
-  encoding: 'utf-8' as const,
-  timeout: FOREIGN_PROBE_TIMEOUT_MS,
-  maxBuffer: FOREIGN_PROBE_MAX_BYTES,
-};
+/** What one probe produced, however it ended. */
+export interface ForeignProbeRun {
+  /** Everything read before it finished or was stopped. */
+  stdout: string;
+  /** False when it timed out, flooded, exited non-zero or could not start. */
+  ok: boolean;
+}
+
+/**
+ * Run one probe in its own process group. Never rejects (see @fileoverview).
+ *
+ * The caller is answered AT the deadline, while the group is still dying.
+ */
+export function runForeignProbe(
+  argv: readonly string[],
+  opts: { timeoutMs?: number; maxBytes?: number } = {}
+): Promise<ForeignProbeRun> {
+  const { timeoutMs = FOREIGN_PROBE_TIMEOUT_MS, maxBytes = FOREIGN_PROBE_MAX_BYTES } = opts;
+  return new Promise((resolve) => {
+    const [file, ...args] = argv;
+    const chunks: Buffer[] = [];
+    let bytes = 0;
+    let settled = false;
+    let child: ChildProcess | undefined;
+    let escalation: NodeJS.Timeout | undefined;
+
+    const finish = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      resolve({ stdout: Buffer.concat(chunks).toString('utf-8'), ok });
+    };
+    const signalGroup = (signal: NodeJS.Signals) => {
+      try {
+        if (child?.pid) process.kill(-child.pid, signal);
+      } catch {
+        /* already gone */
+      }
+    };
+    const stop = () => {
+      signalGroup('SIGTERM');
+      escalation = setTimeout(() => signalGroup('SIGKILL'), FOREIGN_PROBE_KILL_GRACE_MS);
+      escalation.unref();
+      // ⚠️ Let go of the pipe by hand. A stopped tmux server can hold it open with
+      // everything in this group dead (see foreign-tmux.ts), so waiting for its EOF
+      // would keep one handle per scan until that server is resumed.
+      child?.stdout?.destroy();
+      finish(false);
+    };
+    const deadline = setTimeout(stop, timeoutMs);
+
+    try {
+      child = spawn(file ?? '', args, { stdio: ['ignore', 'pipe', 'ignore'], detached: true });
+    } catch {
+      finish(false);
+      return;
+    }
+    child.stdout?.on('data', (chunk: Buffer) => {
+      if (settled) return;
+      chunks.push(chunk.subarray(0, Math.max(0, maxBytes - bytes)));
+      bytes += chunk.length;
+      if (bytes > maxBytes) stop();
+    });
+    child.on('error', () => finish(false));
+    child.on('close', (code) => {
+      // The group is gone, so a late SIGKILL could only reach whoever reused its id.
+      clearTimeout(escalation);
+      finish(code === 0);
+    });
+  });
+}
+
+/** The note for a probe that ended badly. Rows already read stay, so say which case this is. */
+function probeFailureNote(where: string, run: ForeignProbeRun, nothing: string): string {
+  return run.stdout ? `${where}: the scan did not finish, this list may be incomplete` : `${where}: ${nothing}`;
+}
 
 /**
  * Turn one probe's stdout into candidates. Shared by all three transports, so a
@@ -68,7 +149,7 @@ const PROBE_OPTS = {
  * <label>`). The browser tells the two kinds apart by it: a local note is re-read on
  * every poll, a container or host note only by the next explicit scan.
  */
-function candidatesFrom(
+export function candidatesFrom(
   stdout: string,
   location: ForeignTmuxSession['location'],
   hostKey: string,
@@ -119,8 +200,15 @@ function candidatesFrom(
   }
   if (unsafe) {
     notes.push(
-      `${where}: ${unsafe} session(s) skipped, the tmux session name or socket path contains characters Codeman will not pass to a shell`
+      `${where}: ${unsafe} session(s) skipped, the tmux session name or socket path is one Codeman cannot pass safely to a shell or to tmux`
     );
+  }
+  // Another Codeman's server is not a session this list would ever have shown.
+  const hung = probe.hungSockets.filter(
+    (socketPath) => !isCodemanOwnedPane({ socketPath, sessionName: '' }, ownSocket)
+  );
+  if (hung.length) {
+    notes.push(`${where}: ${hung.length} tmux server(s) did not answer, sessions on them are not listed`);
   }
   return out;
 }
@@ -145,17 +233,11 @@ export async function discoverLocalForeign(force = false): Promise<ForeignDiscov
 
   localInFlight = (async (): Promise<ForeignDiscoveryResult> => {
     const notes: string[] = [];
-    let sessions: ForeignTmuxSession[] = [];
-    try {
-      // argv array: no outer shell, so the script's own `$TMUX_TMPDIR`/`$(id -u)`
-      // reach the inner sh intact (see @fileoverview).
-      const { stdout } = await execFileAsync('sh', ['-c', buildForeignProbeScript()], PROBE_OPTS);
-      sessions = candidatesFrom(stdout, 'local', 'local', {}, 'local', notes);
-    } catch {
-      // No tmux, no sockets, or a probe that timed out. "Nothing to adopt here"
-      // is the only honest answer and it is never an error to the caller.
-      notes.push('local: tmux probe produced no result');
-    }
+    // argv array: no outer shell, so the script's own `$TMUX_TMPDIR`/`$(id -u)`
+    // reach the inner sh intact (see @fileoverview).
+    const run = await runForeignProbe(['sh', '-c', buildForeignProbeScript()]);
+    const sessions = candidatesFrom(run.stdout, 'local', 'local', {}, 'local', notes);
+    if (!run.ok) notes.push(probeFailureNote('local', run, 'tmux probe produced no result'));
     const result: ForeignDiscoveryResult = { sessions, scannedAt: Date.now(), notes };
     localCache = { at: Date.now(), result };
     return result;
@@ -239,22 +321,19 @@ export async function discoverDockerForeign(cases: DockerCase[]): Promise<Foreig
 
   await Promise.all(
     targets.map(async (t) => {
-      const [engine, ...args] = foreignDockerProbeArgv(t);
-      try {
-        const { stdout } = await execFileAsync(engine, args, PROBE_OPTS);
-        sessions.push(
-          ...candidatesFrom(
-            stdout,
-            'docker',
-            `${t.hostId} ${t.containerName}`,
-            { hostId: t.hostId, hostLabel: t.label, containerName: t.containerName },
-            `docker ${t.containerName}`,
-            notes
-          )
-        );
-      } catch {
-        notes.push(`docker ${t.containerName}: not running, no tmux, or engine unreachable`);
-      }
+      const where = `docker ${t.containerName}`;
+      const run = await runForeignProbe(foreignDockerProbeArgv(t));
+      sessions.push(
+        ...candidatesFrom(
+          run.stdout,
+          'docker',
+          `${t.hostId} ${t.containerName}`,
+          { hostId: t.hostId, hostLabel: t.label, containerName: t.containerName },
+          where,
+          notes
+        )
+      );
+      if (!run.ok) notes.push(probeFailureNote(where, run, 'not running, no tmux, or engine unreachable'));
     })
   );
 
@@ -301,12 +380,13 @@ export async function discoverRemoteForeign(hosts: RemoteHost[]): Promise<Foreig
     hosts.map(async (host) => {
       const where = `remote ${host.label}`;
       try {
-        const { stdout } = await runWithRemoteSshLimit(() => execAsync(foreignRemoteProbeCommand(host), PROBE_OPTS), {
+        const run = await runWithRemoteSshLimit(() => runForeignProbe(['sh', '-c', foreignRemoteProbeCommand(host)]), {
           maxWaitMs: FOREIGN_PROBE_TIMEOUT_MS,
         });
         sessions.push(
-          ...candidatesFrom(stdout, 'remote', host.id, { hostId: host.id, hostLabel: host.label }, where, notes)
+          ...candidatesFrom(run.stdout, 'remote', host.id, { hostId: host.id, hostLabel: host.label }, where, notes)
         );
+        if (!run.ok) notes.push(probeFailureNote(where, run, 'unreachable, or no tmux'));
       } catch {
         notes.push(`${where}: unreachable, or no tmux`);
       }
