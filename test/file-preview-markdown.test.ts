@@ -146,6 +146,8 @@ function loadApp(prefs: Record<string, string> = {}) {
   app.$ = (id: string) => document.getElementById(id);
   app._resetFilePreviewEdit = () => {};
   app._isExternalPreviewPath = () => false;
+  app._isOutsideWorktreePath = () => false;
+  app.sessions = new Map();
   app.formatFileSize = (n: number) => `${n} B`;
   app.showToast = vi.fn();
   app.filePreviewContent = '';

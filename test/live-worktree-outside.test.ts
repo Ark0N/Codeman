@@ -8,9 +8,9 @@
  * against worktrees real git made, since the registry files are the thing being read.
  */
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative as posixRelative } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { findLiveWorktree, findOutsideWorktree } from '../src/live-worktree.js';
 
@@ -55,15 +55,31 @@ describe('findLiveWorktree outside the session folder', () => {
     expect(await findLiveWorktree(repo, sibling)).toBeUndefined();
   });
 
-  it('follows a worktree made with --relative-paths', async () => {
+  it('follows a worktree whose gitdir links are relative paths, whatever the git version', async () => {
+    // Hand-written, since git older than 2.48 cannot make this layout itself.
     const relative = join(base, 'myapp-relative');
+    const entry = join(repo, '.git', 'worktrees', 'myapp-relative');
+    mkdirSync(relative);
+    mkdirSync(entry, { recursive: true });
+    writeFileSync(join(entry, 'gitdir'), `${posixRelative(entry, join(relative, '.git'))}\n`);
+    writeFileSync(join(relative, '.git'), `gitdir: ${posixRelative(relative, entry)}\n`);
+    expect(await findLiveWorktree(repo, relative, { home })).toEqual({
+      name: 'myapp-relative',
+      path: relative,
+      outside: true,
+    });
+  });
+
+  it('follows a worktree made with --relative-paths', async (ctx) => {
+    const relative = join(base, 'myapp-relative-git');
     try {
       git(repo, 'worktree', 'add', '-q', '--relative-paths', relative);
     } catch {
-      return; // git older than 2.48 has no --relative-paths
+      ctx.skip(); // git older than 2.48 has no --relative-paths
+      return;
     }
     expect(await findLiveWorktree(repo, relative, { home })).toEqual({
-      name: 'myapp-relative',
+      name: 'myapp-relative-git',
       path: relative,
       outside: true,
     });
@@ -119,8 +135,12 @@ describe('findLiveWorktree outside the session folder', () => {
 
   it('refuses a registry entry that names a .git symlink back', async () => {
     const entry = execFileSync('git', ['rev-parse', '--git-dir'], { cwd: sibling, encoding: 'utf8' }).trim();
+    // The symlink leads to a copy of the original `gitdir` file, whose text is `<sibling>/.git`,
+    // so only the refusal of a symlink can stop it: followed, it would name the sibling back.
+    const copy = join(base, 'gitdir-copy');
+    writeFileSync(copy, readFileSync(join(entry, 'gitdir')));
     rmSync(join(entry, 'gitdir'));
-    symlinkSync(join(sibling, '.git'), join(entry, 'gitdir'));
+    symlinkSync(copy, join(entry, 'gitdir'));
     expect(await findLiveWorktree(repo, sibling, { home })).toBeUndefined();
   });
 
@@ -131,6 +151,16 @@ describe('findLiveWorktree outside the session folder', () => {
     rmSync(join(sibling, '.git'));
     symlinkSync(copy, join(sibling, '.git'));
     expect(await findLiveWorktree(repo, sibling, { home })).toBeUndefined();
+  });
+
+  it('refuses a folder whose .git is a symlink to the repository’s .git folder', async () => {
+    const fake = join(base, 'fake');
+    mkdirSync(fake);
+    symlinkSync(join(repo, '.git'), join(fake, '.git'));
+    // The session is in the linked worktree, so the main-worktree branch is the one exercised.
+    expect(await findLiveWorktree(sibling, fake, { home })).toBeUndefined();
+    // The real main worktree is still followed from the same session.
+    expect(await findLiveWorktree(sibling, repo, { home })).toEqual({ name: 'myapp', path: repo, outside: true });
   });
 
   it('follows nothing from a session started in a subfolder of its repository', async () => {
@@ -199,6 +229,13 @@ describe('findLiveWorktree outside the session folder', () => {
     expect(await findLiveWorktree(repo, sibling, { home, allowRoot: refuse })).toBeUndefined();
     expect(seen).toEqual([sibling]);
     expect(await findLiveWorktree(repo, sibling, { home, allowRoot: async () => true })).toEqual(expected());
+  });
+
+  it('treats an allowRoot that rejects as a refusal', async () => {
+    const reject = async () => {
+      throw new Error('settings unreadable');
+    };
+    expect(await findLiveWorktree(repo, sibling, { home, allowRoot: reject })).toBeUndefined();
   });
 
   it('clears when the pane comes back to the session folder', async () => {

@@ -1639,7 +1639,9 @@ export class Session extends EventEmitter {
   }
 
   /**
-   * The linked git worktree that {@link paneCwd} is in, when there is one (`live-worktree.ts`).
+   * The git worktree that {@link paneCwd} is in, when there is one (`live-worktree.ts`): a linked
+   * worktree inside `workingDir`, or, for an outside answer, a linked worktree or the repository's
+   * main worktree (from a session started in a linked one).
    * The Files panel lists it instead of the main checkout. Runtime-only, like `paneCwd`. One inside
    * `workingDir` is never a confinement root: it is judged lexically when the pane moves, and the
    * listing route re-checks the real folder on every request. One outside it (`outside: true`) is
@@ -2419,7 +2421,9 @@ export class Session extends EventEmitter {
       status: this._status,
       workingDir: this.workingDir,
       paneCwd: this._paneCwd,
-      liveWorktree: this._liveWorktree,
+      // The wire keeps `liveWorktree` inside `workingDir` only; an outside answer rides its own field.
+      liveWorktree: this._liveWorktree?.outside ? undefined : this._liveWorktree,
+      outsideWorktree: this._liveWorktree?.outside ? this._liveWorktree : undefined,
       remote: this._remote,
       docker: this._docker,
       adopt: this._adopt,

@@ -23,11 +23,17 @@
  * own repository vouches for it ({@link findOutsideWorktree}). The answer then carries
  * `outside: true`, and the file routes serve absolute paths inside it.
  *
- * That answer is lexical and only as fresh as the last time the pane moved: a symlink can take the
- * folder's place afterwards without moving the pane. So nothing here is a confinement decision.
- * `GET /api/sessions/:id/files` resolves the folder on every request and walks it only while it
- * really lies inside `workingDir` (`canWalkLiveWorktree()` in file-routes.ts), and the routes keep
- * judging every path against `workingDir`.
+ * For a worktree inside `workingDir` the answer is lexical and only as fresh as the last time the
+ * pane moved: a symlink can take the folder's place afterwards without moving the pane. So
+ * nothing there is a confinement decision. `GET /api/sessions/:id/files` resolves the folder on
+ * every request and walks it only while it really lies inside `workingDir`
+ * (`canWalkLiveWorktree()` in file-routes.ts), and the routes keep judging every path against
+ * `workingDir`.
+ *
+ * For an outside worktree {@link findOutsideWorktree} IS the confinement decision for the second
+ * root. Its vouching, home, Docker and `allowRoot` rules run only when the pane moves. The routes
+ * re-check on each request only that the folder still realpaths to the recorded path
+ * (`outsideWorktreeRootFor()`, `canWalkOutsideWorktree()`).
  *
  * Probes are bounded (#516). The folder can sit on a mount that stopped answering, and an
  * `unknown` answer stops the walk rather than being read as "no `.git` here".
@@ -63,10 +69,17 @@ export interface OutsideWorktreeOptions {
   /** Host paths of every Docker case workspace: a container can write there, so none is followed. */
   dockerWorkspaces?: () => Promise<string[]>;
   /**
-   * Narrows which worktree may be followed. Multi-user mode passes the owner's folder rule
-   * (`folderAllowedForUser`), so a regular user's session cannot list another user's checkout.
+   * The caller's last word on which worktree may be followed. The server passes its attachment
+   * guard rules (workspace confinement, blocked trees, sensitive folders) in every mode, plus the
+   * owner's folder rule (`folderAllowedForUser`) in multi-user mode, so a regular user's session
+   * cannot list another user's checkout. A rejection counts as a refusal.
    */
   allowRoot?: (root: string) => boolean | Promise<boolean>;
+}
+
+/** The text after `gitdir:` in a `.git` file, as written (possibly relative). */
+function rawGitDir(text: string): string | undefined {
+  return /^gitdir:[ \t]*(.+?)[ \t]*$/m.exec(text)?.[1];
 }
 
 /** More than any real `.git` file. It is read only to recognise the first line. */
@@ -78,10 +91,31 @@ const MAX_DOT_GIT_FILE_BYTES = 4096;
  * The path may be relative: `git worktree add --relative-paths` writes it that way.
  */
 export function isLinkedWorktreeGitFile(text: string): boolean {
-  const gitDir = /^gitdir:[ \t]*(.+?)[ \t]*$/m.exec(text)?.[1];
+  const gitDir = rawGitDir(text);
   if (!gitDir) return false;
   const segments = gitDir.split('/').filter(Boolean);
   return segments.length >= 2 && segments[segments.length - 2] === 'worktrees';
+}
+
+/**
+ * The text of a small file, opened so that nothing blocks or escapes. The probe a caller ran
+ * follows symlinks and the file can change after it, so the open itself refuses: O_NOFOLLOW a
+ * symlink, and O_NONBLOCK a FIFO, which would otherwise wait for a writer and hold a threadpool
+ * worker for good. Whatever it did open is then judged on the handle. Null for anything but a
+ * regular file it could read.
+ */
+async function readOpenedSmallFile(path: string): Promise<string | null> {
+  let handle: fs.FileHandle | undefined;
+  try {
+    handle = await fs.open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    if (!(await handle.stat()).isFile()) return null;
+    const { buffer, bytesRead } = await handle.read(Buffer.alloc(MAX_DOT_GIT_FILE_BYTES), 0, MAX_DOT_GIT_FILE_BYTES, 0);
+    return buffer.toString('utf8', 0, bytesRead);
+  } catch {
+    return null;
+  } finally {
+    await handle?.close().catch(() => {});
+  }
 }
 
 /** What `<dir>/.git` says: a linked worktree's root, a boundary the walk must stop at, or nothing. */
@@ -91,20 +125,9 @@ async function classifyDotGit(dir: string): Promise<'worktree' | 'stop' | 'none'
   if (kind === 'absent') return 'none';
   // A `.git` directory is a repository of its own, and `unknown` is never read as absent.
   if (kind !== 'file') return 'stop';
-  let handle: fs.FileHandle | undefined;
-  try {
-    // The probe follows symlinks and the file can change after it, so the open itself refuses:
-    // O_NOFOLLOW a symlink, and O_NONBLOCK a FIFO, which would otherwise wait for a writer and
-    // hold a threadpool worker for good. Whatever it did open is then judged on the handle.
-    handle = await fs.open(dotGit, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-    if (!(await handle.stat()).isFile()) return 'stop';
-    const { buffer, bytesRead } = await handle.read(Buffer.alloc(MAX_DOT_GIT_FILE_BYTES), 0, MAX_DOT_GIT_FILE_BYTES, 0);
-    return isLinkedWorktreeGitFile(buffer.toString('utf8', 0, bytesRead)) ? 'worktree' : 'stop';
-  } catch {
-    return 'stop';
-  } finally {
-    await handle?.close().catch(() => {});
-  }
+  // `null` is a symlink, a FIFO, a non-regular file or an unreadable one: all stop the walk.
+  const text = await readOpenedSmallFile(dotGit);
+  return text !== null && isLinkedWorktreeGitFile(text) ? 'worktree' : 'stop';
 }
 
 /**
@@ -147,29 +170,14 @@ async function realPathBounded(p: string): Promise<string | null> {
   }
 }
 
-/**
- * The text of a small regular file, refusing a symlink as the last component and a FIFO
- * (O_NOFOLLOW, O_NONBLOCK, then judged on the handle), like {@link classifyDotGit}. Null for
- * anything else.
- */
+/** The text of a small regular file that a bounded probe found, via {@link readOpenedSmallFile}. */
 async function readSmallFile(path: string): Promise<string | null> {
-  if ((await probePathKind(path)) !== 'file') return null;
-  let handle: fs.FileHandle | undefined;
-  try {
-    handle = await fs.open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-    if (!(await handle.stat()).isFile()) return null;
-    const { buffer, bytesRead } = await handle.read(Buffer.alloc(MAX_DOT_GIT_FILE_BYTES), 0, MAX_DOT_GIT_FILE_BYTES, 0);
-    return buffer.toString('utf8', 0, bytesRead);
-  } catch {
-    return null;
-  } finally {
-    await handle?.close().catch(() => {});
-  }
+  return (await probePathKind(path)) === 'file' ? readOpenedSmallFile(path) : null;
 }
 
 /** The `gitdir:` value of a `.git` file's text, resolved against the folder that holds it. */
 function gitDirOf(text: string, dir: string): string | null {
-  const raw = /^gitdir:[ \t]*(.+?)[ \t]*$/m.exec(text)?.[1];
+  const raw = rawGitDir(text);
   return raw ? resolve(dir, raw) : null;
 }
 
@@ -206,7 +214,9 @@ async function sessionCommonDir(workingDir: string): Promise<string | null> {
  *     from the pane watcher on every directory change.
  *   - `/`, the home folder and anything above it, and any folder holding `workingDir` are
  *     refused, as is a folder at, inside or around a Docker case workspace.
- *   - `allowRoot`, when given, has the last word (multi-user mode).
+ *   - `allowRoot`, when given, has the last word (the server's attachment-guard and multi-user rules).
+ *
+ * Never rejects: an `allowRoot` that rejects refuses the worktree.
  *
  * Every path is compared as a real path, and the answer is the real path. The file routes check
  * on each request that the folder still resolves to itself, so a symlink swapped in later is
@@ -239,8 +249,9 @@ export async function findOutsideWorktree(
   if (!real) return undefined;
 
   if (kind === 'directory') {
-    // The main worktree: its `.git` folder is the session's common dir itself.
-    if ((await realPathBounded(join(dir, '.git'))) !== commonDir) return undefined;
+    // The main worktree: its `.git` folder is the session's common dir itself. The folder must
+    // really hold it: a `.git` symlink resolves elsewhere, so it fails this comparison.
+    if (join(real, '.git') !== commonDir) return undefined;
   } else {
     const text = await readSmallFile(join(dir, '.git'));
     const gitDir = text && isLinkedWorktreeGitFile(text) ? gitDirOf(text, dir) : null;
@@ -265,6 +276,14 @@ export async function findOutsideWorktree(
       if (isSameOrUnder(real, realWorkspace) || isSameOrUnder(realWorkspace, real)) return undefined;
     }
   }
-  if (opts.allowRoot && !(await opts.allowRoot(real))) return undefined;
+  if (opts.allowRoot) {
+    let allowed = false;
+    try {
+      allowed = await opts.allowRoot(real);
+    } catch {
+      // A callback that throws or rejects refuses the worktree.
+    }
+    if (!allowed) return undefined;
+  }
   return { name: basename(real), path: real, outside: true };
 }

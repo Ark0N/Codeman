@@ -988,11 +988,12 @@ the web UI uses as the base for a relative path printed in the terminal. It is
 never restored after a restart (it is written to `state.json` with the rest of the
 session state but not read back), absent for remote,
 Docker, adopted, direct-PTY and rediscovered sessions and for a session split into several panes,
-and never a confinement root: file routes stay confined to `workingDir`.
+and never a confinement root. File routes stay confined to `workingDir`, except for an
+absolute path inside an `outsideWorktree`, described in the next section.
 tmux reports the resolved directory, so for a workspace reached through a symlink a
 directory at or under the resolved workspace is reported in `workingDir`'s spelling.
 
-## Live worktree (`liveWorktree`)
+## Live worktree (`liveWorktree`, `outsideWorktree`)
 
 Session state (`GET /api/v1/sessions`, the `session:updated` event) may carry `liveWorktree`,
 the linked git worktree the session's pane is in now, for example after Claude Code's
@@ -1002,34 +1003,55 @@ EnterWorktree moved the running session:
 "liveWorktree": { "name": "feature-a", "path": "/home/me/repo/.claude/worktrees/feature-a" }
 ```
 
-It is derived from `paneCwd`, so it is absent wherever that is. Usually it is a folder strictly
-below `workingDir`, with `path` in `workingDir`'s spelling, and then it is never a confinement
-root. Like `paneCwd` it is never restored after a restart.
+It is derived from `paneCwd`, so it is absent wherever that is, and it is only ever a folder
+strictly below `workingDir`: a worktree elsewhere is never reported in it. `path` is in
+`workingDir`'s spelling. Like `paneCwd` it is never restored after a restart and never a
+confinement root.
 
-It can also be a worktree of the session's repository OUTSIDE `workingDir`, such as
-`git worktree add ../feature`. It then carries `"outside": true`, and `path` is the folder's
-real path:
+Session state may also carry the optional `outsideWorktree`: a
+worktree of the session's repository OUTSIDE `workingDir`, such as `git worktree add ../feature`.
+It can be a linked worktree, or the repository's main worktree for a session started in a linked
+one. It carries `"outside": true`, and `path` is the folder's real path. A session has at most one
+of `liveWorktree` and `outsideWorktree`:
 
 ```json
-"liveWorktree": { "name": "repo-feature", "path": "/home/me/repo-feature", "outside": true }
+"outsideWorktree": { "name": "repo-feature", "path": "/home/me/repo-feature", "outside": true }
 ```
 
+Like `liveWorktree`, it is never restored after a restart.
+
 Such a worktree is a second root for the session's file routes. `file-content` (read and edit),
-`file-raw`, `file-preview`, `file-thumbnail` and `GET /api/v1/download` accept an ABSOLUTE path
-inside it, while a relative path still resolves against `workingDir` only. Codeman reports it
-only when the session's own repository lists it, and never for `/`, the home folder or above, a
-folder holding `workingDir`, or a Docker case workspace.
+`file-raw`, `file-preview`, `file-thumbnail`, `GET /api/v1/download` and
+`POST /api/v1/sessions/:id/html-view` accept an ABSOLUTE path inside it, while a relative path
+still resolves against `workingDir` only. A file there that the sensitive-path blocklist names
+(`.env`, `.aws/credentials`, `users.json` and the like) is refused on every one of those routes.
+Codeman reports the worktree only when the session's own repository lists it, and only when `workingDir` is the top of that repository or of a linked worktree, so a session started in a subfolder of its repository reports none. It never reports:
+
+- `/`, the home folder or above, or a folder holding `workingDir`;
+- a folder at, inside or around a Docker case workspace;
+- in multi-user mode, a worktree outside the owner's folder rule (their own space or the session
+  folder; an admin owner is not limited);
+- any outside worktree while attachment workspace confinement is on;
+- a folder at, inside or around a blocked attachment tree, or a folder that is itself a
+  sensitive folder such as `.ssh`.
+
+The file routes also apply confinement and the blocked trees on every request, so a setting changed later takes effect at once, and a listing then walks `workingDir`. `html-view` also applies the attachment guard to such a path on every request.
 
 `GET /api/v1/sessions/:id/files` takes an optional `root=live`, which starts the listing, or a
-`q` search, at that worktree instead of at `workingDir`. The response's `root` names the folder
+`q` search, at a worktree inside `workingDir` instead of at `workingDir`. `root=live` never walks
+an outside worktree. `root=live-any` does the same and also walks an outside worktree, whose
+listing carries ABSOLUTE `path`s. The response's `root` names the folder
 that was walked: it stays `workingDir` when the session is in no worktree, when the worktree has
 gone, and when the folder no longer resolves inside `workingDir` (for an outside worktree, when it
 no longer resolves to its recorded `path`). A `path` in the response stays relative to
-`workingDir` either way, except in a listing of an outside worktree, where every `path` is
-absolute. Both forms work unchanged on `file-content` and `file-raw`,
-while a `q` containing `/` is matched against paths relative to the folder walked. The response
-also carries `worktree`, the same `{ name, path }`, whenever the session has a `liveWorktree`,
-whichever folder was walked and with or without `root=live`.
+`workingDir` either way, except in a `root=live-any` listing of an outside worktree, where every `path` is
+absolute. A relative `path` and an absolute `path` inside an outside worktree both work on
+`file-content`, `file-raw`, `file-preview`, `file-thumbnail`, `/api/v1/download` and `html-view`.
+A `q` containing `/` is matched against paths relative to the folder walked. The response
+also carries `worktree`, the session's `liveWorktree` object (`{ name, path }`) whenever the
+session has one, whichever folder was walked and with or without `root=live` or `root=live-any`.
+An `outsideWorktree` (`{ name, path, outside: true }`) is reported in `worktree` only for
+`root=live-any`.
 
 The walk lists at most 5,000 files and folders and opens no more folders once it has read 250,000
 directory entries (the folder that crosses that line is read whole). It sets `truncated` when it

@@ -19,7 +19,7 @@ const WORKING_DIR = '/base/myapp';
 const SIBLING = '/base/myapp-feature';
 const outsideSession = () => ({
   workingDir: WORKING_DIR,
-  liveWorktree: { name: 'myapp-feature', path: SIBLING, outside: true },
+  outsideWorktree: { name: 'myapp-feature', path: SIBLING, outside: true },
 });
 
 type Proto = {
@@ -176,5 +176,137 @@ describe('markdown in a worktree outside the session folder', () => {
     const src = (alt: string) => root.querySelector(`img[alt="${alt}"]`)!.getAttribute('src');
     expect(src('root')).toBe(raw(`${SIBLING}/assets/root.png`));
     expect(src('rel')).toBe(raw(`${SIBLING}/docs/img/a.png`));
+  });
+});
+
+describe('the Files panel following an agent in a worktree outside the session folder', () => {
+  const OUTSIDE = { name: 'myapp-feature', path: SIBLING };
+  const update = (extra: Record<string, unknown>) => ({ id: 'sess-1', ...extra });
+
+  const panelElement = () => {
+    const classes = new Set<string>();
+    return {
+      innerHTML: '',
+      textContent: '',
+      title: '',
+      hidden: true,
+      value: '',
+      classList: {
+        toggle: (name: string, on: boolean) => (on ? classes.add(name) : classes.delete(name)),
+        contains: (name: string) => classes.has(name),
+      },
+      setAttribute: () => {},
+      querySelectorAll: () => [],
+    };
+  };
+
+  const loadPanel = () => {
+    const CodemanApp = function CodemanApp(this: unknown) {} as unknown as new () => Record<string, any>;
+    const context = vm.createContext({
+      CodemanApp,
+      console,
+      localStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
+      escapeHtml: (x: string) => String(x),
+      document: { getElementById: () => null, addEventListener: vi.fn() },
+      window: { addEventListener: vi.fn() },
+      setTimeout,
+      clearTimeout,
+      fetch: undefined as unknown,
+      CodemanBase: { url: (path: string) => path },
+    });
+    vm.runInContext(read('panels-ui.js'), context, { filename: 'panels-ui.js' });
+    const ids = [
+      'fileBrowserPanel',
+      'fileBrowserTree',
+      'fileBrowserStatus',
+      'fileBrowserHiddenBtn',
+      'fileBrowserSearch',
+      'fileBrowserRoot',
+      'fileBrowserRootLabel',
+      'fileBrowserRootName',
+      'fileBrowserRootSwitch',
+    ];
+    const elements = Object.fromEntries(ids.map((id) => [id, panelElement()]));
+    elements.fileBrowserPanel.classList.toggle('visible', true);
+    const app = new CodemanApp();
+    app.$ = (id: string) => elements[id] ?? null;
+    app.activeSessionId = 'sess-1';
+    app.fileBrowserData = null;
+    app.fileBrowserExpandedDirs = new Set<string>();
+    app.fileBrowserFilter = '';
+    app.fileBrowserShowHidden = false;
+    app.getFileIcon = () => '';
+    app.formatFileSize = () => '';
+
+    // A stand-in for the route. The agent is in the outside worktree when `outside` is set, and
+    // a listing then reports it only when the request asks for root=live-any.
+    const server = { outside: null as typeof OUTSIDE | null, requests: [] as string[] };
+    context.fetch = async (url: string) => {
+      server.requests.push(url);
+      const live = url.includes('root=live') && server.outside;
+      const data = {
+        root: live ? server.outside!.path : WORKING_DIR,
+        ...(live && { worktree: server.outside }),
+        tree: [],
+        totalFiles: 0,
+        totalDirectories: 0,
+        truncated: false,
+      };
+      return { ok: true, json: async () => ({ success: true, data }) };
+    };
+    return { app, elements, server };
+  };
+
+  it('reloads when an update carries only outsideWorktree and the listing reports none', async () => {
+    const { app, server } = loadPanel();
+    await app.loadFileBrowser('sess-1');
+    expect(server.requests).toHaveLength(1);
+    const reload = vi.spyOn(app, '_reloadFileBrowserKeepingQuery');
+
+    server.outside = OUTSIDE;
+    app._followFileBrowserWorktree(update({ outsideWorktree: { ...OUTSIDE, outside: true } }));
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not reload when the listing already reports that outside worktree', async () => {
+    const { app, server } = loadPanel();
+    server.outside = OUTSIDE;
+    await app.loadFileBrowser('sess-1');
+    const reload = vi.spyOn(app, '_reloadFileBrowserKeepingQuery');
+
+    app._followFileBrowserWorktree(update({ outsideWorktree: { ...OUTSIDE, outside: true } }));
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it('keeps the session folder pinned while the agent stays in the outside worktree', async () => {
+    const { app, elements, server } = loadPanel();
+    server.outside = OUTSIDE;
+    await app.loadFileBrowser('sess-1');
+    await app.toggleFileBrowserRoot();
+    await vi.waitFor(() => expect(app._fileBrowserState.normalState?.phase).toBe('ready'));
+    expect(app._fileBrowserState.normalState.data.worktree).toBeUndefined();
+    const reload = vi.spyOn(app, '_reloadFileBrowserKeepingQuery');
+
+    app._followFileBrowserWorktree(update({ outsideWorktree: { ...OUTSIDE, outside: true } }));
+    expect(reload).not.toHaveBeenCalled();
+    expect(app._fileBrowserState.sessionRootPinned).toBe(true);
+    expect(elements.fileBrowserRoot.hidden).toBe(false);
+    expect(elements.fileBrowserRootLabel.textContent).toBe('Session folder');
+    expect(elements.fileBrowserRootSwitch.textContent).toBe('Back to worktree');
+  });
+
+  it('drops the pin and reloads once the agent leaves the outside worktree', async () => {
+    const { app, server } = loadPanel();
+    server.outside = OUTSIDE;
+    await app.loadFileBrowser('sess-1');
+    await app.toggleFileBrowserRoot();
+    await vi.waitFor(() => expect(app._fileBrowserState.normalState?.phase).toBe('ready'));
+    const reload = vi.spyOn(app, '_reloadFileBrowserKeepingQuery');
+
+    server.outside = null;
+    app._followFileBrowserWorktree(update({}));
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(app._fileBrowserState.sessionRootPinned).toBe(false);
+    expect(app._fileBrowserState.pinnedWorktree).toBeNull();
   });
 });

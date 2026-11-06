@@ -2372,7 +2372,7 @@ Object.assign(CodemanApp.prototype, {
             previewsInFileViewer(target) ||
             rendersAsPage(target) ||
             self._isExternalPreviewPath(target, sessionId) ||
-            self._isOutsideWorktreePath?.(target, sessionId)
+            self._isOutsideWorktreePath(target, sessionId)
           ) {
             self.openFilePreview(target, sessionId);
             return;

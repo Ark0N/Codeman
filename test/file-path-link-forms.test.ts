@@ -244,6 +244,7 @@ function loadApp() {
   app._registerExternalPreview = vi.fn(async () => ({ attachmentId: 'att-fixture' }));
   app.showToast = vi.fn();
   app._isExternalPreviewPath = (p: string) => p.startsWith('~/');
+  app._isOutsideWorktreePath = () => false;
   return app;
 }
 

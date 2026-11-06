@@ -49,7 +49,13 @@ import {
 import { generateFirstPageThumbnail } from '../../document-thumbnailer.js';
 import { getOfficePreviewPdfPath, getPreviewPdfDownloadName } from '../../document-preview-cache.js';
 import { sanitizeAttachmentHistoryItem } from '../../session-attachment-history.js';
-import { isBlockedAttachmentPath, isUnderTree, loadAttachmentGuardConfig } from '../../config/attachment-guard.js';
+import {
+  isBlockedAttachmentDirectory,
+  isBlockedAttachmentPath,
+  isOutsideWorktreeRootRefused,
+  isUnderTree,
+  loadAttachmentGuardConfig,
+} from '../../config/attachment-guard.js';
 import { isMultiUserMode, userSpacePath } from '../../config/multiuser.js';
 import {
   CASES_DIR,
@@ -661,6 +667,19 @@ type FileTargetResolution =
     };
 
 /**
+ * The scope with an outside worktree (#765) dropped when the attachment guard refuses its root
+ * right now. `findOutsideWorktree()` judged the guard when the pane moved, and an admin can turn
+ * on workspace confinement or block the folder afterwards, so every request judges it again. A
+ * scope without an outside worktree comes back unchanged and reads no settings.
+ */
+async function withGuardedOutsideWorktree<T extends { liveWorktree?: LiveWorktree }>(scope: T): Promise<T> {
+  const worktree = scope.liveWorktree;
+  if (!worktree?.outside) return scope;
+  if (!isOutsideWorktreeRootRefused(worktree.path, await loadAttachmentGuardConfig())) return scope;
+  return { ...scope, liveWorktree: undefined };
+}
+
+/**
  * Resolve a request's `?path=` against the session's file scope.
  *
  * Never throws: a transport failure comes back as `status: 502` with the remote
@@ -669,7 +688,7 @@ type FileTargetResolution =
  */
 async function resolveFileTarget(scope: SessionFileScope, filePath: string): Promise<FileTargetResolution> {
   if (!scope.remote) {
-    const validated = validateLocalSessionFilePath(scope, filePath);
+    const validated = validateLocalSessionFilePath(await withGuardedOutsideWorktree(scope), filePath);
     if (!validated) {
       return {
         ok: false,
@@ -889,7 +908,8 @@ async function canWalkLiveWorktree(workingDir: string, worktreePath: string): Pr
 }
 
 /**
- * Whether a `root=live` listing may start at a worktree OUTSIDE `workingDir` (`liveWorktree.outside`).
+ * Whether a `root=live-any` listing may start at a worktree OUTSIDE `workingDir` (`outside: true`,
+ * published as `outsideWorktree`).
  * `findOutsideWorktree()` recorded its real path, and a symlink can take the folder's place, or a
  * parent's, without moving the pane, so the folder must still resolve to exactly that path. Probed
  * first (#516).
@@ -971,11 +991,7 @@ function resolveCandidateRootPaths(candidates: ReadonlyArray<{ path: string }>):
 }
 
 function isBlockedPickerPath(path: string, blockedTrees: readonly string[], directory = false): boolean {
-  if (isBlockedAttachmentPath(path, blockedTrees)) return true;
-  // The shared sensitive-path matcher describes file locations such as
-  // ~/.ssh/<key>. Probe a child path as well so the directory itself cannot be
-  // opened and used to enumerate those filenames.
-  return directory && isBlockedAttachmentPath(join(path, '__codeman_path_picker_probe__'), blockedTrees);
+  return directory ? isBlockedAttachmentDirectory(path, blockedTrees) : isBlockedAttachmentPath(path, blockedTrees);
 }
 
 function extraConfiguredPickerRoots(): Array<{ label: string; path: string }> {
@@ -1735,19 +1751,27 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
     // `workingDir`, so file-content, file-raw and the edit route need nothing new and judge these
     // paths against the same root as any other. Only the search predicate reads a path relative
     // to the listing, since that is the tree the person is looking at.
-    // A worktree OUTSIDE `workingDir` (`liveWorktree.outside`) is a second root: walked only while
-    // it still resolves to the real path recorded for it, and listed with ABSOLUTE `path`s, since a
-    // relative one resolves against `workingDir` on every other route. Those routes confine an
-    // absolute path inside it to it (`validateLocalSessionFilePath`).
-    const liveWorktree = session.liveWorktree;
+    // A worktree OUTSIDE `workingDir` (the session's `outsideWorktree` on the wire) is a second
+    // root, and walking it is opt-in: only `root=live-any` does. `root=live` never walks it (every
+    // `path` stays relative to `workingDir`), so with an outside worktree it walks `workingDir`. The outside
+    // walk happens only while the folder still resolves to the real path recorded for it, and it
+    // lists ABSOLUTE `path`s, since a relative one resolves against `workingDir` on every other
+    // route. Those routes confine an absolute path inside it to it (`validateLocalSessionFilePath`).
+    const liveWorktree = (await withGuardedOutsideWorktree({ liveWorktree: session.liveWorktree })).liveWorktree;
     const walksOutside =
-      root === 'live' && !!liveWorktree?.outside && (await canWalkOutsideWorktree(liveWorktree.path));
+      root === 'live-any' && !!liveWorktree?.outside && (await canWalkOutsideWorktree(liveWorktree.path));
     const walksInside =
-      root === 'live' &&
+      (root === 'live' || root === 'live-any') &&
       !!liveWorktree &&
       !liveWorktree.outside &&
       (await canWalkLiveWorktree(workingDir, liveWorktree.path));
     const walkRoot = liveWorktree && (walksOutside || walksInside) ? liveWorktree.path : workingDir;
+    // Only `root=live-any` reports an outside worktree: it is the client that opted in to it.
+    // A listing keeps reporting a worktree the guard refuses to walk, or the panel would reload on
+    // every session update.
+    const sessionWorktree = session.liveWorktree;
+    const reportedWorktree =
+      sessionWorktree && (!sessionWorktree.outside || root === 'live-any') ? sessionWorktree : undefined;
     const nodePath = (fullPath: string): string => (walksOutside ? fullPath : fullPath.slice(workingDir.length + 1));
     // null for an empty/whitespace query, which is what keeps the default
     // tree response byte-identical when no search is requested.
@@ -1876,7 +1900,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
         success: true,
         data: {
           root: walkRoot,
-          ...(liveWorktree && { worktree: liveWorktree }),
+          ...(reportedWorktree && { worktree: reportedWorktree }),
           tree: [],
           matches,
           totalFiles,
@@ -1967,7 +1991,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
       success: true,
       data: {
         root: walkRoot,
-        ...(liveWorktree && { worktree: liveWorktree }),
+        ...(reportedWorktree && { worktree: reportedWorktree }),
         tree,
         totalFiles,
         totalDirectories,
@@ -2269,7 +2293,10 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
         throwFileEditError(413, ApiErrorCode.INVALID_INPUT, `Content too large (${MAX_EDITABLE_BYTES / 1024}KB limit)`);
       }
 
-      const validated = validateLocalSessionFilePath(session, body.path);
+      const validated = validateLocalSessionFilePath(
+        await withGuardedOutsideWorktree({ workingDir: session.workingDir, liveWorktree: session.liveWorktree }),
+        body.path
+      );
       if (!validated) {
         // Covers missing files, traversal, and symlink escapes alike — a write
         // target that fails confinement is reported identically to a missing
@@ -3014,7 +3041,10 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
     }
 
     const session = findSessionOrFail(ctx, sessionId, req);
-    const validated = validateLocalSessionFilePath(session, filePath);
+    const validated = validateLocalSessionFilePath(
+      await withGuardedOutsideWorktree({ workingDir: session.workingDir, liveWorktree: session.liveWorktree }),
+      filePath
+    );
     if (!validated) {
       reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, 'File not found'));
       return;

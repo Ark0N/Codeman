@@ -81,6 +81,7 @@ import { imageWatcher } from '../image-watcher.js';
 import { workflowRunWatcher, summarizeRun } from '../workflow-run-watcher.js';
 import { attachmentRegistry, buildFileThumbnailRoute, registerExternalAttachment } from '../attachment-registry.js';
 import { folderAllowedForUser, folderGrants } from '../folder-listing.js';
+import { isOutsideWorktreeRootRefused, loadAttachmentGuardConfig } from '../config/attachment-guard.js';
 import { getCli, enabledClis, listClis } from '../config/cli-registry/registry.js';
 import { isCliEntryInstalled, probeStockCliAvailability } from '../utils/cli-installed-probes.js';
 import { readCustomModelHosts, resolveCustomModelContextLength } from '../custom-model-hosts.js';
@@ -3028,23 +3029,33 @@ export class WebServer extends EventEmitter {
 
   /**
    * The rules a worktree OUTSIDE the session's folder must pass to be followed (#765 follow-up):
-   * none in a Docker case workspace (the list is read only when a candidate needs it, and an
-   * unreadable list follows nothing), and in multi-user mode only inside the owner's space or
-   * `workingDir`. Undefined for a remote or Docker session, whose pane directory is not a path the
-   * agent works in on this host (it has no `paneCwd` either, so this is belt and braces).
+   *
+   * - none in a Docker case workspace (the list is read only when a candidate needs it, and an
+   *   unreadable list follows nothing);
+   * - none while attachment workspace confinement is on (`attachmentConfineToWorkspace` /
+   *   `CODEMAN_ATTACHMENT_CONFINE`), since an outside worktree is a second served root;
+   * - none at, inside or around an attachment blocked tree (`attachmentBlockedPaths` /
+   *   `CODEMAN_ATTACHMENT_BLOCKED_PATHS`, plus the defaults), or at a sensitive path;
+   * - in multi-user mode, only inside the owner's space or `workingDir`.
+   *
+   * Codeman judges these rules when the pane moves. The file routes judge the two guard rules
+   * again on every request (`isOutsideWorktreeRootRefused()`), so a setting changed later applies
+   * at once. The Docker and multi-user rules are judged only when the pane moves. Undefined for a remote or Docker session,
+   * whose pane directory is not a path the agent works in on this host (it has no `paneCwd`
+   * either, so this is belt and braces).
    */
   private outsideWorktreeOptions(session: Session): OutsideWorktreeOptions | undefined {
     if (session.remote || session.docker) return undefined;
     return {
       dockerWorkspaces: defaultDockerWorkspaces,
-      ...(isMultiUserMode() && {
-        allowRoot: async (root: string): Promise<boolean> => {
-          const owner = session.owner ? await findUser(session.owner) : undefined;
-          return folderAllowedForUser(root, owner ? { username: owner.username, role: owner.role } : undefined, {
-            workingDir: session.workingDir,
-          });
-        },
-      }),
+      allowRoot: async (root: string): Promise<boolean> => {
+        if (isOutsideWorktreeRootRefused(root, await loadAttachmentGuardConfig())) return false;
+        if (!isMultiUserMode()) return true;
+        const owner = session.owner ? await findUser(session.owner) : undefined;
+        return folderAllowedForUser(root, owner ? { username: owner.username, role: owner.role } : undefined, {
+          workingDir: session.workingDir,
+        });
+      },
     };
   }
 

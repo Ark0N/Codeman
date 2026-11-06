@@ -57,8 +57,13 @@ A worktree beside the repository (`git worktree add ../feature`, or a setup that
 EnterWorktree put worktrees there) is followed too, as long as the session was started at the top
 of the repository or of one of its worktrees. The panel then lists that folder with full paths,
 and you can preview and edit its files there. Codeman follows such a worktree only when the
-session's own repository lists it, and never one that is your home folder or above it, one that
-holds the session's folder, or a Docker case's workspace.
+session's own repository lists it. Codeman never follows one of these:
+
+- your home folder or above it, or a folder that holds the session's folder;
+- a folder at, inside or around a Docker case's workspace;
+- in multi-user mode, unless the session's owner is an admin, a folder outside the owner's own space and the session's folder;
+- any worktree beside the repository while the server confines attachments to the workspace;
+- a folder at, inside or around a tree the server blocks for attachments, or a folder that is itself a credential folder such as `.ssh`.
 
 A session started in a subfolder of the repository follows no worktree outside that subfolder,
 including the one Claude Code creates at the top of the repository. Open such a worktree as a case

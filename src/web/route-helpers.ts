@@ -16,6 +16,7 @@ import type { WaitCapacityError } from './session-wait-registry.js';
 import { MAX_CONCURRENT_SESSIONS } from '../config/map-limits.js';
 import { parseRalphLoopConfig, extractCompletionPhrase } from '../ralph-config.js';
 import { SseEvent } from './sse-events.js';
+import { isSensitivePath } from './sensitive-path.js';
 import type { SessionPort } from './ports/session-port.js';
 import type { EventPort } from './ports/event-port.js';
 
@@ -125,16 +126,20 @@ export function outsideWorktreeRootFor(
 
 /**
  * {@link validateSessionFilePath} for a LOCAL session that may have a worktree outside its folder
- * (`liveWorktree.outside`): an absolute path inside that worktree is confined to it, and, when
+ * (the session's outside worktree, `outside: true`): an absolute path inside that worktree is confined to it, and, when
  * that refuses it (a worktree file that is a symlink into the session's own folder), to
- * `workingDir`, which is served anyway. Every other path is judged against `workingDir` alone.
+ * `workingDir`, which is served anyway. A file there that `isSensitivePath()` blocklists (`.env`,
+ * `.aws/credentials`, `users.json`, ...) is never served from the worktree root. Every other
+ * path is judged against `workingDir` alone.
  */
 export function validateLocalSessionFilePath(
   scope: { workingDir: string; liveWorktree?: { path: string; outside?: true } },
   filePath: string
 ): { resolvedPath: string; relativePath: string } | null {
   const root = outsideWorktreeRootFor(scope.liveWorktree, filePath);
-  return (root && validateSessionFilePath(root, filePath)) || validateSessionFilePath(scope.workingDir, filePath);
+  const viaRoot = root ? validateSessionFilePath(root, filePath) : null;
+  if (viaRoot && !isSensitivePath(viaRoot.resolvedPath)) return viaRoot;
+  return validateSessionFilePath(scope.workingDir, filePath);
 }
 
 /**
