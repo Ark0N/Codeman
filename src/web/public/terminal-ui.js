@@ -2964,6 +2964,9 @@ Object.assign(CodemanApp.prototype, {
       // up (stopped in hideWelcome), see foreign-sessions.js.
       this.wireForeignSessions?.();
       this.startForeignPolling?.();
+      // What this Mac can run as a local model (local-model-ui.js). One request,
+      // at most once a minute, no timer: nothing to stop in hideWelcome.
+      this.loadLocalModel?.();
     }
     // Home screen has no input target — hide the CJK textarea (activeSessionId
     // is null by the time we get here). Guarded: defined on the app object.
