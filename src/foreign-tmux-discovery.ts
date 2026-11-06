@@ -304,7 +304,9 @@ export async function discoverRemoteForeign(hosts: RemoteHost[]): Promise<Foreig
         const { stdout } = await runWithRemoteSshLimit(() => execAsync(foreignRemoteProbeCommand(host), PROBE_OPTS), {
           maxWaitMs: FOREIGN_PROBE_TIMEOUT_MS,
         });
-        sessions.push(...candidatesFrom(stdout, 'remote', host.id, { hostId: host.id, hostLabel: host.label }, where, notes));
+        sessions.push(
+          ...candidatesFrom(stdout, 'remote', host.id, { hostId: host.id, hostLabel: host.label }, where, notes)
+        );
       } catch {
         notes.push(`${where}: unreachable, or no tmux`);
       }

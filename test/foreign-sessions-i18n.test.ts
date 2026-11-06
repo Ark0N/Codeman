@@ -33,7 +33,10 @@ const ELSEWHERE = [
 ];
 const ALL = [...FROM_MODULE, ...LOCATION_WORDS, ...TOGGLE, ...ELSEWHERE];
 
-const dom = new JSDOM('<!doctype html><html><body></body></html>', { runScripts: 'outside-only', url: 'http://localhost/' });
+const dom = new JSDOM('<!doctype html><html><body></body></html>', {
+  runScripts: 'outside-only',
+  url: 'http://localhost/',
+});
 vm.runInContext(I18N, dom.getInternalVMContext(), { filename: 'i18n.js' });
 const api = (dom.window as unknown as { CodemanI18n: Api }).CodemanI18n;
 api.configure({ language: 'zh-CN' });
@@ -61,8 +64,10 @@ describe('the outside-sessions block in zh-CN', () => {
   });
 
   it('adds each key to the dictionary once', () => {
+    // Prettier leaves a key that is one word unquoted.
     for (const source of new Set(ALL)) {
-      expect(I18N.split(`'${source}':`).length - 1, source).toBe(1);
+      const bare = /^\w+$/.test(source) ? I18N.split(`\n    ${source}: `).length - 1 : 0;
+      expect(I18N.split(`'${source}':`).length - 1 + bare, source).toBe(1);
     }
   });
 });

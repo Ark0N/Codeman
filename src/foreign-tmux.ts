@@ -627,6 +627,12 @@ export interface ForeignAttachTarget {
  *   one would rewrite the owner's keys for every session on their server, and it would
  *   outlive our detach. Same reason `window-size` is left alone above. The owner's
  *   bindings stay reachable from a tab, behind our own `send-prefix`, as theirs to use.
+ * - ⚠️ While the view exists the window has two sessions holding it, so an owner's
+ *   `kill-session` on their own session leaves the window alive under the view
+ *   (measured on tmux 3.4: `tmux ls` then shows only `codeman-view-…`, the shell keeps
+ *   running) until the tab closes and `destroy-unattached` lets go of it. Exiting the
+ *   shell inside the pane ends it at once, view and all. Nothing here can tell the two
+ *   apart without a hook on the owner's server, which is not ours to install.
  * - Single line: the string crosses `bash -c "..."`, where a real newline would
  *   not survive JSON escaping.
  */
@@ -746,7 +752,14 @@ export interface ForeignRemoteAttachOptions extends ForeignAttachTarget {
  */
 export function buildForeignRemoteAttachCommand(opts: ForeignRemoteAttachOptions): string {
   const [ssh, batchMode, ...rest] = opts.sshArgs;
-  return [ssh, batchMode, '-t', ...rest, opts.sshTarget, fshq(foreignRemoteShellCommand(buildForeignTmuxInvocation(opts)))]
+  return [
+    ssh,
+    batchMode,
+    '-t',
+    ...rest,
+    opts.sshTarget,
+    fshq(foreignRemoteShellCommand(buildForeignTmuxInvocation(opts))),
+  ]
     .filter(Boolean)
     .join(' ');
 }

@@ -450,7 +450,10 @@ describe('an adopted session has no workspace of ours', () => {
     expect(status.json()).toMatchObject({ success: true, data: { state: 'unsupported', reason: 'adopted' } });
     const fetch = await app.inject({ method: 'POST', url: `/api/sessions/${ctx._sessionId}/git-fetch` });
     expect(fetch.json()).toMatchObject({ success: true, data: { state: 'unsupported', reason: 'adopted' } });
-    const diff = await app.inject({ method: 'GET', url: `/api/sessions/${ctx._sessionId}/git-diff?repo=x&path=y&kind=z` });
+    const diff = await app.inject({
+      method: 'GET',
+      url: `/api/sessions/${ctx._sessionId}/git-diff?repo=x&path=y&kind=z`,
+    });
     expect(diff.statusCode).toBe(400);
     expect(git).not.toHaveBeenCalled();
     await app.close();

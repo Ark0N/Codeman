@@ -483,7 +483,11 @@ describe('the docker and ssh transports', () => {
 
     it('goes through the saved connection for an ssh host', () => {
       const cmd = buildAdoptSessionCommand(
-        { ...adopt, location: 'remote', remote: { hostId: 'h1', label: 'b', host: 'h.example', username: 'me', port: 2222 } },
+        {
+          ...adopt,
+          location: 'remote',
+          remote: { hostId: 'h1', label: 'b', host: 'h.example', username: 'me', port: 2222 },
+        },
         'abc12345'
       );
       expect(cmd.startsWith('ssh -o BatchMode=yes -t ')).toBe(true);
@@ -506,7 +510,9 @@ describe('the docker and ssh transports', () => {
       mkdirSync(bin);
       // The real thing hands its LAST argument to the remote login shell.
       writeFileSync(join(bin, 'ssh'), '#!/bin/sh\nfor last; do :; done\nexec sh -c "$last"\n', { mode: 0o755 });
-      writeFileSync(join(bin, 'tmux'), '#!/bin/sh\nfor a; do printf "<%s>" "$a"; done\nprintf "\\n"\n', { mode: 0o755 });
+      writeFileSync(join(bin, 'tmux'), '#!/bin/sh\nfor a; do printf "<%s>" "$a"; done\nprintf "\\n"\n', {
+        mode: 0o755,
+      });
     });
 
     afterEach(() => {

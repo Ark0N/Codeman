@@ -1085,6 +1085,71 @@ the caller's case space, a linked case's exact path, or a Claude worktree of eit
 session, the create response carries `tabLayout` as it does for `tabGroupId`. Deleting the
 case forgets the value; existing sessions never move.
 
+## Adopting a foreign tmux session
+
+A tmux session someone started by hand (`tmux new -s work`) lives on its own socket,
+where Codeman does not look for its own sessions. These two routes list such sessions
+and open one as a tab. Admin-only in multi-user mode (403), since the list shows other
+people's processes and adopting a shell is arbitrary execution as the server account.
+
+`GET /api/v1/mux/foreign` lists candidates. Local sessions are always scanned, and
+cached for 5 s. `?docker=1` and `?remote=1` add the containers behind the saved Docker
+cases and the saved ssh hosts, one `docker exec` or ssh connection per target, so the
+browser sends them only on an explicit scan. `?force=1` skips the local cache.
+
+```json
+{
+  "sessions": [
+    {
+      "id": "fa9b76d36",
+      "location": "local",
+      "socketPath": "/tmp/tmux-1000/default",
+      "sessionName": "work",
+      "windows": 1,
+      "attached": false,
+      "createdAt": 1793931275000,
+      "mode": "claude",
+      "command": "claude",
+      "workingDir": "/home/me/project",
+      "adoptedBy": "961d0a82-6888-425d-a3ee-dab38ecbb598"
+    }
+  ],
+  "scannedAt": 1793931277916,
+  "notes": ["remote Build box: unreachable, or no tmux"],
+  "pollIntervalMs": 8000,
+  "canScanWide": true
+}
+```
+
+`hostId`, `hostLabel` and `containerName` appear on a docker or remote candidate.
+`adoptedBy` names the session already wrapping that target. `notes` says why a location
+gave nothing, each opening with where it came from (`local`, `docker <name>`,
+`remote <label>`). A session whose name or socket path holds characters Codeman will not
+pass to a shell is skipped and counted in a note. Sessions on a Codeman socket never
+appear.
+
+`POST /api/v1/sessions/adopt` wraps one, with `{ "id": "...", "docker": true, "remote":
+true }` (the two flags must match the listing the id came from; `name` and
+`parentSessionId` are optional). The body carries only that opaque id: the target is
+re-resolved by a fresh scan, so a candidate that is gone answers `404`, and one on a
+location unreachable this time answers `404` saying so.
+
+The answer is `{ "session": SessionState, "adopted": true }`, or
+`{ "session": SessionState, "alreadyAdopted": true }` when the target already has a
+wrapper. A second adopt of a target whose wrapper is still being created is
+`SESSION_BUSY`. The session has `adopt` set and `pid: null`: start it like any other,
+`POST .../shell` for `mode: "shell"` and `POST .../interactive` for the rest. `mode`
+comes from the pane's process tree.
+
+Closing the session detaches. The foreign session keeps running, and only Codeman's
+wrapper and its grouped `codeman-view-<id>` session go, so `DELETE` removes nothing that
+belongs to someone else. Codeman did not start this agent, so these refuse an adopted
+session: respawn, Ralph, auto-clear, auto-compact, auto-resume, custom model endpoints,
+prompt uploads and the image watcher. `stop` and `blocked` waits are a 400, the git
+routes answer `unsupported` with `reason: "adopted"`, and `last-response` answers empty,
+since Codeman knows no transcript for it. Its `paneExit` stays absent, because the pane
+holds a `tmux attach` and not the agent. Reboot restore does not rebuild one.
+
 ## Approvals Inbox
 
 Cross-session queue of prompts waiting on a human (permission dialogs,

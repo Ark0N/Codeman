@@ -378,9 +378,7 @@ Object.assign(CodemanApp.prototype, {
       rescan.dataset.foreignAction = 'rescan-wide';
       rescan.disabled = this._foreignWideLoading === true;
       rescan.title = foreignT('Scan containers and remote hosts again');
-      rescan.textContent = this._foreignWideLoading
-        ? foreignT('Scanning…')
-        : foreignT('Rescan');
+      rescan.textContent = this._foreignWideLoading ? foreignT('Scanning…') : foreignT('Rescan');
       header.appendChild(rescan);
     }
 

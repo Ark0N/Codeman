@@ -461,13 +461,13 @@ export function resolveMuxAttachCwd(
   //
   // ⚠️ An ADOPTED session needs the same treatment and does NOT get it from the
   // two checks above: its connection facts live on `adopt.docker`/`adopt.remote`,
-  // so `session.docker` is undefined even for an in-container adoption. Its
-  // `workingDir` is the FOREIGN pane's cwd — a path that routinely does not exist
-  // on this host. Measured against a real container: adopting an in-container
-  // session produced `workingDir: /workspace/pythonserver`, the local PTY spawn
-  // inherited it as its cwd, and the session came up with `pid: null` and a blank
-  // terminal while the wrapper tmux session and the in-container grouped view had
-  // both been created successfully — i.e. it looked half-alive rather than failed.
+  // so `session.docker` is undefined even for an in-container adoption. Its pane
+  // only attaches, so no folder on this host means anything to it. Measured against
+  // a real container, when `workingDir` still held the foreign pane's cwd: the local
+  // PTY spawn inherited `/workspace/pythonserver`, and the session came up with
+  // `pid: null` and a blank terminal while the wrapper tmux session and the
+  // in-container grouped view had both been created successfully, so it looked
+  // half-alive rather than failed.
   return remote || docker || adopt ? '/tmp' : workingDir;
 }
 

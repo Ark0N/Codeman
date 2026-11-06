@@ -2727,9 +2727,8 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
       // Replace the shell with the actual command (no echo in terminal). Keep
       // pane launch in /tmp, then cd inside bash against the current mount table.
-      // ⚠️ An adopted pane must NOT be `cd`'d: it only attaches, and its
-      // `workingDir` is the FOREIGN pane's cwd observed at adopt time — a path
-      // that need not exist on this host at all (a container path, a remote path).
+      // ⚠️ An adopted pane is never `cd`'d: it only attaches, and its `workingDir`
+      // is the neutral wrapper folder, not where the foreign pane is.
       const launchCmd = remote || docker || adopt ? fullCmd : `cd ${JSON.stringify(workingDir)} && ${fullCmd}`;
       execSync(
         `${this.tmux()} respawn-pane -k -c ${TMUX_LAUNCH_CWD} -t "${muxName}" bash -c ${JSON.stringify(launchCmd)}`,
@@ -2992,9 +2991,8 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       this.applyEnvOverrides(muxName, envOverrides, unsetEnvKeys);
 
       // -c /tmp + cd bounce — see createSession() for rationale (stale FUSE state).
-      // ⚠️ An adopted pane must NOT be `cd`'d: it only attaches, and its
-      // `workingDir` is the FOREIGN pane's cwd observed at adopt time — a path
-      // that need not exist on this host at all (a container path, a remote path).
+      // ⚠️ An adopted pane is never `cd`'d: it only attaches, and its `workingDir`
+      // is the neutral wrapper folder, not where the foreign pane is.
       const launchCmd = remote || docker || adopt ? fullCmd : `cd ${JSON.stringify(workingDir)} && ${fullCmd}`;
       await execAsync(
         `${this.tmux()} respawn-pane -k -c ${TMUX_LAUNCH_CWD} -t "${muxName}" bash -c ${JSON.stringify(launchCmd)}`,

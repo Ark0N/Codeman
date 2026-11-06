@@ -95,7 +95,11 @@ describe('the wide scan is one-shot', () => {
       calls.push(path);
       return ok(
         path.includes('docker=1')
-          ? { sessions: [LOCAL, DOCKER], notes: ['docker box: not running, no tmux, or engine unreachable'], canScanWide: true }
+          ? {
+              sessions: [LOCAL, DOCKER],
+              notes: ['docker box: not running, no tmux, or engine unreachable'],
+              canScanWide: true,
+            }
           : { sessions: [LOCAL], notes: ['local: 1 session(s) skipped'], canScanWide: true }
       );
     });

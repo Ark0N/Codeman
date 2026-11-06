@@ -93,8 +93,7 @@ export function registerReadMyMindRoutes(app: FastifyInstance, ctx: SessionPort 
       // Remote-SSH cases skip git: workingDir is not local. Docker cases are
       // fine (the workspace is bind-mounted at the same host path). An adopted
       // session's workingDir is a neutral wrapper folder, so it skips git too.
-      const workspace =
-        session.remote || session.isAdopted ? null : await collectWorkspaceSignals(session.workingDir);
+      const workspace = session.remote || session.isAdopted ? null : await collectWorkspaceSignals(session.workingDir);
 
       const lastPromptTs = profile.recentPrompts[profile.recentPrompts.length - 1]?.ts;
       const tracker = ctx.runSummaryTrackers.get(id);
