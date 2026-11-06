@@ -6059,17 +6059,20 @@ Object.assign(CodemanApp.prototype, {
     // option, but it would override an explicit user choice; instead the caller
     // falls through to _maybePageCliTranscript, so the gesture still pages the
     // CLI's transcript (or loads unloaded tmux scrollback, see there) and the
-    // setting keeps meaning exactly what it says.
+    // setting keeps meaning exactly what it says. Pi is the accepted exception:
+    // it declares no `transcriptPageKeys`, so with this on its wheel stays dead.
     if (this.loadAppSettingsFromStorage?.()?.terminalWheelLocalScrollback) return false;
     const mode = (target.terminal || this.terminal)?.modes?.mouseTrackingMode;
     if (mode && mode !== 'none') return false;
     const session = this.sessions?.get(target.sessionId || this.activeSessionId);
     const sessionMode = session?.mode || 'claude';
-    // GitHub Copilot CLI (and pi, fullscreen by default) scrolls its own transcript on SGR wheel reports (checked with xterm
-    // encoding them natively). Its mouse DECSETs are stripped server-side so a drag selects
-    // locally (strip-mux-and-mouse), which also means xterm no longer encodes the wheel: send the
-    // same reports by hand, but only while the CLI is actually tracking the mouse. Not gated on a
-    // version; a stale-false flag falls through to the PageUp/PageDown fallback like claude's.
+    // GitHub Copilot CLI (and pi, fullscreen by default) scrolls its own transcript on SGR wheel
+    // reports (checked with xterm encoding them natively). Their mouse DECSETs are stripped
+    // server-side so a drag selects locally (strip-mux-and-mouse), which also means xterm no longer
+    // encodes the wheel: send the same reports by hand, but only while the CLI is actually tracking
+    // the mouse. Not gated on a version. On Copilot a stale-false flag falls through to the
+    // PageUp/PageDown fallback like claude's; pi has none on purpose (the `transcriptPageKeys` note
+    // in stock.ts), so there the wheel does nothing until the flag is back.
     if (sessionMode === 'copilot' || sessionMode === 'pi') return session?.cliMouseTracking === true;
     if (sessionMode !== 'claude' && sessionMode !== 'codex') return false;
     if (sessionMode === 'claude' && !this._cliVersionAtLeast(session?.cliVersion, '2.1.187')) return false;

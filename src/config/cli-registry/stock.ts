@@ -1186,8 +1186,10 @@ const PI: CliEntry = {
     // empty local buffer and went dead until a redraw. Same shape as copilot: strip the DECSETs
     // (a drag selects locally), publish `cliMouseTracking`, and forward the wheel by hand from
     // that flag. pi scrolls on SGR wheel reports, one row each at a low rate, faster on a spin.
-    // `tuiMode: regular` (and every pi below 1.0.0) is inline and emits no mouse DECSET, so the
-    // strip finds nothing and the flag stays false.
+    // `tuiMode: regular`, the default below 1.0.0, is inline and emits no mouse DECSET, so the
+    // strip finds nothing and the flag stays false. A pi from 0.84.0 set to fullscreen does emit
+    // them (0.84.1 and 0.99.2 measured: alternate_on=1, mouse_any_flag=1, SGR) and the flag
+    // covers it.
     // ⚠️ No `transcriptPageKeys`, though fullscreen pi does page on PageUp/PageDown. pi binds
     // those keys to its editor in regular mode too, where they page nothing and move the caret
     // of a multi-line draft, so a wheel over a fresh regular pane sent the next keystroke to the
