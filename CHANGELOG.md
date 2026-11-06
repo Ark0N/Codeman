@@ -1,5 +1,39 @@
 # aicodeman
 
+## 1.48.0
+
+### Minor Changes
+
+- 4960bee: ### Thanks
+  - @opticon454 for a big round: the two-way Discord bridge (#741), custom endpoint context limits, Codex and DeepSeek model selection and the model picker (#752, #755, #757), Clone Repo into a custom folder (#744), the New folder button (#745), and the wrapped `.conf` file links (#735).
+  - @Randalix for the Edit history panel (#693).
+  - @aakhter for relative links that follow your `cd` (#740).
+  - @JDProfresh for settings saves that say when they failed (#736), a visible press on the phone keys (#737), and two test harness fixes (#738, #742).
+  - @timkjr for a tab strip that keeps its shape whichever tab is selected (#748).
+  - @Hugo-DDT for the parallel fix to the same wrapped file link bug (#734), whose `Bash(` test rows landed with the guard below.
+
+  **Talk to your agents from Discord (#741).** An opt-in two-way bridge gives each tab its own thread: alerts go out, and a reply from an allowlisted account is typed into that tab. An agent that needs a person can run `codeman notify "<message>" [--urgent] [--file <path>]`, and files travel both ways. Claude learns the command through its system prompt. Setup is in `docs/discord-bridge.md`.
+
+  **Edit history panel (#693).** An opt-in header button (per device, off by default, never on phones) shows every Edit and Write a local Claude session made, subagents included, with each diff inline, plus the images a Bash call produced. It reads transcripts only when the panel asks, and keeps its 0600 per-session store only as long as the session's record.
+
+  **Custom endpoints go further (#752, #755, #757).** OpenCode and Codex now receive the endpoint's context window, Codex launches on the model you picked, and endpoint discovery reads each model's context size from `/v1/models`, with a per-endpoint default for gateways that state none. DeepSeek Harness moves to a per-session home with a generated patch, so it runs the exact model you chose. The model picker gained a search box and marks the model one of your running sessions is using on an endpoint that cannot report it, or says plainly that nothing is known.
+
+  **Clone into a custom folder, and make a folder from the picker (#744, #745).** Clone Repo can clone straight into a folder you pick, empty or not yet created, and registers it as a linked case. The path picker in Link Existing gained a New folder button, so a brand-new project folder no longer means a trip to a shell.
+
+  **Relative links follow your `cd` (#740).** A relative path printed in the terminal now resolves against the directory the session's pane is in, not the folder the session started in. Only the base changes: what can be opened is the same as before. Session state carries it as the new optional `paneCwd` field.
+
+  **Fixes.**
+  - **File links keep the whole name (#735).** `.conf` files and parenthesised paths with spaces link as one file in the terminal and the Response Viewer, and a path wrapped over several rows stays clickable from every row. An ambiguous hard wrap tries the unspaced name first and looks up the spaced one only after a 404, on click, never on hover.
+  - **A failed settings save says so (#736).** Any write the server did not store now reports the reason and keeps App Settings open, where only two kinds of refusal did before. Run mode and respawn preset writes warn too, and a failed tunnel stop no longer claims the tunnel stopped.
+  - **Phone keys show a press (#737).** Every toolbar button, the voice, attach and settings icons and the accessory keys now react on all seven skins.
+  - **The L-shaped tab strip holds its shape (#748).** A too-wide first tab is trimmed to the room beside the toolbar, so the layout no longer changes with the selected tab.
+  - **Credential files stay out of the attachment routes.** `webhook.json`, `custom-model-hosts.json`, the generated custom-model configs and everything under `backups/` could still be read through the attachment routes, which in multi-user mode means by any user. A config backup was the widest gap, since it holds copies of `users.json` and `settings.json`. A custom `configBackupDir` is outside what the blocklist can name, so keep that folder out of reach of other users.
+  - **The OpenCode Console breach notice is retired.** A new install has no record of having seen it, so every new OpenCode user was still being warned about an October incident.
+
+  **Fixes applied while landing.** `codeman notify --file` refuses a credential file such as `.env` or a key under `.ssh`, even inside the tab's own folder, and the Discord bot token cannot be read through the attachment routes (#741). A very wide table cell in an agent's last message no longer stalls the server, and a file sent from Discord is no longer reported as something the agent produced (#741). A `Bash(` row keeps its links, because it holds a command rather than a path, while `Read(` and `Update(` rows link a spaced name whole (#735). A model id the CLI cannot launch is refused before anyone is asked to evict a loaded model, on both the swap route and quick-start (#752). A cases-folder refusal in Clone Repo now points at Clone Repo, and OpenSSL's `SSL_connect` errors classify as unreachable again (#744). Abandoning a tunnel enable records the settings baseline (#736). A session's unreachable `DSH_HOME` is logged when the server's home is linked instead (#755). Clone Repo and New folder no longer risk a hang on a mount that stopped answering (#744, #745).
+
+  **Docs and tests.** Discord setup guide and wiki page, the Edit history and `paneCwd` API sections, the custom endpoint guide, and the architecture notes for the new subsystems. Two Docker and TUI test harnesses now pass under a root runner and on tmux 3.2a (#738, #742).
+
 ## 1.47.0
 
 ### Minor Changes

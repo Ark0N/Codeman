@@ -62,7 +62,7 @@ supervised by systemd or launchd; npm installs report as non-updatable. See
 Chips for every optional header control, with a live preview of the resulting header:
 
 Run, Font Size, System Stats, Redraw Terminal, Response Viewer, Away Digest, Session
-Manager, Attachments, File Viewer, Multi-monitor, Split, Tiles, Plan Usage, Lifecycle Log, Monitor,
+Manager, Attachments, Edit history, File Viewer, Multi-monitor, Split, Tiles, Plan Usage, Lifecycle Log, Monitor,
 Project Insights, File Browser, Subagents, Approvals Inbox, Read My Mind, Ultracode Agents,
 Ultracode Windows, Cron.
 
@@ -105,6 +105,12 @@ when you asked for them at the moment you asked), and the one that can run a rep
 nothing waits for a login, and that is a default, never an override: your own `GIT_SSH_COMMAND`, or the
 repository's `core.sshCommand`, is used when either is set. ⚠️ The default's `StrictHostKeyChecking=accept-new`
 records an unknown host key in `~/.ssh/known_hosts` without asking: BatchMode stops a prompt, not a write.
+
+**Edit history** (per device, off by default, never on phones) adds a header button for the
+active session's edit history: every edit the agent and its subagents made, with its diff, and
+images it produced. Local Claude sessions only. Nothing is read until you open the window, and it
+stores those diffs (secrets included) under `~/.codeman/edit-history/`; see
+[Working With Files](Working-With-Files#edit-history).
 
 Most default to off. The stock desktop header is system stats, File Viewer, Tiles, and the gear.
 **Header Stats Style** picks how the system stats and plan usage are drawn: *Compact*
@@ -214,8 +220,9 @@ how long a desktop notification stays up before Codeman closes it (**Browser
 notification display time**, default 8; both per device, and your OS may close a
 desktop notification sooner), the idle
 threshold that decides when a quiet session counts as needing you, and the server-wide
-webhook (ntfy, Slack, Discord or generic JSON; admins only in multi-user mode). See
-[Notifications And Approvals](Notifications-And-Approvals).
+webhook (ntfy, Slack, Discord or generic JSON; admins only in multi-user mode), and the
+Discord group for the two-way bot (token, IDs, thread and ping options; see
+[Discord Bridge](Discord-Bridge)). See [Notifications And Approvals](Notifications-And-Approvals).
 
 ### Voice
 

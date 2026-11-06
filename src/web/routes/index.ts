@@ -16,6 +16,7 @@ export { registerInboxRoutes } from './inbox-routes.js';
 export { registerRebootRestoreRoutes } from './reboot-restore-routes.js';
 export { registerReadMyMindRoutes } from './readmymind-routes.js';
 export { registerGitStatusRoutes } from './git-status-routes.js';
+export { registerEditHistoryRoutes } from './edit-history-routes.js';
 export { registerStatusTelemetryRoutes } from './status-telemetry-routes.js';
 export { registerCaseRoutes } from './case-routes.js';
 export { registerWorktreeRoutes } from './worktree-routes.js';
@@ -35,6 +36,7 @@ export { registerTabLayoutRoutes } from './tab-layout-routes.js';
 export { registerMcpSyncRoutes } from './mcp-sync-routes.js';
 export { registerConfigBackupRoutes, runConfigBackup } from './config-backup-routes.js';
 export { registerWebhookRoutes } from './webhook-routes.js';
+export { registerDiscordRoutes } from './discord-routes.js';
 export { registerDoctorRoutes } from './doctor-routes.js';
 export {
   registerCustomModelRoutes,

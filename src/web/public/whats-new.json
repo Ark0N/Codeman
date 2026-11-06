@@ -1,12 +1,13 @@
 {
-  "version": "1.47.0",
+  "version": "1.48.0",
   "highlights": [
-    "The wrapped tab strip uses the room under the toolbar (#721)",
-    "Bodyless requests work through Cloudflare Tunnel (#725)",
-    "A desktop dead key is typed once, and Ctrl+V stays a paste after a replay (#726, #716)",
-    "Remote sessions no longer touch the local disk at their path (#722, #727, #728)",
-    "Rendered Markdown fills a resized File Viewer (#730)",
-    "A middle click on a file path opens the file (#731)",
-    "No more duplicate-key warning on build (#729)"
+    "Talk to your agents from Discord (#741)",
+    "Edit history panel (#693)",
+    "Custom endpoints go further (#752, #755, #757)",
+    "Clone into a custom folder, and make a folder from the picker (#744, #745)",
+    "Relative links follow your `cd` (#740)",
+    "File links keep the whole name (#735)",
+    "A failed settings save says so (#736)",
+    "Phone keys show a press (#737)"
   ]
 }

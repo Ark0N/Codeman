@@ -79,6 +79,7 @@ codeman web    # then open http://localhost:3000
 | ------------------------------------------------------------- | --------------------------------------------------- |
 | [Keeping Agents Running](Keeping-Agents-Running)              | How does it run unattended overnight?               |
 | [Notifications And Approvals](Notifications-And-Approvals)    | How do I know an agent needs me, and answer from my phone? |
+| [Discord Bridge](Discord-Bridge)                              | How do I answer a blocked agent from Discord, in a thread per tab? |
 | [Cron Jobs](Cron-Jobs)                                        | How do I run an agent on a schedule?                |
 | [Autonomous Loops](Autonomous-Loops)                          | What are the Ralph and Orchestrator loops for?      |
 | [Watching Agents Work](Watching-Agents-Work)                  | How do I see what the subagents are doing?          |

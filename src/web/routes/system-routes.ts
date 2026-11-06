@@ -856,6 +856,7 @@ export function registerSystemRoutes(
       // Keeping a pane that died while detached errs toward the 12 h TTL and the boot
       // prune, the same trade the boot keep set makes.
       if (!ctx.mux.getSession(s.id)) agentInbox.drop(s.id);
+      ctx.forgetEditHistory(s.id);
     }
     return { cleanedSessions: result.count };
   });

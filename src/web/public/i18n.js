@@ -553,6 +553,39 @@
     'Fetch git status': '拉取 Git 状态',
     'Refresh git status': '刷新 Git 状态',
     'Close git status': '关闭 Git 状态',
+    // Edit history (edit-history-ui.js): settings chip, header button and panel.
+    // The two row badges use scoped keys: a bare "new"/"edit" key would also
+    // translate unrelated words elsewhere (the lookup is case-insensitive).
+    'Edit history': '编辑历史',
+    'Open edit history': '打开编辑历史',
+    'Refresh edit history': '刷新编辑历史',
+    'Close edit history': '关闭编辑历史',
+    'Group by file': '按文件分组',
+    'Main agent only': '仅主智能体',
+    'Open a session to see its edits.': '打开一个会话以查看其编辑。',
+    'Reading the edit history…': '正在读取编辑历史…',
+    'Could not read the edit history.': '无法读取编辑历史。',
+    'Edit history is only available for local Claude sessions.': '编辑历史仅适用于本地 Claude 会话。',
+    'Showing saved entries only: {reason}': '仅显示已保存的条目：{reason}',
+    'No transcript found for this session yet. It is picked up with the next prompt; until then a CLAUDE_CONFIG_DIR set outside Codeman cannot be found.':
+      '尚未找到此会话的记录。它会在下一次提示时被识别；在此之前，在 Codeman 之外设置的 CLAUDE_CONFIG_DIR 无法被找到。',
+    'No edits yet.': '暂无编辑。',
+    'No edits by the main agent.': '主智能体没有编辑。',
+    'Load older': '加载更早的编辑',
+    'Loading older edits…': '正在加载更早的编辑…',
+    'Edit history badge: new': '新建',
+    'Edit history badge: edit': '编辑',
+    'File created': '已创建文件',
+    'File edited ({tool})': '已编辑文件（{tool}）',
+    Image: '图片',
+    Subagent: '子智能体',
+    'Open in the file preview': '在文件预览中打开',
+    'Show what changed': '显示更改内容',
+    'Hide the diff': '隐藏差异',
+    'Reading the diff…': '正在读取差异…',
+    'Could not read the diff.': '无法读取差异。',
+    'No textual changes.': '没有文本更改。',
+    'Diff cut short: it is larger than the viewer shows.': '差异已截断：内容超出查看器可显示的范围。',
     Panels: '面板',
     Monitor: '监视器',
     'Project Insights': '项目洞察',
@@ -615,6 +648,9 @@
     'API key': 'API 密钥',
     'Optional. Left blank on edit keeps the existing key.': '可选。编辑时留空将保留现有密钥。',
     'Auth header': '认证请求头',
+    'Default context length (tokens)': '默认上下文长度（token 数）',
+    "Used for models whose size cannot be discovered. The model's whole window; the Claude floor check divides it by any stored slot count. Leave empty to let each CLI assume its own default.":
+      '用于无法自动发现上下文大小的模型。这是模型的完整窗口；Claude 下限检查会将其除以已存储的槽位数。留空则让各个 CLI 使用其自身的默认值。',
     'Never send both — some servers hang indefinitely.': '切勿同时发送两者 — 部分服务器会因此无限期挂起。',
     'Authorization: Bearer (default)': 'Authorization: Bearer（默认）',
     'api-key header (Azure)': 'api-key 请求头（Azure）',
@@ -624,9 +660,15 @@
     'Custom Endpoints': '自定义端点',
     'Choose a model': '选择模型',
     'Currently loaded': '当前已加载',
+    'In use by a session': '会话正在使用',
     'Last used': '上次使用',
+    'Nothing is marked: this endpoint did not report which model it has loaded, and none of your running sessions uses one. Pick the model to launch.':
+      '未标记任何模型：此端点没有报告它已加载了哪个模型，你运行中的会话也没有在使用它。请选择要启动的模型。',
     'That endpoint no longer exists': '该端点已不存在',
     'No models discovered for this endpoint yet': '此端点尚未发现任何模型',
+    // Model picker search box (index.html placeholder/aria-label and the no-matches line)
+    'Search models': '搜索模型',
+    'No models match': '没有匹配的模型',
     'Subagent Options': '子智能体选项',
     'Enable Tracking': '启用跟踪',
     'Active Tab Only': '仅活动标签页',
@@ -917,6 +959,8 @@
     'Saved on this device. Server-wide settings can only be changed by an admin.':
       '已保存到本设备。服务器全局设置只能由管理员更改。',
     'Server-wide settings can only be changed by an admin': '服务器全局设置只能由管理员更改',
+    // The reason a settings write gives when no answer came back (settings-ui.js _settingsWriteError).
+    'the server could not be reached': '无法连接到服务器',
     'Tunnel active': '隧道已启用',
     'Tunnel starting — QR code will appear when ready...': '隧道正在启动，准备好后将显示二维码…',
     'Push notifications enabled': '推送通知已启用',
@@ -1379,6 +1423,7 @@
       [/^Lifetime: (\d+) sessions created$/, (_m, count) => `累计已创建 ${count} 个会话`],
       [/^Tunnel active: (.+)$/, (_m, url) => `隧道已启用：${url}`],
       [/^Tunnel error: (.+)$/, (_m, error) => `隧道错误：${error}`],
+      [/^Tunnel not stopped: ([\s\S]+)$/, (_m, why) => `隧道未停止：${why}`],
       [/^Update to v(.+)$/, (_m, version) => `更新到 v${version}`],
       [/^You're up to date \(v(.+)\)\.$/, (_m, version) => `已是最新版本（v${version}）。`],
       [/^Update available: v(.+)$/, (_m, version) => `有可用更新：v${version}`],
@@ -1447,6 +1492,17 @@
         (_m, n) => `窗口太小，容纳不下 ${n} 个窗格：只显示聚焦的窗格`,
       ],
       [/^The agent exited \((-?\d+)\)$/, (_m, code) => `智能体已退出（${code}）`],
+      // A settings write the server did not store (settings-ui.js). The server's reason passes
+      // through untranslated; the one the page supplies itself has its own entry.
+      [
+        /^Saved on this device, not on the server: ([\s\S]+)$/,
+        (_m, why) => `已保存到本设备，但未保存到服务器：${ZH_CN[why] || why}`,
+      ],
+      [
+        /^(Run mode|Respawn presets) saved on this device, not on the server: ([\s\S]+)$/,
+        (_m, what, why) =>
+          `${what === 'Run mode' ? '运行模式' : '重生预设'}已保存到本设备，但未保存到服务器：${ZH_CN[why] || why}`,
+      ],
       // A dialog read off a hook-less CLI's screen (src/web/screen-blocked.ts), as the
       // notification drawer shows it. The CLI's label passes through.
       [/^(.+) is waiting for your answer in the terminal$/, (_m, cli) => `${cli} 正在终端中等待你的回答`],

@@ -55,6 +55,65 @@ describe('customModelInjection.launchModel', () => {
   });
 });
 
+/** Mutates the shipped deepseek configDir recipe (the one real-home-linking entry) and expects rejection. */
+function expectRejectedOnDeepSeek(mutate: (recipe: Record<string, unknown>) => void, because: string): void {
+  const entry = baseEntry('deepseek');
+  const recipe = (entry.capabilities as Record<string, unknown>).customModelInjection as Record<string, unknown>;
+  mutate(recipe);
+  const result = CliEntrySchema.safeParse(entry);
+  expect(result.success, `expected rejection: ${because}`).toBe(false);
+}
+
+describe('configDir real-home linking (linkFromRealHome / realHomeFallback)', () => {
+  it('rejects a realHomeFallback that is not a single relative path segment', () => {
+    // The consumer joins it under the user's home, so any of these escapes that home:
+    // and bare `.` IS that home: linking through it would expose the whole tree
+    // unshielded instead of just the declared segments.
+    for (const bad of ['../x', '.dsh/evil', '/.dsh', '..', '.']) {
+      expectRejectedOnDeepSeek((r) => {
+        r.realHomeFallback = bad;
+      }, `realHomeFallback ${JSON.stringify(bad)}`);
+    }
+  });
+
+  it('accepts a shipped-style dot-prefixed segment', () => {
+    const entry = baseEntry('deepseek');
+    expect(CliEntrySchema.safeParse(entry).success).toBe(true); // ships as `.dsh`
+    const recipe = (entry.capabilities as Record<string, unknown>).customModelInjection as Record<string, unknown>;
+    recipe.realHomeFallback = '.dsh-relocated';
+    expect(CliEntrySchema.safeParse(entry).success).toBe(true);
+  });
+
+  it('requires realHomeFallback whenever linkFromRealHome is declared', () => {
+    expectRejectedOnDeepSeek((r) => {
+      delete r.realHomeFallback;
+    }, 'without it the consumer would have to hardcode a per-CLI home default');
+  });
+
+  it('rejects a linked entry that collides with fileName', () => {
+    // A symlink at the generated file's own name would write THROUGH into the user's real config.
+    expectRejectedOnDeepSeek((r) => {
+      r.linkFromRealHome = ['cordis.patch.yml', 'profiles'];
+    }, 'linkFromRealHome containing fileName');
+  });
+
+  it('requires linkFromRealHomeDirs to be a subset of linkFromRealHome', () => {
+    // types.ts documents the rule; a name absent from the linked list names nothing,
+    // so the create-missing-directory behaviour would silently never apply to it.
+    expectRejectedOnDeepSeek((r) => {
+      r.linkFromRealHome = ['profiles', 'settings.yaml'];
+      r.linkFromRealHomeDirs = ['profiles', 'sessions'];
+    }, 'linkFromRealHomeDirs naming an unlinked entry');
+    // The shipped recipe is a valid subset (deepseek: profiles and sessions are dirs
+    // of the three linked entries) and keeps loading.
+    const entry = baseEntry('deepseek');
+    const recipe = (entry.capabilities as Record<string, unknown>).customModelInjection as Record<string, unknown>;
+    expect(recipe.linkFromRealHome).toEqual(['profiles', 'sessions', 'settings.yaml']);
+    expect(recipe.linkFromRealHomeDirs).toEqual(['profiles', 'sessions']);
+    expect(CliEntrySchema.safeParse(entry).success).toBe(true);
+  });
+});
+
 describe('the shipped catalog', () => {
   it('validates every stock entry exactly as shipped', () => {
     // If this fails, the catalog cannot load at all — every other test here is downstream.

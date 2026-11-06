@@ -17,6 +17,7 @@
  * @module session-cli-registry-bridge
  */
 
+import { getDiscordStartupHint } from './discord-bridge.js';
 import type { CliEntry } from './config/cli-registry/types.js';
 import { renderLaunch, type EngineValues, type ParamValues } from './config/cli-registry/argv.js';
 import { matchesPattern } from './config/cli-registry/patterns.js';
@@ -257,6 +258,10 @@ export function buildSpawnCommandFromRegistry(entry: CliEntry, options: SpawnBri
     if (options.idleCompactionOff) settingsObj.idleCompaction = false;
     engineValues.effortSettingsJson = JSON.stringify(settingsObj);
   }
+
+  // The Discord bridge's startup hint: undefined (so the flag is omitted) unless the bridge and its
+  // `startupHint` setting are on. Claude-only in practice, like the settings object above.
+  engineValues.appendSystemPrompt = getDiscordStartupHint();
 
   // Preserves buildSpawnCommand's original fallback: an EXPLICIT `undefined` probes the
   // entry's own local CLI (gateVersion: claude's probe for claude, the registry resolver for

@@ -20,6 +20,7 @@ import {
 import { MAX_EDITABLE_BYTES } from '../config/file-editing.js';
 import { CODEX_REASONING_EFFORTS } from '../types/session.js';
 import { WEBHOOK_KINDS, WEBHOOK_SCOPES } from '../types/push.js';
+import { DISCORD_ON_DELETE, DISCORD_PING_MODES, DISCORD_THREAD_CREATION } from '../types/discord.js';
 import { MIN_MATCH_LENGTH, MAX_MATCH_LENGTH } from '../config/agent-wait.js';
 import { MAX_WAKE_MACS } from '../config/remote-wake-limits.js';
 import { MAX_INPUT_LENGTH } from '../config/terminal-limits.js';
@@ -81,6 +82,35 @@ const filesystemPickerPathSchema = z
  * means off) so a client can send the flag unconditionally.
  */
 const showHiddenQuerySchema = z.enum(['true', 'false']).optional();
+
+/**
+ * Body for the path picker's "New folder": one folder name created directly inside `path`. The name is held
+ * to the character set `safePathSchema` accepts (letters, digits, `_ - . ~` and space, no `..`), so every
+ * name it accepts is one Link Existing and a session working directory accept (the parent's own path is
+ * judged there separately), and never a control character. It is also one path segment, not dot-prefixed (the picker hides those by default) and not tilde-prefixed (a folder named `~` is an `rm -rf ~` accident), and at
+ * most 255 BYTES, the usual filesystem limit.
+ */
+export const FilesystemMkdirSchema = z.object({
+  path: filesystemPickerPathSchema,
+  name: z
+    .string()
+    .trim()
+    .min(1, 'Folder name is required')
+    .refine((n) => Buffer.byteLength(n) <= 255, { message: 'Folder name is too long' })
+    .refine((n) => /^[\p{L}\p{N}_\-. ~]+$/u.test(n), {
+      message: 'Folder name can only use letters, numbers, spaces and _ - . ~',
+    })
+    .refine((n) => !n.includes('..') && !n.startsWith('.') && !n.startsWith('~'), {
+      message: 'Folder name cannot contain "..", or start with a dot or a tilde',
+    }),
+  sessionId: z
+    .string()
+    .max(100)
+    .regex(/^[a-zA-Z0-9_-]+$/, 'Invalid session id')
+    .optional(),
+  /** Same opt-in flag as browse: lets the picker create inside a hidden folder it is showing. */
+  showHidden: showHiddenQuerySchema,
+});
 
 /** Query validation for the lazy, allowlisted filesystem path picker. */
 export const FilesystemBrowseQuerySchema = z.object({
@@ -786,6 +816,12 @@ export const CloneCaseSchema = z.object({
   /** `--depth 1`. */
   shallow: z.boolean().optional(),
   description: z.string().max(1000).optional(),
+  /**
+   * Clone into this exact folder (the folder itself, no case-name subfolder is added) instead of under the cases directory, and
+   * register it as a linked case. Absolute or starting with `~`; only length-bounded here, since
+   * `prepareNewCasePath()` (web/case-path.ts) judges it and produces the user-facing reason.
+   */
+  path: z.string().min(1).max(1000).optional(),
 });
 
 /** Schema for POST /api/cases/clone-preflight — ask the remote what it has, clone nothing. */
@@ -2216,6 +2252,37 @@ export const WebhookUpdateSchema = z
   })
   .strict();
 
+/**
+ * PUT /api/discord. `.strict()` and every field optional, so a change of one option never needs the
+ * token re-sent; an empty `token` clears it. Option lists are the bridge's own, so the schema cannot
+ * accept a value the store would coerce away. Ids are checked again (as snowflakes) by the route.
+ */
+export const DiscordUpdateSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    token: z.string().max(200).optional(),
+    guildId: z.string().max(25).optional(),
+    parentChannelId: z.string().max(25).optional(),
+    allowedUserIds: z.array(z.string().max(25)).max(20).optional(),
+    threadCreation: z.enum(DISCORD_THREAD_CREATION).optional(),
+    onSessionDelete: z.enum(DISCORD_ON_DELETE).optional(),
+    staleThreads: z.enum(DISCORD_ON_DELETE).optional(),
+    pingMode: z.enum(DISCORD_PING_MODES).optional(),
+    scope: z.enum(WEBHOOK_SCOPES).optional(),
+    startupHint: z.boolean().optional(),
+  })
+  .strict();
+
+/** POST /api/sessions/:id/discord-notify */
+export const DiscordNotifySchema = z
+  .object({
+    message: z.string().min(1).max(1500),
+    urgent: z.boolean().optional(),
+    /** Absolute path of a file inside the session's working folder, uploaded with the post. */
+    file: z.string().min(1).max(1024).optional(),
+  })
+  .strict();
+
 // ========== Ralph Loop ==========
 
 /** POST /api/ralph-loop/start */
@@ -2354,6 +2421,14 @@ export const WebviewUpdateSchema = WebviewBaseSchema.partial();
 /** POST /api/webviews/probe: reachability + framing check for the editor's Test button. */
 export const WebviewProbeSchema = z.object({ url: webviewUrlSchema });
 
+/**
+ * Ceiling on a stated context length (tokens), shared between the bounds below and
+ * discovery (`custom-model-routes.ts`): anything above it reads as nonsense and is
+ * ignored, because a bogus figure here overflows the smaller server, which is the exact
+ * failure the discovery field exists to prevent.
+ */
+export const MAX_DISCOVERED_CONTEXT_TOKENS = 100_000_000;
+
 // Custom Model Endpoint Profiles (docs/custom-model-endpoints-plan.md) — a
 // user-configured custom OpenAI-compatible endpoint, local (llama.cpp) or cloud
 // (Azure AI Foundry, etc.). Lives below `webviewUrlSchema` because `baseUrl` IS that
@@ -2377,11 +2452,16 @@ export const CustomModelHostSchema = z.object({
   defaultModelId: z.string().max(200).optional(),
   // Server-populated by discovery (custom-model-routes.ts); accepted here only so a client
   // round-tripping the GET response back through PUT (edit-save) doesn't drop it.
-  modelContextLengths: z.record(z.string().max(200), z.number().int().positive().max(100_000_000)).optional(),
+  modelContextLengths: z
+    .record(z.string().max(200), z.number().int().positive().max(MAX_DISCOVERED_CONTEXT_TOKENS))
+    .optional(),
   // Same reasoning as modelContextLengths above.
   modelSlotCounts: z.record(z.string().max(200), z.number().int().positive().max(4096)).optional(),
   // Same reasoning as modelContextLengths above.
   modelSizesGB: z.record(z.string().max(200), z.number().positive().max(100_000)).optional(),
+  // User-set fallback for models discovery has no context length for (session-routes.ts);
+  // discovery never writes it. Same bound as the modelContextLengths values above.
+  defaultContextLength: z.number().int().positive().max(MAX_DISCOVERED_CONTEXT_TOKENS).optional(),
 });
 
 /**

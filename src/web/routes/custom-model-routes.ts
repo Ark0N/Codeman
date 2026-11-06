@@ -21,7 +21,7 @@ import { isMultiUserMode } from '../../config/multiuser.js';
 import { getDataDir } from '../../config/instance.js';
 import { isBlockedWebviewUrl } from '../webview-egress-policy.js';
 import { egressBlockedReason, webviewFetch } from '../webview-egress.js';
-import { CustomModelHostSchema } from '../schemas.js';
+import { CustomModelHostSchema, MAX_DISCOVERED_CONTEXT_TOKENS } from '../schemas.js';
 import { readCustomModelHosts, writeCustomModelHosts, type CustomModelHost } from '../../custom-model-hosts.js';
 import type { CliEntry } from '../../config/cli-registry/types.js';
 
@@ -158,9 +158,14 @@ function authHeaders(host: Pick<CustomModelHost, 'apiKey' | 'authStyle'>): Recor
 
 export interface DiscoveryResult {
   models: string[];
-  /** See `CustomModelHost.modelContextLengths` — only ever populated for models already loaded. */
+  /**
+   * See `CustomModelHost.modelContextLengths`: populated from a model's own `/v1/models`
+   * entry (`context_length`, else `context_window`) whenever the server states one, and
+   * from the launch command or `/props` for loaded models, which overwrite (and so win
+   * over) any listed figure for the same model.
+   */
   contextLengths: Record<string, number>;
-  /** See `CustomModelHost.modelSlotCounts`; populated on the same loaded-models-only basis as `contextLengths`. */
+  /** See `CustomModelHost.modelSlotCounts`; populated only for models the server reports loaded (launch command or `/props`). No listing states a slot count, unlike `contextLengths`. */
   slotCounts: Record<string, number>;
   /** See `CustomModelHost.modelSizesGB` — populated for every model whose own listing states one. */
   sizesGB: Record<string, number>;
@@ -180,6 +185,20 @@ function parseSizeGB(description: unknown): number | undefined {
   if (!match) return undefined;
   const size = Number(match[1]);
   return Number.isFinite(size) && size > 0 ? size : undefined;
+}
+
+/**
+ * Best-effort: reads a context length (tokens) stated by a model's OWN entry in
+ * `GET /v1/models`. OpenRouter-style servers call the field `context_length`; current
+ * llama-swap sends both `context_length` and `context_window` per model, and current
+ * Bifrost (a gateway in front of llama-swap) passes `context_window` through. Older
+ * servers send neither, and a server that states nothing gets no entry, never a guess.
+ * Non-numeric, zero, negative, fractional or over-the-ceiling values are ignored, the
+ * same rule the stored field's schema enforces: a wrong figure here is worse than none.
+ */
+function parseListedContextLength(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) return undefined;
+  return value <= MAX_DISCOVERED_CONTEXT_TOKENS ? value : undefined;
 }
 
 /**
@@ -312,25 +331,42 @@ async function discoverModels(
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const body = (await res.json()) as {
-    data?: Array<{ id?: unknown; status?: { value?: unknown }; description?: unknown }>;
+    data?: Array<{
+      id?: unknown;
+      status?: { value?: unknown };
+      description?: unknown;
+      context_length?: unknown;
+      context_window?: unknown;
+    }>;
   };
   const entries = body.data ?? [];
   const models = entries.map((m) => m.id).filter((id): id is string => typeof id === 'string' && id.length > 0);
 
   const sizesGB: Record<string, number> = {};
+  // The lowest-precedence context source, and the only one a gateway without /running or
+  // /props of its own (e.g. Bifrost) can offer: the figure a model's own listing states
+  // (`context_length`, else `context_window`). The loaded-model pass below OVERWRITES
+  // these for whatever it reads from the launch command or /props, so precedence per
+  // model stays: `/running` cmd, then `/props`, then this listed figure.
+  const contextLengths: Record<string, number> = {};
   for (const entry of entries) {
     if (typeof entry.id !== 'string' || !entry.id) continue;
     const size = parseSizeGB(entry.description);
     if (size !== undefined) sizesGB[entry.id] = size;
+    const listed = parseListedContextLength(entry.context_length) ?? parseListedContextLength(entry.context_window);
+    if (listed !== undefined) contextLengths[entry.id] = listed;
   }
 
   // llama-swap-specific, feature-detected: a server that never mentions `status` on ANY
-  // entry gets no context-length enrichment at all, rather than treating "no status field"
-  // as "assume unloaded" — either reading is a guess, and skipping is the safe one, since
-  // fetchContextLength must only ever run against a model this server itself calls loaded.
+  // entry gets no launch-command/props context enrichment at all, rather than treating
+  // "no status field" as "assume unloaded"; either reading is a guess, and skipping is
+  // the safe one, since fetchContextLength must only ever run against a model this server
+  // itself calls loaded. Listed figures above are unaffected: reading them triggers nothing.
   const hasStatusField = entries.some((m) => m && typeof m === 'object' && 'status' in m);
-  const contextLengths: Record<string, number> = {};
   const slotCounts: Record<string, number> = {};
+  // Ids whose figure THIS round's loaded-model probe answered: the listed figure remains
+  // the source only for the ids NOT in this set (see the per-slot correction below).
+  const ctxFromProbe = new Set<string>();
   if (hasStatusField) {
     const loadedIds = entries
       .filter((m) => m.status && typeof m.status === 'object' && (m.status as { value?: unknown }).value === 'loaded')
@@ -364,10 +400,29 @@ async function discoverModels(
           // merges onto what was learned before).
           if (cmdSlots !== undefined && ctxFromProps) slots = 1;
         }
-        if (ctx !== undefined) contextLengths[id] = ctx;
+        // Assigning only when a probe answered keeps the listed figure (if any) when
+        // neither the launch command nor /props stated one, and replaces it with the
+        // stronger source whenever they did: cmd > /props > listed, never the reverse.
+        if (ctx !== undefined) {
+          contextLengths[id] = ctx;
+          ctxFromProbe.add(id);
+        }
         if (slots !== undefined) slotCounts[id] = slots;
       }
     }
+  }
+  // llama-swap documents the LISTED `context_length` as the PER-SLOT window, so whenever
+  // the listed figure is the one taken this round (the model was not loaded, or the
+  // probe answered nothing), its slot count is 1 by definition: the floor check must NOT
+  // divide a per-slot figure a second time. Without recording 1 here, the count a loaded
+  // round stored survives the merge (applyDiscoveredModels keeps what a later round does
+  // not overwrite): 262144 @ 4 slots stored, model unloaded, listed 65536 → 65536 with 4
+  // slots → a false 16384-per-slot warning. Even a count this round's launch command
+  // parsed must yield: pairing a per-slot listed figure with the cmd's --parallel is the
+  // same double division. Same rule the /props branch above applies. Ids whose figure the
+  // probe DID answer keep their probe-derived count untouched.
+  for (const id of Object.keys(contextLengths)) {
+    if (!ctxFromProbe.has(id)) slotCounts[id] = 1;
   }
   return { models, contextLengths, slotCounts, sizesGB };
 }

@@ -735,12 +735,12 @@ Object.assign(CodemanApp.prototype, {
     // where settings.json is server-wide and its PUT admin-only: the mode is kept as their own
     // on this device and wins over the server's on the next load (_rememberOwnSetting,
     // settings-ui.js). A PUT refused that way (sent before the role was known) marks the page
-    // read-only for the writes after it (_noteSettingsWriteRefusal).
+    // read-only for the writes after it (_noteSettingsWriteRefusal); any other failure is toasted.
     if (this._settingsReadOnly?.()) {
       this._rememberOwnSetting?.('runMode', mode);
     } else {
       this._apiPut('/api/settings', { runMode: mode })
-        .then((res) => this._noteSettingsWriteRefusal?.(res))
+        .then((res) => this._noteSettingsWriteResult?.(res, 'Run mode'))
         .catch(() => {});
     }
     // Close menu
@@ -1002,12 +1002,23 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
-   * Best-effort lookup of the model llama-swap currently has loaded and ready on this
-   * endpoint, so the picker can offer it first instead of making the user remember what
-   * they picked last time it mattered. Mirrors `_watchLlamaSwapLoading`'s own
-   * `state === 'ready'` check. Returns null for a plain (non-llama-swap) server, an
-   * unreachable endpoint, or a loaded model this host no longer lists as discovered —
-   * never throws, since a failed probe should just skip promotion, not break the picker.
+   * Best-effort lookup of what the endpoint itself says it has loaded and ready, so the
+   * picker can offer it first instead of making the user remember what they picked last
+   * time it mattered. Only llama-swap answers this question (the route reads its
+   * `/running`); every other OpenAI-compatible server (a bare llama.cpp, Ollama, vLLM,
+   * or a gateway such as Bifrost fronting a whole fleet) replies `isLlamaSwap: false`,
+   * which is why `_getCustomModelInUseBySession` exists. `state === 'ready'` mirrors
+   * `_watchLlamaSwapLoading`'s own check.
+   *
+   * Resolves the raw route payload rather than a model id so the caller can tell the
+   * three answers apart: llama-swap naming a model; `isLlamaSwap: false`, which is what
+   * the route answers for EVERY failure it catches (a server without a `/running`
+   * route, a refused or unresolvable endpoint, a 401 from a wrong key): safe to
+   * explain in the UI as long as the wording also fits an endpoint that is down; and
+   * `null`, only when Codeman's own request to the route failed or the client-side
+   * bound below won the race, which stays silent, since the endpoint may merely have
+   * been asleep. Never throws: a failed probe should
+   * just skip promotion, not break the picker.
    *
    * ⚠️ Client-side bounded to ~800ms via Promise.race, on top of (never instead of) the
    * route's own 5s server-side timeout (`RUNNING_TIMEOUT_MS`, custom-model-routes.ts) —
@@ -1024,15 +1035,56 @@ Object.assign(CodemanApp.prototype, {
    * `vi.useFakeTimers()` patches, so a param is the only way to test the timeout without
    * actually waiting on it. Real callers never pass it.
    */
-  async _getCustomModelCurrentlyLoaded(host, timeoutMs = 800) {
+  async _getCustomModelRunningStatus(host, timeoutMs = 800) {
     const probe = this._apiJson(`/api/model-endpoints/${encodeURIComponent(host.id)}/running-status`).catch(
       () => null
     );
     const timeout = new Promise((resolve) => setTimeout(() => resolve(null), timeoutMs));
-    const status = await Promise.race([probe, timeout]);
+    return Promise.race([probe, timeout]);
+  },
+
+  /**
+   * The model llama-swap reports `ready` on this endpoint AND that this host still lists
+   * as discovered (an undropped-but-undiscovered model has no row to promote), else null.
+   */
+  _pickReadyRunningModel(status, host) {
     if (!status?.isLlamaSwap) return null;
     const ready = (status.running || []).find((r) => r.state === 'ready' && (host.models || []).includes(r.model));
     return ready?.model || null;
+  },
+
+  /**
+   * The model a LIVE session of this instance is pointed at on `host`, or null. It is the
+   * fallback for every endpoint that cannot answer "what is loaded?" about itself.
+   * A session already running on the endpoint is first-hand evidence of a model in use
+   * there: Codeman itself injected that endpoint and model into it, so it earns the same
+   * promotion llama-swap's own answer gets, under its own honest tag.
+   *
+   * ⚠️ Reads ONLY `customModel` (what Codeman injected), never `displayModel`: that field
+   * is display text scraped off a CLI's footer or statusline for a session header (pane
+   * derived, `source: 'screen'`), and promoting a row because a terminal printed a
+   * similar string is worse than showing nothing.
+   * ⚠️ Requires a live pane: `status: 'stopped'`, a null `pid` (the PTY exited; the
+   * same live-pane test keep-warm applies, `src/prompt-cache-keepwarm.ts`) or a recorded
+   * `paneExit` means nothing is on the endpoint any more, and a dead session's stale pin
+   * is exactly what an "in use" claim must not resurrect. `session:updated` keeps it
+   * current, so a session cleared back to the CLI's own backend or moved to another
+   * endpoint stops counting.
+   * ⚠️ A since-deleted endpoint simply matches no host, so no extra liveness check is
+   * needed here.
+   */
+  _getCustomModelInUseBySession(host) {
+    const models = host?.models || [];
+    if (models.length === 0) return null;
+    let newest = null;
+    for (const [, session] of this.sessions || []) {
+      if (!session || session.status === 'stopped' || session.pid === null || session.paneExit) continue;
+      const pinned = session.customModel;
+      if (!pinned || pinned.endpointId !== host.id) continue;
+      if (!models.includes(pinned.modelId)) continue; // undiscovered since: no row to promote
+      if (!newest || (newest.createdAt || 0) <= (session.createdAt || 0)) newest = session;
+    }
+    return newest?.customModel?.modelId || null;
   },
 
   /**
@@ -1055,15 +1107,17 @@ Object.assign(CodemanApp.prototype, {
     const generation = (this._customModelPickGeneration = (this._customModelPickGeneration || 0) + 1);
     const isCurrent = () => this._customModelPickGeneration === generation;
 
-    // Whichever model llama-swap actually has loaded right now beats a merely
-    // remembered choice — it's what a launch would attach to with zero wait, while
-    // "last used" might have been swapped out by another session since. Neither
-    // reorders past the top: exactly one model is promoted, everything else keeps
-    // its discovery order.
-    const currentlyLoaded = await this._getCustomModelCurrentlyLoaded(host);
+    // Three kinds of knowledge, best first: what llama-swap says it has loaded right
+    // now (zero wait to attach to), what a live session of this instance is pointed at
+    // on that endpoint (the endpoint itself cannot say, but Codeman put it there), and
+    // only then this device's memory of the last launch. One wins, and it never reorders
+    // anything else: every other row keeps its discovery order.
+    const runningStatus = await this._getCustomModelRunningStatus(host);
     if (!isCurrent()) return; // a newer pick opened (and possibly already rendered) while this probe was in flight
-    const lastUsed = currentlyLoaded ? null : this._getCustomModelLastUsed(mode, host.id);
-    const promoted = currentlyLoaded || lastUsed;
+    const currentlyLoaded = this._pickReadyRunningModel(runningStatus, host);
+    const inUse = currentlyLoaded ? null : this._getCustomModelInUseBySession(host);
+    const lastUsed = currentlyLoaded || inUse ? null : this._getCustomModelLastUsed(mode, host.id);
+    const promoted = currentlyLoaded || inUse || lastUsed;
     const models = [...(host.models || [])];
     if (promoted && models.includes(promoted)) {
       models.splice(models.indexOf(promoted), 1);
@@ -1078,23 +1132,91 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('customModelPickTitle').textContent = 'Choose a model';
     document.getElementById('customModelPickHint').textContent =
       `${cliLabel} → ${host.label} — ${(host.models || []).length} models discovered.`;
+    // A plain static line (its markup lives in index.html), shown when NOTHING is known
+    // about any row: 40 alphabetical rows with no mark on any of them otherwise read as
+    // the app ignoring the question. `isLlamaSwap: false` is what the route answers for
+    // every failure it catches: a server that cannot report AND a down or refused one
+    // alike (`getLlamaSwapStatus`, custom-model-routes.ts), so the line's wording
+    // promises only that nothing was reported, which stays true either way. A probe
+    // that never got an answer at all (`runningStatus === null`: Codeman's own request
+    // failed or the 800ms bound won) keeps the line hidden, the box may merely be
+    // asleep.
+    // A remembered id that has since vanished from host.models is no promotion: count
+    // only a promoted id that is actually a row, or a stale "last used" would both skip
+    // tagging any row and hide this line, leaving 40 unmarked rows with no explanation.
+    const nothingKnown = !(promoted && models.includes(promoted)) && runningStatus?.isLlamaSwap === false;
+    const unknownLine = document.getElementById('customModelPickUnknown');
+    if (unknownLine) unknownLine.hidden = !nothingKnown;
     list.innerHTML = models
       .map((m) => {
-        // Two independent tags, never one exclusive slot: the promotion tag says what
-        // llama-swap (or this device's history) knows about the model, the Default pill
-        // says what the saved endpoint says about it, and on a single-purpose GPU box the
-        // promoted model IS the default more often than not. One slot holding whichever
-        // applied first silently dropped the Default marking for exactly that row.
-        const promotion = m === currentlyLoaded ? 'Currently loaded' : m === lastUsed ? 'Last used' : null;
+        // Two independent tags, never one exclusive slot: the promotion tag says what the
+        // endpoint, a live session, or this device's history knows about the model, the
+        // Default pill says what the saved endpoint says about it, and on a
+        // single-purpose GPU box the promoted model IS the default more often than not.
+        // One slot holding whichever applied first silently dropped the Default marking
+        // for exactly that row.
+        const promotion =
+          m === currentlyLoaded
+            ? 'Currently loaded'
+            : m === inUse
+              ? 'In use by a session'
+              : m === lastUsed
+                ? 'Last used'
+                : null;
         const tags = [promotion, m === host.defaultModelId ? 'Default' : null].filter(Boolean);
         const arg = escapeHtml(JSON.stringify(m));
+        // data-model-id is the filter's haystack (escapeHtml covers `"` as well as
+        // `<>&`, so a hostile model id cannot break out of the attribute); the
+        // filter reads it back through dataset, which decodes it.
         return `
-          <button class="run-mode-option" onclick="app.chooseCustomModelAndRun(${arg})">
+          <button class="run-mode-option" data-model-id="${escapeHtml(m)}" onclick="app.chooseCustomModelAndRun(${arg})">
             <span class="run-mode-dot ${escapeHtml(mode)}"></span>${escapeHtml(m)}${tags.map((t) => ` <span class="set-scope">${escapeHtml(t)}</span>`).join('')}
           </button>`;
       })
       .join('');
     modal.classList.add('active');
+    // A fresh open always starts unfiltered with the caret in the search box: the
+    // list was just rebuilt, so clearing the input is the whole reset; focus is the
+    // user's next keystroke away. Inside the generation guard above, so a
+    // superseded probe can neither focus nor clear a modal that now shows another
+    // endpoint's models.
+    const search = document.getElementById('customModelPickSearch');
+    if (search) {
+      search.value = '';
+      // readmymind-ui.js's rule: on touch devices never focus an input unprompted, or
+      // the OS keyboard pops over the very list the picker just opened to show. Desktop
+      // keeps the caret in the box, one keystroke from filtering.
+      if (!(typeof MobileDetection !== 'undefined' && MobileDetection.isTouchDevice())) {
+        search.focus();
+      }
+    }
+    this.filterCustomModelPick('');
+  },
+
+  /**
+   * View filter for the open "Choose a model" picker: case-insensitive substring
+   * over each row's model id, driven from the search input's own `oninput`.
+   * Deliberately toggles `hidden` on the already-rendered buttons rather than
+   * re-rendering from a second copy of the model list: the loaded/last-used
+   * promotion, the Default pill, the escaped inline click argument and the async
+   * generation guard all then stay exactly where they are, and clearing the
+   * query restores the list byte for byte. ⚠️ `.run-mode-option` carries its own
+   * `display: flex` (styles.css, restated in mobile.css), which outranks the UA
+   * `[hidden]` rule, so styles.css re-asserts `display: none !important` for
+   * these rows: without it the filter would silently do nothing.
+   */
+  filterCustomModelPick(value) {
+    const list = document.getElementById('customModelPickList');
+    if (!list) return;
+    const query = String(value || '').trim().toLowerCase();
+    let visible = 0;
+    for (const btn of list.querySelectorAll('button[data-model-id]')) {
+      const match = !query || btn.dataset.modelId.toLowerCase().includes(query);
+      btn.hidden = !match;
+      if (match) visible += 1;
+    }
+    const noMatches = document.getElementById('customModelPickNoMatches');
+    if (noMatches) noMatches.hidden = visible > 0;
   },
 
   closeCustomModelPickModal() {
@@ -4097,6 +4219,15 @@ Object.assign(CodemanApp.prototype, {
     set('cloneRepoUrl', '');
     set('cloneCaseName', '');
     set('cloneRepoRef', '');
+    set('cloneCasePath', '');
+    // Custom folder starts off each time, and is not offered to a non-admin in multi-user mode: the
+    // server refuses it (it writes outside the cases directory and into the shared registry).
+    const customToggle = document.getElementById('cloneCustomPathToggle');
+    if (customToggle) customToggle.checked = false;
+    const customRow = document.getElementById('cloneCustomPathToggleRow');
+    const me = window.__codemanUser || {};
+    if (customRow) customRow.style.display = me.multiUser && me.role !== 'admin' ? 'none' : '';
+    this.toggleCloneCustomPath();
     const shallow = document.getElementById('cloneShallow');
     if (shallow) shallow.checked = false;
     const start = document.getElementById('cloneStartSession');
@@ -4122,6 +4253,50 @@ Object.assign(CodemanApp.prototype, {
       const current = this.runMode || 'claude';
       brain.value = [...brain.options].some((o) => o.value === current && !o.hidden) ? current : '';
     }
+  },
+
+  /** Custom-folder row for Clone Repo: shows or hides the parent-folder field and rewords the name hint. */
+  toggleCloneCustomPath() {
+    const custom = document.getElementById('cloneCustomPathToggle');
+    const row = document.getElementById('cloneCustomPathRow');
+    if (!custom || !row) return;
+    row.style.display = custom.checked ? '' : 'none';
+    const hint = document.getElementById('cloneCaseNameHint');
+    if (hint) {
+      hint.textContent = custom.checked
+        ? 'Filled in from the URL. Names the case only: the repository is cloned into the folder chosen below.'
+        : 'Filled in from the URL. Cloned into ~/codeman-cases/<name>, so deleting the case deletes this working tree.';
+    }
+    this.updateCloneCasePathPreview();
+  },
+
+  /** The folder the repository is cloned into: exactly what the field holds (no case name is added). */
+  _cloneTargetPath() {
+    const raw = (document.getElementById('cloneCasePath')?.value || '').trim();
+    // Trailing slashes off, but `/` stays the root rather than becoming an empty path.
+    return raw.length > 1 ? raw.replace(/\/+$/, '') || '/' : raw;
+  },
+
+  updateCloneCasePathPreview() {
+    const hint = document.getElementById('cloneCasePathPreview');
+    if (!hint) return;
+    const target = this._cloneTargetPath();
+    hint.textContent = target ? `Will clone into: ${target}` : 'Pick an empty folder, or one that does not exist yet, to clone into.';
+  },
+
+  openCloneCasePathPicker() {
+    const input = document.getElementById('cloneCasePath');
+    PathPicker.open({
+      title: 'Choose the folder to clone into',
+      initialPath: input.value.trim(),
+      directoriesOnly: true,
+      onSelect: (path) => {
+        input.value = path;
+        this.updateCloneCasePathPreview();
+        input.focus();
+        input.setSelectionRange(path.length, path.length);
+      },
+    });
   },
 
   _setCloneStatus(message, kind) {
@@ -4272,6 +4447,12 @@ Object.assign(CodemanApp.prototype, {
       return;
     }
 
+    const customFolder = !!document.getElementById('cloneCustomPathToggle')?.checked;
+    if (customFolder && !(document.getElementById('cloneCasePath')?.value || '').trim()) {
+      this.showToast('Choose the folder to clone into', 'error');
+      return;
+    }
+
     this._setCloneStatus(`Cloning ${url}… this can take a while for a large repository.`, '');
     try {
       const res = await fetch('/api/cases/clone', {
@@ -4279,7 +4460,13 @@ Object.assign(CodemanApp.prototype, {
         headers: { 'Content-Type': 'application/json' },
         // Zod `.optional()` rejects an explicit null, and JSON.stringify keeps one
         // on the wire — omit the empty fields instead of sending null.
-        body: JSON.stringify({ name, repository: url, ...(ref ? { ref } : {}), ...(shallow ? { shallow: true } : {}) }),
+        body: JSON.stringify({
+          name,
+          repository: url,
+          ...(ref ? { ref } : {}),
+          ...(shallow ? { shallow: true } : {}),
+          ...(customFolder ? { path: this._cloneTargetPath() } : {}),
+        }),
       });
       const data = await res.json();
       if (!data.success) {
@@ -4315,6 +4502,7 @@ Object.assign(CodemanApp.prototype, {
       title: 'Select Existing Project Folder',
       initialPath: pathInput.value.trim(),
       directoriesOnly: true,
+      allowNewFolder: true,
       onSelect: (path) => {
         pathInput.value = path;
         const nameInput = document.getElementById('linkCaseName');

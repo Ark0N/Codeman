@@ -481,6 +481,52 @@ describe('refreshAllCustomModelHosts: parallel-slot enrichment (llama.cpp splits
     const [updated] = await readCustomModelHosts(dir);
     expect(updated.modelSlotCounts).toEqual({ a: 4 });
   });
+
+  it('a round where only the listed figure answers resets the slot count a loaded round learned', async () => {
+    // The false-warning scenario, measured on a real llama-swap: round 1 has the model
+    // loaded under `--ctx-size 262144 --parallel 4`: a TOTAL window shared across slots,
+    // correctly stored with its count. Round 2 finds it unloaded and takes the LISTED
+    // `context_length`, which llama-swap documents as the PER-SLOT window. If the stored 4
+    // survived, the floor check would divide the per-slot figure a second time
+    // (65536/4 = 16384) and warn about a model that serves 65536 to every request.
+    const dir = getDataDir();
+    await writeCustomModelHosts(dir, [host({ id: 'ep', baseUrl: 'http://localhost:8080' })]);
+    fetchMock.mockImplementation(async (url: URL) => {
+      if (url.pathname === '/v1/models') {
+        return new Response(JSON.stringify({ data: [{ id: 'm', status: { value: 'loaded' } }] }), { status: 200 });
+      }
+      if (url.pathname === '/running') {
+        return new Response(
+          JSON.stringify({
+            running: [{ model: 'm', state: 'ready', cmd: 'llama-server -m /models/m.gguf --ctx-size 262144 --parallel 4' }],
+          }),
+          { status: 200 }
+        );
+      }
+      throw new Error(`unexpected request: ${url.href}`); // the command answers both questions
+    });
+
+    await refreshAllCustomModelHosts();
+
+    let [round1] = await readCustomModelHosts(dir);
+    expect(round1.modelContextLengths).toEqual({ m: 262144 });
+    expect(round1.modelSlotCounts).toEqual({ m: 4 });
+
+    // Round 2: unloaded, no /running or /props probe in order, listing its per-slot figure.
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ data: [{ id: 'm', status: { value: 'unloaded' }, context_length: 65536 }] }), {
+        status: 200,
+      })
+    );
+
+    await refreshAllCustomModelHosts();
+
+    const [round2] = await readCustomModelHosts(dir);
+    expect(round2.modelContextLengths).toEqual({ m: 65536 });
+    // 1 slot, not the stale 4: 65536 per slot with 1 recorded slot is the honest pair, so
+    // the floor check reads 65536/request: exactly what the server gives a single request.
+    expect(round2.modelSlotCounts).toEqual({ m: 1 });
+  });
 });
 
 describe('refreshAllCustomModelHosts: model-size enrichment (parsed from /v1/models description)', () => {

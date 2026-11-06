@@ -11,7 +11,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { registerCustomModelRoutes } from '../../src/web/routes/custom-model-routes.js';
 import { webviewFetch } from '../../src/web/webview-egress.js';
-import { createRouteTestHarness } from './_route-test-utils.js';
+import { createRouteTestHarness, type RouteTestHarness } from './_route-test-utils.js';
 
 vi.mock('../../src/web/webview-egress.js', async () => {
   const actual = await vi.importActual<typeof import('../../src/web/webview-egress.js')>(
@@ -415,5 +415,168 @@ describe('apiKey is never handed back to the browser', () => {
     });
     await app.inject({ method: 'POST', url: '/api/model-endpoints/ep-replace-key/discover-models' });
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('context-length discovery from the /v1/models listing', () => {
+  // The gateway path (a Bifrost in front of llama-swap, an OpenRouter-style server):
+  // no /running, no /props, just a per-model `context_length` or `context_window` in the
+  // model listing. Distinct ports per test keep the file's shared data dir unambiguous.
+  afterEach(() => {
+    fetchMock.mockReset();
+  });
+
+  type StoredHost = { id: string; modelContextLengths?: Record<string, number>; defaultContextLength?: number };
+
+  type HarnessApp = RouteTestHarness['app'];
+
+  async function endpointWith(id: string, port: number, extra: Record<string, unknown> = {}): Promise<HarnessApp> {
+    const { app } = await setup();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/model-endpoints',
+      payload: { id, label: 'A', baseUrl: `http://localhost:${port}`, ...extra },
+    });
+    expect(res.statusCode).toBe(200);
+    return app;
+  }
+
+  async function storedHost(app: HarnessApp, id: string): Promise<StoredHost | undefined> {
+    const list = await app.inject({ method: 'GET', url: '/api/model-endpoints' });
+    return (list.json() as StoredHost[]).find((h) => h.id === id);
+  }
+
+  it('reads context_length (preferred) then context_window from each entry into modelContextLengths', async () => {
+    const app = await endpointWith('ep-ctx-listed', 8101);
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          data: [
+            { id: 'both', context_length: 131072, context_window: 32768 },
+            { id: 'window-only', context_window: 8192 },
+            { id: 'no-figure' },
+          ],
+        }),
+        { status: 200 }
+      )
+    );
+
+    const discover = await app.inject({ method: 'POST', url: '/api/model-endpoints/ep-ctx-listed/discover-models' });
+    expect(discover.json().success).toBe(true);
+
+    const stored = await storedHost(app, 'ep-ctx-listed');
+    expect(stored?.modelContextLengths).toEqual({ both: 131072, 'window-only': 8192 });
+  });
+
+  it('ignores non-numeric, zero, negative and absurd listed values; the schema bound itself is still accepted', async () => {
+    const app = await endpointWith('ep-ctx-bad', 8102);
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          data: [
+            { id: 'string', context_length: '131072' },
+            { id: 'zero', context_window: 0 },
+            { id: 'negative', context_length: -10 },
+            { id: 'over-bound', context_length: 100_000_001 },
+            { id: 'fractional', context_window: 16384.5 },
+            { id: 'at-bound', context_length: 100_000_000 },
+          ],
+        }),
+        { status: 200 }
+      )
+    );
+
+    await app.inject({ method: 'POST', url: '/api/model-endpoints/ep-ctx-bad/discover-models' });
+
+    const stored = await storedHost(app, 'ep-ctx-bad');
+    expect(stored?.modelContextLengths).toEqual({ 'at-bound': 100_000_000 });
+  });
+
+  it('prefers the /running launch command over the listed figure for a loaded model', async () => {
+    const app = await endpointWith('ep-ctx-cmd', 8103);
+    fetchMock.mockImplementation(async (url: URL) => {
+      if (url.pathname === '/v1/models') {
+        return new Response(
+          JSON.stringify({ data: [{ id: 'cmd-wins', status: { value: 'loaded' }, context_length: 131072 }] }),
+          { status: 200 }
+        );
+      }
+      if (url.pathname === '/running') {
+        return new Response(
+          JSON.stringify({ running: [{ model: 'cmd-wins', state: 'ready', cmd: 'llama-server --ctx-size 16384' }] }),
+          { status: 200 }
+        );
+      }
+      if (url.pathname === '/props') return new Response('nope', { status: 404 });
+      throw new Error(`unexpected request in this test: ${url.href}`);
+    });
+
+    await app.inject({ method: 'POST', url: '/api/model-endpoints/ep-ctx-cmd/discover-models' });
+
+    const stored = await storedHost(app, 'ep-ctx-cmd');
+    expect(stored?.modelContextLengths).toEqual({ 'cmd-wins': 16384 });
+  });
+
+  it('keeps a previously learned value the fresh listing says nothing about, and discovery never touches defaultContextLength', async () => {
+    const app = await endpointWith('ep-ctx-keep', 8104, {
+      models: ['re-listed', 'untouched'],
+      modelContextLengths: { 're-listed': 16384, untouched: 4096 },
+      defaultContextLength: 65536,
+    });
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({ data: [{ id: 're-listed', context_length: 32768 }, { id: 'untouched' }] }),
+        { status: 200 }
+      )
+    );
+
+    await app.inject({ method: 'POST', url: '/api/model-endpoints/ep-ctx-keep/discover-models' });
+
+    const stored = await storedHost(app, 'ep-ctx-keep');
+    expect(stored?.modelContextLengths).toEqual({ 're-listed': 32768, untouched: 4096 });
+    expect(stored?.defaultContextLength).toBe(65536);
+  });
+});
+
+describe('defaultContextLength (the user-set fallback discovery never overwrites)', () => {
+  afterEach(() => {
+    fetchMock.mockReset();
+  });
+
+  it('stores it on create, updates it on PUT, and a PUT without it clears it', async () => {
+    const { app } = await setup();
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/model-endpoints',
+      payload: { id: 'ep-defctx', label: 'A', baseUrl: 'http://localhost:8105', defaultContextLength: 131072 },
+    });
+    expect(create.json().data.host.defaultContextLength).toBe(131072);
+
+    const update = await app.inject({
+      method: 'PUT',
+      url: '/api/model-endpoints/ep-defctx',
+      payload: { label: 'A', baseUrl: 'http://localhost:8105', defaultContextLength: 32768 },
+    });
+    expect(update.json().data.host.defaultContextLength).toBe(32768);
+
+    const cleared = await app.inject({
+      method: 'PUT',
+      url: '/api/model-endpoints/ep-defctx',
+      payload: { label: 'A', baseUrl: 'http://localhost:8105' },
+    });
+    expect(cleared.json().data.host.defaultContextLength).toBeUndefined();
+  });
+
+  it('rejects zero, negative, fractional, over-the-bound and non-numeric values', async () => {
+    const { app } = await setup();
+    for (const defaultContextLength of [0, -1, 1.5, 100_000_001, '131072']) {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/model-endpoints',
+        payload: { id: 'ep-defctx-bad', label: 'A', baseUrl: 'http://localhost:8106', defaultContextLength },
+      });
+      expect(res.json().success, String(defaultContextLength)).toBe(false);
+      expect(res.json().errorCode, String(defaultContextLength)).toBe('INVALID_INPUT');
+    }
   });
 });
