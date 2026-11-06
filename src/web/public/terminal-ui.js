@@ -1572,8 +1572,8 @@ Object.assign(CodemanApp.prototype, {
     // A real mouse click normally reaches the PTY through xterm's own mouse
     // encoder, but that encoder only runs while mouseTrackingMode is ON — and
     // the server strips the enabling DECSETs from claude/codex/gemini output
-    // (isAltScreenStripMode, session.ts) and from opencode's (isMuxMouseStripMode,
-    // so a drag selects text) so the wheel keeps scrolling
+    // (isAltScreenStripMode, session.ts) and from the mouse-strip modes'
+    // (isMuxMouseStripMode, so a drag selects text) so the wheel keeps scrolling
     // scrollback. Desktop clicks therefore stopped reporting entirely (the
     // same breakage the mobile touchend tap branch above works around).
     // Hand-encode the SGR report for plain left-clicks on those sessions.
@@ -5942,8 +5942,8 @@ Object.assign(CodemanApp.prototype, {
    * literal text (`[<0;88;20M`) and they garble the next line typed.
    *
    * Fails toward silence: an unknown or stale flag reports nothing rather than
-   * injecting bytes. After a server restart the flag is false until the CLI
-   * re-emits its DECSET, which closing and reopening a dialog does.
+   * injecting bytes. After a server restart the flag is false until the DECSET
+   * passes again, which tmux does itself when the server re-attaches to the pane.
    *
    * `sessionId` defaults to the primary pane's session; a TerminalTile passes
    * its own (through _handleDesktopTerminalClick's target), never the active one.
@@ -6065,7 +6065,7 @@ Object.assign(CodemanApp.prototype, {
     if (mode && mode !== 'none') return false;
     const session = this.sessions?.get(target.sessionId || this.activeSessionId);
     const sessionMode = session?.mode || 'claude';
-    // GitHub Copilot CLI (and pi, same shape since 1.4.0) scrolls its own transcript on SGR wheel reports (checked with xterm
+    // GitHub Copilot CLI (and pi, fullscreen by default) scrolls its own transcript on SGR wheel reports (checked with xterm
     // encoding them natively). Its mouse DECSETs are stripped server-side so a drag selects
     // locally (strip-mux-and-mouse), which also means xterm no longer encodes the wheel: send the
     // same reports by hand, but only while the CLI is actually tracking the mouse. Not gated on a
@@ -6408,8 +6408,8 @@ Object.assign(CodemanApp.prototype, {
    * The reason is that the habit and xterm's Shift mean different things once
    * the DECSETs are stripped. xterm reads Shift as "force selection" ONLY while
    * the app actually has mouse tracking on; the server strips those DECSETs for
-   * claude/codex/gemini (isAltScreenStripMode) and opencode (isMuxMouseStripMode),
-   * so xterm's mouseTrackingMode is
+   * claude/codex/gemini (isAltScreenStripMode) and the mouse-strip modes
+   * (isMuxMouseStripMode), so xterm's mouseTrackingMode is
    * permanently `none`, that branch is unreachable, and Shift instead falls into
    * `_onIncrementalClick` — EXTEND an existing selection. Extending is a no-op
    * when `selectionStart` is null, so the drag never anchors and no selection is

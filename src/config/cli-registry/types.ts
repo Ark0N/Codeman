@@ -546,7 +546,7 @@ export interface CliCapabilities {
    * `strip-full` is `isAltScreenStripMode`; `strip-mux-and-mouse` is `isMuxMouseStripMode`;
    * every other value takes `isMuxAltScreenOnlyStripMode`, so at runtime `preserve` and
    * `strip-mux-only` are the same row — `preserve` only says what such a CLI's pane
-   * holds (terminal-owned scrollback: a shell, pi), not a different strip.
+   * holds (terminal-owned scrollback: a shell), not a different strip.
    *
    * - alt-screen: the tmux CLIENT emits `smcup` as its first bytes at attach, parking
    *   xterm in the scrollback-less alternate buffer; a pane program's own toggles never

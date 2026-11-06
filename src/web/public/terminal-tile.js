@@ -1149,8 +1149,8 @@
 
     // A plain left-click reported to the CLI, the primary pane's desktop click
     // (terminal-ui.js _handleDesktopTerminalClick) aimed at this pane. The
-    // server strips the mouse DECSETs of some modes (opencode's since #555, so a
-    // drag selects text), which leaves this xterm's own mouse encoder idle for
+    // server strips the mouse DECSETs of some modes (so a drag selects text),
+    // which leaves this xterm's own mouse encoder idle for
     // them; without this a click in such a pane never reached the CLI. Only
     // while this pane's session has tracking on (cliMouseTracking), through the
     // same skips as the primary pane. Bubble phase, as there. The target is

@@ -898,7 +898,7 @@ describe('GitHub Copilot wheel forwarding', () => {
   });
 });
 
-describe('pi wheel forwarding (1.4.0: alt-screen TUI with mouse tracking)', () => {
+describe('pi wheel forwarding (fullscreen by default since 1.0.0)', () => {
   // pi enables mouse tracking once at start. Codeman's replay (tab switch, reload) drops that
   // mode in xterm (`mouseTrackingMode` none, baseY 0), so the wheel hit an empty local buffer
   // and went dead until a redraw. Like Copilot, the server strips the DECSETs and publishes
@@ -908,13 +908,22 @@ describe('pi wheel forwarding (1.4.0: alt-screen TUI with mouse tracking)', () =
     expect(app._shouldForwardWheelToApp({ shiftKey: false })).toBe(true);
   });
 
-  it('keeps Shift+wheel local and falls back to paging when the flag is stale', () => {
+  it('keeps Shift+wheel local', () => {
     expect(hollowApp({ mode: 'pi', cliMouseTracking: true }).app._shouldForwardWheelToApp({ shiftKey: true })).toBe(
       false
     );
-    const { app } = hollowApp({ mode: 'pi', cliMouseTracking: false });
+  });
+
+  it('sends nothing to an inline pi: page keys there move the caret of a multi-line draft', () => {
+    // `tuiMode: regular`, and every pi below 1.0.0, emits no mouse enable, so the flag stays false
+    // over a buffer that is hollow on a fresh pane. pi binds PageUp to its editor in that mode:
+    // measured on real pi, the wheel moved the caret and the next X landed on the first line.
+    const { app, sent } = hollowApp({ mode: 'pi', cliMouseTracking: false });
+
     expect(app._shouldForwardWheelToApp({ shiftKey: false })).toBe(false);
-    expect(app._localScrollbackIsHollow()).toBe(true);
+    expect(app._maybePageCliTranscript({ shiftKey: false }, -18)).toBe(false);
+    app._flushWheelSgrQueue();
+    expect(sent).toEqual([]);
   });
 });
 

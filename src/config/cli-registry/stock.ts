@@ -1180,15 +1180,21 @@ const PI: CliEntry = {
     // (hasTrustRequiringProjectResources, pi 1.1.0), which would stall a spawned worker on
     // a dialog. pi reads the user-level `~/.agents/skills` without that prompt, so a pi
     // user installs it there (`npx skills add Ark0N/Codeman --skill codeman -g`).
-    // pi 1.4.0 measured (tmux pane: alternate_on=1, history_size=0, mouse on, SGR): a fullscreen
-    // TUI that enables tracking once at start. Codeman's replay (tab switch, reload) drops that
-    // mode in xterm, so the wheel hit an empty local buffer and went dead until a redraw. Same
-    // shape as copilot: strip the DECSETs (a drag selects locally), publish `cliMouseTracking`,
-    // and forward the wheel by hand from that flag. pi scrolls on SGR wheel (1 line per report)
-    // and on PageUp/PageDown, which is the fallback for a stale flag.
+    // Fullscreen is pi's default `tuiMode` since 1.0.0 (measured 1.0.0, 1.1.0, 1.4.0, 1.5.0 in
+    // tmux: alternate_on=1, history_size=0, mouse on, SGR): a TUI that enables tracking once at
+    // start. Codeman's replay (tab switch, reload) drops that mode in xterm, so the wheel hit an
+    // empty local buffer and went dead until a redraw. Same shape as copilot: strip the DECSETs
+    // (a drag selects locally), publish `cliMouseTracking`, and forward the wheel by hand from
+    // that flag. pi scrolls on SGR wheel reports, one row each at a low rate, faster on a spin.
+    // `tuiMode: regular` (and every pi below 1.0.0) is inline and emits no mouse DECSET, so the
+    // strip finds nothing and the flag stays false.
+    // ⚠️ No `transcriptPageKeys`, though fullscreen pi does page on PageUp/PageDown. pi binds
+    // those keys to its editor in regular mode too, where they page nothing and move the caret
+    // of a multi-line draft, so a wheel over a fresh regular pane sent the next keystroke to the
+    // wrong line (measured). The cost: a fullscreen pi with "Wheel scrolls local history" on
+    // has no paging fallback.
     altScreen: 'strip-mux-and-mouse',
     wheelForward: { mode: 'always' },
-    transcriptPageKeys: true,
     echo: { policy: 'buffer', anchor: { kind: 'cursor' } },
     // Measured on a live pi 1.1.0 pane (capture-pane every 250 ms through a turn,
     // 2026-10-09): pi has no composer glyph. Its composer sits between two `─` rules, and
