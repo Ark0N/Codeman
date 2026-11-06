@@ -411,6 +411,10 @@ run_first_run_setup() {
   setup_cases="$setup_appdata/codeman-cases"
   write_env_file
   first_run=1
+  # Compose prefers the shell environment over the env file, so a preset still
+  # exported here would beat a different typed answer: docker/.env and the
+  # summary would name one folder and port and the stack would run on another.
+  unset TZ CODEMAN_APPDATA_PATH CODEMAN_CASES_PATH CODEMAN_PORT CODEMAN_PASSWORD
 
   if [[ -n "$generated_password" ]]; then
     password_note="$generated_password  (generated; shown again once Codeman is up)"

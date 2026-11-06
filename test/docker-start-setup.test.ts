@@ -34,6 +34,7 @@ import {
   statSync,
   existsSync,
   symlinkSync,
+  readdirSync,
 } from 'node:fs';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
@@ -53,9 +54,10 @@ const REWRITTEN_KEYS = ['TZ', 'CODEMAN_APPDATA_PATH', 'CODEMAN_CASES_PATH', 'COD
 
 /**
  * A stub `docker` that logs every invocation and answers the calls the script
- * makes. `compose ... config --environment` sources the env file (bash reads
- * single-quoted values the way Compose's dotenv does) and prints the keys the
- * script reads.
+ * makes. `compose ... config --environment` sources the env file and prints the
+ * keys the script reads, with the shell environment beating the file as it does
+ * in Compose. Bash reads a single-quoted value the way Compose's dotenv does
+ * except for a backslash before the closing quote: see `composeReads`.
  */
 const STUB = [
   '#!/usr/bin/env bash',
@@ -83,10 +85,13 @@ const STUB = [
   '    prev="$a"',
   '  done',
   '  if [[ " $* " == *" config "* && " $* " == *" --environment "* ]]; then',
+  '    keys="CODEMAN_APPDATA_PATH CODEMAN_CASES_PATH DOCKER_SOCKET CODEMAN_PORT CODEMAN_USERNAME CODEMAN_PASSWORD"',
+  '    for k in $keys; do if [[ -n "${!k+x}" ]]; then printf -v "shell_$k" %s "${!k}"; fi; done',
   '    set -a; source "$envfile"; set +a',
   '    DOCKER_SOCKET="${STUB_DOCKER_SOCKET:-$DOCKER_SOCKET}"',
-  '    for k in CODEMAN_APPDATA_PATH CODEMAN_CASES_PATH DOCKER_SOCKET CODEMAN_PORT CODEMAN_USERNAME CODEMAN_PASSWORD; do',
-  '      printf "%s=%s\\n" "$k" "${!k}"',
+  '    for k in $keys; do',
+  '      shell="shell_$k"',
+  '      printf "%s=%s\\n" "$k" "${!shell-${!k}}"',
   '    done',
   '    exit 0',
   '  fi',
@@ -111,6 +116,8 @@ interface Run {
   envMode: number | null;
   home: string;
   dir: string;
+  /** What was in HOME when the run ended; the sandbox is gone by the time a test reads this. */
+  homeEntries: string[];
 }
 
 /**
@@ -130,6 +137,12 @@ function runStart(
     update?: boolean;
     /** CODEMAN_APPDATA_PATH preset, built from the sandbox's own paths. */
     appdata?: (p: { home: string; repo: string }) => string;
+    /**
+     * Keystrokes for a run on a REAL terminal (a pty from util-linux `script`,
+     * so Linux only), which is the only way to reach the questions: the script
+     * reads stdin only when `-t 0` holds.
+     */
+    terminal?: string;
   } = {}
 ): Run {
   const dir = mkdtempSync(join(tmpdir(), 'codeman-start-setup-'));
@@ -177,17 +190,21 @@ function runStart(
     if (opts.appdata) env.CODEMAN_APPDATA_PATH = opts.appdata({ home, repo: join(dir, 'repo') });
     if (opts.socket) env.STUB_DOCKER_SOCKET = opts.socket;
 
-    const entry = opts.update ? 'Update-Codeman.sh' : 'Start-Codeman.sh';
-    const res = spawnSync(BASH, [join(dockerDir, entry), ...args], {
-      env,
-      encoding: 'utf-8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    const entry = join(dockerDir, opts.update ? 'Update-Codeman.sh' : 'Start-Codeman.sh');
+    const res =
+      opts.terminal === undefined
+        ? spawnSync(BASH, [entry, ...args], { env, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] })
+        : spawnSync('script', ['-qefc', [BASH, entry, ...args].join(' '), '/dev/null'], {
+            env,
+            encoding: 'utf-8',
+            input: opts.terminal,
+          });
     const envPath = join(dockerDir, '.env');
     const hasEnv = existsSync(envPath);
     return {
       status: res.status ?? 1,
-      stdout: res.stdout,
+      // A terminal turns every line end into CRLF.
+      stdout: res.stdout.replace(/\r/g, ''),
       stderr: res.stderr,
       log: readFileSync(logPath, 'utf-8')
         .split('\n')
@@ -196,6 +213,7 @@ function runStart(
       envMode: hasEnv ? statSync(envPath).mode & 0o777 : null,
       home,
       dir,
+      homeEntries: readdirSync(home),
     };
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -425,6 +443,30 @@ describe.skipIf(process.platform === 'win32')('Start-Codeman.sh first run, start
     const up = r.log.findIndex((l) => / up --build -d/.test(l));
     expect(up).toBeGreaterThan(-1);
     expect(r.log.findIndex((l) => l.startsWith('docker inspect'))).toBeGreaterThan(up);
+  });
+
+  it('runs on the port docker/.env holds, not on the preset the shell still exports', () => {
+    const r = runStart([], { socket: sockPath, env: { CODEMAN_PORT: '04444' } });
+    expect(r.status, r.stderr).toBe(0);
+    expect(envValue(r.env as string, 'CODEMAN_PORT')).toBe('4444');
+    expect(r.stdout).toContain('http://localhost:4444');
+    expect(r.stdout).not.toContain('04444');
+  });
+
+  it.skipIf(process.platform !== 'linux')('a typed answer beats a preset for the stack itself, not just the file', () => {
+    const r = runStart([], {
+      socket: sockPath,
+      appdata: ({ home }) => join(home, 'preset-data'),
+      env: { CODEMAN_PORT: '4444' },
+      terminal: '~/typed-data\n5555\n\n',
+    });
+    expect(r.status, r.stdout).toBe(0);
+    const env = r.env as string;
+    expect(envValue(env, 'CODEMAN_APPDATA_PATH')).toBe(join(r.home, 'typed-data'));
+    expect(envValue(env, 'CODEMAN_PORT')).toBe('5555');
+    expect(r.stdout).toContain('http://localhost:5555');
+    expect(r.homeEntries).toContain('typed-data');
+    expect(r.homeEntries).not.toContain('preset-data');
   });
 
   it('reports a container that keeps restarting, with its last log lines, and exits 1', () => {
