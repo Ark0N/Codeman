@@ -306,7 +306,7 @@ button, and **Rescan** runs it again.
   kill. Opening one types nothing into it.
 - **Codeman did not start it,** so it will not drive it: respawn, Ralph, auto-clear,
   auto-compact, auto-resume, custom model endpoints, prompt uploads and the image watcher are
-  refused, and the git panel shows nothing.
+  refused, the git panel shows nothing, and Edit history says it is not available.
 - **The tab opens on the session's first window,** and the row describes that same window.
 - **It joins like a second tmux client.** While the tab is open it can resize a session
   someone else is viewing, the way any second client does, and that reverses when it closes.

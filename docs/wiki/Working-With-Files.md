@@ -326,7 +326,8 @@ Click it for a draggable window listing the active session's edits, newest first
   first catches up on the ones it had not read yet. **Load older** then goes back within the new
   conversation.
 
-It works for Claude sessions, local and remote (SSH). Docker and other CLIs' sessions say so instead.
+It works for Claude sessions, local and remote (SSH). Docker sessions, other CLIs' sessions and
+tmux sessions opened outside Codeman say so instead.
 A remote session's images show no thumbnail (each would be one more SSH read); click one to
 preview it. A remote host that is asleep is never woken for the history: the window shows the
 stored edits with the SSH error on top.
