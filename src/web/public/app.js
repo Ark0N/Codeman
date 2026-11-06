@@ -10308,11 +10308,11 @@ class CodemanApp {
       // response re-reports the count, so a pane that starts keeping history
       // (claude switched to its inline view) goes back to the tail on the next
       // switch.
-      // A remote (ssh) or Docker session's local pane hosts a nested tmux client in the
-      // alternate screen, so it reports 0 while its byte tail is real scrollback.
+      // A remote (ssh), Docker or adopted session's local pane hosts a nested tmux client in
+      // the alternate screen, so it reports 0 while its byte tail is real scrollback.
       const shellSession = session?.mode === 'shell';
       const paneKeepsNoHistory =
-        !session?.remote && !session?.docker && this._paneHistoryLines?.get(sessionId) === 0;
+        !session?.remote && !session?.docker && !session?.adopt && this._paneHistoryLines?.get(sessionId) === 0;
       const useFullHistory = !shellSession && (paneKeepsNoHistory || !this._fullHistoryLoaded.has(sessionId));
       if (useFullHistory) this._fullHistoryLoaded.add(sessionId);
       const fetchStartedAt = performance.now();
@@ -10920,6 +10920,9 @@ class CodemanApp {
       // An SSE resync (handleInit) that landed mid-request rebuilds the list from
       // the server, which still had the session then.
       if (this.sessions.has(sessionId)) this._onSessionDeleted({ id: sessionId });
+      // The home screen read the outside-sessions list when the tab went, before this
+      // delete landed, so its row would say "Go to tab" with no tab until the next poll.
+      if (session?.adopt) void this.loadForeignSessions?.();
       if (killMux) {
         this.showToast('Session closed and tmux killed', 'success');
       } else {
@@ -10954,6 +10957,25 @@ class CodemanApp {
     const name = this.getSessionName(session);
     const sessionNameEl = document.getElementById('closeConfirmSessionName');
     sessionNameEl.textContent = name;
+
+    // ⚠️ An ADOPTED session has no "kill" outcome to offer. Its wrapper is the
+    // only thing Codeman owns; the server's killSession refuses to reach the
+    // foreign server at all (see the adopted early return in tmux-manager). So
+    // the red "Terminate the session completely" option is not merely redundant
+    // here, it is a false promise about someone else's live work — and the kind
+    // of false promise that stops a user closing the tab at all. Hide it, and say
+    // what actually happens instead.
+    const killBtn = document.getElementById('closeConfirmKillBtn');
+    const keepTitle = document.getElementById('closeConfirmKeepTitle');
+    const keepDesc = document.getElementById('closeConfirmKeepDesc');
+    const adopted = !!session.adopt;
+    if (killBtn) killBtn.style.display = adopted ? 'none' : '';
+    if (keepTitle) keepTitle.textContent = adopted ? 'Close Tab' : 'Remove Tab';
+    if (keepDesc) {
+      keepDesc.textContent = adopted
+        ? 'Detaches only. The tmux session keeps running for whoever started it.'
+        : 'Tmux session keeps running in background';
+    }
 
     // A session in a Codeman-managed git worktree also offers to remove the worktree
     // (git worktree remove, never forced) once the session is gone. Read now, before the
@@ -11014,7 +11036,18 @@ class CodemanApp {
     this.cancelCloseSession();
 
     if (sessionId) {
-      const gone = await this.closeSession(sessionId, killMux);
+      // ⚠️ For an ADOPTED session `killMux` does not mean what it means everywhere
+      // else. There is no agent of ours to terminate: the only thing it can reach
+      // is the WRAPPER we created, and the server's adopted branch in
+      // `killSession` tears that down without ever touching the foreign server.
+      // So "keep the tmux session running" has no useful meaning here: taking it
+      // literally leaves our wrapper AND its grouped view session parked on the
+      // user's own socket forever, one pair per tab they ever closed (measured:
+      // `codeman-view-*` survived every close and the row stayed "Go to tab" with
+      // no tab behind it). Always tear the wrapper down; the foreign session is
+      // structurally out of reach either way.
+      const adopted = !!this.sessions.get(sessionId)?.adopt;
+      const gone = await this.closeSession(sessionId, adopted ? true : killMux);
       if (gone && worktree) await this._removeWorktreeAfterClose?.(worktree, deleteBranch);
     }
   }

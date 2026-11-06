@@ -425,9 +425,11 @@ Object.assign(CodemanApp.prototype, {
         overview.state === 'not-a-repo'
           ? 'No git repository here: this session’s folder is not one, and none was found inside it (up to two levels down).'
           : overview.state === 'unsupported'
-            ? overview.reason === 'docker'
-              ? 'Git status is not available for Docker sessions, or for folders inside a Docker case workspace.'
-              : 'Git status is not available for remote (SSH) sessions.'
+            ? overview.reason === 'adopted'
+              ? 'Git status is not available for a tmux session opened outside Codeman.'
+              : overview.reason === 'docker'
+                ? 'Git status is not available for Docker sessions, or for folders inside a Docker case workspace.'
+                : 'Git status is not available for remote (SSH) sessions.'
             : `Could not read the repository: ${overview.error || 'git failed'}`;
       body.append(el('div', 'git-status-empty', why));
       clearChrome();

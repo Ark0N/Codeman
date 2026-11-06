@@ -569,9 +569,10 @@ export class WebServer extends EventEmitter {
     agentExited: (id) => !!this.sessions.get(id)?.paneExit,
     awaitingChoice: (id) => approvalInbox.listPending().some((item) => item.sessionId === id && item.kind !== 'idle'),
     // Remote (ssh) sessions keep their folder on another host, so received files have nowhere local to go.
+    // An adopted session's folder is the neutral wrapper folder, which its agent need not be able to read.
     sessionDir: (sessionId) => {
       const session = this.sessions.get(sessionId);
-      return session && !session.remote ? session.workingDir : undefined;
+      return session && !session.remote && !session.isAdopted ? session.workingDir : undefined;
     },
   });
   private teamWatcher: TeamWatcher = new TeamWatcher();
@@ -2207,7 +2208,9 @@ export class WebServer extends EventEmitter {
     // fs.watch()es it on the LOCAL disk, so a remote session only records the path: the fix plan stays
     // authoritative as for a local session (keeping the output-based completion guessers off), and its
     // file is read over ssh only on an explicit import (fix-plan/read).
-    if (!isExternalCliMode(session.mode)) {
+    // ⚠️ An ADOPTED session is skipped outright: Ralph is refused for one anyway, and its
+    // `workingDir` is the neutral wrapper folder, not the foreign pane's work.
+    if (!isExternalCliMode(session.mode) && !session.isAdopted) {
       if (session.remote) {
         session.ralphTracker.setRemoteWorkingDir(session.workingDir);
       } else {
@@ -2217,8 +2220,10 @@ export class WebServer extends EventEmitter {
 
     // Start watching for new images in this session's working directory (if enabled globally and per-session).
     // A remote session's workingDir is a path on the remote host, and the watcher watches it on the LOCAL
-    // disk, so it is skipped there (the per-session and app-wide toggles skip it too).
-    if ((await this.isImageWatcherEnabled()) && session.imageWatcherEnabled && !session.remote) {
+    // disk, so it is skipped there (the per-session and app-wide toggles skip it too). An ADOPTED session
+    // is skipped for the same reason as the Ralph watcher above: nothing in its wrapper folder is the
+    // foreign pane's work.
+    if ((await this.isImageWatcherEnabled()) && session.imageWatcherEnabled && !session.remote && !session.isAdopted) {
       imageWatcher.watchSession(session.id, session.workingDir);
     }
 
@@ -2305,6 +2310,9 @@ export class WebServer extends EventEmitter {
   ): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) return;
+    // ⚠️ A link scanned from an adopted pane was printed by a process on another host or in a
+    // container, while confinement here would be to this host's `/tmp`, the wrapper's folder.
+    if (session.isAdopted) return;
     const event =
       source === 'codex-generated'
         ? await registerGeneratedArtifactAttachment({
@@ -4152,6 +4160,14 @@ export class WebServer extends EventEmitter {
               // MuxSession.docker; state.json carries SessionState.docker), so recovery
               // rebuilds the `docker exec` launch instead of a broken local command.
               docker: muxSession.docker ?? savedState?.docker,
+              // Adoption metadata round-trips for the same reason remote/docker do,
+              // and one more: it is the ONLY thing that marks this session as
+              // wrapping a process Codeman never launched. Dropping it on recovery
+              // silently re-enabled respawn, Ralph and hook-backed waits against
+              // someone else's live tmux session after every server restart —
+              // measured, not hypothetical. The mux record is preferred because it
+              // is what `killSession`'s detach-not-kill guard already reads.
+              adopt: muxSession.adopt ?? savedState?.adopt,
               owner: recoveredOwner,
               // Tab lineage survives a restart. It is only decoration, so a parent
               // that did NOT come back is harmless: the frontend draws an edge only
@@ -4435,6 +4451,13 @@ export class WebServer extends EventEmitter {
     const workspaces = new Set<string>();
     for (const session of this.sessions.values()) {
       if (session.mode !== 'claude' || session.remote) continue;
+      // ⚠️ An ADOPTED session is not caught by the `remote` check above: its
+      // connection facts live on `adopt.remote` / `adopt.docker`, so a session
+      // wrapping someone's in-container or over-ssh claude looks local here.
+      // Its workspace was never Codeman's to begin with, so installing hooks
+      // there writes `.claude/settings.local.json` into the human's own repo —
+      // on EVERY restart, since this sweep runs from boot recovery.
+      if (session.isAdopted) continue;
       if (session.docker && !session.docker.hooksEnabled) continue;
       if (session.workingDir) workspaces.add(session.workingDir);
     }

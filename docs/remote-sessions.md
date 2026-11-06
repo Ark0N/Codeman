@@ -136,9 +136,9 @@ Key points:
   **login shell**, not the agent.
 - The **whole tmux invocation is a single shell-quoted ssh argument**, and the
   pane command is independently quoted, so a `remotePath` with spaces is safe.
-- **That argument reaches the far end verbatim** (#760): the launch goes to the
-  local `bash -c` in single quotes, so `$HOME`, `$PATH` and `$SHELL` are the
-  remote user's. In double quotes the local `sh` expanded them first, which sent
+- **That argument reaches the far end verbatim** (#760): the launch, an adopted
+  session's ssh attach included, goes to the local `bash -c` in single quotes, so
+  `$HOME`, `$PATH` and `$SHELL` are the remote user's. In double quotes the local `sh` expanded them first, which sent
   this host's home and PATH to the remote. ⚠️ Every `$` in a `commands.*` override
   now expands on the far end too, and a bare `$VAR` in an `extraSshOptions` value
   reaches `ssh` as those literal characters at launch, as it always did in the link
@@ -205,6 +205,12 @@ when the tab closes.
 - **`owned: false`** — discovered + attached; another Codeman owns the remote
   session. `remoteSessionName` holds its existing tmux name. Closing the tab
   **detaches**, never kills.
+
+⚠️ This covers `codeman-*` sessions on the `codeman-remote` socket, the ones another
+Codeman runs. A tmux session a HUMAN started on the host is a separate path:
+`GET /api/mux/foreign?remote=1` finds it and `POST /api/sessions/adopt` wraps it, with
+the connection on `Session.adopt.remote` and `session.remote` undefined. Closing that tab
+detaches too. See `docs/architecture-invariants.md#adopted-foreign-tmux-sessions`.
 
 ### Discovery
 

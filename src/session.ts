@@ -65,6 +65,7 @@ import {
   type SessionNameSource,
   type SessionWriteOptions,
   type PaneExit,
+  type SessionAdopt,
   type PromptCacheStatus,
   type StatusLineExporter,
   type KeepWarmStatus,
@@ -448,10 +449,25 @@ export function queryTmuxWindowSize(muxName: string, socket: string): { cols: nu
   return { cols: DEFAULT_PTY_COLS, rows: DEFAULT_PTY_ROWS };
 }
 
-export function resolveMuxAttachCwd(workingDir: string, remote?: SessionRemote, docker?: SessionDocker): string {
+export function resolveMuxAttachCwd(
+  workingDir: string,
+  remote?: SessionRemote,
+  docker?: SessionDocker,
+  adopt?: SessionAdopt
+): string {
   // Remote and docker sessions run the CLI elsewhere (ssh / docker exec); the LOCAL
   // wrapper pane never needs the workspace as its cwd, so launch it in /tmp.
-  return remote || docker ? '/tmp' : workingDir;
+  //
+  // ⚠️ An ADOPTED session needs the same treatment and does NOT get it from the
+  // two checks above: its connection facts live on `adopt.docker`/`adopt.remote`,
+  // so `session.docker` is undefined even for an in-container adoption. Its pane
+  // only attaches, so no folder on this host means anything to it. Measured against
+  // a real container, when `workingDir` still held the foreign pane's cwd: the local
+  // PTY spawn inherited `/workspace/pythonserver`, and the session came up with
+  // `pid: null` and a blank terminal while the wrapper tmux session and the
+  // in-container grouped view had both been created successfully, so it looked
+  // half-alive rather than failed.
+  return remote || docker || adopt ? '/tmp' : workingDir;
 }
 
 /**
@@ -881,6 +897,11 @@ export class Session extends EventEmitter {
   // local tmux + `docker exec`. The container is per-CASE (shared by sibling sessions).
   private readonly _docker?: SessionDocker;
 
+  // Adoption metadata, present when this session is a WRAPPER around a tmux
+  // session a human started outside Codeman. Its presence is the single switch
+  // that disables everything Codeman can only do to a process it launched.
+  private readonly _adopt?: SessionAdopt;
+
   // Owning username in multi-user mode (undefined in single-user). Stamped at create
   // from req.authUser and round-tripped through recovery like _remote/_docker.
   private _owner?: string;
@@ -1006,6 +1027,8 @@ export class Session extends EventEmitter {
       remote?: SessionRemote;
       /** Docker execution metadata for sessions launched inside a container via local tmux. */
       docker?: SessionDocker;
+      /** Adoption metadata for a wrapper around a human-started tmux session. */
+      adopt?: SessionAdopt;
       /** Owning username (multi-user mode); undefined in single-user. */
       owner?: string;
       /** Session that spawned this one — tab lineage decoration, resolved by the caller. */
@@ -1176,6 +1199,7 @@ export class Session extends EventEmitter {
     this._tmuxHistoryLimit = config.tmuxHistoryLimit ?? DEFAULT_TMUX_HISTORY_LIMIT;
     this._remote = config.remote;
     this._docker = config.docker;
+    this._adopt = config.adopt;
     this._owner = config.owner;
     this._discoveredMuxSession = config.discoveredMuxSession === true;
     // Restored so a record that says the agent exited survives a server restart
@@ -1336,6 +1360,25 @@ export class Session extends EventEmitter {
     return this._remote;
   }
 
+  /** Adoption metadata when this session wraps a human-started tmux session. */
+  get adopt(): SessionAdopt | undefined {
+    return this._adopt;
+  }
+
+  /**
+   * Is this a wrapper around a tmux session Codeman did not start?
+   *
+   * ⚠️ Deliberately NOT folded into `isExternalCliMode()`. That predicate answers
+   * "does this CLI render its own TUI", which is about the PROTOCOL. This one
+   * answers "did we launch the process", which is about AUTHORITY — an adopted
+   * session can be `mode: 'claude'` and still have no hooks installed, no
+   * `envOverrides`, no effort and no `--session-id` we chose. Conflating the two
+   * would silently grant claude-shaped automation over a process we do not own.
+   */
+  get isAdopted(): boolean {
+    return this._adopt !== undefined;
+  }
+
   /**
    * `deepSeekConfig.statusReporting` verbatim: `undefined` when the caller sent
    * none (i.e. ON), `false` when the user disarmed the status bridge for this
@@ -1451,13 +1494,20 @@ export class Session extends EventEmitter {
   /**
    * True when a tmux pane's death would mean THIS session's agent has exited.
    *
-   * Four shapes fail the test, and each would otherwise publish a death that is
+   * Five shapes fail the test, and each would otherwise publish a death that is
    * not the agent's. A direct-PTY session owns no pane at all. A remote SSH
    * session's local pane holds the ssh client, whose death means a transport
    * drop OR an exit, which is the ambiguity PR #355 was about. A docker case's
    * local pane holds a `docker exec` into the container's own tmux.
    *
-   * The fourth is a session rebuilt from the socket. Absent `remote`/`docker`
+   * ⚠️ An ADOPTED session is the same shape for a different reason: its pane runs
+   * `tmux attach` to a session a human started, never the agent. That attach exiting
+   * with 0 says the connection ended or its owner closed the foreign session — neither
+   * means this session finished, and neither is Codeman's to clear the tab for. Without
+   * this, the clean-exit sweep (`pane-exit-sweep.ts`) would close someone else's live
+   * session's tab the moment they detached from it themselves.
+   *
+   * The fifth is a session rebuilt from the socket. Absent `remote`/`docker`/`adopt`
    * normally means "this is local", but on a discovered record it only means
    * "Codeman never found the metadata": the synthetic `restored-<fragment>` id
    * matches no `state.json` entry, so a remote session rediscovered after
@@ -1466,7 +1516,7 @@ export class Session extends EventEmitter {
    */
   private get paneExitApplies(): boolean {
     if (this._discoveredMuxSession) return false;
-    return this._useMux && this._muxSession !== null && !this._remote && !this._docker;
+    return this._useMux && this._muxSession !== null && !this._remote && !this._docker && !this._adopt;
   }
 
   /** What Codeman last observed of this pane's agent, or undefined for UNKNOWN. */
@@ -2371,6 +2421,7 @@ export class Session extends EventEmitter {
       liveWorktree: this._liveWorktree,
       remote: this._remote,
       docker: this._docker,
+      adopt: this._adopt,
       owner: this._owner,
       parentSessionId: this._parentSessionId,
       currentTaskId: this._currentTaskId,
@@ -2664,7 +2715,7 @@ export class Session extends EventEmitter {
           name: 'xterm-256color',
           cols: ptyCols,
           rows: ptyRows,
-          cwd: resolveMuxAttachCwd(this.workingDir, this._remote, this._docker),
+          cwd: resolveMuxAttachCwd(this.workingDir, this._remote, this._docker, this._adopt),
           // COD-75: a CLI that declares `export COLORTERM=truecolor` gets it on the ATTACH
           // client too. Both sides read the same registry entry, which is what stops the
           // attach client and the tmux session from disagreeing — they used to be two
@@ -2817,6 +2868,7 @@ export class Session extends EventEmitter {
       historyLimit: this._tmuxHistoryLimit,
       remote: this._remote,
       docker: this._docker,
+      adopt: this._adopt,
       owner: this._owner,
     };
     return this._withCustomModelLaunchModel(options);
@@ -3198,8 +3250,10 @@ export class Session extends EventEmitter {
     // wheel-forwarding to Claude's own transcript (the only route to history in
     // repaint/alt-screen mode; issue #154). Remote sessions run claude on
     // another host, so a local probe wouldn't reflect their version; they get
-    // their own over-ssh probe below. Cached process-wide, best-effort.
-    if (cliNeedsVersionProbe(this.mode) && !this._remote && !this._docker && !this._cliVersion) {
+    // their own over-ssh probe below. Cached process-wide, best-effort. An adopted
+    // session's agent is a process someone else started, possibly elsewhere, so
+    // the local binary says nothing about it either.
+    if (cliNeedsVersionProbe(this.mode) && !this._remote && !this._docker && !this._adopt && !this._cliVersion) {
       const probedVersion = resolveSessionCliVersion(this.mode);
       if (probedVersion) {
         this._cliVersion = probedVersion;
@@ -3302,6 +3356,7 @@ export class Session extends EventEmitter {
             historyLimit: this._tmuxHistoryLimit,
             remote: this._remote,
             docker: this._docker,
+            adopt: this._adopt,
             owner: this._owner,
           },
           spawnErrLabel: 'mux attachment',
@@ -3611,6 +3666,14 @@ export class Session extends EventEmitter {
     // Stopped: the kill itself produces PTY output, and the buffer tail still holds the
     // dialog, so without this a deleted session kept "answering" it for several seconds.
     if (this._trustDialogAccepted || this._isStopped) return;
+    // ⚠️ Never answer a dialog in someone else's pane. An adopted session wraps a
+    // claude the human started, and this scan reads the pane and SENDS KEYS for 90
+    // seconds after `startInteractive()`, which boot recovery re-runs for every
+    // wrapper, so it is not a one-time window at adoption.
+    if (this._adopt) {
+      this._trustDialogAccepted = true;
+      return;
+    }
     const now = Date.now();
     if (now - this._interactiveStartedAt > TRUST_DIALOG_WINDOW_MS) {
       this._trustDialogAccepted = true; // window closed; anything matching now is not the dialog
@@ -4367,6 +4430,7 @@ export class Session extends EventEmitter {
             historyLimit: this._tmuxHistoryLimit,
             remote: this._remote,
             docker: this._docker,
+            adopt: this._adopt,
             owner: this._owner,
           },
           createSessionOptions: {
@@ -4379,6 +4443,7 @@ export class Session extends EventEmitter {
             historyLimit: this._tmuxHistoryLimit,
             remote: this._remote,
             docker: this._docker,
+            adopt: this._adopt,
             owner: this._owner,
           },
           spawnErrLabel: 'shell mux attachment',
@@ -4386,7 +4451,10 @@ export class Session extends EventEmitter {
 
         // For NEW sessions: clear by sending 'clear' command to the shell
         // For RESTORED sessions: don't clear - we want to see the existing output
-        if (!isRestored) {
+        // ⚠️ Never for an ADOPTED one: this pane is someone else's, so the write would land
+        // on their half-typed command and submit it (measured), or in whatever is reading
+        // stdin. `shell` is also the mode of anything the classifier cannot name.
+        if (!isRestored && !this._adopt) {
           setTimeout(() => {
             if (this.ptyProcess) {
               this._terminalBuffer.clear();
@@ -5139,6 +5207,7 @@ export class Session extends EventEmitter {
       (!allowLease && this.guardedInputHeld) ||
       this.remote ||
       this.docker ||
+      this._adopt ||
       this.paneExit ||
       !this._muxSession
     )

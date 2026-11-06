@@ -2757,8 +2757,9 @@ Object.assign(CodemanApp.prototype, {
   /** Copy the open session's working folder (Session Options > Session > Working folder). */
   async copySessionPath() {
     const session = this.sessions.get(this.editingSessionId);
-    if (!session?.workingDir) return;
-    const ok = await this._copyText(session.workingDir);
+    const path = session?.adopt?.paneCurrentPath || session?.workingDir;
+    if (!path) return;
+    const ok = await this._copyText(path);
     this.showToast(ok ? 'Path copied' : 'Copy failed', ok ? 'success' : 'error');
   },
 
@@ -2833,8 +2834,9 @@ Object.assign(CodemanApp.prototype, {
     this.updateGitFetchStatus(sessionId);
     const imageWatcherToggle = document.getElementById('modalImageWatcherEnabled');
     imageWatcherToggle.checked = session.imageWatcherEnabled ?? true;
-    // The server never watches a remote session's directory (it is on another host), so the row is hidden.
-    imageWatcherToggle.closest('.set-row').style.display = session.remote ? 'none' : '';
+    // The server never watches a remote session's directory (it is on another host), nor an adopted
+    // session's (a neutral wrapper folder), so the row is hidden.
+    imageWatcherToggle.closest('.set-row').style.display = session.remote || session.adopt ? 'none' : '';
     document.getElementById('modalFlickerFilterEnabled').checked = session.flickerFilterEnabled ?? false;
 
     // Populate session name input with prefix/suffix split
@@ -2853,17 +2855,21 @@ Object.assign(CodemanApp.prototype, {
     }
 
     // Working folder: the path the CLI was launched in on the Codeman host
+    // (an adopted session's is the neutral wrapper folder, so the row shows where the pane was)
     const _pathEl = document.getElementById('modalSessionPath');
-    _pathEl.textContent = session.workingDir || '';
-    _pathEl.title = session.workingDir || '';
-    document.getElementById('modalSessionPathCopy').disabled = !session.workingDir;
+    const _shownPath = session.adopt?.paneCurrentPath || session.workingDir || '';
+    _pathEl.textContent = _shownPath;
+    _pathEl.title = _shownPath;
+    document.getElementById('modalSessionPathCopy').disabled = !_shownPath;
     // A remote session's workingDir is the REMOTE path; a docker session's is the
     // host bind-mount source the container sees.
-    document.getElementById('modalSessionPathDesc').textContent = session.remote
-      ? "Where this session's CLI runs, on the remote host it reaches over SSH, not on this machine."
-      : session.docker
-        ? "On the machine hosting Codeman, mounted into the Docker container this session's CLI runs in."
-        : "Where this session's CLI runs, on the machine hosting Codeman.";
+    document.getElementById('modalSessionPathDesc').textContent = session.adopt
+      ? 'Where the tmux session was when it was opened here. It was started outside Codeman and keeps running if this tab closes.'
+      : session.remote
+        ? "Where this session's CLI runs, on the remote host it reaches over SSH, not on this machine."
+        : session.docker
+          ? "On the machine hosting Codeman, mounted into the Docker container this session's CLI runs in."
+          : "Where this session's CLI runs, on the machine hosting Codeman.";
 
     // Initialize color picker with current session color
     const currentColor = session.color || 'default';
@@ -2890,11 +2896,11 @@ Object.assign(CodemanApp.prototype, {
       if (respawnTabBtn) respawnTabBtn.style.display = '';
     }
 
-    // Git is local git only: a remote (SSH) or Docker case answers 'unsupported' on both git routes and is
-    // never fetched by the interval scheduler, so its Git tab has nothing to say and its rail entry goes
-    // hidden the same way.
+    // Git is local git only: a remote (SSH) or Docker case, or an adopted session, answers 'unsupported' on
+    // both git routes and is never fetched by the interval scheduler, so its Git tab has nothing to say and
+    // its rail entry goes hidden the same way.
     const gitTabBtn = document.querySelector('#sessionOptionsModal .set-rail-item[data-tab="git"]');
-    if (gitTabBtn) gitTabBtn.style.display = session.remote || session.docker ? 'none' : '';
+    if (gitTabBtn) gitTabBtn.style.display = session.remote || session.docker || session.adopt ? 'none' : '';
 
     // Populate Ralph Wiggum form with current session values (skip for external CLI sessions)
     if (!isExternalCli) {
@@ -6112,7 +6118,7 @@ Object.assign(CodemanApp.prototype, {
 
   /** The Codeman-managed worktree a session runs in, or null (see managedWorktreeOfDir). */
   _managedWorktreeOfSession(session) {
-    if (!session || session.remote || session.docker) return null;
+    if (!session || session.remote || session.docker || session.adopt) return null;
     return managedWorktreeOfDir(session.workingDir, this.cases);
   },
 

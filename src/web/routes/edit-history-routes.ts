@@ -99,6 +99,7 @@ export function registerEditHistoryRoutes(app: FastifyInstance, ctx: SessionPort
       mode: session.mode,
       remote: session.remote,
       docker: session.docker,
+      adopt: session.adopt,
       claudeSessionId: session.claudeSessionId,
       claudeConfigDir: session.claudeConfigDir(),
     };

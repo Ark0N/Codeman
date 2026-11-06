@@ -174,6 +174,7 @@ describe('unsupportedReason', () => {
     expect(unsupportedReason(remote)).toBeUndefined();
     expect(unsupportedReason({ ...remote, docker: { image: 'x' } })).toBe('docker');
     expect(unsupportedReason({ ...local, docker: { image: 'x' } })).toBe('docker');
+    expect(unsupportedReason({ ...local, adopt: { location: 'local' } })).toBe('adopted');
     expect(unsupportedReason({ ...local, mode: 'shell' })).toBe('mode');
   });
 });

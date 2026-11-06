@@ -79,6 +79,8 @@ export interface EditHistorySession {
   mode: string;
   remote: SessionRemote | undefined;
   docker?: unknown;
+  /** Set on a wrapper around a foreign tmux session: Codeman holds no transcript id for what runs there. */
+  adopt?: unknown;
   claudeSessionId: string | null;
   /** The session's own `CLAUDE_CONFIG_DIR` (Codeman env override), if it has one. */
   claudeConfigDir?: string;
@@ -129,6 +131,7 @@ export function remoteTranscriptIds(session: EditHistorySession, storedTranscrip
 /** Why a session has no edit history, or undefined when it can have one. */
 export function unsupportedReason(session: EditHistorySession): string | undefined {
   if (session.docker) return 'docker';
+  if (session.adopt) return 'adopted';
   if (getCli(session.mode)?.capabilities.transcript !== 'claude-jsonl') return 'mode';
   return undefined;
 }

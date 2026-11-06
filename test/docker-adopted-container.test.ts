@@ -218,8 +218,15 @@ describe('adopted container: the host is not required to have the CLI', () => {
     expect(src.match(/if \(mode === '[a-z]+' && !cliDir\)/g)).toBeNull();
   });
 
-  it('derives the flag from the docker metadata the session already carries', () => {
-    expect(src).toContain('const cliRunsInContainer = !!docker;');
+  it('derives the flag from the location metadata the session already carries', () => {
+    // Adoption joined the condition for the same reason docker is in it: an
+    // adopted session's CLI was started by a human in a process Codeman never
+    // spawned, so the host binary is irrelevant there too — and demanding it
+    // would reject adopting a claude that lives in a container, on an ssh host,
+    // or simply outside the server process's PATH (the systemd/launchd case).
+    // What the assertion still pins is that the flag comes from the session's
+    // OWN metadata rather than from anything ambient.
+    expect(src).toContain('const cliRunsInContainer = !!docker || !!adopt;');
   });
 });
 

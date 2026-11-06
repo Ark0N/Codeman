@@ -10,6 +10,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   TmuxManager,
+  buildAdoptSessionCommand,
   buildCodexCommand,
   buildRemoteKillCommand,
   buildRemoteLaunchCommand,
@@ -22,6 +23,7 @@ import {
 } from '../src/tmux-manager.js';
 import { execSync, exec } from 'node:child_process';
 import type { MuxSession } from '../src/mux-interface.js';
+import type { SessionAdopt } from '../src/types/session.js';
 
 // ============================================================================
 // Unit Tests (mocked)
@@ -969,6 +971,79 @@ describe('TmuxManager (unit)', () => {
       } finally {
         nonTestManager.destroy();
       }
+    });
+
+    describe('an adopted launch reaches bash exactly as built', () => {
+      // A single quote, a real newline and `$HOME` in one value. Discovery refuses such a
+      // socket path, so this measures the quoting alone: `$HOME/…:$PATH` in the ssh line and
+      // the `'\''` of every nested quote have to come through the same way.
+      const foreign = {
+        socketPath: "/tmp/it's\n$HOME/sock",
+        targetSession: 'work',
+        viewSession: 'codeman-view-abc12345',
+      };
+      const adoptions: [string, SessionAdopt][] = [
+        ['local', { ...foreign, location: 'local' }],
+        [
+          'docker',
+          {
+            ...foreign,
+            location: 'docker',
+            docker: { hostId: 'local', label: 'Local', engine: 'docker', containerName: 'their-box' },
+          },
+        ],
+        [
+          'ssh',
+          {
+            ...foreign,
+            location: 'remote',
+            remote: { hostId: 'gpu-box', label: 'GPU Box', host: '10.0.0.42', username: 'ubuntu' },
+          },
+        ],
+      ];
+      const respawnLine = () =>
+        [...mockedExecSync.mock.calls, ...vi.mocked(exec).mock.calls]
+          .map(([cmd]) => cmd)
+          .find((cmd) => typeof cmd === 'string' && cmd.includes(' respawn-pane ')) as string;
+
+      it.each(adoptions)('at create: %s', async (_location, adopt) => {
+        const sessionId = 'abc12345-1234-5678-90ab-cdef12345681';
+        const NonTestTmuxManager = await importWithTmuxCommandsEnabled();
+        const nonTestManager = new NonTestTmuxManager();
+
+        try {
+          await nonTestManager.createSession({ sessionId, workingDir: '/tmp', mode: 'shell', adopt });
+          // Equal to the built line: no `cd`, nothing expanded here, nothing re-escaped.
+          expect(await bashArgAfterLocalShell(respawnLine())).toBe(buildAdoptSessionCommand(adopt, sessionId));
+        } finally {
+          nonTestManager.destroy();
+        }
+      });
+
+      it.each(adoptions)('at respawn: %s', async (_location, adopt) => {
+        const sessionId = 'respawnadopted';
+        const NonTestTmuxManager = await importWithTmuxCommandsEnabled();
+        const nonTestManager = new NonTestTmuxManager();
+        nonTestManager.registerSession({
+          sessionId,
+          muxName: 'codeman-abcd7777',
+          pid: 1000,
+          createdAt: Date.now(),
+          workingDir: '/tmp',
+          mode: 'shell',
+          attached: false,
+          adopt,
+        });
+
+        try {
+          // No `adopt` here: a respawn takes it from the tracked session, so a caller
+          // that forgets the field still re-attaches rather than launching an agent.
+          await nonTestManager.respawnPane({ sessionId, workingDir: '/tmp', mode: 'shell' });
+          expect(await bashArgAfterLocalShell(respawnLine())).toBe(buildAdoptSessionCommand(adopt, sessionId));
+        } finally {
+          nonTestManager.destroy();
+        }
+      });
     });
 
     it('changes the global history default on tmux versions that cannot resize panes', async () => {
