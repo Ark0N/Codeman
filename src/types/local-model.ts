@@ -129,11 +129,14 @@ export interface LocalHarnessEntry {
 
 /**
  * Memory bandwidth of one chip family. `LocalModelCatalog.chips` is ordered most specific first
- * ('M4 Max' before 'M4') and the first row whose `match` occurs in `HardwareFacts.chip` wins. A
- * chip that matches no row has an UNKNOWN speed: a bandwidth is never guessed.
+ * ('M4 Max' before 'M4') and the first row that names `HardwareFacts.chip` wins. A row names a
+ * chip when the chip string ENDS with its `match`, starting at the beginning or after a space,
+ * case ignored (`chipNameMatches()` in src/config/local-model-catalog.ts): 'M4' is not the chip
+ * of 'Apple M4 Pro', and a variant the table has never heard of ('Apple M6 Pro') matches no row.
+ * A chip that matches no row has an UNKNOWN speed: a bandwidth is never guessed.
  */
 export interface ChipEntry {
-  /** Text that must occur in the chip string ('M4 Max'). */
+  /** The chip name the chip string must end with ('M4 Max'). */
   match: string;
   /** Memory bandwidth in GB/s. */
   gbps: number;
@@ -305,7 +308,7 @@ export interface Candidate {
   downloadBytes: number;
   /** `downloadBytes` as decimal GB text, no unit. */
   downloadGb: string;
-  /** `needBytes / Recommendation.budgetBytes` (0.83). */
+  /** `needBytes / Recommendation.budgetBytes`, rounded to three decimals (0.83). The fit grade is decided on the unrounded ratio. */
   budgetShare: number;
   /** A candidate in a `Recommendation` is never `out`. */
   fit: Exclude<FitGrade, 'out'>;
@@ -339,7 +342,7 @@ export interface Recommendation {
   pick?: Candidate;
   /** The next models that fit (at most four, each at its best context and harness), best first. Empty when `verdict` is `none`. */
   alternatives: Candidate[];
-  /** `DeviceBudget.budgetBytes`. 0 when the budget could not be computed (not macOS). */
+  /** `DeviceBudget.budgetBytes`. 0 when no budget is computed: not macOS, or a Mac without Apple silicon. */
   budgetBytes: number;
   /** `budgetBytes` as decimal GB text, no unit. */
   budgetGb: string;
