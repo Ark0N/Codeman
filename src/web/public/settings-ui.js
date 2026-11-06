@@ -1940,10 +1940,14 @@ Object.assign(CodemanApp.prototype, {
     // `docker-compose` self-updates in place like `git` does — the container
     // restarts itself. Anything else cannot.
     if (data.installKind && data.installKind !== 'git' && data.installKind !== 'docker-compose') {
+      // `archive` = installed by install.sh on a machine with no working git: the
+      // installer replaces it with a fresh build, so point there, not at npm.
       const hint =
         data.supervisor === 'docker-compose'
           ? 'Update from the Docker host with <code>docker/Start-Codeman.sh</code>.'
-          : 'Update with <code>npm i -g aicodeman@latest</code>.';
+          : data.installKind === 'archive'
+            ? 'It was installed without git. Re-run the installer to update: <code>curl -fsSL https://getcodeman.com/install | bash</code>'
+            : 'Update with <code>npm i -g aicodeman@latest</code>.';
       this._setUpdateResult(`This install can't update itself (${escapeHtml(data.installKind)}). ${hint}`);
       return;
     }

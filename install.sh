@@ -17,6 +17,9 @@
 #   --yes, -y                       Take every default; still waits on a Tailscale login URL
 #   --password <p>                  Dashboard password (visible in `ps`; prefer CODEMAN_PASSWORD)
 #   --port <n>                      Port Codeman listens on (default 3000)
+#   --no-admin                      Never use sudo or Homebrew: download Node.js and tmux into
+#                                   the home folder instead (chosen by itself when this account
+#                                   has no administrator rights)
 #   --help, -h                      Print this text
 #
 # Environment variables:
@@ -40,6 +43,12 @@
 #                               front it with `tailscale serve` HTTPS (never
 #                               installs Tailscale in non-interactive runs)
 #   CODEMAN_TAILSCALE_NAME    - Rename this machine on the tailnet (same as --name)
+#   CODEMAN_NO_ADMIN          - 1: install without administrator rights (same as
+#                               --no-admin); 0: always use system packages, even
+#                               when this account looks like it has no such rights
+#   CODEMAN_TARBALL_URL       - Source archive (.tar.gz) to install from when no
+#                               working git is available (default: the GitHub
+#                               archive of CODEMAN_REPO_URL at CODEMAN_BRANCH)
 #
 # Subcommands:
 #   install.sh update       - Update an existing install
@@ -56,12 +65,46 @@ set -euo pipefail
 # ============================================================================
 
 INSTALL_DIR="${CODEMAN_INSTALL_DIR:-$HOME/.codeman/app}"
+# "$INSTALL_DIR.new" and ".old" must sit beside the install: with a trailing
+# slash they land inside it, and every archive update fails at the final swap.
+while [[ "$INSTALL_DIR" == */ && "$INSTALL_DIR" != "/" ]]; do
+    INSTALL_DIR="${INSTALL_DIR%/}"
+done
+# `docker run -u` gives a process no USER, and set -u turns every message that
+# prints it into a crash.
+USER="${USER:-$(id -un 2>/dev/null || true)}"
 REPO_URL="${CODEMAN_REPO_URL:-https://github.com/Ark0N/Codeman.git}"
 BRANCH="${CODEMAN_BRANCH:-master}"
 MIN_NODE_VERSION=18
 TARGET_NODE_VERSION="${CODEMAN_NODE_VERSION:-22}"
 NONINTERACTIVE="${CODEMAN_NONINTERACTIVE:-0}"
 SKIP_SYSTEMD="${CODEMAN_SKIP_SYSTEMD:-0}"
+
+# Install without administrator rights (see "No-admin route" below): 1 = on
+# (--no-admin), 0 = never, empty = decided from what this account may do
+# (resolve_admin_mode). NO_ADMIN_REASON is the one-line "why" shown to the user.
+NO_ADMIN="${CODEMAN_NO_ADMIN:-}"
+NO_ADMIN_REASON=""
+# The one reason that can be wrong, so the messages name a way back for it
+# (no_admin_override_hint).
+NO_ADMIN_UNCONFIRMED="could not confirm that this account may use sudo"
+# Where the no-admin route keeps what it downloads (Node.js, tmux). Inside the
+# data directory, so one folder holds everything Codeman put on the machine.
+RUNTIME_DIR="$HOME/.codeman/runtime"
+# The tmux project's own binaries (https://github.com/tmux/tmux-builds). It
+# publishes no checksum file, so the SHA-256 of every asset of this version is
+# pinned in tmux_build_sha256 and a download that does not match is refused.
+# Bump the version and all four digests together.
+TMUX_BUILD_VERSION="3.7c"
+# Written into the install directory when the source came from an archive
+# instead of a git clone. The in-app updater reads the same file name
+# (ARCHIVE_INSTALL_MARKER in src/web/self-update.ts) to say how such an install
+# updates; test/install-sh-invariants.test.ts pins the two to each other.
+SOURCE_MARKER=".install-source"
+# Set while a fresh source tree is being built beside an existing archive
+# install (install_or_update_repo); finish_source_swap moves it into place once
+# the build has succeeded.
+SOURCE_STAGING=""
 
 # Network binding chosen during install (choose_network_binding). Empty
 # BIND_HOST means "not chosen" (e.g. the update path) and falls back to the
@@ -322,8 +365,14 @@ cleanup() {
         error "Failed while: $CURRENT_STEP (see the output above). Fix the cause and re-run this installer."
     fi
     if [[ $exit_code -ne 0 && "$INSTALL_STARTED" == "1" ]]; then
-        error "Installation failed. Partial installation may remain at $INSTALL_DIR"
-        error "To retry, run the installer again or remove the directory manually."
+        if [[ -n "$SOURCE_STAGING" ]]; then
+            # The new tree was being built beside the old one and never swapped in.
+            error "Update failed. The existing install at $INSTALL_DIR is unchanged."
+            error "The unfinished new copy is in $SOURCE_STAGING; the next run replaces it."
+        else
+            error "Installation failed. Partial installation may remain at $INSTALL_DIR"
+            error "To retry, run the installer again or remove the directory manually."
+        fi
         if [[ -s "$LOG_FILE" ]]; then
             error "Step output was saved to $LOG_FILE"
         fi
@@ -431,10 +480,22 @@ check_curl_or_wget() {
     return 1
 }
 
+# DOWNLOADER is set by check_curl_or_wget, which only main() used to call: a
+# subcommand that downloads (`update` of an archive install, `cloudflared`,
+# `tailscale`) reached these two with it unset and died on `set -u` with the
+# message swallowed by the step log. So they resolve it themselves.
+require_downloader() {
+    if [[ -n "${DOWNLOADER:-}" ]] || check_curl_or_wget; then
+        return 0
+    fi
+    die "curl or wget is required but neither is installed. Please install one first."
+}
+
 download() {
     local url="$1"
     local output="$2"
 
+    require_downloader
     if [[ "$DOWNLOADER" == "curl" ]]; then
         curl -fsSL "$url" -o "$output"
     else
@@ -445,6 +506,7 @@ download() {
 download_to_stdout() {
     local url="$1"
 
+    require_downloader
     if [[ "$DOWNLOADER" == "curl" ]]; then
         curl -fsSL "$url"
     else
@@ -474,8 +536,23 @@ check_npm() {
     command -v npm &>/dev/null
 }
 
+# A git on PATH is not proof of a working git. On a Mac without the Xcode
+# Command Line Tools, /usr/bin/git is Apple's stub: running it opens the
+# "install the developer tools" dialog and exits non-zero, so that one is
+# judged by `xcode-select -p` and NEVER executed. Any other git is asked for
+# its version, which also rules out a broken one.
 check_git() {
-    command -v git &>/dev/null
+    local git_bin
+    git_bin=$(command -v git 2>/dev/null) || return 1
+    if [[ "$(uname -s)" == "Darwin" && "$git_bin" == "/usr/bin/git" ]]; then
+        local dev_dir
+        dev_dir=$(xcode-select -p 2>/dev/null) || return 1
+        if [[ -n "$dev_dir" && -x "$dev_dir/usr/bin/git" ]]; then
+            return 0
+        fi
+        return 1
+    fi
+    "$git_bin" --version >/dev/null 2>&1 < /dev/null
 }
 
 check_tmux() {
@@ -755,6 +832,11 @@ offer_ai_cli_install() {
             curl_only_skipped=$((curl_only_skipped + 1))
             continue
         fi
+        # Same reasoning for a Homebrew command: it cannot run where there is no
+        # Homebrew, and the no-admin route never installs one.
+        if [[ "${CLI_INSTALL_CMD_TRUSTED[$i]}" == brew\ * ]] && { [[ "$NO_ADMIN" == "1" ]] || ! command -v brew &>/dev/null; }; then
+            continue
+        fi
         offer_idx[${#offer_idx[@]}]=$i
     done
 
@@ -857,9 +939,92 @@ get_cloudflared_path() {
 # Dependency Installation
 # ============================================================================
 
+# True when this account is in a group that normally carries administrator
+# rights: admin on macOS, sudo or wheel (or admin) on Linux.
+user_in_admin_group() {
+    local group
+    for group in $(id -Gn 2>/dev/null); do
+        case "$group" in
+            admin|sudo|wheel) return 0 ;;
+        esac
+    done
+    return 1
+}
+
+# Decide once whether this run may ask for administrator rights, and switch to
+# the no-admin route (below) when it may not. An explicit --no-admin or
+# CODEMAN_NO_ADMIN=0/1 wins. Otherwise root has them; a Mac account outside the
+# admin group does not (unless a Homebrew it can write to is already there);
+# on Linux an account has none without sudo, or when it is outside the admin
+# groups AND sudo will not run without a password. That last one is a judgment,
+# not a fact: an account sudoers lists by name, with a password, lands there
+# too, because nothing can read sudoers without a probe that reports to the
+# administrator. So it says "could not confirm", and every message that ends or
+# sums up the route names CODEMAN_NO_ADMIN=0 for it.
+#
+# Never decided by trying `sudo -v`: that asks for a password, and a wrong
+# answer from an account that may not use sudo is reported to the machine's
+# administrator. `sudo -n` never asks.
+resolve_admin_mode() {
+    case "$NO_ADMIN" in
+        1) [[ -n "$NO_ADMIN_REASON" ]] || NO_ADMIN_REASON="--no-admin"; return 0 ;;
+        0) return 0 ;;
+    esac
+    NO_ADMIN="0"
+    if [[ $EUID -eq 0 ]]; then
+        return 0
+    fi
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        if user_in_admin_group; then
+            return 0
+        fi
+        if command -v brew &>/dev/null && [[ -w "$(brew --prefix 2>/dev/null)" ]]; then
+            return 0
+        fi
+        NO_ADMIN="1"
+        NO_ADMIN_REASON="this account is not an administrator of this Mac"
+        return 0
+    fi
+    if ! command -v sudo &>/dev/null; then
+        NO_ADMIN="1"
+        NO_ADMIN_REASON="sudo is not installed"
+        return 0
+    fi
+    if user_in_admin_group || sudo -n true 2>/dev/null; then
+        return 0
+    fi
+    NO_ADMIN="1"
+    NO_ADMIN_REASON="$NO_ADMIN_UNCONFIRMED"
+    return 0
+}
+
+# The way back to sudo, with a leading space so it can end a sentence, for a
+# route chosen because the rights could not be confirmed. Nothing for any other
+# reason: --no-admin asked for this route, and a sudo that is missing or refused
+# has no way back to offer.
+no_admin_override_hint() {
+    if [[ "$NO_ADMIN_REASON" == "$NO_ADMIN_UNCONFIRMED" ]]; then
+        printf '%s' " If this account can use sudo, run this again with CODEMAN_NO_ADMIN=0 set (for the install line: curl -fsSL https://getcodeman.com/install | CODEMAN_NO_ADMIN=0 bash)."
+    fi
+    return 0
+}
+
+# The same hint on a line of its own, for a message that does not end the run.
+print_no_admin_override_hint() {
+    local hint=""
+    hint=$(no_admin_override_hint)
+    if [[ -n "$hint" ]]; then
+        echo -e "  ${DIM}${hint# }${NC}" >&2
+    fi
+    return 0
+}
+
 ensure_sudo() {
     if [[ $EUID -eq 0 ]]; then
         return 0
+    fi
+    if [[ "$NO_ADMIN" == "1" ]]; then
+        die "This step needs administrator rights, and this run installs without them${NO_ADMIN_REASON:+ ($NO_ADMIN_REASON)}.$(no_admin_override_hint)"
     fi
     if ! command -v sudo &>/dev/null; then
         die "sudo is required but not installed. Please install packages manually or run as root."
@@ -880,6 +1045,11 @@ ensure_sudo() {
 run_as_root() {
     if [[ $EUID -eq 0 ]]; then
         "$@"
+    elif [[ "$NO_ADMIN" == "1" ]]; then
+        # Every caller checks NO_ADMIN first; refusing here keeps a call site
+        # that was missed from opening a sudo password prompt.
+        error "Not running '$1' as root: this run installs without administrator rights."
+        return 1
     else
         sudo "$@"
     fi
@@ -1215,6 +1385,477 @@ install_cloudflared_suse() {
 }
 
 # ============================================================================
+# No-admin route: everything into the home folder, no administrator rights
+# ============================================================================
+#
+# What Codeman itself writes was always under $HOME: the app, the `codeman`
+# symlink, the user-level service. Administrator rights were only ever spent on
+# what it needs first (system packages for Node.js, tmux and git; Homebrew on a
+# Mac). This route supplies those without them:
+#
+#   Node.js  the official tarball from nodejs.org, checked against the
+#            SHASUMS256.txt published beside it, unpacked to $RUNTIME_DIR/node
+#   tmux     the tmux project's own build, checked against the digest pinned in
+#            tmux_build_sha256, in $RUNTIME_DIR/bin (linked from ~/.local/bin)
+#   git      never installed: where no git works, the source comes as an
+#            archive (fetch_source_archive) and such an install updates by
+#            re-running this installer
+#
+# Two things it cannot supply, both checked BEFORE anything is downloaded
+# (no_admin_blocker): a C/C++ toolchain on Linux, where node-pty compiles from
+# source, and a tmux for a Mac older than macOS 15, the deployment target of
+# the official build.
+#
+# Rule for every function between this header and "End of the no-admin route":
+# none of them runs sudo, ensure_sudo, run_as_root, sudo_session_*, Homebrew or
+# `xcode-select --install` (pinned by test/install-sh-invariants.test.ts).
+
+# sha256_file <path>: the file's SHA-256 in lowercase hex. Fails when the
+# machine has no tool for it; a download is never unpacked unverified.
+sha256_file() {
+    local file="$1" out=""
+    if command -v sha256sum &>/dev/null; then
+        out=$(sha256sum "$file" 2>/dev/null) || return 1
+    elif command -v shasum &>/dev/null; then
+        out=$(shasum -a 256 "$file" 2>/dev/null) || return 1
+    elif command -v openssl &>/dev/null; then
+        out=$(openssl dgst -sha256 -r "$file" 2>/dev/null) || return 1
+    else
+        return 1
+    fi
+    printf '%s' "${out%% *}" | tr 'A-F' 'a-f'
+}
+
+# verify_sha256 <path> <expected hex>
+verify_sha256() {
+    local file="$1" want="$2" got=""
+    [[ -n "$want" ]] || return 1
+    got=$(sha256_file "$file") || return 1
+    [[ "$got" == "$want" ]]
+}
+
+# The platform part of a Node.js tarball name; fails where nodejs.org ships
+# none that this route supports.
+userspace_node_platform() {
+    case "$1-$2" in
+        linux-x64)   printf 'linux-x64' ;;
+        linux-arm64) printf 'linux-arm64' ;;
+        macos-x64)   printf 'darwin-x64' ;;
+        macos-arm64) printf 'darwin-arm64' ;;
+        *)           return 1 ;;
+    esac
+}
+
+# The platform part of a tmux-builds asset name.
+userspace_tmux_platform() {
+    case "$1-$2" in
+        linux-x64)   printf 'linux-x86_64' ;;
+        linux-arm64) printf 'linux-arm64' ;;
+        macos-x64)   printf 'macos-x86_64' ;;
+        macos-arm64) printf 'macos-arm64' ;;
+        *)           return 1 ;;
+    esac
+}
+
+# SHA-256 of tmux-$TMUX_BUILD_VERSION-<platform>.tar.gz, as published on the
+# release page (the `digest` field of the GitHub release API) and re-hashed
+# from a fresh download when this version was pinned.
+tmux_build_sha256() {
+    case "$1" in
+        linux-x86_64) printf 'cc56bd1cc873eb6089c615f0496b072385bda8a6d944069f38564a5d49c128aa' ;;
+        linux-arm64)  printf '29dcb978da2a4b0cf6790f9e004865dac239a3ba03bbf776dddacce23d03831b' ;;
+        macos-arm64)  printf '0a763dd0380aa980d239509654da1bc7455843706a3c050f6709c8cd2e13d12d' ;;
+        macos-x86_64) printf '1c21f9ade964e4a539be05ffe3a4e95854ab76a0a9c4c05d0ffbe7fc6c4d783f' ;;
+        *)            return 1 ;;
+    esac
+}
+
+# Alpine and friends: the official Node.js tarballs are linked against glibc.
+is_musl_libc() {
+    [[ "$(uname -s)" == "Linux" ]] || return 1
+    if ls /lib/ld-musl-* >/dev/null 2>&1; then
+        return 0
+    fi
+    command -v ldd &>/dev/null || return 1
+    case "$(ldd --version 2>&1 || true)" in
+        *musl*) return 0 ;;
+    esac
+    return 1
+}
+
+macos_major_version() {
+    local version
+    version=$(sw_vers -productVersion 2>/dev/null) || return 1
+    printf '%s' "${version%%.*}"
+}
+
+# pick_node_tarball <platform>: reads a SHASUMS256.txt on stdin and prints
+# "<sha256> <file name>" for that platform's .tar.gz. Pure (the test suite
+# feeds it a fixture), and it reads all of stdin so the writer never sees a
+# closed pipe under `set -o pipefail`.
+pick_node_tarball() {
+    local platform="$1" sha="" name="" found="" hex='^[0-9a-f]{64}$'
+    while read -r sha name; do
+        [[ -z "$found" ]] || continue
+        case "$name" in
+            node-v*-"$platform".tar.gz)
+                if [[ "$sha" =~ $hex ]]; then
+                    found="$sha $name"
+                fi
+                ;;
+        esac
+    done
+    [[ -n "$found" ]] || return 1
+    printf '%s\n' "$found"
+}
+
+# ensure_on_path <dir>: first on PATH for the rest of this run, and in the
+# shell profile for later ones. add_to_path alone is not enough: it returns
+# before exporting when the profile already carries the line (a re-run from a
+# shell that has not loaded its profile).
+ensure_on_path() {
+    local dir="$1"
+    if [[ ":$PATH:" == *":$dir:"* ]]; then
+        return 0
+    fi
+    add_to_path "$dir"
+    if [[ ":$PATH:" != *":$dir:"* ]]; then
+        export PATH="$dir:$PATH"
+    fi
+    return 0
+}
+
+# link_into_local_bin <target> <name>: make ~/.local/bin/<name> point at
+# something this route unpacked, so it is found wherever `codeman` itself is.
+# That matters for node: the `codeman` launcher starts with
+# `#!/usr/bin/env node`, and a non-interactive shell (ssh host 'codeman ...',
+# cron) never reads the PATH line this installer adds to an interactive
+# profile. Returns 1, changing nothing, when a file or link that is not ours
+# is already there.
+link_into_local_bin() {
+    local target="$1" link="$HOME/.local/bin/$2"
+    if [[ -e "$link" || -L "$link" ]] && [[ "$(readlink "$link" 2>/dev/null)" != "$RUNTIME_DIR/"* ]]; then
+        return 1
+    fi
+    mkdir -p "$HOME/.local/bin"
+    ln -sf "$target" "$link"
+}
+
+# A re-run often starts in a shell that has not loaded the profile an earlier
+# no-admin run wrote (a fresh `curl | bash`, a non-login shell), so what that
+# run unpacked would look missing and be downloaded again. Put it back on PATH
+# for this run. Runs for every subcommand: `update` needs node and npm too.
+adopt_userspace_runtime() {
+    if [[ -x "$RUNTIME_DIR/node/bin/node" && ":$PATH:" != *":$RUNTIME_DIR/node/bin:"* ]]; then
+        export PATH="$RUNTIME_DIR/node/bin:$PATH"
+    fi
+    if [[ -x "$RUNTIME_DIR/bin/tmux" ]] && ! command -v tmux &>/dev/null; then
+        export PATH="$RUNTIME_DIR/bin:$PATH"
+    fi
+    return 0
+}
+
+# no_admin_blocker <os> <arch> <need node: 0|1> <need tmux: 0|1>: prints why
+# this route cannot finish on this machine, or nothing when it can. Checks
+# only, so it runs before the first download: nobody should wait for 50 MB of
+# Node.js to then learn that a compiler is missing.
+no_admin_blocker() {
+    local os="$1" arch="$2" need_node="$3" need_tmux="$4"
+    if [[ "$os" == "linux" ]] && ! check_build_tools; then
+        printf '%s' "Codeman's terminal module (node-pty) is compiled during the install on Linux, which needs make, a C++ compiler and python3. Missing here: $(missing_build_tools). Installing them takes an administrator (Debian/Ubuntu: apt-get install -y build-essential python3; Fedora/RHEL: dnf install -y gcc gcc-c++ make python3). Once they are there, re-run this installer: the rest needs no administrator rights."
+        return 0
+    fi
+    if [[ "$need_node" == "1" ]]; then
+        if ! userspace_node_platform "$os" "$arch" >/dev/null; then
+            printf '%s' "nodejs.org has no Node.js download this installer can use on $os $arch. Install Node.js $TARGET_NODE_VERSION yourself, then re-run this installer."
+            return 0
+        fi
+        if is_musl_libc; then
+            printf '%s' "The official Node.js downloads need glibc, and this system uses musl (Alpine). Install Node.js $TARGET_NODE_VERSION yourself (an administrator can run: apk add nodejs npm), then re-run this installer."
+            return 0
+        fi
+    fi
+    if [[ "$need_tmux" == "1" ]]; then
+        if ! userspace_tmux_platform "$os" "$arch" >/dev/null; then
+            printf '%s' "The tmux project publishes no build for $os $arch. Ask an administrator to install tmux, then re-run this installer."
+            return 0
+        fi
+        if [[ "$os" == "macos" ]]; then
+            local major="" digits='^[0-9]+$'
+            major=$(macos_major_version) || major=""
+            if ! [[ "$major" =~ $digits ]] || [[ "$major" -lt 15 ]]; then
+                printf '%s' "The tmux project's build needs macOS 15 or newer, and this Mac runs ${major:-an unknown version}. Ask an administrator to install tmux once (brew install tmux), then re-run this installer: the rest needs no administrator rights."
+                return 0
+            fi
+        fi
+    fi
+    if [[ "$need_node" == "1" || "$need_tmux" == "1" ]]; then
+        if ! command -v tar &>/dev/null; then
+            printf '%s' "tar is needed to unpack the downloads and is not installed."
+            return 0
+        fi
+        if ! command -v sha256sum &>/dev/null && ! command -v shasum &>/dev/null && ! command -v openssl &>/dev/null; then
+            printf '%s' "No SHA-256 tool (sha256sum, shasum or openssl) is installed, so the downloads could not be verified."
+            return 0
+        fi
+    fi
+    return 0
+}
+
+# Node.js $TARGET_NODE_VERSION (latest patch release) into $RUNTIME_DIR/node.
+# Unpacked beside the old copy and proven to run before it replaces it.
+install_node_userspace() {
+    local os="$1" arch="$2" platform="" sums="" line="" sha="" name="" version="" tmp=""
+    local dest="$RUNTIME_DIR/node" base="https://nodejs.org/dist"
+    platform=$(userspace_node_platform "$os" "$arch") || die "No Node.js download for $os $arch."
+
+    info "Looking up the latest Node.js $TARGET_NODE_VERSION..."
+    sums=$(download_to_stdout "$base/latest-v${TARGET_NODE_VERSION}.x/SHASUMS256.txt" < /dev/null) \
+        || die "Could not reach nodejs.org. Check the network (or a proxy: https_proxy) and re-run."
+    line=$(printf '%s\n' "$sums" | pick_node_tarball "$platform") \
+        || die "nodejs.org lists no Node.js $TARGET_NODE_VERSION build for $platform."
+    sha="${line%% *}"
+    name="${line#* }"
+    version="${name#node-}"
+    version="${version%%-*}"
+
+    tmp=$(mktemp -d "${TMPDIR:-/tmp}/codeman-node.XXXXXX") || die "Could not create a temporary folder."
+    if ! run_step "Downloading Node.js $version" download "$base/$version/$name" "$tmp/$name"; then
+        rm -rf "$tmp"
+        exit 1
+    fi
+    if ! verify_sha256 "$tmp/$name" "$sha"; then
+        rm -rf "$tmp"
+        die "The Node.js download does not match the checksum nodejs.org publishes for it. Nothing was installed; re-run to try again."
+    fi
+
+    mkdir -p "$RUNTIME_DIR"
+    rm -rf "$dest.new"
+    mkdir -p "$dest.new"
+    if ! tar -xzf "$tmp/$name" -C "$dest.new" --strip-components=1 < /dev/null; then
+        rm -rf "$tmp" "$dest.new"
+        die "Could not unpack the Node.js download."
+    fi
+    rm -rf "$tmp"
+    if ! "$dest.new/bin/node" --version >/dev/null 2>&1 < /dev/null; then
+        rm -rf "$dest.new"
+        die "The downloaded Node.js does not run here (on Linux the official builds need glibc 2.28 or newer). Install Node.js $TARGET_NODE_VERSION yourself, then re-run this installer."
+    fi
+    rm -rf "$dest.old"
+    if [[ -e "$dest" ]]; then
+        mv "$dest" "$dest.old"
+    fi
+    mv "$dest.new" "$dest"
+    rm -rf "$dest.old"
+
+    # On PATH as a folder (what `npm install -g` puts beside it is found too),
+    # and linked from ~/.local/bin for shells that never read the profile.
+    ensure_on_path "$dest/bin"
+    local tool
+    for tool in node npm npx; do
+        link_into_local_bin "$dest/bin/$tool" "$tool" || true
+    done
+    # An older Node.js earlier on PATH would still win for this run.
+    if [[ "$(command -v node 2>/dev/null)" != "$dest/bin/node" ]]; then
+        export PATH="$dest/bin:$PATH"
+    fi
+    hash -r 2>/dev/null || true
+    success "Node.js $version installed in $dest"
+    return 0
+}
+
+# tmux $TMUX_BUILD_VERSION into $RUNTIME_DIR/bin, linked from ~/.local/bin
+# (already on the PATH of the service this installer writes).
+install_tmux_userspace() {
+    local os="$1" arch="$2" platform="" sha="" name="" tmp=""
+    local bin_dir="$RUNTIME_DIR/bin" link_dir="$HOME/.local/bin"
+    platform=$(userspace_tmux_platform "$os" "$arch") || die "No tmux build for $os $arch."
+    sha=$(tmux_build_sha256 "$platform") || die "No pinned checksum for the $platform tmux build."
+    name="tmux-$TMUX_BUILD_VERSION-$platform.tar.gz"
+
+    # Staged in the runtime folder, as Node.js is: /tmp is often mounted noexec
+    # on the shared hosts this route is for, and the proof run below would then
+    # call a working build one that does not run.
+    mkdir -p "$bin_dir"
+    tmp=$(mktemp -d "$RUNTIME_DIR/codeman-tmux.XXXXXX") || die "Could not create a temporary folder."
+    if ! run_step "Downloading tmux $TMUX_BUILD_VERSION" download \
+        "https://github.com/tmux/tmux-builds/releases/download/v$TMUX_BUILD_VERSION/$name" "$tmp/$name"; then
+        rm -rf "$tmp"
+        exit 1
+    fi
+    if ! verify_sha256 "$tmp/$name" "$sha"; then
+        rm -rf "$tmp"
+        die "The tmux download does not match the checksum pinned in this installer. Nothing was installed; re-run to try again."
+    fi
+    if ! tar -xzf "$tmp/$name" -C "$tmp" < /dev/null || [[ ! -f "$tmp/tmux" ]]; then
+        rm -rf "$tmp"
+        die "Could not unpack the tmux download."
+    fi
+    chmod 755 "$tmp/tmux"
+    if ! "$tmp/tmux" -V >/dev/null 2>&1 < /dev/null; then
+        rm -rf "$tmp"
+        die "The downloaded tmux does not run on this system. Ask an administrator to install tmux, then re-run this installer."
+    fi
+    mv -f "$tmp/tmux" "$bin_dir/tmux"
+    rm -rf "$tmp"
+
+    # A tmux someone else put at ~/.local/bin/tmux is not ours to replace: put
+    # the runtime folder itself on PATH in that case.
+    if link_into_local_bin "$bin_dir/tmux" tmux; then
+        ensure_on_path "$link_dir"
+    else
+        ensure_on_path "$bin_dir"
+    fi
+    hash -r 2>/dev/null || true
+    success "tmux $TMUX_BUILD_VERSION installed in $bin_dir"
+    return 0
+}
+
+# cloudflared into ~/.local/bin, where the server looks for it first. Cloudflare
+# publishes no checksum file; this takes the release asset over TLS, exactly as
+# the system routes above take the same release's packages and binaries.
+install_cloudflared_userspace() {
+    local os="$1" arch="$2" asset="" tmp="" src="" dest="$HOME/.local/bin/cloudflared"
+    case "$os-$arch" in
+        linux-x64)   asset="cloudflared-linux-amd64" ;;
+        linux-arm64) asset="cloudflared-linux-arm64" ;;
+        linux-armv7) asset="cloudflared-linux-arm" ;;
+        macos-x64)   asset="cloudflared-darwin-amd64.tgz" ;;
+        macos-arm64) asset="cloudflared-darwin-arm64.tgz" ;;
+        *)           die "Cloudflare publishes no cloudflared build for $os $arch." ;;
+    esac
+    # Staged in the home folder for the reason in install_tmux_userspace.
+    mkdir -p "$HOME/.local/bin"
+    tmp=$(mktemp -d "$HOME/.local/codeman-cloudflared.XXXXXX") || die "Could not create a temporary folder."
+    if ! run_step "Downloading cloudflared" download \
+        "https://github.com/cloudflare/cloudflared/releases/latest/download/$asset" "$tmp/$asset"; then
+        rm -rf "$tmp"
+        exit 1
+    fi
+    src="$tmp/$asset"
+    if [[ "$asset" == *.tgz ]]; then
+        if ! tar -xzf "$tmp/$asset" -C "$tmp" < /dev/null || [[ ! -f "$tmp/cloudflared" ]]; then
+            rm -rf "$tmp"
+            die "Could not unpack the cloudflared download."
+        fi
+        src="$tmp/cloudflared"
+    fi
+    chmod 755 "$src"
+    if ! "$src" --version >/dev/null 2>&1 < /dev/null; then
+        rm -rf "$tmp"
+        die "The downloaded cloudflared does not run on this system."
+    fi
+    mv -f "$src" "$dest"
+    rm -rf "$tmp"
+    return 0
+}
+
+# The no-admin half of ask_dependencies: say what stands in the way before
+# downloading anything, ask once, fetch what is missing, then prove it runs.
+# $2 = "consented" when the user already said yes to installing the missing
+# pieces (the fallback after a refused sudo password), so they are not asked
+# the same thing twice.
+ask_dependencies_no_admin() {
+    local os="$1" consented="${2:-}" arch="" blocker="" what=""
+    local need_node="0" need_tmux="0" need_git="0"
+    arch=$(detect_arch)
+    check_node || need_node="1"
+    check_tmux || need_tmux="1"
+    check_git || need_git="1"
+
+    blocker=$(no_admin_blocker "$os" "$arch" "$need_node" "$need_tmux")
+    if [[ -n "$blocker" ]]; then
+        die "$blocker$(no_admin_override_hint)"
+    fi
+    if [[ "$need_git" == "1" ]]; then
+        if [[ -d "$INSTALL_DIR/.git" ]]; then
+            die "$INSTALL_DIR is a git checkout, and no working git is available here to update it. Ask an administrator for git, or remove that folder for a fresh install, then re-run."
+        fi
+        if ! source_tarball_url >/dev/null; then
+            die "No working git is available, and $REPO_URL is not a GitHub repository this installer can fetch as an archive. Set CODEMAN_TARBALL_URL to a .tar.gz of the source, then re-run."
+        fi
+    fi
+
+    info "Installing without administrator rights${NO_ADMIN_REASON:+ ($NO_ADMIN_REASON)}."
+    if [[ "$need_git" == "1" ]]; then
+        info "No working git here: Codeman is installed from a source archive, and updates by re-running this installer."
+    fi
+    if [[ "$need_node" == "1" ]]; then
+        what="Node.js $TARGET_NODE_VERSION (from nodejs.org)"
+    fi
+    if [[ "$need_tmux" == "1" ]]; then
+        what="${what:+$what and }tmux $TMUX_BUILD_VERSION (from github.com/tmux/tmux-builds)"
+    fi
+    if [[ -n "$what" ]]; then
+        headless_guard "download $what into $RUNTIME_DIR"
+        if [[ "$consented" != "consented" ]] && ! prompt_yes_no "Download $what into your home folder ($RUNTIME_DIR)?" "y"; then
+            die "Codeman needs $what. Install them and re-run this installer.$(no_admin_override_hint)"
+        fi
+        if [[ "$need_node" == "1" ]]; then
+            CURRENT_STEP="installing Node.js $TARGET_NODE_VERSION into $RUNTIME_DIR"
+            install_node_userspace "$os" "$arch"
+        fi
+        if [[ "$need_tmux" == "1" ]]; then
+            CURRENT_STEP="installing tmux into $RUNTIME_DIR"
+            install_tmux_userspace "$os" "$arch"
+        fi
+        CURRENT_STEP=""
+        hash -r 2>/dev/null || true
+    fi
+
+    # Prove it, never assume it. git is deliberately absent from this list.
+    check_node || die "Node.js $MIN_NODE_VERSION+ is still missing after the install."
+    check_npm || die "npm is not available next to that Node.js."
+    check_tmux || die "tmux is still missing after the install (sessions live inside tmux)."
+    if [[ -n "$what" ]]; then
+        success "Dependencies installed without administrator rights"
+    fi
+    return 0
+}
+
+# Where the source archive comes from when there is no git to clone with:
+# CODEMAN_TARBALL_URL, else GitHub's archive of the configured repository at
+# the configured branch or tag. Fails for a repository that is not on GitHub.
+source_tarball_url() {
+    if [[ -n "${CODEMAN_TARBALL_URL:-}" ]]; then
+        printf '%s' "$CODEMAN_TARBALL_URL"
+        return 0
+    fi
+    local base="${REPO_URL%/}"
+    base="${base%.git}"
+    case "$base" in
+        https://github.com/*/*) printf '%s/archive/%s.tar.gz' "$base" "$BRANCH" ;;
+        *)                      return 1 ;;
+    esac
+}
+
+# fetch_source_archive <dir>: unpack the source into <dir>, which must be
+# missing or empty. The marker goes in FIRST, so a run that dies half way
+# through leaves something the next run recognises as its own and replaces.
+fetch_source_archive() {
+    local dest="$1" url="" tmp=""
+    url=$(source_tarball_url) || die "No source archive is configured for $REPO_URL (set CODEMAN_TARBALL_URL)."
+    tmp=$(mktemp -d "${TMPDIR:-/tmp}/codeman-source.XXXXXX") || die "Could not create a temporary folder."
+    if ! run_step "Downloading Codeman" download "$url" "$tmp/source.tar.gz"; then
+        rm -rf "$tmp"
+        exit 1
+    fi
+    mkdir -p "$dest"
+    printf 'archive\n' > "$dest/$SOURCE_MARKER"
+    if ! tar -xzf "$tmp/source.tar.gz" -C "$dest" --strip-components=1 < /dev/null; then
+        rm -rf "$tmp"
+        die "Could not unpack the Codeman source archive from $url."
+    fi
+    rm -rf "$tmp"
+    if [[ ! -f "$dest/package.json" ]]; then
+        die "The archive at $url does not look like the Codeman source (no package.json at its top level)."
+    fi
+    return 0
+}
+
+# ---- End of the no-admin route ---------------------------------------------
+
+# ============================================================================
 # Interactive Prompts
 # ============================================================================
 
@@ -1294,17 +1935,21 @@ prompt_yes_no() {
 # up`, the operator grant). Ask for the password ONCE, up front, and keep the
 # sudo timestamp warm in the background for the rest of the run, instead of a
 # password prompt per step scattered around a multi-minute build.
-sudo_session_start() {
+#
+# sudo_session_try returns 1 when the password is refused, so a caller can fall
+# back to the no-admin route; sudo_session_start ends the run instead.
+sudo_session_try() {
     [[ $EUID -eq 0 ]] && return 0
     [[ -n "$SUDO_KEEPALIVE_PID" ]] && return 0
+    [[ "$NO_ADMIN" == "1" ]] && return 0
     command -v sudo &>/dev/null || return 0
     if ! sudo -n true 2>/dev/null; then
         echo "" >&2
         info "Some steps need administrator rights. You will be asked for your password once."
         if [[ -e /dev/tty ]]; then
-            sudo -v < /dev/tty || die "Failed to obtain sudo privileges."
+            sudo -v < /dev/tty || return 1
         else
-            sudo -v || die "Failed to obtain sudo privileges. Try running the script directly instead of piping."
+            sudo -v || return 1
         fi
     fi
     # Refreshes the timestamp while this script lives; ends on its own once the
@@ -1317,6 +1962,16 @@ sudo_session_start() {
     ) &
     SUDO_KEEPALIVE_PID=$!
     return 0
+}
+
+sudo_session_start() {
+    if sudo_session_try; then
+        return 0
+    fi
+    if [[ -e /dev/tty ]]; then
+        die "Failed to obtain sudo privileges."
+    fi
+    die "Failed to obtain sudo privileges. Try running the script directly instead of piping."
 }
 
 # Open a URL in the user's browser when there is one to open it in (macOS, a
@@ -1640,6 +2295,9 @@ choose_network_binding() {
     # Tailscale state, for the menu hint and the default choice. Detection
     # only; never installs, logs in, or prompts for sudo here.
     local ts_hint="will be installed for you" ts_ready="0" ts_detected_url="" ts_preview=""
+    if [[ "$NO_ADMIN" == "1" && "$(uname -s)" != "Darwin" ]]; then
+        ts_hint="not installed, and installing it takes an administrator"
+    fi
     if check_tailscale; then
         ts_hint="installed, needs login"
         if command -v node &>/dev/null && [[ "$(ts_backend_state)" == "Running" ]]; then
@@ -2027,10 +2685,18 @@ offer_install_tailscale() {
         info "Tailscale is not installed; skipping (non-interactive runs never install it)."
         return 1
     fi
+    # Linux: the package install, `tailscale up` and the operator grant all
+    # need root. Say so instead of opening a sudo prompt that cannot succeed.
+    if [[ "$NO_ADMIN" == "1" && "$(uname -s)" != "Darwin" ]]; then
+        info "Tailscale is not installed, and installing it takes an administrator."
+        echo -e "  ${DIM}Once one has installed it and run${NC} ${CYAN}sudo tailscale set --operator=$USER${NC}${DIM}, finish here with:${NC} ${CYAN}bash $INSTALL_DIR/install.sh tailscale${NC}" >&2
+        print_no_admin_override_hint
+        return 1
+    fi
     headless_guard "install Tailscale (curl | sh from tailscale.com)"
 
     if [[ "$(uname -s)" == "Darwin" ]]; then
-        if command -v brew &>/dev/null; then
+        if [[ "$NO_ADMIN" != "1" ]] && command -v brew &>/dev/null; then
             if ! prompt_yes_no "Tailscale is not installed. Install it now with Homebrew?" "y"; then
                 return 1
             fi
@@ -2094,6 +2760,10 @@ ensure_tailscale_login() {
     if [[ "$(uname -s)" == "Darwin" ]]; then
         # The GUI app's CLI runs as the user; no root needed.
         if "$ts_bin" up --timeout=300s; then up_ok="1"; fi
+    elif [[ "$NO_ADMIN" == "1" ]]; then
+        # Works for an account an administrator made the Tailscale operator;
+        # for any other it fails right here, without a password prompt.
+        if "$ts_bin" up --timeout=300s; then up_ok="1"; fi
     else
         sudo_session_start
         if [[ -e /dev/tty ]]; then
@@ -2107,6 +2777,7 @@ ensure_tailscale_login() {
             info "If the CLI cannot log in, open the Tailscale app, log in there, then run:"
             info "  bash $INSTALL_DIR/install.sh tailscale"
         fi
+        print_no_admin_override_hint
         return 1
     fi
     if [[ "$(ts_backend_state)" == "Running" ]]; then
@@ -2125,6 +2796,12 @@ ensure_tailscale_operator() {
     fi
     if ts_cmd serve status &>/dev/null; then
         return 0
+    fi
+    if [[ "$NO_ADMIN" == "1" ]]; then
+        warn "tailscale serve needs root or Tailscale 'operator' rights, and this account has neither."
+        echo -e "  ${DIM}An administrator can grant them once with:${NC} ${CYAN}sudo tailscale set --operator=$USER${NC}" >&2
+        print_no_admin_override_hint
+        return 1
     fi
     if ! command -v sudo &>/dev/null; then
         warn "No sudo available; tailscale serve configuration may fail without root."
@@ -2234,7 +2911,13 @@ tailscale_preflight() {
         tailscale_retrofit_hint "Tailscale is not connected"
         return 1
     fi
-    ensure_tailscale_operator
+    # Fails only on the no-admin route (everywhere else it falls back to sudo
+    # per command). Checked explicitly: this function runs inside `||` and `if`
+    # conditions, where `set -e` does not stop on a failing line.
+    if ! ensure_tailscale_operator; then
+        tailscale_retrofit_hint "tailscale serve is not available to this account"
+        return 1
+    fi
     if ! ensure_tailnet_https; then
         tailscale_retrofit_hint "HTTPS certificates are not enabled for your tailnet"
         return 1
@@ -2621,7 +3304,7 @@ setup_name_subcommand() {
         die "Tailscale is not connected. Run: bash $INSTALL_DIR/install.sh tailscale"
     fi
     read_existing_binding
-    ensure_tailscale_operator
+    ensure_tailscale_operator || exit 1
     [[ -z "$SUBCOMMAND_ARG" ]] || TS_NAME="$SUBCOMMAND_ARG"
     TS_NO_RENAME="0"
 
@@ -2677,11 +3360,19 @@ cloudflared_subcommand() {
     if check_cloudflared; then
         success "cloudflared is already installed at $(get_cloudflared_path)"
     else
-        headless_guard "install cloudflared (system package via sudo)"
-        if ! prompt_yes_no "Install cloudflared now?" "y"; then
-            exit 0
+        if [[ "$NO_ADMIN" == "1" ]]; then
+            headless_guard "download cloudflared into $HOME/.local/bin"
+            if ! prompt_yes_no "Download cloudflared into $HOME/.local/bin now?" "y"; then
+                exit 0
+            fi
+            install_cloudflared_userspace "$os" "$(detect_arch)"
+        else
+            headless_guard "install cloudflared (system package via sudo)"
+            if ! prompt_yes_no "Install cloudflared now?" "y"; then
+                exit 0
+            fi
+            install_dependency "cloudflared" "$os" "$distro"
         fi
-        install_dependency "cloudflared" "$os" "$distro"
         hash -r 2>/dev/null || true
         check_cloudflared || die "cloudflared installation failed. See https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/"
         success "cloudflared installed at $(get_cloudflared_path)"
@@ -2748,6 +3439,22 @@ setup_launchd_service() {
     # Find node binary path
     local node_path
     node_path=$(command -v node)
+
+    # A Node.js outside those directories (the no-admin runtime, nvm, fnm) has
+    # to be on the agent's PATH as well: `npm install -g` puts AI CLIs beside
+    # it, and their `#!/usr/bin/env node` launchers look node up on PATH. Same
+    # for the tmux the no-admin route unpacked.
+    local node_dir
+    node_dir=$(dirname "$node_path")
+    if [[ ":$svc_path:" != *":$node_dir:"* ]]; then
+        svc_path="$node_dir:$svc_path"
+    fi
+    if [[ -x "$RUNTIME_DIR/node/bin/node" && ":$svc_path:" != *":$RUNTIME_DIR/node/bin:"* ]]; then
+        svc_path="$RUNTIME_DIR/node/bin:$svc_path"
+    fi
+    if [[ -x "$RUNTIME_DIR/bin/tmux" ]]; then
+        svc_path="$RUNTIME_DIR/bin:$svc_path"
+    fi
 
     # Binding chosen during install (empty on paths that never asked), the
     # sub-path and the port when they differ from the defaults.
@@ -3042,6 +3749,7 @@ main() {
     install_or_update_repo
     npm_install_deps
     run_step "Building Codeman" npm run build || exit 1
+    finish_source_swap
     install_symlink
 
     # The dispatcher at the bottom only routes a bare re-run to the quiet
@@ -3148,8 +3856,11 @@ print_preflight_summary() {
         installed) ts_line="installed, not logged in" ;;
         *)         ts_line="not installed" ;;
     esac
-    if [[ -d "$INSTALL_DIR/.git" ]]; then
+    if [[ -d "$INSTALL_DIR/.git" || -f "$INSTALL_DIR/$SOURCE_MARKER" ]]; then
         existing="$INSTALL_DIR${EXISTING_VERSION:+ (v$EXISTING_VERSION)}"
+        if [[ ! -d "$INSTALL_DIR/.git" ]]; then
+            existing="$existing, from a source archive"
+        fi
         if [[ "$EXISTING_FOUND" == "1" ]]; then
             existing="$existing, service binds $EXISTING_HOST${EXISTING_BASE_URL:+ under $EXISTING_BASE_URL}"
         fi
@@ -3160,6 +3871,10 @@ print_preflight_summary() {
     echo -e "  ${BOLD}AI CLIs${NC}     ${clis:-none found}"
     echo -e "  ${BOLD}Tailscale${NC}   $ts_line"
     echo -e "  ${BOLD}Existing${NC}    $existing"
+    if [[ "$NO_ADMIN" == "1" ]]; then
+        echo -e "  ${BOLD}Admin${NC}       not used${NO_ADMIN_REASON:+ ($NO_ADMIN_REASON)}: Node.js and tmux, where missing, go into your home folder"
+        print_no_admin_override_hint
+    fi
     echo ""
     return 0
 }
@@ -3175,12 +3890,27 @@ print_preflight_summary() {
 ask_dependencies() {
     local os="$1" distro="$2"
     [[ -n "$MISSING_PKGS" ]] || return 0
+    if [[ "$NO_ADMIN" == "1" ]]; then
+        ask_dependencies_no_admin "$os"
+        return 0
+    fi
     headless_guard "install $MISSING_PKGS (system packages via sudo)"
     if ! prompt_yes_no "Install the missing pieces now ($MISSING_PKGS)?" "y"; then
         die "Codeman needs $MISSING_PKGS. Install them and re-run this installer."
     fi
     if [[ "$os" == "linux" ]]; then
-        sudo_session_start
+        if ! sudo_session_try; then
+            # The password was refused, or this account may not use sudo after
+            # all. Offer the route that needs neither before giving up.
+            warn "Could not get administrator rights."
+            if prompt_yes_no "Install without them instead? (Node.js and tmux go into your home folder)" "y"; then
+                NO_ADMIN="1"
+                NO_ADMIN_REASON="sudo was refused"
+                ask_dependencies_no_admin "$os" "consented"
+                return 0
+            fi
+            die "Failed to obtain sudo privileges."
+        fi
     fi
     if ! check_git; then
         CURRENT_STEP="installing git"
@@ -3266,8 +3996,43 @@ choose_launch_mode() {
 # Phase 2: work
 # ----------------------------------------------------------------------------
 
+# fetch_source <dir>: a shallow clone where git works, the source archive
+# where it does not (only the no-admin route gets here without a git: every
+# other route installed one in ask_dependencies).
+fetch_source() {
+    local dest="$1"
+    if check_git; then
+        run_step "Cloning Codeman" git clone --quiet --depth 1 --branch "$BRANCH" "$REPO_URL" "$dest" || exit 1
+    else
+        fetch_source_archive "$dest"
+    fi
+    return 0
+}
+
+# The second half of replacing an archive install (install_or_update_repo set
+# SOURCE_STAGING): the freshly built tree takes the old one's place. Called
+# only after `npm run build` succeeded, so until this line the running install
+# was never touched.
+finish_source_swap() {
+    [[ -n "$SOURCE_STAGING" ]] || return 0
+    local old="$INSTALL_DIR.old"
+    rm -rf "$old"
+    cd "$HOME" 2>/dev/null || cd /
+    mv "$INSTALL_DIR" "$old"
+    if ! mv "$SOURCE_STAGING" "$INSTALL_DIR"; then
+        mv "$old" "$INSTALL_DIR"
+        die "Could not move the new build into place. The previous install is unchanged."
+    fi
+    rm -rf "$old"
+    SOURCE_STAGING=""
+    cd "$INSTALL_DIR"
+    return 0
+}
+
 install_or_update_repo() {
+    SOURCE_STAGING=""
     if [[ -d "$INSTALL_DIR/.git" ]]; then
+        check_git || die "$INSTALL_DIR is a git checkout, and no working git is available to update it. Install git (or remove that folder for a fresh install), then re-run."
         info "Existing installation found at $INSTALL_DIR, updating it"
         cd "$INSTALL_DIR"
         git remote set-url origin "$REPO_URL" 2>/dev/null || true
@@ -3285,12 +4050,27 @@ install_or_update_repo() {
             run_step "Fetching the latest Codeman" git fetch --quiet origin || exit 1
             git reset --hard "origin/$BRANCH" --quiet
         fi
+    elif [[ -f "$INSTALL_DIR/$SOURCE_MARKER" ]]; then
+        # An archive install is replaced as a whole: with no git there is
+        # nothing to say which files a newer version dropped. The fresh tree
+        # is fetched and built BESIDE the running one, and finish_source_swap
+        # moves it into place once the build has succeeded, so a failed
+        # download or build leaves the install exactly as it was. Where git
+        # works by now, the fresh tree is a clone and in-app updates return.
+        info "Existing installation found at $INSTALL_DIR, building its replacement beside it"
+        SOURCE_STAGING="$INSTALL_DIR.new"
+        rm -rf "$SOURCE_STAGING"
+        fetch_source "$SOURCE_STAGING"
+        cd "$SOURCE_STAGING"
     else
+        if [[ -e "$INSTALL_DIR" ]] && [[ -n "$(ls -A "$INSTALL_DIR" 2>/dev/null)" ]]; then
+            die "$INSTALL_DIR exists and is not a Codeman install. Move it away (or set CODEMAN_INSTALL_DIR), then re-run."
+        fi
         # Create parent directory
         mkdir -p "$(dirname "$INSTALL_DIR")"
 
-        # Clone repository (shallow for speed)
-        run_step "Cloning Codeman" git clone --quiet --depth 1 --branch "$BRANCH" "$REPO_URL" "$INSTALL_DIR" || exit 1
+        # Shallow clone, or the source archive where no git works
+        fetch_source "$INSTALL_DIR"
         cd "$INSTALL_DIR"
     fi
     return 0
@@ -3473,7 +4253,11 @@ print_done_screen() {
             echo -e "              ${DIM}(the same variables apply to: codeman web -d)${NC}"
         fi
     fi
-    echo -e "    ${BOLD}Update${NC}    re-run the install line, or App Settings -> System -> Updates"
+    if [[ -f "$INSTALL_DIR/$SOURCE_MARKER" && ! -d "$INSTALL_DIR/.git" ]]; then
+        echo -e "    ${BOLD}Update${NC}    re-run the install line ${DIM}(installed without git, so the in-app updater is off)${NC}"
+    else
+        echo -e "    ${BOLD}Update${NC}    re-run the install line, or App Settings -> System -> Updates"
+    fi
     echo -e "    ${BOLD}Terminal${NC}  ${CYAN}codeman tui${NC}   ${DIM}(session dashboard over SSH, e.g. from Termius)${NC}"
     echo -e "    ${BOLD}Docs${NC}      https://github.com/Ark0N/Codeman/wiki"
     if [[ -z "$ts_url" ]] && [[ "$BIND_HOST" != "0.0.0.0" ]]; then
@@ -3494,33 +4278,41 @@ print_done_screen() {
 }
 
 update() {
-    if [[ ! -d "$INSTALL_DIR/.git" ]]; then
+    if [[ ! -d "$INSTALL_DIR/.git" && ! -f "$INSTALL_DIR/$SOURCE_MARKER" ]]; then
         die "Codeman is not installed at $INSTALL_DIR. Run the installer first."
     fi
 
     info "Updating Codeman..."
     INSTALL_STARTED="1"
-    cd "$INSTALL_DIR"
-    git remote set-url origin "$REPO_URL" 2>/dev/null || true
+    if [[ -d "$INSTALL_DIR/.git" ]]; then
+        check_git || die "$INSTALL_DIR is a git checkout, and no working git is available to update it. Install git, then re-run."
+        cd "$INSTALL_DIR"
+        git remote set-url origin "$REPO_URL" 2>/dev/null || true
 
-    # Never blow away local changes silently (this used to be an unconditional
-    # reset --hard). Interactive users get a choice; headless runs auto-stash
-    # so the changes stay recoverable, the same policy as scripts/self-update.sh.
-    if ! git diff --quiet 2>/dev/null || ! git diff --staged --quiet 2>/dev/null; then
-        warn "Local changes detected in $INSTALL_DIR"
-        if prompt_yes_no "Stash local changes and update? (recover with: git stash pop)"; then
-            git stash push --quiet -m "codeman-installer auto-stash $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-            info "Local changes stashed (see 'git stash list' in $INSTALL_DIR)"
-        else
-            info "Keeping local changes; update skipped."
-            return 0
+        # Never blow away local changes silently (this used to be an unconditional
+        # reset --hard). Interactive users get a choice; headless runs auto-stash
+        # so the changes stay recoverable, the same policy as scripts/self-update.sh.
+        if ! git diff --quiet 2>/dev/null || ! git diff --staged --quiet 2>/dev/null; then
+            warn "Local changes detected in $INSTALL_DIR"
+            if prompt_yes_no "Stash local changes and update? (recover with: git stash pop)"; then
+                git stash push --quiet -m "codeman-installer auto-stash $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+                info "Local changes stashed (see 'git stash list' in $INSTALL_DIR)"
+            else
+                info "Keeping local changes; update skipped."
+                return 0
+            fi
         fi
-    fi
 
-    run_step "Fetching the latest Codeman" git fetch --quiet origin || exit 1
-    git reset --hard "origin/$BRANCH" --quiet
+        run_step "Fetching the latest Codeman" git fetch --quiet origin || exit 1
+        git reset --hard "origin/$BRANCH" --quiet
+    else
+        # Installed from a source archive (no git): a fresh tree is fetched and
+        # built beside the running one, and swapped in below after the build.
+        install_or_update_repo
+    fi
     npm_install_deps
     run_step "Building Codeman" npm run build || exit 1
+    finish_source_swap
     date -u +%Y-%m-%dT%H:%M:%SZ > "$INSTALL_DIR/.install-complete"
     success "Updated to $(node -e "console.log(require('./package.json').version)")"
     echo ""
@@ -3678,11 +4470,41 @@ uninstall() {
         fi
     fi
 
+    # What a no-admin install downloaded. A link in ~/.local/bin goes only
+    # while it still points into that folder: a tmux or node the user put
+    # there themselves is not ours. `npm install -g` under that Node.js put its
+    # CLIs in the same folder, so say so and default to keeping it then.
+    if [[ -d "$RUNTIME_DIR" ]]; then
+        local runtime_default="y" runtime_note="" runtime_globals=""
+        runtime_globals=$(ls "$RUNTIME_DIR/node/lib/node_modules" 2>/dev/null | grep -v -E '^(npm|corepack)$' | tr '\n' ' ' || true)
+        if [[ -n "$runtime_globals" ]]; then
+            runtime_default="n"
+            runtime_note=" It also holds what you installed with its npm -g: $runtime_globals"
+        fi
+        if prompt_yes_no "Remove the Node.js and tmux this installer downloaded ($RUNTIME_DIR)?$runtime_note" "$runtime_default"; then
+            local runtime_tool
+            for runtime_tool in tmux node npm npx; do
+                if [[ -L "$symlink_dir/$runtime_tool" ]] && [[ "$(readlink "$symlink_dir/$runtime_tool" 2>/dev/null)" == "$RUNTIME_DIR/"* ]]; then
+                    rm -f "$symlink_dir/$runtime_tool"
+                fi
+            done
+            rm -rf "$RUNTIME_DIR"
+            success "Removed $RUNTIME_DIR"
+        else
+            info "Kept $RUNTIME_DIR"
+        fi
+    fi
+
     # Ask about data directory
     local data_dir="$HOME/.codeman"
     if [[ -d "$data_dir" ]]; then
         warn "Data directory exists at $data_dir (contains sessions, settings, state)"
-        if prompt_yes_no "Remove data directory ($data_dir)?" "n"; then
+        # Still there means it was kept just above, and it lives in this folder.
+        local data_note=""
+        if [[ -d "$RUNTIME_DIR" ]]; then
+            data_note=" That includes the Node.js and tmux you just kept ($RUNTIME_DIR), and whatever npm -g put there."
+        fi
+        if prompt_yes_no "Remove data directory ($data_dir)?$data_note" "n"; then
             rm -rf "$data_dir"
             success "Removed $data_dir"
         else
@@ -3712,6 +4534,8 @@ Flags
   --yes, -y                       Take every default; still waits on a Tailscale login URL
   --password <p>                  Dashboard password (visible in ps; prefer CODEMAN_PASSWORD)
   --port <n>                      Port Codeman listens on (default 3000)
+  --no-admin                      Never use sudo or Homebrew: Node.js and tmux go into the
+                                  home folder (chosen by itself without administrator rights)
   --help, -h                      This text
 
 Subcommands
@@ -3724,7 +4548,8 @@ Subcommands
 
 Environment: CODEMAN_NONINTERACTIVE=1, CODEMAN_INSTALL_DIR, CODEMAN_HOST,
 CODEMAN_PASSWORD, CODEMAN_PORT, CODEMAN_TAILSCALE=1, CODEMAN_TAILSCALE_NAME,
-CODEMAN_SKIP_SYSTEMD=1, CODEMAN_NODE_VERSION, CODEMAN_REPO_URL, CODEMAN_BRANCH.
+CODEMAN_SKIP_SYSTEMD=1, CODEMAN_NODE_VERSION, CODEMAN_REPO_URL, CODEMAN_BRANCH,
+CODEMAN_NO_ADMIN=1 or 0, CODEMAN_TARBALL_URL.
 EOF
 }
 
@@ -3751,6 +4576,7 @@ parse_flags() {
             --run)         LAUNCH_PRESET="1"; RECONFIGURE="1" ;;
             --no-start)    LAUNCH_PRESET="3" ;;
             --yes|-y)      ASSUME_YES="1" ;;
+            --no-admin)    NO_ADMIN="1" ;;
             --password)
                 shift
                 [[ $# -gt 0 ]] || die "--password needs a value"
@@ -3788,6 +4614,13 @@ if [[ -n "${CODEMAN_INSTALL_SH_LIB:-}" ]]; then return 0 2>/dev/null || exit 0; 
 
 # Wrap in main to prevent partial execution on curl | bash
 parse_flags "$@"
+adopt_userspace_runtime
+# Whether this run may ask for administrator rights. `status` and `uninstall`
+# never install anything, so they skip the question (and its `sudo -n`).
+case "$SUBCOMMAND" in
+    status|uninstall) ;;
+    *)                resolve_admin_mode ;;
+esac
 case "$SUBCOMMAND" in
     update)      update ;;
     uninstall)   uninstall ;;
@@ -3801,7 +4634,7 @@ case "$SUBCOMMAND" in
         # re-runs the full flow, so a failed first attempt can actually finish.
         # A flag that changes the setup (--tailscale, --service, ...) also takes
         # the full flow: that is what the flag is for.
-        if [[ "$RECONFIGURE" != "1" && -d "$INSTALL_DIR/.git" && -f "$INSTALL_DIR/.install-complete" ]]; then
+        if [[ "$RECONFIGURE" != "1" && -f "$INSTALL_DIR/.install-complete" ]] && [[ -d "$INSTALL_DIR/.git" || -f "$INSTALL_DIR/$SOURCE_MARKER" ]]; then
             print_banner
             update
         else

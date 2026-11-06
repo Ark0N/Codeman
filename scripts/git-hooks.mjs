@@ -218,6 +218,11 @@ function canonicalPath(path) {
  * @returns {string | null}
  */
 export function resolveGitHooksDir(repoRoot) {
+  // Not a checkout at all (a source-archive or npm install): answer without running
+  // git. On a Mac without the Xcode Command Line Tools `/usr/bin/git` is a stub that
+  // opens Apple's "install the developer tools" dialog, and this runs on every
+  // `npm install`. `.git` is a directory in a clone and a file in a worktree.
+  if (!existsSync(join(repoRoot, '.git'))) return null;
   try {
     const top = git(repoRoot, ['rev-parse', '--show-toplevel']);
     if (!top || realpathSync(top) !== realpathSync(repoRoot)) return null;

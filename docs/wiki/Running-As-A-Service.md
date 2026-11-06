@@ -145,6 +145,7 @@ log stream --predicate 'process == "node"'   # macOS, noisy
 | Install route | Update with                                                             |
 | ------------- | ------------------------------------------------------------------------ |
 | Installer     | Re-run the one-liner, or **App Settings → System → Updates**.             |
+| Installer, without git | Re-run the one-liner. The in-app updater says so instead of offering an update. |
 | npm           | `npm update -g aicodeman`                                                 |
 | git clone     | `git pull && npm install && npm run build`, then restart.                 |
 | Docker Compose | The in-app updater, which restarts the container in place, or `git pull`, then re-run `Start-Codeman.sh`. |
@@ -152,8 +153,8 @@ log stream --predicate 'process == "node"'   # macOS, noisy
 ### The in-app updater
 
 **App Settings → System → Updates**, for git-clone installs supervised by systemd or
-launchd. npm installs report as non-updatable, and an unsupervised install is told to
-restart manually.
+launchd. npm installs and installs without git report as non-updatable, and an unsupervised
+install is told to restart manually.
 
 The interesting part is that the update restarts the very process running it. So the real
 work runs in a **detached script that outlives the restart** and writes progress to a status

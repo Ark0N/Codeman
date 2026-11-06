@@ -38,8 +38,8 @@ as usual and tells them that server-wide settings can only be changed by an admi
 ### Updates
 
 Current version, a manual check, and the in-app updater. Covers git-clone installs
-supervised by systemd or launchd; npm installs report as non-updatable. See
-[Running As A Service](Running-As-A-Service).
+supervised by systemd or launchd; npm installs and installs without git report as
+non-updatable. See [Running As A Service](Running-As-A-Service).
 
 ### Terminal & Input
 
