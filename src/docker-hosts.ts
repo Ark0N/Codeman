@@ -1014,7 +1014,7 @@ export function resolveDockerCredentialArtifacts(
  * string; argv arrays must NOT carry literal quotes (mirror of docker-export's
  * dockerArgv).
  */
-function dockerEngineArgv(docker: Pick<SessionDocker, 'engine' | 'context' | 'daemonHost'>): string[] {
+export function dockerEngineArgv(docker: Pick<SessionDocker, 'engine' | 'context' | 'daemonHost'>): string[] {
   const argv: string[] = [docker.engine === 'podman' ? 'podman' : 'docker'];
   if (docker.context) argv.push('--context', docker.context);
   if (docker.daemonHost) argv.push('-H', docker.daemonHost);

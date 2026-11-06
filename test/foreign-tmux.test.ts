@@ -6,7 +6,11 @@
  * would quietly undo. Each one has a comment naming what actually went wrong.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { execSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import {
   buildForeignProbeScript,
   parseForeignProbeOutput,
@@ -19,9 +23,13 @@ import {
   buildForeignAttachCommand,
   buildForeignDockerAttachCommand,
   buildForeignRemoteAttachCommand,
+  buildForeignDockerViewKillCommand,
   buildForeignTmuxInvocation,
   foreignCliSignatures,
 } from '../src/foreign-tmux.js';
+import { foreignDockerProbeArgv, foreignRemoteProbeCommand } from '../src/foreign-tmux-discovery.js';
+import { buildAdoptSessionCommand } from '../src/tmux-manager.js';
+import type { RemoteHost, SessionAdopt } from '../src/types/session.js';
 import { PROC_WALK_MAX_NODES } from '../src/proc-tree.js';
 import { STOCK_CLIS } from '../src/config/cli-registry/stock.js';
 import { hooksAvailableForMode, sessionHookOptions } from '../src/web/session-wait-registry.js';
@@ -386,6 +394,139 @@ describe('attach command builders', () => {
 
     it('single-quotes the whole remote invocation', () => {
       expect(cmd).toMatch(/me@host '.*tmux -S .*'$/);
+    });
+  });
+});
+
+describe('the docker and ssh transports', () => {
+  const host: RemoteHost = {
+    id: 'h1',
+    label: 'Build box',
+    host: 'build.example',
+    username: 'me',
+  } as RemoteHost;
+  const dockerTarget = {
+    hostId: 'd1',
+    label: 'ci',
+    containerName: 'box',
+    base: { engine: 'docker' as const, context: 'my ctx', daemonHost: 'tcp://10.0.0.1:2375' },
+  };
+
+  it('hands execFile a docker argv with no shell quoting in it', () => {
+    // `docker --context "'my ctx'"` is what the shell-quoted builder gave execFile:
+    // "context not found", so every container behind a context read as unreachable.
+    const argv = foreignDockerProbeArgv(dockerTarget);
+    expect(argv.slice(0, 5)).toEqual(['docker', '--context', 'my ctx', '-H', 'tcp://10.0.0.1:2375']);
+    expect(argv.slice(5, 9)).toEqual(['exec', 'box', 'sh', '-lc']);
+    for (const token of argv) expect(token).not.toContain("'");
+  });
+
+  it('runs the ssh probe in sh with the remote tmux PATH, so a timeout reaches ssh', () => {
+    const cmd = foreignRemoteProbeCommand(host);
+    expect(cmd.startsWith('exec ssh ')).toBe(true);
+    expect(cmd).toContain('me@build.example');
+    expect(cmd).toContain('/opt/homebrew/bin');
+    expect(cmd).toContain('exec sh -c');
+    expect(cmd).toContain('list-panes');
+  });
+
+  it('puts the same PATH and sh on the ssh attach', () => {
+    const cmd = buildForeignRemoteAttachCommand({
+      socketPath: '/tmp/tmux-1000/default',
+      targetSession: 'work',
+      viewSession: 'codeman-view-abc12345',
+      sshArgs: ['ssh', '-o BatchMode=yes'],
+      sshTarget: 'me@host',
+    });
+    expect(cmd).toContain('/opt/homebrew/bin');
+    expect(cmd).toContain('exec sh -c');
+  });
+
+  it('kills the in-container view by exact name', () => {
+    // Without `=` tmux prefix-matches, and the view is grouped with the owner's work.
+    expect(
+      buildForeignDockerViewKillCommand({
+        dockerBase: 'docker',
+        containerName: 'box',
+        socketPath: '/tmp/tmux-0/default',
+        viewSession: 'codeman-view-abc12345',
+      })
+    ).toContain("kill-session -t '=codeman-view-abc12345'");
+  });
+
+  describe('buildAdoptSessionCommand', () => {
+    const adopt: SessionAdopt = {
+      location: 'local',
+      socketPath: '/tmp/tmux-1000/default',
+      targetSession: 'work',
+      viewSession: '',
+    };
+
+    it('attaches in place for a local target, and names the view after our session', () => {
+      const cmd = buildAdoptSessionCommand(adopt, 'abc12345-rest');
+      expect(cmd).toContain("has-session -t '=work'");
+      expect(cmd).toContain("-s 'codeman-view-abc12345'");
+      expect(cmd).not.toMatch(/\b(ssh|docker)\b/);
+    });
+
+    it('goes through the saved engine for a container, shell-quoted for the launch string', () => {
+      const cmd = buildAdoptSessionCommand(
+        {
+          ...adopt,
+          location: 'docker',
+          docker: { hostId: 'd1', label: 'ci', engine: 'podman', containerName: 'box', context: 'my ctx' },
+        },
+        'abc12345'
+      );
+      expect(cmd).toContain("podman --context 'my ctx' exec -it 'box' sh -lc");
+    });
+
+    it('goes through the saved connection for an ssh host', () => {
+      const cmd = buildAdoptSessionCommand(
+        { ...adopt, location: 'remote', remote: { hostId: 'h1', label: 'b', host: 'h.example', username: 'me', port: 2222 } },
+        'abc12345'
+      );
+      expect(cmd.startsWith('ssh -o BatchMode=yes -t ')).toBe(true);
+      expect(cmd).toContain('me@h.example');
+      expect(cmd).toContain('2222');
+    });
+  });
+
+  describe('the ssh attach survives every shell on its way', () => {
+    // bash -c "<JSON>" at respawn-pane, the single quotes around the remote command,
+    // the remote login shell, then sh -c. Stand-ins for ssh and tmux at the two ends
+    // show what a real tmux would receive, which no substring check can.
+    let home: string;
+    let bin: string;
+
+    beforeEach(() => {
+      home = mkdtempSync(join(tmpdir(), 'foreign-ssh-'));
+      // $HOME/bin, because the remote PATH line puts it ahead of a real tmux.
+      bin = join(home, 'bin');
+      mkdirSync(bin);
+      // The real thing hands its LAST argument to the remote login shell.
+      writeFileSync(join(bin, 'ssh'), '#!/bin/sh\nfor last; do :; done\nexec sh -c "$last"\n', { mode: 0o755 });
+      writeFileSync(join(bin, 'tmux'), '#!/bin/sh\nfor a; do printf "<%s>" "$a"; done\nprintf "\\n"\n', { mode: 0o755 });
+    });
+
+    afterEach(() => {
+      rmSync(home, { recursive: true, force: true });
+    });
+
+    it('delivers a spaced name as one argument to each tmux command', () => {
+      const launch = buildForeignRemoteAttachCommand({
+        socketPath: '/tmp/tmux-1000/my sock',
+        targetSession: 'my work',
+        viewSession: 'codeman-view-abc12345',
+        sshArgs: ['ssh', '-o BatchMode=yes'],
+        sshTarget: 'me@host',
+      });
+      const out = execSync(`bash -c ${JSON.stringify(launch)}`, {
+        encoding: 'utf-8',
+        env: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}` },
+      });
+      expect(out).toContain('<-S></tmp/tmux-1000/my sock><has-session><-t><=my work>');
+      expect(out).toContain('<new-session><-t><my work><-s><codeman-view-abc12345><;><set-option>');
     });
   });
 });

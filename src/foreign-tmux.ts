@@ -70,6 +70,7 @@
 
 import { collectDescendants } from './proc-tree.js';
 import { listClis } from './config/cli-registry/registry.js';
+import { withRemoteTmuxPath } from './remote-hosts.js';
 import { FOREIGN_MAX_PANES, FOREIGN_MAX_PROCS, FOREIGN_MAX_SOCKETS } from './config/foreign-tmux.js';
 import type { ForeignPaneProbe, ForeignTmuxLocationKind } from './types/foreign-tmux.js';
 import type { SessionAdopt, SessionMode } from './types/session.js';
@@ -597,7 +598,7 @@ export interface ForeignAttachTarget {
  *   noise out of the pane — the message we print says it better.
  * - ⚠️ The `=` prefix cannot go on `new-session -t` itself: tmux reads it as part of
  *   the name and creates a group literally called `=work`. It has to be a separate
- *   `has-session`. The read-only `attach-session` fallback takes `=` too.
+ *   `has-session`.
  * - `new-session -t` creates a session in the target's GROUP: same windows, our
  *   own session options and current window (NOT our own size — see @fileoverview
  *   for the measurement that disproved that).
@@ -620,6 +621,12 @@ export interface ForeignAttachTarget {
  *   killing a session in a group removes only that session (measured: the owner's
  *   `work` survived its grouped view being killed). `2>/dev/null` because "no such
  *   session" is the normal case, not an error.
+ * - ⚠️ Nothing here touches the prefix table, unlike the nested servers Codeman runs
+ *   itself (`nestedPrefixTableResetCommands`). Our own socket already has its table
+ *   reduced by `createSession`, but key tables are SERVER-WIDE, so reducing the foreign
+ *   one would rewrite the owner's keys for every session on their server, and it would
+ *   outlive our detach. Same reason `window-size` is left alone above. The owner's
+ *   bindings stay reachable from a tab, behind our own `send-prefix`, as theirs to use.
  * - Single line: the string crosses `bash -c "..."`, where a real newline would
  *   not survive JSON escaping.
  */
@@ -703,8 +710,23 @@ export function buildForeignDockerViewKillCommand(opts: {
 }): string {
   return (
     `${opts.dockerBase} exec ${fshq(opts.containerName)} ` +
-    `tmux -S ${fshq(opts.socketPath)} kill-session -t ${fshq(opts.viewSession)}`
+    `tmux -S ${fshq(opts.socketPath)} kill-session -t ${fshq(`=${opts.viewSession}`)}`
   );
+}
+
+/**
+ * A POSIX script as the command line of an ssh connection.
+ *
+ * ssh hands its command to the remote user's LOGIN shell, which may be fish: the
+ * guard chain's `{ ...; }` and the probe's `${VAR:-x}` are POSIX, so they run in an
+ * explicit `sh`. The PATH line stays outside it because it is the part written for
+ * whatever that shell is (`withRemoteTmuxPath`), and sshd's non-interactive PATH can
+ * miss a Homebrew or per-user tmux, the same reason every other remote tmux call has
+ * it. Single-quote-free input stays single-quote-free here, and `exec` keeps the
+ * process tree one level shorter.
+ */
+export function foreignRemoteShellCommand(script: string): string {
+  return withRemoteTmuxPath(`exec sh -c ${fshq(script)}`);
 }
 
 export interface ForeignRemoteAttachOptions extends ForeignAttachTarget {
@@ -724,7 +746,7 @@ export interface ForeignRemoteAttachOptions extends ForeignAttachTarget {
  */
 export function buildForeignRemoteAttachCommand(opts: ForeignRemoteAttachOptions): string {
   const [ssh, batchMode, ...rest] = opts.sshArgs;
-  return [ssh, batchMode, '-t', ...rest, opts.sshTarget, fshq(buildForeignTmuxInvocation(opts))]
+  return [ssh, batchMode, '-t', ...rest, opts.sshTarget, fshq(foreignRemoteShellCommand(buildForeignTmuxInvocation(opts)))]
     .filter(Boolean)
     .join(' ');
 }

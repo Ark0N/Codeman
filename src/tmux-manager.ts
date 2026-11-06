@@ -1917,7 +1917,7 @@ function buildRemoteSessionCommand(options: {
  * `kill-session`. It is the same reasoning that keeps a non-owned REMOTE session
  * safe (see the detach-not-kill early return in `killSession`).
  */
-function buildAdoptSessionCommand(adopt: SessionAdopt, sessionId: string): string {
+export function buildAdoptSessionCommand(adopt: SessionAdopt, sessionId: string): string {
   const target = {
     socketPath: adopt.socketPath,
     targetSession: adopt.targetSession,
@@ -2614,7 +2614,8 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     const { command: statusLineCommand, state: statusLine } = await this._resolveStatusLine(
       mode,
       workingDir,
-      !!(remote || docker)
+      // An adopted wrapper launches no agent, so nothing can carry the exporter.
+      !!(remote || docker || adopt)
     );
     const idleCompactionOff = await this._resolveIdleCompactionOptOut(mode, statusLine, keepWarm, spawnedByAgent);
     // The user's own REAL statusLine, if any (walked via Claude Code's own
@@ -2937,7 +2938,8 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     const { command: statusLineCommand, state: statusLine } = await this._resolveStatusLine(
       mode,
       workingDir,
-      !!(remote || docker)
+      // An adopted wrapper launches no agent, so nothing can carry the exporter.
+      !!(remote || docker || adopt)
     );
     const idleCompactionOff = await this._resolveIdleCompactionOptOut(mode, statusLine, keepWarm, spawnedByAgent);
     const userStatusLineCommand = statusLineCommand ? await findEffectiveUserStatusLineCommand(workingDir) : undefined;
@@ -3218,24 +3220,27 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       // A `docker exec` survives its client, so the in-container view would stay
       // attached forever and leak. Best-effort, and it can only reach OUR view.
       // See buildForeignDockerViewKillCommand for why local/remote need nothing.
+      // Fire and forget like the owned docker branch below: a daemon that stopped
+      // answering must not hold the event loop for the whole timeout.
       if (session.adopt.location === 'docker' && session.adopt.docker) {
         try {
-          execSync(
-            `${buildForeignDockerViewKillCommand({
+          exec(
+            buildForeignDockerViewKillCommand({
               dockerBase: buildDockerBaseArgs(session.adopt.docker).join(' '),
               containerName: session.adopt.docker.containerName,
               socketPath: session.adopt.socketPath,
               viewSession: session.adopt.viewSession || foreignViewSessionName(sessionId),
-            })} 2>/dev/null`,
-            { timeout: EXEC_TIMEOUT_MS, stdio: 'ignore' }
+            }),
+            { timeout: EXEC_TIMEOUT_MS },
+            () => {}
           );
         } catch {
-          // The container may be gone, or the view already collected.
+          // Best-effort: the container may be gone, or the view already collected.
         }
       }
       if (isValidMuxName(session.muxName)) {
         try {
-          execSync(`${this.tmux()} kill-session -t "${session.muxName}" 2>/dev/null`, {
+          await execAsync(`${this.tmux()} kill-session -t "${session.muxName}" 2>/dev/null`, {
             timeout: EXEC_TIMEOUT_MS,
           });
         } catch {
@@ -3243,7 +3248,9 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         }
       }
       this.lastPaneCount.delete(session.muxName);
+      this.clearPaneExit(session.muxName);
       this.sessions.delete(sessionId);
+      this.clearRemoteReconnectState(sessionId);
       this.saveSessions();
       this.emit('sessionKilled', { sessionId });
       return true;

@@ -34,16 +34,16 @@ import { promisify } from 'node:util';
 import {
   buildForeignProbeScript,
   classifyForeignPaneMode,
+  foreignRemoteShellCommand,
   foreignSessionId,
   isAdoptableSessionName,
   isAdoptableSocketPath,
   isCodemanOwnedPane,
   parseForeignProbeOutput,
 } from './foreign-tmux.js';
-import { buildDockerBaseArgs, shellescape } from './docker-hosts.js';
-import { buildSshConnectionArgs, remoteSshTarget } from './remote-hosts.js';
-import { readDockerCases, readDockerHosts } from './docker-hosts.js';
-import { readRemoteHosts } from './remote-hosts.js';
+import { dockerEngineArgv, readDockerCases, readDockerHosts } from './docker-hosts.js';
+import { buildSshConnectionArgs, readRemoteHosts, remoteSshTarget, shellescape } from './remote-hosts.js';
+import { runWithRemoteSshLimit } from './remote-ssh-limiter.js';
 import { resolveTmuxSocketName, getDataDir } from './config/instance.js';
 import { FOREIGN_CACHE_TTL_MS, FOREIGN_PROBE_MAX_BYTES, FOREIGN_PROBE_TIMEOUT_MS } from './config/foreign-tmux.js';
 import type { ForeignDiscoveryResult, ForeignTmuxSession } from './types/foreign-tmux.js';
@@ -63,13 +63,18 @@ const PROBE_OPTS = {
 /**
  * Turn one probe's stdout into candidates. Shared by all three transports, so a
  * container's sessions and the host's are classified by identical rules.
+ *
+ * `where` opens every note this scan writes (`local`, `docker <name>`, `remote
+ * <label>`). The browser tells the two kinds apart by it: a local note is re-read on
+ * every poll, a container or host note only by the next explicit scan.
  */
 function candidatesFrom(
   stdout: string,
   location: ForeignTmuxSession['location'],
   hostKey: string,
   extra: Pick<ForeignTmuxSession, 'hostId' | 'hostLabel' | 'containerName'>,
-  notes?: string[]
+  where: string,
+  notes: string[]
 ): ForeignTmuxSession[] {
   const probe = parseForeignProbeOutput(stdout);
   const ownSocket = resolveTmuxSocketName();
@@ -112,9 +117,9 @@ function candidatesFrom(
       workingDir: pane.paneCurrentPath,
     });
   }
-  if (unsafe && notes) {
+  if (unsafe) {
     notes.push(
-      `${unsafe} session(s) skipped: the tmux session name or socket path contains characters Codeman will not pass to a shell`
+      `${where}: ${unsafe} session(s) skipped, the tmux session name or socket path contains characters Codeman will not pass to a shell`
     );
   }
   return out;
@@ -145,7 +150,7 @@ export async function discoverLocalForeign(force = false): Promise<ForeignDiscov
       // argv array: no outer shell, so the script's own `$TMUX_TMPDIR`/`$(id -u)`
       // reach the inner sh intact (see @fileoverview).
       const { stdout } = await execFileAsync('sh', ['-c', buildForeignProbeScript()], PROBE_OPTS);
-      sessions = candidatesFrom(stdout, 'local', 'local', {}, notes);
+      sessions = candidatesFrom(stdout, 'local', 'local', {}, 'local', notes);
     } catch {
       // No tmux, no sockets, or a probe that timed out. "Nothing to adopt here"
       // is the only honest answer and it is never an error to the caller.
@@ -171,7 +176,7 @@ export function invalidateForeignCache(): void {
 // ===========================================================================
 
 /** Connection facts for one adoptable container, resolved from the registries. */
-interface DockerTargetInfo {
+export interface DockerTargetInfo {
   hostId: string;
   label: string;
   containerName: string;
@@ -205,6 +210,18 @@ function dockerTargets(cases: DockerCase[], hosts: DockerHost[]): DockerTargetIn
 }
 
 /**
+ * The argv of one in-container probe.
+ *
+ * ⚠️ `dockerEngineArgv`, never `buildDockerBaseArgs`, whose `--context` and `-H`
+ * values are shell-quoted for the launch string. `execFile` passes those quotes
+ * through literally, so `docker --context "'default'"` answered "context not found"
+ * and every container behind a named context or a remote daemon read as unreachable.
+ */
+export function foreignDockerProbeArgv(target: DockerTargetInfo): string[] {
+  return [...dockerEngineArgv(target.base), 'exec', target.containerName, 'sh', '-lc', buildForeignProbeScript()];
+}
+
+/**
  * Scan the containers behind the caller's docker cases. On demand only.
  *
  * Read-only by construction: one `docker exec` running the probe. Never inspects
@@ -222,19 +239,16 @@ export async function discoverDockerForeign(cases: DockerCase[]): Promise<Foreig
 
   await Promise.all(
     targets.map(async (t) => {
-      const [engine, ...baseFlags] = buildDockerBaseArgs(t.base);
+      const [engine, ...args] = foreignDockerProbeArgv(t);
       try {
-        const { stdout } = await execFileAsync(
-          engine,
-          [...baseFlags, 'exec', t.containerName, 'sh', '-lc', buildForeignProbeScript()],
-          PROBE_OPTS
-        );
+        const { stdout } = await execFileAsync(engine, args, PROBE_OPTS);
         sessions.push(
           ...candidatesFrom(
             stdout,
             'docker',
             `${t.hostId} ${t.containerName}`,
             { hostId: t.hostId, hostLabel: t.label, containerName: t.containerName },
+            `docker ${t.containerName}`,
             notes
           )
         );
@@ -252,12 +266,30 @@ export async function discoverDockerForeign(cases: DockerCase[]): Promise<Foreig
 // ===========================================================================
 
 /**
+ * The ssh command line of one remote probe.
+ *
+ * `exec` so a timeout kill reaches ssh itself, not only the local `sh -c` around it.
+ */
+export function foreignRemoteProbeCommand(host: RemoteHost): string {
+  return [
+    'exec',
+    ...buildSshConnectionArgs(host),
+    remoteSshTarget(host),
+    shellescape(foreignRemoteShellCommand(buildForeignProbeScript())),
+  ].join(' ');
+}
+
+/**
  * Scan saved ssh hosts. On demand only — this is the expensive one.
  *
  * ⚠️ The ssh command is a STRING (as every ssh call in this codebase is), so the
  * probe crosses one extra shell and must be single-quoted. `shellescape` does
  * that, and `buildForeignProbeScript()` is single-quote-free precisely so the
  * escaping stays a wrap rather than a rewrite.
+ *
+ * Each host holds a slot of the shared remote-ssh limiter: one saved host per
+ * connection, all at once, is the burst OpenSSH's `MaxStartups` starts dropping.
+ * A host that waits too long for a slot reads as unreachable this round.
  */
 export async function discoverRemoteForeign(hosts: RemoteHost[]): Promise<ForeignDiscoveryResult> {
   if (IS_TEST_MODE) return { sessions: [], scannedAt: Date.now(), notes: [] };
@@ -267,14 +299,14 @@ export async function discoverRemoteForeign(hosts: RemoteHost[]): Promise<Foreig
 
   await Promise.all(
     hosts.map(async (host) => {
-      const cmd = [...buildSshConnectionArgs(host), remoteSshTarget(host), shellescape(buildForeignProbeScript())].join(
-        ' '
-      );
+      const where = `remote ${host.label}`;
       try {
-        const { stdout } = await execAsync(cmd, PROBE_OPTS);
-        sessions.push(...candidatesFrom(stdout, 'remote', host.id, { hostId: host.id, hostLabel: host.label }));
+        const { stdout } = await runWithRemoteSshLimit(() => execAsync(foreignRemoteProbeCommand(host), PROBE_OPTS), {
+          maxWaitMs: FOREIGN_PROBE_TIMEOUT_MS,
+        });
+        sessions.push(...candidatesFrom(stdout, 'remote', host.id, { hostId: host.id, hostLabel: host.label }, where, notes));
       } catch {
-        notes.push(`remote ${host.label}: unreachable, or no tmux`);
+        notes.push(`${where}: unreachable, or no tmux`);
       }
     })
   );
