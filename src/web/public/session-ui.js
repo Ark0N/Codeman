@@ -4271,30 +4271,34 @@ Object.assign(CodemanApp.prototype, {
     const hint = document.getElementById('cloneCaseNameHint');
     if (hint) {
       hint.textContent = custom.checked
-        ? 'Filled in from the URL. Names the case only: the repository is cloned into the folder chosen below.'
+        ? 'Filled in from the URL. Names the case and the subfolder of the chosen folder the repository is cloned into.'
         : 'Filled in from the URL. Cloned into ~/codeman-cases/<name>, so deleting the case deletes this working tree.';
     }
     this.updateCloneCasePathPreview();
   },
 
-  /** The folder the repository is cloned into: exactly what the field holds (no case name is added). */
+  /** The folder the repository is cloned into: the parent field plus the case name, as Create New does. */
   _cloneTargetPath() {
-    const raw = (document.getElementById('cloneCasePath')?.value || '').trim();
+    const rawParent = (document.getElementById('cloneCasePath')?.value || '').trim();
+    const name = (document.getElementById('cloneCaseName')?.value || '').trim();
+    if (!rawParent || !name) return '';
     // Trailing slashes off, but `/` stays the root rather than becoming an empty path.
-    return raw.length > 1 ? raw.replace(/\/+$/, '') || '/' : raw;
+    return `${rawParent.replace(/\/+$/, '')}/${name}`;
   },
 
   updateCloneCasePathPreview() {
     const hint = document.getElementById('cloneCasePathPreview');
     if (!hint) return;
     const target = this._cloneTargetPath();
-    hint.textContent = target ? `Will clone into: ${target}` : 'Pick an empty folder, or one that does not exist yet, to clone into.';
+    hint.textContent = target
+      ? `Will clone into: ${target}`
+      : 'Pick the folder the repository should be cloned inside. It goes into a subfolder named after the case.';
   },
 
   openCloneCasePathPicker() {
     const input = document.getElementById('cloneCasePath');
     PathPicker.open({
-      title: 'Choose the folder to clone into',
+      title: 'Choose the parent folder for the clone',
       initialPath: input.value.trim(),
       directoriesOnly: true,
       onSelect: (path) => {
@@ -4341,12 +4345,14 @@ Object.assign(CodemanApp.prototype, {
   onCloneNameEdited() {
     // Once the user types a name, autofill stops fighting them.
     this._cloneNameEdited = !!document.getElementById('cloneCaseName')?.value.trim();
+    this.updateCloneCasePathPreview();
   },
 
   onCloneUrlInput() {
     const url = document.getElementById('cloneRepoUrl')?.value.trim() || '';
     const nameInput = document.getElementById('cloneCaseName');
     if (nameInput && !this._cloneNameEdited) nameInput.value = this._repoNameFromUrl(url);
+    this.updateCloneCasePathPreview();
     clearTimeout(this._clonePreflightTimer);
     this._clonePreflightAbort?.abort();
     this._clonePreflightAbort = null;
@@ -4401,7 +4407,10 @@ Object.assign(CodemanApp.prototype, {
     // The server's suggestion wins over the local guess (it is the same function
     // the case name is validated against), but never over a name the user typed.
     const nameInput = document.getElementById('cloneCaseName');
-    if (nameInput && !this._cloneNameEdited && parse.suggestedName) nameInput.value = parse.suggestedName;
+    if (nameInput && !this._cloneNameEdited && parse.suggestedName) {
+      nameInput.value = parse.suggestedName;
+      this.updateCloneCasePathPreview();
+    }
 
     const where = parse.owner ? `${parse.provider} ${parse.owner}/${parse.repo}` : `${parse.provider} ${parse.repo}`;
     if (data.gitAvailable === false) {
@@ -4456,7 +4465,7 @@ Object.assign(CodemanApp.prototype, {
 
     const customFolder = !!document.getElementById('cloneCustomPathToggle')?.checked;
     if (customFolder && !(document.getElementById('cloneCasePath')?.value || '').trim()) {
-      this.showToast('Choose the folder to clone into', 'error');
+      this.showToast('Choose the parent folder for the clone', 'error');
       return;
     }
 
