@@ -313,8 +313,8 @@ button, and **Rescan** runs it again.
 - **A short line in the block says why a session is missing.** One whose name holds unusual
   characters is skipped, and so is one named so that tmux reads the name as something else (it
   starts with `=`, `@` or `%`, or is a bare `~`). Rename it with `tmux rename-session`. A tmux
-  server that stopped answering costs only its own sessions. The one silent case: a session
-  named `codeman-*` or `claudeman-*` counts as Codeman's own and is left out with no line.
+  server that stopped answering costs only its own sessions. One case gets no line: a session
+  named `codeman-*` or `claudeman-*`, or on a Codeman socket, counts as Codeman's own.
 
 Only sockets in tmux's own folder are scanned, so `tmux -L <name>` is found and
 `tmux -S /custom/path` is not. In multi-user mode the block is for admins, since it shows
