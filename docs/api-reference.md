@@ -1676,15 +1676,44 @@ Only replies from `allowedUserIds`, in `guildId`, inside a thread the bridge cre
 
 `GET /api/doctor[?category=core|office|other]` returns the `codeman doctor --json` report (`platform`, `summary`, `tools[]` with `status` `ok` \| `missing` \| `outdated` \| `skipped` \| `error`, `version`, `path`, `installHint`). The probe engine is synchronous, so it runs in a child process of the same entry script, never on the server's event loop (30 s timeout). It names install paths and versions, so it is admin only in multi-user mode (`403`). `400` for an unknown category, `500` if the child produces no report.
 
-## Local model recommendation
+## Local model
 
-`GET /api/local-model` looks at the machine the server runs on and says which local coding model fits it, and with which agent CLI. It covers Apple silicon macOS only; anywhere else the answer is still a `200`, with verdict `none`. **Read-only:** the route downloads nothing, installs nothing, writes no file and reads or changes no setting (setting a model up from Codeman is a later step and is not built yet). It names the host's hardware, so it is admin only in multi-user mode (`403`, answered before anything is probed). The models, their sizes and the agent CLIs it considers are a catalogue compiled into the release; there is no override file.
+`GET /api/local-model` looks at the machine the server runs on and says which local coding model fits it, with which agent CLI, and where an install of one stands. Five verbs install a model, pause and continue the install, stop and start the model runtime, and remove everything again. It covers Apple silicon macOS only; anywhere else the GET is still a `200`, with verdict `none`, and nothing can be installed. How it works: [local-models.md](local-models.md).
 
-**Experimental.** This endpoint and its payload are labeled experimental until the step that sets a model up ships: that step will add to and may change the fields below, the verdicts and the sentences, in a MINOR or PATCH release (see [versioning-policy.md](versioning-policy.md), "What SemVer does NOT cover", item 3). Do not build on its shape yet.
+**Experimental.** These routes and their payloads are labeled experimental: the fields below, the states, the error codes and the sentences may change or go in a MINOR or PATCH release (see [versioning-policy.md](versioning-policy.md), "What SemVer does NOT cover", item 3). Do not build on their shape yet.
 
-| Method | Path               | Body | Notes                                                                                                                                                                                                    |
-| ------ | ------------------ | ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET`  | `/api/local-model` | none | `200` with `{ hardware, recommendation, catalogUpdated }`. `403 FORBIDDEN` for a non-admin in multi-user mode. `500 INTERNAL_ERROR` only when the recommendation itself fails, never for a failed probe. |
+Every route is admin only in multi-user mode (`403 FORBIDDEN`, answered before anything is probed, parsed or started): the GET names the host's hardware, and the verbs download and run a program, install an agent CLI and write the server-wide settings. There is no SSE event: the window polls the GET once a second while it is open.
+
+| Method   | Path                       | Body                                             | Notes                                                                                                                                                                                                                                                  |
+| -------- | -------------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `GET`    | `/api/local-model`         | none                                             | `200` with `{ hardware, recommendation, catalogUpdated, install }`. `500 INTERNAL_ERROR` only when the recommendation itself fails, never for a failed probe.                                                                                             |
+| `POST`   | `/api/local-model/install` | `{ modelId, cli, context, acknowledgedBytes }`   | Starts the one install job and answers at once; the job runs on in the server. `400 INVALID_INPUT` when the three choices are not a row the server offers right now. `409`: `job-running`, `already-installed`, `size-changed`.                         |
+| `POST`   | `/api/local-model/cancel`  | none                                             | Interrupts the step in flight; the job is `paused` at that step. `409 wrong-state` when no job is running.                                                                                                                                                |
+| `POST`   | `/api/local-model/resume`  | `{ newPort? }` (may be absent)                   | Continues a `paused` or `failed` job at the same step. `newPort: true` chooses another port first. `409`: `job-running`, `wrong-state`, `sessions-open` (`newPort` while live sessions use the model).                                                  |
+| `POST`   | `/api/local-model/runtime` | `{ action: "start" \| "stop", newPort? }`        | `stop` stops the runtime and keeps it from starting at the next boot; `start` undoes that. `newPort: true` with `start` chooses another port and moves the saved endpoint to it. `409`: `job-running`, `wrong-state` (nothing is installed), `sessions-open` (`stop` or `newPort` while live sessions use the model: their agents keep calling the address they were started with). |
+| `DELETE` | `/api/local-model`         | `{ removeModel? }` (may be absent)               | Stops the runtime, removes the saved endpoint, restores the settings flag when this feature switched it on and no other endpoint is saved, deletes the runtime; the model only with `removeModel: true`. `409`: `job-running`, `sessions-open`.        |
+
+Every verb answers `{ success: true, data: <install> }` with the `install` object (below) as it is after the verb. A refusal the feature names is a `409` whose envelope also carries the conflict:
+
+```json
+{
+  "success": false,
+  "error": "The download is 23.3 GB now. Check the sizes and confirm again.",
+  "errorCode": "CONFLICT",
+  "data": {
+    "reason": "size-changed",
+    "message": { "text": "The download is {size} GB now. Check the sizes and confirm again.", "vars": { "size": "23.3" } },
+    "expectedBytes": 23291770627,
+    "expectedGb": "23.3"
+  }
+}
+```
+
+`data.reason` is `job-running`, `already-installed` (remove the installed model first), `size-changed` (with `expectedBytes` and `expectedGb`), `sessions-open` (with `sessions`, the names of the live sessions that use the model) or `wrong-state`. A `409 CONFLICT` without `data` means a config file that must not be overwritten (`settings.json` or `custom-model-hosts.json` does not parse); `error` names the fix.
+
+`POST /api/local-model/install` also answers `400` when a saved model endpoint already uses the id `local-ollama` and was not created by this feature: rename or delete that endpoint first. The check is made before anything is downloaded. Every `400` the install names, and the `507 OPERATION_FAILED` of a first install on a full disk, carries its sentence as `data.message` (`{ text, vars }`, like a `409`), so a client can print it in its own language.
+
+**Consent is bound to the size shown.** `acknowledgedBytes` must be the `installBytes` of the chosen row: the model download plus the runtime download while the runtime is not unpacked yet. The server compares it with its own total before anything starts and answers `409 size-changed` when they differ, so a click confirms exactly the size the person saw.
 
 A probe that fails is an answer, not an error: a server that is not on macOS, or a Mac whose `sysctl` call failed or timed out, still gets a `200`, and `hardware.source` says what was read.
 
@@ -1696,18 +1725,46 @@ A probe that fails is an answer, not an error: a server that is not on macOS, or
   - `chip`, `model`, `macosVersion`, `macosMajor`, `wiredLimitMb` (`0` means not set), `freeDiskBytes` and `freeDiskGb` (free space on the filesystem of Codeman's data directory). Each is absent when it could not be read.
   - `source`: `sysctl` (the one bounded `sysctl` call answered), `os-fallback` (macOS, but that call failed: memory, architecture, the chip name and the free disk space come from Node, and nothing only `sysctl` knows, such as `arm64`, `translated`, `model`, `macosVersion`, `macosMajor` or `wiredLimitMb`, is present) or `not-probed` (not macOS, nothing was run).
 - `recommendation`:
-  - `verdict`: `ok`, `limited` or `none`. `limited` is a statement about the Mac: no model with 12 billion parameters or more fits its memory, so what it can run handles small edits and questions and does not replace a cloud model. It is judged on every model that fits, before the free disk space is looked at and whatever the pick is. With `ok` the pick can still be a small model (a larger one may fit only tightly, have no speed figure or have no room on the disk); `notes` then says so.
+  - `verdict`: `ok`, `limited` or `none`. `limited` is a statement about the Mac: no model with 12 billion parameters or more fits its memory, so what it can run handles small edits and questions and does not replace a cloud model. It is judged on every model that fits, before the free disk space is looked at and whatever the pick is. With `ok` the pick can still be a small model (a larger one may be slow, have no speed figure or have no room on the disk); `notes` then says so.
   - `reason`, present only with `none`: `not-macos`, `intel`, `memory`, `disk`, `macos` (too old) or `no-harness` (no agent CLI that can be connected to a local model is installed or installable). `memory` has three sentences: nothing fits at all (slot `memory`, the size the Mac is sold as), a model fits but only below the context length an agent CLI needs (slots `budget` and `need`, so a Mac that misses by a little reads as that), and the memory size could not be read (no slot).
   - `headline` and `notes[]`: `{ text, vars? }`. `text` is an English sentence that may hold `{placeholder}` slots, and `vars` carries the slot values as text. Notes, in order: the pick is a small model although larger ones fit (verdict `ok` only); a model that fits the memory was left out because its download would not leave 10 GiB free on the disk (slots `model` and `missing`: the best-ranked such model and the GB to free up); nobody tested the pick on a Mac like this one.
-  - `pick` (absent with `none`) and `alternatives[]` (at most four, best first; empty with `none`), each one model at one context length with one agent CLI. A model whose download would leave less than 10 GiB free on the disk is not listed (an unknown free disk space excludes nothing):
+  - `pick` (absent with `none`) and `alternatives[]` (at most four, best first; empty with `none`), each one model at one context length with one agent CLI. The order: a pair tested on a Mac like this one first, then speed (`ok` before `unknown` before `slow`), then the model's rank, the agent CLI's rank and the larger context. The memory fit decides whether a row is listed and what it says (`fit`, `tag`), it does not sort, so a model is offered at the largest context it fits at. A model whose download would leave less than 10 GiB free on the disk is not listed (an unknown free disk space excludes nothing):
     - `modelId` (`name:tag`), `modelLabel`, `license`, `paramsB` (parameters in billions), `context` (tokens);
     - `cli`, `cliLabel`, `cliInstalled` (`false`: the CLI is not on this machine yet but can be installed without administrator rights), `slowFirstTurn?`;
-    - `needBytes` and `needGb` (memory the model needs at that context), `downloadBytes` and `downloadGb`, `budgetShare` (need divided by `budgetBytes`, rounded to three decimals);
+    - `needBytes` and `needGb` (memory the model needs at that context, at its PEAK: the weights, what stays held per token of context, what the runner holds beside both, and what it takes for a moment while a long prompt is processed), `needSource` (`measured`: the figures were measured for this model on a Mac; `estimated`: they are another model's), `downloadBytes` and `downloadGb`, `budgetShare` (need divided by `budgetBytes`, rounded to three decimals);
+    - `installBytes` and `installGb`: the whole download a click on Install starts for this row, `downloadBytes` plus the runtime archive while the runtime is not unpacked. It is the number to send as `acknowledgedBytes`;
+    - `harnesses[]`: every agent CLI the model can be run with at this context, best first: `{ cli, cliLabel, installed, installCommand?, slowFirstTurn? }`. `installCommand` is the literal command the install would run for a CLI that is not installed (the release's own stock command), for the consent screen. The first entry is the one the flat `cli` fields name;
+    - `tag?`: `{ kind, label }`, the one tag of the row. `kind` is `tested`, `best`, `tight`, `slow` or `small`;
     - `fit`: `good` (up to 0.85 of the budget) or `tight` (up to 0.98), with its label `fitLabel`;
     - `speed`: `ok`, `slow` (under 10 tokens per second) or `unknown`, with `speedLabel` (absent for `ok`) and `tokensPerSecond` (rounded to one decimal, absent for `unknown`; `speed` is decided on the unrounded figure, so `10` can be `slow`). `unknown` means the chip is in no row of the catalogue's chip table, or the catalogue has no speed figure for the model: a speed is never guessed;
-    - `tested`: we ran this model with this CLI on a Mac like this one. No catalogue row has such an entry yet, so it is `false` today.
-  - `budgetBytes` and `budgetGb`: the memory a model may use on this Mac (`0` for `not-macos` and `intel`, where none is computed). `budgetSource` is `wired-limit` (taken from `iogpu.wired_limit_mb`) or `estimated` (computed from the installed memory).
+    - `tested`: we ran this model with this CLI on a Mac like this one (same chip, same memory size). Its `tokensPerSecond` is then the speed measured in that run.
+  - `budgetBytes` and `budgetGb`: the memory a model may use on this Mac (`0` for `not-macos` and `intel`, where none is computed). `budgetSource` is `estimated` (computed from the installed memory: all there is before the runtime ran), `wired-limit` (taken from `iogpu.wired_limit_mb`) or `measured` (the device total the runtime itself printed when it started; the GET uses it from the first install on).
 - `catalogUpdated`: ISO date on which the catalogue's rows were last checked.
+- `install`: where the install stands and what can be done about it.
+  - `state`: `idle` (nothing installed, no job), `installing`, `paused` (Cancel or a server restart stopped the job; it never continues without a click), `failed` or `installed`.
+  - `step` and `steps[]` (present with `installing`, `paused` and `failed`): the step the job is in or stopped in, and the steps of this job in order, out of `runtime`, `model`, `verify`, `agent`, `connect`. `agent` is absent from a job whose agent CLI was already installed.
+  - `progress` (while a download runs, and as it stood on a paused or failed job): `completedBytes`, `totalBytes`, `completedGb`, `totalGb`, and while it moves `bytesPerSecond`, `mbPerSecond` (whole decimal megabytes per second as text) and `secondsLeft`. During the `model` step both byte figures come from the download's own lines, not from the catalogue.
+  - `error` (with `failed`; with `installed` only when something blocks a session): `{ code, message: { text, vars? }, next, nextModel?, detail? }`. `next` is the ONE action that helps: `retry` (`POST .../resume`), `other-port` (`POST .../resume` or `.../runtime` with `newPort: true`), `next-model` (choose again; `nextModel` is `{ modelId, modelLabel }` when the server knows one), `start` (`POST .../runtime`) or `remove` (`DELETE`). `detail` is raw text for the curious (an installer's last lines), not translated.
+  - `model` (`{ id, label }`), `cli`, `cliLabel`, `context`: the choice of the job or of the installation. `port`: the runtime's loopback port, once chosen.
+  - `running`: the runtime Codeman started is alive right now. A runtime the person stopped is `running: false` with no `error`.
+  - `loaded` (with `installed`): what the runtime reported when the job checked the loaded model: `context`, `memoryBytes`, `memoryGb`, `onGpu`.
+  - `endpointId` (with `installed`): the saved model endpoint a session is started on, with `cli`.
+  - `developerTools`: `present`, `missing` (the Mac has no Xcode or Command Line Tools, so macOS will offer to install them the first time an agent runs `git` or `python3`) or `unknown`.
+  - `runtime`: `{ version, installed, downloadBytes, downloadGb, unpackedGb }`. `downloadBytes` is `0` once the runtime is unpacked.
+  - `folder`: the absolute folder everything of this feature is kept in.
+  - `actions[]`: exactly what the server accepts right now, out of `install`, `cancel`, `resume`, `start`, `stop`, `remove` and `start-session` (not a route here: start a session on `endpointId`; offered only while the runtime runs and nothing blocks a session).
+
+Error codes (`install.error.code`), each with one next step:
+
+| Next step    | Codes                                                                                                                                                                                                                                   |
+| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `retry`      | `runtime-download-failed`, `runtime-damaged`, `runtime-unpack-failed`, `runtime-start-failed`, `disk-full`, `pull-failed`, `context-not-applied`, `load-failed`, `probe-unfinished`, `harness-failed`, `endpoint-id-taken`, `connect-failed`, `internal` |
+| `start`      | `runtime-stopped` (the runtime crashed three times in a row and is no longer restarted)                                                                                                                                                 |
+| `other-port` | `port-in-use`                                                                                                                                                                                                                           |
+| `next-model` | `model-not-found`, `does-not-fit`, `no-tool-call`                                                                                                                                                                                       |
+| `remove`     | `model-changed` (the model's digest is no longer the one stored at install time; a session on it is refused)                                                                                                                            |
+
+Starting a session on the saved endpoint goes through the existing custom model launch (`POST /api/quick-start` with `customModel`, or `POST /api/sessions/:id/custom-model`). For the endpoint this feature manages both answer `OPERATION_FAILED` with one sentence while the runtime is not running, when the model's digest changed, or for a model other than the installed one.
 
 Every computed size a person reads travels twice: as bytes, and as decimal GB text without the unit (`"needGb": "29.6"`). Show the text and add the unit; do not divide the bytes yourself, so one request never shows two different roundings. The installed memory is the exception named above: show `memClassGb`.
 

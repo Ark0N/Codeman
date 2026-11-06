@@ -113,6 +113,11 @@ const SENSITIVE_PATTERNS: RegExp[] = [
   /\/\.codeman[^/]*\/webhook\.json$/,
   /\/\.codeman[^/]*\/custom-model-hosts\.json$/,
   /\/\.codeman[^/]*\/custom-model-configs\//,
+  // The local model runtime (src/local-model/) is started with a private HOME inside the data
+  // dir and makes a key pair for itself there (`home/.ollama/id_ed25519`). A runtime the user
+  // runs on their own keeps the same key under their real home.
+  /\/\.codeman[^/]*\/local-model\/home\//,
+  /\/\.ollama\/id_ed25519$/,
   // Config backups are dated COPIES of the files above (users.json and settings.json
   // included), which the name-anchored patterns do not match. A custom
   // `configBackupDir` is outside what a pattern here can name.

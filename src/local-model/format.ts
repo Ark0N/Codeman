@@ -7,12 +7,12 @@
  * `budgetGb`, and the size slots of a `LocalModelMessage`). Nothing else may turn bytes into a
  * size for display, the browser included: it prints the text it was sent.
  *
- * GiB and MiB exist only for the budget math (reserves, the wired limit, the prompt cache) and
- * never reach a person, with one exception: `memClassGb()`, the memory size a Mac is sold as,
- * is how the card names the installed memory ("48 GB memory", what About This Mac shows). It
- * is a name of the machine, not a computed size: `formatGb()` of the same bytes reads 51.5,
- * which no owner recognises. Every computed size (need, budget, download, free disk) is
- * `formatGb()`.
+ * GiB and MiB exist only for the budget math (reserves, the wired limit, the device total the
+ * runtime reports) and never reach a person, with one exception: `memClassGb()`, the memory
+ * size a Mac is sold as, is how the card names the installed memory ("48 GB memory", what
+ * About This Mac shows). It is a name of the machine, not a computed size: `formatGb()` of the
+ * same bytes reads 51.5, which no owner recognises. Every computed size (need, budget,
+ * download, free disk) is `formatGb()`.
  *
  * Pure: no IO, no state.
  */

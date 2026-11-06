@@ -1,18 +1,22 @@
 /**
- * @fileoverview The "Model on this Mac" card and its App Settings group in Chinese (zh-CN).
+ * @fileoverview "Run a model on this Mac" in Chinese (zh-CN): the welcome button, the chooser
+ * window and the App Settings group.
  *
  * Three sources of text, all checked against the real dictionary in i18n.js:
  *  - the module's own strings, HARVESTED from the real local-model-ui.js (every literal it
  *    passes to `localModelT`), so a new string without an entry fails here instead of showing
  *    up English on one surface;
- *  - every sentence and label the SERVER may send (`LOCAL_MODEL_LABELS`, imported from the
- *    contract, so a label added there fails here until it has an entry);
- *  - the static heading and hint of the Settings group, read from the real index.html and run
- *    through the real DOM translator.
+ *  - every sentence and label the SERVER may send: the recommendation (`LOCAL_MODEL_LABELS`),
+ *    the tag of a model row (`LOCAL_MODEL_TAG_LABELS`) and the install
+ *    (`LOCAL_MODEL_INSTALL_LABELS`), all imported from the contract, so a label added there
+ *    fails here until it has an entry;
+ *  - the static strings of the real index.html (the Settings group's heading and hint, the
+ *    window's title), run through the real DOM translator.
  *
- * Both containers carry data-i18n-skip (model, harness and chip names are someone else's
- * text), so nothing in them is reached by the DOM translator: these strings translate only
- * through the module's own call, which is why they are checked through `t()` here.
+ * The window's body, the welcome button and the Settings row carry data-i18n-skip (model,
+ * coding agent and chip names are someone else's text), so nothing in them is reached by the
+ * DOM translator: these strings translate only through the module's own call, which is why
+ * they are checked through `t()` here.
  *
  * Beyond "it is Chinese now", each entry must keep its `{placeholder}` slots: a translation
  * that drops one prints a sentence without its number.
@@ -24,7 +28,13 @@ import { resolve } from 'node:path';
 import vm from 'node:vm';
 import { JSDOM } from 'jsdom';
 import { afterAll, describe, expect, it } from 'vitest';
-import { LOCAL_MODEL_LABELS, LOCAL_MODEL_NONE_LABELS } from '../src/types.js';
+import {
+  LOCAL_MODEL_ERROR_LABELS,
+  LOCAL_MODEL_INSTALL_LABELS,
+  LOCAL_MODEL_LABELS,
+  LOCAL_MODEL_NONE_LABELS,
+  LOCAL_MODEL_TAG_LABELS,
+} from '../src/types.js';
 
 const PUBLIC = resolve(import.meta.dirname, '../src/web/public');
 const I18N = readFileSync(resolve(PUBLIC, 'i18n.js'), 'utf8');
@@ -39,11 +49,14 @@ type Api = {
 
 /** Every literal the module hands to its translator call (Prettier may break after the paren). */
 const FROM_MODULE = [...new Set([...MODULE.matchAll(/localModelT\(\s*'([^']+)'/g)].map((m) => m[1]))];
-/** Every text the server may send. */
-const FROM_SERVER: string[] = Object.values(LOCAL_MODEL_LABELS);
-/** Already in the dictionary for the outside-sessions block; reused here for a failed request. */
-const SHARED = ['Could not reach the server.'];
-const OWN = FROM_MODULE.filter((source) => !SHARED.includes(source));
+/** Every text the server may send: the recommendation, the tag of a row, the install. */
+const FROM_SERVER: string[] = [
+  ...new Set([
+    ...Object.values(LOCAL_MODEL_LABELS),
+    ...Object.values(LOCAL_MODEL_TAG_LABELS),
+    ...Object.values(LOCAL_MODEL_INSTALL_LABELS),
+  ]),
+];
 
 /** A page with only the translator in it: enough for `t()`, and cheap to re-configure. */
 const small = new JSDOM('<!doctype html><html><body></body></html>', {
@@ -66,13 +79,15 @@ afterAll(() => {
   page.window.close();
 });
 
-/** The Settings group's static strings, as index.html ships them (English). */
+/** The static strings of the page, as index.html ships them (English): the Settings group and the window's title. */
 const GROUP_MARKUP = INDEX.match(
   /<div class="set-group" id="localModelGroup">\s*<div class="set-group-head"><h4>([^<]+)<\/h4><\/div>\s*<p class="set-group-hint">([^<]+)<\/p>/
 );
-const STATIC = GROUP_MARKUP ? [GROUP_MARKUP[1].trim(), GROUP_MARKUP[2].trim()] : [];
+const TITLE_MARKUP = INDEX.match(/<h3 id="localModelModalTitle">([^<]+)<\/h3>/);
+const STATIC =
+  GROUP_MARKUP && TITLE_MARKUP ? [GROUP_MARKUP[1].trim(), GROUP_MARKUP[2].trim(), TITLE_MARKUP[1].trim()] : [];
 
-const ALL = [...new Set([...OWN, ...FROM_SERVER, ...STATIC])];
+const ALL = [...new Set([...FROM_MODULE, ...FROM_SERVER, ...STATIC])];
 
 /** The `{slot}` names of a source text. */
 const slots = (text: string) => [...text.matchAll(/\{([a-zA-Z]\w*)\}/g)].map((m) => m[1]);
@@ -80,25 +95,29 @@ const slots = (text: string) => [...text.matchAll(/\{([a-zA-Z]\w*)\}/g)].map((m)
 /** U+2013, U+2014 and U+2015, built from their code points so this file holds none of them. */
 const LONG_DASH = new RegExp(`[${String.fromCharCode(0x2013, 0x2014, 0x2015)}]`);
 
-/** What may stay Latin: the product, the platform and its vendors, the unit, and Token (the dictionary's own word). */
+/**
+ * What may stay Latin: the product, the platform and its vendors, the units, Token (the
+ * dictionary's own word), and the proper names of the install (the runtime, the two tools a
+ * coding agent calls, the GPU and an API key).
+ */
 const leftover = (text: string) =>
-  text.replace(/\b(Codeman|macOS|Mac|GB|Apple|Intel|Token)\b/g, '').match(/[A-Za-z]+/g) ?? [];
+  text.replace(/\b(Codeman|macOS|Mac|GB|MB|Apple|Intel|Token|Ollama|GPU|API|git|Python)\b/g, '').match(/[A-Za-z]+/g) ??
+  [];
 
 describe('the local model strings in zh-CN', () => {
   it('harvests the module (the check is not vacuous)', () => {
-    expect(FROM_MODULE).toContain('Model on this Mac');
-    expect(FROM_MODULE).toContain('{model} ({id}) with {harness}');
-    expect(FROM_MODULE).toContain('Needs about {need} GB of the {budget} GB this Mac can give a model (estimated).');
-    expect(FROM_MODULE).toContain(
-      'Codeman cannot download or install this for you yet. That is the next step, and it is not built yet.'
-    );
-    // What the fit and speed labels measure, and the speed of an alternative.
-    expect(FROM_MODULE).toContain('Memory fit: needs {share}% of what this Mac can give a model');
-    expect(FROM_MODULE).toContain('No speed estimate for this model on this chip');
-    expect(FROM_MODULE).toContain('about {speed} tokens per second');
-    expect(FROM_MODULE.length).toBeGreaterThanOrEqual(20);
+    expect(FROM_MODULE).toContain('Run a local model');
+    expect(FROM_MODULE).toContain('Local model');
+    expect(FROM_MODULE).toContain('About {need} of {budget} GB of memory');
+    expect(FROM_MODULE).toContain('Install on this Mac');
+    expect(FROM_MODULE).toContain('Download and install');
+    expect(FROM_MODULE).toContain('{speed} MB per second, {left}');
+    expect(FROM_MODULE).toContain('You can close this window. The download continues while Codeman is running.');
+    expect(FROM_MODULE).toContain('Start a session');
+    expect(FROM_MODULE).toContain('{model} is ready on this Mac.');
+    expect(FROM_MODULE.length).toBeGreaterThanOrEqual(70);
     // The only other way the module calls its translator is with payload text (a server
-    // sentence or label), so no string of its own can reach the page unharvested.
+    // sentence, or the tag of a row), so no string of its own can reach the page unharvested.
     const code = MODULE.split('\n')
       .filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line))
       .join('\n');
@@ -108,20 +127,35 @@ describe('the local model strings in zh-CN', () => {
     // One more: the function's own declaration.
     expect(calls).toBe(literalCalls + payloadCalls + 1);
     expect(payloadCalls).toBe(2);
+    // The stage that only read is gone, with its sentence.
+    expect(MODULE).not.toContain('cannot download or install');
   });
 
-  it('lists every server label, the none reasons included', () => {
+  it('lists every server label: the recommendation, the tags and the install', () => {
     // A label added to the contract later fails below by its text, not here by a count.
-    expect(FROM_SERVER.length).toBeGreaterThanOrEqual(18);
+    expect(FROM_SERVER.length).toBeGreaterThanOrEqual(18 + 3 + 26);
     for (const text of Object.values(LOCAL_MODEL_NONE_LABELS)) expect(FROM_SERVER).toContain(text);
+    // Every error code has its sentence in the list.
+    for (const text of Object.values(LOCAL_MODEL_ERROR_LABELS)) expect(FROM_SERVER).toContain(text);
     expect(FROM_SERVER).toContain('Best fit for this Mac');
     expect(FROM_SERVER).toContain('Speed unknown');
+    expect(FROM_SERVER).toContain('Tested on a Mac like this');
+    expect(FROM_SERVER).toContain('Best fit');
+    expect(FROM_SERVER).toContain('Small model');
+    expect(FROM_SERVER).toContain(LOCAL_MODEL_INSTALL_LABELS.conflictSizeChanged);
+    expect(FROM_SERVER).toContain(LOCAL_MODEL_INSTALL_LABELS.conflictSessionsOpen);
     // The two other sentences of the `memory` reason and the two notes are not in the
     // reason map, so they are named here.
     expect(FROM_SERVER).toContain(LOCAL_MODEL_LABELS.noneMemoryContext);
     expect(FROM_SERVER).toContain(LOCAL_MODEL_LABELS.noneMemoryUnknown);
     expect(FROM_SERVER).toContain(LOCAL_MODEL_LABELS.noteSmallPick);
     expect(FROM_SERVER).toContain(LOCAL_MODEL_LABELS.noteDiskDropped);
+  });
+
+  it('prints the developer tools sentence from one source', () => {
+    // Not sent by the server: the window prints it when `developerTools` is `missing`. The
+    // module's literal is the contract's text, so one dictionary entry serves both.
+    expect(FROM_MODULE).toContain(LOCAL_MODEL_INSTALL_LABELS.developerToolsMissing);
   });
 
   it('never uses the translator slot {name} for a value of its own', () => {
@@ -166,9 +200,10 @@ describe('the local model strings in zh-CN', () => {
     }
   });
 
-  it('translates the Settings group heading and hint in the page, and leaves both containers alone', () => {
-    expect(STATIC).toHaveLength(2);
+  it('translates the static strings in the page, and leaves what the module writes alone', () => {
+    expect(STATIC).toHaveLength(3);
     expect(STATIC[0]).toBe('Model on this Mac');
+    expect(STATIC[2]).toBe('Run a model on this Mac');
     const translated = page.window.document.getElementById('localModelGroup')!;
     const heading = translated.querySelector('.set-group-head h4')!.textContent!.trim();
     const hint = translated.querySelector('.set-group-hint')!.textContent!.trim();
@@ -176,8 +211,16 @@ describe('the local model strings in zh-CN', () => {
     expect(hint).not.toBe(STATIC[1]);
     expect(hint).toBe(api.t(STATIC[1]));
     expect(leftover(hint)).toEqual([]);
-    // Written only by the module, through its own translator call.
-    expect(INDEX).toMatch(/id="localModelCard"[^>]*data-i18n-skip/);
-    expect(INDEX).toMatch(/id="localModelSettings"[^>]*data-i18n-skip/);
+    const title = page.window.document.getElementById('localModelModalTitle')!.textContent!.trim();
+    expect(title).toBe('在此 Mac 上运行模型');
+    // The dialog's close button is named in Chinese too.
+    const close = page.window.document.querySelector('#localModelModal .modal-close')!;
+    expect(close.getAttribute('aria-label')).toBe('关闭');
+    // Written only by the module, through its own translator call. The button keeps the
+    // English label it ships with until the module shows it.
+    for (const id of ['welcomeLocalModelBtn', 'localModelSettings', 'localModelSettingsOpen', 'localModelWindowBody']) {
+      expect(INDEX).toMatch(new RegExp(`id="${id}"[^>]*data-i18n-skip`));
+    }
+    expect(page.window.document.getElementById('welcomeLocalModelLabel')!.textContent).toBe('Run a local model');
   });
 });

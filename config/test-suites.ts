@@ -61,6 +61,7 @@ export const BROWSER_TEST_GLOBS = [
   'test/terminal-touch-swipe-axis.browser.test.ts',
   'test/phone-press-feedback.browser.test.ts',
   'test/desktop-connect-page.browser.test.ts', // no server: the page is served by request interception
+  'test/local-model-ui.browser.test.ts',
 ];
 
 /**

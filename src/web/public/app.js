@@ -1468,6 +1468,12 @@ class CodemanApp {
           this.handleTabRailSearchKeydown(e);
           return;
         }
+        // The local model window can sit on top of App Settings (it opens from a
+        // row there): Escape closes the window alone and leaves Settings open.
+        if (this.isLocalModelWindowOpen?.()) {
+          this.closeLocalModelWindow();
+          return;
+        }
         this.closeAllPanels();
         this.closeHelp();
         if (this.attachmentHistoryDrawerOpen) this.closeAttachmentHistory();

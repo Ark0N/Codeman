@@ -4,17 +4,18 @@
  *
  * Laid out like the module:
  *
- * 1. The budget (`deviceBudget`) for every memory size Apple sells from 8 to 128 GB, and the
- *    need of a model at a context (`needBytes`).
+ * 1. The budget (`deviceBudget`) for every memory size Apple sells from 8 to 128 GB, estimated
+ *    and measured, and the need of a model at a context (`needBytes`: the peak).
  * 2. The two REAL Macs of the project, from their captured `sysctl` output through the real
  *    parser: the MacBook Pro (M5 Pro, 48 GB) and the Mac mini (M4, 16 GB). Each test states the
- *    expected answer and why.
+ *    expected answer and why. The MacBook's answer is checked against what was MEASURED on it.
  * 3. Every reason for verdict `none`, one fixture per reason, and their order.
  * 4. The `limited` verdict (a statement about the Mac, not about the pick), the notes that say
- *    what the headline cannot (a small pick, a model left out for disk space), the three-state
- *    speed in the ranking, harness rows (a gated one is never chosen), the `tested` flag that
- *    alone may turn on the word "Recommended", and the shape of the answer (labels from the
- *    fixed list, sizes in one unit).
+ *    what the headline cannot (a small pick, a model left out for disk space), the ranking
+ *    (tested, speed, model rank, harness rank, context: the fit grade filters and does not
+ *    sort), harness rows (a gated one is never chosen), the `tested` flag that alone may turn
+ *    on the word "Recommended", what each row of the chooser carries (its tag, its harnesses,
+ *    the whole download of an install), and the shape of the answer.
  *
  * The stock catalogue is used wherever the answer for a real Mac is at stake. Small synthetic
  * catalogues (validated by the real schema) isolate one rule of the ranking at a time.
@@ -38,12 +39,14 @@ import {
   FIT_TIGHT_MAX_SHARE,
   LIMITED_BELOW_PARAMS_B,
   MAX_ALTERNATIVES,
+  modelFitsBudget,
   needBytes,
   recommend,
   SLOW_BELOW_TOKENS_PER_SECOND,
 } from '../src/local-model/recommend.js';
 import {
   LOCAL_MODEL_LABELS,
+  LOCAL_MODEL_TAG_LABELS,
   type Candidate,
   type HardwareFacts,
   type HarnessFact,
@@ -51,6 +54,7 @@ import {
   type LocalModelCatalog,
   type LocalModelEntry,
   type Recommendation,
+  type TestedOn,
 } from '../src/types.js';
 
 // ---------- Fixtures ----------
@@ -83,6 +87,16 @@ exit=0
 /dev/disk3s5   239362496 172954124  41752848    81% 2353838 417528480    1%   /System/Volumes/Data
 `;
 
+/**
+ * What the runtime printed as the device total on each real Mac when it started: 37.4 GiB on
+ * the MacBook, 11.8 GiB on the Mac mini (`parseInferenceComputeTotal()` of those two log lines).
+ */
+const MACBOOK_MEASURED_TOTAL = 40_157_944_217;
+const MACMINI_MEASURED_TOTAL = 12_670_153_523;
+
+/** The size of the pinned runtime archive: what an install adds to the download while the runtime is not installed. */
+const RUNTIME_ARCHIVE_BYTES = 185_971_671;
+
 /** The hardware facts of a real Mac: its captured output through the real parser, no IO. */
 async function realMac(sysctlOutput: string, freeDiskKb: number): Promise<HardwareFacts> {
   resetHardwareCache();
@@ -96,6 +110,9 @@ async function realMac(sysctlOutput: string, freeDiskKb: number): Promise<Hardwa
     now: () => 0,
   });
 }
+
+const macbook = (): Promise<HardwareFacts> => realMac(MACBOOK_SYSCTL, 890_926_084);
+const macMini = (): Promise<HardwareFacts> => realMac(MACMINI_SYSCTL, 41_752_848);
 
 /** An Apple silicon Mac with `soldGb` of memory, healthy in every other respect. */
 function mac(soldGb: number, chip: string, overrides: Partial<HardwareFacts> = {}): HardwareFacts {
@@ -147,6 +164,11 @@ const STOCK = getLocalModelCatalog();
 /** Every stock harness installed, the gated one included. */
 const ALL_INSTALLED: HarnessFact[] = STOCK.harnesses.map((row) => fact(row.cli));
 
+/** A stock model row by id. */
+function stockModel(id: string): LocalModelEntry {
+  return STOCK.models.find((m) => m.id === id) as LocalModelEntry;
+}
+
 /** The stock catalogue with a change applied, validated by the real schema. */
 function stockWith(change: (catalog: LocalModelCatalog) => void): LocalModelCatalog {
   const catalog = structuredClone(STOCK_LOCAL_MODEL_CATALOG);
@@ -154,7 +176,15 @@ function stockWith(change: (catalog: LocalModelCatalog) => void): LocalModelCata
   return LocalModelCatalogSchema.parse(catalog);
 }
 
-/** A model row for a synthetic catalogue: 20 billion parameters, 10 GiB, one small context. */
+/** The stock catalogue as it was before anybody tested a row: no `tested` entry anywhere. */
+const UNTESTED = stockWith((catalog) => {
+  for (const row of catalog.models) row.tested = [];
+});
+
+/**
+ * A model row for a synthetic catalogue: 20 billion parameters, 10 GiB, one small context, one
+ * byte held per token and nothing else on top, so its need is its weights plus its context.
+ */
 function model(id: string, overrides: Partial<LocalModelEntry> = {}): LocalModelEntry {
   return {
     id,
@@ -162,7 +192,10 @@ function model(id: string, overrides: Partial<LocalModelEntry> = {}): LocalModel
     license: 'Apache-2.0',
     paramsB: 20,
     bytes: 10 * GIB,
-    kvBytesPerToken: 1,
+    heldBytesPerToken: 1,
+    overheadBytes: 0,
+    peakExtraBytes: 0,
+    figures: 'estimated',
     contexts: [1024],
     rank: 1,
     tested: [],
@@ -171,15 +204,14 @@ function model(id: string, overrides: Partial<LocalModelEntry> = {}): LocalModel
 }
 
 /**
- * A synthetic catalogue: no prompt cache, one harness `alpha` that works from 1024 tokens, and
- * one chip row ('M4 Max' at 400 GB/s, so tokens per second = `speedPer100Gbps` x 4).
+ * A synthetic catalogue: one harness `alpha` that works from 1024 tokens, and one chip row
+ * ('M4 Max' at 400 GB/s, so tokens per second = `speedPer100Gbps` x 4).
  */
 function catalogOf(models: LocalModelEntry[], harnesses?: LocalHarnessEntry[]): LocalModelCatalog {
   return LocalModelCatalogSchema.parse({
     schema: 1,
     updated: '2026-11-06',
     minMacosMajor: 14,
-    promptCacheTiers: [{ minMemGb: 0, bytes: 0 }],
     models,
     harnesses: harnesses ?? [{ cli: 'alpha', minContext: 1024, rank: 1 }],
     chips: [{ match: 'M4 Max', gbps: 400 }],
@@ -190,19 +222,22 @@ function catalogOf(models: LocalModelEntry[], harnesses?: LocalHarnessEntry[]): 
 const HUNDRED_GIB_MAC = mac(128, 'Apple M4 Max', { wiredLimitMb: 101 * 1024 });
 const HUNDRED_GIB = 100 * GIB;
 
-/** What a synthetic model needs beside its weights at its 1024-token context: 1 GiB plus the KV cache. */
-const SYNTHETIC_OVERHEAD = GIB + 1024;
+/** What a synthetic model needs beside its weights at its 1024-token context: one byte per token. */
+const SYNTHETIC_OVERHEAD = 1024;
 
 /** A model whose need is exactly `need` bytes in a synthetic catalogue. */
 function modelNeeding(id: string, need: number, overrides: Partial<LocalModelEntry> = {}): LocalModelEntry {
   return model(id, { bytes: need - SYNTHETIC_OVERHEAD, ...overrides });
 }
 
+/** The pick and the alternatives, in order. */
+function rows(result: Recommendation): Candidate[] {
+  return [result.pick, ...result.alternatives].filter((candidate): candidate is Candidate => candidate !== undefined);
+}
+
 /** `id@context` of the pick and of each alternative, in order. */
 function order(result: Recommendation): string[] {
-  return [result.pick, ...result.alternatives]
-    .filter((candidate): candidate is Candidate => candidate !== undefined)
-    .map((candidate) => `${candidate.modelId}@${candidate.context}`);
+  return rows(result).map((candidate) => `${candidate.modelId}@${candidate.context}`);
 }
 
 /** Every string anywhere in a value. */
@@ -232,7 +267,7 @@ beforeEach(() => {
 
 // ---------- 1. Budget and need ----------
 
-describe('deviceBudget', () => {
+describe('deviceBudget, estimated', () => {
   // Sold size, device limit L and budget B in GiB. L is 2/3 of memory below 36 GB and 3/4 from
   // 36 GB; B = min(L - 1, memory - reserve). Only at 8 GB is the reserve the smaller bound.
   const TIERS: [soldGb: number, limitGib: number, budgetGib: number][] = [
@@ -321,31 +356,91 @@ describe('deviceBudget', () => {
   });
 });
 
-describe('needBytes', () => {
-  const nineB = STOCK.models.find((m) => m.id === 'qwen3.5:9b') as LocalModelEntry;
-
-  it('adds weights, the KV cache of the context, 1 GiB and the prompt cache', () => {
-    // 6,550,825,373 + 32768 x 65536 + 1 GiB + 512 MiB on a Mac below 32 GB.
-    expect(needBytes(nineB, 65536, STOCK, mac(16, 'Apple M4'))).toBe(6_550_825_373 + 2 * GIB + GIB + 512 * MIB);
-    expect(needBytes(nineB, 65536, STOCK, mac(16, 'Apple M4'))).toBe(10_308_921_757);
-    // Half the context, half the KV cache.
-    expect(needBytes(nineB, 32768, STOCK, mac(16, 'Apple M4'))).toBe(6_550_825_373 + GIB + GIB + 512 * MIB);
+describe('deviceBudget, measured', () => {
+  it('takes what the runtime reported as the limit, without the 1 GiB of the estimate', () => {
+    // The MacBook: 37.4 GiB reported, memory - reserve is 40 GiB, so the report is the budget.
+    expect(deviceBudget(mac(48, 'Apple M5 Pro'), { measuredTotalBytes: MACBOOK_MEASURED_TOTAL })).toEqual({
+      limitBytes: 40_157_944_217,
+      budgetBytes: 40_157_944_217,
+      source: 'measured',
+    });
+    // 1.4 GiB more than the estimate of 35 GiB, which was on the careful side.
+    expect(40_157_944_217 - deviceBudget(mac(48, 'Apple M5 Pro')).budgetBytes).toBe(2_576_980_377);
   });
 
-  it('counts a prompt cache of 512 MiB below 32 GB of memory and 2 GiB from 32 GB', () => {
-    const base = 6_550_825_373 + 2 * GIB + GIB;
-    for (const soldGb of [8, 16, 18, 24]) {
-      expect(needBytes(nineB, 65536, STOCK, mac(soldGb, 'Apple M4')) - base, `${soldGb} GB`).toBe(512 * MIB);
-    }
-    for (const soldGb of [32, 36, 48, 64, 96, 128]) {
-      expect(needBytes(nineB, 65536, STOCK, mac(soldGb, 'Apple M4')) - base, `${soldGb} GB`).toBe(2 * GIB);
-    }
+  it('is still bounded by the reserve', () => {
+    // The Mac mini: 11.8 GiB reported, but 16 GiB minus the 6 GiB reserve is 10 GiB.
+    expect(deviceBudget(mac(16, 'Apple M4'), { measuredTotalBytes: MACMINI_MEASURED_TOTAL })).toEqual({
+      limitBytes: 12_670_153_523,
+      budgetBytes: 10 * GIB,
+      source: 'measured',
+    });
   });
 
-  it('does not depend on the chip or the harness', () => {
-    expect(needBytes(nineB, 65536, STOCK, mac(48, 'Apple M1'))).toBe(
-      needBytes(nineB, 65536, STOCK, mac(48, 'Apple M5 Ultra'))
+  it('beats a wired limit: the runtime read what it will really use', () => {
+    const hw = mac(48, 'Apple M5 Pro', { wiredLimitMb: 20_000 });
+    expect(deviceBudget(hw).source).toBe('wired-limit');
+    expect(deviceBudget(hw, { measuredTotalBytes: MACBOOK_MEASURED_TOTAL })).toMatchObject({
+      budgetBytes: MACBOOK_MEASURED_TOTAL,
+      source: 'measured',
+    });
+  });
+
+  it('ignores a figure that is no byte count and falls back to the estimate', () => {
+    const estimated = deviceBudget(mac(48, 'Apple M5 Pro'));
+    for (const measuredTotalBytes of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, undefined]) {
+      expect(deviceBudget(mac(48, 'Apple M5 Pro'), { measuredTotalBytes }), String(measuredTotalBytes)).toEqual(
+        estimated
+      );
+    }
+    // A fraction of a byte is rounded down.
+    expect(deviceBudget(mac(48, 'Apple M5 Pro'), { measuredTotalBytes: 40_157_944_217.6 }).limitBytes).toBe(
+      40_157_944_217
     );
+  });
+});
+
+describe('needBytes', () => {
+  it('is the peak: weights, what stays held for the context, the runner, and the moment of a long prompt', () => {
+    // The measured row: 23,105,798,956 + 37,000 x 131,072 + 3 GB + 5 GB.
+    const moe = stockModel('qwen3.6:35b-a3b');
+    expect(needBytes(moe, 131072)).toBe(23_105_798_956 + 37_000 * 131_072 + 3_000_000_000 + 5_000_000_000);
+    expect(needBytes(moe, 131072)).toBe(35_955_462_956);
+    // What was measured on the MacBook: about 30.5 GB held and 35 to 36 GB at the peak.
+    expect(formatGb(needBytes(moe, 131072))).toBe('36.0');
+    expect(formatGb(needBytes(moe, 131072) - moe.peakExtraBytes)).toBe('31.0');
+  });
+
+  it('grows with the context by what one token holds', () => {
+    const nineB = stockModel('qwen3.5:9b');
+    expect(needBytes(nineB, 65536)).toBe(16_975_657_373);
+    expect(needBytes(nineB, 32768)).toBe(15_763_241_373);
+    // Half the context, half of what the context holds: 37,000 x 32,768.
+    expect(needBytes(nineB, 65536) - needBytes(nineB, 32768)).toBe(1_212_416_000);
+  });
+
+  it('reads every figure from the row it is given', () => {
+    const row = model('probe:1', {
+      bytes: 1000,
+      heldBytesPerToken: 7,
+      overheadBytes: 30,
+      peakExtraBytes: 500,
+      contexts: [10],
+    });
+    expect(needBytes(row, 10)).toBe(1000 + 70 + 30 + 500);
+    expect(needBytes({ ...row, peakExtraBytes: 0 }, 10)).toBe(1100);
+  });
+
+  it('states the need of every stock row at its largest context', () => {
+    expect(Object.fromEntries(STOCK.models.map((m) => [m.id, formatGb(needBytes(m, m.contexts[0]))]))).toEqual({
+      'qwen3.5:9b': '17.0',
+      'qwen3.5:9b-q8_0': '20.9',
+      'gpt-oss:20b': '26.6',
+      'qwen3.6:35b-a3b': '36.0',
+      'qwen3.8:27b': '30.6',
+      'qwen3.8:27b-q8_0': '47.7',
+      'qwen3.5:122b-a10b': '94.2',
+    });
   });
 });
 
@@ -384,18 +479,21 @@ describe('the fit grade', () => {
 
 describe('the MacBook Pro (Mac17,13: Apple M5 Pro, 48 GB)', () => {
   /**
-   * Expected: Qwen3.6 35B-A3B at 131,072 tokens with OpenCode, Good, about 42 tokens per second.
+   * Expected: Qwen3.6 35B-A3B at 131,072 tokens with OpenCode, a TIGHT fit, 67.7 tokens per
+   * second, "Recommended for this Mac".
    *
-   * Why. The budget is 35 GiB (3/4 of 48 GiB minus 1). Five models fit it as Good. The M5 Pro is
-   * in the chips table (307 GB/s), so each model with a speed figure gets an estimate:
-   * the dense 27B computes to 2.95 x 3.07 = 9.1 tokens per second, under the 10 that separate
-   * slow from ok, while the 35B-A3B (3 billion parameters active per token) computes to 41.8.
-   * Speed ranks before model rank, so the 35B-A3B wins although the 27B has the higher rank. The
-   * 27B stays in the list, last, marked Slow. Both harnesses can run it; OpenCode has the
-   * higher rank.
+   * Why. This is the Mac the model was run on (2026-11-06), so its row has a `tested` entry for
+   * exactly this chip, memory size and harness. A tested row ranks first, and it reports the
+   * speed that was measured (67.7) in place of the estimate from the chip (13.6 x 3.07 = 41.8).
+   *
+   * The need is the peak at the full context: 23.1 GB of weights + 4.8 GB held for 131,072
+   * tokens + 3 GB of runner + 5 GB for a moment while a long prompt is processed = 36.0 GB.
+   * Before the runtime ran, the budget is the estimate, 35 GiB (37.6 GB): 0.957 of it, tight.
+   * It is not stepped down to 65,536 tokens, where it would be 0.892: a model is offered at
+   * the largest context it fits at.
    */
-  it('gets Qwen3.6 35B-A3B at 131072 tokens with OpenCode', async () => {
-    const hw = await realMac(MACBOOK_SYSCTL, 890_926_084);
+  it('gets Qwen3.6 35B-A3B at 131072 tokens with OpenCode, as a tight fit', async () => {
+    const hw = await macbook();
     expect(hw.chip).toBe('Apple M5 Pro');
     expect(hw.memClassGb).toBe(48);
 
@@ -415,70 +513,136 @@ describe('the MacBook Pro (Mac17,13: Apple M5 Pro, 48 GB)', () => {
       cli: 'opencode',
       cliLabel: 'OpenCode',
       cliInstalled: true,
-      // 22,621,314,161 + 20480 x 131072 + 1 GiB + 2 GiB.
-      needBytes: 28_526_894_193,
-      needGb: '28.5',
-      downloadBytes: 22_621_314_161,
-      downloadGb: '22.6',
-      budgetShare: 0.759,
-      fit: 'good',
-      fitLabel: 'Good',
+      // 23,105,798,956 + 37,000 x 131,072 + 3,000,000,000 + 5,000,000,000.
+      needBytes: 35_955_462_956,
+      needGb: '36.0',
+      // What a Mac really downloads (the MLX build), not the 22.6 GB of the registry manifest.
+      downloadBytes: 23_105_798_956,
+      downloadGb: '23.1',
+      budgetShare: 0.957,
+      fit: 'tight',
+      fitLabel: 'Tight',
       speed: 'ok',
-      tokensPerSecond: 41.8,
-      tested: false,
+      // Measured on this Mac, not the 41.8 the chip's bandwidth predicts.
+      tokensPerSecond: 67.7,
+      tested: true,
+      needSource: 'measured',
+      tag: { kind: 'tested', label: 'Tested on a Mac like this' },
+      harnesses: [
+        { cli: 'opencode', cliLabel: 'OpenCode', installed: true },
+        { cli: 'claude', cliLabel: 'Claude Code', installed: true, slowFirstTurn: true },
+      ],
+      // No runtime download was named, so an install downloads the model alone.
+      installBytes: 23_105_798_956,
+      installGb: '23.1',
     });
   });
 
-  it('says "Best fit", not "Recommended", and that nobody tested it on such a Mac', async () => {
-    const result = recommend(await realMac(MACBOOK_SYSCTL, 890_926_084), STOCK, ALL_INSTALLED);
-    expect(result.headline).toEqual({ text: 'Best fit for this Mac' });
-    expect(result.notes).toEqual([{ text: 'Not yet tested by us on a Mac like this.' }]);
-    expect(stringsIn(result).join(' ')).not.toMatch(/recommended/i);
+  /**
+   * Expected with the budget the runtime MEASURED on this Mac (37.4 GiB, 40.2 GB): the same
+   * pick at the same context, 0.895 of the budget, still tight. That is what the measurement
+   * notes say of it: "it FITS the measured 40.2 GB budget, and it is TIGHT, not Good".
+   */
+  it('keeps the pick under the measured budget: 36.0 of 40.2 GB, tight', async () => {
+    const result = recommend(await macbook(), STOCK, ALL_INSTALLED, {
+      measuredTotalBytes: MACBOOK_MEASURED_TOTAL,
+      runtimeDownloadBytes: RUNTIME_ARCHIVE_BYTES,
+    });
+    expect(result.budgetBytes).toBe(40_157_944_217);
+    expect(result.budgetGb).toBe('40.2');
+    expect(result.budgetSource).toBe('measured');
+    expect(result.pick).toMatchObject({
+      modelId: 'qwen3.6:35b-a3b',
+      context: 131072,
+      needGb: '36.0',
+      budgetShare: 0.895,
+      fit: 'tight',
+      tested: true,
+      // The model plus the runtime archive: 23,105,798,956 + 185,971,671.
+      installBytes: 23_291_770_627,
+      installGb: '23.3',
+    });
+    // At 65536 tokens it would be a good fit (0.835), and it is still offered at the full context.
+    const moe = stockModel('qwen3.6:35b-a3b');
+    expect(needBytes(moe, 65536) / result.budgetBytes).toBeCloseTo(0.835, 3);
+    expect(needBytes(moe, 65536) / result.budgetBytes).toBeLessThan(FIT_GOOD_MAX_SHARE);
+  });
+
+  it('says "Recommended", because the pick was run on exactly such a Mac', async () => {
+    const result = recommend(await macbook(), STOCK, ALL_INSTALLED);
+    expect(result.headline).toEqual({ text: 'Recommended for this Mac' });
+    // The "not yet tested" note would be false.
+    expect(result.notes).toEqual([]);
   });
 
   it('lists the other four models that fit: the fast ones, the one of unknown speed, the slow one', async () => {
-    const result = recommend(await realMac(MACBOOK_SYSCTL, 890_926_084), STOCK, ALL_INSTALLED);
-    expect(result.alternatives.map((c) => [c.modelId, c.context, c.fit, c.speed, c.tokensPerSecond ?? null])).toEqual([
-      ['qwen3.5:9b-q8_0', 65536, 'good', 'ok', 17.8],
-      ['qwen3.5:9b', 65536, 'good', 'ok', 28.6],
-      ['gpt-oss:20b', 131072, 'good', 'unknown', null],
-      ['qwen3.8:27b', 131072, 'good', 'slow', 9.1],
+    const result = recommend(await macbook(), STOCK, ALL_INSTALLED);
+    expect(
+      result.alternatives.map((c) => [c.modelId, c.context, c.fit, c.speed, c.tokensPerSecond ?? null, c.tag?.kind])
+    ).toEqual([
+      ['qwen3.5:9b-q8_0', 65536, 'good', 'ok', 17.8, 'small'],
+      ['qwen3.5:9b', 65536, 'good', 'ok', 28.6, 'small'],
+      ['gpt-oss:20b', 131072, 'good', 'unknown', null, undefined],
+      // The dense 27B computes to 2.95 x 3.07 = 9.1 tokens per second on this chip.
+      ['qwen3.8:27b', 131072, 'good', 'slow', 9.1, 'slow'],
     ]);
     expect(result.alternatives[2].speedLabel).toBe('Speed unknown');
     expect(result.alternatives[3].speedLabel).toBe('Slow');
-    // The two that do not fit 35 GiB at any context are not listed.
-    expect(order(result)).not.toContain('qwen3.8:27b-q8_0@131072');
+    // Only the tested row rests on a measurement of that model.
+    expect(result.alternatives.map((c) => c.needSource)).toEqual(['estimated', 'estimated', 'estimated', 'estimated']);
+    // The two that do not fit at any context are not listed.
+    expect(order(result).some((entry) => entry.startsWith('qwen3.8:27b-q8_0'))).toBe(false);
     expect(order(result).some((entry) => entry.startsWith('qwen3.5:122b'))).toBe(false);
   });
 
-  it('would get the 27B instead if its chip were in no chips row', async () => {
-    // The same Mac with the M5 Pro row removed: every speed is unknown, so model rank decides.
-    const hw = await realMac(MACBOOK_SYSCTL, 890_926_084);
+  it('would get the same model as "Best fit", with the estimated speed, had nobody tested it', async () => {
+    const result = recommend(await macbook(), UNTESTED, ALL_INSTALLED);
+    expect(result.pick).toMatchObject({
+      modelId: 'qwen3.6:35b-a3b',
+      context: 131072,
+      fit: 'tight',
+      tested: false,
+      // 13.6 x 307 / 100.
+      tokensPerSecond: 41.8,
+      // It only just fits, and the tag says so.
+      tag: { kind: 'best-tight', label: 'Best fit, tight' },
+    });
+    expect(result.headline).toEqual({ text: 'Best fit for this Mac' });
+    expect(result.notes).toEqual([{ text: 'Codeman has not run this on a Mac like this yet.' }]);
+    expect(stringsIn(result).join(' ')).not.toMatch(/recommended/i);
+  });
+
+  it('keeps its measured speed when its chip is in no chips row', async () => {
+    // The same Mac with the M5 Pro row removed: every ESTIMATE is gone, the measurement is not.
     const withoutChip = stockWith((catalog) => {
       catalog.chips = catalog.chips.filter((row) => row.match !== 'M5 Pro');
     });
-    const result = recommend(hw, withoutChip, ALL_INSTALLED);
-    expect(result.pick).toMatchObject({ modelId: 'qwen3.8:27b', context: 131072, speed: 'unknown' });
-    expect(result.pick).not.toHaveProperty('tokensPerSecond');
+    const result = recommend(await macbook(), withoutChip, ALL_INSTALLED);
+    expect(result.pick).toMatchObject({ modelId: 'qwen3.6:35b-a3b', speed: 'ok', tokensPerSecond: 67.7, tested: true });
+    // The others have no speed, so the model rank orders them.
+    expect(result.alternatives.map((c) => [c.modelId, c.speed])).toEqual([
+      ['qwen3.8:27b', 'unknown'],
+      ['gpt-oss:20b', 'unknown'],
+      ['qwen3.5:9b-q8_0', 'unknown'],
+      ['qwen3.5:9b', 'unknown'],
+    ]);
   });
 });
 
 describe('the Mac mini (Mac16,10: Apple M4, 16 GB)', () => {
   /**
-   * Expected: no recommendation, reason `memory`, in the sentence that names both numbers.
+   * Expected: no recommendation, reason `memory`, in the plain sentence.
    *
-   * Why. The budget is 9.67 GiB (2/3 of 16 GiB minus 1). The only model near it is the 9B. Both
-   * harnesses that may be offered need 65,536 tokens of context, and there the 9B needs
-   * 6.10 GiB of weights + 2 GiB of KV cache + 1 GiB + 0.5 GiB of prompt cache = 9.60 GiB, which
-   * is 0.993 of the budget: above the 0.98 where "tight" ends. At 32,768 tokens it would fit
-   * (0.890, tight), but the one harness that works at that context is gated.
+   * Why. The budget is 9.67 GiB (10.4 GB: 2/3 of 16 GiB minus 1). The smallest model, the 9B,
+   * needs 6.6 GB of weights + 1.2 GB held for its smallest context of 32,768 tokens + 3 GB of
+   * runner + 5 GB at the peak = 15.8 GB: one and a half times the budget. Nothing fits at any
+   * context, so this is no longer a miss by a hair that deserves the sentence with both numbers.
    *
-   * The miss is 1.3 points on an ESTIMATED budget, so the sentence is not "too little memory"
-   * (what an 8 GB Mac is told): it says the budget (10.4 GB), the need (10.3 GB) and that
-   * Codeman estimates.
+   * The 3 GB and the 5 GB were measured on a 35B model and are applied to the 9B unmeasured
+   * (`needSource: 'estimated'`), so this answer is careful, not proven.
    */
-  it('gets no recommendation: nothing fits at the context a harness needs', async () => {
-    const hw = await realMac(MACMINI_SYSCTL, 41_752_848);
+  it('gets no recommendation: no model fits at any context', async () => {
+    const hw = await macMini();
     expect(hw.chip).toBe('Apple M4');
     expect(hw.memClassGb).toBe(16);
 
@@ -488,9 +652,8 @@ describe('the Mac mini (Mac16,10: Apple M4, 16 GB)', () => {
       verdict: 'none',
       reason: 'memory',
       headline: {
-        text: 'Codeman estimates that this Mac can give a model about {budget} GB of memory. The smallest model a coding agent can work with needs about {need} GB. That leaves no safe margin, so Codeman recommends none here.',
-        // floor(17,179,869,184 x 2/3) - 1 GiB, and the 9B at 65536 tokens: 10,308,921,757 bytes.
-        vars: { budget: '10.4', need: '10.3' },
+        text: 'With {memory} GB of memory, this Mac cannot run a model that can drive a coding agent.',
+        vars: { memory: '16' },
       },
       notes: [],
       alternatives: [],
@@ -501,25 +664,38 @@ describe('the Mac mini (Mac16,10: Apple M4, 16 GB)', () => {
     });
   });
 
-  it('misses by a hair at 65536 tokens and would fit at 32768', async () => {
-    const hw = await realMac(MACMINI_SYSCTL, 41_752_848);
-    const nineB = STOCK.models.find((m) => m.id === 'qwen3.5:9b') as LocalModelEntry;
+  it('is far from fitting: the smallest model at its smallest context needs 1.5 times the budget', async () => {
+    const hw = await macMini();
+    const nineB = stockModel('qwen3.5:9b');
     const budget = deviceBudget(hw).budgetBytes;
-    const shareAt64k = needBytes(nineB, 65536, STOCK, hw) / budget;
-    const shareAt32k = needBytes(nineB, 32768, STOCK, hw) / budget;
-    expect(shareAt64k).toBeCloseTo(0.9932, 4);
-    expect(shareAt64k).toBeGreaterThan(FIT_TIGHT_MAX_SHARE);
-    expect(shareAt32k).toBeCloseTo(0.8898, 4);
-    expect(shareAt32k).toBeLessThan(FIT_TIGHT_MAX_SHARE);
-    // Every other model needs more than the whole budget at its smallest context.
-    for (const other of STOCK.models.filter((m) => m.id !== 'qwen3.5:9b')) {
-      const smallest = other.contexts[other.contexts.length - 1];
-      expect(needBytes(other, smallest, STOCK, hw), other.id).toBeGreaterThan(budget);
+    expect(formatGb(needBytes(nineB, 32768))).toBe('15.8');
+    expect(needBytes(nineB, 32768) / budget).toBeCloseTo(1.5187, 4);
+    expect(needBytes(nineB, 65536) / budget).toBeCloseTo(1.6355, 4);
+    // Every model needs more than the whole budget at every context.
+    for (const row of STOCK.models) {
+      for (const ctx of row.contexts) expect(needBytes(row, ctx), `${row.id}@${ctx}`).toBeGreaterThan(budget);
     }
   });
 
-  it('would get the 9B at 32768 tokens, as a limited answer, once the gated harness is opened', async () => {
-    const hw = await realMac(MACMINI_SYSCTL, 41_752_848);
+  it('gets none with the budget its runtime measured, too', async () => {
+    // The runtime reported 11.8 GiB here; the 6 GiB reserve leaves 10 GiB (10.7 GB) of it.
+    const result = recommend(await macMini(), STOCK, ALL_INSTALLED, { measuredTotalBytes: MACMINI_MEASURED_TOTAL });
+    expect(result).toMatchObject({
+      verdict: 'none',
+      reason: 'memory',
+      headline: { text: LOCAL_MODEL_LABELS.noneMemory, vars: { memory: '16' } },
+      budgetBytes: 10 * GIB,
+      budgetGb: '10.7',
+      budgetSource: 'measured',
+    });
+  });
+
+  it('gets none with a wired limit or with the gated harness opened: memory is what is missing', async () => {
+    // iogpu.wired_limit_mb = 14000 lifts the budget to 10 GiB (memory minus the 6 GiB reserve).
+    const wired = recommend({ ...(await macMini()), wiredLimitMb: 14000 }, STOCK, ALL_INSTALLED);
+    expect(wired).toMatchObject({ verdict: 'none', reason: 'memory', budgetSource: 'wired-limit' });
+    expect(wired.budgetBytes).toBe(10 * GIB);
+
     const ungated = stockWith((catalog) => {
       catalog.harnesses = catalog.harnesses.map((row) => ({
         cli: row.cli,
@@ -527,28 +703,9 @@ describe('the Mac mini (Mac16,10: Apple M4, 16 GB)', () => {
         rank: row.rank,
       }));
     });
-    const result = recommend(hw, ungated, ALL_INSTALLED);
-    expect(result.verdict).toBe('limited');
-    expect(result.pick).toMatchObject({
-      modelId: 'qwen3.5:9b',
-      context: 32768,
-      cli: 'pi',
-      fit: 'tight',
-      budgetShare: 0.89,
-      speed: 'ok',
-      // 9.3 x 1.2.
-      tokensPerSecond: 11.2,
-    });
-  });
-
-  it('would get the 9B at 65536 tokens if a wired limit had been set on it', async () => {
-    // iogpu.wired_limit_mb = 14000 lifts the budget to 10 GiB (memory minus the 6 GiB reserve).
-    const hw = { ...(await realMac(MACMINI_SYSCTL, 41_752_848)), wiredLimitMb: 14000 };
-    const result = recommend(hw, STOCK, ALL_INSTALLED);
-    expect(result.verdict).toBe('limited');
-    expect(result.budgetSource).toBe('wired-limit');
-    expect(result.budgetBytes).toBe(10 * GIB);
-    expect(result.pick).toMatchObject({ modelId: 'qwen3.5:9b', context: 65536, cli: 'opencode', fit: 'tight' });
+    const opened = recommend(await macMini(), ungated, ALL_INSTALLED);
+    expect(opened.reason).toBe('memory');
+    expect(opened.headline.text).toBe(LOCAL_MODEL_LABELS.noneMemory);
   });
 });
 
@@ -558,25 +715,27 @@ describe('every memory size, with the stock catalogue', () => {
   const EXPECTED: [soldGb: number, chip: string, answer: string][] = [
     [8, 'Apple M2', 'none memory'],
     [16, 'Apple M4', 'none memory'],
-    // The 9B at 65536 tokens is 0.87 of 11 GiB.
-    [18, 'Apple M3 Pro', 'limited qwen3.5:9b@65536 tight ok'],
-    // gpt-oss:20b at 65536 tokens needs 15.8 GiB of the 15 GiB budget: out.
-    [24, 'Apple M4', 'limited qwen3.5:9b@65536 good ok'],
-    // gpt-oss:20b fits only as Tight here (0.853 at 65536 tokens, 0.927 at 131072), and Good
-    // ranks before Tight. The Q8 9B is Good but slow on a base M4 (7 tokens per second). The
-    // pick is a 9B, the verdict is `ok` all the same: a 20B fits this Mac.
-    [32, 'Apple M4', 'ok qwen3.5:9b@65536 good ok'],
-    [32, 'Apple M1 Max', 'ok qwen3.5:9b-q8_0@65536 good ok'],
-    // The 27B (0.905) and the 35B-A3B (0.974) are Tight; gpt-oss:20b is Good but has no speed
-    // figure, and a known speed ranks before an unknown one.
+    // The 9B at its smallest context needs 15.8 GB of the 11.8 GB budget.
+    [18, 'Apple M3 Pro', 'none memory'],
+    // The 9B fits only at 32768 tokens (0.979), and the one harness that works there is gated.
+    [24, 'Apple M4', 'none memory'],
+    // Only the two 9B rows fit (0.778, and 0.956 for the Q8, which is slow on a base M4), so
+    // this is a small-model Mac: gpt-oss:20b needs 24.2 GB of the 21.8 GB budget.
+    [32, 'Apple M4', 'limited qwen3.5:9b@65536 good ok'],
+    // Both 9B rows are fast enough here, and the higher rank wins although it is the tight one.
+    [32, 'Apple M1 Max', 'limited qwen3.5:9b-q8_0@65536 tight ok'],
+    // gpt-oss:20b fits as Tight (0.954), so the verdict is `ok`; it has no speed figure, and a
+    // known speed ranks before an unknown one.
     [36, 'Apple M4 Max', 'ok qwen3.5:9b-q8_0@65536 good ok'],
     // On a Pro chip the dense 27B is slow (8.1 tokens per second), the 35B-A3B is not.
-    [48, 'Apple M4 Pro', 'ok qwen3.6:35b-a3b@131072 good ok'],
+    [48, 'Apple M4 Pro', 'ok qwen3.6:35b-a3b@131072 tight ok'],
+    [48, 'Apple M5 Pro', 'ok qwen3.6:35b-a3b@131072 tight ok'],
+    // On a Max chip the 27B is fast enough (12.1) and has the higher rank.
     [48, 'Apple M4 Max', 'ok qwen3.8:27b@131072 good ok'],
     // The Q8 27B fits 47 GiB but computes to 7 tokens per second on this chip.
     [64, 'Apple M4 Max', 'ok qwen3.8:27b@131072 good ok'],
     [96, 'Apple M3 Ultra', 'ok qwen3.8:27b-q8_0@262144 good ok'],
-    // The 122B fits 95 GiB only as Tight (0.861) and has no speed figure.
+    // The 122B fits 95 GiB only as Tight (0.924) and has no speed figure.
     [128, 'Apple M5 Ultra', 'ok qwen3.8:27b-q8_0@262144 good ok'],
   ];
 
@@ -586,6 +745,23 @@ describe('every memory size, with the stock catalogue', () => {
       ? `${result.verdict} ${result.pick.modelId}@${result.pick.context} ${result.pick.fit} ${result.pick.speed}`
       : `${result.verdict} ${result.reason}`;
     expect(actual).toBe(answer);
+  });
+
+  it('tells the four sizes without a model which kind of "too little" it is', () => {
+    const headlineOf = (soldGb: number): Recommendation['headline'] =>
+      recommend(mac(soldGb, 'Apple M4'), STOCK, ALL_INSTALLED).headline;
+    // Nothing fits at any context: the plain sentence with the size the Mac is sold as.
+    for (const soldGb of [8, 16, 18]) {
+      expect(headlineOf(soldGb), `${soldGb} GB`).toEqual({
+        text: LOCAL_MODEL_LABELS.noneMemory,
+        vars: { memory: String(soldGb) },
+      });
+    }
+    // A model fits, but only below the context a harness needs: both numbers.
+    expect(headlineOf(24)).toEqual({
+      text: LOCAL_MODEL_LABELS.noneMemoryContext,
+      vars: { budget: '16.1', need: '17.0' },
+    });
   });
 
   it('always pairs the pick with the top-ranked harness, OpenCode', () => {
@@ -643,7 +819,7 @@ describe('verdict none', () => {
     it('answers so for an Intel Mac, whose sysctl has no arm64 flag', () => {
       const hw = without(mac(32, intelChip, { arch: 'x64' }), 'arm64', 'translated', 'wiredLimitMb');
       const result = recommend(hw, STOCK, ALL_INSTALLED);
-      expectNone(result, 'intel', 'This Mac has an Intel processor. Local coding models need Apple silicon.');
+      expectNone(result, 'intel', 'Local coding models need Apple silicon, and this Mac has an Intel processor.');
       expect(result.budgetBytes).toBe(0);
       expect(result.budgetGb).toBe('0.0');
     });
@@ -693,7 +869,7 @@ describe('verdict none', () => {
         STOCK,
         ALL_INSTALLED
       );
-      expectNone(result, 'macos', 'This Mac runs macOS {version}. Local models need macOS {minimum} or newer.');
+      expectNone(result, 'macos', 'Local models need macOS {minimum} or newer, and this Mac runs macOS {version}.');
       expect(result.headline.vars).toEqual({ version: '13.6.7', minimum: '14' });
       // The budget is still reported: the Mac itself is able.
       expect(result.budgetBytes).toBe(35 * GIB);
@@ -723,7 +899,7 @@ describe('verdict none', () => {
       expectNone(
         result,
         'memory',
-        'This Mac has {memory} GB of memory. That is too little to run a model that can drive a coding agent, so Codeman recommends none here.'
+        'With {memory} GB of memory, this Mac cannot run a model that can drive a coding agent.'
       );
       expect(result.headline.text).toBe(LOCAL_MODEL_LABELS.noneMemory);
       // The size the Mac is sold as (what About This Mac shows), not 8 x 2^30 bytes as 8.6 decimal GB.
@@ -745,27 +921,59 @@ describe('verdict none', () => {
     });
 
     it('says both numbers when models fit, but only below the context a harness needs', () => {
-      // The 16 GB case of the Mac mini, with harnesses that are all present.
-      const result = recommend(mac(16, 'Apple M4'), STOCK, ALL_INSTALLED);
+      // The 24 GB case, with harnesses that are all present: the 9B fits at 32768 tokens.
+      const hw = mac(24, 'Apple M4');
+      const nineB = stockModel('qwen3.5:9b');
+      expect(needBytes(nineB, 32768) / deviceBudget(hw).budgetBytes).toBeCloseTo(0.9787, 4);
+      expect(needBytes(nineB, 65536) / deviceBudget(hw).budgetBytes).toBeCloseTo(1.054, 4);
+
+      const result = recommend(hw, STOCK, ALL_INSTALLED);
       expectNone(result, 'memory', LOCAL_MODEL_LABELS.noneMemoryContext);
       // The need is the smallest one at a context a usable harness works at (the 9B at 65536),
       // not the 9B at 32768, which fits and which only the gated harness could use.
-      expect(result.headline.vars).toEqual({ budget: '10.4', need: '10.3' });
-      expect(result.headline.text).toMatch(/^Codeman estimates/);
+      expect(result.headline.vars).toEqual({ budget: '16.1', need: '17.0' });
+      // Both figures are said as estimates ("about"), in one sentence.
+      expect(result.headline.text).toBe(
+        'This Mac can give a model about {budget} GB of memory, and the smallest model a coding agent can work with needs about {need} GB.'
+      );
       expect(result.headline.text).not.toContain('{memory}');
     });
 
+    it('would give that Mac the 9B at 32768 tokens, as a limited answer, once the gated harness is opened', () => {
+      const ungated = stockWith((catalog) => {
+        catalog.harnesses = catalog.harnesses.map((row) => ({
+          cli: row.cli,
+          minContext: row.minContext,
+          rank: row.rank,
+        }));
+      });
+      const result = recommend(mac(24, 'Apple M4'), ungated, ALL_INSTALLED);
+      expect(result.verdict).toBe('limited');
+      expect(result.pick).toMatchObject({
+        modelId: 'qwen3.5:9b',
+        context: 32768,
+        cli: 'pi',
+        fit: 'tight',
+        budgetShare: 0.979,
+        speed: 'ok',
+        // 9.3 x 1.2.
+        tokensPerSecond: 11.2,
+      });
+      // Only the harness that works at 32768 tokens can run it there.
+      expect(result.pick?.harnesses.map((h) => h.cli)).toEqual(['pi']);
+    });
+
     it('says the same two numbers when the need is far above the budget', () => {
-      // One model: 3 GiB at 1024 tokens (fits 10 GiB), 30 GiB at the context the harness needs.
+      // One model: 2 GiB at 1024 tokens (fits 10 GiB), 30 GiB at the context the harness needs.
       const catalog = catalogOf(
-        [model('probe:1', { bytes: 2 * GIB, kvBytesPerToken: 1024, contexts: [28 * 1024 * 1024, 1024] })],
+        [model('probe:1', { bytes: 2 * GIB, heldBytesPerToken: 1024, contexts: [28 * 1024 * 1024, 1024] })],
         [{ cli: 'alpha', minContext: 4096, rank: 1 }]
       );
       const hw = mac(16, 'Apple M4', { wiredLimitMb: 14000 });
       const result = recommend(hw, catalog, [fact('alpha')]);
       expectNone(result, 'memory', LOCAL_MODEL_LABELS.noneMemoryContext);
-      // 2 GiB + 28 GiB of KV cache + 1 GiB = 31 GiB; the budget is 10 GiB.
-      expect(result.headline.vars).toEqual({ budget: formatGb(10 * GIB), need: formatGb(31 * GIB) });
+      // 2 GiB + 28 GiB held for the context = 30 GiB; the budget is 10 GiB.
+      expect(result.headline.vars).toEqual({ budget: formatGb(10 * GIB), need: formatGb(30 * GIB) });
       expect(result.budgetSource).toBe('wired-limit');
     });
 
@@ -841,24 +1049,24 @@ describe('verdict none', () => {
       // 12 GiB free: even the smallest download (6.55 GB) leaves 5.9 GiB.
       const hw = mac(48, 'Apple M4 Max', { freeDiskBytes: 12 * GIB, freeDiskGb: formatGb(12 * GIB) });
       const result = recommend(hw, STOCK, ALL_INSTALLED);
+      // One sentence with the one number that says what to do.
       expectNone(
         result,
         'disk',
-        'Not enough free disk space. The smallest model that fits this Mac is a {download} GB download, and {reserve} GB must stay free after it. {free} GB is free now. Free up about {missing} GB.'
+        'Free up about {missing} GB of disk space to install the smallest model that fits this Mac.'
       );
       // download + 10 GiB - free = 6,550,825,373 + 10,737,418,240 - 12,884,901,888 bytes.
-      expect(result.headline.vars).toEqual({ download: '6.6', reserve: '10.7', free: '12.9', missing: '4.4' });
+      expect(result.headline.vars).toEqual({ missing: '4.4' });
       expect(result.budgetBytes).toBe(35 * GIB);
     });
 
-    it('gives the reader every number of the sum: download + reserve - free = missing', () => {
-      // 12 GB free is more than the 6.6 GB download, so without the reserve "not enough" reads false.
-      const hw = mac(24, 'Apple M4', { freeDiskBytes: 12 * GB, freeDiskGb: formatGb(12 * GB) });
+    it('says what to free, counting the reserve: download + 10 GiB - free', () => {
+      // 12 GB free is more than the 6.6 GB download: what is missing is the reserve on top of it.
+      const hw = mac(32, 'Apple M4', { freeDiskBytes: 12 * GB, freeDiskGb: formatGb(12 * GB) });
       const vars = recommend(hw, STOCK, ALL_INSTALLED).headline.vars as Record<string, string>;
-      expect(vars).toEqual({ download: '6.6', reserve: '10.7', free: '12.0', missing: '5.3' });
-      expect(vars.reserve).toBe(formatGb(DISK_HEADROOM_BYTES));
-      // Within the rounding of four one-decimal figures.
-      expect(Number(vars.download) + Number(vars.reserve) - Number(vars.free)).toBeCloseTo(Number(vars.missing), 0);
+      // 6,550,825,373 + 10,737,418,240 - 12,000,000,000 bytes.
+      expect(vars).toEqual({ missing: '5.3' });
+      expect(Number(vars.missing)).toBeCloseTo((6_550_825_373 + DISK_HEADROOM_BYTES - 12 * GB) / GB, 1);
     });
 
     it('names the smallest model that fits the MEMORY, not the smallest of the catalogue', () => {
@@ -870,7 +1078,8 @@ describe('verdict none', () => {
       const hw = mac(48, 'Apple M4 Max', { freeDiskBytes: 12 * GIB, freeDiskGb: formatGb(12 * GIB) });
       const result = recommend(hw, STOCK, facts);
       expect(result.reason).toBe('disk');
-      expect(result.headline.vars?.download).toBe('13.8');
+      // 13,793,441,427 + 10 GiB - 12 GiB: the 20B's download, not the 9B's.
+      expect(result.headline.vars).toEqual({ missing: '11.6' });
     });
 
     it('drops only the models that do not leave 10 GiB, picks among the rest, and says what was left out', () => {
@@ -891,15 +1100,15 @@ describe('verdict none', () => {
           text: '{model} fits the memory of this Mac too, but its download needs about {missing} GB more free disk space.',
           vars: { model: 'Qwen3.8 27B', missing: '7.0' },
         },
-        { text: 'Not yet tested by us on a Mac like this.' },
+        { text: 'Codeman has not run this on a Mac like this yet.' },
       ]);
     });
 
-    it('turns on 0.4 GB of disk on the real MacBook without calling it a small-model Mac', async () => {
-      // The cut for the 35B-A3B: 22,621,314,161 + 10 GiB = 33,358,732,401 bytes free.
-      const macbook = await realMac(MACBOOK_SYSCTL, 890_926_084);
+    it('turns on 0.8 GB of disk on the real MacBook without calling it a small-model Mac', async () => {
+      // The cut for the 35B-A3B: its real download of 23,105,798,956 + 10 GiB = 33,843,217,196 bytes free.
+      const hw = await macbook();
       const withFree = (bytes: number): HardwareFacts => ({
-        ...macbook,
+        ...hw,
         freeDiskBytes: bytes,
         freeDiskGb: formatGb(bytes),
       });
@@ -907,20 +1116,22 @@ describe('verdict none', () => {
       const enough = recommend(withFree(34 * GB), STOCK, ALL_INSTALLED);
       expect(enough.verdict).toBe('ok');
       expect(enough.pick?.modelId).toBe('qwen3.6:35b-a3b');
-      expect(enough.notes).toEqual([{ text: LOCAL_MODEL_LABELS.noteUntested }]);
+      expect(enough.notes).toEqual([]);
 
       const short = recommend(withFree(33 * GB), STOCK, ALL_INSTALLED);
       expect(short.verdict).toBe('ok');
+      // The tested model has no room, so nothing here is "Recommended".
       expect(short.headline.text).toBe(LOCAL_MODEL_LABELS.headlineOk);
       expect(short.pick?.modelId).toBe('qwen3.5:9b-q8_0');
       expect(order(short)).not.toContain('qwen3.6:35b-a3b@131072');
       expect(short.notes).toEqual([
         { text: LOCAL_MODEL_LABELS.noteSmallPick },
-        { text: LOCAL_MODEL_LABELS.noteDiskDropped, vars: { model: 'Qwen3.6 35B-A3B', missing: '0.4' } },
+        { text: LOCAL_MODEL_LABELS.noteDiskDropped, vars: { model: 'Qwen3.6 35B-A3B', missing: '0.8' } },
         { text: LOCAL_MODEL_LABELS.noteUntested },
       ]);
       // The exact cut: one byte decides, and the note appears with the first missing byte.
-      const cut = 22_621_314_161 + DISK_HEADROOM_BYTES;
+      const cut = 23_105_798_956 + DISK_HEADROOM_BYTES;
+      expect(cut).toBe(33_843_217_196);
       expect(recommend(withFree(cut), STOCK, ALL_INSTALLED).pick?.modelId).toBe('qwen3.6:35b-a3b');
       expect(recommend(withFree(cut - 1), STOCK, ALL_INSTALLED).pick?.modelId).toBe('qwen3.5:9b-q8_0');
     });
@@ -948,9 +1159,9 @@ describe('verdict none', () => {
     it('allows a download that leaves exactly 10 GiB', () => {
       const exact = STOCK.models[0].bytes + DISK_HEADROOM_BYTES;
       expect(DISK_HEADROOM_BYTES).toBe(10 * GIB);
-      const fits = recommend(mac(24, 'Apple M4', { freeDiskBytes: exact }), STOCK, ALL_INSTALLED);
+      const fits = recommend(mac(32, 'Apple M4', { freeDiskBytes: exact }), STOCK, ALL_INSTALLED);
       expect(fits.pick?.modelId).toBe('qwen3.5:9b');
-      const short = recommend(mac(24, 'Apple M4', { freeDiskBytes: exact - 1 }), STOCK, ALL_INSTALLED);
+      const short = recommend(mac(32, 'Apple M4', { freeDiskBytes: exact - 1 }), STOCK, ALL_INSTALLED);
       expect(short.reason).toBe('disk');
     });
 
@@ -959,9 +1170,10 @@ describe('verdict none', () => {
       expect(recommend(hw, STOCK, ALL_INSTALLED).verdict).toBe('ok');
     });
 
-    it('formats the free size itself when the hardware carries only the bytes', () => {
+    it('needs only the bytes of the free disk, not its text', () => {
       const hw = without(mac(48, 'Apple M4 Max', { freeDiskBytes: 3 * GB }), 'freeDiskGb');
-      expect(recommend(hw, STOCK, ALL_INSTALLED).headline.vars?.free).toBe('3.0');
+      // 6,550,825,373 + 10 GiB - 3 GB.
+      expect(recommend(hw, STOCK, ALL_INSTALLED).headline.vars).toEqual({ missing: '14.3' });
     });
 
     it('comes after the memory and the harness', () => {
@@ -973,26 +1185,31 @@ describe('verdict none', () => {
   });
 });
 
-// ---------- 4. Verdicts, ranking, harnesses, tested ----------
+// ---------- 4. Verdicts, ranking, harnesses, tested, rows ----------
 
 describe('verdict limited', () => {
   it('is the answer when no model that fits has 12 billion parameters or more', () => {
     expect(LIMITED_BELOW_PARAMS_B).toBe(12);
-    const result = recommend(mac(24, 'Apple M4'), STOCK, ALL_INSTALLED);
+    const result = recommend(mac(32, 'Apple M4'), STOCK, ALL_INSTALLED);
     expect(result.verdict).toBe('limited');
     expect(result.reason).toBeUndefined();
     expect(result.pick).toMatchObject({ modelId: 'qwen3.5:9b', paramsB: 9, context: 65536, fit: 'good' });
     expect(result.headline).toEqual({
       text: 'This Mac can run a small model. It handles small edits and questions. It does not replace a cloud model.',
     });
-    expect(result.notes).toEqual([{ text: 'Not yet tested by us on a Mac like this.' }]);
+    expect(result.notes).toEqual([{ text: 'Codeman has not run this on a Mac like this yet.' }]);
   });
 
-  it('holds for a tight fit too (18 GB)', () => {
-    const result = recommend(mac(18, 'Apple M3 Pro'), STOCK, ALL_INSTALLED);
+  it('holds when the pick is a tight fit too (32 GB with a fast chip)', () => {
+    const result = recommend(mac(32, 'Apple M1 Max'), STOCK, ALL_INSTALLED);
     expect(result.verdict).toBe('limited');
-    expect(result.pick).toMatchObject({ modelId: 'qwen3.5:9b', fit: 'tight', fitLabel: 'Tight', budgetShare: 0.873 });
-    expect(result.alternatives).toEqual([]);
+    expect(result.pick).toMatchObject({
+      modelId: 'qwen3.5:9b-q8_0',
+      fit: 'tight',
+      fitLabel: 'Tight',
+      budgetShare: 0.956,
+    });
+    expect(result.alternatives.map((c) => c.modelId)).toEqual(['qwen3.5:9b']);
   });
 
   it('draws the line at 12 billion: 11.9 is limited, 12 is ok', () => {
@@ -1005,11 +1222,14 @@ describe('verdict limited', () => {
   });
 
   it('is about the MAC, not the pick: a larger model further down the list lifts it', () => {
-    // 32 GB: the 20B fits only as Tight, so a 9B is the pick. The Mac can still run a 20B, so
-    // "This Mac can run a small model" would be false of it.
-    const result = recommend(mac(32, 'Apple M4'), STOCK, ALL_INSTALLED);
-    expect(result.pick).toMatchObject({ modelId: 'qwen3.5:9b', paramsB: 9 });
-    expect(result.alternatives.map((c) => [c.modelId, c.fit])).toContainEqual(['gpt-oss:20b', 'tight']);
+    // 36 GB: the 20B fits as Tight and has no speed figure, so a 9B is the pick. The Mac can
+    // still run a 20B, so "This Mac can run a small model" would be false of it.
+    const result = recommend(mac(36, 'Apple M4 Max'), STOCK, ALL_INSTALLED);
+    expect(result.pick).toMatchObject({ modelId: 'qwen3.5:9b-q8_0', paramsB: 9, fit: 'good', speed: 'ok' });
+    expect(result.alternatives.map((c) => [c.modelId, c.fit, c.speed])).toEqual([
+      ['qwen3.5:9b', 'good', 'ok'],
+      ['gpt-oss:20b', 'tight', 'unknown'],
+    ]);
     expect(result.verdict).toBe('ok');
     expect(result.headline).toEqual({ text: 'Best fit for this Mac' });
     // The pick is still called what it is.
@@ -1017,34 +1237,20 @@ describe('verdict limited', () => {
       {
         text: 'The best fit is a small model. It handles small edits and questions. It does not replace a cloud model.',
       },
-      { text: 'Not yet tested by us on a Mac like this.' },
+      { text: 'Codeman has not run this on a Mac like this yet.' },
     ]);
-  });
-
-  it('does not tell a 36 GB Mac it is a small-model Mac above a list of 20B, 27B and 35B models', () => {
-    const result = recommend(mac(36, 'Apple M4 Max'), STOCK, ALL_INSTALLED);
-    expect(result.pick).toMatchObject({ modelId: 'qwen3.5:9b-q8_0', fit: 'good', speed: 'ok' });
-    expect(result.alternatives.map((c) => [c.modelId, c.fit, c.speed])).toEqual([
-      ['qwen3.5:9b', 'good', 'ok'],
-      ['gpt-oss:20b', 'good', 'unknown'],
-      // Both Tight and fast enough: the higher model rank first.
-      ['qwen3.8:27b', 'tight', 'ok'],
-      ['qwen3.6:35b-a3b', 'tight', 'ok'],
-    ]);
-    expect(result.verdict).toBe('ok');
-    expect(result.headline.text).not.toBe(LOCAL_MODEL_LABELS.headlineLimited);
-    expect(result.notes[0]).toEqual({ text: LOCAL_MODEL_LABELS.noteSmallPick });
   });
 
   it('does not depend on whether the chip is in the chips table', () => {
-    // Knowing the chip must not lower the verdict: before, a known chip made the 9B win on
-    // speed and the answer limited, while an unknown chip got `ok` with the 20B.
-    for (const soldGb of [32, 36]) {
-      const known = recommend(mac(soldGb, 'Apple M4 Max'), STOCK, ALL_INSTALLED);
-      const unknown = recommend(mac(soldGb, 'Apple M6'), STOCK, ALL_INSTALLED);
-      expect([soldGb, known.verdict]).toEqual([soldGb, unknown.verdict]);
-      expect(known.verdict).toBe('ok');
-    }
+    // Knowing the chip must not change the verdict: it is about what fits, not about speed.
+    const verdicts = [32, 36].map((soldGb) => [
+      recommend(mac(soldGb, 'Apple M4 Max'), STOCK, ALL_INSTALLED).verdict,
+      recommend(mac(soldGb, 'Apple M6'), STOCK, ALL_INSTALLED).verdict,
+    ]);
+    expect(verdicts).toEqual([
+      ['limited', 'limited'],
+      ['ok', 'ok'],
+    ]);
   });
 
   it('is limited exactly when nothing with 12 billion parameters fits, on every Mac of the sweep', () => {
@@ -1055,7 +1261,7 @@ describe('verdict limited', () => {
       const largeFits = STOCK.models.some(
         (m) =>
           m.paramsB >= LIMITED_BELOW_PARAMS_B &&
-          m.contexts.some((ctx) => ctx >= 65536 && needBytes(m, ctx, STOCK, hw) / budget <= FIT_TIGHT_MAX_SHARE)
+          m.contexts.some((ctx) => ctx >= 65536 && needBytes(m, ctx) / budget <= FIT_TIGHT_MAX_SHARE)
       );
       expect([hw.memClassGb, hw.chip, result.verdict]).toEqual([hw.memClassGb, hw.chip, largeFits ? 'ok' : 'limited']);
       // The small-pick note: under `ok` only, and exactly when the pick is small.
@@ -1121,7 +1327,7 @@ describe('speed', () => {
     // 48 GB: five models fit, so all of them are listed and gpt-oss:20b is among them.
     for (const chip of ['Apple M1', 'Apple M4 Max', 'Apple M5 Ultra']) {
       const result = recommend(mac(48, chip), STOCK, ALL_INSTALLED);
-      const gptOss = [result.pick, ...result.alternatives].find((c) => c?.modelId === 'gpt-oss:20b');
+      const gptOss = rows(result).find((c) => c.modelId === 'gpt-oss:20b');
       expect(gptOss, chip).toMatchObject({ speed: 'unknown', speedLabel: 'Speed unknown' });
       expect(gptOss).not.toHaveProperty('tokensPerSecond');
     }
@@ -1130,7 +1336,7 @@ describe('speed', () => {
   it('is unknown for every model on a chip that is in no chips row: no bandwidth is guessed', () => {
     for (const chip of ['Apple M6', 'Apple M6 Pro', 'Apple M10', 'Some Future Chip']) {
       const result = recommend(mac(64, chip), STOCK, ALL_INSTALLED);
-      for (const candidate of [result.pick, ...result.alternatives]) {
+      for (const candidate of rows(result)) {
         expect(candidate, chip).toMatchObject({ speed: 'unknown', speedLabel: 'Speed unknown' });
         expect(candidate).not.toHaveProperty('tokensPerSecond');
       }
@@ -1139,11 +1345,32 @@ describe('speed', () => {
     const result = recommend(without(mac(64, 'x'), 'chip'), STOCK, ALL_INSTALLED);
     expect(result.pick?.speed).toBe('unknown');
   });
+
+  it('is the speed that was measured, for a row tested on a Mac like this', () => {
+    const entry = (tokensPerSecond?: number): TestedOn => ({
+      chip: 'Apple M4 Max',
+      memGb: 128,
+      cli: 'alpha',
+      date: '2026-11-06',
+      ...(tokensPerSecond !== undefined ? { tokensPerSecond } : {}),
+    });
+    const pickOf = (tested: TestedOn[]): Candidate | undefined =>
+      recommend(HUNDRED_GIB_MAC, catalogOf([model('probe:1', { speedPer100Gbps: 5, tested })]), [fact('alpha')]).pick;
+    // The estimate: 5 x 4.
+    expect(pickOf([])).toMatchObject({ tested: false, tokensPerSecond: 20 });
+    // The measurement replaces it, and is graded like any speed.
+    expect(pickOf([entry(33.33)])).toMatchObject({ tested: true, speed: 'ok', tokensPerSecond: 33.3 });
+    expect(pickOf([entry(4)])).toMatchObject({ tested: true, speed: 'slow', speedLabel: 'Slow', tokensPerSecond: 4 });
+    // A tested entry without a speed keeps the estimate.
+    expect(pickOf([entry()])).toMatchObject({ tested: true, tokensPerSecond: 20 });
+    // An entry for another Mac changes nothing.
+    expect(pickOf([{ ...entry(99), memGb: 64 }])).toMatchObject({ tested: false, tokensPerSecond: 20 });
+  });
 });
 
 describe('the ranking', () => {
   it('puts ok before unknown before slow, ahead of the model rank', () => {
-    // Three models that fit equally well. The ranks run AGAINST the speed.
+    // Three models that fit. The ranks run AGAINST the speed.
     const catalog = catalogOf([
       model('slow-top:1', { rank: 3, speedPer100Gbps: 1 }),
       model('unknown-mid:1', { rank: 2 }),
@@ -1151,7 +1378,7 @@ describe('the ranking', () => {
     ]);
     const result = recommend(HUNDRED_GIB_MAC, catalog, [fact('alpha')]);
     expect(order(result)).toEqual(['ok-low:1@1024', 'unknown-mid:1@1024', 'slow-top:1@1024']);
-    expect([result.pick, ...result.alternatives].map((c) => c?.speed)).toEqual(['ok', 'unknown', 'slow']);
+    expect(rows(result).map((c) => c.speed)).toEqual(['ok', 'unknown', 'slow']);
   });
 
   it('ranks by model rank alone when every speed is unknown', () => {
@@ -1169,7 +1396,7 @@ describe('the ranking', () => {
   it('ranks an unknown speed below a known ok one and above a slow one, on a real tier', () => {
     // 48 GB, M4 Pro: three ok models, then gpt-oss:20b (unknown), then the 27B (slow).
     const result = recommend(mac(48, 'Apple M4 Pro'), STOCK, ALL_INSTALLED);
-    expect([result.pick, ...result.alternatives].map((c) => [c?.modelId, c?.speed])).toEqual([
+    expect(rows(result).map((c) => [c.modelId, c.speed])).toEqual([
       ['qwen3.6:35b-a3b', 'ok'],
       ['qwen3.5:9b-q8_0', 'ok'],
       ['qwen3.5:9b', 'ok'],
@@ -1178,13 +1405,27 @@ describe('the ranking', () => {
     ]);
   });
 
-  it('puts a good fit before a tight one, ahead of speed and rank', () => {
+  it('does not sort by the fit grade: a tight model of the higher rank stays above a good one', () => {
+    // The need is the peak at the full context, so a tight fit is a model that runs. Both are
+    // equally fast here; the rank decides, and the row says Tight.
     const catalog = catalogOf([
-      modelNeeding('tight-fast-top:1', 0.9 * HUNDRED_GIB, { rank: 9, speedPer100Gbps: 20 }),
-      modelNeeding('good-slow-low:1', 0.5 * HUNDRED_GIB, { rank: 1, speedPer100Gbps: 1 }),
+      modelNeeding('tight-top:1', 0.9 * HUNDRED_GIB, { rank: 9, speedPer100Gbps: 5 }),
+      modelNeeding('good-low:1', 0.5 * HUNDRED_GIB, { rank: 1, speedPer100Gbps: 5 }),
     ]);
     const result = recommend(HUNDRED_GIB_MAC, catalog, [fact('alpha')]);
-    expect(order(result)).toEqual(['good-slow-low:1@1024', 'tight-fast-top:1@1024']);
+    expect(order(result)).toEqual(['tight-top:1@1024', 'good-low:1@1024']);
+    expect(rows(result).map((c) => c.fit)).toEqual(['tight', 'good']);
+  });
+
+  it('still puts the speed first: a good and fast model beats a tight and slow one of the higher rank', () => {
+    const catalog = catalogOf([
+      modelNeeding('tight-slow-top:1', 0.9 * HUNDRED_GIB, { rank: 9, speedPer100Gbps: 1 }),
+      modelNeeding('good-fast-low:1', 0.5 * HUNDRED_GIB, { rank: 1, speedPer100Gbps: 5 }),
+    ]);
+    expect(order(recommend(HUNDRED_GIB_MAC, catalog, [fact('alpha')]))).toEqual([
+      'good-fast-low:1@1024',
+      'tight-slow-top:1@1024',
+    ]);
   });
 
   it('takes the higher model rank among equals', () => {
@@ -1196,33 +1437,42 @@ describe('the ranking', () => {
     ]);
   });
 
-  it('takes the larger context of one model when both fit equally well', () => {
-    // 1 KiB per token: 4 GiB of KV cache at 4,194,304 tokens, still a good fit.
-    const catalog = catalogOf([model('probe:1', { kvBytesPerToken: 1024, contexts: [4_194_304, 1024] })]);
+  it('takes the larger context of one model when both fit', () => {
+    // 1 KiB held per token: 4 GiB at 4,194,304 tokens, still a good fit.
+    const catalog = catalogOf([model('probe:1', { heldBytesPerToken: 1024, contexts: [4_194_304, 1024] })]);
     const result = recommend(HUNDRED_GIB_MAC, catalog, [fact('alpha')]);
     expect(result.pick?.context).toBe(4_194_304);
     expect(result.alternatives).toEqual([]);
   });
 
-  it('steps a model down to the context at which it fits well', () => {
-    // Good at the small context, tight at the large one: the good one is that model's entry.
+  it('offers a model at the largest context it fits at, also when that fit is tight', () => {
+    // Good at the small context (0.8), tight at the large one (80 + 8 GiB = 0.88): the large one.
     const catalog = catalogOf([
-      model('probe:1', { bytes: 80 * GIB, kvBytesPerToken: 1024, contexts: [8_388_608, 1024] }),
+      model('probe:1', { bytes: 80 * GIB, heldBytesPerToken: 1024, contexts: [8_388_608, 1024] }),
     ]);
     const result = recommend(HUNDRED_GIB_MAC, catalog, [fact('alpha')]);
-    expect(result.pick).toMatchObject({ context: 1024, fit: 'good' });
+    expect(result.pick).toMatchObject({ context: 8_388_608, fit: 'tight', budgetShare: 0.88 });
+  });
+
+  it('steps a model down only when the larger context does not fit at all', () => {
+    // 92 + 8 GiB is the whole budget (out); at 1024 tokens it is 0.92.
+    const catalog = catalogOf([
+      model('probe:1', { bytes: 92 * GIB, heldBytesPerToken: 1024, contexts: [8_388_608, 1024] }),
+    ]);
+    const result = recommend(HUNDRED_GIB_MAC, catalog, [fact('alpha')]);
+    expect(result.pick).toMatchObject({ context: 1024, fit: 'tight', budgetShare: 0.92 });
   });
 
   it('lists each model once, never the pick again, and at most four alternatives', () => {
     expect(MAX_ALTERNATIVES).toBe(4);
-    // Six models fit a 128 GB Mac; the pick plus four are shown.
+    // Seven models fit a 128 GB Mac; the pick plus four are shown.
     const result = recommend(mac(128, 'Apple M5 Ultra'), STOCK, ALL_INSTALLED);
     expect(result.alternatives).toHaveLength(4);
-    const ids = [result.pick, ...result.alternatives].map((c) => c?.modelId);
+    const ids = rows(result).map((c) => c.modelId);
     expect(new Set(ids).size).toBe(ids.length);
     for (const hw of SWEEP) {
       const swept = recommend(hw, STOCK, ALL_INSTALLED);
-      const sweptIds = [swept.pick, ...swept.alternatives].filter(Boolean).map((c) => c?.modelId);
+      const sweptIds = rows(swept).map((c) => c.modelId);
       expect(new Set(sweptIds).size).toBe(sweptIds.length);
       expect(swept.alternatives.length).toBeLessThanOrEqual(MAX_ALTERNATIVES);
     }
@@ -1237,21 +1487,23 @@ describe('harnesses', () => {
     expect(gated).toEqual(['pi']);
     for (const swept of SWEEP) {
       const result = recommend(swept, STOCK, ALL_INSTALLED);
-      for (const candidate of [result.pick, ...result.alternatives]) {
-        if (candidate) expect(gated).not.toContain(candidate.cli);
+      for (const candidate of rows(result)) {
+        expect(gated).not.toContain(candidate.cli);
+        expect(candidate.harnesses.map((h) => h.cli).some((cli) => gated.includes(cli))).toBe(false);
       }
     }
-    // 16 GB: the gated harness alone works at 32768 tokens, where the 9B would fit. Still none.
-    expect(recommend(mac(16, 'Apple M4'), STOCK, ALL_INSTALLED).verdict).toBe('none');
+    // 24 GB: the gated harness alone works at 32768 tokens, where the 9B would fit. Still none.
+    expect(recommend(mac(24, 'Apple M4'), STOCK, ALL_INSTALLED).verdict).toBe('none');
   });
 
   it('never offers a context below the minimum of the harness', () => {
     for (const swept of SWEEP) {
       const result = recommend(swept, STOCK, ALL_INSTALLED);
-      for (const candidate of [result.pick, ...result.alternatives]) {
-        if (!candidate) continue;
-        const row = STOCK.harnesses.find((harness) => harness.cli === candidate.cli);
-        expect(candidate.context).toBeGreaterThanOrEqual(row?.minContext ?? Number.POSITIVE_INFINITY);
+      for (const candidate of rows(result)) {
+        for (const harness of candidate.harnesses) {
+          const row = STOCK.harnesses.find((entry) => entry.cli === harness.cli);
+          expect(candidate.context).toBeGreaterThanOrEqual(row?.minContext ?? Number.POSITIVE_INFINITY);
+        }
       }
     }
   });
@@ -1287,6 +1539,7 @@ describe('harnesses', () => {
     // OpenCode refuses the 27B: it goes with the next harness.
     const one = recommend(hw, STOCK, [fact('opencode', { acceptsModelId: refusing27b }), fact('claude')]);
     expect(one.pick).toMatchObject({ modelId: 'qwen3.8:27b', cli: 'claude' });
+    expect(one.pick?.harnesses.map((h) => h.cli)).toEqual(['claude']);
     expect(one.alternatives[0]).toMatchObject({ modelId: 'qwen3.6:35b-a3b', cli: 'opencode' });
     // Both refuse it: the model is not offered.
     const both = recommend(hw, STOCK, [
@@ -1309,54 +1562,93 @@ describe('harnesses', () => {
     expect(recommend(hw, STOCK, [throwing]).reason).toBe('no-harness');
   });
 
-  it('puts the fit and the model before the harness rank', () => {
+  it('puts the model before the harness rank, and pairs it with the best harness that can run it', () => {
     // `big` needs a large context and is the higher-ranked harness; `small` works from 1024.
     const harnesses: LocalHarnessEntry[] = [
       { cli: 'big', minContext: 8_388_608, rank: 2 },
       { cli: 'small', minContext: 1024, rank: 1 },
     ];
-    const tightAtLarge = catalogOf(
-      [model('probe:1', { bytes: 80 * GIB, kvBytesPerToken: 1024, contexts: [8_388_608, 1024] })],
+    // Fits at both contexts (tight at the large one): the higher-ranked harness, at the
+    // context it needs. Both harnesses can run it there.
+    const fitsAtLarge = catalogOf(
+      [model('probe:1', { bytes: 80 * GIB, heldBytesPerToken: 1024, contexts: [8_388_608, 1024] })],
       harnesses
     );
-    // Tight at the context `big` needs, good at the small one: the good fit with `small` wins.
-    expect(recommend(HUNDRED_GIB_MAC, tightAtLarge, [fact('big'), fact('small')]).pick).toMatchObject({
-      cli: 'small',
-      context: 1024,
-      fit: 'good',
-    });
-    // Good at both: the higher-ranked harness wins, at the context it needs.
-    const goodAtBoth = catalogOf(
-      [model('probe:1', { bytes: 10 * GIB, kvBytesPerToken: 1024, contexts: [8_388_608, 1024] })],
+    const large = recommend(HUNDRED_GIB_MAC, fitsAtLarge, [fact('big'), fact('small')]).pick;
+    expect(large).toMatchObject({ cli: 'big', context: 8_388_608, fit: 'tight' });
+    expect(large?.harnesses.map((h) => h.cli)).toEqual(['big', 'small']);
+    // Does not fit at the large context: only `small` can run it, at the small one.
+    const onlyAtSmall = catalogOf(
+      [model('probe:1', { bytes: 92 * GIB, heldBytesPerToken: 1024, contexts: [8_388_608, 1024] })],
       harnesses
     );
-    expect(recommend(HUNDRED_GIB_MAC, goodAtBoth, [fact('big'), fact('small')]).pick).toMatchObject({
-      cli: 'big',
-      context: 8_388_608,
-    });
+    const small = recommend(HUNDRED_GIB_MAC, onlyAtSmall, [fact('big'), fact('small')]).pick;
+    expect(small).toMatchObject({ cli: 'small', context: 1024 });
+    expect(small?.harnesses.map((h) => h.cli)).toEqual(['small']);
+    // A higher-ranked MODEL with the lower-ranked harness still comes before a lower-ranked
+    // model with the higher-ranked harness.
+    const twoModels = catalogOf(
+      [
+        model('top:1', { rank: 2, contexts: [1024] }),
+        model('low:1', { rank: 1, heldBytesPerToken: 1024, contexts: [8_388_608] }),
+      ],
+      harnesses
+    );
+    expect(
+      rows(recommend(HUNDRED_GIB_MAC, twoModels, [fact('big'), fact('small')])).map((c) => [c.modelId, c.cli])
+    ).toEqual([
+      ['top:1', 'small'],
+      ['low:1', 'big'],
+    ]);
   });
 });
 
 describe('the tested flag and the word "Recommended"', () => {
-  const testedOn = (chip: string, memGb: number, cli: string) => ({ chip, memGb, cli, date: '2026-11-06' });
+  const testedOn = (chip: string, memGb: number, cli: string): TestedOn => ({ chip, memGb, cli, date: '2026-11-06' });
+  /** The untested catalogue with one tested entry on the dense 27B. */
   const with27bTested = (chip: string, memGb: number, cli: string): LocalModelCatalog =>
     stockWith((catalog) => {
-      const row = catalog.models.find((m) => m.id === 'qwen3.8:27b') as LocalModelEntry;
-      row.tested = [testedOn(chip, memGb, cli)];
+      for (const row of catalog.models) row.tested = [];
+      (catalog.models.find((m) => m.id === 'qwen3.8:27b') as LocalModelEntry).tested = [testedOn(chip, memGb, cli)];
     });
 
-  it('is off for every model of the stock catalogue, so "Recommended" is never said today', () => {
-    for (const hw of SWEEP) {
+  it('is on for exactly one kind of Mac in the stock catalogue: an Apple M5 Pro with 48 GB', () => {
+    expect(STOCK.models.flatMap((m) => m.tested.map((entry) => [m.id, entry.chip, entry.memGb, entry.cli]))).toEqual([
+      ['qwen3.6:35b-a3b', 'Apple M5 Pro', 48, 'opencode'],
+    ]);
+
+    const tested = recommend(mac(48, 'Apple M5 Pro'), STOCK, ALL_INSTALLED);
+    expect(tested.pick).toMatchObject({ modelId: 'qwen3.6:35b-a3b', cli: 'opencode', tested: true });
+    expect(tested.headline.text).toBe('Recommended for this Mac');
+
+    // The same chip with another memory size, and the same memory size with another chip.
+    const others = [
+      ...SWEEP,
+      mac(24, 'Apple M5 Pro'),
+      mac(64, 'Apple M5 Pro'),
+      mac(48, 'Apple M4 Pro'),
+      mac(48, 'Apple M5 Max'),
+      mac(48, 'Apple M5'),
+    ];
+    for (const hw of others) {
       const result = recommend(hw, STOCK, ALL_INSTALLED);
-      for (const candidate of [result.pick, ...result.alternatives]) {
-        if (candidate) expect(candidate.tested).toBe(false);
-      }
+      for (const candidate of rows(result)) expect(candidate.tested, `${hw.memClassGb} ${hw.chip}`).toBe(false);
       expect(stringsIn(result).join(' ')).not.toMatch(/recommended/i);
       if (result.verdict !== 'none') {
         // Always the last note; a small pick under `ok` has one more before it.
         expect(result.notes[result.notes.length - 1]).toEqual({ text: LOCAL_MODEL_LABELS.noteUntested });
       }
     }
+  });
+
+  it('is off for the tested Mac when its harness is not the tested one', () => {
+    // The MacBook without OpenCode: the model is the same, the pair was not run by us.
+    const result = recommend(mac(48, 'Apple M5 Pro'), STOCK, [fact('claude')]);
+    expect(result.pick).toMatchObject({ modelId: 'qwen3.6:35b-a3b', cli: 'claude', tested: false });
+    // So the speed is the estimate again, and nothing says "Recommended".
+    expect(result.pick?.tokensPerSecond).toBe(41.8);
+    expect(result.headline.text).toBe('Best fit for this Mac');
+    expect(result.notes).toEqual([{ text: LOCAL_MODEL_LABELS.noteUntested }]);
   });
 
   it('turns on "Recommended for this Mac" when the pick was tested on exactly such a Mac', () => {
@@ -1368,50 +1660,290 @@ describe('the tested flag and the word "Recommended"', () => {
     expect(result.notes).toEqual([]);
   });
 
-  it('stays off when the chip, the memory size or the harness differs', () => {
+  it('stays off when the chip or the memory size differs', () => {
     const hw = mac(48, 'Apple M4 Max');
     const cases: LocalModelCatalog[] = [
       with27bTested('Apple M4 Pro', 48, 'opencode'),
       with27bTested('Apple M4', 48, 'opencode'),
       with27bTested('Apple M4 Max', 64, 'opencode'),
-      with27bTested('Apple M4 Max', 48, 'claude'),
     ];
     for (const catalog of cases) {
       const result = recommend(hw, catalog, ALL_INSTALLED);
       expect(result.pick).toMatchObject({ modelId: 'qwen3.8:27b', cli: 'opencode', tested: false });
       expect(result.headline).toEqual({ text: 'Best fit for this Mac' });
-      expect(result.notes).toEqual([{ text: 'Not yet tested by us on a Mac like this.' }]);
+      expect(result.notes).toEqual([{ text: 'Codeman has not run this on a Mac like this yet.' }]);
     }
   });
 
-  it('follows the harness: tested with the second harness counts when that one is the pick', () => {
+  it('follows the tested harness: the pair that was run comes first, also against a higher-ranked harness', () => {
+    // Tested with the second harness. Both are installed: the tested pair is the pick, and
+    // the other harness stays selectable.
     const catalog = with27bTested('Apple M4 Max', 48, 'claude');
-    const result = recommend(mac(48, 'Apple M4 Max'), catalog, [fact('claude')]);
-    expect(result.pick).toMatchObject({ cli: 'claude', tested: true });
+    const result = recommend(mac(48, 'Apple M4 Max'), catalog, ALL_INSTALLED);
+    expect(result.pick).toMatchObject({ modelId: 'qwen3.8:27b', cli: 'claude', tested: true });
+    expect(result.pick?.harnesses.map((h) => h.cli)).toEqual(['claude', 'opencode']);
     expect(result.headline.text).toBe('Recommended for this Mac');
+    // Without the tested harness on the machine the pair is another one, and untested.
+    expect(recommend(mac(48, 'Apple M4 Max'), catalog, [fact('opencode')]).pick).toMatchObject({
+      cli: 'opencode',
+      tested: false,
+    });
   });
 
-  it('does not change the ranking: a tested model further down stays an alternative', () => {
-    // On the M4 Pro the pick is the 35B-A3B. A tested 27B is flagged in the list, no more.
-    const result = recommend(mac(48, 'Apple M4 Pro'), with27bTested('Apple M4 Pro', 48, 'opencode'), ALL_INSTALLED);
-    expect(result.pick).toMatchObject({ modelId: 'qwen3.6:35b-a3b', tested: false });
-    expect(result.headline.text).toBe('Best fit for this Mac');
-    expect(result.notes).toEqual([{ text: LOCAL_MODEL_LABELS.noteUntested }]);
-    expect(result.alternatives.find((c) => c.modelId === 'qwen3.8:27b')?.tested).toBe(true);
+  it('ranks a tested model first: a measurement on this Mac beats the estimates of the others', () => {
+    // On the M4 Pro the untested pick is the 35B-A3B, because the 27B is estimated as slow.
+    const hw = mac(48, 'Apple M4 Pro');
+    expect(recommend(hw, UNTESTED, ALL_INSTALLED).pick?.modelId).toBe('qwen3.6:35b-a3b');
+    // Once the 27B was run on such a Mac, it is the pick, and the 35B-A3B is the first alternative.
+    const result = recommend(hw, with27bTested('Apple M4 Pro', 48, 'opencode'), ALL_INSTALLED);
+    expect(result.pick).toMatchObject({ modelId: 'qwen3.8:27b', tested: true, speed: 'slow' });
+    expect(result.headline.text).toBe('Recommended for this Mac');
+    expect(result.notes).toEqual([]);
+    expect(result.alternatives[0]).toMatchObject({ modelId: 'qwen3.6:35b-a3b', tested: false });
   });
 
   it('never says "Recommended" for a limited answer, tested or not', () => {
     const catalog = stockWith((stock) => {
       const row = stock.models.find((m) => m.id === 'qwen3.5:9b') as LocalModelEntry;
-      row.tested = [testedOn('Apple M4', 24, 'opencode')];
+      row.tested = [testedOn('Apple M4', 32, 'opencode')];
     });
-    const result = recommend(mac(24, 'Apple M4'), catalog, ALL_INSTALLED);
+    const result = recommend(mac(32, 'Apple M4'), catalog, ALL_INSTALLED);
     expect(result.verdict).toBe('limited');
     expect(result.pick?.tested).toBe(true);
     expect(result.headline.text).toBe(LOCAL_MODEL_LABELS.headlineLimited);
-    expect(stringsIn(result).join(' ')).not.toMatch(/recommended/i);
+    expect(stringsIn(result.headline).join(' ')).not.toMatch(/recommended/i);
     // It WAS tested, so the "not yet tested" note would be false.
     expect(result.notes).toEqual([]);
+  });
+});
+
+describe('what each row of the chooser carries', () => {
+  describe('the tag', () => {
+    it('is "Best fit" on an untested pick and the first kind that applies on the others', () => {
+      // 48 GB, M4 Max: the 27B is the pick; the 35B-A3B is tight; the two 9B rows are small;
+      // gpt-oss:20b is none of these and has no tag.
+      const result = recommend(mac(48, 'Apple M4 Max'), STOCK, ALL_INSTALLED);
+      expect(rows(result).map((c) => [c.modelId, c.tag ?? null])).toEqual([
+        ['qwen3.8:27b', { kind: 'best', label: 'Best fit' }],
+        ['qwen3.6:35b-a3b', { kind: 'tight', label: 'Tight' }],
+        ['qwen3.5:9b-q8_0', { kind: 'small', label: 'Small model' }],
+        ['qwen3.5:9b', { kind: 'small', label: 'Small model' }],
+        ['gpt-oss:20b', null],
+      ]);
+      expect(result.alternatives[3]).not.toHaveProperty('tag');
+    });
+
+    it('says "Best fit, tight" on a pick that only just fits: the words must not say less than the bar', () => {
+      const result = recommend(mac(48, 'Apple M4 Pro'), STOCK, ALL_INSTALLED);
+      expect(result.pick).toMatchObject({ fit: 'tight', tag: { kind: 'best-tight', label: 'Best fit, tight' } });
+      // A pick with room says "Best fit" and nothing more.
+      const roomy = recommend(mac(64, 'Apple M4 Max'), STOCK, ALL_INSTALLED);
+      expect(roomy.pick).toMatchObject({ fit: 'good', tag: { kind: 'best', label: 'Best fit' } });
+    });
+
+    it('says "Tested on a Mac like this" in place of every other tag', () => {
+      // The MacBook's pick is tight and the pick, and says neither.
+      expect(recommend(mac(48, 'Apple M5 Pro'), STOCK, ALL_INSTALLED).pick?.tag).toEqual({
+        kind: 'tested',
+        label: 'Tested on a Mac like this',
+      });
+      // Two tested rows: the second is an alternative and says so too.
+      const entry: TestedOn = { chip: 'Apple M4 Max', memGb: 128, cli: 'alpha', date: '2026-11-06' };
+      const catalog = catalogOf([
+        model('first:1', { rank: 2, tested: [entry] }),
+        modelNeeding('second:1', 0.9 * HUNDRED_GIB, { rank: 1, paramsB: 9, speedPer100Gbps: 1, tested: [entry] }),
+      ]);
+      expect(rows(recommend(HUNDRED_GIB_MAC, catalog, [fact('alpha')])).map((c) => c.tag?.kind)).toEqual([
+        'tested',
+        'tested',
+      ]);
+    });
+
+    it('orders the kinds: tight before slow before small', () => {
+      const tagOfSecond = (overrides: Partial<LocalModelEntry>, need = 0.5 * HUNDRED_GIB): string | undefined => {
+        const catalog = catalogOf([
+          model('pick:1', { rank: 2, speedPer100Gbps: 5 }),
+          modelNeeding('second:1', need, { rank: 1, speedPer100Gbps: 5, ...overrides }),
+        ]);
+        return recommend(HUNDRED_GIB_MAC, catalog, [fact('alpha')]).alternatives[0].tag?.kind;
+      };
+      // Tight, slow and small at once.
+      expect(tagOfSecond({ speedPer100Gbps: 1, paramsB: 9 }, 0.9 * HUNDRED_GIB)).toBe('tight');
+      // Slow and small.
+      expect(tagOfSecond({ speedPer100Gbps: 1, paramsB: 9 })).toBe('slow');
+      // Small only.
+      expect(tagOfSecond({ paramsB: 9 })).toBe('small');
+      expect(tagOfSecond({ paramsB: 11.9 })).toBe('small');
+      // None of them: no tag. An unknown speed is not a tag either.
+      expect(tagOfSecond({})).toBeUndefined();
+      expect(tagOfSecond({ speedPer100Gbps: undefined })).toBeUndefined();
+    });
+
+    it('takes every tag text from the fixed list', () => {
+      const texts = new Set<string>(Object.values(LOCAL_MODEL_TAG_LABELS));
+      for (const hw of [...SWEEP, mac(48, 'Apple M5 Pro')]) {
+        for (const candidate of rows(recommend(hw, STOCK, ALL_INSTALLED))) {
+          if (!candidate.tag) continue;
+          expect(texts.has(candidate.tag.label)).toBe(true);
+          expect(candidate.tag.label).toBe(LOCAL_MODEL_TAG_LABELS[candidate.tag.kind]);
+        }
+      }
+    });
+
+    it('gives exactly one row the pick tag, and it is the first', () => {
+      for (const hw of SWEEP) {
+        const result = recommend(hw, STOCK, ALL_INSTALLED);
+        if (!result.pick) continue;
+        // The pick's tag is the pick's alone: "Best fit", with ", tight" when it only just fits.
+        expect(result.pick.tag?.kind).toBe(result.pick.fit === 'tight' ? 'best-tight' : 'best');
+        expect(result.alternatives.some((c) => c.tag?.kind === 'best' || c.tag?.kind === 'best-tight')).toBe(false);
+      }
+    });
+  });
+
+  describe('the harnesses', () => {
+    const hw = mac(48, 'Apple M4 Max');
+
+    it('lists every harness that can run the model at its context, best first, the flat one first', () => {
+      const result = recommend(hw, STOCK, ALL_INSTALLED);
+      for (const candidate of rows(result)) {
+        expect(candidate.harnesses).toEqual([
+          { cli: 'opencode', cliLabel: 'OpenCode', installed: true },
+          { cli: 'claude', cliLabel: 'Claude Code', installed: true, slowFirstTurn: true },
+        ]);
+        expect(candidate.harnesses[0]).toMatchObject({
+          cli: candidate.cli,
+          cliLabel: candidate.cliLabel,
+          installed: candidate.cliInstalled,
+        });
+      }
+    });
+
+    it('prints the install command of a harness that is not installed, and only of such a one', () => {
+      const command = 'curl -fsSL https://example.com/install | bash';
+      const facts = [
+        fact('opencode', { installed: false, installable: true, installCommand: command }),
+        // Installed: a command the caller knows is not shown.
+        fact('claude', { installCommand: 'npm install -g something' }),
+      ];
+      expect(recommend(hw, STOCK, facts).pick?.harnesses).toEqual([
+        { cli: 'opencode', cliLabel: 'OpenCode', installed: false, installCommand: command },
+        { cli: 'claude', cliLabel: 'Claude Code', installed: true, slowFirstTurn: true },
+      ]);
+      // Installable without a command the caller could name: listed, without the field.
+      const bare = recommend(hw, STOCK, [fact('opencode', { installed: false, installable: true })]);
+      expect(bare.pick?.harnesses).toEqual([{ cli: 'opencode', cliLabel: 'OpenCode', installed: false }]);
+    });
+
+    it('leaves out a harness that refuses the model id or is not on the machine', () => {
+      const facts = [
+        fact('opencode', { acceptsModelId: (id: string) => id !== 'qwen3.8:27b' }),
+        fact('claude', { installed: false, installable: false }),
+      ];
+      const result = recommend(hw, STOCK, facts);
+      for (const candidate of rows(result)) expect(candidate.harnesses.map((h) => h.cli)).toEqual(['opencode']);
+      expect(order(result)).not.toContain('qwen3.8:27b@131072');
+    });
+
+    it('is never empty', () => {
+      for (const swept of [...SWEEP, mac(48, 'Apple M5 Pro')]) {
+        for (const candidate of rows(recommend(swept, STOCK, ALL_INSTALLED))) {
+          expect(candidate.harnesses.length).toBeGreaterThan(0);
+          expect(new Set(candidate.harnesses.map((h) => h.cli)).size).toBe(candidate.harnesses.length);
+        }
+      }
+    });
+  });
+
+  describe('the download of an install', () => {
+    const hw = mac(48, 'Apple M4 Max');
+
+    it('is the model alone once the runtime is installed', () => {
+      for (const candidate of rows(recommend(hw, STOCK, ALL_INSTALLED))) {
+        expect(candidate.installBytes).toBe(candidate.downloadBytes);
+        expect(candidate.installGb).toBe(candidate.downloadGb);
+      }
+    });
+
+    it('adds the runtime archive to every row while the runtime is not installed', () => {
+      const result = recommend(hw, STOCK, ALL_INSTALLED, { runtimeDownloadBytes: RUNTIME_ARCHIVE_BYTES });
+      for (const candidate of rows(result)) {
+        expect(candidate.installBytes).toBe(candidate.downloadBytes + 185_971_671);
+        expect(candidate.installGb).toBe(formatGb(candidate.installBytes));
+      }
+      // 17,741,871,939 + 185,971,671: reads 17.9 where the model alone reads 17.7.
+      expect(result.pick).toMatchObject({ downloadGb: '17.7', installBytes: 17_927_843_610, installGb: '17.9' });
+    });
+
+    it('does not let it change which model is the pick, what fits, or the need', () => {
+      const plain = recommend(hw, STOCK, ALL_INSTALLED);
+      const withRuntime = recommend(hw, STOCK, ALL_INSTALLED, { runtimeDownloadBytes: RUNTIME_ARCHIVE_BYTES });
+      const strip = (candidate: Candidate): Omit<Candidate, 'installBytes' | 'installGb'> => {
+        const { installBytes: _bytes, installGb: _gb, ...rest } = candidate;
+        return rest;
+      };
+      expect(rows(withRuntime).map(strip)).toEqual(rows(plain).map(strip));
+    });
+
+    it('ignores a runtime size that is no byte count', () => {
+      for (const runtimeDownloadBytes of [0, -5, Number.NaN, Number.POSITIVE_INFINITY]) {
+        const pick = recommend(hw, STOCK, ALL_INSTALLED, { runtimeDownloadBytes }).pick as Candidate;
+        expect(pick.installBytes, String(runtimeDownloadBytes)).toBe(pick.downloadBytes);
+      }
+    });
+  });
+
+  it('says whether the need of a row rests on a measurement of that model', () => {
+    const result = recommend(mac(64, 'Apple M4 Max'), STOCK, ALL_INSTALLED);
+    expect(Object.fromEntries(rows(result).map((c) => [c.modelId, c.needSource]))).toEqual({
+      'qwen3.8:27b': 'estimated',
+      'qwen3.6:35b-a3b': 'measured',
+      'qwen3.5:9b-q8_0': 'estimated',
+      'qwen3.5:9b': 'estimated',
+      'gpt-oss:20b': 'estimated',
+    });
+  });
+});
+
+describe('the measured budget, end to end', () => {
+  it('re-runs the recommendation against what the runtime reported', async () => {
+    const hw = await macbook();
+    const estimated = recommend(hw, STOCK, ALL_INSTALLED);
+    const measured = recommend(hw, STOCK, ALL_INSTALLED, { measuredTotalBytes: MACBOOK_MEASURED_TOTAL });
+    expect([estimated.budgetSource, estimated.budgetGb]).toEqual(['estimated', '37.6']);
+    expect([measured.budgetSource, measured.budgetGb]).toEqual(['measured', '40.2']);
+    // The same rows in the same order; only the share of each changes.
+    expect(order(measured)).toEqual(order(estimated));
+    expect(rows(estimated).map((c) => c.budgetShare)).toEqual([0.957, 0.555, 0.452, 0.709, 0.814]);
+    expect(rows(measured).map((c) => c.budgetShare)).toEqual([0.895, 0.52, 0.423, 0.663, 0.762]);
+    for (const candidate of rows(measured)) {
+      expect(candidate.budgetShare).toBeCloseTo(candidate.needBytes / MACBOOK_MEASURED_TOTAL, 3);
+    }
+  });
+
+  it('can rule a model out that the estimate offered, and offer one the estimate ruled out', () => {
+    const hw = mac(48, 'Apple M4 Pro');
+    // The estimate (35 GiB) offers the 35B-A3B at 131072 tokens (0.957).
+    expect(order(recommend(hw, STOCK, ALL_INSTALLED))[0]).toBe('qwen3.6:35b-a3b@131072');
+    expect(modelFitsBudget(hw, STOCK, 'qwen3.6:35b-a3b', 131072)).toBe(true);
+    // A runtime that reports only 33 GiB rules that context out (1.015), so the install job
+    // stops before the download, and the recommendation steps the model down to 65536 (0.946).
+    const lower = { measuredTotalBytes: 33 * GIB };
+    expect(modelFitsBudget(hw, STOCK, 'qwen3.6:35b-a3b', 131072, lower)).toBe(false);
+    expect(modelFitsBudget(hw, STOCK, 'qwen3.6:35b-a3b', 65536, lower)).toBe(true);
+    expect(recommend(hw, STOCK, ALL_INSTALLED, lower).pick).toMatchObject({
+      modelId: 'qwen3.6:35b-a3b',
+      context: 65536,
+      budgetShare: 0.946,
+    });
+    // At 31 GiB it fits at no context and is not listed at all.
+    const lowest = { measuredTotalBytes: 31 * GIB };
+    expect(modelFitsBudget(hw, STOCK, 'qwen3.6:35b-a3b', 65536, lowest)).toBe(false);
+    expect(order(recommend(hw, STOCK, ALL_INSTALLED, lowest)).some((entry) => entry.startsWith('qwen3.6'))).toBe(false);
+    // On a 36 GB Mac the estimate (26 GiB) rules the 27B out at 65536 tokens; 27 GiB admits it.
+    const small = mac(36, 'Apple M4 Max');
+    expect(modelFitsBudget(small, STOCK, 'qwen3.8:27b', 65536)).toBe(false);
+    expect(modelFitsBudget(small, STOCK, 'qwen3.8:27b', 65536, { measuredTotalBytes: 27 * GIB })).toBe(true);
   });
 });
 
@@ -1419,12 +1951,11 @@ describe('the shape of the answer', () => {
   const labels = new Set<string>(Object.values(LOCAL_MODEL_LABELS));
 
   it('takes every sentence and label from the fixed list', () => {
-    for (const hw of SWEEP) {
+    for (const hw of [...SWEEP, mac(48, 'Apple M5 Pro')]) {
       const result = recommend(hw, STOCK, ALL_INSTALLED);
       expect(labels.has(result.headline.text)).toBe(true);
       for (const note of result.notes) expect(labels.has(note.text)).toBe(true);
-      for (const candidate of [result.pick, ...result.alternatives]) {
-        if (!candidate) continue;
+      for (const candidate of rows(result)) {
         expect(labels.has(candidate.fitLabel)).toBe(true);
         if (candidate.speedLabel !== undefined) expect(labels.has(candidate.speedLabel)).toBe(true);
         expect(candidate.speedLabel === undefined).toBe(candidate.speed === 'ok');
@@ -1450,7 +1981,7 @@ describe('the shape of the answer', () => {
     ]);
     // The two other sentences of the `memory` reason, and an answer with every kind of note.
     answers.push(
-      recommend(mac(16, 'Apple M4'), STOCK, ALL_INSTALLED),
+      recommend(mac(24, 'Apple M4'), STOCK, ALL_INSTALLED),
       recommend({ ...mac(48, 'Apple M4'), memBytes: 0, memGb: '0.0', memClassGb: 0 }, STOCK, ALL_INSTALLED),
       recommend(mac(48, 'Apple M4', { freeDiskBytes: 20 * GIB, freeDiskGb: '21.5' }), STOCK, ALL_INSTALLED)
     );
@@ -1476,26 +2007,26 @@ describe('the shape of the answer', () => {
   });
 
   it('prints every size in one unit: decimal GB from the one formatter, never GiB', () => {
-    for (const hw of SWEEP) {
-      const result = recommend(hw, STOCK, ALL_INSTALLED);
+    for (const hw of [...SWEEP, mac(48, 'Apple M5 Pro')]) {
+      const result = recommend(hw, STOCK, ALL_INSTALLED, { runtimeDownloadBytes: RUNTIME_ARCHIVE_BYTES });
       expect(result.budgetGb).toBe(formatGb(result.budgetBytes));
-      for (const candidate of [result.pick, ...result.alternatives]) {
-        if (!candidate) continue;
+      for (const candidate of rows(result)) {
         expect(candidate.needGb).toBe(formatGb(candidate.needBytes));
         expect(candidate.downloadGb).toBe(formatGb(candidate.downloadBytes));
+        expect(candidate.installGb).toBe(formatGb(candidate.installBytes));
         expect(candidate.budgetShare).toBeCloseTo(candidate.needBytes / result.budgetBytes, 3);
       }
       expect(JSON.stringify(result)).not.toMatch(/GiB|MiB/);
     }
   });
 
-  it('adds up for a person: download, plus what the context and the runtime take, is the need', () => {
+  it('adds up for a person: download, plus what the context and the runner take, is the need', () => {
     const result = recommend(mac(48, 'Apple M4 Max'), STOCK, ALL_INSTALLED);
     const pick = result.pick as Candidate;
-    // 17.7 GB of weights + 8 GiB of KV cache + 1 GiB + 2 GiB of prompt cache, all in decimal GB.
+    // 17.7 GB of weights + 4.8 GB held for 131,072 tokens + 3 GB + 5 GB, all in decimal GB.
     expect(pick.downloadGb).toBe('17.7');
-    expect(pick.needGb).toBe('29.6');
-    expect(formatGb(pick.needBytes - pick.downloadBytes)).toBe('11.8');
+    expect(pick.needGb).toBe('30.6');
+    expect(formatGb(pick.needBytes - pick.downloadBytes)).toBe('12.8');
     expect(result.budgetGb).toBe('37.6');
     expect(pick.needBytes).toBeLessThan(result.budgetBytes);
   });
@@ -1513,12 +2044,47 @@ describe('the shape of the answer', () => {
     );
   });
 
+  it('gives every row the same fields, plus the ones that say something only sometimes', () => {
+    const always = [
+      'budgetShare',
+      'cli',
+      'cliInstalled',
+      'cliLabel',
+      'context',
+      'downloadBytes',
+      'downloadGb',
+      'fit',
+      'fitLabel',
+      'harnesses',
+      'installBytes',
+      'installGb',
+      'license',
+      'modelId',
+      'modelLabel',
+      'needBytes',
+      'needGb',
+      'needSource',
+      'paramsB',
+      'speed',
+      'tested',
+    ];
+    const sometimes = ['slowFirstTurn', 'speedLabel', 'tag', 'tokensPerSecond'];
+    for (const hw of [...SWEEP, mac(48, 'Apple M5 Pro')]) {
+      for (const candidate of rows(recommend(hw, STOCK, ALL_INSTALLED))) {
+        const keys = Object.keys(candidate);
+        expect(keys.filter((key) => !sometimes.includes(key)).sort()).toEqual(always);
+        for (const key of keys) expect((candidate as unknown as Record<string, unknown>)[key]).not.toBeUndefined();
+      }
+    }
+  });
+
   it('is pure: frozen inputs are enough, and the same inputs give the same answer', () => {
     const hw = deepFreeze(mac(48, 'Apple M4 Pro'));
     const catalog = deepFreeze(structuredClone(STOCK_LOCAL_MODEL_CATALOG));
     const facts = deepFreeze(ALL_INSTALLED.map((entry) => ({ ...entry })));
-    const first = recommend(hw, catalog, facts);
-    const second = recommend(hw, catalog, facts);
+    const options = deepFreeze({ measuredTotalBytes: MACBOOK_MEASURED_TOTAL, runtimeDownloadBytes: 1 });
+    const first = recommend(hw, catalog, facts, options);
+    const second = recommend(hw, catalog, facts, options);
     expect(second).toEqual(first);
     expect(first.verdict).toBe('ok');
   });

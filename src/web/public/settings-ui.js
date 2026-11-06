@@ -550,8 +550,9 @@ Object.assign(CodemanApp.prototype, {
     // Assigning .checked above does not fire onchange, so the body's visibility
     // (and its lazy load) needs an explicit sync on every open, not just a save.
     this.applyCustomModelEndpointsVisibility();
-    // Model on this Mac (local-model-ui.js): a read-only row, not a setting. Server state,
-    // asked for at most once a minute; nothing here is loaded or saved by id.
+    // Model on this Mac (local-model-ui.js): a row that says where the local model stands and
+    // opens its window, not a setting. Server state, asked for at most once a minute; nothing
+    // here is loaded or saved by id.
     this.loadLocalModel?.();
     // CLI management (docs/cli-enable-disable-plan.md): synced, default OFF.
     document.getElementById('appSettingsCliManagement').checked = settings.cliManagementEnabled === true;

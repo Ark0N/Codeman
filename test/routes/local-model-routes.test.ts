@@ -1,12 +1,17 @@
 /**
- * @fileoverview GET /api/local-model: what this Mac is and which local model fits it.
+ * @fileoverview The local model routes: GET /api/local-model (what this Mac is and which local
+ * model fits it, plus where the install stands) and the verbs that install, cancel, resume,
+ * start, stop and remove.
  *
- * The route only composes four injected functions (the hardware probe, the catalogue getter,
- * the harness facts and the pure `recommend()`), so every test passes its own and no test
- * depends on what those modules compute. What is pinned here is the route's own contract:
- * the envelope, the admin gate in multi-user mode, that an unsupported platform and a failed
- * probe are answers (200) and never a 500, what does answer 500, and that a request writes
- * nothing.
+ * The routes only compose injected functions (the hardware probe, the catalogue getter, the
+ * harness facts, the pure `recommend()` and the install service), so every test passes its own
+ * and no test depends on what those modules compute. What is pinned here is the routes' own
+ * contract: the envelope, the admin gate on EVERY verb in multi-user mode, that an unsupported
+ * platform and a failed probe are answers (200) and never a 500, what does answer 500, how a
+ * verb's refusal becomes a 400 or a 409 with its conflict, that DELETE hands the live sessions
+ * to the service, and that a GET with nothing installed writes nothing.
+ *
+ * The install service itself is tested in test/local-model-install-service.test.ts.
  *
  * Port: N/A (app.inject()).
  */
@@ -24,12 +29,22 @@ import {
 } from '../../src/web/routes/local-model-routes.js';
 import { buildHarnessFacts } from '../../src/local-model/harness-facts.js';
 import { formatGb, memClassGb } from '../../src/local-model/format.js';
-import { getDataDir } from '../../src/config/instance.js';
 import {
+  createLocalModelService,
+  getLocalModelService,
+  type LocalModelService,
+  type LocalModelVerbResult,
+} from '../../src/local-model/install-job.js';
+import { CustomModelHostsWriteRefusedError } from '../../src/custom-model-hosts-writer.js';
+import { SettingsWriteRefusedError } from '../../src/web/settings-writer.js';
+import { dataPath, getDataDir } from '../../src/config/instance.js';
+import {
+  LOCAL_MODEL_INSTALL_LABELS,
   LOCAL_MODEL_LABELS,
   type HardwareFacts,
   type HarnessFact,
   type LocalModelCatalog,
+  type LocalModelInstallView,
   type Recommendation,
 } from '../../src/types.js';
 
@@ -37,10 +52,6 @@ const CATALOG: LocalModelCatalog = {
   schema: 1,
   updated: '2026-11-06',
   minMacosMajor: 14,
-  promptCacheTiers: [
-    { minMemGb: 0, bytes: 512 * 1024 * 1024 },
-    { minMemGb: 32, bytes: 2 * 1024 ** 3 },
-  ],
   models: [],
   harnesses: [
     { cli: 'opencode', minContext: 65536, rank: 3 },
@@ -111,6 +122,10 @@ const OK: Recommendation = {
     speed: 'unknown',
     speedLabel: LOCAL_MODEL_LABELS.speedUnknown,
     tested: false,
+    needSource: 'estimated',
+    harnesses: [{ cli: 'opencode', cliLabel: 'OpenCode', installed: true }],
+    installBytes: 17740000000,
+    installGb: '17.7',
   },
   alternatives: [],
   budgetBytes: 37580963840,
@@ -133,12 +148,58 @@ const FACTS: HarnessFact[] = [
   { cli: 'opencode', label: 'OpenCode', installed: true, installable: false, acceptsModelId: () => true },
 ];
 
+/** The install view of a Mac with nothing installed, as the service would answer it. */
+const IDLE_VIEW: LocalModelInstallView = {
+  state: 'idle',
+  running: false,
+  developerTools: 'missing',
+  runtime: { version: '0.40.15', installed: false, downloadBytes: 185971671, downloadGb: '0.2', unpackedGb: '0.6' },
+  folder: '/Users/me/.codeman/local-model',
+  actions: ['install'],
+};
+
+const INSTALLING_VIEW: LocalModelInstallView = {
+  ...IDLE_VIEW,
+  state: 'installing',
+  step: 'runtime',
+  steps: ['runtime', 'model', 'verify', 'agent', 'connect'],
+  model: { id: 'qwen3.8:27b', label: 'Qwen3.8 27B' },
+  cli: 'opencode',
+  cliLabel: 'OpenCode',
+  context: 131072,
+  actions: ['cancel'],
+};
+
+const OK_RESULT: LocalModelVerbResult = { ok: true, view: INSTALLING_VIEW };
+
+type ServiceMock = { [K in keyof LocalModelService]: Mock<LocalModelService[K]> };
+
+/** An install service whose every verb answers `OK_RESULT` and whose view is idle. */
+function fakeService(): ServiceMock {
+  return {
+    view: vi.fn(async () => IDLE_VIEW),
+    launchRefusal: vi.fn(async () => undefined),
+    launchRefusalMessage: vi.fn(async () => undefined),
+    recommendOptions: vi.fn(async () => ({ runtimeDownloadBytes: 185971671 })),
+    install: vi.fn(async () => OK_RESULT),
+    cancel: vi.fn(async () => OK_RESULT),
+    resume: vi.fn(async () => OK_RESULT),
+    runtime: vi.fn(async () => OK_RESULT),
+    remove: vi.fn(async () => OK_RESULT),
+    boot: vi.fn(async () => {}),
+    shutdown: vi.fn(async () => {}),
+    onRuntimeChange: vi.fn(),
+    idle: vi.fn(async () => {}),
+  };
+}
+
 interface Fakes {
   deps: LocalModelRouteDeps;
   readHardware: Mock<LocalModelRouteDeps['readHardware']>;
   getCatalog: Mock<LocalModelRouteDeps['getCatalog']>;
   buildHarnessFacts: Mock<LocalModelRouteDeps['buildHarnessFacts']>;
   recommend: Mock<LocalModelRouteDeps['recommend']>;
+  service: ServiceMock;
 }
 
 function fakes(hardware: HardwareFacts = MAC, recommendation: Recommendation = OK): Fakes {
@@ -146,17 +207,28 @@ function fakes(hardware: HardwareFacts = MAC, recommendation: Recommendation = O
   const getCatalog = vi.fn<LocalModelRouteDeps['getCatalog']>(() => CATALOG);
   const buildFacts = vi.fn<LocalModelRouteDeps['buildHarnessFacts']>(async () => FACTS);
   const recommend = vi.fn<LocalModelRouteDeps['recommend']>(() => recommendation);
+  const service = fakeService();
   return {
-    deps: { readHardware, getCatalog, buildHarnessFacts: buildFacts, recommend },
+    deps: { readHardware, getCatalog, buildHarnessFacts: buildFacts, recommend, service: () => service },
     readHardware,
     getCatalog,
     buildHarnessFacts: buildFacts,
     recommend,
+    service,
   };
 }
 
-const harness = (deps: Partial<LocalModelRouteDeps>, authUser?: { username: string; role: 'admin' | 'user' }) =>
-  createRouteTestHarness((app) => registerLocalModelRoutes(app, deps), authUser ? { authUser } : undefined);
+type AuthUser = { username: string; role: 'admin' | 'user' };
+
+/** The live sessions the DELETE looks at: a name, and for some the endpoint their model comes from. */
+type SessionLike = { name: string; customModel?: { endpointId: string } };
+
+const harness = (deps: Partial<LocalModelRouteDeps>, authUser?: AuthUser, sessions: SessionLike[] = []) =>
+  createRouteTestHarness(
+    (app) =>
+      registerLocalModelRoutes(app, { sessions: new Map(sessions.map((session, i) => [`s${i}`, session])) }, deps),
+    authUser ? { authUser } : undefined
+  );
 
 const get = async (deps: Partial<LocalModelRouteDeps>, authUser?: { username: string; role: 'admin' | 'user' }) => {
   const { app } = await harness(deps, authUser);
@@ -191,8 +263,28 @@ describe('GET /api/local-model', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({
       success: true,
-      data: { hardware: MAC, recommendation: OK, catalogUpdated: '2026-11-06' },
+      data: { hardware: MAC, recommendation: OK, catalogUpdated: '2026-11-06', install: IDLE_VIEW },
     });
+  });
+
+  it('recommends with what the install service knows: the measured budget and the runtime still to download', async () => {
+    const f = fakes();
+    f.service.recommendOptions.mockResolvedValue({ measuredTotalBytes: 40_157_944_217, runtimeDownloadBytes: 0 });
+    await get(f.deps);
+    expect(f.service.recommendOptions).toHaveBeenCalledTimes(1);
+    expect(f.recommend.mock.calls[0][3]).toEqual({ measuredTotalBytes: 40_157_944_217, runtimeDownloadBytes: 0 });
+  });
+
+  it('carries the install view of the service as it is, in every state', async () => {
+    const f = fakes();
+    f.service.view.mockResolvedValue(INSTALLING_VIEW);
+    const res = await get(f.deps);
+    expect(res.json().data.install).toEqual(INSTALLING_VIEW);
+    expect(f.service.view).toHaveBeenCalledTimes(1);
+    // Looking is not doing: no verb of the service was called.
+    for (const verb of ['install', 'cancel', 'resume', 'runtime', 'remove', 'boot', 'shutdown'] as const) {
+      expect(f.service[verb]).not.toHaveBeenCalled();
+    }
   });
 
   it('hands recommend() exactly what the probe, the catalogue and the harness facts answered', async () => {
@@ -211,7 +303,7 @@ describe('GET /api/local-model', () => {
   it('sends the payload as the modules built it: no size is reformatted and no function leaks', async () => {
     const res = await get(fakes().deps);
     const { data } = res.json();
-    expect(Object.keys(data).sort()).toEqual(['catalogUpdated', 'hardware', 'recommendation']);
+    expect(Object.keys(data).sort()).toEqual(['catalogUpdated', 'hardware', 'install', 'recommendation']);
     expect(data.hardware.memGb).toBe('51.5');
     expect(data.hardware.freeDiskGb).toBe('912');
     expect(data.recommendation.pick.needGb).toBe('29.6');
@@ -221,10 +313,13 @@ describe('GET /api/local-model', () => {
     expect(res.body).not.toContain('installable');
   });
 
-  it('registers a GET and nothing else: this stage has no route that changes anything', async () => {
-    const { app } = await harness(fakes().deps);
-    expect((await app.inject({ method: 'POST', url: '/api/local-model', payload: {} })).statusCode).toBe(404);
-    expect((await app.inject({ method: 'DELETE', url: '/api/local-model' })).statusCode).toBe(404);
+  it('is the only thing a GET does: there is no POST, PUT or PATCH on the same path', async () => {
+    const f = fakes();
+    const { app } = await harness(f.deps);
+    for (const method of ['POST', 'PUT', 'PATCH'] as const) {
+      expect((await app.inject({ method, url: '/api/local-model', payload: {} })).statusCode).toBe(404);
+    }
+    expect(f.service.install).not.toHaveBeenCalled();
   });
 
   describe('multi-user mode', () => {
@@ -239,6 +334,8 @@ describe('GET /api/local-model', () => {
       expect(f.getCatalog).not.toHaveBeenCalled();
       expect(f.buildHarnessFacts).not.toHaveBeenCalled();
       expect(f.recommend).not.toHaveBeenCalled();
+      expect(f.service.view).not.toHaveBeenCalled();
+      expect(f.service.recommendOptions).not.toHaveBeenCalled();
     });
 
     it('answers an admin', async () => {
@@ -364,9 +461,16 @@ describe('GET /api/local-model', () => {
   describe('read-only', () => {
     it('writes nothing: the home directory and the data dir are byte for byte what they were', async () => {
       // The real harness facts (they read the CLI registry and run the availability probe),
-      // the route's own composition, and a hardware answer and a recommendation of the test's.
+      // the REAL install service over the real state file (nothing is installed, so its view
+      // is idle), the route's own composition, and a hardware answer and a recommendation of
+      // the test's.
       const f = fakes();
-      const { app } = await harness({ ...f.deps, buildHarnessFacts: (catalog) => buildHarnessFacts(catalog) });
+      const service = createLocalModelService();
+      const { app } = await harness({
+        ...f.deps,
+        buildHarnessFacts: (catalog) => buildHarnessFacts(catalog),
+        service: () => service,
+      });
 
       const home = homedir();
       const before = snapshot(home);
@@ -375,6 +479,7 @@ describe('GET /api/local-model', () => {
       for (let i = 0; i < 3; i++) {
         const res = await app.inject({ method: 'GET', url: '/api/local-model' });
         expect(res.statusCode).toBe(200);
+        expect(res.json().data.install).toMatchObject({ state: 'idle', running: false, actions: ['install'] });
       }
       // A refused request and a failing one write nothing either.
       f.recommend.mockImplementationOnce(() => {
@@ -405,8 +510,28 @@ describe('GET /api/local-model', () => {
       const server = readFileSync(join(root, 'src/web/server.ts'), 'utf8');
       const barrel = readFileSync(join(root, 'src/web/routes/index.ts'), 'utf8');
       expect(barrel).toContain("export { registerLocalModelRoutes } from './local-model-routes.js';");
-      // No second argument: the server runs the real probe, catalogue, facts and recommend().
-      expect(server).toContain('registerLocalModelRoutes(this.app);');
+      // The route context for the live sessions, and no third argument: the server runs the
+      // real probe, catalogue, facts, recommend() and install service.
+      expect(server).toContain('registerLocalModelRoutes(this.app, ctx);');
+    });
+
+    it('the server starts the install service at boot and stops it at shutdown, outside tests only', () => {
+      const root = fileURLToPath(new URL('../../', import.meta.url));
+      const server = readFileSync(join(root, 'src/web/server.ts'), 'utf8');
+      const boot = server.indexOf('void getLocalModelService().boot();');
+      const shutdown = server.indexOf('void getLocalModelService().shutdown();');
+      expect(boot).toBeGreaterThan(-1);
+      expect(shutdown).toBeGreaterThan(-1);
+      // Each sits in a block that tests never enter: nothing of the runtime runs under vitest.
+      for (const at of [boot, shutdown]) {
+        const before = server.slice(0, at).trimEnd();
+        expect(before.endsWith('if (!this.testMode) {')).toBe(true);
+      }
+      // Shutdown stands beside the other supervised child's stop.
+      const deepseek = server.indexOf('void stopDeepSeekWeb();');
+      expect(deepseek).toBeGreaterThan(-1);
+      expect(shutdown).toBeGreaterThan(deepseek);
+      expect(shutdown - deepseek).toBeLessThan(700);
     });
 
     it('the default dependencies are the real modules, read at call time', () => {
@@ -415,8 +540,469 @@ describe('GET /api/local-model', () => {
         'getCatalog',
         'readHardware',
         'recommend',
+        'service',
       ]);
       for (const dep of Object.values(defaultLocalModelRouteDeps)) expect(typeof dep).toBe('function');
+      // The one install service of the process, the same object every time.
+      expect(defaultLocalModelRouteDeps.service()).toBe(getLocalModelService());
     });
+  });
+});
+
+describe('the install verbs', () => {
+  const INSTALL_BODY = { modelId: 'qwen3.8:27b', cli: 'opencode', context: 131072, acknowledgedBytes: 17926000000 };
+
+  /** Every verb as a request, with a body the route accepts. */
+  const VERBS = [
+    { name: 'install', method: 'POST', url: '/api/local-model/install', payload: INSTALL_BODY },
+    { name: 'cancel', method: 'POST', url: '/api/local-model/cancel', payload: undefined },
+    { name: 'resume', method: 'POST', url: '/api/local-model/resume', payload: {} },
+    { name: 'runtime', method: 'POST', url: '/api/local-model/runtime', payload: { action: 'stop' } },
+    { name: 'remove', method: 'DELETE', url: '/api/local-model', payload: { removeModel: true } },
+  ] as const;
+
+  const call = (app: Awaited<ReturnType<typeof harness>>['app'], verb: (typeof VERBS)[number]) =>
+    app.inject({ method: verb.method, url: verb.url, ...(verb.payload ? { payload: verb.payload } : {}) });
+
+  describe.each(VERBS)('$method $url', (verb) => {
+    it('answers the view after the verb in the success envelope', async () => {
+      const f = fakes();
+      const { app } = await harness(f.deps);
+      const res = await call(app, verb);
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ success: true, data: INSTALLING_VIEW });
+      expect(f.service[verb.name]).toHaveBeenCalledTimes(1);
+    });
+
+    it('multi-user mode: a non-admin is refused with 403 before the service is asked anything', async () => {
+      process.env.CODEMAN_MULTIUSER = '1';
+      const f = fakes();
+      const { app } = await harness(f.deps, { username: 'bob', role: 'user' });
+      const res = await call(app, verb);
+      expect(res.statusCode).toBe(403);
+      expect(res.json()).toMatchObject({ success: false, errorCode: 'FORBIDDEN' });
+      for (const name of ['install', 'cancel', 'resume', 'runtime', 'remove', 'view', 'recommendOptions'] as const) {
+        expect(f.service[name]).not.toHaveBeenCalled();
+      }
+    });
+
+    it('multi-user mode: the gate comes before the body is even parsed', async () => {
+      process.env.CODEMAN_MULTIUSER = '1';
+      const f = fakes();
+      const { app } = await harness(f.deps, { username: 'bob', role: 'user' });
+      const res = await app.inject({ method: verb.method, url: verb.url, payload: { nonsense: true } });
+      expect(res.statusCode).toBe(403);
+    });
+
+    it('multi-user mode: an admin is served', async () => {
+      process.env.CODEMAN_MULTIUSER = '1';
+      const f = fakes();
+      const { app } = await harness(f.deps, { username: 'root', role: 'admin' });
+      expect((await call(app, verb)).statusCode).toBe(200);
+      expect(f.service[verb.name]).toHaveBeenCalledTimes(1);
+    });
+
+    it('is not gated while multi-user mode is off', async () => {
+      const f = fakes();
+      const { app } = await harness(f.deps, { username: 'bob', role: 'user' });
+      expect((await call(app, verb)).statusCode).toBe(200);
+    });
+
+    it('a 409 of the service is the error envelope plus the conflict as data', async () => {
+      const f = fakes();
+      f.service[verb.name].mockResolvedValue({
+        ok: false,
+        status: 409,
+        conflict: { reason: 'job-running', message: { text: LOCAL_MODEL_INSTALL_LABELS.conflictJobRunning } },
+      });
+      const { app } = await harness(f.deps);
+      const res = await call(app, verb);
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toEqual({
+        success: false,
+        error: 'An install is already running.',
+        errorCode: 'CONFLICT',
+        data: { reason: 'job-running', message: { text: 'An install is already running.' } },
+      });
+    });
+
+    it('an exception of the service is a 500 in the envelope', async () => {
+      const f = fakes();
+      f.service[verb.name].mockRejectedValue(new Error('disk on fire'));
+      const { app } = await harness(f.deps);
+      const res = await call(app, verb);
+      expect(res.statusCode).toBe(500);
+      expect(res.json()).toMatchObject({ success: false, errorCode: 'INTERNAL_ERROR' });
+      expect(res.json().error).toContain('disk on fire');
+    });
+
+    it.each([
+      ['the endpoint store', new CustomModelHostsWriteRefusedError('custom-model-hosts.json is not a valid JSON list')],
+      ['the settings file', new SettingsWriteRefusedError('settings.json is not a valid JSON object')],
+    ])('a refused write of %s is a 409 with the fix and no conflict data', async (_label, error) => {
+      const f = fakes();
+      f.service[verb.name].mockRejectedValue(error);
+      const { app } = await harness(f.deps);
+      const res = await call(app, verb);
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toEqual({ success: false, error: error.message, errorCode: 'CONFLICT' });
+    });
+  });
+
+  describe('POST /api/local-model/install', () => {
+    it('hands the service the four choices and who asked', async () => {
+      const f = fakes();
+      const { app } = await harness(f.deps, { username: 'alice', role: 'admin' });
+      await app.inject({ method: 'POST', url: '/api/local-model/install', payload: INSTALL_BODY });
+      expect(f.service.install).toHaveBeenCalledWith(INSTALL_BODY, { username: 'alice', ip: '127.0.0.1' });
+    });
+
+    it('a row the server does not offer is a 400 with the service own sentence, as text and as data', async () => {
+      const f = fakes();
+      f.service.install.mockResolvedValue({
+        ok: false,
+        status: 400,
+        message: { text: LOCAL_MODEL_INSTALL_LABELS.refusedAgentNotInstallable, vars: { cli: 'OpenCode' } },
+      });
+      const { app } = await harness(f.deps);
+      const res = await app.inject({ method: 'POST', url: '/api/local-model/install', payload: INSTALL_BODY });
+      expect(res.statusCode).toBe(400);
+      // `error` is the English sentence with its slots filled; `data.message` is the sentence
+      // with its slots apart, which the window prints in its own language.
+      expect(res.json()).toEqual({
+        success: false,
+        error: 'OpenCode is not installed and cannot be installed from here.',
+        errorCode: 'INVALID_INPUT',
+        data: {
+          message: { text: '{cli} is not installed and cannot be installed from here.', vars: { cli: 'OpenCode' } },
+        },
+      });
+    });
+
+    it('a first install on a full disk is a 507 with the sentence, not a 500', async () => {
+      const f = fakes();
+      f.service.install.mockResolvedValue({
+        ok: false,
+        status: 507,
+        message: { text: LOCAL_MODEL_INSTALL_LABELS.errDiskFull },
+      });
+      const { app } = await harness(f.deps);
+      const res = await app.inject({ method: 'POST', url: '/api/local-model/install', payload: INSTALL_BODY });
+      expect(res.statusCode).toBe(507);
+      expect(res.json()).toEqual({
+        success: false,
+        error: 'The disk is full. Free up space, then try again.',
+        errorCode: 'OPERATION_FAILED',
+        data: { message: { text: 'The disk is full. Free up space, then try again.' } },
+      });
+    });
+
+    it('consent bound to the size: the 409 carries the server own total, so the window can ask again', async () => {
+      const f = fakes();
+      f.service.install.mockResolvedValue({
+        ok: false,
+        status: 409,
+        conflict: {
+          reason: 'size-changed',
+          message: { text: LOCAL_MODEL_INSTALL_LABELS.conflictSizeChanged, vars: { size: '23.3' } },
+          expectedBytes: 23291770627,
+          expectedGb: '23.3',
+        },
+      });
+      const { app } = await harness(f.deps);
+      const res = await app.inject({ method: 'POST', url: '/api/local-model/install', payload: INSTALL_BODY });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toEqual({
+        success: false,
+        error: 'The download is 23.3 GB now. Check the sizes and confirm again.',
+        errorCode: 'CONFLICT',
+        data: {
+          reason: 'size-changed',
+          message: {
+            text: 'The download is {size} GB now. Check the sizes and confirm again.',
+            vars: { size: '23.3' },
+          },
+          expectedBytes: 23291770627,
+          expectedGb: '23.3',
+        },
+      });
+    });
+
+    it.each([
+      ['no body', undefined],
+      ['a missing size', { modelId: 'qwen3.8:27b', cli: 'opencode', context: 131072 }],
+      ['a model id with a registry host in it', { ...INSTALL_BODY, modelId: 'evil.example/x/y:z' }],
+      ['a model id without a tag', { ...INSTALL_BODY, modelId: 'qwen3.8' }],
+      ['an upper-case model id', { ...INSTALL_BODY, modelId: 'Qwen3.8:27B' }],
+      ['a coding agent id with a space', { ...INSTALL_BODY, cli: 'open code' }],
+      ['a coding agent id that is a path', { ...INSTALL_BODY, cli: '../bin/sh' }],
+      ['a context of zero', { ...INSTALL_BODY, context: 0 }],
+      ['a context that is not a whole number', { ...INSTALL_BODY, context: 1.5 }],
+      ['a negative size', { ...INSTALL_BODY, acknowledgedBytes: -1 }],
+      ['a size as text', { ...INSTALL_BODY, acknowledgedBytes: '17926000000' }],
+      ['a member nobody defined', { ...INSTALL_BODY, url: 'https://example.invalid/ollama.tgz' }],
+    ])('%s is a 400 before the service is asked', async (_label, payload) => {
+      const f = fakes();
+      const { app } = await harness(f.deps);
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/local-model/install',
+        ...(payload ? { payload } : {}),
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ success: false, errorCode: 'INVALID_INPUT' });
+      expect(f.service.install).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('POST /api/local-model/resume and /runtime', () => {
+    it('resume takes no body, an empty one, or newPort', async () => {
+      const f = fakes();
+      const { app } = await harness(f.deps);
+      await app.inject({ method: 'POST', url: '/api/local-model/resume' });
+      await app.inject({ method: 'POST', url: '/api/local-model/resume', payload: {} });
+      await app.inject({ method: 'POST', url: '/api/local-model/resume', payload: { newPort: true } });
+      expect(f.service.resume.mock.calls.map(([body]) => body)).toEqual([{}, {}, { newPort: true }]);
+      expect(f.service.resume.mock.calls[0][1]).toEqual({ username: 'admin', ip: '127.0.0.1' });
+    });
+
+    it('resume and runtime hand the service the live sessions on the model, read at the moment of the request', async () => {
+      const f = fakes();
+      const sessions = new Map<string, SessionLike>([
+        ['a', { name: 'w1-app', customModel: { endpointId: 'local-ollama' } }],
+        ['b', { name: 'w2-app', customModel: { endpointId: 'office-gpu' } }],
+      ]);
+      const { app } = await createRouteTestHarness((instance) =>
+        registerLocalModelRoutes(instance, { sessions }, f.deps)
+      );
+      await app.inject({ method: 'POST', url: '/api/local-model/runtime', payload: { action: 'stop' } });
+      await app.inject({ method: 'POST', url: '/api/local-model/resume', payload: { newPort: true } });
+      sessions.delete('a');
+      await app.inject({ method: 'POST', url: '/api/local-model/runtime', payload: { action: 'stop' } });
+      expect(f.service.runtime.mock.calls.map((args) => args[1])).toEqual([['w1-app'], []]);
+      expect(f.service.resume.mock.calls[0][2]).toEqual(['w1-app']);
+    });
+
+    it('a stop while a live session uses the model: 409 with the session names', async () => {
+      const f = fakes();
+      f.service.runtime.mockImplementation(async (_request, names = []) => ({
+        ok: false,
+        status: 409,
+        conflict: {
+          reason: 'sessions-open',
+          message: { text: LOCAL_MODEL_INSTALL_LABELS.conflictSessionsOpen, vars: { sessions: names.join(', ') } },
+          sessions: [...names],
+        },
+      }));
+      const { app } = await harness(f.deps, undefined, [
+        { name: 'w1-app', customModel: { endpointId: 'local-ollama' } },
+      ]);
+      const res = await app.inject({ method: 'POST', url: '/api/local-model/runtime', payload: { action: 'stop' } });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({
+        errorCode: 'CONFLICT',
+        error: 'Sessions are still using this model: w1-app. Close them first.',
+        data: { reason: 'sessions-open', sessions: ['w1-app'] },
+      });
+    });
+
+    it('resume refuses a body it does not know', async () => {
+      const f = fakes();
+      const { app } = await harness(f.deps);
+      const res = await app.inject({ method: 'POST', url: '/api/local-model/resume', payload: { port: 80 } });
+      expect(res.statusCode).toBe(400);
+      expect(f.service.resume).not.toHaveBeenCalled();
+    });
+
+    it('runtime takes start or stop, and newPort with it', async () => {
+      const f = fakes();
+      const { app } = await harness(f.deps);
+      await app.inject({
+        method: 'POST',
+        url: '/api/local-model/runtime',
+        payload: { action: 'start', newPort: true },
+      });
+      await app.inject({ method: 'POST', url: '/api/local-model/runtime', payload: { action: 'stop' } });
+      expect(f.service.runtime.mock.calls.map(([body]) => body)).toEqual([
+        { action: 'start', newPort: true },
+        { action: 'stop' },
+      ]);
+    });
+
+    it.each([
+      ['no body', undefined],
+      ['no action', {}],
+      ['an action that is neither', { action: 'restart' }],
+      ['a port number of the caller own choosing', { action: 'start', port: 22 }],
+    ])('runtime with %s is a 400', async (_label, payload) => {
+      const f = fakes();
+      const { app } = await harness(f.deps);
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/local-model/runtime',
+        ...(payload ? { payload } : {}),
+      });
+      expect(res.statusCode).toBe(400);
+      expect(f.service.runtime).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('DELETE /api/local-model', () => {
+    const SESSIONS: SessionLike[] = [
+      { name: 'w1-app', customModel: { endpointId: 'local-ollama' } },
+      { name: 'w2-app' },
+      { name: 'w3-lib', customModel: { endpointId: 'office-gpu' } },
+      { name: 'w4-lib', customModel: { endpointId: 'local-ollama' } },
+    ];
+
+    it('hands the service the names of the live sessions on the model, and who asked', async () => {
+      const f = fakes();
+      const { app } = await harness(f.deps, undefined, SESSIONS);
+      await app.inject({ method: 'DELETE', url: '/api/local-model', payload: { removeModel: true } });
+      expect(f.service.remove).toHaveBeenCalledWith({ removeModel: true }, ['w1-app', 'w4-lib'], {
+        username: 'admin',
+        ip: '127.0.0.1',
+      });
+    });
+
+    it('without a live session on the model the list is empty, and no body means the model stays', async () => {
+      const f = fakes();
+      const { app } = await harness(f.deps, undefined, [SESSIONS[1], SESSIONS[2]]);
+      const res = await app.inject({ method: 'DELETE', url: '/api/local-model' });
+      expect(res.statusCode).toBe(200);
+      expect(f.service.remove.mock.calls[0][0]).toEqual({});
+      expect(f.service.remove.mock.calls[0][1]).toEqual([]);
+    });
+
+    it('the sessions are read at the moment of the request, not when the routes were registered', async () => {
+      const f = fakes();
+      const sessions = new Map<string, SessionLike>();
+      const { app } = await createRouteTestHarness((instance) =>
+        registerLocalModelRoutes(instance, { sessions }, f.deps)
+      );
+      await app.inject({ method: 'DELETE', url: '/api/local-model' });
+      sessions.set('late', { name: 'w9-late', customModel: { endpointId: 'local-ollama' } });
+      await app.inject({ method: 'DELETE', url: '/api/local-model' });
+      expect(f.service.remove.mock.calls.map((args) => args[1])).toEqual([[], ['w9-late']]);
+    });
+
+    it('while a live session uses the model: 409 with the session names', async () => {
+      const f = fakes();
+      f.service.remove.mockImplementation(async (_request, names) => ({
+        ok: false,
+        status: 409,
+        conflict: {
+          reason: 'sessions-open',
+          message: { text: LOCAL_MODEL_INSTALL_LABELS.conflictSessionsOpen, vars: { sessions: names.join(', ') } },
+          sessions: [...names],
+        },
+      }));
+      const { app } = await harness(f.deps, undefined, SESSIONS);
+      const res = await app.inject({ method: 'DELETE', url: '/api/local-model' });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toEqual({
+        success: false,
+        error: 'Sessions are still using this model: w1-app, w4-lib. Close them first.',
+        errorCode: 'CONFLICT',
+        data: {
+          reason: 'sessions-open',
+          message: {
+            text: 'Sessions are still using this model: {sessions}. Close them first.',
+            vars: { sessions: 'w1-app, w4-lib' },
+          },
+          sessions: ['w1-app', 'w4-lib'],
+        },
+      });
+    });
+
+    it('refuses a body it does not know', async () => {
+      const f = fakes();
+      const { app } = await harness(f.deps);
+      const res = await app.inject({ method: 'DELETE', url: '/api/local-model', payload: { path: '/' } });
+      expect(res.statusCode).toBe(400);
+      expect(f.service.remove).not.toHaveBeenCalled();
+    });
+  });
+});
+
+describe('the routes over the real install service', () => {
+  const STATE = () => dataPath('local-model.json');
+
+  afterEach(() => {
+    rmSync(STATE(), { force: true });
+  });
+
+  /** The real service with the real state file. Only the hardware is the test's: a server that is not a Mac. */
+  function realService(): LocalModelService {
+    return createLocalModelService({ readHardware: async () => LINUX });
+  }
+
+  it('on a server that is not a Mac nothing can be installed: the install is a 400 and nothing is written', async () => {
+    const service = realService();
+    const { app } = await harness({ readHardware: async () => LINUX, service: () => service });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/local-model/install',
+      payload: { modelId: 'qwen3.6:35b-a3b', cli: 'opencode', context: 131072, acknowledgedBytes: 1 },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ success: false, errorCode: 'INVALID_INPUT' });
+    expect(existsSync(STATE())).toBe(false);
+    const get = await app.inject({ method: 'GET', url: '/api/local-model' });
+    expect(get.json().data.install).toMatchObject({ state: 'idle', actions: ['install'] });
+    expect(get.json().data.recommendation).toMatchObject({ verdict: 'none', reason: 'not-macos' });
+  });
+
+  it('with nothing installed: cancel, resume and a runtime action are 409 wrong-state', async () => {
+    const service = realService();
+    const { app } = await harness({ service: () => service });
+    for (const [url, payload] of [
+      ['/api/local-model/cancel', undefined],
+      ['/api/local-model/resume', {}],
+      ['/api/local-model/runtime', { action: 'start' }],
+    ] as const) {
+      const res = await app.inject({ method: 'POST', url, ...(payload ? { payload } : {}) });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({
+        success: false,
+        errorCode: 'CONFLICT',
+        error: 'That is not possible in the current state.',
+        data: { reason: 'wrong-state' },
+      });
+    }
+    expect(existsSync(STATE())).toBe(false);
+  });
+
+  it('a job the state file still calls installing comes back paused on the first GET of a new server', async () => {
+    writeFileSync(
+      STATE(),
+      JSON.stringify({
+        schema: 1,
+        state: 'installing',
+        step: 'model',
+        steps: ['runtime', 'model', 'verify', 'agent', 'connect'],
+        model: { id: 'qwen3.6:35b-a3b', label: 'Qwen3.6 35B-A3B', context: 131072 },
+        cli: { id: 'opencode', label: 'OpenCode' },
+        runtime: { version: '0.40.15', port: 11435, enabled: true },
+        progress: { completedBytes: 6200000000, totalBytes: 23105798956 },
+      })
+    );
+    const service = realService();
+    const { app } = await harness({ readHardware: async () => LINUX, service: () => service });
+    const res = await app.inject({ method: 'GET', url: '/api/local-model' });
+    expect(res.json().data.install).toMatchObject({
+      state: 'paused',
+      step: 'model',
+      running: false,
+      model: { id: 'qwen3.6:35b-a3b', label: 'Qwen3.6 35B-A3B' },
+      cli: 'opencode',
+      port: 11435,
+      progress: { completedBytes: 6200000000, totalBytes: 23105798956, completedGb: '6.2', totalGb: '23.1' },
+      actions: ['resume', 'install', 'remove'],
+    });
+    expect(JSON.parse(readFileSync(STATE(), 'utf8')).state).toBe('paused');
+    // A second install while that job is only paused is refused for what it asks, not started.
+    const cancel = await app.inject({ method: 'POST', url: '/api/local-model/cancel' });
+    expect(cancel.statusCode).toBe(409);
   });
 });

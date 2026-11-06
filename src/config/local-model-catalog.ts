@@ -3,8 +3,9 @@
  * knows, as a compiled constant validated by a Zod schema.
  *
  * Rules:
- *  - There is NO override file and no runtime download data in this stage: nothing here reads
- *    the data dir, and a data file can never decide what gets recommended.
+ *  - There is NO override file and no runtime download data here: nothing in this file reads
+ *    the data dir, and a data file can never decide what gets recommended. Which runtime build
+ *    is downloaded is a compiled constant of its own (src/local-model/runtime.ts).
  *  - A model id is `name:tag` in lowercase with no slash (`LOCAL_MODEL_ID_PATTERN`), so it can
  *    only ever name a model of the default registry and namespace.
  *  - A harness is a ROW (`{ cli, minContext, rank, gated?, slowFirstTurn? }`). The `cli` is a CLI
@@ -13,7 +14,7 @@
  *    src/local-model/harness-facts.ts, never here.
  *  - The schema checks more than fields. Across rows it requires: unique model ids and ranks,
  *    unique harness `cli`s and ranks, `contexts` largest first, a `tested` entry naming a harness
- *    row, `chips` most specific first, and `promptCacheTiers` ascending from 0.
+ *    row, and `chips` most specific first.
  *  - `getLocalModelCatalog()` parses the constant once, on first use and never at import, and
  *    throws on a bad row. test/local-model-catalog.test.ts pins that the stock constant parses,
  *    so a bad row fails the gate and never reaches the route.
@@ -22,26 +23,44 @@
  *
  * | Figure               | Source                                                    | Checked                              |
  * |----------------------|-----------------------------------------------------------|--------------------------------------|
- * | `id`, `bytes`        | registry manifest of the tag, sum of its layer sizes      | yes, to the byte, by the facts review |
+ * | `id`                 | the registry's tag                                        | yes, by the facts review             |
+ * | `bytes`              | `qwen3.6:35b-a3b`: the total of a real pull on a Mac      | that row: measured. It is an MLX     |
+ * |                      | (23,105,798,956). Every other row: the sum of the layer   | build on a Mac, 2% above its         |
+ * |                      | sizes of the tag's registry manifest                      | manifest. The others: not on a Mac   |
+ * | `heldBytesPerToken`, | measured for `qwen3.6:35b-a3b` on an Apple M5 Pro with    | that row: measured. The others carry |
+ * | `overheadBytes`,     | 48 GB: 36,000 to 38,000 bytes held per token of context,  | the SAME three figures, not their    |
+ * | `peakExtraBytes`     | 2.5 to 3 GB beside the weights, and about 5 GB more for a | own: nobody ran them. `figures` says |
+ * |                      | moment while a long prompt is processed                   | which row is which                   |
  * | `license`            | the model card (all Apache-2.0)                           | read by the research, not re-checked |
  * | `paramsB`            | 27.8 from the model card; the others are the count in the | no. Only the 12 billion line reads   |
  * |                      | model's name                                              | it, and no row is near that line     |
- * | `kvBytesPerToken`    | COMPUTED from each model's config: 2 x full-attention     | no. Not measured in a running        |
- * |                      | layers x KV heads x head size x 2 bytes                   | runtime. The review called the       |
- * |                      |                                                           | gpt-oss figure plausible, no more    |
  * | `contexts`, `rank`   | a judgement of the design                                 | no                                   |
  * | `speedPer100Gbps`    | one published run on an M1 Max (400 GB/s): generation     | the run was read. It stands for less |
  * |                      | only, short prompt. The two q8_0 rows are SCALED by file  | than a session: no long prompt, no   |
  * |                      | size, not measured                                        | thinking tokens                      |
+ * | `tested`             | our own run of the model with a harness on a real Mac     | one entry, with its measured speed   |
  * | `minMacosMajor`      | the runtime's documentation (macOS 14)                    | yes, by the facts review             |
- * | `promptCacheTiers`   | a decision of the design, not a measurement               | no                                   |
  * | harness `minContext` | 65536: the runtime's documentation for both harnesses.    | 65536 yes. 32768 no, which is why    |
  * |                      | 32768: recalled                                           | that row is gated                    |
  * | `chips`              | the bandwidth column of                                   | yes, read at the source for this     |
  * |                      | https://github.com/ggml-org/llama.cpp/discussions/4167    | file                                 |
  *
- * `tested` is empty on every row: nobody has run any of these models with a harness on a Mac
- * yet. Until a row has an entry, the recommendation never says "Recommended".
+ * The memory figures decide a lot and rest on ONE measured model, so for every other row they
+ * can be wrong in either direction:
+ *  - For the 9B rows they may be too HIGH (the 5 GB for a moment was seen with a prompt of
+ *    89,000 tokens on the 35B model). That errs on the careful side: a small Mac is told
+ *    "none" before it is told to download something that may not fit.
+ *  - For the two dense `qwen3.8:27b` rows the per-token figure may be too LOW: computed from
+ *    its config alone that model holds 64 KiB per token, more than the 37,000 bytes measured
+ *    on the 35B (whose own computed figure was 20 KiB). Their need at a large context is
+ *    therefore the least certain figure of the catalogue.
+ * A row gets its own figures when somebody measures it. Until then the check after the
+ * download (the runtime must report the whole model on the GPU) is what catches a row that
+ * was judged too kindly.
+ *
+ * `tested` has one entry: `qwen3.6:35b-a3b` with OpenCode on an Apple M5 Pro with 48 GB,
+ * 2026-11-06, 67.7 tokens per second. Only a Mac of exactly that chip and memory size is told
+ * "Recommended" and shown that speed in place of the estimate.
  */
 
 import { z } from 'zod';
@@ -85,6 +104,7 @@ const TestedOnSchema = z
     memGb: positiveInt,
     cli: z.string().min(1).max(24),
     date: isoDate,
+    tokensPerSecond: z.number().positive().optional(),
   })
   .strict();
 
@@ -95,7 +115,10 @@ const LocalModelEntrySchema = z
     license: z.string().min(1).max(40),
     paramsB: z.number().positive(),
     bytes: positiveInt,
-    kvBytesPerToken: positiveInt,
+    heldBytesPerToken: positiveInt,
+    overheadBytes: z.number().int().nonnegative(),
+    peakExtraBytes: z.number().int().nonnegative(),
+    figures: z.enum(['measured', 'estimated']),
     contexts: z.array(positiveInt).min(1),
     rank: z.number().int(),
     speedPer100Gbps: z.number().positive().optional(),
@@ -120,13 +143,6 @@ const ChipEntrySchema = z
   })
   .strict();
 
-const PromptCacheTierSchema = z
-  .object({
-    minMemGb: z.number().int().nonnegative(),
-    bytes: z.number().int().nonnegative(),
-  })
-  .strict();
-
 /** The index of the first value that already occurred earlier in the list, or -1. */
 function firstRepeat<T>(values: readonly T[]): number {
   const seen = new Set<T>();
@@ -146,7 +162,6 @@ export const LocalModelCatalogSchema: z.ZodType<LocalModelCatalog> = z
     schema: z.literal(1),
     updated: isoDate,
     minMacosMajor: positiveInt,
-    promptCacheTiers: z.array(PromptCacheTierSchema).min(1),
     models: z.array(LocalModelEntrySchema),
     harnesses: z.array(LocalHarnessEntrySchema),
     chips: z.array(ChipEntrySchema),
@@ -199,23 +214,21 @@ export const LocalModelCatalogSchema: z.ZodType<LocalModelCatalog> = z
         break;
       }
     }
-
-    // The tiers are read as "the last one whose minimum is not above this Mac's memory", so they
-    // must start at 0 (every Mac has a tier) and ascend.
-    if (catalog.promptCacheTiers[0].minMemGb !== 0) {
-      issue(['promptCacheTiers', 0, 'minMemGb'], 'the first prompt cache tier must start at 0');
-    }
-    for (let i = 1; i < catalog.promptCacheTiers.length; i++) {
-      if (catalog.promptCacheTiers[i].minMemGb <= catalog.promptCacheTiers[i - 1].minMemGb) {
-        issue(['promptCacheTiers', i, 'minMemGb'], 'prompt cache tiers must ascend by minMemGb');
-        break;
-      }
-    }
   });
 
-const KIB = 1024;
-const MIB = 1024 ** 2;
-const GIB = 1024 ** 3;
+/**
+ * The memory figures measured for `qwen3.6:35b-a3b` on an Apple M5 Pro with 48 GB (2026-11-06,
+ * the MLX runner), in decimal bytes. That row carries them as `measured`; every other row
+ * carries the same three as `estimated`, see the file header.
+ */
+const MEASURED_MEMORY = {
+  /** 36,000 to 38,000 bytes stayed held per token of context after a prompt of 89,000 and one of 167,000 tokens. */
+  heldBytesPerToken: 37_000,
+  /** The runner held 2.5 to 3 GB beside the weights. */
+  overheadBytes: 3_000_000_000,
+  /** While a long prompt was processed the peak stood about 5 GB above what stayed held. */
+  peakExtraBytes: 5_000_000_000,
+} as const;
 
 /**
  * The catalogue that ships with Codeman. Never read directly outside this file and its test:
@@ -226,12 +239,6 @@ export const STOCK_LOCAL_MODEL_CATALOG: LocalModelCatalog = {
   updated: '2026-11-06',
   // The oldest macOS the model runtime supports.
   minMacosMajor: 14,
-  // Host memory the runtime's prompt cache may take beside the model: 512 MiB on a Mac below
-  // 32 GB, 2 GiB from 32 GB. Part of the need of every candidate.
-  promptCacheTiers: [
-    { minMemGb: 0, bytes: 512 * MIB },
-    { minMemGb: 32, bytes: 2 * GIB },
-  ],
   // Ordered by rank. The higher rank wins among models that fit equally well and are equally
   // fast. `flint:40b` is left out on purpose: its plain tag is the slow build on a Mac and it
   // has an open bug with tool arguments.
@@ -242,7 +249,8 @@ export const STOCK_LOCAL_MODEL_CATALOG: LocalModelCatalog = {
       license: 'Apache-2.0',
       paramsB: 9,
       bytes: 6_550_825_373,
-      kvBytesPerToken: 32 * KIB,
+      ...MEASURED_MEMORY,
+      figures: 'estimated',
       contexts: [65536, 32768],
       rank: 1,
       // 37.1 tokens per second measured on 400 GB/s.
@@ -255,7 +263,8 @@ export const STOCK_LOCAL_MODEL_CATALOG: LocalModelCatalog = {
       license: 'Apache-2.0',
       paramsB: 9,
       bytes: 10_449_217_949,
-      kvBytesPerToken: 32 * KIB,
+      ...MEASURED_MEMORY,
+      figures: 'estimated',
       contexts: [65536, 32768],
       rank: 2,
       // Not measured: the 9.3 of the row above scaled by file size.
@@ -268,7 +277,8 @@ export const STOCK_LOCAL_MODEL_CATALOG: LocalModelCatalog = {
       license: 'Apache-2.0',
       paramsB: 20,
       bytes: 13_793_441_427,
-      kvBytesPerToken: 24 * KIB,
+      ...MEASURED_MEMORY,
+      figures: 'estimated',
       contexts: [131072, 65536],
       rank: 3,
       // No speed figure: its speed is unknown on every chip.
@@ -279,13 +289,18 @@ export const STOCK_LOCAL_MODEL_CATALOG: LocalModelCatalog = {
       label: 'Qwen3.6 35B-A3B',
       license: 'Apache-2.0',
       paramsB: 35,
-      bytes: 22_621_314_161,
-      kvBytesPerToken: 20 * KIB,
+      // What a Mac really downloads: an MLX build, 2% above the 22,621,314,161 of the manifest.
+      bytes: 23_105_798_956,
+      ...MEASURED_MEMORY,
+      figures: 'measured',
       contexts: [131072, 65536],
       rank: 4,
       // 54.5 tokens per second measured on 400 GB/s (3 billion parameters are active per token).
+      // The MLX build ran faster than this figure predicts on the one Mac we tested (67.7
+      // against 41.8), so on other chips the estimate is on the low side.
       speedPer100Gbps: 13.6,
-      tested: [],
+      // Run by us with OpenCode on the MacBook Pro (Mac17,13): a four-step task with tool calls.
+      tested: [{ chip: 'Apple M5 Pro', memGb: 48, cli: 'opencode', date: '2026-11-06', tokensPerSecond: 67.7 }],
     },
     {
       id: 'qwen3.8:27b',
@@ -293,7 +308,8 @@ export const STOCK_LOCAL_MODEL_CATALOG: LocalModelCatalog = {
       license: 'Apache-2.0',
       paramsB: 27.8,
       bytes: 17_741_871_939,
-      kvBytesPerToken: 64 * KIB,
+      ...MEASURED_MEMORY,
+      figures: 'estimated',
       contexts: [131072, 65536, 32768],
       rank: 5,
       // 11.8 tokens per second measured on 400 GB/s.
@@ -306,7 +322,8 @@ export const STOCK_LOCAL_MODEL_CATALOG: LocalModelCatalog = {
       license: 'Apache-2.0',
       paramsB: 27.8,
       bytes: 29_978_241_837,
-      kvBytesPerToken: 64 * KIB,
+      ...MEASURED_MEMORY,
+      figures: 'estimated',
       contexts: [262144, 131072],
       rank: 6,
       // Not measured: the 2.95 of the row above scaled by file size.
@@ -319,7 +336,8 @@ export const STOCK_LOCAL_MODEL_CATALOG: LocalModelCatalog = {
       license: 'Apache-2.0',
       paramsB: 122,
       bytes: 81_370_035_877,
-      kvBytesPerToken: 24 * KIB,
+      ...MEASURED_MEMORY,
+      figures: 'estimated',
       contexts: [131072],
       rank: 7,
       // No speed figure: its speed is unknown on every chip.

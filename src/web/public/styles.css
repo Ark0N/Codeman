@@ -22304,192 +22304,820 @@ html[data-tile-anim="soft"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.til
 }
 
 /* ═══════════════════════════════════════════════════════════════
-   Model on this Mac (local-model-ui.js): what the server's Mac can run as
-   a local coding model. One body (`.local-model-body`), drawn in two places:
-   the welcome card and a row of App Settings > Models.
+   Run a model on this Mac (local-model-ui.js): the welcome button and the
+   chooser window (#localModelModal). The App Settings row is ordinary
+   `.set-row` markup and needs nothing here.
 
-   Same vocabulary as the two blocks above it on the welcome screen: a dim
-   heading row, then one bordered surface with a name over dim meta lines.
-   Theme tokens only (`--control-bg`, never a white alpha: that fill is
-   invisible on the light skins), and the fit and speed labels are neutral
-   pills: the words carry the meaning, so no skin needs a colour of its own.
-   Nothing here is keyed on a CLI or a model id, and nothing animates.
+   The subject is this Mac's memory, so the window has ONE strong element:
+   the bar (`.lm-bar`), the memory this Mac can give a model, filled to what
+   the selected model needs. Everything around it is quiet: hierarchy by size
+   and weight, no box inside the window, no border around a row. The selected
+   row carries the accent on its reading edge and a faint fill.
+
+   Theme tokens only, never a black or white alpha (those vanish on the light
+   skins). The bar's track is `--text-muted`: the part of the bar that stays
+   FREE is half of what the bar says, so it must be seen against the window
+   (about 3:1 or better on every skin; the fill of the app's inputs,
+   `--bg-input`, is the window's own surface on the dark skins, and a border
+   token is 1.5:1). Nothing here is keyed on a CLI or a model id. The only
+   motion is the bar's width, and it stops under prefers-reduced-motion.
+
+   The window is ONE frame for the whole flow: a fixed height on desktop, the
+   header on top, the buttons in a foot of their own (`.lm-foot-slot`) and the
+   body scrolling between them. A click never moves the next button away.
    ═══════════════════════════════════════════════════════════════ */
 
-.local-model-card {
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-  width: 100%;
-  margin-top: 0.75rem;
-  text-align: left;
+/* The welcome button: a second large button under the launchers, in the size
+   of the primary one, so a model on this Mac is offered as a main way in and
+   not as a footnote (the owner asked for it big and in the middle). It keeps
+   the chip's markup and the chip family's rules for everything it does not
+   restate here. */
+.welcome-local-model {
+  margin-top: 1.1rem;
+  height: 46px;
+  gap: 0.65rem;
+  padding: 0 1.4rem 0 0.45rem;
+  border: 1px solid var(--accent);
+  border-radius: 23px;
+  background: var(--control-bg);
+  color: var(--accent);
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: 0.005em;
+  box-shadow: 0 8px 24px -14px rgba(var(--accent-rgb), 0.5);
 }
 
-/* A flex container, so `[hidden]` needs re-asserting or the module's only
-   visibility lever does nothing (same trap as .foreign-sessions). */
-.local-model-card[hidden] {
+.welcome-local-model:hover,
+.welcome-local-model:focus-visible {
+  background: rgba(var(--accent-rgb), 0.12);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* `.welcome-chip` is inline-flex, so `[hidden]` needs re-asserting or the
+   module's only visibility lever does nothing. */
+.welcome-local-model[hidden] {
   display: none;
 }
 
-.local-model-head {
+/* The chip's 14 px glyph sits in a 34 px disc, the primary button's logo size. */
+.welcome-local-model svg {
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  padding: 8px;
+  box-sizing: border-box;
+  border-radius: 50%;
+  background: rgba(var(--accent-rgb), 0.16);
+}
+
+/* The window: App Settings' chrome (`.modal`, `.modal-header`, the boxed
+   close button) at a width of its own. One frame for every screen: the height
+   is fixed, so the header, the close button and the main button stay where
+   they are from the chooser to "Start a session". */
+.modal-content.local-model-window {
   display: flex;
+  flex-direction: column;
+  width: min(640px, 94vw);
+  max-width: min(640px, 94vw);
+  height: min(600px, 88vh);
+  max-height: 88vh;
+}
+
+.local-model-window > .modal-header {
+  flex-shrink: 0;
+}
+
+/* App Settings' close button: a 30px box, not the bare glyph of a plain modal. */
+.local-model-window > .modal-header .modal-close {
+  display: inline-flex;
   align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 9px;
+  font-size: 1.2rem;
+  color: var(--text-dim);
+  background: transparent;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease,
+    transform 0.1s ease;
+}
+
+.local-model-window > .modal-header .modal-close:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.local-model-window > .modal-header .modal-close:active {
+  transform: scale(0.94);
+}
+
+.local-model-window > .lm-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 1.05rem;
+  min-height: 0;
+  padding: 1.15rem 1.25rem 1.2rem;
+  overflow-y: auto;
+  text-align: start;
+}
+
+/* The short screens (progress, paused, a failure, installed, nothing fits)
+   hold a few lines in a frame sized for the chooser: they sit in the middle of
+   it, a status in its own room, not a heading with a void under it. */
+.local-model-window
+  > .lm-body:is(
+    [data-screen='progress'],
+    [data-screen='paused'],
+    [data-screen='failed'],
+    [data-screen='installed'],
+    [data-screen='none']
+  ) {
+  justify-content: center;
+  padding-bottom: 2.2rem;
+}
+
+/* The foot of the frame: the buttons of the screen (or the Remove question),
+   outside the part that scrolls. */
+.local-model-window > .lm-foot-slot {
+  flex-shrink: 0;
+  padding: 0 1.25rem 1.15rem;
+  text-align: start;
+}
+
+.local-model-window > .lm-foot-slot:empty {
+  display: none;
+}
+
+.lm-foot-slot p {
+  margin: 0;
+}
+
+.lm-body p,
+.lm-body h4 {
+  margin: 0;
+}
+
+/* ── type: four sizes, nothing in capitals ─────────────────────────── */
+.lm-hw {
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+
+.lm-title {
+  font-size: 1rem;
+  font-weight: 650;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.lm-lead {
+  font-size: 0.84rem;
+  line-height: 1.5;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+/* Why no model fits: one sentence, read as a sentence and not as a headline. */
+.lm-reason {
+  font-size: 0.92rem;
+  font-weight: 500;
+  line-height: 1.55;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.lm-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.lm-aside {
+  font-size: 0.74rem;
+  line-height: 1.5;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+
+.lm-heading {
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+
+/* ── the bar ───────────────────────────────────────────────────────── */
+.lm-meter {
+  display: flex;
+  flex-direction: column;
   gap: 0.5rem;
 }
 
-.local-model-title {
-  margin: 0;
-  font-size: 0.85rem;
-  color: var(--text-dim);
-  font-weight: 500;
-}
-
-.local-model-hide {
-  margin-left: auto;
-  font: inherit;
-  font-size: 0.68rem;
-  color: var(--text-dim);
-  background: transparent;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 0.12rem 0.5rem;
-  cursor: pointer;
-}
-
-.local-model-hide:hover {
-  color: var(--text);
-  background: var(--control-bg-hover);
-}
-
-.local-model-box {
-  padding: 0.55rem 0.65rem;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--control-bg);
-  min-width: 0;
-}
-
-.local-model-body {
-  display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
-  min-width: 0;
-}
-
-/* The line that says nothing can be set up from here yet (.local-model-next) is
-   the one a reader must not miss, so it reads like every other line: same size,
-   same --text-dim. --text-muted on this surface was 3.9:1. */
-.local-model-hw,
-.local-model-line,
-.local-model-note,
-.local-model-next {
-  font-size: 0.68rem;
-  line-height: 1.45;
-  color: var(--text-dim);
-  overflow-wrap: anywhere;
-}
-
-.local-model-headline {
-  font-size: 0.82rem;
-  line-height: 1.45;
-  color: var(--text);
-  overflow-wrap: anywhere;
-}
-
-/* The pick is the one thing in the card set apart: a rule in the accent, on the
-   reading side (logical, so it follows a right-to-left page). */
-.local-model-pick {
-  display: flex;
-  flex-direction: column;
-  gap: 0.12rem;
-  padding-inline-start: 0.55rem;
-  border-inline-start: 2px solid var(--accent);
-}
-
-.local-model-name-row {
+.lm-meter-head {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
-  gap: 0.2rem 0.4rem;
-  min-width: 0;
+  align-items: baseline;
+  gap: 0.15rem 0.6rem;
 }
 
-.local-model-name {
-  font-size: 0.82rem;
+.lm-figure {
+  font-size: 1.06rem;
+  font-weight: 680;
+  letter-spacing: -0.012em;
+  color: var(--text);
+}
+
+/* Only the figure that ticks (the download) holds its digits in fixed cells.
+   In a sentence fixed cells leave a hole around every 1. */
+.lm-figure-count {
+  font-variant-numeric: tabular-nums;
+}
+
+.lm-figure-aside {
+  font-size: 0.74rem;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.lm-bar {
+  height: 10px;
+  border-radius: 999px;
+  background: var(--text-muted);
+  overflow: hidden;
+}
+
+.lm-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+  transition: width 0.32s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.lm-legend {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  font-size: 0.7rem;
+  line-height: 1.4;
+  color: var(--text-dim);
+}
+
+.lm-legend > :last-child {
+  text-align: end;
+}
+
+/* ── the models: one grid, so the numbers line up down the list ──── */
+/* Radio, name, tag, speed, download. The tag sits next to the name and takes
+   the room that is left, which pushes the two numbers to the right edge. */
+.lm-list {
+  display: grid;
+  grid-template-columns: auto minmax(0, max-content) minmax(0, 1fr) auto auto;
+  column-gap: 0.9rem;
+  row-gap: 0.1rem;
+  /* A row's fill reaches into the window's padding, so what is IN a row lines
+     up with every other line of the window on both edges. */
+  margin-inline: calc(-0.7rem - 2px) -0.7rem;
+}
+
+.lm-caption,
+.lm-models,
+.lm-model {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+}
+
+.lm-models {
+  row-gap: 0.1rem;
+}
+
+.lm-caption,
+.lm-model {
+  align-items: center;
+  padding: 0 0.7rem;
+  border-inline-start: 2px solid transparent;
+}
+
+.lm-caption {
+  padding-bottom: 0.3rem;
+  font-size: 0.7rem;
+  color: var(--text-dim);
+}
+
+.lm-caption-label {
+  grid-column: 1 / span 3;
+}
+
+/* The server's word for a pick it has run on a Mac like this one stands where
+   the list's label does, in the text colour. */
+.lm-caption-strong {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.lm-caption-speed,
+.lm-caption-size {
+  text-align: end;
+}
+
+.lm-model {
+  min-height: 2.35rem;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: background var(--transition-smooth);
+}
+
+.lm-model:hover {
+  background: var(--control-bg);
+}
+
+.lm-model:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* Selected: the accent on the reading edge and a faint fill. Nothing else. */
+.lm-model-on,
+.lm-model-on:hover {
+  border-inline-start-color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.075);
+}
+
+.lm-radio {
+  box-sizing: border-box;
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid var(--text-muted);
+  border-radius: 50%;
+}
+
+.lm-model-on .lm-radio {
+  border-color: var(--accent);
+  background: radial-gradient(circle, var(--accent) 0 3px, transparent 3.5px);
+}
+
+.lm-model-name {
+  min-width: 0;
+  font-size: 0.86rem;
   font-weight: 600;
   color: var(--text);
   overflow-wrap: anywhere;
-  min-width: 0;
 }
 
-/* Each pill carries what it measures as its tooltip (a title), hence the cursor. */
-.local-model-pill {
-  flex: 0 0 auto;
-  font-size: 0.62rem;
+.lm-model-tag {
+  display: flex;
+  justify-content: flex-start;
+}
+
+/* A tag is text with a hairline, not a coloured pill. The accent is for the
+   pick (and for a row that was run on a Mac like this one). */
+.lm-tag {
+  padding: 0.05rem 0.42rem;
+  border: 1px solid var(--border-light);
+  border-radius: 5px;
+  font-size: 0.66rem;
   line-height: 1.5;
   color: var(--text-dim);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 0 0.42rem;
   white-space: nowrap;
-  cursor: help;
 }
 
-.local-model-alts-title {
-  font-size: 0.72rem;
+.lm-tag-accent {
+  border-color: rgba(var(--accent-rgb), 0.5);
+  color: var(--accent);
+}
+
+.lm-model-speed,
+.lm-model-size {
+  text-align: end;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.lm-model-speed {
+  font-size: 0.76rem;
   color: var(--text-dim);
 }
 
-/* The welcome card folds the list behind a native disclosure (keyboard and
-   screen-reader behaviour for free); the summary keeps `display: list-item`
-   so its marker stays. */
-.local-model-alts > summary {
-  cursor: pointer;
-}
-
-.local-model-alts > summary:hover {
+.lm-model-size {
+  font-size: 0.8rem;
+  font-weight: 560;
   color: var(--text);
 }
 
-.local-model-alt {
+/* A browser without subgrid: fixed tracks keep the columns in line. */
+@supports not (grid-template-columns: subgrid) {
+  .lm-list,
+  .lm-models {
+    display: block;
+  }
+
+  .lm-caption,
+  .lm-model {
+    grid-template-columns: 14px 10.5rem minmax(0, 1fr) 8.6rem 4.4rem;
+    column-gap: 0.9rem;
+  }
+
+  .lm-model {
+    margin-top: 0.1rem;
+  }
+}
+
+/* ── the coding agent ─────────────────────────────────────────────── */
+.lm-runs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.6rem;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+
+.lm-runs-label {
+  color: var(--text);
+}
+
+.lm-select {
+  max-width: 100%;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-input);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.78rem;
+  outline: none;
+}
+
+.lm-select:focus-visible {
+  border-color: var(--accent);
+}
+
+.lm-runs-hint {
+  min-width: 0;
+  font-size: 0.74rem;
+}
+
+/* ── the confirm screen: the download as a table ──────────────────── */
+/* One row per thing that is fetched: its name in the text colour with what it
+   is underneath, its size at the right edge, and the total under a rule in the
+   strong weight. The table is the screen; nothing else on it competes. */
+.lm-sizes {
   display: flex;
   flex-direction: column;
-  gap: 0.1rem;
-  margin-top: 0.3rem;
-  padding-top: 0.3rem;
+}
+
+.lm-sizes .lm-heading {
+  margin-bottom: 0.35rem;
+  font-size: 0.84rem;
+  font-weight: 650;
+  letter-spacing: -0.005em;
+  color: var(--text);
+}
+
+.lm-size-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1.2rem;
+  padding: 0.6rem 0;
   border-top: 1px solid var(--border);
 }
 
-.local-model-alt .local-model-name {
-  font-size: 0.76rem;
-  font-weight: 500;
+.lm-size-what {
+  display: flex;
+  flex-direction: column;
+  gap: 0.18rem;
+  min-width: 0;
 }
 
-/* In App Settings the body sits inside an ordinary .set-row, so it takes that
-   surface's type scale (label 0.76rem over a muted description) and the row
-   supplies the border. */
-#localModelSettings {
-  padding: 3px 0;
+.lm-size-name {
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: var(--text);
+  overflow-wrap: anywhere;
 }
 
-#localModelSettings .local-model-headline,
-#localModelSettings .local-model-name {
-  font-size: 0.76rem;
+.lm-size-note {
+  font-size: 0.74rem;
+  line-height: 1.45;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
 }
 
-#localModelSettings .local-model-alt .local-model-name {
+.lm-size-gb {
+  flex-shrink: 0;
+  font-size: 0.86rem;
+  font-weight: 560;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.lm-size-total {
+  padding-top: 0.75rem;
+  border-top-color: var(--text-muted);
+}
+
+.lm-size-total .lm-size-name,
+.lm-size-total .lm-size-gb {
+  font-size: 1.06rem;
+  font-weight: 680;
+  letter-spacing: -0.012em;
+}
+
+/* A literal command: text to read and to copy, so it is set in the mono face
+   and selects whole. It sits in its row, under the sentence that names it. */
+.lm-command {
+  display: block;
+  margin-top: 0.15rem;
+  color: var(--text);
+  font-family: var(--font-mono);
   font-size: 0.72rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  user-select: all;
 }
 
-/* Touch: the two things in the card that take a press get a finger's height. */
+/* Where it goes: one quiet line under the table. */
+.lm-where {
+  font-size: 0.74rem;
+  line-height: 1.5;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+
+.lm-path {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  user-select: all;
+}
+
+/* ── progress: the steps ARE a sequence, so they are a list ───────── */
+.lm-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lm-step {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.lm-step-mark {
+  position: relative;
+  box-sizing: border-box;
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid var(--border-light);
+  border-radius: 50%;
+}
+
+.lm-step-done {
+  color: var(--text-dim);
+}
+
+.lm-step-done .lm-step-mark {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+/* The check of a finished step, drawn from two borders in the page colour. */
+.lm-step-done .lm-step-mark::after {
+  content: '';
+  position: absolute;
+  left: 3.5px;
+  top: 1px;
+  width: 3px;
+  height: 6px;
+  border: solid var(--accent-ink);
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg);
+}
+
+.lm-step-now,
+.lm-step-stopped {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.lm-step-now .lm-step-mark {
+  border-color: var(--accent);
+  background: radial-gradient(circle, var(--accent) 0 3px, transparent 3.5px);
+}
+
+.lm-step-stopped .lm-step-mark {
+  border-color: var(--text-dim);
+  background: radial-gradient(circle, var(--text-dim) 0 3px, transparent 3.5px);
+}
+
+/* ── installed ────────────────────────────────────────────────────── */
+.lm-state {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem 0.5rem;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+}
+
+.lm-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+
+.lm-dot-on {
+  background: var(--green);
+}
+
+.lm-state-text {
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* ── a refused verb, an error's raw detail, the Remove question ──── */
+.lm-notice {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding-inline-start: 0.7rem;
+  border-inline-start: 2px solid var(--yellow);
+}
+
+.lm-notice-text {
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.lm-notice-detail {
+  font-size: 0.72rem;
+  line-height: 1.45;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+
+.lm-details {
+  margin-top: 0.2rem;
+  font-size: 0.74rem;
+  color: var(--text-dim);
+}
+
+.lm-details > summary {
+  width: fit-content;
+  cursor: pointer;
+}
+
+.lm-details > summary:hover {
+  color: var(--text);
+}
+
+.lm-detail-text {
+  max-height: 9rem;
+  margin: 0.45rem 0 0;
+  padding: 0.5rem 0.6rem;
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow: auto;
+  overflow-wrap: anywhere;
+}
+
+/* An error: its first sentence as the headline, the rest in the body size. */
+.lm-error {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.lm-remove {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding-top: 0.95rem;
+  border-top: 1px solid var(--border);
+}
+
+.lm-check {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: fit-content;
+  font-size: 0.8rem;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.lm-check input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+/* ── the foot: one promise on the left, the action on the right ──── */
+.lm-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-top: 0.95rem;
+  border-top: 1px solid var(--border);
+}
+
+.lm-remove .lm-foot {
+  padding-top: 0.2rem;
+  border-top: 0;
+}
+
+.lm-foot-note {
+  min-width: 0;
+  font-size: 0.74rem;
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+
+.lm-buttons {
+  display: flex;
+  flex-shrink: 0;
+  gap: 0.5rem;
+  margin-inline-start: auto;
+}
+
+/* The buttons are the Git worktrees dialog's set (`.wt-btn`): a main action
+   that reads as one on every skin (the skin block greys
+   `.btn-toolbar.btn-primary`) and that the phone toolbar's !important sizing
+   does not reach. Only the size is the window's own. */
+.local-model-window .wt-btn.lm-btn {
+  padding: 0.5rem 0.95rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.local-model-window .wt-btn-primary.lm-btn {
+  font-weight: 700;
+}
+
+/* OG has no designed --accent-ink: the main action takes the deeper blue and
+   light text of that skin's own Run button, as `.welcome-primary` does. Keep
+   the two in step. */
+html[data-skin='og'] .local-model-window .wt-btn-primary.lm-btn {
+  border-color: rgba(96, 165, 250, 0.5);
+  background: linear-gradient(135deg, #1e4fb8 0%, #2563eb 100%);
+  color: #fff;
+}
+
+html[data-skin='og'] .local-model-window .wt-btn-primary.lm-btn:hover:not(:disabled) {
+  background: linear-gradient(135deg, #2454a8 0%, #2d6cf0 100%);
+}
+
+.local-model-window .wt-btn.lm-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lm-bar-fill,
+  .lm-model {
+    transition: none;
+  }
+}
+
+/* Touch: rows and the select get a finger's height. */
 @media (pointer: coarse) {
-  .local-model-hide {
-    min-height: 32px;
-    padding: 0.3rem 0.8rem;
+  .lm-model {
+    min-height: 2.9rem;
   }
 
-  .local-model-alts > summary {
-    padding: 0.4rem 0;
+  .lm-select {
+    min-height: 36px;
+  }
+
+  .local-model-window .wt-btn.lm-btn {
+    min-height: 40px;
   }
 }
 

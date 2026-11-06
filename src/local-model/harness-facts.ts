@@ -10,8 +10,11 @@
  *  - reports `label` from the registry entry and `installed` from the same probe the page
  *    render and `GET /api/clis` use (`utils/cli-installed-probes.ts`), asked once per build;
  *  - reports `installable` only for a STOCK CLI that is not installed and whose install
- *    command for this platform needs no administrator rights (`installCommandNeedsAdmin()`).
- *    Stock only, because the install runner never executes a custom entry's command;
+ *    command for this platform needs no administrator rights (`installCommandNeedsAdmin()`),
+ *    and then carries that command as `installCommand`, so the consent screen can print the
+ *    literal text. The command is the COMPILED stock one (`stockInstallCommand()`), never the
+ *    one a `clis.json` override supplies: it is exactly what the install job would run, and
+ *    an override file must not be able to change that;
  *  - supplies `acceptsModelId` (`cliAcceptsCustomModelId()`), the test a custom model launch
  *    applies to the model id before anything is written.
  *
@@ -33,7 +36,8 @@
 
 import type { CliEntry } from '../config/cli-registry/types.js';
 import { matchesPattern } from '../config/cli-registry/patterns.js';
-import { getCli, resolveInstallCommandForPlatform } from '../config/cli-registry/registry.js';
+import { stockInstallCommand } from '../cli-install-runner.js';
+import { getCli } from '../config/cli-registry/registry.js';
 import { buildCustomModelInjection, type CustomModelEndpoint } from '../custom-model-injection.js';
 import { isCliEntryInstalled, probeStockCliAvailability } from '../utils/cli-installed-probes.js';
 import { getErrorMessage, type HarnessFact, type LocalModelCatalog } from '../types.js';
@@ -48,7 +52,11 @@ export interface HarnessFactsDeps {
    * `installed` passes its own.
    */
   probeInstalled: () => Promise<(entry: CliEntry) => boolean>;
-  /** The install command the registry holds for this platform. Read as text, never run. */
+  /**
+   * The install command the install job would run for this CLI on this platform: the compiled
+   * stock command, `undefined` for a CLI that is not stock or has none here. Read as text,
+   * never run.
+   */
   installCommandFor: (entry: CliEntry) => string | undefined;
 }
 
@@ -58,7 +66,7 @@ export const defaultHarnessFactsDeps: HarnessFactsDeps = {
     const stockAvailability = await probeStockCliAvailability();
     return (entry) => isCliEntryInstalled(entry, stockAvailability);
   },
-  installCommandFor: resolveInstallCommandForPlatform,
+  installCommandFor: (entry) => stockInstallCommand(entry.id as string),
 };
 
 /**
@@ -147,17 +155,20 @@ export async function buildHarnessFacts(
       console.warn(`[local-model] Probing ${entry.label} failed, reading it as not installed: ${getErrorMessage(err)}`);
     }
 
-    let installable = false;
+    let installCommand: string | undefined;
     if (!installed && entry.stock) {
       const command = resolved.installCommandFor(entry);
-      installable = command !== undefined && command.trim() !== '' && !installCommandNeedsAdmin(command);
+      if (command !== undefined && command.trim() !== '' && !installCommandNeedsAdmin(command)) {
+        installCommand = command;
+      }
     }
 
     facts.push({
       cli: row.cli,
       label: entry.label,
       installed,
-      installable,
+      installable: installCommand !== undefined,
+      ...(installCommand !== undefined ? { installCommand } : {}),
       acceptsModelId: (modelId: string) => cliAcceptsCustomModelId(entry, modelId),
     });
   }
