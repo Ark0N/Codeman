@@ -55,6 +55,9 @@
       '应用于新本地会话；可用强度取决于模型和 Codex 版本。自定义端点、Docker 和远程会话保留自己的设置。',
     'Default Codex model may only contain letters, digits, ".", "_", "-" and "/"':
       'Codex 默认模型只能包含字母、数字、"."、"_"、"-" 和 "/"',
+    'Allow network access': '允许网络访问',
+    "Lets commands in Codex's workspace-write sandbox use the network, which the Codeman skill needs to reach this server. Those commands can then call Codeman's API, which can start a session outside the sandbox with no approval prompt, even when a password is set. So with this on, Codex's sandbox does not contain a prompt-injected command: treat it as close to Bypass. Applies to every new local Codex session, not scheduled jobs. It does not change Codex's sandbox mode: a folder Codex runs read-only (one it does not trust) keeps the network closed and asks per command.":
+      '允许 Codex 的 workspace-write 沙箱中的命令使用网络，Codeman 技能需要网络才能连接到此服务器。这些命令随后可以调用 Codeman 的 API，而该 API 可以在沙箱之外启动会话且不弹出审批提示，即使设置了密码也是如此。因此开启后，Codex 的沙箱无法约束被提示注入的命令：请把它视为接近“绕过审批与沙箱”。应用于所有新的本地 Codex 会话，不包括定时任务。它不会改变 Codex 的沙箱模式：Codex 以只读方式运行的文件夹（即它不信任的文件夹）仍会保持网络关闭，并逐条命令询问。',
     'Skip to terminal': '跳转到终端',
     'Go to main page': '返回主页',
     'Session tabs': '会话标签页',
@@ -565,10 +568,15 @@
     'Open a session to see its edits.': '打开一个会话以查看其编辑。',
     'Reading the edit history…': '正在读取编辑历史…',
     'Could not read the edit history.': '无法读取编辑历史。',
-    'Edit history is only available for local Claude sessions.': '编辑历史仅适用于本地 Claude 会话。',
+    'Edit history is only available for Claude sessions outside Docker.':
+      '编辑历史仅适用于 Docker 之外的 Claude 会话。',
+    'Edit history is not available for a tmux session opened outside Codeman.':
+      '在 Codeman 之外打开的 tmux 会话无法使用编辑历史。',
     'Showing saved entries only: {reason}': '仅显示已保存的条目：{reason}',
     'No transcript found for this session yet. It is picked up with the next prompt; until then a CLAUDE_CONFIG_DIR set outside Codeman cannot be found.':
       '尚未找到此会话的记录。它会在下一次提示时被识别；在此之前，在 Codeman 之外设置的 CLAUDE_CONFIG_DIR 无法被找到。',
+    'No transcript found on the remote host yet (Claude writes it with the first prompt). A CLAUDE_CONFIG_DIR set only in a shell profile (.profile, .bash_profile, .zshrc) cannot be found.':
+      '远程主机上尚未找到记录（Claude 会在第一次提示时写入）。仅在 shell 配置文件（.profile、.bash_profile、.zshrc）中设置的 CLAUDE_CONFIG_DIR 无法被找到。',
     'No edits yet.': '暂无编辑。',
     'No edits by the main agent.': '主智能体没有编辑。',
     'Load older': '加载更早的编辑',
@@ -1141,6 +1149,10 @@
     'Filter by date range': '按日期范围筛选',
     'Filter by session status': '按会话状态筛选',
     'Filter files...': '筛选文件…',
+    Worktree: '工作树',
+    'Session folder': '会话文件夹',
+    'Back to worktree': '返回工作树',
+    'Not fully scanned': '未完全扫描',
     'Any status': '任意状态',
     'Any time': '任意时间',
     'Last hour': '最近一小时',
@@ -1380,6 +1392,29 @@
     'Remove Tab': '移除标签页',
     'Remove All Tabs': '移除所有标签页',
     'Use arrows to reorder. Changes are saved automatically.': '使用方向键重新排序；更改会自动保存。',
+    // Sessions opened outside Codeman (foreign-sessions.js, the close dialog and Session Options).
+    'Opened outside Codeman': '在 Codeman 之外打开',
+    'Also scan containers and remote hosts (slower)': '同时扫描容器和远程主机（较慢）',
+    'Scan containers and remote hosts again': '重新扫描容器和远程主机',
+    '⟳ all': '⟳ 全部',
+    '⟳ local': '⟳ 本机',
+    'Scanning…': '扫描中…',
+    Rescan: '重新扫描',
+    'Opening…': '正在打开…',
+    'Go to tab': '转到标签页',
+    'this machine': '本机',
+    container: '容器',
+    remote: '远程',
+    'No sessions found outside Codeman.': '未发现在 Codeman 之外打开的会话。',
+    'Could not reach the server.': '无法连接服务器。',
+    'Could not open that session. Refreshing the list.': '无法打开该会话，正在刷新列表。',
+    'Close Tab': '关闭标签页',
+    'Detaches only. The tmux session keeps running for whoever started it.':
+      '仅断开连接。该 tmux 会话会继续运行，供其启动者使用。',
+    'Where the tmux session was when it was opened here. It was started outside Codeman and keeps running if this tab closes.':
+      '该 tmux 会话在此处打开时所在的位置。它是在 Codeman 之外启动的，关闭此标签页后仍会继续运行。',
+    'Git status is not available for a tmux session opened outside Codeman.':
+      '在 Codeman 之外打开的 tmux 会话无法使用 Git 状态。',
   });
 
   const ZH_CN_LOWER = new Map(Object.entries(ZH_CN).map(([key, value]) => [key.toLocaleLowerCase('en'), value]));

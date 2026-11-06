@@ -140,12 +140,28 @@ message a worker directly instead of typing into its terminal.
 
 Two things to know:
 
-- Codex's default sandbox blocks network access, even to this machine, so the skill needs
-  **Bypass approvals and sandbox** (App Settings, Codex).
+- Codex's default sandbox blocks network access, even to this machine, so a Codex session
+  needs **Allow network access** (App Settings, Codex) before it can start and drive
+  others. The setting is app-wide: it applies to every local Codex session started after
+  you switch it on, not only the ones you mean to orchestrate. It also has a cost: commands
+  in Codex's sandbox can then call Codeman's API, which can start a session outside the
+  sandbox with no approval prompt, even when a password is set, so the sandbox no longer
+  contains a prompt-injected command. See
+  [Security](Security#what-codeman-does-not-protect-against). It opens the network only
+  where Codex runs the folder in its workspace-write sandbox, which is what Codex does for
+  a project you trusted. It does not change Codex's sandbox mode: a folder Codex runs
+  read-only (a new case that is not a git repository, for one) keeps the network closed,
+  and Codex asks you to approve each call to Codeman. Trust the project in Codex, or use `/permissions` in
+  Codex for that session, to get workspace-write there. **Bypass approvals and sandbox**
+  works everywhere, but removes the sandbox and the approval prompts.
 - Codex 0.162 runs its commands in a shared background process, whose Codeman variables can
-  belong to the session that started it.
+  belong to the session that started it. Codeman starts a local Codex 0.162 or later with
+  `--no-daemon`, so each session runs its own. A remote or Docker session does not get the
+  flag, and neither does a local one whose Codex version Codeman could not read; there,
+  and with an older Codex, the skill notices and says so instead of acting.
 
-The skill checks for both and says so instead of acting.
+OpenCode and DeepSeek Harness need nothing extra: in their default setup neither keeps its
+shell commands off the network, so the skill works there as soon as it is injected.
 
 ## What is in the skill
 

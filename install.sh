@@ -72,6 +72,14 @@ set -euo pipefail
 # ============================================================================
 
 INSTALL_DIR="${CODEMAN_INSTALL_DIR:-$HOME/.codeman/app}"
+# "$INSTALL_DIR.new" and ".old" must sit beside the install: with a trailing
+# slash they land inside it, and every archive update fails at the final swap.
+while [[ "$INSTALL_DIR" == */ && "$INSTALL_DIR" != "/" ]]; do
+    INSTALL_DIR="${INSTALL_DIR%/}"
+done
+# `docker run -u` gives a process no USER, and set -u turns every message that
+# prints it into a crash.
+USER="${USER:-$(id -un 2>/dev/null || true)}"
 REPO_URL="${CODEMAN_REPO_URL:-https://github.com/Ark0N/Codeman.git}"
 BRANCH="${CODEMAN_BRANCH:-master}"
 MIN_NODE_VERSION=18
@@ -84,6 +92,9 @@ SKIP_SYSTEMD="${CODEMAN_SKIP_SYSTEMD:-0}"
 # (resolve_admin_mode). NO_ADMIN_REASON is the one-line "why" shown to the user.
 NO_ADMIN="${CODEMAN_NO_ADMIN:-}"
 NO_ADMIN_REASON=""
+# The one reason that can be wrong, so the messages name a way back for it
+# (no_admin_override_hint).
+NO_ADMIN_UNCONFIRMED="could not confirm that this account may use sudo"
 # Where the no-admin route keeps what it downloads (Node.js, tmux). Inside the
 # data directory, so one folder holds everything Codeman put on the machine.
 RUNTIME_DIR="$HOME/.codeman/runtime"
@@ -1089,7 +1100,11 @@ user_in_admin_group() {
 # CODEMAN_NO_ADMIN=0/1 wins. Otherwise root has them; a Mac account outside the
 # admin group does not (unless a Homebrew it can write to is already there);
 # on Linux an account has none without sudo, or when it is outside the admin
-# groups AND sudo will not run without a password.
+# groups AND sudo will not run without a password. That last one is a judgment,
+# not a fact: an account sudoers lists by name, with a password, lands there
+# too, because nothing can read sudoers without a probe that reports to the
+# administrator. So it says "could not confirm", and every message that ends or
+# sums up the route names CODEMAN_NO_ADMIN=0 for it.
 #
 # Never decided by trying `sudo -v`: that asks for a password, and a wrong
 # answer from an account that may not use sudo is reported to the machine's
@@ -1123,7 +1138,28 @@ resolve_admin_mode() {
         return 0
     fi
     NO_ADMIN="1"
-    NO_ADMIN_REASON="this account may not use sudo"
+    NO_ADMIN_REASON="$NO_ADMIN_UNCONFIRMED"
+    return 0
+}
+
+# The way back to sudo, with a leading space so it can end a sentence, for a
+# route chosen because the rights could not be confirmed. Nothing for any other
+# reason: --no-admin asked for this route, and a sudo that is missing or refused
+# has no way back to offer.
+no_admin_override_hint() {
+    if [[ "$NO_ADMIN_REASON" == "$NO_ADMIN_UNCONFIRMED" ]]; then
+        printf '%s' " If this account can use sudo, run this again with CODEMAN_NO_ADMIN=0 set (for the install line: curl -fsSL https://getcodeman.com/install | CODEMAN_NO_ADMIN=0 bash)."
+    fi
+    return 0
+}
+
+# The same hint on a line of its own, for a message that does not end the run.
+print_no_admin_override_hint() {
+    local hint=""
+    hint=$(no_admin_override_hint)
+    if [[ -n "$hint" ]]; then
+        echo -e "  ${DIM}${hint# }${NC}" >&2
+    fi
     return 0
 }
 
@@ -1132,7 +1168,7 @@ ensure_sudo() {
         return 0
     fi
     if [[ "$NO_ADMIN" == "1" ]]; then
-        die "This step needs administrator rights, and this run installs without them${NO_ADMIN_REASON:+ ($NO_ADMIN_REASON)}."
+        die "This step needs administrator rights, and this run installs without them${NO_ADMIN_REASON:+ ($NO_ADMIN_REASON)}.$(no_admin_override_hint)"
     fi
     if ! command -v sudo &>/dev/null; then
         die "sudo is required but not installed. Please install packages manually or run as root."
@@ -1781,7 +1817,11 @@ install_tmux_userspace() {
     sha=$(tmux_build_sha256 "$platform") || die "No pinned checksum for the $platform tmux build."
     name="tmux-$TMUX_BUILD_VERSION-$platform.tar.gz"
 
-    tmp=$(mktemp -d "${TMPDIR:-/tmp}/codeman-tmux.XXXXXX") || die "Could not create a temporary folder."
+    # Staged in the runtime folder, as Node.js is: /tmp is often mounted noexec
+    # on the shared hosts this route is for, and the proof run below would then
+    # call a working build one that does not run.
+    mkdir -p "$bin_dir"
+    tmp=$(mktemp -d "$RUNTIME_DIR/codeman-tmux.XXXXXX") || die "Could not create a temporary folder."
     if ! run_step "Downloading tmux $TMUX_BUILD_VERSION" download \
         "https://github.com/tmux/tmux-builds/releases/download/v$TMUX_BUILD_VERSION/$name" "$tmp/$name"; then
         rm -rf "$tmp"
@@ -1800,7 +1840,6 @@ install_tmux_userspace() {
         rm -rf "$tmp"
         die "The downloaded tmux does not run on this system. Ask an administrator to install tmux, then re-run this installer."
     fi
-    mkdir -p "$bin_dir"
     mv -f "$tmp/tmux" "$bin_dir/tmux"
     rm -rf "$tmp"
 
@@ -1829,7 +1868,9 @@ install_cloudflared_userspace() {
         macos-arm64) asset="cloudflared-darwin-arm64.tgz" ;;
         *)           die "Cloudflare publishes no cloudflared build for $os $arch." ;;
     esac
-    tmp=$(mktemp -d "${TMPDIR:-/tmp}/codeman-cloudflared.XXXXXX") || die "Could not create a temporary folder."
+    # Staged in the home folder for the reason in install_tmux_userspace.
+    mkdir -p "$HOME/.local/bin"
+    tmp=$(mktemp -d "$HOME/.local/codeman-cloudflared.XXXXXX") || die "Could not create a temporary folder."
     if ! run_step "Downloading cloudflared" download \
         "https://github.com/cloudflare/cloudflared/releases/latest/download/$asset" "$tmp/$asset"; then
         rm -rf "$tmp"
@@ -1848,7 +1889,6 @@ install_cloudflared_userspace() {
         rm -rf "$tmp"
         die "The downloaded cloudflared does not run on this system."
     fi
-    mkdir -p "$HOME/.local/bin"
     mv -f "$src" "$dest"
     rm -rf "$tmp"
     return 0
@@ -1869,7 +1909,7 @@ ask_dependencies_no_admin() {
 
     blocker=$(no_admin_blocker "$os" "$arch" "$need_node" "$need_tmux")
     if [[ -n "$blocker" ]]; then
-        die "$blocker"
+        die "$blocker$(no_admin_override_hint)"
     fi
     if [[ "$need_git" == "1" ]]; then
         if [[ -d "$INSTALL_DIR/.git" ]]; then
@@ -1893,7 +1933,7 @@ ask_dependencies_no_admin() {
     if [[ -n "$what" ]]; then
         headless_guard "download $what into $RUNTIME_DIR"
         if [[ "$consented" != "consented" ]] && ! prompt_yes_no "Download $what into your home folder ($RUNTIME_DIR)?" "y"; then
-            die "Codeman needs $what. Install them and re-run this installer."
+            die "Codeman needs $what. Install them and re-run this installer.$(no_admin_override_hint)"
         fi
         if [[ "$need_node" == "1" ]]; then
             CURRENT_STEP="installing Node.js $TARGET_NODE_VERSION into $RUNTIME_DIR"
@@ -2795,6 +2835,7 @@ offer_install_tailscale() {
     if [[ "$NO_ADMIN" == "1" && "$(uname -s)" != "Darwin" ]]; then
         info "Tailscale is not installed, and installing it takes an administrator."
         echo -e "  ${DIM}Once one has installed it and run${NC} ${CYAN}sudo tailscale set --operator=$USER${NC}${DIM}, finish here with:${NC} ${CYAN}bash $INSTALL_DIR/install.sh tailscale${NC}" >&2
+        print_no_admin_override_hint
         return 1
     fi
     headless_guard "install Tailscale (curl | sh from tailscale.com)"
@@ -2881,6 +2922,7 @@ ensure_tailscale_login() {
             info "If the CLI cannot log in, open the Tailscale app, log in there, then run:"
             info "  bash $INSTALL_DIR/install.sh tailscale"
         fi
+        print_no_admin_override_hint
         return 1
     fi
     if [[ "$(ts_backend_state)" == "Running" ]]; then
@@ -2903,6 +2945,7 @@ ensure_tailscale_operator() {
     if [[ "$NO_ADMIN" == "1" ]]; then
         warn "tailscale serve needs root or Tailscale 'operator' rights, and this account has neither."
         echo -e "  ${DIM}An administrator can grant them once with:${NC} ${CYAN}sudo tailscale set --operator=$USER${NC}" >&2
+        print_no_admin_override_hint
         return 1
     fi
     if ! command -v sudo &>/dev/null; then
@@ -3982,6 +4025,7 @@ print_preflight_summary() {
     echo -e "  ${BOLD}Existing${NC}    $existing"
     if [[ "$NO_ADMIN" == "1" ]]; then
         echo -e "  ${BOLD}Admin${NC}       not used${NO_ADMIN_REASON:+ ($NO_ADMIN_REASON)}: Node.js and tmux, where missing, go into your home folder"
+        print_no_admin_override_hint
     fi
     echo ""
     return 0
@@ -4607,7 +4651,12 @@ uninstall() {
     local data_dir="$HOME/.codeman"
     if [[ -d "$data_dir" ]]; then
         warn "Data directory exists at $data_dir (contains sessions, settings, state)"
-        if prompt_yes_no "Remove data directory ($data_dir)?" "n"; then
+        # Still there means it was kept just above, and it lives in this folder.
+        local data_note=""
+        if [[ -d "$RUNTIME_DIR" ]]; then
+            data_note=" That includes the Node.js and tmux you just kept ($RUNTIME_DIR), and whatever npm -g put there."
+        fi
+        if prompt_yes_no "Remove data directory ($data_dir)?$data_note" "n"; then
             rm -rf "$data_dir"
             success "Removed $data_dir"
         else
@@ -4715,7 +4764,7 @@ Subcommands
 Environment: CODEMAN_NONINTERACTIVE=1, CODEMAN_INSTALL_DIR, CODEMAN_HOST,
 CODEMAN_PASSWORD, CODEMAN_PORT, CODEMAN_TAILSCALE=1, CODEMAN_TAILSCALE_NAME,
 CODEMAN_SKIP_SYSTEMD=1, CODEMAN_NODE_VERSION, CODEMAN_REPO_URL, CODEMAN_BRANCH,
-CODEMAN_NO_ADMIN=1, CODEMAN_TARBALL_URL, CODEMAN_AI_CLI, CODEMAN_PROGRESS=1.
+CODEMAN_NO_ADMIN=1 or 0, CODEMAN_TARBALL_URL, CODEMAN_AI_CLI, CODEMAN_PROGRESS=1.
 EOF
 }
 

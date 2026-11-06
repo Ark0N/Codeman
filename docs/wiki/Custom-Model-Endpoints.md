@@ -213,6 +213,10 @@ missing entry is the more current answer.
 - **No button to un-point a session from the UI yet.** Clearing back to native cloud is an
   HTTP call (`POST .../custom-model {"clear": true}`) or deleting the session; the settings
   panel manages saved endpoints, not what a running session is currently pointed at.
+  A clear, or a switch to another endpoint, gives the session back what it had set itself under
+  a key the endpoint replaced, such as its own `DSH_HOME` or `CLAUDE_CONFIG_DIR`. If Codeman
+  restarted in between, only the home directory comes back, and an own `DSH_HOME`, `CODEX_HOME`
+  or `GROK_HOME` only when the endpoint was picked before that restart.
 - **Nothing is shared with your real cloud credentials.** The endpoint's own key, if any,
   never touches your Anthropic/OpenAI/Google login — a custom endpoint is a separate,
   explicit choice per session.

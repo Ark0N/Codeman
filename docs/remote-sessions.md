@@ -91,7 +91,7 @@ builds the command that launches (or **reattaches** to) the remote session:
 
 ```
 ssh -o BatchMode=yes -t <connection-args> user@host \
-  'tmux -L codeman-remote new-session -A -s codeman-ssh-<id8> -c <remotePath> "cd <remotePath> && exec <cli>" \; \
+  'tmux -L codeman-remote new-session -A -s codeman-ssh-<id8> -c <remotePath> /bin/sh -c <pane-command> \; \
      set -t codeman-ssh-<id8> status off \; set -t codeman-ssh-<id8> mouse off \; \
      set -t codeman-ssh-<id8> prefix C-q \; set -s escape-time 0 \; \
      set -t codeman-ssh-<id8> window-size latest \; \
@@ -99,6 +99,9 @@ ssh -o BatchMode=yes -t <connection-args> user@host \
      bind-key -T prefix C-q send-prefix \; \
      set -t codeman-ssh-<id8> remain-on-exit failed'
 ```
+
+`<pane-command>` is `cd <remotePath> && exec <cli>`, shell-quoted as one token. With a
+`commands.*` override that token stands alone, with no `/bin/sh -c` in front of it.
 
 Key points:
 
@@ -133,6 +136,45 @@ Key points:
   **login shell**, not the agent.
 - The **whole tmux invocation is a single shell-quoted ssh argument**, and the
   pane command is independently quoted, so a `remotePath` with spaces is safe.
+- **That argument reaches the far end verbatim** (#760): the launch, an adopted
+  session's ssh attach included, goes to the local `bash -c` in single quotes, so
+  `$HOME`, `$PATH` and `$SHELL` are the remote user's. In double quotes the local `sh` expanded them first, which sent
+  this host's home and PATH to the remote. ⚠️ Every `$` in a `commands.*` override
+  now expands on the far end too, and a bare `$VAR` in an `extraSshOptions` value
+  reaches `ssh` as those literal characters at launch, as it always did in the link
+  and quick-start tmux probes. A Docker launch is verbatim as well, so a bare `$VAR`
+  in `extraCreateArgs`/`extraExecArgs` reaches `docker` the same way. Write those
+  values out.
+- **tmux picks the shell by argument count** (measured on 3.4): one argument runs
+  through the remote `default-shell`, two or more are exec'd directly. Codeman's own
+  pane command is POSIX, so it goes to `/bin/sh -c` as separate arguments, and a fish
+  login shell (or a `default-shell` set in the remote `~/.tmux.conf`) never parses it:
+  fish refuses `${SHELL:-/bin/sh}` with status 127, which is a dead pane. A `commands.*`
+  override stays one argument on purpose, since it is written for the user's own shell
+  (`source` and `[[` work in bash and zsh and die under a dash `/bin/sh`).
+- **Login shells**: POSIX shells and fish work, and csh and tcsh do within the limits
+  below. nushell and elvish cannot run the PATH bootstrap at all, so no override
+  helps. A `remotePath` holding an apostrophe does not start under fish.
+- **The login flags are picked on the far end**, the only place the shell is known:
+  the pane command passes `-i -l` unless `${SHELL##*/}` is `csh` or `tcsh`, which get
+  neither. tcsh honors `-l` only as its one flag and exits on `-i -l -c`, `-l -c` and
+  `-i -l` (measured on 6.24), so a tcsh session reads `.tcshrc` and not `.login`. The
+  text is one brace group, so `cd <path> && { …; }` starts nothing when the `cd` fails.
+- **The login shell still parses the ssh line itself**, as it did in 1.48.0, so tcsh
+  has two more limits. It has no `export`, so the PATH bootstrap only prints an error
+  there, and `tmux` and the CLI have to be on a PATH that `.tcshrc` sets. And the tmux
+  prerequisite probe's `command -v tmux` needs a `command` executable: macOS and the
+  BSDs ship one, Debian and Ubuntu do not, so linking a tcsh host there is refused
+  with `could not verify tmux`.
+- **File reads never leave a quote for the login shell** (`remoteLoginShellLine()` in
+  `remote-files.ts`). Previews, downloads, folder grids and Edit history are multi-line
+  POSIX scripts holding a path someone else may have named. fish reads `\'` inside
+  single quotes as a quote, so the shell-quoted text flips in and out of quotes, and
+  csh and tcsh end a command at a newline even inside quotes, so both ran part of a path
+  as a command (measured). The script therefore crosses the login shell as one word of
+  `printf` text with those bytes in octal, and only `sh` ever reads it. Plain csh caps
+  a word at about 8 KB and answers `Word too long` for a larger read; tcsh has no such
+  cap.
 - Connection options come from the **same `buildSshConnectionArgs(remote)`** as
   the prereq probe; `-t` is inserted right after `ssh -o BatchMode=yes`,
   preserving historical token order.
@@ -175,6 +217,12 @@ when the tab closes.
 - **`owned: false`** — discovered + attached; another Codeman owns the remote
   session. `remoteSessionName` holds its existing tmux name. Closing the tab
   **detaches**, never kills.
+
+⚠️ This covers `codeman-*` sessions on the `codeman-remote` socket, the ones another
+Codeman runs. A tmux session a HUMAN started on the host is a separate path:
+`GET /api/mux/foreign?remote=1` finds it and `POST /api/sessions/adopt` wraps it, with
+the connection on `Session.adopt.remote` and `session.remote` undefined. Closing that tab
+detaches too. See `docs/architecture-invariants.md#adopted-foreign-tmux-sessions`.
 
 ### Discovery
 
@@ -419,8 +467,9 @@ still has it.
 
 **Not available over ssh (by choice, not by accident):** editing a file (writes would
 need SFTP; `docs/file-viewer-edit-plan.md` §6), office-document previews and
-generated thumbnails (both need the bytes on the server's disk — no remote file is ever
-spilled onto the server), the file-tree/picker listings, and `tail-file`. Those routes
+generated thumbnails (both need the bytes on the server's disk: no remote file is ever
+spilled onto the server, the Edit history store's diffs being the one exception), the
+file-tree/picker listings, and `tail-file`. Those routes
 are still local-only, so with an `sshfs` mount in place they read the mounted copy —
 the two views can only disagree when that mount is stale. Docker cases are unaffected:
 their workspace is bind-mounted at the same absolute path, so local `fs` reads real bytes.

@@ -114,7 +114,7 @@ history.
 ## Remote SSH cases
 
 `grok` mode is routed through an interactive login shell
-(`exec "$SHELL" -i -l -c 'grok'`), because sshd's remote-command PATH does not include
+(`remoteLoginShellCommand('grok')`), because sshd's remote-command PATH does not include
 `~/.grok/bin`. Per-session config and `envOverrides` do not cross ssh and are rejected
 rather than silently ignored; use the per-host command override instead. For auth on
 the remote host, `grok login --device-auth` exists for exactly this.

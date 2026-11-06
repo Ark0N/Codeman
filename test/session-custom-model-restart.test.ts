@@ -1,7 +1,7 @@
 /**
  * @fileoverview Custom Model Endpoint Profiles, the Session half of applying and
  * clearing a selection against a live pane (`Session.setCustomModel()` +
- * `Session.restartCli()`), pinned against the three ways the first cut broke a
+ * `Session.restartCli()`), pinned against the four ways the first cut broke a
  * working session:
  *
  * 1. Clearing did not clear. The injected vars reach the CLI via `tmux setenv`,
@@ -16,12 +16,15 @@
  *    gated on that transcript existing, so these tests write one.
  * 3. pi/omp/grok wrote their config file and then launched without the `--model`
  *    that selects it, so the file was ignored.
+ * 4. A value the session set itself under an injected key was overwritten, then deleted
+ *    with the injected one on clear: an own `DSH_HOME` fell back to the server's tree and
+ *    an own `CLAUDE_CONFIG_DIR` silently moved the session to the default Claude account.
  *
  * Drives a real `Session` against the in-memory tmux layer vitest substitutes,
  * spying on `respawnPane` to read the options the relaunch would get.
  * Port: N/A.
  */
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -29,6 +32,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Session } from '../src/session.js';
 import { getCli } from '../src/config/cli-registry/index.js';
 import { buildCustomModelInjection } from '../src/custom-model-injection.js';
+import {
+  applyCustomModelInjection,
+  customModelConfigDir,
+  removeConfigDir,
+} from '../src/custom-model-injection-apply.js';
 import { TmuxManager } from '../src/tmux-manager.js';
 import type { MuxSession, SessionMode } from '../src/types.js';
 
@@ -187,6 +195,53 @@ describe('restartCli() must not kill a working pane', () => {
 });
 
 describe('launchModel reaches the CLI through its own launch param', () => {
+  /** A session the route just built: no pane yet, so its launch is `createSession`. */
+  function freshSession(mode: SessionMode, extra: Record<string, unknown> = {}) {
+    mkdirSync(workingDir, { recursive: true });
+    const mux = new TmuxManager();
+    const create = vi.spyOn(mux, 'createSession');
+    vi.spyOn(mux, 'muxSessionExists').mockReturnValue(true);
+    const respawn = vi.spyOn(mux, 'respawnPane').mockResolvedValue(4242);
+    const session = new Session({ workingDir, mode, mux, useMux: true, ...extra });
+    sessions.push(session);
+    return { session, create, respawn };
+  }
+
+  it('the first launch carries it too, and a clear relaunches on the model the session was created with', async () => {
+    const { session, create, respawn } = freshSession('pi', { piConfig: { model: 'anthropic/claude-x' } });
+    session.setCustomModel(
+      { endpointId: 'ep', modelId: 'qwen3', envKeys: ['HOME'], configDir: '/tmp/cfg', launchModel: 'custom/qwen3' },
+      { HOME: '/tmp/cfg' }
+    );
+    await session.startInteractive();
+    expect(create.mock.calls[0][0].piConfig?.model).toBe('custom/qwen3');
+    expect(session.toState().piConfig?.model).toBe('anthropic/claude-x');
+
+    session.setCustomModel(undefined);
+    expect(await session.restartCli()).toBe(true);
+    expect(respawn.mock.calls[0][0].piConfig?.model).toBe('anthropic/claude-x');
+  });
+
+  it('a clear on a session created with no model relaunches with none', async () => {
+    const { session, create, respawn } = freshSession('codex');
+    session.setCustomModel(
+      { endpointId: 'ep', modelId: 'qwen3', envKeys: ['CODEX_HOME'], configDir: '/tmp/cfg', launchModel: 'qwen3' },
+      { CODEX_HOME: '/tmp/cfg' }
+    );
+    await session.startInteractive();
+    expect(create.mock.calls[0][0].codexConfig?.model).toBe('qwen3');
+
+    session.setCustomModel(undefined);
+    expect(await session.restartCli()).toBe(true);
+    expect(respawn.mock.calls[0][0].codexConfig?.model).toBeUndefined();
+  });
+
+  it('leaves the launch untouched without a selection', async () => {
+    const { session, create } = freshSession('pi', { piConfig: { model: 'anthropic/claude-x', thinking: 'low' } });
+    await session.startInteractive();
+    expect(create.mock.calls[0][0].piConfig).toEqual({ model: 'anthropic/claude-x', thinking: 'low' });
+  });
+
   it('pi: the selection forces piConfig.model on the respawn options, leaving the stored config alone', async () => {
     const { session, respawn } = liveSession('pi', { piConfig: { model: 'anthropic/claude-x', thinking: 'low' } });
     session.setCustomModel(
@@ -251,5 +306,201 @@ describe('Codex custom endpoint model overrides', () => {
     respawn.mockClear();
     await session.restartCli();
     expect(respawn.mock.calls[0][0].codexConfig).toEqual({ model: 'native-model', reasoningEffort: 'high' });
+  });
+});
+
+describe('a value the session set itself comes back with the selection gone', () => {
+  const DSH_SELECTION = {
+    endpointId: 'ep',
+    modelId: 'q',
+    envKeys: ['DSH_HOME', 'CODEMAN_CUSTOM_MODEL_API_KEY'],
+    configDir: '/isolated/dsh',
+    homeEnvVar: 'DSH_HOME',
+  };
+  const DSH_ENV = { DSH_HOME: '/isolated/dsh', CODEMAN_CUSTOM_MODEL_API_KEY: 'k' };
+
+  it('puts an own DSH_HOME back on clear and sets it rather than unsetting it', async () => {
+    const { session, respawn } = liveSession('deepseek', { envOverrides: { DSH_HOME: '/home/u/my-dsh' } });
+    session.setCustomModel(DSH_SELECTION, DSH_ENV);
+    expect(session.envOverrideValue('DSH_HOME')).toBe('/isolated/dsh');
+
+    session.setCustomModel(undefined);
+    expect(session.envOverrideValue('DSH_HOME')).toBe('/home/u/my-dsh');
+    expect(session.deepSeekHomeOverride).toBe('/home/u/my-dsh');
+
+    await session.restartCli();
+    const options = respawn.mock.calls[0][0];
+    expect(options.envOverrides).toEqual({ DSH_HOME: '/home/u/my-dsh' });
+    expect(options.unsetEnvKeys).toEqual(['CODEMAN_CUSTOM_MODEL_API_KEY']);
+  });
+
+  it('carries it across a switch between endpoints', () => {
+    const { session } = liveSession('deepseek', { envOverrides: { DSH_HOME: '/home/u/my-dsh' } });
+    session.setCustomModel(DSH_SELECTION, DSH_ENV);
+    session.setCustomModel({ ...DSH_SELECTION, endpointId: 'other' }, DSH_ENV);
+    expect(session.envOverrideValue('DSH_HOME')).toBe('/isolated/dsh');
+
+    session.setCustomModel(undefined);
+    expect(session.envOverrideValue('DSH_HOME')).toBe('/home/u/my-dsh');
+  });
+
+  it('keeps a claude session on its own account, the #255 override', async () => {
+    const { session, respawn } = liveSession('claude', {
+      envOverrides: { CLAUDE_CONFIG_DIR: '/home/u/.claude-client', CLAUDE_CODE_MAX_CONTEXT_TOKENS: '100000' },
+    });
+    session.setCustomModel(
+      {
+        endpointId: 'ep',
+        modelId: 'q',
+        envKeys: [...CLAUDE_KEYS, 'CLAUDE_CONFIG_DIR', 'CLAUDE_CODE_MAX_CONTEXT_TOKENS'],
+        configDir: '/isolated/claude',
+        homeEnvVar: 'CLAUDE_CONFIG_DIR',
+      },
+      { ...claudeEnv, CLAUDE_CONFIG_DIR: '/isolated/claude', CLAUDE_CODE_MAX_CONTEXT_TOKENS: '32768' }
+    );
+
+    session.setCustomModel(undefined);
+    await session.restartCli();
+    const options = respawn.mock.calls[0][0];
+    expect(options.envOverrides).toEqual({
+      CLAUDE_CONFIG_DIR: '/home/u/.claude-client',
+      CLAUDE_CODE_MAX_CONTEXT_TOKENS: '100000',
+    });
+    expect(options.unsetEnvKeys).toEqual(CLAUDE_KEYS);
+  });
+
+  it('still unsets a key whose own value was empty, since tmux never held that value', () => {
+    const { session } = liveSession('deepseek', { envOverrides: { DSH_HOME: '' } });
+    session.setCustomModel(DSH_SELECTION, DSH_ENV);
+
+    session.setCustomModel(undefined);
+    expect(session.envOverrideValue('DSH_HOME')).toBeUndefined();
+  });
+
+  it('writes the own home to state.json and no other own value', () => {
+    const { session } = liveSession('gemini', {
+      envOverrides: { GEMINI_API_KEY: 'own-secret', DSH_HOME: '/home/u/my-dsh' },
+    });
+    session.setCustomModel(
+      {
+        endpointId: 'ep',
+        modelId: 'q',
+        envKeys: ['GEMINI_API_KEY', 'DSH_HOME'],
+        homeEnvVar: 'DSH_HOME',
+      },
+      { GEMINI_API_KEY: 'endpoint-key', DSH_HOME: '/isolated/dsh' }
+    );
+
+    const persisted = session.getCustomModelForPersist();
+    expect(persisted?.ownEnv).toEqual({ DSH_HOME: '/home/u/my-dsh' });
+    expect(JSON.stringify(persisted)).not.toContain('own-secret');
+    // The secret is still put back: it just never leaves memory.
+    session.setCustomModel(undefined);
+    expect(session.envOverrideValue('GEMINI_API_KEY')).toBe('own-secret');
+  });
+
+  it('keeps a home variable holding anything but an absolute path off disk', () => {
+    // The registry types `configDirVar`/`dirEnvVar` as plain env names, so a clis.json
+    // override can name a credential as the home variable. Only a path may reach disk.
+    const { session } = liveSession('gemini', { envOverrides: { GEMINI_API_KEY: 'own-secret' } });
+    session.setCustomModel(
+      { endpointId: 'ep', modelId: 'q', envKeys: ['GEMINI_API_KEY'], homeEnvVar: 'GEMINI_API_KEY' },
+      { GEMINI_API_KEY: 'endpoint-key' }
+    );
+
+    expect(JSON.stringify(session.getCustomModelForPersist())).not.toContain('own-secret');
+    session.setCustomModel(undefined);
+    expect(session.envOverrideValue('GEMINI_API_KEY')).toBe('own-secret');
+  });
+
+  it('reads the own value while a selection holds the key, never the injected one', () => {
+    const { session } = liveSession('deepseek', { envOverrides: { DSH_HOME: ' /home/u/my-dsh ' } });
+    expect(session.ownEnvValue('DSH_HOME')).toBe('/home/u/my-dsh');
+
+    session.setCustomModel(DSH_SELECTION, DSH_ENV);
+    expect(session.ownEnvValue('DSH_HOME')).toBe('/home/u/my-dsh');
+    // An injected key the session never set has no own value, whatever the map holds now.
+    expect(session.envOverrideValue('CODEMAN_CUSTOM_MODEL_API_KEY')).toBe('k');
+    expect(session.ownEnvValue('CODEMAN_CUSTOM_MODEL_API_KEY')).toBeUndefined();
+  });
+
+  it('persists nothing extra for a recipe with no home variable', () => {
+    const { session } = liveSession('gemini', { envOverrides: { GEMINI_API_KEY: 'own-secret' } });
+    session.setCustomModel(
+      { endpointId: 'ep', modelId: 'q', envKeys: ['GEMINI_API_KEY'] },
+      { GEMINI_API_KEY: 'endpoint-key' }
+    );
+
+    expect(session.getCustomModelForPersist()).toEqual({ endpointId: 'ep', modelId: 'q', envKeys: ['GEMINI_API_KEY'] });
+  });
+});
+
+describe('a claude session on its own config dir keeps its conversation', () => {
+  const ownDir = join(homedir(), 'custom-model-restart-own-claude');
+  const endpoint = { id: 'ep', label: 'Ep', baseUrl: 'http://box:8080', apiKey: 'k' };
+
+  afterEach(() => rmSync(ownDir, { recursive: true, force: true }));
+
+  function writeTranscript(configDir: string, conversationId: string): string {
+    const dir = join(configDir, 'projects', '-custom-model-restart');
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, `${conversationId}.jsonl`);
+    writeFileSync(file, '{"type":"user"}\n');
+    return file;
+  }
+
+  /** The route's apply, with the real isolated directory and its `projects` link. */
+  function applyEndpoint(session: Session) {
+    const applied = applyCustomModelInjection(
+      getCli('claude')!,
+      endpoint,
+      'q',
+      session.id,
+      undefined,
+      workingDir,
+      (envVar) => session.ownEnvValue(envVar)
+    )!;
+    session.setCustomModel(
+      {
+        endpointId: 'ep',
+        modelId: 'q',
+        envKeys: applied.envKeys,
+        configDir: applied.configDir,
+        homeEnvVar: applied.homeEnvVar,
+      },
+      applied.envOverrides
+    );
+    return applied;
+  }
+
+  it('resumes it on apply, from under the own dir', async () => {
+    const { session, respawn } = liveSession('claude', { envOverrides: { CLAUDE_CONFIG_DIR: ownDir } });
+    writeTranscript(ownDir, session.id);
+    const applied = applyEndpoint(session);
+
+    await session.restartCli();
+    const options = respawn.mock.calls[0][0];
+    expect(options.envOverrides?.CLAUDE_CONFIG_DIR).toBe(applied.configDir);
+    expect(options.resumeSessionId).toBe(session.id);
+    removeConfigDir(applied.configDir);
+  });
+
+  it('resumes what the endpoint run wrote on clear, on the own account', async () => {
+    // The server's tree exists, as it does on any machine that has run claude: this is
+    // where the `projects` link used to send the transcript, out of the own dir's sight.
+    mkdirSync(join(homedir(), '.claude', 'projects'), { recursive: true });
+    const { session, respawn } = liveSession('claude', { envOverrides: { CLAUDE_CONFIG_DIR: ownDir } });
+    const applied = applyEndpoint(session);
+    writeTranscript(applied.configDir!, session.id);
+
+    const { previousConfigDir } = session.setCustomModel(undefined);
+    removeConfigDir(previousConfigDir);
+    await session.restartCli();
+
+    expect(existsSync(customModelConfigDir(session.id))).toBe(false);
+    expect(existsSync(join(ownDir, 'projects', '-custom-model-restart', `${session.id}.jsonl`))).toBe(true);
+    const options = respawn.mock.calls[0][0];
+    expect(options.envOverrides?.CLAUDE_CONFIG_DIR).toBe(ownDir);
+    expect(options.resumeSessionId).toBe(session.id);
   });
 });

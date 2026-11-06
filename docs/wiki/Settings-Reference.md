@@ -38,8 +38,8 @@ as usual and tells them that server-wide settings can only be changed by an admi
 ### Updates
 
 Current version, a manual check, and the in-app updater. Covers git-clone installs
-supervised by systemd or launchd; npm installs report as non-updatable. See
-[Running As A Service](Running-As-A-Service).
+supervised by systemd or launchd; npm installs and installs without git report as
+non-updatable. See [Running As A Service](Running-As-A-Service).
 
 ### Terminal & Input
 
@@ -49,7 +49,7 @@ supervised by systemd or launchd; npm installs report as non-updatable. See
 | Keep Size Under Keyboard      | On                   | For local Claude sessions, the on-screen keyboard no longer resizes the session: the terminal keeps its rows and the view scrolls so the prompt sits just above the keyboard. Resizing made Claude reprint its screen and drop transcript lines from history. Codex, Claude's fullscreen mode, remote and Docker sessions resize as before. See [Mobile Guide](Mobile-Guide). |
 | CJK Input                     | Off                  | IME composition through a dedicated text field.                        |
 | Extended Keyboard Bar         | Per device           | Which accessory bar phones get. Shell sessions override it while they are active. |
-| Wheel Scrolls Local History   | Off                  | Keeps the wheel on the local buffer instead of forwarding it to the CLI. |
+| Wheel Scrolls Local History   | Off                  | Keeps the wheel on the local buffer instead of forwarding it to the CLI. Fullscreen pi leaves that buffer empty and has no paging fallback, so with this on the wheel does nothing there. |
 | Auto Copy Selection           | Off                  | Copies highlighted terminal text to the clipboard the moment you finish selecting it. Ctrl+C still copies on demand. |
 | Trim The Pane Margin On Copy  | On                   | Takes the left margin a full-screen agent CLI paints down its own edge off a copy, so the text pastes flush. Each CLI declares its own width, and the strip never exceeds the indent every selected line shares, so nesting is kept. Claude Code and Codex declare a margin; a shell does not. |
 | Normal / Bold font weight     | xterm defaults       | Per device, each slot from 100 to 900. The bundled JetBrains Mono renders every step, so a lighter normal weight makes Claude's bold headings stand out. Applies live to the terminal, both echo overlays and open team panes. |
@@ -108,7 +108,7 @@ records an unknown host key in `~/.ssh/known_hosts` without asking: BatchMode st
 
 **Edit history** (per device, off by default, never on phones) adds a header button for the
 active session's edit history: every edit the agent and its subagents made, with its diff, and
-images it produced. Local Claude sessions only. Nothing is read until you open the window, and it
+images it produced. Claude sessions, local and remote (SSH). Nothing is read until you open the window, and it
 stores those diffs (secrets included) under `~/.codeman/edit-history/`; see
 [Working With Files](Working-With-Files#edit-history).
 
@@ -208,6 +208,7 @@ instead of its native cloud backend. See [Custom Model Endpoints](Custom-Model-E
 | Default Codex model              | Model for new local Codex sessions; empty uses Codex's own config. Letters, digits, `.` `_` `-` `/` only. |
 | Default Codex reasoning effort   | Reasoning level for new local Codex sessions; empty uses Codex's own config.                   |
 | Bypass approvals and sandbox     | Starts new Codex sessions with `--dangerously-bypass-approvals-and-sandbox`. Read [Agent CLIs](Agent-CLIs) before enabling. |
+| Allow network access             | Starts new local Codex sessions (Run menu, Resume and the API; not scheduled jobs) with `sandbox_workspace_write.network_access=true`, so commands in Codex's workspace-write sandbox can use the network. The [Codeman Skill](Codeman-Skill) needs it to reach this server from a Codex session. It applies to every such session, and those commands can then call Codeman's API, which can start a session outside the sandbox with no approval prompt, even when a password is set: see [Security](Security#what-codeman-does-not-protect-against). It applies where Codex runs the folder in workspace-write (a project you trusted in Codex) and does not change Codex's sandbox mode: a folder Codex runs read-only keeps the network closed, and Codex asks for approval per command. Synced, off by default; forced off for users without the privileged-commands grant in multi-user mode. |
 | Animated status effects          | Cosmetic.                                                                                      |
 | MCP server sync                  | Copies the MCP servers each installed, enabled CLI (Claude, Codex, Gemini, OpenCode, Antigravity) and GitHub Copilot CLI has into the others' own config files. Synced, off by default, admin only in multi-user mode. Turn it on and **Apply** or **Save** (Apply keeps Settings open), then **Preview** shows what would change and **Sync now** applies it. It only adds missing servers, keeps the previous file as `.codeman-bak`, and leaves a file that receives env values or headers readable by you only. A config dir moved by `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `XDG_CONFIG_HOME`, `GEMINI_CLI_HOME` or `COPILOT_HOME` in Codeman's own environment is followed. |
 

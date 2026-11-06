@@ -3291,6 +3291,8 @@ Object.assign(CodemanApp.prototype, {
         matches: [],
         deferredDirectoryTarget: null,
         filter: typeof this.fileBrowserFilter === 'string' ? this.fileBrowserFilter : '',
+        // The person asked for the session folder while the agent is in a worktree (#765).
+        sessionRootPinned: false,
       };
     }
     return this._fileBrowserState;
@@ -3313,6 +3315,7 @@ Object.assign(CodemanApp.prototype, {
     state.deferredDirectoryTarget = null;
     state.filter = '';
     state.view = 'normal';
+    state.sessionRootPinned = false;
     this.fileBrowserData = null;
     this.fileBrowserFilter = '';
     this.fileBrowserExpandedDirs?.clear?.();
@@ -3323,6 +3326,7 @@ Object.assign(CodemanApp.prototype, {
     this._syncFileBrowserExpandBtn();
     const expandBtn = this.$?.('fileBrowserExpandBtn');
     if (expandBtn) expandBtn.innerHTML = '\u229E';
+    this._renderFileBrowserRoot(null);
 
     const panel = this.$?.('fileBrowserPanel');
     const treeEl = this.$?.('fileBrowserTree');
@@ -3355,6 +3359,7 @@ Object.assign(CodemanApp.prototype, {
     state.deferredDirectoryTarget = null;
     state.filter = '';
     state.view = 'normal';
+    state.sessionRootPinned = false;
     this.fileBrowserData = null;
     this.fileBrowserFilter = '';
     this.fileBrowserExpandedDirs?.clear?.();
@@ -3365,6 +3370,7 @@ Object.assign(CodemanApp.prototype, {
     this._syncFileBrowserExpandBtn();
     const expandBtn = this.$?.('fileBrowserExpandBtn');
     if (expandBtn) expandBtn.innerHTML = '\u229E';
+    this._renderFileBrowserRoot(null);
     const treeEl = this.$?.('fileBrowserTree');
     if (treeEl) treeEl.innerHTML = '';
     const statusEl = this.$?.('fileBrowserStatus');
@@ -3457,6 +3463,60 @@ Object.assign(CodemanApp.prototype, {
     this._syncFileBrowserExpandBtn();
     this.renderFileBrowserTree(normalState.sessionId);
     this._renderFileBrowserNormalStatus(normalState.data, normalState.showHidden);
+    this._renderFileBrowserRoot(normalState.data);
+  },
+
+  // The strip under the panel header, present only while the session's pane is in a linked
+  // worktree (#765): it says which of the two folders is listed and switches between them.
+  // Everything here comes from GET .../files, so the strip describes the tree on screen rather
+  // than the session's state a moment later.
+  _renderFileBrowserRoot(data) {
+    const strip = this.$?.('fileBrowserRoot');
+    if (!strip) return;
+    const worktree = data?.worktree;
+    if (typeof worktree?.path !== 'string' || typeof worktree?.name !== 'string') {
+      strip.hidden = true;
+      return;
+    }
+    const inWorktree = data.root === worktree.path;
+    const label = this.$?.('fileBrowserRootLabel');
+    const name = this.$?.('fileBrowserRootName');
+    const button = this.$?.('fileBrowserRootSwitch');
+    if (label) label.textContent = inWorktree ? 'Worktree' : 'Session folder';
+    if (name) name.textContent = inWorktree ? worktree.name : '';
+    if (button) button.textContent = inWorktree ? 'Session folder' : 'Back to worktree';
+    strip.title = typeof data.root === 'string' ? data.root : '';
+    strip.hidden = false;
+  },
+
+  // The `root` parameter of a listing or search. The server ignores it while the pane is not in
+  // a worktree, so the panel always asks unless the person chose the session folder.
+  _fileBrowserRootParam() {
+    return this._ensureFileBrowserState().sessionRootPinned ? '' : '&root=live';
+  },
+
+  toggleFileBrowserRoot() {
+    const state = this._ensureFileBrowserState();
+    state.sessionRootPinned = !state.sessionRootPinned;
+    return this._reloadFileBrowserKeepingQuery();
+  },
+
+  // Called on every session update of the active session. Compares with what the listing on
+  // screen reported rather than with the previous update, so a load already in flight when the
+  // pane moved is corrected by the next update, and an answer that matches ends it: a listing
+  // always reports the session's worktree, whichever folder it walked, so this cannot loop.
+  _followFileBrowserWorktree(session) {
+    const state = this._fileBrowserState;
+    if (!state || state.ownerSessionId !== session.id) return;
+    if (this.$?.('fileBrowserPanel')?.classList.contains('visible') !== true) return;
+    const normal = state.normalState;
+    if (normal?.phase !== 'ready' || normal.sessionId !== session.id) return;
+    const live = session.liveWorktree?.path ?? null;
+    const listed = normal.data?.worktree?.path ?? null;
+    if (live === listed) return;
+    // The pin was about the worktree the agent has just left.
+    state.sessionRootPinned = false;
+    this._reloadFileBrowserKeepingQuery();
   },
 
   _validateFileBrowserTreeEnvelope(result) {
@@ -3561,14 +3621,20 @@ Object.assign(CodemanApp.prototype, {
   },
 
   async toggleFileBrowserHidden() {
-    const state = this._ensureFileBrowserState();
-    const rawInput = typeof state.filter === 'string' ? state.filter : '';
-    const query = rawInput.trim();
     this.fileBrowserShowHidden = !this.fileBrowserShowHidden;
     try {
       localStorage.setItem(FILE_BROWSER_SHOW_HIDDEN_KEY, this.fileBrowserShowHidden ? '1' : '0');
     } catch {}
     this._syncFileBrowserHiddenBtn();
+    return this._reloadFileBrowserKeepingQuery();
+  },
+
+  // Re-fetch the tree after something the server filters on changed (hidden files, the listing's
+  // root), then re-run the search in the box against the new tree.
+  async _reloadFileBrowserKeepingQuery() {
+    const state = this._ensureFileBrowserState();
+    const rawInput = typeof state.filter === 'string' ? state.filter : '';
+    const query = rawInput.trim();
 
     if (state.inFlight?.timer !== undefined && state.inFlight?.timer !== null) {
       clearTimeout(state.inFlight.timer);
@@ -3642,7 +3708,7 @@ Object.assign(CodemanApp.prototype, {
     const request = (async () => {
       try {
         const res = await fetch(
-          `/api/sessions/${encodeURIComponent(sessionId)}/files?depth=5&showHidden=${showHidden}`,
+          `/api/sessions/${encodeURIComponent(sessionId)}/files?depth=5&showHidden=${showHidden}${this._fileBrowserRootParam()}`,
         );
         if (!res.ok) throw new Error('Failed to load files');
         const result = await res.json();
@@ -3737,6 +3803,12 @@ Object.assign(CodemanApp.prototype, {
           renderNode(child, depth + 1);
         }
       }
+
+      // The scan stopped at a limit or the folder did not answer, so what is listed above is not all
+      // of it. Not a .file-tree-item: the click wiring below would try to open it as a file.
+      if (isDir && isExpanded && node.incomplete === true) {
+        html.push(`<div class="file-tree-incomplete" data-depth="${depth + 1}">${escapeHtml('Not fully scanned')}</div>`);
+      }
     };
 
     for (const node of tree) {
@@ -3829,6 +3901,7 @@ Object.assign(CodemanApp.prototype, {
       showHidden: this.fileBrowserShowHidden === true,
       rawInput,
       query,
+      rootParam: this._fileBrowserRootParam(),
       timer: null,
     };
     state.view = 'search-pending';
@@ -3843,7 +3916,7 @@ Object.assign(CodemanApp.prototype, {
       request.timer = null;
       try {
         const res = await fetch(
-          `/api/sessions/${encodeURIComponent(ownerSessionId)}/files?depth=5&showHidden=${request.showHidden}&q=${encodeURIComponent(query)}`,
+          `/api/sessions/${encodeURIComponent(ownerSessionId)}/files?depth=5&showHidden=${request.showHidden}&q=${encodeURIComponent(query)}${request.rootParam}`,
         );
         if (!res.ok) throw new Error('Search failed');
         const result = await res.json();
@@ -5080,6 +5153,7 @@ Object.assign(CodemanApp.prototype, {
       const doc = tmpl.content.firstElementChild;
       this._rebaseFilePreviewMarkdownRefs(doc, info);
       this._linkifyFilePaths(doc);
+      this._applyBlockDirection(doc);
       // The linkifier's absolute paths name no session; give them the
       // preview's, like the rebased links, or they open in the active tab's.
       for (const a of doc.querySelectorAll('a.rv-path:not([data-session-id])')) a.dataset.sessionId = info.sessionId;

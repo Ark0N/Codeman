@@ -13,10 +13,20 @@
  *
  * Port: N/A (no server; filesystem-only, under a temp CODEMAN data dir from test/setup.ts).
  */
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  readlinkSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getCli } from '../src/config/cli-registry/index.js';
 import { applyCustomModelInjection, customModelConfigDir } from '../src/custom-model-injection-apply.js';
 import type { CustomModelEndpoint } from '../src/custom-model-injection.js';
@@ -87,6 +97,72 @@ describe('applyCustomModelInjection: CLAUDE_CONFIG_DIR isolation', () => {
     if (existsSync(join(homedir(), '.claude', 'projects'))) {
       expect(existsSync(link)).toBe(true);
       expect(lstatSync(link).isSymbolicLink() || lstatSync(link).isDirectory()).toBe(true);
+    }
+  });
+
+  it('claude: creates the missing projects folder under the temp HOME, never a real one', () => {
+    // test/setup.ts points HOME at a temp dir and drops CLAUDE_CONFIG_DIR. Without both, the
+    // apply below would create `projects` in the real `~/.claude` of whoever runs the suite.
+    expect(homedir().startsWith(tmpdir())).toBe(true);
+    expect(process.env.CLAUDE_CONFIG_DIR).toBeUndefined();
+
+    const sessionId = 'sess-cfgdir-default';
+    sessionsToClean.push(sessionId);
+    const realProjects = join(homedir(), '.claude', 'projects');
+    rmSync(realProjects, { recursive: true, force: true });
+
+    const applied = applyCustomModelInjection(entryOrThrow('claude'), endpoint, 'qwen3', sessionId);
+
+    expect(readlinkSync(join(applied!.configDir!, 'projects'))).toBe(realProjects);
+    expect(statSync(realProjects).isDirectory()).toBe(true);
+  });
+
+  it('claude: a relative CLAUDE_CONFIG_DIR of the server gets no link, nothing lands under its cwd', () => {
+    const sessionId = 'sess-cfgdir-relative';
+    sessionsToClean.push(sessionId);
+    vi.stubEnv('CLAUDE_CONFIG_DIR', 'relative-server-claude');
+    try {
+      const applied = applyCustomModelInjection(entryOrThrow('claude'), endpoint, 'qwen3', sessionId);
+      expect(existsSync(join(applied!.configDir!, 'projects'))).toBe(false);
+      expect(existsSync('relative-server-claude')).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("claude: links projects from the session's own CLAUDE_CONFIG_DIR, creating it for a new account", () => {
+    const sessionId = 'sess-cfgdir-own';
+    sessionsToClean.push(sessionId);
+    const ownDir = join(homedir(), 'client-account');
+    const applied = applyCustomModelInjection(
+      entryOrThrow('claude'),
+      endpoint,
+      'qwen3',
+      sessionId,
+      undefined,
+      undefined,
+      (envVar) => (envVar === 'CLAUDE_CONFIG_DIR' ? ownDir : undefined)
+    );
+    expect(readlinkSync(join(applied!.configDir!, 'projects'))).toBe(join(ownDir, 'projects'));
+    // A dangling directory link is not inert: the CLI's mkdir through it fails ENOENT.
+    expect(statSync(join(ownDir, 'projects')).isDirectory()).toBe(true);
+    rmSync(ownDir, { recursive: true, force: true });
+  });
+
+  it('claude: links projects from the real config dir when the own value is relative or the isolated dir', () => {
+    for (const own of ['relative/claude', customModelConfigDir('sess-cfgdir-self')]) {
+      sessionsToClean.push('sess-cfgdir-self');
+      const applied = applyCustomModelInjection(
+        entryOrThrow('claude'),
+        endpoint,
+        'qwen3',
+        'sess-cfgdir-self',
+        undefined,
+        undefined,
+        () => own
+      );
+      expect(readlinkSync(join(applied!.configDir!, 'projects'))).toBe(join(homedir(), '.claude', 'projects'));
+      rmSync(applied!.configDir!, { recursive: true, force: true });
     }
   });
 

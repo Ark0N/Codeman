@@ -22,11 +22,9 @@ import { defaultRemoteCommandForMode, remoteLoginShellCommand } from '../src/rem
 import { defaultDockerCommandForMode } from '../src/docker-hosts.js';
 import type { SessionMode } from '../src/types/session.js';
 
-const REMOTE_LOGIN_SHELL = '"${SHELL:-/bin/sh}"';
-
 it('pins every remote pane command', () => {
   const expected: Record<string, string> = {
-    shell: `exec ${REMOTE_LOGIN_SHELL} -i -l`,
+    shell: '{ set -- -i -l; case ${SHELL##*/} in csh|tcsh) set --;; esac; exec "${SHELL:-/bin/sh}" "$@"; }',
     claude: remoteLoginShellCommand('claude --dangerously-skip-permissions'),
     opencode: remoteLoginShellCommand('opencode'),
     codex: remoteLoginShellCommand('codex'),

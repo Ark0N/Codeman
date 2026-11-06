@@ -287,7 +287,8 @@ long turn, but a worker that never comes back is far more likely to be working t
 blocked, and polling `blocked` alone will sit at its timeout.
 
 **`blocked` on `codex` is read off the screen**, because codex has no hooks and is
-launched with its approvals on unless `codexConfig.dangerouslyBypassApprovals` is set.
+launched with its approvals on unless `codexConfig.dangerouslyBypassApprovals` is set
+(`codexConfig.networkAccess` opens the sandbox's network and does not change that).
 A codex pane showing a command, edit or network approval, a question (`request_user_input`)
 or the startup trust prompt raises `blocked` (plus the red alert, push and webhook a Claude
 `permission_prompt` raises, alert-only: answer it in the terminal), and the session reads
@@ -905,10 +906,10 @@ html and svg are the ones deliberately kept out.
 `POST /api/filesystem/mkdir` with `{ path, name, sessionId?, showHidden? }` makes one
 folder directly inside `path`, which must be a folder the path picker may browse, and
 answers `{ path }`. `name` is one path segment (letters, numbers, spaces and `_ - . ~`, not
-starting with a dot or `~`). `400` for a cases folder (use Add Case → New Case) or a `path`
-that is not a directory, `403` for a blocked tree or a `path` outside the browse roots,
-`404` for a `path` that does not exist, `409` when the folder already exists, and `422`
-when the mount under `path` does not answer.
+starting with a dot or `~`). `400` for a cases folder (use Add Case → Create New or Clone
+Repo with no custom folder) or a `path` that is not a directory, `403` for a blocked tree
+or a `path` outside the browse roots, `404` for a `path` that does not exist, `409` when
+the folder already exists, and `422` when the mount under `path` does not answer.
 
 ## Rendered HTML files
 
@@ -986,10 +987,48 @@ the directory the session's local tmux pane is in now (`#{pane_current_path}`), 
 the web UI uses as the base for a relative path printed in the terminal. It is
 never restored after a restart (it is written to `state.json` with the rest of the
 session state but not read back), absent for remote,
-Docker, direct-PTY and rediscovered sessions and for a session split into several panes,
+Docker, adopted, direct-PTY and rediscovered sessions and for a session split into several panes,
 and never a confinement root: file routes stay confined to `workingDir`.
 tmux reports the resolved directory, so for a workspace reached through a symlink a
 directory at or under the resolved workspace is reported in `workingDir`'s spelling.
+
+## Live worktree (`liveWorktree`)
+
+Session state (`GET /api/v1/sessions`, the `session:updated` event) may carry `liveWorktree`,
+the linked git worktree the session's pane is in now, for example after Claude Code's
+EnterWorktree moved the running session:
+
+```json
+"liveWorktree": { "name": "feature-a", "path": "/home/me/repo/.claude/worktrees/feature-a" }
+```
+
+It is derived from `paneCwd`, so it is absent wherever that is, and it is only ever a folder
+strictly below `workingDir`: a worktree elsewhere is never reported. `path` is in `workingDir`'s
+spelling. Like `paneCwd` it is never restored after a restart and never a confinement root.
+
+`GET /api/v1/sessions/:id/files` takes an optional `root=live`, which starts the listing, or a
+`q` search, at that worktree instead of at `workingDir`. The response's `root` names the folder
+that was walked: it stays `workingDir` when the session is in no worktree, when the worktree has
+gone, and when the folder no longer resolves inside `workingDir`. A `path` in the response stays
+relative to `workingDir` either way, so it works unchanged on `file-content` and `file-raw`,
+while a `q` containing `/` is matched against paths relative to the folder walked. The response
+also carries `worktree`, the same `{ name, path }`, whenever the session has a `liveWorktree`,
+whichever folder was walked and with or without `root=live`.
+
+The walk lists at most 5,000 files and folders and opens no more folders once it has read 250,000
+directory entries (the folder that crosses that line is read whole). It sets `truncated` when it
+stops with anything left, which includes a folder it never opened, even if that folder would have
+turned out to be empty. It is a per-directory round-robin (breadth-first): each folder found so far
+gets an equal share of what is left before any of them gets more, and a folder's own files count
+as one more share beside the subfolders it has just found, so one huge folder cannot use up the
+listing limit before its later siblings or its own subfolders are read, and the `matches` of a `q`
+search come back shallow-first. A folder made of thousands of small subfolders can still use most
+of the limit one level down, and folders that add up to the read limit can leave later ones
+unread. A folder below the start of the walk that does not answer a bounded probe (a mount that
+stopped responding) is not read either, and counts as left over the same way. In the tree, a
+directory node the walk stopped short of for either reason also carries `incomplete: true`: its
+`children` hold what was listed before it stopped, which can be nothing. The key is absent on every
+other node.
 
 ## Session model (`displayModel`)
 
@@ -1084,6 +1123,80 @@ the caller's case space, a linked case's exact path, or a Claude worktree of eit
 `<case>/.claude/worktrees/<name>`); without a `workingDir` there is no case. When a case default places the
 session, the create response carries `tabLayout` as it does for `tabGroupId`. Deleting the
 case forgets the value; existing sessions never move.
+
+## Adopting a foreign tmux session
+
+A tmux session someone started by hand (`tmux new -s work`) lives on its own socket,
+where Codeman does not look for its own sessions. These two routes list such sessions
+and open one as a tab. Admin-only in multi-user mode (403), since the list shows other
+people's processes and adopting a shell is arbitrary execution as the server account.
+
+`GET /api/v1/mux/foreign` lists candidates. Local sessions are always scanned, and
+cached for 5 s. `?docker=1` and `?remote=1` add the containers behind the saved Docker
+cases and the saved ssh hosts, one `docker exec` or ssh connection per target, so the
+browser sends them only on an explicit scan. `?force=1` skips the local cache.
+
+```json
+{
+  "sessions": [
+    {
+      "id": "fa9b76d36",
+      "location": "local",
+      "socketPath": "/tmp/tmux-1000/default",
+      "sessionName": "work",
+      "windows": 1,
+      "attached": false,
+      "createdAt": 1793931275000,
+      "mode": "claude",
+      "command": "claude",
+      "workingDir": "/home/me/project",
+      "adoptedBy": "961d0a82-6888-425d-a3ee-dab38ecbb598"
+    }
+  ],
+  "scannedAt": 1793931277916,
+  "notes": ["remote Build box: unreachable, or no tmux"],
+  "pollIntervalMs": 8000,
+  "canScanWide": true
+}
+```
+
+`hostId`, `hostLabel` and `containerName` appear on a docker or remote candidate.
+`adoptedBy` names the session already wrapping that target. `notes` says why a location
+gave nothing, each opening with where it came from (`local`, `docker <name>`,
+`remote <label>`). A session whose name or socket path holds characters Codeman will not
+pass to a shell, or whose name tmux reads as a target rather than a name (one starting
+with `=`, `@` or `%`, or a bare `~`), is skipped and counted in a note. A tmux server that
+does not answer within 2 seconds costs only its own rows and gets a note, and a scan cut
+short keeps the rows it read and says so in one. Sessions on a Codeman socket never appear,
+and neither does a session named `codeman-*` or `claudeman-*` on any other socket, with no note.
+
+`POST /api/v1/sessions/adopt` wraps one, with `{ "id": "...", "docker": true, "remote":
+true }` (the two flags must match the listing the id came from; `name` and
+`parentSessionId` are optional). The body carries only that opaque id: the target is
+re-resolved by a fresh scan, so a candidate that is gone answers `404`, and one on a
+location unreachable this time answers `404` saying so.
+
+The answer is `{ "session": SessionState, "adopted": true }`, or
+`{ "session": SessionState, "alreadyAdopted": true }` when the target already has a
+wrapper. A second adopt of a target whose wrapper is still being created is
+`SESSION_BUSY`. The session has `adopt` set and `pid: null`: start it like any other,
+`POST .../shell` for `mode: "shell"` and `POST .../interactive` for the rest. `mode`
+comes from the pane's process tree.
+
+Closing the session detaches. The foreign session keeps running, and only Codeman's
+wrapper and its grouped `codeman-view-<id>` session go, so `DELETE` removes nothing that
+belongs to someone else. Codeman did not start this agent, so these refuse an adopted
+session: respawn, Ralph (its config and the `fix-plan/write`, `fix-plan/read` and
+`ralph-prompt/write` file routes), one-shot `POST .../run`, auto-clear, auto-compact,
+auto-resume, custom model endpoints, prompt uploads and the image watcher. `stop` waits
+are a 400, and so are `blocked` waits unless Codeman reads that CLI's dialogs off its
+screen (codex), `git-status`, `git-fetch` and Edit history (`.../edits`) answer
+`unsupported` with `reason: "adopted"`, `git-diff` and `git-fetch-settings` answer
+`400 INVALID_INPUT`, and `last-response` answers empty, since Codeman knows no transcript
+for it. Its `paneExit`
+stays absent, because the pane holds a `tmux attach` and not the agent. Reboot restore
+does not rebuild one. A wrapper that cannot start answers `OPERATION_FAILED` and leaves
+the tab to be tried again: Codeman never starts a local process in its place.
 
 ## Approvals Inbox
 
@@ -1358,9 +1471,9 @@ The target is judged before anything is written:
 - The folder must not exist, or must be an **empty** directory; a folder with contents is Link Existing's job: `409 ALREADY_EXISTS`. A symlink or a plain file at the target is `400`.
 - `409 ALREADY_EXISTS` also for a case name already in use (in the cases dir or the registry) and for a folder that is already a case.
 
-Admin only in multi-user mode (`403`), like `POST /api/cases/link`: it writes outside the cases directory and into the shared, ownerless registry. If anything fails after the first write, what this call created is removed (the whole folder if it created it, otherwise only the scaffold inside the empty folder you picked) and the response is `500`.
+Admin only in multi-user mode (`403`), like `POST /api/cases/link`: it writes outside the cases directory and into the shared, ownerless registry. If anything fails after the first write, what this call created is removed (the whole folder if it created it, otherwise only the scaffold inside the empty folder you picked) and the response is `500`, or `409 ALREADY_EXISTS` when the name was linked meanwhile, or `409 CONFLICT` when `linked-cases.json` cannot be read or is not a JSON object. Such a file is refused and left as it is, because writing over it would unlink every other case; `POST /api/cases/link` refuses it the same way.
 
-`POST /api/cases/clone` takes the same optional `path`, with `{ name, repository, ref?, shallow?, description?, path? }`. Without `path` the repository is cloned to `<cases dir>/<name>` as always. With `path` the repository is cloned **into that exact folder** (no `<name>` subfolder is added) and registered as a linked case, judged by the same rules as above: `400` for an invalid or blocked path (or a symlink or file at the target), `404` for a missing parent, `422` for an unreachable parent, and `409 ALREADY_EXISTS` for a folder that has files, a name already in use or a folder that is already a case. Admin only in multi-user mode (`403`). An existing empty folder is cloned into directly and is kept, emptied again, if the clone fails; a second clone into the same folder while one is running is refused with `409`. A destination at or inside a Docker case workspace is refused `400 INVALID_INPUT` (git would run the new repository's hooks and filters on the host, and a container can write there), and `503` when the Docker case list cannot be read. If the clone succeeds but the registry write fails (or the name was linked while git ran, which is `409`), the cloned folder is kept and the error names it: `500 OPERATION_FAILED`, then use Link Existing.
+`POST /api/cases/clone` takes the same optional `path`, with `{ name, repository, ref?, shallow?, description?, path? }`. Without `path` the repository is cloned to `<cases dir>/<name>` as always. With `path` the repository is cloned **into that exact folder** (no `<name>` subfolder is added) and registered as a linked case, judged by the same rules as above: `400` for an invalid or blocked path (or a symlink or file at the target), `404` for a missing parent, `422` for an unreachable parent, and `409 ALREADY_EXISTS` for a folder that has files, a name already in use or a folder that is already a case. Admin only in multi-user mode (`403`). An existing empty folder is cloned into directly and is kept, emptied again, if the clone fails; a second clone into the same folder while one is running is refused with `409`. A destination at or inside a Docker case workspace is refused `400 INVALID_INPUT` (git would run the new repository's hooks and filters on the host, and a container can write there), and `503` when the Docker case list cannot be read. If the clone succeeds but the case cannot be registered, the cloned folder is kept and the error names it, then use Link Existing: `409 ALREADY_EXISTS` when the name was linked while git ran, `409 CONFLICT` when `linked-cases.json` is refused as above, and `500 OPERATION_FAILED` when the write itself fails.
 
 ## Git status
 
@@ -1382,23 +1495,23 @@ Both routes accept two optional query parameters, which the UI sends from its pe
 - `state: 'ok'`: `repos[]`, each `{ name, path, status }` where `name` is the repository folder's name, `path` its root relative to the working directory, and `status` is:
   `branch` (null when `detached`), `upstream`, `ahead`, `behind`, `hasRemote`, `counts` (`staged`, `unstaged`, `untracked`, `conflicted`, `uncommitted` = distinct paths, `stashes`), `files[]` (`path` relative to `repoRoot`, `origPath` for a rename, `index` and `worktree` status letters, `kind`: `staged` \| `unstaged` \| `untracked` \| `conflicted`; a file that is staged *and* modified again appears once per kind), `filesTruncated`, `unpushedCount` (exact) and `unpushed[]` (newest first: `hash`, `author`, `time` in epoch seconds, `subject`), `repoRoot`, `checkedAt`.
 - `state: 'not-a-repo'`: no repository here, above (that counts) or within two levels below.
-- `state: 'unsupported'` with `reason: 'remote' | 'docker'`: those sessions are never inspected (a Docker workspace is writable from inside its sandbox, and git here would run on the host).
+- `state: 'unsupported'` with `reason: 'remote' | 'docker' | 'adopted'`: those sessions are never inspected (a Docker workspace is writable from inside its sandbox, and git here would run on the host; an adopted session's `workingDir` is a neutral `/tmp`, not its workspace).
 - `state: 'error'` with a short `error` (git missing, timed out, or git's first stderr line with any `user:token@` credentials redacted).
 
 Lists are capped (300 files and 50 commits per repository) while the counts stay exact. A branch with no upstream reports the commits no remote has (`HEAD --not --remotes`); a repository with no remote reports `unpushedCount: 0`, since there is nothing to push to. Concurrent polls of one folder share a single git invocation; `?fresh=1` (what the panel's Refresh button and opening the panel send) skips the short-lived caches, though it still joins a computation already running.
 
-`POST /api/sessions/:id/git-fetch` is the panel's **Fetch** button: one `git fetch --quiet` per repository the panel would show, through the same resolver so the two cannot disagree about which repositories belong to a workspace, with the same `maxRepos` and `timeout` clamps. It is the only git command the Git panel runs that writes (cloning and worktree management write too, but only when you asked for them at the moment you asked), and it writes remote-tracking refs only: nothing commits, checks out, merges or touches the working tree. It is not quite as harmless as a read: a fetch holds git's ref lock, so an agent's own `git pull` in the same clone can hit the same `cannot lock ref` while a fetch is running, which is why one folder is fetched by one run at a time. It runs on that click, or on the interval below and never otherwise, and `git fetch` is exactly the command that can run a repository's own hooks (`reference-transaction`, `pre-auto-gc` through the automatic maintenance a fetch triggers, and config commands such as `credential.helper`), which is why nothing runs on a timer until you opt in, and why a repository at or inside a Docker case workspace is refused before any git runs. Remote and Docker sessions answer `state: 'unsupported'` like the status route. Bounded: 4 repositories at a time across the whole run (one shared bound, not one per repository group; a scheduled tick keeps that one bound for all its folders, so 4 folders do not mean 4 × 4, and works at most 4 folders at a time), one spawn per repository with the same per-command timeout, which reaches the whole process group rather than only the `git` parent (a fetch over http spawns helper processes, and a timeout that signals the parent alone can leave one running after the answer goes out), `GIT_TERMINAL_PROMPT=0` plus BatchMode ssh so a repository that needs a login fails fast instead of hanging the request on an invisible prompt. Codeman supplies no credentials, so a repository your own git is already signed in to works because that is your existing setup. That BatchMode ssh is a default, never an override: your own `GIT_SSH_COMMAND` and the repository's `core.sshCommand` are honoured, and ⚠️ the default's `StrictHostKeyChecking=accept-new` records an unknown host key in `~/.ssh/known_hosts` without asking: BatchMode stops a prompt, not a write. A click joins a run already going for the same folder, and the click publishes the trigger of the run it actually did (`click` when the click was the run, `interval` when it joined a tick already going, because a click that fetched nothing cannot report itself as the fetch) as the session's `gitFetch` state (below), so another tab open on the same folder sees the same run.
+`POST /api/sessions/:id/git-fetch` is the panel's **Fetch** button: one `git fetch --quiet` per repository the panel would show, through the same resolver so the two cannot disagree about which repositories belong to a workspace, with the same `maxRepos` and `timeout` clamps. It is the only git command the Git panel runs that writes (cloning and worktree management write too, but only when you asked for them at the moment you asked), and it writes remote-tracking refs only: nothing commits, checks out, merges or touches the working tree. It is not quite as harmless as a read: a fetch holds git's ref lock, so an agent's own `git pull` in the same clone can hit the same `cannot lock ref` while a fetch is running, which is why one folder is fetched by one run at a time. It runs on that click, or on the interval below and never otherwise, and `git fetch` is exactly the command that can run a repository's own hooks (`reference-transaction`, `pre-auto-gc` through the automatic maintenance a fetch triggers, and config commands such as `credential.helper`), which is why nothing runs on a timer until you opt in, and why a repository at or inside a Docker case workspace is refused before any git runs. Remote, Docker and adopted sessions answer `state: 'unsupported'` like the status route. Bounded: 4 repositories at a time across the whole run (one shared bound, not one per repository group; a scheduled tick keeps that one bound for all its folders, so 4 folders do not mean 4 × 4, and works at most 4 folders at a time), one spawn per repository with the same per-command timeout, which reaches the whole process group rather than only the `git` parent (a fetch over http spawns helper processes, and a timeout that signals the parent alone can leave one running after the answer goes out), `GIT_TERMINAL_PROMPT=0` plus BatchMode ssh so a repository that needs a login fails fast instead of hanging the request on an invisible prompt. Codeman supplies no credentials, so a repository your own git is already signed in to works because that is your existing setup. That BatchMode ssh is a default, never an override: your own `GIT_SSH_COMMAND` and the repository's `core.sshCommand` are honoured, and ⚠️ the default's `StrictHostKeyChecking=accept-new` records an unknown host key in `~/.ssh/known_hosts` without asking: BatchMode stops a prompt, not a write. A click joins a run already going for the same folder, and the click publishes the trigger of the run it actually did (`click` when the click was the run, `interval` when it joined a tick already going, because a click that fetched nothing cannot report itself as the fetch) as the session's `gitFetch` state (below), so another tab open on the same folder sees the same run.
 
 `data` is `{ state, repos, reposTruncated, repoLimit, fetchedAt }`, `repos[]` each `{ name, path, ok }` and, when it failed, `failure` (`{ code, message, stderr }`: the codes as in the clone failures, plus `NO_REMOTE`). A repository that could not be fetched keeps its row rather than being dropped. The panel shows the result under its list and then re-reads, so `behind` reflects what this fetch brought.
 
-The interval is two **synced** settings in `PUT /api/settings` (`src/git-fetch-scheduler.ts`): `gitFetchEnabled` (default `false`) and `gitFetchIntervalSeconds` (30 to 3600, default 300, the gap between runs timed from the start of a run so a slow repository does not push the next one out). Synced, not per-device, because the server is what acts on them; the scheduler reads them fresh on each 15 s tick, so a change works without a restart. A session can override both, and the override wins even while the app-wide switch is off: `POST /api/sessions/:id/git-fetch-settings` takes `{ "enabled": true | false | null, "intervalSeconds": number | null }` (`null` on a field clears that half so the app value applies again, a field left out of the body leaves the other half as it was), is `400 INVALID_INPUT` for a remote or Docker session, and answers `200` with `{ gitFetchSettings: { enabled, intervalSeconds } }` where `null` means the session follows the app. What the last run did rides the session state as `gitFetch` (`{ ranAt, trigger, state, repos, failed, firstFailure? }`, `trigger` is `click` or `interval`), on the existing `SessionUpdated` event: no new event. Sessions on the same folder share one run and both see its result, the schedule is keyed by folder, and a folder is fetched by at most one run at a time; a folder is due when ANY session open on it is due, so the order the sessions were read cannot decide which interval wins, and the folder is probed once for the whole group rather than once per session on it; every session open on a folder is remembered, so closing the one that holds the override does not stop that folder's fetching while another session is still open on it. The tick skips anything its bounded probe does not confirm is a directory, stamps each folder's schedule when it picks it, and does not run a second tick over a selection still going. Remote and Docker sessions are never fetched on a timer, and the Docker rule is re-checked against the CURRENT Docker roots every tick. Both fetch paths fail closed on a Docker case list (`docker-cases.json`) that exists but cannot be read or parsed: a click answers `200` with `state: 'error'` and publishes that as its `gitFetch`, and a tick fetches nothing and leaves its folders due for the next tick, since without the list nothing tells which folders a container can write to (the read-only status and diff routes keep reading such a list as no Docker workspaces).
+The interval is two **synced** settings in `PUT /api/settings` (`src/git-fetch-scheduler.ts`): `gitFetchEnabled` (default `false`) and `gitFetchIntervalSeconds` (30 to 3600, default 300, the gap between runs timed from the start of a run so a slow repository does not push the next one out). Synced, not per-device, because the server is what acts on them; the scheduler reads them fresh on each 15 s tick, so a change works without a restart. A session can override both, and the override wins even while the app-wide switch is off: `POST /api/sessions/:id/git-fetch-settings` takes `{ "enabled": true | false | null, "intervalSeconds": number | null }` (`null` on a field clears that half so the app value applies again, a field left out of the body leaves the other half as it was), is `400 INVALID_INPUT` for a remote, Docker or adopted session, and answers `200` with `{ gitFetchSettings: { enabled, intervalSeconds } }` where `null` means the session follows the app. What the last run did rides the session state as `gitFetch` (`{ ranAt, trigger, state, repos, failed, firstFailure? }`, `trigger` is `click` or `interval`), on the existing `SessionUpdated` event: no new event. Sessions on the same folder share one run and both see its result, the schedule is keyed by folder, and a folder is fetched by at most one run at a time; a folder is due when ANY session open on it is due, so the order the sessions were read cannot decide which interval wins, and the folder is probed once for the whole group rather than once per session on it; every session open on a folder is remembered, so closing the one that holds the override does not stop that folder's fetching while another session is still open on it. The tick skips anything its bounded probe does not confirm is a directory, stamps each folder's schedule when it picks it, and does not run a second tick over a selection still going. Remote, Docker and adopted sessions are never fetched on a timer, and the Docker rule is re-checked against the CURRENT Docker roots every tick. Both fetch paths fail closed on a Docker case list (`docker-cases.json`) that exists but cannot be read or parsed: a click answers `200` with `state: 'error'` and publishes that as its `gitFetch`, and a tick fetches nothing and leaves its folders due for the next tick, since without the list nothing tells which folders a container can write to (the read-only status and diff routes keep reading such a list as no Docker workspaces).
 
 
 ## Edit history
 
-What the Edit history panel reads (Settings → Header & Panels → Header, per-device, default off): the edits a **local claude session** made, main agent and subagents, read from its transcripts. Read-only. Every route resolves the session through `findSessionOrFail` (another user's session is `404`). Remote, Docker and non-claude sessions answer `state: 'unsupported'` and are never read.
+What the Edit history panel reads (Settings → Header & Panels → Header, per-device, default off): the edits a **claude session** made (local or remote SSH), main agent and subagents, read from its transcripts. Read-only. Every route resolves the session through `findSessionOrFail` (another user's session is `404`). A remote session is read over ssh and never woken: a sleeping host answers `unavailable`. Docker, non-claude and adopted sessions answer `state: 'unsupported'` and are never read.
 
-`GET /api/sessions/:id/edits[?sync=1]` lists the stored edits, newest first, without diffs: `{ state, reason?, backfillTruncated, agents, entries }`. With `sync=1` it first reads what the transcripts gained since the last read (after `/clear` or a resume, the previous conversation's transcripts to their end first); without it the server reads nothing. `state` is `ok`, `unavailable` (stored entries only; `reason` is `no-transcript` before the session has a transcript Codeman can find, `removed` while the session's history is being deleted, or the read error; the transcript is the one the session's hooks report, else the newest `<id>.jsonl` under the session's `CLAUDE_CONFIG_DIR` override or the server's config dir) or `unsupported` (`reason`: `remote`, `docker`, `mode`). Each entry is `{ id, ts, path, relPath, kind: 'code'|'image', tool, created, added, removed, truncated, agentId? }`, where `tool` is the edit tool, `bash` for an image a Bash call produced or `sent` for one the agent sent; `relPath` is relative to the workspace (a subagent's worktree for its edits). `agents` maps a subagent id to `{ description, agentType, worktreeBranch? }`. `backfillTruncated: true` means older edits can still be loaded.
+`GET /api/sessions/:id/edits[?sync=1]` lists the stored edits, newest first, without diffs: `{ state, reason?, backfillTruncated, agents, entries }`. With `sync=1` it first reads what the transcripts gained since the last read (after `/clear` or a resume, the previous conversation's transcripts to their end first); without it the server reads nothing. `state` is `ok`, `unavailable` (stored entries only; `reason` is `no-transcript` before the session has a transcript Codeman can find, `removed` while the session's history is being deleted, or the read error; the transcript is the one the session's hooks report, else the newest `<id>.jsonl` under the session's `CLAUDE_CONFIG_DIR` override or the server's config dir; a remote session sends no hooks, so its host is asked over ssh for the conversation the pane's claude writes now, else the most recently written of the stored conversation, the session's `claudeSessionId` and its id, under the host's `CLAUDE_CONFIG_DIR` or `~/.claude`) or `unsupported` (`reason`: `docker`, `mode`, `adopted`). Each entry is `{ id, ts, path, relPath, kind: 'code'|'image', tool, created, added, removed, truncated, agentId? }`, where `tool` is the edit tool, `bash` for an image a Bash call produced or `sent` for one the agent sent; `relPath` is relative to the workspace (a subagent's worktree for its edits). `agents` maps a subagent id to `{ description, agentType, worktreeBranch? }`. `backfillTruncated: true` means older edits can still be loaded.
 
 `GET /api/sessions/:id/edits/:entryId` returns one edit's diff as unified text: `{ diff, truncated }` (each edit's diff is capped at 64 KiB). `404` for an edit the session does not have.
 
@@ -1458,7 +1571,7 @@ A local case whose folder is the top of a git repository can keep **worktrees** 
 
 A non-admin's `POST /api/quick-start` and `POST /api/ralph-loop/start` work as before but do not record their case as `lastUsedCase` (a server-wide key).
 
-`POST /api/cases/:name/rename` (body `{ newName, renameFolder?, stopSessions? }`, strict) renames a case. It is not one of the admin-only writes above: in multi-user mode a non-admin renames their own cases, and only the `settings.json` part is skipped for them. A case under the cases directory is its folder, so it always moves; a linked case renames its alias in `linked-cases.json` and moves its real folder (next to the old one, named `newName`) only with `renameFolder: true`. Remote and Docker cases are `400`. The new name must be free in every namespace the list merges (`409`). Live sessions whose working directory is at or inside the folder that would move make it `409` with `requiresStop: true` and `sessions: [{ id, name }]`; retry with `stopSessions: true` to end them first (they are closed as by `DELETE /api/sessions/:id`, nothing is restarted); another user's session is `403`. The folder is held by an in-process lock for the whole operation (an overlapping rename is `409 BUSY`, and `new Session` refuses a working directory inside it); a session that is still being created in the folder (constructed, not yet registered, so it can be neither listed nor stopped) makes a folder move `409` with `renameCode: "BUSY"` too, and a retry once it is registered lists it like any open session; the move is retried for a transient `EBUSY`/`EPERM`/`EACCES` and then answers `423` with `renameCode: "LOCKED"`, a cross-device move is `400`, and if the registries cannot be written afterwards `settings.json` and the folder are put back (when the folder cannot be moved back, the `500` says it is now at the new path). An error from the rename itself carries `stoppedSessions`: how many sessions it ended before it failed. On success the response is `{ oldName, newName, oldPath, newPath, folderMoved, stoppedSessions }`; `caseOrder` and `lastUsedCase` (in multi-user mode, by an admin's rename only), `linked-cases.json` and Claude Code's `projects/<path>` history are updated (history already at the new path is merged into, never overwritten), and `case:renamed` is broadcast. A linked case is admin only in multi-user mode: for a non-admin the name is looked up in their own case space only (`404` when they have no case of that name).
+`POST /api/cases/:name/rename` (body `{ newName, renameFolder?, stopSessions? }`, strict) renames a case. It is not one of the admin-only writes above: in multi-user mode a non-admin renames their own cases, and only the `settings.json` part is skipped for them. A case under the cases directory is its folder, so it always moves; a linked case renames its alias in `linked-cases.json` and moves its real folder (next to the old one, named `newName`) only with `renameFolder: true`. Remote and Docker cases are `400`. The new name must be free in every namespace the list merges (`409`). Live sessions whose working directory is at or inside the folder that would move make it `409` with `requiresStop: true` and `sessions: [{ id, name }]`; retry with `stopSessions: true` to end them first (they are closed as by `DELETE /api/sessions/:id`, nothing is restarted); another user's session is `403`. The folder is held by an in-process lock for the whole operation (an overlapping rename is `409 BUSY`, and `new Session` refuses a working directory inside it); a session that is still being created in the folder (constructed, not yet registered, so it can be neither listed nor stopped) makes a folder move `409` with `renameCode: "BUSY"` too, and a retry once it is registered lists it like any open session; the move is retried for a transient `EBUSY`/`EPERM`/`EACCES` and then answers `423` with `renameCode: "LOCKED"`, a cross-device move is `400`, and if the registries cannot be written afterwards `settings.json` and the folder are put back (when the folder cannot be moved back, the answer is `500` and says it is now at the new path). A failed write is `500`. A linked case's entry is checked again where it is written, after any folder move, and a refusal there puts everything back the same way: a new name linked since the first check is `409 ALREADY_EXISTS` with `renameCode: "EXISTS"`, an old entry unlinked or changed since then is `409 CONFLICT` with `renameCode: "BUSY"`, and a `linked-cases.json` that stopped being readable or a JSON object is `409 CONFLICT` with no `renameCode` (one already damaged when the rename starts reads as empty, so a linked name answers `404`). An error from the rename itself carries `stoppedSessions`: how many sessions it ended before it failed. On success the response is `{ oldName, newName, oldPath, newPath, folderMoved, stoppedSessions }`; `caseOrder` and `lastUsedCase` (in multi-user mode, by an admin's rename only), `linked-cases.json` and Claude Code's `projects/<path>` history are updated (history already at the new path is merged into, never overwritten), and `case:renamed` is broadcast. A linked case is admin only in multi-user mode: for a non-admin the name is looked up in their own case space only (`404` when they have no case of that name).
 
 ### System operations
 

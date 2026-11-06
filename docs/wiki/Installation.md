@@ -127,10 +127,19 @@ installer says so in its summary (`Admin  not used (...)`) and gets those anothe
 
 This route is taken by itself when `sudo` is not installed, when the account is outside the
 `sudo`, `wheel` and `admin` groups and `sudo` will not run without a password, when the
-`sudo` password is refused, and on a Mac for an account that is not an administrator.
+`sudo` password is refused, and on a Mac for an account that is not an administrator and
+has no Homebrew it can write to.
 `--no-admin` (or `CODEMAN_NO_ADMIN=1`) forces it on an account that does have the rights;
 `CODEMAN_NO_ADMIN=0` switches the detection off. Nothing on this route runs `sudo`,
 Homebrew or the Xcode tools installer.
+
+The group check cannot see a sudoers entry, so an account that sudoers lists by name, with
+a password, takes this route too. The summary then reads `could not confirm that this
+account may use sudo`, and to use `sudo` anyway:
+
+```bash
+curl -fsSL https://getcodeman.com/install | CODEMAN_NO_ADMIN=0 bash
+```
 
 What to know about it:
 
@@ -197,16 +206,24 @@ See [Contributing](Contributing) for the rest of the development loop.
 ## Route D: Docker Compose
 
 Codeman itself can run in a container and spawn Docker cases as sibling containers through
-the host's Docker socket. Copy `docker/.env.example` to `docker/.env`, set
-`CODEMAN_PASSWORD`, then:
+the host's Docker socket. You need Docker with the Compose v2 plugin (2.27.2 or newer), and
+an account that can use Docker without sudo (on Linux, the `docker` group). Then, on Linux:
 
 ```bash
+git clone https://github.com/Ark0N/Codeman.git && cd Codeman
 bash docker/Start-Codeman.sh
 ```
 
+The first run asks for a data folder, a port and a password. Enter takes each default,
+including a generated password, shown on your terminal and kept in `docker/.env`. It then
+writes that file, builds the image (a few minutes the first time) and ends on the URL once
+Codeman answers. The image
+already includes Claude Code, Codex, Gemini CLI and OpenCode: start a session and log the CLI
+in once, and the login is kept in the data folder.
+
 Run the script again after updating rather than a plain `docker compose up`, so the rebuilt
 image, the refreshed volumes and the entrypoint arrive together. The full guide, including
-storage and networking options, is
+Unraid, storage and networking options, is
 [`docker/README.md`](https://github.com/Ark0N/Codeman/blob/master/docker/README.md).
 
 ## Installing an agent CLI
@@ -274,7 +291,7 @@ Full detail, including logs and the self-updater, is in
 | Installer, without git | Re-run the one-liner. The in-app updater says so instead of offering an update. |
 | npm           | `npm update -g aicodeman`                                          |
 | git clone     | `git pull && npm install && npm run build`, then restart.          |
-| Docker Compose | Re-run `Start-Codeman.sh`. The in-app updater works too, and refuses a release that changes the container definition until you re-run the script. |
+| Docker Compose | `git pull`, then re-run `Start-Codeman.sh`. The in-app updater works too, and refuses a release that changes the container definition until you re-run the script. |
 
 The in-app updater covers git-clone installs supervised by systemd or launchd. It restarts
 the process that is running it, so the actual work happens in a detached script and the
@@ -289,8 +306,10 @@ npm uninstall -g aicodeman      # npm route
 
 The installer route asks before it removes `~/.codeman/runtime` (the Node.js and tmux it
 downloaded, if any), and keeps it by default when you installed CLIs there with
-`npm install -g`. Neither removes `~/.codeman/` or `~/codeman-cases/`. Delete those by hand if you want the
-state and your case folders gone as well, and check `~/codeman-cases/` first: linked cases
+`npm install -g`. That folder is inside `~/.codeman/`, so saying yes to the data directory
+question that follows removes it even if you kept it a step earlier, and the question says
+so. By default neither route removes `~/.codeman/` or `~/codeman-cases/`. Delete those by hand
+if you want the state and your case folders gone as well, and check `~/codeman-cases/` first: linked cases
 point at directories you already had, but cases created from scratch have their only copy
 there.
 

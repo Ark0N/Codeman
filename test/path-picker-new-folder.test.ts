@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const PUBLIC = resolve(import.meta.dirname, '../src/web/public');
 const accessoryJs = readFileSync(resolve(PUBLIC, 'keyboard-accessory.js'), 'utf8');
 const sessionUiJs = readFileSync(resolve(PUBLIC, 'session-ui.js'), 'utf8');
+const stylesCss = readFileSync(resolve(PUBLIC, 'styles.css'), 'utf8');
 
 const dom = new JSDOM('<!DOCTYPE html><html><body></body></html>', { url: 'https://localhost/' });
 const jsdomWindow = dom.window as unknown as Window & typeof globalThis;
@@ -166,14 +167,35 @@ describe('PathPicker New folder', () => {
     expect(doc.querySelector('.path-picker-overlay')).not.toBeNull();
   });
 
-  it('is on for Link Existing and off for the other session-ui pickers', () => {
-    const block = (name: string) => {
-      const start = sessionUiJs.indexOf(`${name}() {`);
-      return sessionUiJs.slice(start, sessionUiJs.indexOf('PathPicker.open', start) + 400);
-    };
-    expect(block('openLinkCasePathPicker')).toContain('allowNewFolder: true');
-    for (const other of ['openDockerWorkspacePathPicker', 'openDockerWorkdirPicker', 'openNewCasePathPicker']) {
-      expect(block(other), other).not.toContain('allowNewFolder');
+  // A picker's whole options object: a fixed window stops short of the container picker's long one.
+  const pickerOptions = (name: string) => {
+    const start = sessionUiJs.indexOf(`${name}() {`);
+    expect(start, name).toBeGreaterThan(-1);
+    const open = sessionUiJs.indexOf('PathPicker.open', start);
+    expect(open, name).toBeGreaterThan(start);
+    const end = sessionUiJs.indexOf('\n    });', open);
+    expect(end, name).toBeGreaterThan(open);
+    return sessionUiJs.slice(open, end);
+  };
+
+  it("is on for Create New's custom folder picker too", () => {
+    expect(pickerOptions('openNewCasePathPicker')).toContain('allowNewFolder: true');
+  });
+
+  it("is on for Clone Repo's parent folder picker: that parent must already exist", () => {
+    expect(pickerOptions('openCloneCasePathPicker')).toContain('allowNewFolder: true');
+  });
+
+  it('is on for Link Existing and off for the Docker pickers', () => {
+    expect(pickerOptions('openLinkCasePathPicker')).toContain('allowNewFolder: true');
+    for (const other of ['openDockerWorkspacePathPicker', 'openDockerWorkdirPicker']) {
+      expect(pickerOptions(other), other).not.toContain('allowNewFolder');
     }
+  });
+
+  it('lets an error wrap: the status line has no other way to show the rest of a long refusal', () => {
+    const start = stylesCss.indexOf('.path-picker-status.error {');
+    expect(start).toBeGreaterThan(-1);
+    expect(stylesCss.slice(start, stylesCss.indexOf('}', start))).toContain('white-space: normal');
   });
 });

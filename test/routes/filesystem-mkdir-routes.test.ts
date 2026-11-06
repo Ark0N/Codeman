@@ -51,7 +51,9 @@ describe('POST /api/filesystem/mkdir', () => {
     try {
       const res = await mkdir({ path: casesDir, name: 'myproj' });
       expect(res.statusCode).toBe(400);
-      expect(res.json().error).toContain('Add Case > New Case');
+      expect(res.json().error).toContain('Pick a folder outside it');
+      // Every picker offering New folder sees this, and Clone Repo opens here by default.
+      expect(res.json().error).toContain('Add Case > Create New or Clone Repo (no custom folder)');
       expect(existsSync(join(casesDir, 'myproj'))).toBe(false);
       // A folder inside a case is fine.
       mkdirSync(join(casesDir, 'real-case'));

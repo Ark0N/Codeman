@@ -2458,6 +2458,8 @@ class CodemanApp {
     }
     // cliMouseTracking (Claude's fullscreen mode) ends a keyboard row hold.
     if (session.id === this.activeSessionId) this._reconcileKeyboardHold?.();
+    // The agent moved into or out of a git worktree while the Files panel is open (#765).
+    if (session.id === this.activeSessionId) this._followFileBrowserWorktree?.(session);
     // Update parentSessionName for any subagents belonging to this session
     // (fixes stale name display after session rename)
     this.updateSubagentParentNames(session.id);
@@ -2845,6 +2847,14 @@ class CodemanApp {
           a.setAttribute('target', '_blank');
           a.setAttribute('rel', 'noopener noreferrer');
         });
+        // Code and preformatted text are always left to right. `dir="ltr"`
+        // also isolates them, and `dir="auto"` skips any descendant that
+        // carries a `dir`, so `npm install` at the head of a Persian sentence
+        // no longer turns the whole sentence left to right (issue #715). The
+        // `dir="auto"` itself is `_applyBlockDirection`'s, never this string's.
+        tmpl.content.querySelectorAll('pre, code').forEach((el) => {
+          if (!el.hasAttribute('dir')) el.setAttribute('dir', 'ltr');
+        });
         return tmpl.innerHTML;
       } catch { /* fall through */ }
     }
@@ -3002,8 +3012,36 @@ class CodemanApp {
     renderedText.className = 'rv-text';
     renderedText.innerHTML = this._renderMarkdown(text);
     this._linkifyFilePaths(renderedText);
+    this._applyBlockDirection(renderedText);
     div.appendChild(renderedText);
     return div;
+  }
+
+  /**
+   * Right-to-left text (issue #715). With no `dir`, every block was laid out
+   * left to right, so a Persian, Arabic or Hebrew answer was left-aligned, its
+   * punctuation landed on the wrong end and its lists and quotes hung off the
+   * left edge. Each OUTERMOST prose block now takes its direction from its own
+   * first letter (`dir="auto"`, what GitHub does for rendered markdown), so an
+   * RTL paragraph beside an English one reads correctly in both; nested blocks
+   * inherit, which keeps a list's markers and indent on one side. A `dir` the
+   * agent wrote (the sanitizer allows it) is kept, and so is what it covers.
+   *
+   * ⚠️ Call this LAST, on the DOM, once nothing else inserts under `root`: an
+   * element that already carries `dir="auto"` re-resolves its direction on every
+   * insertion beneath it, and a block whose letters all sit in `dir` children
+   * (a code-only or path-only list) walks its whole subtree each time. Set
+   * during `_renderMarkdown` or before the linkifier, that made rendering
+   * quadratic, for English documents too: a 200 KB list of inline code froze
+   * the tab for 40 s. Not part of `_linkifyFilePaths`, which returns early when
+   * a stale constants.js has no `findFilePathLinks`.
+   */
+  _applyBlockDirection(root) {
+    if (!root) return;
+    for (const el of root.querySelectorAll('p, h1, h2, h3, h4, h5, h6, ul, ol, dl, blockquote, .rv-table-wrap')) {
+      if (el.parentElement?.closest('[dir]') || el.hasAttribute('dir')) continue;
+      el.setAttribute('dir', 'auto');
+    }
   }
 
   /**
@@ -3106,6 +3144,9 @@ class CodemanApp {
         link.dataset.path = path;
         link.dataset.linkified = '1';
         if (folder) link.dataset.folder = '1';
+        // A path reads left to right, and in a right-to-left sentence it must
+        // not vote on the sentence's direction (`_applyBlockDirection`, issue #715).
+        link.dir = 'ltr';
         link.title = path;
         link.textContent = path;
         frag.appendChild(link);
@@ -10267,11 +10308,11 @@ class CodemanApp {
       // response re-reports the count, so a pane that starts keeping history
       // (claude switched to its inline view) goes back to the tail on the next
       // switch.
-      // A remote (ssh) or Docker session's local pane hosts a nested tmux client in the
-      // alternate screen, so it reports 0 while its byte tail is real scrollback.
+      // A remote (ssh), Docker or adopted session's local pane hosts a nested tmux client in
+      // the alternate screen, so it reports 0 while its byte tail is real scrollback.
       const shellSession = session?.mode === 'shell';
       const paneKeepsNoHistory =
-        !session?.remote && !session?.docker && this._paneHistoryLines?.get(sessionId) === 0;
+        !session?.remote && !session?.docker && !session?.adopt && this._paneHistoryLines?.get(sessionId) === 0;
       const useFullHistory = !shellSession && (paneKeepsNoHistory || !this._fullHistoryLoaded.has(sessionId));
       if (useFullHistory) this._fullHistoryLoaded.add(sessionId);
       const fetchStartedAt = performance.now();
@@ -10879,6 +10920,9 @@ class CodemanApp {
       // An SSE resync (handleInit) that landed mid-request rebuilds the list from
       // the server, which still had the session then.
       if (this.sessions.has(sessionId)) this._onSessionDeleted({ id: sessionId });
+      // The home screen read the outside-sessions list when the tab went, before this
+      // delete landed, so its row would say "Go to tab" with no tab until the next poll.
+      if (session?.adopt) void this.loadForeignSessions?.();
       if (killMux) {
         this.showToast('Session closed and tmux killed', 'success');
       } else {
@@ -10913,6 +10957,25 @@ class CodemanApp {
     const name = this.getSessionName(session);
     const sessionNameEl = document.getElementById('closeConfirmSessionName');
     sessionNameEl.textContent = name;
+
+    // ⚠️ An ADOPTED session has no "kill" outcome to offer. Its wrapper is the
+    // only thing Codeman owns; the server's killSession refuses to reach the
+    // foreign server at all (see the adopted early return in tmux-manager). So
+    // the red "Terminate the session completely" option is not merely redundant
+    // here, it is a false promise about someone else's live work, and the kind
+    // of false promise that stops a user closing the tab at all. Hide it, and say
+    // what actually happens instead.
+    const killBtn = document.getElementById('closeConfirmKillBtn');
+    const keepTitle = document.getElementById('closeConfirmKeepTitle');
+    const keepDesc = document.getElementById('closeConfirmKeepDesc');
+    const adopted = !!session.adopt;
+    if (killBtn) killBtn.style.display = adopted ? 'none' : '';
+    if (keepTitle) keepTitle.textContent = adopted ? 'Close Tab' : 'Remove Tab';
+    if (keepDesc) {
+      keepDesc.textContent = adopted
+        ? 'Detaches only. The tmux session keeps running for whoever started it.'
+        : 'Tmux session keeps running in background';
+    }
 
     // A session in a Codeman-managed git worktree also offers to remove the worktree
     // (git worktree remove, never forced) once the session is gone. Read now, before the
@@ -10973,7 +11036,18 @@ class CodemanApp {
     this.cancelCloseSession();
 
     if (sessionId) {
-      const gone = await this.closeSession(sessionId, killMux);
+      // ⚠️ For an ADOPTED session `killMux` does not mean what it means everywhere
+      // else. There is no agent of ours to terminate: the only thing it can reach
+      // is the WRAPPER we created, and the server's adopted branch in
+      // `killSession` tears that down without ever touching the foreign server.
+      // So "keep the tmux session running" has no useful meaning here: taking it
+      // literally leaves our wrapper AND its grouped view session parked on the
+      // user's own socket forever, one pair per tab they ever closed (measured:
+      // `codeman-view-*` survived every close and the row stayed "Go to tab" with
+      // no tab behind it). Always tear the wrapper down; the foreign session is
+      // structurally out of reach either way.
+      const adopted = !!this.sessions.get(sessionId)?.adopt;
+      const gone = await this.closeSession(sessionId, adopted ? true : killMux);
       if (gone && worktree) await this._removeWorktreeAfterClose?.(worktree, deleteBranch);
     }
   }

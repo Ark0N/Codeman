@@ -2757,8 +2757,9 @@ Object.assign(CodemanApp.prototype, {
   /** Copy the open session's working folder (Session Options > Session > Working folder). */
   async copySessionPath() {
     const session = this.sessions.get(this.editingSessionId);
-    if (!session?.workingDir) return;
-    const ok = await this._copyText(session.workingDir);
+    const path = session?.adopt?.paneCurrentPath || session?.workingDir;
+    if (!path) return;
+    const ok = await this._copyText(path);
     this.showToast(ok ? 'Path copied' : 'Copy failed', ok ? 'success' : 'error');
   },
 
@@ -2833,8 +2834,9 @@ Object.assign(CodemanApp.prototype, {
     this.updateGitFetchStatus(sessionId);
     const imageWatcherToggle = document.getElementById('modalImageWatcherEnabled');
     imageWatcherToggle.checked = session.imageWatcherEnabled ?? true;
-    // The server never watches a remote session's directory (it is on another host), so the row is hidden.
-    imageWatcherToggle.closest('.set-row').style.display = session.remote ? 'none' : '';
+    // The server never watches a remote session's directory (it is on another host), nor an adopted
+    // session's (a neutral wrapper folder), so the row is hidden.
+    imageWatcherToggle.closest('.set-row').style.display = session.remote || session.adopt ? 'none' : '';
     document.getElementById('modalFlickerFilterEnabled').checked = session.flickerFilterEnabled ?? false;
 
     // Populate session name input with prefix/suffix split
@@ -2853,17 +2855,21 @@ Object.assign(CodemanApp.prototype, {
     }
 
     // Working folder: the path the CLI was launched in on the Codeman host
+    // (an adopted session's is the neutral wrapper folder, so the row shows where the pane was)
     const _pathEl = document.getElementById('modalSessionPath');
-    _pathEl.textContent = session.workingDir || '';
-    _pathEl.title = session.workingDir || '';
-    document.getElementById('modalSessionPathCopy').disabled = !session.workingDir;
+    const _shownPath = session.adopt?.paneCurrentPath || session.workingDir || '';
+    _pathEl.textContent = _shownPath;
+    _pathEl.title = _shownPath;
+    document.getElementById('modalSessionPathCopy').disabled = !_shownPath;
     // A remote session's workingDir is the REMOTE path; a docker session's is the
     // host bind-mount source the container sees.
-    document.getElementById('modalSessionPathDesc').textContent = session.remote
-      ? "Where this session's CLI runs, on the remote host it reaches over SSH, not on this machine."
-      : session.docker
-        ? "On the machine hosting Codeman, mounted into the Docker container this session's CLI runs in."
-        : "Where this session's CLI runs, on the machine hosting Codeman.";
+    document.getElementById('modalSessionPathDesc').textContent = session.adopt
+      ? 'Where the tmux session was when it was opened here. It was started outside Codeman and keeps running if this tab closes.'
+      : session.remote
+        ? "Where this session's CLI runs, on the remote host it reaches over SSH, not on this machine."
+        : session.docker
+          ? "On the machine hosting Codeman, mounted into the Docker container this session's CLI runs in."
+          : "Where this session's CLI runs, on the machine hosting Codeman.";
 
     // Initialize color picker with current session color
     const currentColor = session.color || 'default';
@@ -2890,11 +2896,11 @@ Object.assign(CodemanApp.prototype, {
       if (respawnTabBtn) respawnTabBtn.style.display = '';
     }
 
-    // Git is local git only: a remote (SSH) or Docker case answers 'unsupported' on both git routes and is
-    // never fetched by the interval scheduler, so its Git tab has nothing to say and its rail entry goes
-    // hidden the same way.
+    // Git is local git only: a remote (SSH) or Docker case, or an adopted session, answers 'unsupported' on
+    // both git routes and is never fetched by the interval scheduler, so its Git tab has nothing to say and
+    // its rail entry goes hidden the same way.
     const gitTabBtn = document.querySelector('#sessionOptionsModal .set-rail-item[data-tab="git"]');
-    if (gitTabBtn) gitTabBtn.style.display = session.remote || session.docker ? 'none' : '';
+    if (gitTabBtn) gitTabBtn.style.display = session.remote || session.docker || session.adopt ? 'none' : '';
 
     // Populate Ralph Wiggum form with current session values (skip for external CLI sessions)
     if (!isExternalCli) {
@@ -4051,6 +4057,7 @@ Object.assign(CodemanApp.prototype, {
       title: 'Choose the folder to create the case in',
       initialPath: input.value.trim(),
       directoriesOnly: true,
+      allowNewFolder: true,
       onSelect: (path) => {
         input.value = path;
         this.updateNewCasePathPreview();
@@ -4264,32 +4271,37 @@ Object.assign(CodemanApp.prototype, {
     const hint = document.getElementById('cloneCaseNameHint');
     if (hint) {
       hint.textContent = custom.checked
-        ? 'Filled in from the URL. Names the case only: the repository is cloned into the folder chosen below.'
+        ? 'Filled in from the URL. Names the case and the subfolder of the chosen folder the repository is cloned into.'
         : 'Filled in from the URL. Cloned into ~/codeman-cases/<name>, so deleting the case deletes this working tree.';
     }
     this.updateCloneCasePathPreview();
   },
 
-  /** The folder the repository is cloned into: exactly what the field holds (no case name is added). */
+  /** The folder the repository is cloned into: the parent field plus the case name, as Create New does. */
   _cloneTargetPath() {
-    const raw = (document.getElementById('cloneCasePath')?.value || '').trim();
+    const rawParent = (document.getElementById('cloneCasePath')?.value || '').trim();
+    const name = (document.getElementById('cloneCaseName')?.value || '').trim();
+    if (!rawParent || !name) return '';
     // Trailing slashes off, but `/` stays the root rather than becoming an empty path.
-    return raw.length > 1 ? raw.replace(/\/+$/, '') || '/' : raw;
+    return `${rawParent.replace(/\/+$/, '')}/${name}`;
   },
 
   updateCloneCasePathPreview() {
     const hint = document.getElementById('cloneCasePathPreview');
     if (!hint) return;
     const target = this._cloneTargetPath();
-    hint.textContent = target ? `Will clone into: ${target}` : 'Pick an empty folder, or one that does not exist yet, to clone into.';
+    hint.textContent = target
+      ? `Will clone into: ${target}`
+      : 'Pick the folder the repository should be cloned inside. It goes into a subfolder named after the case.';
   },
 
   openCloneCasePathPicker() {
     const input = document.getElementById('cloneCasePath');
     PathPicker.open({
-      title: 'Choose the folder to clone into',
+      title: 'Choose the folder to clone inside',
       initialPath: input.value.trim(),
       directoriesOnly: true,
+      allowNewFolder: true,
       onSelect: (path) => {
         input.value = path;
         this.updateCloneCasePathPreview();
@@ -4334,12 +4346,14 @@ Object.assign(CodemanApp.prototype, {
   onCloneNameEdited() {
     // Once the user types a name, autofill stops fighting them.
     this._cloneNameEdited = !!document.getElementById('cloneCaseName')?.value.trim();
+    this.updateCloneCasePathPreview();
   },
 
   onCloneUrlInput() {
     const url = document.getElementById('cloneRepoUrl')?.value.trim() || '';
     const nameInput = document.getElementById('cloneCaseName');
     if (nameInput && !this._cloneNameEdited) nameInput.value = this._repoNameFromUrl(url);
+    this.updateCloneCasePathPreview();
     clearTimeout(this._clonePreflightTimer);
     this._clonePreflightAbort?.abort();
     this._clonePreflightAbort = null;
@@ -4395,6 +4409,7 @@ Object.assign(CodemanApp.prototype, {
     // the case name is validated against), but never over a name the user typed.
     const nameInput = document.getElementById('cloneCaseName');
     if (nameInput && !this._cloneNameEdited && parse.suggestedName) nameInput.value = parse.suggestedName;
+    this.updateCloneCasePathPreview();
 
     const where = parse.owner ? `${parse.provider} ${parse.owner}/${parse.repo}` : `${parse.provider} ${parse.repo}`;
     if (data.gitAvailable === false) {
@@ -4449,7 +4464,7 @@ Object.assign(CodemanApp.prototype, {
 
     const customFolder = !!document.getElementById('cloneCustomPathToggle')?.checked;
     if (customFolder && !(document.getElementById('cloneCasePath')?.value || '').trim()) {
-      this.showToast('Choose the folder to clone into', 'error');
+      this.showToast('Choose the folder to clone inside', 'error');
       return;
     }
 
@@ -6111,7 +6126,7 @@ Object.assign(CodemanApp.prototype, {
 
   /** The Codeman-managed worktree a session runs in, or null (see managedWorktreeOfDir). */
   _managedWorktreeOfSession(session) {
-    if (!session || session.remote || session.docker) return null;
+    if (!session || session.remote || session.docker || session.adopt) return null;
     return managedWorktreeOfDir(session.workingDir, this.cases);
   },
 

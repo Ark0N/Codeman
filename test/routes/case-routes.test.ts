@@ -54,6 +54,12 @@ vi.mock('node:fs/promises', () => ({
       throw err;
     }),
     writeFile: vi.fn(async () => {}),
+    // What the linked-cases writer needs to replace the registry atomically (temp file + rename).
+    realpath: vi.fn(async (p: string) => p),
+    mkdir: vi.fn(async () => undefined),
+    chmod: vi.fn(async () => {}),
+    rename: vi.fn(async () => {}),
+    rm: vi.fn(async () => {}),
   },
 }));
 
@@ -704,6 +710,7 @@ describe('case-routes', () => {
       });
       // linked-cases.json doesn't exist yet
       mockedReadFile.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+      mockedStat.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
 
       const res = await harness.app.inject({
         method: 'POST',

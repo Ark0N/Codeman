@@ -71,6 +71,7 @@ curl -fsSL https://getcodeman.com/install | bash
 - **怎么访问，由你决定。** 安装器提供三种到达仪表盘的方式：**Tailscale**（环回绑定，由 `tailscale serve` 代理，得到带真实证书的 `https://<机器名>.<tailnet>.ts.net`，用你的 tailnet 当登录，无需密码）、**局域网内任意设备**（`0.0.0.0`，会提示设置一个强烈推荐的密码），或**仅本机**（`127.0.0.1`，最安全）。绑定网络却跳过密码需要显式确认，并以醒目警告收尾。高亮的默认项反映机器上已有的状态（已在用 Tailscale 时默认 Tailscale，重跑时沿用现有绑定），直接回车绝不会引入新软件。如果你节点上的 `:443` 已被别的应用占用，Codeman 会改用 `https://<机器名>.<tailnet>.ts.net/codeman` 或第二个端口，而不是把它替换掉。手动运行的 `codeman web` 仍默认仅环回。
 - **名字由你来定。** 默认情况下，URL 用的是这台机器在 tailnet 里现有的名字。第二个问题答「是」会把机器改名为 `codeman-<hostname>`（这也会改掉它在 SSH 里的名字，所以默认是「否」）；之后也可以用 `install.sh name` 来改。
 - **重跑即更新。** 再次运行同一条命令即可原地更新已完成的安装：`~/.codeman/app` 中的本地改动会被 stash（绝不丢弃），运行中的服务会自动重启并校验。若首次安装中途失败，重跑会继续完成完整的安装流程。`install.sh status` 会再次打印 URL 和二维码；另外还有 `install.sh update`、`install.sh tailscale` 和 `install.sh uninstall`。
+- **无需管理员权限。** 在没有 `sudo` 的账户、安装器无法确认 `sudo` 权限的账户（不在 `sudo`、`wheel`、`admin` 组内，且 `sudo` 需要密码）或不是管理员、也没有可写入的 Homebrew 的 Mac 账户上，安装器会把 nodejs.org 的 Node.js 和 tmux 项目自己的构建下载到 `~/.codeman/runtime`，两者都会校验 SHA-256；没有可用的 git 时，则以归档包的方式获取源码。`--no-admin` 强制走这条路线，`CODEMAN_NO_ADMIN=0` 则将其关闭。两个限制：Linux 上必须已有 make、C++ 编译器和 python3，tmux 下载需要 macOS 15 或更新版本。详见 [wiki](https://github.com/Ark0N/Codeman/wiki/Installation#without-administrator-rights)。
 - **给急性子的参数。** `curl -fsSL https://getcodeman.com/install | bash -s -- --tailscale --service` 直接在命令行上回答这些问题（还有 `--lan`、`--local`、`--run`、`--no-start`、`--name <n>`、`--port <n>`、`--yes`）。**CI / 无终端环境：** 没有终端时，涉及系统改动的步骤会带着说明中止，而不是静默执行；在自动化场景设置 `CODEMAN_NONINTERACTIVE=1` 即可批准这些步骤。
 
 你至少需要安装一个 AI 编程 CLI —— [Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[OpenCode](https://opencode.ai)、[Codex](https://developers.openai.com/codex/cli)、[Antigravity](https://antigravity.google)、[Gemini CLI](https://github.com/google-gemini/gemini-cli)、[Pi](https://pi.dev)、[Grok Build](https://github.com/xai-org/grok-build)、[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)、[OMP](https://github.com/can1357/oh-my-pi) 或 [GitHub Copilot CLI](https://github.com/github/copilot-cli)（任意组合均可；自 Google 面向消费者停售后，Gemini CLI 仅限企业版，Antigravity 是其继任者）。安装器会自动检测这十个中已安装的任意一个；若一个都没有，会给出一个菜单让你安装其中任意一个（DeepSeek 除外，它的 npm 包只装一个启动器，没有可运行的 profile），也可以选择跳过、稍后自行安装。安装完成后：
@@ -87,7 +88,14 @@ codeman users add alice --admin      # 创建第一个管理员账号
 codeman web --multiuser              # 命名登录 + 按用户隔离的案例空间
 ```
 
-**更喜欢 Docker Compose？** `docker/` 里附带一套本地镜像的 Compose 部署：把 `docker/.env.example` 复制为 `docker/.env`，设置 `CODEMAN_PASSWORD`，然后在 Linux 上运行 `bash docker/Start-Codeman.sh`。Codeman 自己跑在容器里，并通过宿主机的 socket 把 Docker 案例作为并列容器拉起。更新之后请再跑一次这个脚本，而不是直接 `docker compose up`，这样重建的镜像、刷新的卷和新的入口脚本会一起就位。直接的 Compose 命令、存储与网络选项见 [Docker 部署指南](docker/README.md)（英文）。
+**更喜欢 Docker Compose？** 克隆仓库，运行一个脚本即可（Linux，需要 Docker 和 Compose v2 插件）：
+
+```bash
+git clone https://github.com/Ark0N/Codeman.git && cd Codeman
+bash docker/Start-Codeman.sh
+```
+
+首次运行会问三个问题（数据目录、端口、密码；回车即采用默认值，包括自动生成的密码），替你写好 `docker/.env`，构建镜像，并在 Codeman 响应后给出访问地址。镜像已内置 Claude Code、Codex、Gemini CLI 和 OpenCode。Codeman 自己跑在容器里，并通过宿主机的 socket 把 Docker 案例作为并列容器拉起。更新时请使用 **App Settings → Updates**，或者先 `git pull` 再跑一次这个脚本，而不是直接 `docker compose up`，这样重建的镜像、刷新的卷和新的入口脚本会一起就位。Unraid、直接的 Compose 命令、存储与网络选项见 [Docker 部署指南](docker/README.md)（英文）。
 
 详见下文[多用户模式](#多用户模式可选启用)。
 
@@ -466,6 +474,7 @@ PTY 输出 → 16ms 服务端批处理 → DEC 2026 包裹 → SSE → 客户端
 - **底栏里的 Git 状态**：默认关闭（**App Settings → Header & Panels → Bottom bar → Git status**，按设备生效）。底栏右侧的一个小指示器让你一眼看清当前会话所在仓库的状态：`● 3` 表示未提交的文件，`↑ 2` 表示未推送的提交，`⚠` 表示合并冲突，`✓` 表示全部已提交并推送。点击它会打开一个可拖动的窗口，列出已暂存、未暂存、未跟踪和有冲突的文件（按折叠的文件夹分组，关掉该设置则显示为平铺列表）以及未推送的提交；**点击文件即可查看它的 diff**（新文件全部显示为新增，已删除的文件全部显示为删除），**Open file** 可直接跳到查看器。一个包含多个项目的文件夹，会为向下两层内找到的每个仓库各给一个可折叠分区，打开之前全部折叠。只读且离线（Codeman 绝不 fetch，也绝不改动仓库）；Docker 和远程会话不显示
 - **把 GitHub 仓库克隆成 case** —— 在 **Add Case → Clone Repo** 里粘贴一个仓库 URL，Codeman 会把它克隆到 `~/codeman-cases/<name>` 并注册为普通 case，随时可以跑智能体。输入时它会预检 URL（告诉你能否匿名克隆，并为可选的分支/标签字段提供仓库真实的分支与标签），从 URL 里填好 case 名，还让你选 Run 按钮该用哪个 CLI。支持 `https://` 的公开仓库；Codeman 绝不收集或保存凭据
 - **在自定义文件夹里创建 case**：在 **Add Case → Create New** 里勾选 **Create in a custom folder**，选一个父文件夹（可用 Browse 浏览）和一个名字，Codeman 就会在那里而不是 `~/codeman-cases` 里搭建新 case。目标必须是一个新的或空的文件夹；系统目录、你的主目录本身、`~/.ssh` 这类凭据目录，以及 Codeman 自己的数据目录都会被拒绝。多用户模式下仅管理员可用
+- **打开你手动启动的 tmux 会话**：在 Codeman 之外启动的 tmux 会话会出现在主屏幕上：本机的会自动列出，Docker case 容器内和已保存 SSH 主机上的会在你扫描时列出。点一下即可作为标签页打开。关闭标签页只会分离，Codeman 不会重生或重启并非由它启动的智能体。详见 [Opened outside Codeman](docs/wiki/The-Dashboard.md#opened-outside-codeman)。
 - **多 CLI** —— 每个会话可选 **Claude Code**、**OpenCode**、**Codex**、**Antigravity**、**Gemini**、**Pi**、**Grok**、**DeepSeek Harness**、**OMP** 或 **GitHub Copilot CLI**；环境变量前缀自动隔离（`CLAUDE_CODE_*`、`OPENCODE_*`、`CODEX_*`、`ANTIGRAVITY_*`、`GEMINI_*`/`GOOGLE_*`、`PI_*`、`GROK_*`/`XAI_*`、`DSH_*`/`DEEPSEEK_*`、`OMP_*` 与 `COPILOT_*`）。详见 [`docs/opencode-integration.md`](docs/opencode-integration.md)、[`docs/pi-integration.md`](docs/pi-integration.md)、[`docs/grok-integration.md`](docs/grok-integration.md)、[`docs/deepseek-integration.md`](docs/deepseek-integration.md)、[`docs/omp-integration.md`](docs/omp-integration.md) 与 [`docs/copilot-integration.md`](docs/copilot-integration.md)
 - **自定义模型端点**（1.29.0 新增，目前仅 HTTP API）—— 让某个会话的 CLI 指向任意 OpenAI 兼容端点，而不是它自己的官方后端：本地的 llama.cpp、llama-swap、Ollama 或 vLLM 机器，也可以是 Azure AI Foundry、OpenRouter 这类云端网关。端点只需保存一次（`POST /api/model-endpoints`，模型列表从它的 `/v1/models` 自动发现），再应用到会话（`POST /api/sessions/:id/custom-model`），CLI 就会在原地重启并接上该端点。Claude、OpenCode、Pi、Grok 与 OMP 已实测通过；Codex、Gemini 与 DeepSeek 存在已记录的缺口，Antigravity 没有可用机制。工具栏选择器是下一步。详见 [`docs/custom-model-endpoints.md`](docs/custom-model-endpoints.md)
 - **Web 标签页** —— 把 Grafana、Uptime Kuma、一个 Vite 开发服务器或任何仪表盘 URL 作为标签页打开在会话旁边（Run 下拉菜单 → **Web / URL** → **Add URL**）。仪表盘通过 Codeman 自己的源代理，因此 `http://` 目标在手机上走 HTTPS 也能用、走隧道也能用；单页应用能在自己的路径上正常路由，页面自己重载后也能自行恢复。智能体打印出的 `localhost` 链接会自动以 Web 标签页打开。详见 [`docs/web-tabs.md`](docs/web-tabs.md)
@@ -516,7 +525,7 @@ PTY 输出 → 16ms 服务端批处理 → DEC 2026 包裹 → SSE → 客户端
 - **发现与附着**：列出主机上已在运行的 `codeman-*` 会话（由那台机器自己的 Codeman 或其他操作者启动）并附着其一。非你所有的已附着会话在关闭标签时**只分离，绝不杀掉**。
 - **共享会话**：多个客户端可以以不同窗口尺寸同时附着同一个远程会话而互不挤压；发现列表会显示带客户端计数的「shared」徽标。
 - **注入安全**：所有 ssh 命令行都经由单一的 shell 转义构建器生成，主机/路径/身份文件字段均有模式校验。
-- **文件也行**：远程 case 里的预览、下载和文本读取走同一条 ssh 连接（一次 `realpath` + `stat` 探测，然后流式 `cat`，支持 `Range` 拖动进度），所以点一个路径打开的就是智能体所在那台机器上的文件。什么都不会复制到 Codeman 主机；编辑和 Office 预览会明确返回 400，而不是一个误导性的 404。
+- **文件也行**：远程 case 里的预览、下载和文本读取走同一条 ssh 连接（一次 `realpath` + `stat` 探测，然后流式 `cat`，支持 `Range` 拖动进度），所以点一个路径打开的就是智能体所在那台机器上的文件。除了 Edit history 面板保存的差异之外，什么都不会复制到 Codeman 主机；编辑和 Office 预览会明确返回 400，而不是一个误导性的 404。
 - **完整的回滚历史**：加载远程会话的历史时，会通过一次有上限的 ssh 往返直接从远程 tmux 读取，所以重新附着或切换标签之后，会话依然保有完整的回滚缓冲区，历史与实时屏幕衔接处也不会丢行。
 
 在 **New Case → Remote** 中配置（主机、用户、身份文件、可选跳板机）。完整设计：[`docs/remote-sessions.md`](docs/remote-sessions.md)。

@@ -1,0 +1,85 @@
+name: Publish to the MCP registry
+
+# The official MCP registry does not follow npm, so every version is published to it.
+# Release calls this after npm took a release. To publish the version on master by hand,
+# after a failed run for example: gh workflow run publish-mcp.yml
+#
+# No secret and no browser login: the registry takes this repository's GitHub Actions OIDC
+# token as proof of the io.github.Ark0N/ namespace. That id-token right is why this job
+# runs nothing from the repository: it reads server.json and runs one pinned binary.
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  # Bump both together, the digest from the release's asset. Never releases/latest.
+  MCP_PUBLISHER_VERSION: v1.8.7
+  MCP_PUBLISHER_SHA256: 00b21004149a4ce66f0782508ae4a2bce67d1bea395a8da0bd8028159fb59579
+  REGISTRY_VERSIONS_URL: https://registry.modelcontextprotocol.io/v0/servers/io.github.Ark0N%2Fcodeman/versions
+
+jobs:
+  publish:
+    name: Publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      # Also what ends a run for a release that only moved xterm-zerolag-input.
+      - name: Skip a version the registry already has
+        id: check
+        run: |
+          VERSION=$(jq -r .version config/mcp-registry/server.json)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          STATUS=$(curl -sS -o /dev/null -w '%{http_code}' "$REGISTRY_VERSIONS_URL/$VERSION")
+          case "$STATUS" in
+            200) echo "::notice::$VERSION is already in the MCP registry" ;;
+            404) echo "needed=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::The MCP registry answered $STATUS for $VERSION"; exit 1 ;;
+          esac
+
+      # The registry refuses a version npm does not serve yet, and reads mcpName from it.
+      - name: Wait until npm serves this version
+        if: steps.check.outputs.needed == 'true'
+        env:
+          VERSION: ${{ steps.check.outputs.version }}
+        run: |
+          EXPECTED=$(jq -r .name config/mcp-registry/server.json)
+          for _ in $(seq 1 60); do
+            FOUND=$(npm view "aicodeman@$VERSION" mcpName 2>/dev/null || true)
+            [ "$FOUND" = "$EXPECTED" ] && exit 0
+            sleep 20
+          done
+          echo "::error::npm did not serve aicodeman@$VERSION with mcpName $EXPECTED within 20 minutes"
+          exit 1
+
+      - name: Download mcp-publisher
+        if: steps.check.outputs.needed == 'true'
+        run: |
+          ARCHIVE="$RUNNER_TEMP/mcp-publisher.tar.gz"
+          curl -fsSL -o "$ARCHIVE" "https://github.com/modelcontextprotocol/registry/releases/download/$MCP_PUBLISHER_VERSION/mcp-publisher_linux_amd64.tar.gz"
+          echo "$MCP_PUBLISHER_SHA256  $ARCHIVE" | sha256sum -c -
+          tar xzf "$ARCHIVE" -C "$RUNNER_TEMP" mcp-publisher
+
+      - name: Publish
+        if: steps.check.outputs.needed == 'true'
+        working-directory: config/mcp-registry
+        run: |
+          "$RUNNER_TEMP/mcp-publisher" login github-oidc
+          "$RUNNER_TEMP/mcp-publisher" publish
+
+      - name: Confirm the registry lists it as latest
+        if: steps.check.outputs.needed == 'true'
+        env:
+          VERSION: ${{ steps.check.outputs.version }}
+        run: |
+          curl -fsS --retry 4 --retry-all-errors "$REGISTRY_VERSIONS_URL/$VERSION" \
+            | jq -e '._meta["io.modelcontextprotocol.registry/official"].isLatest == true'

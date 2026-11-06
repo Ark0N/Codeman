@@ -68,7 +68,7 @@ be wrong for at least one of them:
 | **File Viewer**      | Real path resolution before boundary checks, so symlinks cannot escape. Sensitive trees blocked. Edit mode adds an extension allowlist, a size cap, `.git` denial, and optimistic concurrency. It never creates files. |
 | **Attachments**      | An id-based registry, so browser requests never carry absolute paths. The magic-link scanner is prompt-injectable by nature and is therefore force-confined to the session's workspace. Extension allowlist, not a blocklist. |
 | **Path picker**      | Its own root allowlist rather than the workspace confinement. In multi-user mode a non-admin gets only their own user space, because per-user spaces live inside the home directory. |
-| **Remote cases**     | Reads go over the session's own ssh connection and are resolved and contained on the remote host, with a bounded number of ssh children. Nothing is copied to the Codeman host; writes, Office previews and thumbnails are refused. |
+| **Remote cases**     | Reads go over the session's own ssh connection and are resolved and contained on the remote host, with a bounded number of ssh children. Nothing is copied to the Codeman host, apart from the diffs the Edit history panel reads from a remote Claude session's transcripts while it is open, kept in a private bounded store (0600) that is deleted with the session's record. Writes, Office previews and thumbnails are refused. |
 
 Downloads block sensitive paths outright (`.env`, credentials files, `~/.ssh`, AWS
 credentials), and SVG and HTML are served as downloads with `nosniff` so they cannot execute
@@ -99,6 +99,12 @@ Stated plainly, because a security page that only lists strengths is not useful:
   bypass requires a secret unconditionally when auth is on.
 - **The agent CLIs have their own trust models.** Pi's project trust executes repo-local
   TypeScript, for instance. See [Agent CLIs](Agent-CLIs).
+- **Allow network access takes Codex's sandbox out of the picture.** The setting (App
+  Settings, Codex, off by default) lets commands in Codex's sandbox call Codeman's API,
+  which can start a session outside the sandbox with no approval prompt. A password does
+  not stop this, because a session inherits the server's password. It applies to every new
+  local Codex session, so a prompt-injected command in any of them can run anything you
+  can. Leave it off unless you trust what those sessions run.
 
 ## Privacy
 

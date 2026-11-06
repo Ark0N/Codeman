@@ -34,6 +34,7 @@
 import type { RespawnConfig } from './respawn.js';
 import type { AttachmentDetectedType } from './tools.js';
 import type { GitFetchStatus } from '../git-fetch.js';
+import type { LiveWorktree } from '../live-worktree.js';
 
 /** Status of a Claude session */
 export type SessionStatus = 'idle' | 'busy' | 'stopped' | 'error';
@@ -366,6 +367,74 @@ export interface SessionDocker {
 }
 
 /**
+ * Connection facts needed to reach an adopted foreign tmux server. Deliberately
+ * the exact `Pick`s that `buildSshConnectionArgs` / `buildDockerBaseArgs` consume,
+ * so an adopted session can rebuild its command after a server restart without
+ * re-reading a registry that may have been edited in the meantime.
+ */
+export interface AdoptRemoteConnection extends RemoteSshOptions {
+  hostId: string;
+  label: string;
+  host: string;
+  username: string;
+  port?: number;
+}
+
+export interface AdoptDockerConnection {
+  hostId: string;
+  label: string;
+  engine: DockerEngine;
+  containerName: string;
+  daemonHost?: string;
+  context?: string;
+}
+
+/**
+ * ADOPTION overlay: a tmux session a HUMAN started, that Codeman attached to.
+ *
+ * This is the FOURTH location overlay, alongside remote-SSH and Docker, and it
+ * obeys the same rule they do: it is **not** a `SessionMode`. The mode is still
+ * claude / codex / shell / …, decided by the process-tree probe rather than by
+ * the user.
+ *
+ * Shape of an adopted session: Codeman creates a NORMAL wrapper session on its
+ * OWN socket (`codeman-<8hex>`, so `isValidMuxName` and every capture/input/
+ * recovery path is untouched) whose single pane runs a command that attaches to
+ * the foreign target. Killing the tab kills only the wrapper: the foreign
+ * session is structurally out of reach, exactly like a non-owned remote session.
+ *
+ * ⚠️ There is no `owned` field here, unlike `SessionRemote`/`SessionDocker`: an
+ * adopted session is *by definition* someone else's. A field that could be true
+ * would invite a code path that kills it.
+ */
+export interface SessionAdopt {
+  /** Where the foreign tmux server lives. */
+  location: 'local' | 'docker' | 'remote';
+  /** Absolute socket path as seen FROM that location (passed to `tmux -S`). */
+  socketPath: string;
+  /** The foreign session we attach to. Never Codeman-named, never name-validated. */
+  targetSession: string;
+  /**
+   * Our own grouped VIEW session on the foreign server. Grouping (rather than a
+   * bare `attach`) buys `status off` and an independent CURRENT WINDOW, both of
+   * which land on our session instead of mutating the owner's.
+   *
+   * ⚠️ It does NOT buy an independent size, and the comment here used to claim it
+   * did. A window is one object with one size and a group shares that object, so
+   * our attach resizes the owner's view exactly as any second tmux client does
+   * (measured on 3.3a: bare attach and grouped both shrink a 200x49 target to
+   * 80x23; only `window-size largest` holds it, and that is a shared window
+   * option which survives our detach, see foreign-tmux.ts for why it is not set).
+   * Created with `destroy-unattached on` so it evaporates with our pane.
+   */
+  viewSession: string;
+  /** The pane cwd at adoption time. Informational: an adopted pane is never `cd`'d. */
+  paneCurrentPath?: string;
+  remote?: AdoptRemoteConnection;
+  docker?: AdoptDockerConnection;
+}
+
+/**
  * Valid Claude CLI effort levels (claude >= 2.1.154).
  * `ultracode` = xhigh effort + standing dynamic-workflow orchestration; it is a
  * separate `ultracode` settings key rather than an `effortLevel` value.
@@ -437,6 +506,14 @@ export interface CodexConfig {
   resumeSessionId?: string;
   /** Bypass approval prompts (passes --dangerously-bypass-approvals-and-sandbox) */
   dangerouslyBypassApprovals?: boolean;
+  /**
+   * Let commands in codex's workspace-write sandbox use the network, Codeman's loopback API
+   * included (passes --config sandbox_workspace_write.network_access=true). Never changes the
+   * sandbox mode: a folder codex runs read-only keeps the network closed and asks per command.
+   * Filled from the synced `codexNetworkAccess` setting when unset; clamped off for a
+   * non-granted owner.
+   */
+  networkAccess?: boolean;
   /** Enable Codex's decorative TUI animations. Disable to reduce remote terminal redraws. */
   animations?: boolean;
   /** Browser rendering strategy for Codex sessions. Hybrid TUI is the only supported mode. */
@@ -702,6 +779,20 @@ export interface CustomModelBookkeeping extends CustomModelSelection {
   configDir?: string;
   /** Value forced onto the CLI's `model` launch param (pi/omp `custom/<id>`, grok's block name). */
   launchModel?: string;
+  /**
+   * The variable that moves the CLI's home, when the recipe redirects one (`DSH_HOME`,
+   * `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `GROK_HOME`). Its value is a path, which is what
+   * lets {@link CustomModelBookkeeping.ownEnv} keep that one entry on disk.
+   */
+  homeEnvVar?: string;
+  /**
+   * What the session itself had set under keys the selection replaced, put back when the
+   * selection goes. In memory this can hold a credential (a session's own `GEMINI_API_KEY`),
+   * so `Session.getCustomModelForPersist()` writes `homeEnvVar`'s entry, when it is an absolute
+   * path, and nothing else: tmux keeps only the injected value, so state.json is the one copy
+   * left after a restart.
+   */
+  ownEnv?: Record<string, string>;
 }
 
 /**
@@ -847,10 +938,26 @@ export interface SessionState {
    * routes like any other out-of-workspace path.
    */
   paneCwd?: string;
+  /**
+   * The linked git worktree inside `workingDir` that the pane is in NOW, when there is one:
+   * Claude Code's `.claude/worktrees/<name>`, or any other worktree of the repository under
+   * the session's folder. Derived from {@link paneCwd} by `live-worktree.ts`, so it is
+   * runtime-only and absent wherever `paneCwd` is, and absent for a worktree outside
+   * `workingDir`: the file routes never serve those. NOT a confinement root; the Files panel
+   * only starts its listing here, after `GET .../files` has checked that the real folder still
+   * lies inside `workingDir`, since a symlink can replace it without moving the pane.
+   */
+  liveWorktree?: LiveWorktree;
   /** Remote execution metadata, present when this session runs over SSH through local tmux */
   remote?: SessionRemote;
   /** Docker execution metadata, present when this session runs inside a container via local tmux + docker exec */
   docker?: SessionDocker;
+  /**
+   * Adoption metadata, present when this session is a wrapper around a tmux
+   * session a human started outside Codeman. Its presence is what disables
+   * respawn/Ralph/orchestrator and hook-backed waits for the session.
+   */
+  adopt?: SessionAdopt;
   /** Owning username in multi-user mode; undefined in single-user (ignored when the flag is off) */
   owner?: string;
   /**
@@ -956,8 +1063,8 @@ export interface SessionState {
   /**
    * True while the CLI in the pane has a mouse-tracking DECSET on, as observed
    * by the server on its way out of the stream (those sequences are stripped for
-   * the strip-full and strip-mux-and-mouse modes, claude/codex/gemini and opencode
-   * under tmux, so the browser can never see them itself). The browser
+   * the strip-full and strip-mux-and-mouse modes under tmux, so the browser can
+   * never see them itself). The browser
    * hand-encodes a click report ONLY when this is true; without it, every click
    * sent mouse reports to a CLI that never asked for them.
    */

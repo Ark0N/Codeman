@@ -483,6 +483,15 @@ transient mount blip at launch poisons tmux's long‑lived cwd and crashes
   never executes. Large hand‑formatted/generated assets (`app.js`, the gesture
   bundle, vendored libs) are `.prettierignore`d for the style pass, but the NUL +
   syntax checks still cover them.
+- **Installer downloads without a package manager:** on the no-admin route
+  (`docs/wiki/Installation.md`) `install.sh` fetches and runs software no system
+  package manager vetted, each checked before it is unpacked or run. The Node.js
+  tarball is checked against the `SHASUMS256.txt` fetched from nodejs.org over the
+  same TLS connection, which proves integrity, not independent provenance: the
+  signature on that file is not checked. The tmux build is checked against a
+  SHA-256 pinned per platform in the installer. `install.sh cloudflared` takes the
+  latest cloudflared release into `~/.local/bin` unverified, as the system routes
+  take the same release, because Cloudflare publishes no checksum file.
 
 ---
 
@@ -558,7 +567,7 @@ Full feature guide: [`docker-cases.md`](docker-cases.md).
 - **It strictly improves network posture.** It removes the single shared `CODEMAN_PASSWORD` and gives each person a revocable credential; a non‑loopback bind and the tunnel‑enable guard are satisfied by "multi‑user with ≥1 enabled user" without a shared password.
 - **Auth is a parallel branch** (`middleware/auth.ts`) that leaves the single‑user path untouched: per‑user scrypt verify (`timingSafeEqual`, timing‑equalized against user enumeration), identity‑carrying cookies, a per‑username failure bucket (a botnet can't brute one account across IPs; one NATed user can't lock out the rest), and a `mustChangePassword` lockbox. The hook‑secret loopback bypass, host guard, and Origin/CSRF guard are unchanged (hooks authenticate the INSTANCE, not a user).
 - **Ownership is enforced server‑side only** and fails closed: `req.authUser` (a synthetic admin in single‑user), `findSessionOrFail` returns NOT_FOUND (never 403) for a foreign session, list/SSE/WS/file‑preview/search all filter by `session.owner`, and SSE routing defaults session‑scoped events to their owner (unresolved owner → withheld). The load‑bearing rule is **non‑admin `workingDir` confinement**: a non‑admin's session/one‑shot working dir must realpath‑resolve inside `~/codeman-users/<name>/cases`, checked BEFORE any disk write.
-- **Privileged actions are a one‑bit grant** (`canBypassPermissions`, default off): only granted users (and admins) get `--dangerously-skip-permissions` (others are silently downgraded to `--permission-mode auto`), shell‑mode sessions, cron `launchCommand`, and other CLIs' bypass flags. Machine‑level resources (remote/Docker host definitions, tunnel, self‑update, settings writes) are admin‑only.
+- **Privileged actions are a one‑bit grant** (`canBypassPermissions`, default off): only granted users (and admins) get `--dangerously-skip-permissions` (others are silently downgraded to `--permission-mode auto`), shell‑mode sessions, cron `launchCommand`, other CLIs' bypass flags, and Codex's **Allow network access** (`networkAccess`, forced off for a user without the grant, since it lets a command in Codex's sandbox call Codeman's API and start a session outside that sandbox). Machine‑level resources (remote/Docker host definitions, tunnel, self‑update, settings writes) are admin‑only.
 - **Clone Repo does not lend the server's git sign-in to non-admins.** A clone writes only inside the caller's own case space, so it is not admin-gated, but the server account's git credential helpers (the Docker image's opt-in `gh`/`az` helpers, or any `gh auth setup-git`) are shared by every user. A non-admin's clone and preflight therefore run with `git -c credential.helper=`, which empties the helper list including the URL-scoped entries (`cloneWithoutCredentialHelpers` in `case-routes.ts`, argv pinned in `test/git-clone.test.ts`). This closes the Clone Repo path only: the account's SSH keys still apply to an `ssh://` URL, and a non-admin's agent sessions run as the same account, consistent with the first bullet above. Docker cases are a second route to the same sign-in: with `CODEMAN_AGENT_IMAGE_INSTALL_GH`/`_AZ` on, a non-admin's Docker case with credential seeding on (the default) receives a copy of the server account's `gh`/`az` sign-in, exactly as it receives the Claude and Codex credentials.
 - **Admin actions are audited** append‑only to `~/.codeman/admin-audit.jsonl` (acting admin, action, target, IP). Passwords set by an admin create/reset are one‑time (returned once, force change). Under Basic auth, `logout` only truly ends QR‑issued sessions — to lock someone out, disable the account or reset the password (a proper login form is a deferred Phase 6).
 
