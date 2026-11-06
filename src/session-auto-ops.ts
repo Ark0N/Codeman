@@ -1,10 +1,11 @@
 /**
  * @fileoverview Auto-compact, auto-clear, and auto-resume automation for Session.
  *
- * Monitors token counts and triggers /compact or /clear commands when
- * configurable thresholds are reached. Waits for Claude to be idle
- * before sending commands, with retry logic and mutual exclusion
- * (compact and clear never run simultaneously).
+ * Monitors the context size and triggers /compact or /clear commands when
+ * configurable thresholds are reached. The size comes from the statusline report
+ * when the session has one and from the session's token counter otherwise (see
+ * decideAutoThreshold). Waits for Claude to be idle before sending commands, with
+ * retry logic and mutual exclusion (compact and clear never run simultaneously).
  *
  * Also implements auto-resume on usage limit ("token pause" control):
  * when enabled and Claude stops on a usage-limit message ("5-hour limit
@@ -114,14 +115,69 @@ const RESUME_PROMPT = 'continue';
 /** Minimum valid threshold for auto-clear/compact (1000 tokens) */
 const MIN_AUTO_THRESHOLD = 1000;
 
-/** Maximum valid threshold for auto-clear/compact (500k tokens) */
-const MAX_AUTO_THRESHOLD = 500_000;
+/** Maximum valid threshold for auto-clear/compact when the model's window is not reported (1M tokens) */
+const MAX_AUTO_THRESHOLD = 1_000_000;
 
 /** Default auto-clear threshold when invalid value provided */
 const DEFAULT_AUTO_CLEAR_THRESHOLD = 140_000;
 
 /** Default auto-compact threshold when invalid value provided */
 const DEFAULT_AUTO_COMPACT_THRESHOLD = 110_000;
+
+/** The context size Claude Code last reported on its statusline. */
+export interface ContextReport {
+  /** Tokens in the context window at the last API response, cache reads and writes included. */
+  tokens: number;
+  /** The model's window (200k, or 1M with extended context); absent when not reported. */
+  windowSize?: number;
+}
+
+export interface AutoThresholdInput {
+  threshold: number;
+  /** The newest statusline report, or null when none has arrived. */
+  report: ContextReport | null;
+  /** The newest report's size when the last /compact or /clear went out, or null. */
+  reportTokensAtCommand: number | null;
+  /** The session's token counter. */
+  counterTokens: number;
+  /** The counter's value at the last /compact: it never drops by itself after one. */
+  counterBaseline: number;
+}
+
+export interface AutoThresholdDecision {
+  trigger: boolean;
+  tokens: number;
+  source: 'statusline' | 'counter';
+}
+
+/**
+ * Whether the context has reached a threshold. Pure, so every case is testable without a session.
+ *
+ * A report wins over the counter: the counter leaves out cache reads, so on a long conversation
+ * it is a small fraction of the real context. The counter stays as the fallback, because the
+ * exporter only runs for Claude, only while plan-usage collection is on, and never on a remote or
+ * Docker launch or in a workspace with its own statusline.
+ *
+ * A report carries the usage of the last API response, so after a /compact or /clear the number
+ * from before the command stays the newest one until the command finishes, and it is re-posted on
+ * every render. It is ignored by VALUE rather than for a length of time: the first report that
+ * differs came from the finished command (0 on Claude Code 2.1.319) or from a later API response.
+ * If the command was swallowed that report is higher and the threshold fires again, so nothing
+ * can lock auto-compact off, and no timer has to guess how long a compact takes (601k tokens took
+ * 39 s, four times the cooldown).
+ *
+ * A counter summed from JSON usage never drops after a compact, so it counts from the value at
+ * the last one. The pane parser's counter is absolute, see noteAbsoluteCounter().
+ */
+export function decideAutoThreshold(input: AutoThresholdInput): AutoThresholdDecision {
+  const { threshold, report, reportTokensAtCommand, counterTokens, counterBaseline } = input;
+  if (report) {
+    const stale = report.tokens === reportTokensAtCommand;
+    return { trigger: !stale && report.tokens >= threshold, tokens: report.tokens, source: 'statusline' };
+  }
+  const tokens = Math.max(0, counterTokens - counterBaseline);
+  return { trigger: tokens >= threshold, tokens, source: 'counter' };
+}
 
 /**
  * Callbacks required by SessionAutoOps to interact with the parent Session.
@@ -135,6 +191,8 @@ interface AutoOpsCallbacks {
   isStopped: () => boolean;
   /** Get current total token count (input + output) */
   getTotalTokens: () => number;
+  /** The newest statusline context report, or null when none has arrived */
+  getContextReport: () => ContextReport | null;
   /** Get session ID for logging */
   getSessionId: () => string;
 }
@@ -156,6 +214,8 @@ export class SessionAutoOps extends EventEmitter {
   private _autoCompactEnabled: boolean = false;
   private _autoCompactPrompt: string = '';
   private _isCompacting: boolean = false;
+  private _reportTokensAtCommand: number | null = null;
+  private _counterBaseline: number = 0;
   private _autoCompactTimer: NodeJS.Timeout | null = null;
 
   // Auto-clear state
@@ -206,14 +266,7 @@ export class SessionAutoOps extends EventEmitter {
   setAutoCompact(enabled: boolean, threshold?: number, prompt?: string): void {
     this._autoCompactEnabled = enabled;
     if (threshold !== undefined) {
-      if (threshold < MIN_AUTO_THRESHOLD || threshold > MAX_AUTO_THRESHOLD) {
-        console.warn(
-          `[SessionAutoOps ${this.callbacks.getSessionId()}] Invalid autoCompact threshold ${threshold}, must be between ${MIN_AUTO_THRESHOLD} and ${MAX_AUTO_THRESHOLD}. Using default ${DEFAULT_AUTO_COMPACT_THRESHOLD}.`
-        );
-        this._autoCompactThreshold = DEFAULT_AUTO_COMPACT_THRESHOLD;
-      } else {
-        this._autoCompactThreshold = threshold;
-      }
+      this._autoCompactThreshold = this._resolveThreshold('autoCompact', threshold, DEFAULT_AUTO_COMPACT_THRESHOLD);
     }
     if (prompt !== undefined) {
       this._autoCompactPrompt = prompt;
@@ -239,14 +292,7 @@ export class SessionAutoOps extends EventEmitter {
   setAutoClear(enabled: boolean, threshold?: number): void {
     this._autoClearEnabled = enabled;
     if (threshold !== undefined) {
-      if (threshold < MIN_AUTO_THRESHOLD || threshold > MAX_AUTO_THRESHOLD) {
-        console.warn(
-          `[SessionAutoOps ${this.callbacks.getSessionId()}] Invalid autoClear threshold ${threshold}, must be between ${MIN_AUTO_THRESHOLD} and ${MAX_AUTO_THRESHOLD}. Using default ${DEFAULT_AUTO_CLEAR_THRESHOLD}.`
-        );
-        this._autoClearThreshold = DEFAULT_AUTO_CLEAR_THRESHOLD;
-      } else {
-        this._autoClearThreshold = threshold;
-      }
+      this._autoClearThreshold = this._resolveThreshold('autoClear', threshold, DEFAULT_AUTO_CLEAR_THRESHOLD);
     }
   }
 
@@ -393,19 +439,65 @@ export class SessionAutoOps extends EventEmitter {
   // Threshold checks
   // ============================================================================
 
+  /** The highest threshold that can ever fire: the reported window, or 1M when it is unknown. */
   /**
-   * Check if auto-compact should be triggered based on current token count.
-   * Called after token count updates.
+   * A value above the window stops at the window rather than falling to the default: a threshold
+   * saved under a larger window comes back on every save of the options, and the default would
+   * compact far earlier than anyone asked for.
+   */
+  private _resolveThreshold(name: string, threshold: number, fallback: number): number {
+    const id = this.callbacks.getSessionId();
+    if (threshold < MIN_AUTO_THRESHOLD) {
+      console.warn(
+        `[SessionAutoOps ${id}] Invalid ${name} threshold ${threshold}, minimum is ${MIN_AUTO_THRESHOLD}. Using default ${fallback}.`
+      );
+      return fallback;
+    }
+    const max = this._maxThreshold();
+    if (threshold > max) {
+      console.warn(`[SessionAutoOps ${id}] ${name} threshold ${threshold} is above the window, using ${max}.`);
+      return max;
+    }
+    return threshold;
+  }
+
+  /**
+   * The pane parser's counter holds the absolute number on screen and only moves past its highest
+   * value so far, so a move means the context grew back past the last compact. Counting that from
+   * the baseline would ask for twice the threshold, which a 200k window never reaches.
+   */
+  noteAbsoluteCounter(): void {
+    this._counterBaseline = 0;
+  }
+
+  private _maxThreshold(): number {
+    return this.callbacks.getContextReport()?.windowSize ?? MAX_AUTO_THRESHOLD;
+  }
+
+  private _decide(threshold: number): AutoThresholdDecision {
+    return decideAutoThreshold({
+      threshold,
+      report: this.callbacks.getContextReport(),
+      reportTokensAtCommand: this._reportTokensAtCommand,
+      counterTokens: this.callbacks.getTotalTokens(),
+      counterBaseline: this._counterBaseline,
+    });
+  }
+
+  /**
+   * Check if auto-compact should be triggered based on the current context size.
+   * Called after token count updates and after each statusline report.
    */
   checkAutoCompact(): void {
     if (this.callbacks.isStopped()) return;
     if (!this._autoCompactEnabled || this._isCompacting || this._isClearing) return;
 
-    const totalTokens = this.callbacks.getTotalTokens();
-    if (totalTokens >= this._autoCompactThreshold) {
+    const decision = this._decide(this._autoCompactThreshold);
+    if (decision.trigger) {
+      const totalTokens = decision.tokens;
       this._isCompacting = true;
       console.log(
-        `[SessionAutoOps] Auto-compact triggered: ${totalTokens} tokens >= ${this._autoCompactThreshold} threshold`
+        `[SessionAutoOps] Auto-compact triggered: ${totalTokens} tokens (${decision.source}) >= ${this._autoCompactThreshold} threshold`
       );
 
       const action = async () => {
@@ -414,6 +506,9 @@ export class SessionAutoOps extends EventEmitter {
         const compactCmd = this._autoCompactPrompt
           ? `/compact ${toSingleLine(this._autoCompactPrompt)}\r`
           : '/compact\r';
+        // Read here, not at the trigger: the idle wait can outlast several reports.
+        this._reportTokensAtCommand = this.callbacks.getContextReport()?.tokens ?? null;
+        this._counterBaseline = this.callbacks.getTotalTokens();
         await this.callbacks.writeCommand(compactCmd);
         this.emit('autoCompact', {
           tokens: totalTokens,
@@ -446,21 +541,25 @@ export class SessionAutoOps extends EventEmitter {
   }
 
   /**
-   * Check if auto-clear should be triggered based on current token count.
-   * Called after token count updates.
+   * Check if auto-clear should be triggered based on the current context size.
+   * Called after token count updates and after each statusline report.
    */
   checkAutoClear(): void {
     if (this.callbacks.isStopped()) return;
     if (!this._autoClearEnabled || this._isClearing || this._isCompacting) return;
 
-    const totalTokens = this.callbacks.getTotalTokens();
-    if (totalTokens >= this._autoClearThreshold) {
+    const decision = this._decide(this._autoClearThreshold);
+    if (decision.trigger) {
+      const totalTokens = decision.tokens;
       this._isClearing = true;
       console.log(
-        `[SessionAutoOps] Auto-clear triggered: ${totalTokens} tokens >= ${this._autoClearThreshold} threshold`
+        `[SessionAutoOps] Auto-clear triggered: ${totalTokens} tokens (${decision.source}) >= ${this._autoClearThreshold} threshold`
       );
 
       const action = async () => {
+        this._reportTokensAtCommand = this.callbacks.getContextReport()?.tokens ?? null;
+        // The session zeroes its counter on 'autoClear', so the counter restarts from 0.
+        this._counterBaseline = 0;
         await this.callbacks.writeCommand('/clear\r');
         this.emit('autoClear', { tokens: totalTokens, threshold: this._autoClearThreshold });
       };

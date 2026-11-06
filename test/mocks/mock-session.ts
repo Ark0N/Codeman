@@ -489,6 +489,9 @@ export class MockSession extends EventEmitter {
   /** Mirrors Session.ownEnvValue, same default. */
   ownEnvValue = vi.fn((_key: string): string | undefined => undefined);
   getCustomModelForPersist = vi.fn(() => this._mockCustomModel);
+  /** Mirrors Session.noteContextReport: the statusline route hands over the context size. */
+  noteContextReport = vi.fn();
+
   /** Mirrors Session.noteReportedModel: the statusline route records the CLI's model. */
   reportedModel: { model: string; source: 'statusline' | 'screen' } | null = null;
   noteReportedModel = vi.fn((source: 'statusline' | 'screen', raw: unknown): boolean => {

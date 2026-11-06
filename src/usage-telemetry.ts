@@ -68,7 +68,12 @@ export interface RawStatuslinePayload {
     five_hour?: { used_percentage?: number; resets_at?: number };
     seven_day?: { used_percentage?: number; resets_at?: number };
   };
-  context_window?: { used_percentage?: number; total_input_tokens?: number; total_output_tokens?: number };
+  context_window?: {
+    used_percentage?: number;
+    total_input_tokens?: number;
+    total_output_tokens?: number;
+    context_window_size?: number;
+  };
   cost?: { total_cost_usd?: number };
   model?: { display_name?: string };
   /** Main-conversation prompt-cache statistics (Claude Code v2.1.251+); absent before the first API response. */
@@ -259,6 +264,8 @@ export interface SessionStatus {
   inputTokens?: number;
   outputTokens?: number;
   contextUsedPercentage?: number;
+  /** The model's context window in tokens (200k, or 1M with extended context). */
+  contextWindowSize?: number;
   /** Prompt-cache state of the main conversation, when the statusline reports it. */
   cache?: PromptCacheStatus;
 }
@@ -286,6 +293,10 @@ export function parseSessionStatus(data: RawStatuslinePayload | undefined): Sess
   }
   if (typeof cw?.used_percentage === 'number') {
     s.contextUsedPercentage = clampPct(cw.used_percentage);
+  }
+  const windowSize = cw?.context_window_size;
+  if (typeof windowSize === 'number' && Number.isFinite(windowSize) && windowSize > 0) {
+    s.contextWindowSize = windowSize;
   }
   const cache = parsePromptCache(data);
   if (cache) s.cache = cache;
