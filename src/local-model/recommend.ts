@@ -313,14 +313,16 @@ function buildCandidate(
 }
 
 /**
- * The one tag of a row: the first kind that applies, in the order tested, best (the pick),
- * tight, slow, small. `undefined` when none does.
+ * The one tag of a row: the first kind that applies, in the order tested, the pick (which
+ * says so when it only just fits), tight, slow, small. `undefined` when none does.
  */
 function tagFor(candidate: Candidate, isPick: boolean): CandidateTag | undefined {
   const kind: CandidateTagKind | undefined = candidate.tested
     ? 'tested'
     : isPick
-      ? 'best'
+      ? candidate.fit === 'tight'
+        ? 'best-tight'
+        : 'best'
       : candidate.fit === 'tight'
         ? 'tight'
         : candidate.speed === 'slow'
@@ -442,12 +444,8 @@ export function recommend(
   const hasRoom = (model: LocalModelEntry): boolean => free === undefined || free - model.bytes >= DISK_HEADROOM_BYTES;
   if (free !== undefined && !accepted.some((entry) => hasRoom(entry.model))) {
     const smallest = Math.min(...accepted.map((entry) => entry.model.bytes));
-    return none('disk', budget, {
-      download: formatGb(smallest),
-      reserve: formatGb(DISK_HEADROOM_BYTES),
-      free: hw.freeDiskGb ?? formatGb(free),
-      missing: formatGb(smallest + DISK_HEADROOM_BYTES - free),
-    });
+    // One number, the one that says what to do: what must be freed for the smallest model.
+    return none('disk', budget, { missing: formatGb(smallest + DISK_HEADROOM_BYTES - free) });
   }
 
   // Everything that fits is ranked, the models without room on the disk included: the best of

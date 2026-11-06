@@ -604,10 +604,11 @@ describe('the MacBook Pro (Mac17,13: Apple M5 Pro, 48 GB)', () => {
       tested: false,
       // 13.6 x 307 / 100.
       tokensPerSecond: 41.8,
-      tag: { kind: 'best', label: 'Best fit' },
+      // It only just fits, and the tag says so.
+      tag: { kind: 'best-tight', label: 'Best fit, tight' },
     });
     expect(result.headline).toEqual({ text: 'Best fit for this Mac' });
-    expect(result.notes).toEqual([{ text: 'Not yet tested by us on a Mac like this.' }]);
+    expect(result.notes).toEqual([{ text: 'Codeman has not run this on a Mac like this yet.' }]);
     expect(stringsIn(result).join(' ')).not.toMatch(/recommended/i);
   });
 
@@ -651,7 +652,7 @@ describe('the Mac mini (Mac16,10: Apple M4, 16 GB)', () => {
       verdict: 'none',
       reason: 'memory',
       headline: {
-        text: 'This Mac has {memory} GB of memory. That is too little to run a model that can drive a coding agent, so Codeman recommends none here.',
+        text: 'With {memory} GB of memory, this Mac cannot run a model that can drive a coding agent.',
         vars: { memory: '16' },
       },
       notes: [],
@@ -818,7 +819,7 @@ describe('verdict none', () => {
     it('answers so for an Intel Mac, whose sysctl has no arm64 flag', () => {
       const hw = without(mac(32, intelChip, { arch: 'x64' }), 'arm64', 'translated', 'wiredLimitMb');
       const result = recommend(hw, STOCK, ALL_INSTALLED);
-      expectNone(result, 'intel', 'This Mac has an Intel processor. Local coding models need Apple silicon.');
+      expectNone(result, 'intel', 'Local coding models need Apple silicon, and this Mac has an Intel processor.');
       expect(result.budgetBytes).toBe(0);
       expect(result.budgetGb).toBe('0.0');
     });
@@ -868,7 +869,7 @@ describe('verdict none', () => {
         STOCK,
         ALL_INSTALLED
       );
-      expectNone(result, 'macos', 'This Mac runs macOS {version}. Local models need macOS {minimum} or newer.');
+      expectNone(result, 'macos', 'Local models need macOS {minimum} or newer, and this Mac runs macOS {version}.');
       expect(result.headline.vars).toEqual({ version: '13.6.7', minimum: '14' });
       // The budget is still reported: the Mac itself is able.
       expect(result.budgetBytes).toBe(35 * GIB);
@@ -898,7 +899,7 @@ describe('verdict none', () => {
       expectNone(
         result,
         'memory',
-        'This Mac has {memory} GB of memory. That is too little to run a model that can drive a coding agent, so Codeman recommends none here.'
+        'With {memory} GB of memory, this Mac cannot run a model that can drive a coding agent.'
       );
       expect(result.headline.text).toBe(LOCAL_MODEL_LABELS.noneMemory);
       // The size the Mac is sold as (what About This Mac shows), not 8 x 2^30 bytes as 8.6 decimal GB.
@@ -931,7 +932,10 @@ describe('verdict none', () => {
       // The need is the smallest one at a context a usable harness works at (the 9B at 65536),
       // not the 9B at 32768, which fits and which only the gated harness could use.
       expect(result.headline.vars).toEqual({ budget: '16.1', need: '17.0' });
-      expect(result.headline.text).toMatch(/^Codeman estimates/);
+      // Both figures are said as estimates ("about"), in one sentence.
+      expect(result.headline.text).toBe(
+        'This Mac can give a model about {budget} GB of memory, and the smallest model a coding agent can work with needs about {need} GB.'
+      );
       expect(result.headline.text).not.toContain('{memory}');
     });
 
@@ -1045,24 +1049,24 @@ describe('verdict none', () => {
       // 12 GiB free: even the smallest download (6.55 GB) leaves 5.9 GiB.
       const hw = mac(48, 'Apple M4 Max', { freeDiskBytes: 12 * GIB, freeDiskGb: formatGb(12 * GIB) });
       const result = recommend(hw, STOCK, ALL_INSTALLED);
+      // One sentence with the one number that says what to do.
       expectNone(
         result,
         'disk',
-        'Not enough free disk space. The smallest model that fits this Mac is a {download} GB download, and {reserve} GB must stay free after it. {free} GB is free now. Free up about {missing} GB.'
+        'Free up about {missing} GB of disk space to install the smallest model that fits this Mac.'
       );
       // download + 10 GiB - free = 6,550,825,373 + 10,737,418,240 - 12,884,901,888 bytes.
-      expect(result.headline.vars).toEqual({ download: '6.6', reserve: '10.7', free: '12.9', missing: '4.4' });
+      expect(result.headline.vars).toEqual({ missing: '4.4' });
       expect(result.budgetBytes).toBe(35 * GIB);
     });
 
-    it('gives the reader every number of the sum: download + reserve - free = missing', () => {
-      // 12 GB free is more than the 6.6 GB download, so without the reserve "not enough" reads false.
+    it('says what to free, counting the reserve: download + 10 GiB - free', () => {
+      // 12 GB free is more than the 6.6 GB download: what is missing is the reserve on top of it.
       const hw = mac(32, 'Apple M4', { freeDiskBytes: 12 * GB, freeDiskGb: formatGb(12 * GB) });
       const vars = recommend(hw, STOCK, ALL_INSTALLED).headline.vars as Record<string, string>;
-      expect(vars).toEqual({ download: '6.6', reserve: '10.7', free: '12.0', missing: '5.3' });
-      expect(vars.reserve).toBe(formatGb(DISK_HEADROOM_BYTES));
-      // Within the rounding of four one-decimal figures.
-      expect(Number(vars.download) + Number(vars.reserve) - Number(vars.free)).toBeCloseTo(Number(vars.missing), 0);
+      // 6,550,825,373 + 10,737,418,240 - 12,000,000,000 bytes.
+      expect(vars).toEqual({ missing: '5.3' });
+      expect(Number(vars.missing)).toBeCloseTo((6_550_825_373 + DISK_HEADROOM_BYTES - 12 * GB) / GB, 1);
     });
 
     it('names the smallest model that fits the MEMORY, not the smallest of the catalogue', () => {
@@ -1074,7 +1078,8 @@ describe('verdict none', () => {
       const hw = mac(48, 'Apple M4 Max', { freeDiskBytes: 12 * GIB, freeDiskGb: formatGb(12 * GIB) });
       const result = recommend(hw, STOCK, facts);
       expect(result.reason).toBe('disk');
-      expect(result.headline.vars?.download).toBe('13.8');
+      // 13,793,441,427 + 10 GiB - 12 GiB: the 20B's download, not the 9B's.
+      expect(result.headline.vars).toEqual({ missing: '11.6' });
     });
 
     it('drops only the models that do not leave 10 GiB, picks among the rest, and says what was left out', () => {
@@ -1095,7 +1100,7 @@ describe('verdict none', () => {
           text: '{model} fits the memory of this Mac too, but its download needs about {missing} GB more free disk space.',
           vars: { model: 'Qwen3.8 27B', missing: '7.0' },
         },
-        { text: 'Not yet tested by us on a Mac like this.' },
+        { text: 'Codeman has not run this on a Mac like this yet.' },
       ]);
     });
 
@@ -1165,9 +1170,10 @@ describe('verdict none', () => {
       expect(recommend(hw, STOCK, ALL_INSTALLED).verdict).toBe('ok');
     });
 
-    it('formats the free size itself when the hardware carries only the bytes', () => {
+    it('needs only the bytes of the free disk, not its text', () => {
       const hw = without(mac(48, 'Apple M4 Max', { freeDiskBytes: 3 * GB }), 'freeDiskGb');
-      expect(recommend(hw, STOCK, ALL_INSTALLED).headline.vars?.free).toBe('3.0');
+      // 6,550,825,373 + 10 GiB - 3 GB.
+      expect(recommend(hw, STOCK, ALL_INSTALLED).headline.vars).toEqual({ missing: '14.3' });
     });
 
     it('comes after the memory and the harness', () => {
@@ -1191,7 +1197,7 @@ describe('verdict limited', () => {
     expect(result.headline).toEqual({
       text: 'This Mac can run a small model. It handles small edits and questions. It does not replace a cloud model.',
     });
-    expect(result.notes).toEqual([{ text: 'Not yet tested by us on a Mac like this.' }]);
+    expect(result.notes).toEqual([{ text: 'Codeman has not run this on a Mac like this yet.' }]);
   });
 
   it('holds when the pick is a tight fit too (32 GB with a fast chip)', () => {
@@ -1231,7 +1237,7 @@ describe('verdict limited', () => {
       {
         text: 'The best fit is a small model. It handles small edits and questions. It does not replace a cloud model.',
       },
-      { text: 'Not yet tested by us on a Mac like this.' },
+      { text: 'Codeman has not run this on a Mac like this yet.' },
     ]);
   });
 
@@ -1665,7 +1671,7 @@ describe('the tested flag and the word "Recommended"', () => {
       const result = recommend(hw, catalog, ALL_INSTALLED);
       expect(result.pick).toMatchObject({ modelId: 'qwen3.8:27b', cli: 'opencode', tested: false });
       expect(result.headline).toEqual({ text: 'Best fit for this Mac' });
-      expect(result.notes).toEqual([{ text: 'Not yet tested by us on a Mac like this.' }]);
+      expect(result.notes).toEqual([{ text: 'Codeman has not run this on a Mac like this yet.' }]);
     }
   });
 
@@ -1727,9 +1733,12 @@ describe('what each row of the chooser carries', () => {
       expect(result.alternatives[3]).not.toHaveProperty('tag');
     });
 
-    it('says "Best fit" on a pick that is tight: the memory bar shows how full it is', () => {
+    it('says "Best fit, tight" on a pick that only just fits: the words must not say less than the bar', () => {
       const result = recommend(mac(48, 'Apple M4 Pro'), STOCK, ALL_INSTALLED);
-      expect(result.pick).toMatchObject({ fit: 'tight', tag: { kind: 'best', label: 'Best fit' } });
+      expect(result.pick).toMatchObject({ fit: 'tight', tag: { kind: 'best-tight', label: 'Best fit, tight' } });
+      // A pick with room says "Best fit" and nothing more.
+      const roomy = recommend(mac(64, 'Apple M4 Max'), STOCK, ALL_INSTALLED);
+      expect(roomy.pick).toMatchObject({ fit: 'good', tag: { kind: 'best', label: 'Best fit' } });
     });
 
     it('says "Tested on a Mac like this" in place of every other tag', () => {
@@ -1785,8 +1794,9 @@ describe('what each row of the chooser carries', () => {
       for (const hw of SWEEP) {
         const result = recommend(hw, STOCK, ALL_INSTALLED);
         if (!result.pick) continue;
-        expect(result.pick.tag?.kind).toBe('best');
-        expect(result.alternatives.some((c) => c.tag?.kind === 'best')).toBe(false);
+        // The pick's tag is the pick's alone: "Best fit", with ", tight" when it only just fits.
+        expect(result.pick.tag?.kind).toBe(result.pick.fit === 'tight' ? 'best-tight' : 'best');
+        expect(result.alternatives.some((c) => c.tag?.kind === 'best' || c.tag?.kind === 'best-tight')).toBe(false);
       }
     });
   });

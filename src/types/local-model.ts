@@ -351,7 +351,7 @@ export const LOCAL_MODEL_LABELS = {
   headlineLimited:
     'This Mac can run a small model. It handles small edits and questions. It does not replace a cloud model.',
   /** A note under an `ok` or `limited` pick whose `tested` is false. */
-  noteUntested: 'Not yet tested by us on a Mac like this.',
+  noteUntested: 'Codeman has not run this on a Mac like this yet.',
   /** A note under an `ok` pick that is itself a small model: larger ones fit this Mac, but rank lower or have no room on the disk. */
   noteSmallPick:
     'The best fit is a small model. It handles small edits and questions. It does not replace a cloud model.',
@@ -363,18 +363,17 @@ export const LOCAL_MODEL_LABELS = {
   speedSlow: 'Slow',
   speedUnknown: 'Speed unknown',
   noneNotMacos: 'Codeman recommends a local model only on a Mac with Apple silicon.',
-  noneIntel: 'This Mac has an Intel processor. Local coding models need Apple silicon.',
+  noneIntel: 'Local coding models need Apple silicon, and this Mac has an Intel processor.',
   /** Reason `memory`: nothing fits at any context. */
-  noneMemory:
-    'This Mac has {memory} GB of memory. That is too little to run a model that can drive a coding agent, so Codeman recommends none here.',
-  /** Reason `memory`: a model fits, but only below the context a harness needs. Says both numbers, and that they are an estimate. */
+  noneMemory: 'With {memory} GB of memory, this Mac cannot run a model that can drive a coding agent.',
+  /** Reason `memory`: a model fits, but only below the context a harness needs. Says both numbers, and ("about") that they are estimates. */
   noneMemoryContext:
-    'Codeman estimates that this Mac can give a model about {budget} GB of memory. The smallest model a coding agent can work with needs about {need} GB. That leaves no safe margin, so Codeman recommends none here.',
+    'This Mac can give a model about {budget} GB of memory, and the smallest model a coding agent can work with needs about {need} GB.',
   /** Reason `memory`: the memory size could not be read, so no size is stated. */
   noneMemoryUnknown: 'Codeman could not read how much memory this Mac has, so it recommends no model here.',
-  noneDisk:
-    'Not enough free disk space. The smallest model that fits this Mac is a {download} GB download, and {reserve} GB must stay free after it. {free} GB is free now. Free up about {missing} GB.',
-  noneMacos: 'This Mac runs macOS {version}. Local models need macOS {minimum} or newer.',
+  /** Reason `disk`. One number: what to do. The other sizes travel in `vars` for a client that wants them. */
+  noneDisk: 'Free up about {missing} GB of disk space to install the smallest model that fits this Mac.',
+  noneMacos: 'Local models need macOS {minimum} or newer, and this Mac runs macOS {version}.',
   noneNoHarness: 'No coding agent that Codeman can connect to a local model is available on this Mac.',
 } as const;
 
@@ -401,14 +400,17 @@ export interface LocalModelMessage {
 /**
  * The one tag a model row of the chooser carries, by what it says.
  *  - `tested`: `Candidate.tested` is true. Replaces every other tag.
- *  - `best`: the pick. The one tag drawn in the accent colour.
+ *  - `best-tight`: the pick, when its `fit` is `tight`. The words must not say less than the
+ *    memory bar beside them, which is nearly full for such a row.
+ *  - `best`: the pick.
  *  - `tight`: `Candidate.fit` is `tight`.
  *  - `slow`: `Candidate.speed` is `slow`.
  *  - `small`: the model has fewer than 12 billion parameters.
- * A row gets the FIRST kind of this list that applies and no tag when none does, so a pick
- * that is tight says "Best fit" (the memory bar already shows how full it is).
+ * A row gets the FIRST kind of this list that applies and no tag when none does. `tested`,
+ * `best` and `best-tight` are the tags of the row the window opens on, drawn in the accent
+ * colour.
  */
-export type CandidateTagKind = 'tested' | 'best' | 'tight' | 'slow' | 'small';
+export type CandidateTagKind = 'tested' | 'best-tight' | 'best' | 'tight' | 'slow' | 'small';
 
 /**
  * The text of each tag, in English (the i18n source language), like `LOCAL_MODEL_LABELS`. A
@@ -416,6 +418,7 @@ export type CandidateTagKind = 'tested' | 'best' | 'tight' | 'slow' | 'small';
  */
 export const LOCAL_MODEL_TAG_LABELS = {
   tested: 'Tested on a Mac like this',
+  'best-tight': 'Best fit, tight',
   best: 'Best fit',
   tight: 'Tight',
   slow: 'Slow',

@@ -22315,11 +22315,16 @@ html[data-tile-anim="soft"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.til
    row carries the accent on its reading edge and a faint fill.
 
    Theme tokens only, never a black or white alpha (those vanish on the light
-   skins). The bar's track is `--control-border-hover`: the fill of the app's
-   inputs (`--bg-input`) is the window's own surface on the dark skins, so the
-   part of the bar that stays free could not be seen. Nothing here is keyed on
-   a CLI or a model id. The only motion is the bar's width, and it stops under
-   prefers-reduced-motion.
+   skins). The bar's track is `--text-muted`: the part of the bar that stays
+   FREE is half of what the bar says, so it must be seen against the window
+   (about 3:1 or better on every skin; the fill of the app's inputs,
+   `--bg-input`, is the window's own surface on the dark skins, and a border
+   token is 1.5:1). Nothing here is keyed on a CLI or a model id. The only
+   motion is the bar's width, and it stops under prefers-reduced-motion.
+
+   The window is ONE frame for the whole flow: a fixed height on desktop, the
+   header on top, the buttons in a foot of their own (`.lm-foot-slot`) and the
+   body scrolling between them. A click never moves the next button away.
    ═══════════════════════════════════════════════════════════════ */
 
 /* The welcome button: one more chip, on its own line under the launchers. */
@@ -22337,13 +22342,16 @@ html[data-tile-anim="soft"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.til
   flex-shrink: 0;
 }
 
-/* The window: App Settings' chrome (`.modal`, `.modal-header`, `.modal-close`)
-   at a width of its own, the body scrolling under a fixed header. */
+/* The window: App Settings' chrome (`.modal`, `.modal-header`, the boxed
+   close button) at a width of its own. One frame for every screen: the height
+   is fixed, so the header, the close button and the main button stay where
+   they are from the chooser to "Start a session". */
 .modal-content.local-model-window {
   display: flex;
   flex-direction: column;
   width: min(640px, 94vw);
   max-width: min(640px, 94vw);
+  height: min(600px, 88vh);
   max-height: 88vh;
 }
 
@@ -22351,14 +22359,73 @@ html[data-tile-anim="soft"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.til
   flex-shrink: 0;
 }
 
+/* App Settings' close button: a 30px box, not the bare glyph of a plain modal. */
+.local-model-window > .modal-header .modal-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 9px;
+  font-size: 1.2rem;
+  color: var(--text-dim);
+  background: transparent;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease,
+    transform 0.1s ease;
+}
+
+.local-model-window > .modal-header .modal-close:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.local-model-window > .modal-header .modal-close:active {
+  transform: scale(0.94);
+}
+
 .local-model-window > .lm-body {
   display: flex;
+  flex: 1;
   flex-direction: column;
   gap: 1.05rem;
   min-height: 0;
   padding: 1.15rem 1.25rem 1.2rem;
   overflow-y: auto;
   text-align: start;
+}
+
+/* The short screens (progress, paused, a failure, installed, nothing fits)
+   hold a few lines in a frame sized for the chooser: they sit in the middle of
+   it, a status in its own room, not a heading with a void under it. */
+.local-model-window
+  > .lm-body:is(
+    [data-screen='progress'],
+    [data-screen='paused'],
+    [data-screen='failed'],
+    [data-screen='installed'],
+    [data-screen='none']
+  ) {
+  justify-content: center;
+  padding-bottom: 2.2rem;
+}
+
+/* The foot of the frame: the buttons of the screen (or the Remove question),
+   outside the part that scrolls. */
+.local-model-window > .lm-foot-slot {
+  flex-shrink: 0;
+  padding: 0 1.25rem 1.15rem;
+  text-align: start;
+}
+
+.local-model-window > .lm-foot-slot:empty {
+  display: none;
+}
+
+.lm-foot-slot p {
+  margin: 0;
 }
 
 .lm-body p,
@@ -22437,6 +22504,11 @@ html[data-tile-anim="soft"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.til
   font-weight: 680;
   letter-spacing: -0.012em;
   color: var(--text);
+}
+
+/* Only the figure that ticks (the download) holds its digits in fixed cells.
+   In a sentence fixed cells leave a hole around every 1. */
+.lm-figure-count {
   font-variant-numeric: tabular-nums;
 }
 
@@ -22449,7 +22521,7 @@ html[data-tile-anim="soft"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.til
 .lm-bar {
   height: 10px;
   border-radius: 999px;
-  background: var(--control-border-hover);
+  background: var(--text-muted);
   overflow: hidden;
 }
 
@@ -22464,9 +22536,9 @@ html[data-tile-anim="soft"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.til
   display: flex;
   justify-content: space-between;
   gap: 1rem;
-  font-size: 0.68rem;
+  font-size: 0.7rem;
   line-height: 1.4;
-  color: var(--text-muted);
+  color: var(--text-dim);
 }
 
 .lm-legend > :last-child {
@@ -22507,8 +22579,8 @@ html[data-tile-anim="soft"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.til
 
 .lm-caption {
   padding-bottom: 0.3rem;
-  font-size: 0.68rem;
-  color: var(--text-muted);
+  font-size: 0.7rem;
+  color: var(--text-dim);
 }
 
 .lm-caption-label {
@@ -22549,15 +22621,6 @@ html[data-tile-anim="soft"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.til
 .lm-model-on:hover {
   border-inline-start-color: var(--accent);
   background: rgba(var(--accent-rgb), 0.075);
-}
-
-/* The chosen row of the confirm screen: the same line, nothing to press. */
-.lm-model-static {
-  cursor: default;
-}
-
-.lm-model-static .lm-model-name {
-  grid-column: 1 / span 2;
 }
 
 .lm-radio {
@@ -22674,65 +22737,99 @@ html[data-tile-anim="soft"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.til
   font-size: 0.74rem;
 }
 
-/* ── the confirm screen ───────────────────────────────────────────── */
+/* ── the confirm screen: the download as a table ──────────────────── */
+/* One row per thing that is fetched: its name in the text colour with what it
+   is underneath, its size at the right edge, and the total under a rule in the
+   strong weight. The table is the screen; nothing else on it competes. */
 .lm-sizes {
   display: flex;
   flex-direction: column;
 }
 
 .lm-sizes .lm-heading {
-  margin-bottom: 0.3rem;
+  margin-bottom: 0.35rem;
+  font-size: 0.84rem;
+  font-weight: 650;
+  letter-spacing: -0.005em;
+  color: var(--text);
 }
 
 .lm-size-row {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 1rem;
-  padding: 0.28rem 0;
-  font-size: 0.8rem;
-  color: var(--text-dim);
+  gap: 1.2rem;
+  padding: 0.6rem 0;
+  border-top: 1px solid var(--border);
 }
 
 .lm-size-what {
+  display: flex;
+  flex-direction: column;
+  gap: 0.18rem;
   min-width: 0;
+}
+
+.lm-size-name {
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.lm-size-note {
+  font-size: 0.74rem;
+  line-height: 1.45;
+  color: var(--text-dim);
   overflow-wrap: anywhere;
 }
 
 .lm-size-gb {
   flex-shrink: 0;
+  font-size: 0.86rem;
+  font-weight: 560;
   color: var(--text);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
 .lm-size-total {
-  margin-top: 0.25rem;
-  padding-top: 0.55rem;
-  border-top: 1px solid var(--border);
-  font-weight: 650;
-  color: var(--text);
+  padding-top: 0.75rem;
+  border-top-color: var(--text-muted);
 }
 
-.lm-agent,
-.lm-where {
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
+.lm-size-total .lm-size-name,
+.lm-size-total .lm-size-gb {
+  font-size: 1.06rem;
+  font-weight: 680;
+  letter-spacing: -0.012em;
 }
 
-/* A literal command and a folder: text to read and to copy, so it is set in
-   the mono face and selects whole. */
+/* A literal command: text to read and to copy, so it is set in the mono face
+   and selects whole. It sits in its row, under the sentence that names it. */
 .lm-command {
   display: block;
-  padding: 0.42rem 0.6rem;
-  border-radius: 6px;
-  background: var(--bg-input);
+  margin-top: 0.15rem;
   color: var(--text);
   font-family: var(--font-mono);
   font-size: 0.72rem;
   line-height: 1.5;
   overflow-wrap: anywhere;
+  user-select: all;
+}
+
+/* Where it goes: one quiet line under the table. */
+.lm-where {
+  font-size: 0.74rem;
+  line-height: 1.5;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+
+.lm-path {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
   user-select: all;
 }
 
@@ -22853,7 +22950,7 @@ html[data-tile-anim="soft"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.til
 }
 
 .lm-details {
-  margin-top: 0.55rem;
+  margin-top: 0.2rem;
   font-size: 0.74rem;
   color: var(--text-dim);
 }
@@ -22880,6 +22977,13 @@ html[data-tile-anim="soft"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.til
   white-space: pre-wrap;
   overflow: auto;
   overflow-wrap: anywhere;
+}
+
+/* An error: its first sentence as the headline, the rest in the body size. */
+.lm-error {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
 }
 
 .lm-remove {
@@ -22922,9 +23026,9 @@ html[data-tile-anim="soft"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.til
 
 .lm-foot-note {
   min-width: 0;
-  font-size: 0.72rem;
+  font-size: 0.74rem;
   line-height: 1.45;
-  color: var(--text-muted);
+  color: var(--text-dim);
 }
 
 .lm-buttons {

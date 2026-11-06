@@ -185,6 +185,9 @@ function mount(options: { i18n?: boolean; visible?: boolean } = {}) {
     group: document.getElementById('localModelGroup')!,
     modal: document.getElementById('localModelModal')!,
     body: document.getElementById('localModelWindowBody')!,
+    /** The body and the foot together: where a screen's controls are. */
+    frame: document.querySelector('#localModelModal .local-model-window')!,
+    foot: document.getElementById('localModelWindowFoot')!,
   };
 }
 
@@ -195,13 +198,18 @@ function texts(root: ParentNode, selector: string): string[] {
   return [...root.querySelectorAll(selector)].map((el) => el.textContent ?? '');
 }
 
+/** The frame the buttons live in: the window's body AND its foot (the buttons are in the foot). */
+function frameOf(body: Element): Element {
+  return body.closest('.local-model-window') ?? body;
+}
+
 /** The window's buttons, by their label. */
 function buttons(body: Element): string[] {
-  return texts(body, '.lm-buttons button');
+  return texts(frameOf(body), '.lm-buttons button');
 }
 
 function press(body: Element, label: string) {
-  const found = [...body.querySelectorAll<HTMLButtonElement>('.lm-buttons button')].find(
+  const found = [...frameOf(body).querySelectorAll<HTMLButtonElement>('.lm-buttons button')].find(
     (el) => el.textContent === label
   );
   expect(found, `no button "${label}" among ${JSON.stringify(buttons(body))}`).toBeTruthy();
@@ -806,7 +814,7 @@ describe('the App Settings row', () => {
     await app.loadLocalModel();
     expect(texts(page.row, '.set-row-label')).toEqual(['No model installed']);
     expect(texts(page.row, '.set-row-desc')).toEqual([
-      'This Mac has 8 GB of memory. That is too little to run a model that can drive a coding agent, so Codeman recommends none here.',
+      'With 8 GB of memory, this Mac cannot run a model that can drive a coding agent.',
     ]);
     expect(page.rowButton.textContent).toBe('Open');
     app.openLocalModelWindow();
@@ -823,8 +831,12 @@ describe('the chooser', () => {
     const { body } = page;
     expect(body.dataset.screen).toBe('choose');
     expect(texts(body, '.lm-hw')).toEqual(['Apple M5 Pro, 48 GB memory, 897 GB free']);
-    expect(texts(body, '.lm-figure')).toEqual(['About 36.0 of 37.6 GB of memory']);
-    expect(texts(body, '.lm-legend span')).toEqual(['The model at 131,072 tokens of context', 'What stays free']);
+    // An estimate, in whole GB: "about 36 of 38", never "36.0 of 37.6".
+    expect(texts(body, '.lm-figure')).toEqual(['About 36 of 38 GB of memory']);
+    expect(texts(body, '.lm-legend span')).toEqual([
+      'The model at its peak, with all 131,072 tokens of context in use',
+      'What stays free',
+    ]);
 
     const group = body.querySelector('[role="radiogroup"]')!;
     const label = page.document.getElementById(group.getAttribute('aria-labelledby')!)!;
@@ -839,6 +851,14 @@ describe('the chooser', () => {
       'Qwen3.5 9B',
     ]);
     expect(rows.map((row) => row.getAttribute('aria-checked'))).toEqual(['true', 'false', 'false', 'false', 'false']);
+    // The order can be read off the Download column: the pick, then the others largest first.
+    expect(rows.map((row) => row.querySelector('.lm-model-size')!.textContent)).toEqual([
+      '23.1 GB',
+      '17.7 GB',
+      '13.8 GB',
+      '10.4 GB',
+      '6.6 GB',
+    ]);
     // One tab stop: the selected row.
     expect(rows.map((row) => row.getAttribute('tabindex'))).toEqual(['0', '-1', '-1', '-1', '-1']);
     // One line a row: name, one tag, speed, download size.
@@ -859,7 +879,9 @@ describe('the chooser', () => {
     ]);
     expect(texts(group, '.lm-model-size')).toEqual(['23.1 GB', '17.7 GB', '13.8 GB', '10.4 GB', '6.6 GB']);
     expect(texts(body, '.lm-caption span')).toEqual(['Recommended for this Mac', 'Speed', 'Download']);
-    expect(texts(body, '.lm-foot-note')).toEqual(['No account and no API key. The model runs only on this Mac.']);
+    expect(texts(frameOf(body), '.lm-foot-note')).toEqual([
+      'No account and no API key. The model runs only on this Mac.',
+    ]);
     expect(buttons(body)).toEqual(['Install on this Mac']);
   });
 
@@ -896,7 +918,7 @@ describe('the chooser', () => {
     for (const budgetSource of ['measured', 'wired-limit'] as const) {
       serve(status({ budgetBytes: 40157944217, budgetGb: '40.2', budgetSource }));
       await app.loadLocalModel({ force: true });
-      expect(texts(page.body, '.lm-figure')).toEqual(['About 36.0 of 40.2 GB of memory']);
+      expect(texts(page.body, '.lm-figure')).toEqual(['About 36 of 40 GB of memory']);
       expect(texts(page.body, '.lm-figure-aside')).toEqual([]);
       expect(page.body.textContent).not.toContain('estimated');
     }
@@ -921,7 +943,7 @@ describe('the chooser', () => {
     expect(texts(page.body, '.lm-caption-label')).toEqual(['Models that fit this Mac']);
     expect(texts(page.body, '.lm-notes .lm-aside')).toEqual([
       'Qwen3.6 35B-A3B fits the memory of this Mac too, but its download needs about 0.4 GB more free disk space.',
-      'Not yet tested by us on a Mac like this.',
+      'Codeman has not run this on a Mac like this yet.',
     ]);
   });
 
@@ -934,7 +956,7 @@ describe('the chooser', () => {
     expect(body.querySelector('.lm-runs-label')!.getAttribute('for')).toBe(select().id);
     expect([...select().options].map((option) => option.textContent)).toEqual(['OpenCode', 'Claude Code']);
     expect(select().selectedOptions[0].textContent).toBe('OpenCode');
-    expect(texts(body, '.lm-runs-hint')).toEqual(['Not on this Mac yet. It is installed for you.']);
+    expect(texts(body, '.lm-runs-hint')).toEqual(['Not on this Mac yet. Codeman installs it for you.']);
     // No value in the page is a CLI id: the choice is a position in the server's list.
     expect([...select().options].map((option) => option.value)).toEqual(['0', '1']);
 
@@ -1051,9 +1073,9 @@ describe('the memory bar', () => {
     );
 
     const expected: Array<[number, string, string, string]> = [
-      [1, '81', 'About 30.6 of 37.6 GB of memory', 'The model at 131,072 tokens of context'],
-      [4, '45', 'About 17.0 of 37.6 GB of memory', 'The model at 65,536 tokens of context'],
-      [0, '96', 'About 36.0 of 37.6 GB of memory', 'The model at 131,072 tokens of context'],
+      [1, '81', 'About 31 of 38 GB of memory', 'The model at its peak, with all 131,072 tokens of context in use'],
+      [4, '45', 'About 17 of 38 GB of memory', 'The model at its peak, with all 65,536 tokens of context in use'],
+      [0, '96', 'About 36 of 38 GB of memory', 'The model at its peak, with all 131,072 tokens of context in use'],
     ];
     for (const [index, percent, figure, legend] of expected) {
       page.body.querySelectorAll<HTMLElement>('[role="radio"]')[index].click();
@@ -1091,20 +1113,23 @@ describe('the confirm screen', () => {
     expect(body.dataset.screen).toBe('confirm');
     // Nothing was sent: this is the question.
     expect(body.querySelectorAll('[role="radio"]')).toHaveLength(0);
-    expect(texts(body, '.lm-model .lm-model-name')).toEqual(['Qwen3.6 35B-A3B']);
-    expect(texts(body, '.lm-size-row').map((text) => text.replace(/\s+/g, ' '))).toEqual([
-      'Qwen3.6 35B-A3B23.1 GB',
-      'Ollama 0.40.15, the program that runs the model0.2 GB',
-      'Total23.3 GB',
+    // The table is the screen: the chosen row first, the runtime, the missing coding agent
+    // with its installer's literal command, and the total.
+    expect(texts(body, '.lm-heading')).toEqual(['What will be downloaded']);
+    expect(texts(body, '.lm-size-name')).toEqual(['Qwen3.6 35B-A3B', 'Ollama 0.40.15', 'OpenCode', 'Total']);
+    expect(texts(body, '.lm-size-note')).toEqual([
+      'At 131,072 tokens of context, with OpenCode',
+      'The program that runs the model',
+      'Not on this Mac yet. Its own installer fetches it with this command:',
     ]);
+    expect(texts(body, '.lm-size-gb')).toEqual(['23.1 GB', '0.2 GB', '23.3 GB']);
     expect(body.querySelector('.lm-size-total .lm-size-gb')!.textContent).toBe('23.3 GB');
-    // The coding agent is missing: the literal command its installer runs, and the folder.
-    expect(texts(body, '.lm-command')).toEqual(['curl -fsSL https://opencode.ai/install | bash', FOLDER]);
-    const asides = texts(body, '.lm-aside');
-    expect(asides).toContain('Runs with OpenCode, at 131,072 tokens of context.');
-    expect(asides).toContain('OpenCode is not on this Mac yet. Its own installer is run with this command:');
-    expect(asides).toContain('No administrator password.');
-    expect(asides).toContain(LOCAL_MODEL_INSTALL_LABELS.developerToolsMissing);
+    expect(texts(body, '.lm-command')).toEqual(['curl -fsSL https://opencode.ai/install | bash']);
+    // Where it goes, in one line; the developer tools sentence as the one aside.
+    expect(texts(body, '.lm-path')).toEqual([FOLDER]);
+    expect(texts(body, '.lm-aside')).toEqual([LOCAL_MODEL_INSTALL_LABELS.developerToolsMissing]);
+    // The promise sits beside the buttons.
+    expect(texts(frameOf(body), '.lm-foot-note')).toEqual(['No administrator password.']);
     expect(buttons(body)).toEqual(['Back', 'Download and install']);
   });
 
@@ -1113,8 +1138,9 @@ describe('the confirm screen', () => {
     const pick = candidate({ installBytes: 23105798956, installGb: '23.1', harnesses: [CLAUDE] });
     await opened(page, status({ pick, alternatives: [] }, { runtime: RUNTIME_THERE, developerTools: 'present' }));
     press(page.body, 'Install on this Mac');
-    expect(texts(page.body, '.lm-size-what')).toEqual(['Qwen3.6 35B-A3B', 'Total']);
-    expect(texts(page.body, '.lm-command')).toEqual([FOLDER]);
+    expect(texts(page.body, '.lm-size-name')).toEqual(['Qwen3.6 35B-A3B', 'Total']);
+    expect(texts(page.body, '.lm-command')).toEqual([]);
+    expect(texts(page.body, '.lm-path')).toEqual([FOLDER]);
     expect(page.body.textContent).not.toContain('developer tools');
     expect(page.body.textContent).not.toContain('installer');
   });
@@ -1131,7 +1157,7 @@ describe('the confirm screen', () => {
     await opened(page, IDLE);
     page.body.querySelectorAll<HTMLElement>('[role="radio"]')[1].click();
     press(page.body, 'Install on this Mac');
-    expect(texts(page.body, '.lm-model .lm-model-name')).toEqual(['Qwen3.8 27B']);
+    expect(texts(page.body, '.lm-size-name')[0]).toBe('Qwen3.8 27B');
     press(page.body, 'Back');
     expect(page.body.dataset.screen).toBe('choose');
     expect(page.body.querySelector('[aria-checked="true"] .lm-model-name')!.textContent).toBe('Qwen3.8 27B');
@@ -1187,10 +1213,8 @@ describe('the consent', () => {
     const { app } = await opened(page, status({ pick: bare, alternatives: [] }), () => ok(INSTALLING.install));
     press(page.body, 'Install on this Mac');
     // No total the server formatted, so none is printed: bytes are never turned into a size here.
-    expect(texts(page.body, '.lm-size-what')).toEqual([
-      'Qwen3.6 35B-A3B',
-      'Ollama 0.40.15, the program that runs the model',
-    ]);
+    expect(texts(page.body, '.lm-size-name')).toEqual(['Qwen3.6 35B-A3B', 'Ollama 0.40.15', 'OpenCode']);
+    expect(page.body.querySelector('.lm-size-total')).toBeNull();
     press(page.body, 'Download and install');
     await settle();
     expect((verbs(app)[0][2] as { acknowledgedBytes: number }).acknowledgedBytes).toBe(23105798956 + RUNTIME_BYTES);
@@ -1316,11 +1340,11 @@ describe('the consent', () => {
     press(page.body, 'Install on this Mac');
     press(page.body, 'Download and install');
     // While the request is in flight every button waits.
-    expect([...page.body.querySelectorAll<HTMLButtonElement>('.lm-buttons button')].map((el) => el.disabled)).toEqual([
+    expect([...page.frame.querySelectorAll<HTMLButtonElement>('.lm-buttons button')].map((el) => el.disabled)).toEqual([
       true,
       true,
     ]);
-    page.body.querySelectorAll<HTMLButtonElement>('.lm-buttons button')[1].click();
+    page.frame.querySelectorAll<HTMLButtonElement>('.lm-buttons button')[1].click();
     answer(ok(INSTALLING.install));
     await settle();
     expect(verbs(app)).toHaveLength(1);
@@ -1404,14 +1428,19 @@ describe('the progress screen', () => {
     expect(texts(page.body, '.lm-figure-aside')).toEqual([aside]);
   });
 
-  it('names the step when nothing is being downloaded, with the bar full once the model is in', async () => {
+  it('the bar is the model download alone: at the start while the runtime is fetched, gone once the model is in', async () => {
     const page = mount();
     const { app, serve } = await opened(
       page,
       status({}, { ...JOB, state: 'installing', step: 'runtime', actions: ['cancel'], runtime: RUNTIME_MISSING })
     );
-    expect(texts(page.body, '.lm-figure')).toEqual(['Getting the runtime']);
+    // Nothing of the model has arrived: the size that is coming, from the row it was chosen on.
+    expect(texts(page.body, '.lm-figure')).toEqual(['0 of 23.1 GB']);
     expect(page.body.querySelector('.lm-bar')!.getAttribute('aria-valuenow')).toBe('0');
+    expect(texts(page.body, '.lm-aside')).toEqual([
+      'You can close this window. The download continues while Codeman is running.',
+    ]);
+    // The steps after the download have no bar and no second headline: the list says where it stands.
     for (const [step, label] of [
       ['verify', 'Loading and checking'],
       ['agent', 'Installing OpenCode'],
@@ -1419,9 +1448,13 @@ describe('the progress screen', () => {
     ] as const) {
       serve(status({}, { ...JOB, state: 'installing', step, actions: ['cancel'] }));
       await app.loadLocalModel({ force: true });
-      expect(texts(page.body, '.lm-figure')).toEqual([label]);
-      expect(page.body.querySelector('.lm-bar')!.getAttribute('aria-valuenow')).toBe('100');
-      expect(texts(page.body, '.lm-figure-aside')).toEqual([]);
+      expect(page.body.querySelector('.lm-meter')).toBeNull();
+      expect(texts(page.body, '.lm-figure')).toEqual([]);
+      expect(texts(page.body, '.lm-title')).toEqual(['Installing Qwen3.6 35B-A3B']);
+      expect(texts(page.body, '.lm-step-now')).toEqual([label]);
+      expect(texts(page.body, '.lm-aside')).toEqual([
+        'You can close this window. The install continues while Codeman is running.',
+      ]);
     }
   });
 
@@ -1437,7 +1470,7 @@ describe('the progress screen', () => {
   it('moves only the bar when a tick moved only the download: the button is not swapped under a click', async () => {
     const page = mount();
     const { app, serve } = await opened(page, INSTALLING);
-    const cancel = page.body.querySelector('.lm-buttons button');
+    const cancel = page.frame.querySelector('.lm-buttons button');
     const steps = page.body.querySelector('ol.lm-steps');
     serve(
       status(
@@ -1454,7 +1487,7 @@ describe('the progress screen', () => {
     expect(page.body.querySelector('.lm-bar')!.getAttribute('aria-valuenow')).toBe('50');
     expect(page.body.querySelector<HTMLElement>('.lm-bar-fill')!.style.width).toBe('50%');
     expect(page.body.querySelectorAll('.lm-meter')).toHaveLength(1);
-    expect(page.body.querySelector('.lm-buttons button')).toBe(cancel);
+    expect(page.frame.querySelector('.lm-buttons button')).toBe(cancel);
     expect(page.body.querySelector('ol.lm-steps')).toBe(steps);
     // A new step is a new picture.
     serve(status({}, { ...JOB, state: 'installing', step: 'verify', actions: ['cancel'] }));
@@ -1475,7 +1508,7 @@ describe('a paused install', () => {
     // No speed and no time left on a download that is not running.
     expect(texts(body, '.lm-figure-aside')).toEqual([]);
     expect(texts(body, '.lm-step-stopped')).toEqual(['Downloading the model']);
-    expect(texts(body, '.lm-aside')).toEqual(['Nothing is downloaded until you continue.']);
+    expect(texts(body, '.lm-aside')).toEqual(['The download waits until you continue.']);
     expect(buttons(body)).toEqual(['Remove', 'Choose another model', 'Continue']);
     expect(verbs(app)).toEqual([]);
     press(body, 'Continue');
@@ -1533,10 +1566,15 @@ describe('a failure', () => {
       const page = mount();
       const vars = { model: 'M', port: '11435', actual: '4096', wanted: '131072', cli: 'OpenCode', id: 'local-ollama' };
       await opened(page, failed(code, vars));
-      const title = texts(page.body, '.lm-title')[0];
-      expect(title.length, code).toBeGreaterThan(20);
-      expect(title, code).not.toMatch(/[{}]/);
-      expect(title, code).not.toMatch(/sorry|apolog/i);
+      // The headline is the FIRST sentence; what follows is read in the body size.
+      const title = texts(page.body, '.lm-error .lm-title')[0];
+      const rest = texts(page.body, '.lm-error .lm-lead').join(' ');
+      const whole = [title, rest].filter(Boolean).join(' ');
+      expect(whole.length, code).toBeGreaterThan(20);
+      expect(title, code).toMatch(/[.!?]$/);
+      expect(title.replace(/[^.!?]/g, '').length, code).toBeLessThanOrEqual(2);
+      expect(whole, code).not.toMatch(/[{}]/);
+      expect(whole, code).not.toMatch(/sorry|apolog/i);
       page.dom.window.close();
     }
   });
@@ -1610,13 +1648,15 @@ describe('an installed model', () => {
     expect(texts(body, '.lm-title')).toEqual(['Qwen3.6 35B-A3B is ready on this Mac.']);
     expect(texts(body, '.lm-state-text')).toEqual(['Running']);
     expect(body.querySelector('.lm-dot')!.classList.contains('lm-dot-on')).toBe(true);
+    // What it takes now, and what it can take, in the words of the chooser's legend: the
+    // row's own estimate, so the two figures are never read as a contradiction.
     expect(texts(body, '.lm-aside')).toEqual([
-      'Runs with OpenCode. Context 131,072 tokens. Takes 26.3 GB of memory when loaded, all on the GPU.',
+      'Runs with OpenCode. Context 131,072 tokens. Takes 26.3 GB of memory now, and up to about 36 GB at its peak, with all of the context in use. All of it is on the GPU.',
     ]);
     expect(buttons(body)).toEqual(['Remove', 'Stop', 'Start a session']);
     // One main action.
-    expect(body.querySelectorAll('.lm-buttons .wt-btn-primary')).toHaveLength(1);
-    expect(body.querySelector('.lm-buttons .wt-btn-primary')!.textContent).toBe('Start a session');
+    expect(frameOf(body).querySelectorAll('.lm-buttons .wt-btn-primary')).toHaveLength(1);
+    expect(frameOf(body).querySelector('.lm-buttons .wt-btn-primary')!.textContent).toBe('Start a session');
   });
 
   it('says the one honest sentence about git and Python only on a Mac without developer tools', async () => {
@@ -1640,7 +1680,7 @@ describe('an installed model', () => {
     expect(texts(page.body, '.lm-state-text')).toEqual(['Stopped']);
     expect(page.body.querySelector('.lm-dot')!.classList.contains('lm-dot-on')).toBe(false);
     expect(buttons(page.body)).toEqual(['Remove', 'Start']);
-    expect(page.body.querySelector('.lm-buttons .wt-btn-primary')!.textContent).toBe('Start');
+    expect(page.frame.querySelector('.lm-buttons .wt-btn-primary')!.textContent).toBe('Start');
     press(page.body, 'Start');
     await settle();
     expect(verbs(app)).toEqual([
@@ -1684,7 +1724,7 @@ describe('an installed model', () => {
     const { app } = await opened(page, answer, () => ok(INSTALLED.install));
     expect(texts(page.body, '.lm-error .lm-title')).toEqual([sentence]);
     expect(buttons(page.body)).toEqual(labels);
-    expect(page.body.querySelectorAll('.lm-buttons .wt-btn-primary')).toHaveLength(1);
+    expect(page.frame.querySelectorAll('.lm-buttons .wt-btn-primary')).toHaveLength(1);
     press(page.body, labels[1]);
     await settle();
     expect(verbs(app)).toEqual([['POST', '/api/local-model/runtime', body]]);
@@ -1705,13 +1745,19 @@ describe('an installed model', () => {
       }
     );
     await opened(page, answer);
-    expect(texts(page.body, '.lm-error .lm-title')).toEqual([
-      'The model on this Mac changed since it was installed. Remove it and install it again.',
-    ]);
-    // No session can start, so that button is not there.
+    // The sentence is the headline (not "is ready"), its second sentence in the body size.
+    expect(texts(page.body, '.lm-title')).toEqual(['The model on this Mac changed since it was installed.']);
+    expect(texts(page.body, '.lm-error .lm-lead')).toEqual(['Remove it and install it again.']);
+    // The dot is not green: a session cannot be started. The state line names the model.
+    expect(page.body.querySelector('.lm-dot')!.classList.contains('lm-dot-on')).toBe(false);
+    expect(texts(page.body, '.lm-state-text')).toEqual(['Qwen3.6 35B-A3B, Running']);
+    // No session can start, so that button is not there. Remove never takes the accent.
     expect(buttons(page.body)).toEqual(['Stop', 'Remove']);
+    expect(page.frame.querySelectorAll('.lm-buttons .wt-btn-primary')).toHaveLength(0);
     press(page.body, 'Remove');
-    expect(texts(page.body, '.lm-remove .lm-lead')).toEqual(['Remove the local model from this Mac?']);
+    expect(texts(page.frame, '.lm-remove .lm-lead')).toEqual(['Remove the local model from this Mac?']);
+    // In its question the removal is red.
+    expect(page.frame.querySelector('.lm-remove .wt-btn-danger')!.textContent).toBe('Remove');
   });
 
   it('starts a session on the saved connection with the agent of the install, after refreshing the page', async () => {
@@ -1754,7 +1800,7 @@ describe('Remove', () => {
     press(page.body, 'Remove');
     // The question, in place of the buttons. Nothing was sent.
     expect(verbs(app)).toEqual([]);
-    const question = page.body.querySelector('.lm-remove')!;
+    const question = page.frame.querySelector('.lm-remove')!;
     expect(texts(question, '.lm-lead')).toEqual(['Remove the local model from this Mac?']);
     expect(texts(question, '.lm-check span')).toEqual(['Also delete the downloaded model']);
     expect(texts(question, '.lm-aside')).toEqual(['The coding agent stays installed.']);
@@ -1770,10 +1816,10 @@ describe('Remove', () => {
     const { app } = await opened(page, INSTALLED, () => ok(install()));
     press(page.body, 'Remove');
     press(page.body, 'Cancel');
-    expect(page.body.querySelector('.lm-remove')).toBeNull();
+    expect(page.frame.querySelector('.lm-remove')).toBeNull();
     expect(buttons(page.body)).toEqual(['Remove', 'Stop', 'Start a session']);
     press(page.body, 'Remove');
-    const box = page.body.querySelector<HTMLInputElement>('.lm-remove input[type="checkbox"]')!;
+    const box = page.frame.querySelector<HTMLInputElement>('.lm-remove input[type="checkbox"]')!;
     box.checked = false;
     box.dispatchEvent(new page.dom.window.Event('change'));
     press(page.body, 'Remove');
@@ -1806,7 +1852,7 @@ describe('Remove', () => {
     press(page.body, 'Remove');
     await settle();
     expect(page.body.dataset.screen).toBe('installed');
-    expect(texts(page.body, '.lm-notice-text')).toEqual([
+    expect(texts(page.frame, '.lm-notice-text')).toEqual([
       'Sessions are still using this model: w1-app, w2-site. Close them first.',
     ]);
     // Still the question: the person can close the sessions and press Remove again.
@@ -1818,7 +1864,7 @@ describe('Remove', () => {
       const page = mount();
       const { app } = await opened(page, answer, () => ok(install()));
       press(page.body, 'Remove');
-      expect(texts(page.body, '.lm-remove .lm-lead')).toEqual(['Remove the local model from this Mac?']);
+      expect(texts(page.frame, '.lm-remove .lm-lead')).toEqual(['Remove the local model from this Mac?']);
       press(page.body, 'Remove');
       await settle();
       expect(verbs(app)).toEqual([['DELETE', '/api/local-model', { removeModel: true }]]);
@@ -1835,19 +1881,19 @@ describe('no recommendation', () => {
       'intel',
       none('intel', undefined, { arch: 'x64', arm64: false, chip: 'Intel(R) Core(TM) i7-9750H', memClassGb: 16 }),
       'Intel(R) Core(TM) i7-9750H, 16 GB memory, 897 GB free',
-      'This Mac has an Intel processor. Local coding models need Apple silicon.',
+      'Local coding models need Apple silicon, and this Mac has an Intel processor.',
     ],
     [
       'memory',
       none('memory', { memory: '8' }, { memGb: '8.6', memClassGb: 8, chip: 'Apple M2', freeDiskGb: '41.3' }),
       'Apple M2, 8 GB memory, 41.3 GB free',
-      'This Mac has 8 GB of memory. That is too little to run a model that can drive a coding agent, so Codeman recommends none here.',
+      'With 8 GB of memory, this Mac cannot run a model that can drive a coding agent.',
     ],
     [
       'disk',
-      none('disk', { download: '6.6', reserve: '10.7', free: '12.0', missing: '5.3' }, { freeDiskGb: '12.0' }),
+      none('disk', { missing: '5.3' }, { freeDiskGb: '12.0' }),
       'Apple M5 Pro, 48 GB memory, 12.0 GB free',
-      'Not enough free disk space. The smallest model that fits this Mac is a 6.6 GB download, and 10.7 GB must stay free after it. 12.0 GB is free now. Free up about 5.3 GB.',
+      'Free up about 5.3 GB of disk space to install the smallest model that fits this Mac.',
     ],
   ] as Array<[string, LocalModelStatus, string, string]>)(
     'opens with the hardware line, the reason and no button except Close: %s',
@@ -1944,14 +1990,20 @@ describe('the poll', () => {
 
   it('follows the install from the download to the end without a click', async () => {
     const page = mount();
-    const { serve } = await opened(page, INSTALLING);
+    const { app, serve } = await opened(page, INSTALLING);
     expect(page.body.dataset.screen).toBe('progress');
     serve(INSTALLED);
     await page.tick();
     expect(page.body.dataset.screen).toBe('installed');
-    expect(buttons(page.body)).toEqual(['Remove', 'Stop', 'Start a session']);
+    // The screen that ends an install has one button. Stop and Remove are for the window
+    // opened later.
+    expect(buttons(page.body)).toEqual(['Start a session']);
     // The focus goes to the main action of the new screen, inside the dialog.
     expect(page.document.activeElement?.textContent).toBe('Start a session');
+    // Opened again, the same model has its Stop and Remove.
+    app.closeLocalModelWindow();
+    app.openLocalModelWindow();
+    expect(buttons(page.body)).toEqual(['Remove', 'Stop', 'Start a session']);
   });
 });
 
@@ -1990,8 +2042,9 @@ describe('what the server sends is shown as text', () => {
     expect(texts(page.body, '.lm-notes .lm-aside')[0]).toContain(HOSTILE);
     press(page.body, 'Install on this Mac');
     clean(page);
-    expect(texts(page.body, '.lm-command')).toEqual([`run ${HOSTILE}`, `/tmp/${HOSTILE}`]);
-    expect(page.body.textContent).toContain(`Agent ${HOSTILE} is not on this Mac yet.`);
+    expect(texts(page.body, '.lm-command')).toEqual([`run ${HOSTILE}`]);
+    expect(texts(page.body, '.lm-path')).toEqual([`/tmp/${HOSTILE}`]);
+    expect(texts(page.body, '.lm-size-name')).toContain(`Agent ${HOSTILE}`);
     // The row and the button on the welcome screen too.
     expect(page.row.textContent).toContain(HOSTILE);
     clean(page);
@@ -2042,7 +2095,7 @@ describe('what the server sends is shown as text', () => {
     press(page.body, 'Remove');
     press(page.body, 'Remove');
     await settle();
-    expect(texts(page.body, '.lm-notice-text')[0]).toContain(HOSTILE);
+    expect(texts(page.frame, '.lm-notice-text')[0]).toContain(HOSTILE);
     expect(page.row.textContent).toContain(HOSTILE);
     clean(page);
   });
@@ -2068,7 +2121,7 @@ describe('in another language', () => {
     expect(buttons(page.body)).toEqual(['安装到此 Mac']);
     expect(page.button.textContent!.trim()).toBe('运行本地模型');
     expect(texts(page.row, '.set-row-label')).toEqual(['尚未安装模型']);
-    expect(texts(page.body, '.lm-figure')).toEqual(['约需 36.0 GB 内存，共 37.6 GB 可用']);
+    expect(texts(page.body, '.lm-figure')).toEqual(['约需 36 GB 内存，共 38 GB 可用']);
     // Names are someone else's text and stay as sent; the server's tag is translated.
     expect(texts(page.body, '.lm-model-name')[0]).toBe('Qwen3.6 35B-A3B');
     expect(texts(page.body, '.lm-tag')[0]).toBe('已在同类 Mac 上测试');
@@ -2165,5 +2218,101 @@ describe('the module keeps to its rules', () => {
     await settle();
     expect(app._api.mock.calls[0][0]).toBe('/codeman/api/local-model');
     expect(verbs(app)).toEqual([['POST', '/codeman/api/local-model/cancel', undefined]]);
+  });
+});
+
+// ---------- After the review: the order of the rows, the words of a tight pick, a refusal's sentence, a start that failed ----------
+
+describe('the rows of the chooser are ordered by a column the reader can see', () => {
+  it('the pick first, then the other models by download size, largest first, whatever order the server sent', async () => {
+    const page = mount();
+    // The server's own order of the alternatives is its ranking, which no column shows.
+    await opened(page, status({ alternatives: [ALT_SMALL_Q8, ALT_SMALL, ALT_UNKNOWN, ALT_SLOW] }));
+    const rows = [...page.body.querySelectorAll('[role="radio"]')];
+    expect(rows.map((row) => row.querySelector('.lm-model-name')!.textContent)).toEqual([
+      'Qwen3.6 35B-A3B',
+      'Qwen3.8 27B',
+      'GPT-OSS 20B',
+      'Qwen3.5 9B (Q8)',
+      'Qwen3.5 9B',
+    ]);
+    expect(rows.map((row) => row.querySelector('.lm-model-size')!.textContent)).toEqual([
+      '23.1 GB',
+      '17.7 GB',
+      '13.8 GB',
+      '10.4 GB',
+      '6.6 GB',
+    ]);
+    // The arrow keys walk the drawn order.
+    const group = page.body.querySelector('[role="radiogroup"]')!;
+    group.dispatchEvent(new page.dom.window.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+    expect(page.body.querySelector('[aria-checked="true"] .lm-model-name')!.textContent).toBe('Qwen3.8 27B');
+  });
+
+  it('a pick that only just fits says so in its tag, in the accent like every tag of the pick', async () => {
+    const page = mount();
+    const tightPick = candidate({
+      tested: false,
+      tag: { kind: 'best-tight', label: LOCAL_MODEL_TAG_LABELS['best-tight'] },
+    });
+    await opened(page, status({ pick: tightPick, alternatives: [ALT_SMALL] }));
+    const tag = page.body.querySelector('[aria-checked="true"] .lm-tag')!;
+    expect(tag.textContent).toBe('Best fit, tight');
+    expect(tag.classList.contains('lm-tag-accent')).toBe(true);
+    expect(page.body.querySelector('.lm-bar')!.getAttribute('aria-valuenow')).toBe('96');
+  });
+});
+
+describe('a refusal the server names', () => {
+  it('is printed from its sentence and slots, not from the English error text', async () => {
+    const page = mount({ i18n: true });
+    const { app } = await opened(page, IDLE, () => ({
+      ok: false,
+      status: 400,
+      json: async () => ({
+        success: false,
+        error: 'OpenCode is not installed and cannot be installed from here.',
+        errorCode: 'INVALID_INPUT',
+        data: { message: { text: LOCAL_MODEL_INSTALL_LABELS.refusedAgentNotInstallable, vars: { cli: 'OpenCode' } } },
+      }),
+    }));
+    page.win.CodemanI18n.configure({ language: 'zh-CN' });
+    await settle();
+    press(page.body, '安装到此 Mac');
+    press(page.body, '下载并安装');
+    await settle();
+    expect(texts(page.body, '.lm-notice-text')).toEqual(['OpenCode 尚未安装，也无法从这里安装。']);
+    expect(page.body.textContent).not.toContain('cannot be installed from here');
+    app.closeLocalModelWindow();
+  });
+});
+
+describe('an installed model whose runtime did not start', () => {
+  it('says what the runtime said as the headline, keeps the dot grey, and Start tries again', async () => {
+    const page = mount();
+    const answer = status(
+      {},
+      {
+        ...INSTALLED.install,
+        running: false,
+        actions: ['start', 'remove'],
+        error: {
+          code: 'runtime-start-failed',
+          message: { text: LOCAL_MODEL_ERROR_LABELS['runtime-start-failed'] },
+          // The server adapts the next step to the state: Start, not "try again".
+          next: 'start',
+          detail: 'spawn ENOENT',
+        },
+      }
+    );
+    const { app } = await opened(page, answer, () => ok(INSTALLED.install));
+    expect(texts(page.body, '.lm-title')).toEqual(['The runtime did not start on this Mac.']);
+    expect(page.body.querySelector('.lm-dot')!.classList.contains('lm-dot-on')).toBe(false);
+    expect(page.body.querySelector('.lm-detail-text')!.textContent).toBe('spawn ENOENT');
+    expect(buttons(page.body)).toEqual(['Remove', 'Start']);
+    expect(page.frame.querySelector('.lm-buttons .wt-btn-primary')!.textContent).toBe('Start');
+    press(page.body, 'Start');
+    await settle();
+    expect(verbs(app)).toEqual([['POST', '/api/local-model/runtime', { action: 'start' }]]);
   });
 });

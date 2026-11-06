@@ -26,15 +26,28 @@
  *    |-------------|-------------------------------------------------------------------|
  *    | `choose`    | idle: the memory bar, the models that fit as a radio group, the   |
  *    |             | coding agent, "Install on this Mac"                               |
- *    | `confirm`   | after that button: what is downloaded with sizes, where it goes   |
+ *    | `confirm`   | after that button: the download as a table with its total, where  |
+ *    |             | it goes                                                           |
  *    | `progress`  | installing: the download bar, the steps, Cancel                   |
  *    | `paused`    | paused (Cancel or a server restart): Continue or Remove           |
  *    | `failed`    | failed: the server's sentence and the ONE action that helps       |
  *    | `installed` | installed: running or stopped, Start a session, Stop/Start, Remove |
+ *    |             | (right after an install: Start a session alone)                   |
  *    | `none`      | idle and nothing fits: the hardware line, the reason, Close       |
  *
  * The memory bar is the one strong element: the memory this Mac can give a model, filled to
- * what the selected model needs (`budgetShare`). Selecting another row moves the fill.
+ * what the selected model needs at its PEAK (`budgetShare`). Selecting another row moves the
+ * fill. The legend under it and the line of an installed model use the same words for that
+ * peak, so the two figures a person meets (what the model takes now, what it can take) are
+ * never read as a contradiction.
+ *
+ * The window is ONE frame for the whole flow: the header and the foot (`#localModelWindowFoot`,
+ * the buttons) stay where they are and only the body between them changes and scrolls, so a
+ * button never moves away from under the pointer and is never cut off.
+ *
+ * The rows of the chooser are the server's: its pick first, then the other models by download
+ * size, largest first, which is a column the reader can see. The server's own order of the
+ * alternatives is its ranking (what it would offer next), not a reading order.
  *
  * ## Polling
  *
@@ -53,11 +66,13 @@
  *  - Names and labels come from the payload: this file holds no list of models or coding
  *    agents and never compares a CLI id with a literal. The id is passed on as data
  *    (`cli` of the install request, the session start).
- *  - Sizes are printed exactly as sent (`needGb`, `budgetGb`, `downloadGb`, `installGb`,
- *    `completedGb`, `totalGb`: decimal GB as text). Bytes are never turned into a size here.
- *    The installed memory alone is `memClassGb`, the size the Mac is sold as. The two byte
+ *  - Sizes are printed exactly as sent (`downloadGb`, `installGb`, `completedGb`, `totalGb`,
+ *    `memoryGb`: decimal GB as text). Bytes are never turned into a size here. The one figure
+ *    that is rounded is the memory estimate beside the bar and in the installed line: it says
+ *    "about", so it is printed in whole GB from the server's own text (`needGb`, `budgetGb`).
+ *    The installed memory alone is `memClassGb`, the size the Mac is sold as. The byte
  *    figures this file does read are the consent total (sent back unchanged as
- *    `acknowledgedBytes`) and the two ends of a bar.
+ *    `acknowledgedBytes`), the two ends of a bar and the download size the rows are ordered by.
  *  - The consent is bound to the size shown: the install request carries the server's own total
  *    for the row (`Candidate.installBytes`), and a 409 `size-changed` shows the server's new
  *    total and asks again.
@@ -84,6 +99,9 @@ const LOCAL_MODEL_MAX_AGE_MS = 60000;
 
 /** How often the open window asks where the install stands. */
 const LOCAL_MODEL_POLL_MS = 1000;
+
+/** The tag kinds of the server's pick (`CandidateTagKind`): the ones drawn in the accent colour. */
+const LOCAL_MODEL_ACCENT_TAGS = ['tested', 'best', 'best-tight'];
 
 /** i18n.js's translator with the `{placeholder}` slots filled, or the English source filled the same way. */
 function localModelT(source, vars) {
@@ -163,12 +181,25 @@ function localModelInstall(status) {
   return { state: 'idle', running: false, developerTools: 'unknown', actions: [] };
 }
 
-/** The rows of the chooser: the pick first, then the other models that fit. */
+/**
+ * The rows of the chooser: the server's pick first, then the other models that fit by download
+ * size, largest first. The download is a column of the list, so the order can be read off the
+ * screen; the server sends the alternatives in its own ranking, which no column shows.
+ */
 function localModelCandidates(status) {
   const recommendation = (status && status.recommendation) || {};
   if (recommendation.verdict === 'none' || !recommendation.pick) return [];
-  const rest = Array.isArray(recommendation.alternatives) ? recommendation.alternatives : [];
-  return [recommendation.pick, ...rest].filter((row) => row && typeof row.modelId === 'string');
+  const rest = (Array.isArray(recommendation.alternatives) ? recommendation.alternatives : []).filter(
+    (row) => row && typeof row.modelId === 'string'
+  );
+  const bytes = (row) => (Number.isFinite(row.downloadBytes) ? row.downloadBytes : 0);
+  // A stable sort: rows of one size keep the server's order.
+  const bySize = rest
+    .map((row, index) => ({ row, index }))
+    .sort((a, b) => bytes(b.row) - bytes(a.row) || a.index - b.index);
+  return [recommendation.pick, ...bySize.map((entry) => entry.row)].filter(
+    (row) => row && typeof row.modelId === 'string'
+  );
 }
 
 /**
@@ -200,6 +231,29 @@ function localModelInstallBytes(candidate, install) {
 /** A size as sent (decimal GB text) with its unit. The unit is the same in every language. */
 function localModelGb(value) {
   return `${value} GB`;
+}
+
+/**
+ * A memory estimate in whole GB, from the server's decimal GB text ('36.0' is '36'). Only for
+ * a figure that says "about": an estimate printed to the decimal reads as a measurement.
+ * Text that is no number is returned as it is.
+ */
+function localModelWholeGb(value) {
+  const number = Number(value);
+  return typeof value === 'string' && value !== '' && Number.isFinite(number)
+    ? String(Math.round(number))
+    : String(value ?? '');
+}
+
+/**
+ * A sentence group split after its first sentence: `[first, rest]`. The first is what a
+ * headline carries; the rest is read in the body size. Works on the translated text, so both
+ * the Latin full stop (followed by a space) and the ideographic one end a sentence.
+ */
+function localModelSentences(text) {
+  const value = String(text ?? '').trim();
+  const match = /^(.+?(?:[.!?](?=\s)|[。！？]))\s*(.+)$/su.exec(value);
+  return match ? [match[1], match[2]] : [value, ''];
 }
 
 /** "about 68 tokens/s", the measured figure without "about", or that there is none. */
@@ -270,11 +324,20 @@ function localModelBar({ share, role, label, kind, from }) {
   return bar;
 }
 
-/** One line of the confirm screen's download list: what, and how large. */
-function localModelSizeRow(label, gb, { strong = false } = {}) {
+/**
+ * One row of the confirm screen's table: what is fetched, how large it is, and under the name
+ * a second line that says what it is (`note`) and, for a coding agent, the literal command of
+ * its installer (`command`). A row without a size (the coding agent: its installer decides)
+ * has none.
+ */
+function localModelSizeRow(label, { gb, note, command, strong = false } = {}) {
   const row = localModelEl('div', strong ? 'lm-size-row lm-size-total' : 'lm-size-row');
-  row.appendChild(localModelEl('span', 'lm-size-what', label));
-  row.appendChild(localModelEl('span', 'lm-size-gb', localModelGb(gb)));
+  const what = localModelEl('div', 'lm-size-what');
+  what.appendChild(localModelEl('span', 'lm-size-name', label));
+  if (note) what.appendChild(localModelEl('span', 'lm-size-note', note));
+  if (command) what.appendChild(localModelEl('code', 'lm-command', command));
+  row.appendChild(what);
+  if (gb) row.appendChild(localModelEl('span', 'lm-size-gb', localModelGb(gb)));
   return row;
 }
 
@@ -343,10 +406,24 @@ Object.assign(CodemanApp.prototype, {
       this.renderLocalModel();
       return;
     }
+    this._noteLocalModelInstall(data.install);
     this._localModelStatus = data;
     this._localModelState = 'ready';
     this._localModelLoadedAt = Date.now();
     this.renderLocalModel();
+  },
+
+  /**
+   * Called with the `install` object that is about to replace the one on screen. An install
+   * that was running and is installed now finished in front of the person: the window then
+   * shows the screen that ends it (see `justInstalled`). Any other state ends that moment.
+   */
+  _noteLocalModelInstall(next) {
+    const ui = this._localModelWindowState();
+    const before = localModelInstall(this._localModelStatus).state;
+    const after = next && typeof next.state === 'string' ? next.state : 'idle';
+    if (after !== 'installed') ui.justInstalled = false;
+    else if (before === 'installing' && ui.open) ui.justInstalled = true;
   },
 
   _localModelRefused() {
@@ -373,6 +450,11 @@ Object.assign(CodemanApp.prototype, {
         /** The Remove question is open, and whether the downloaded model goes too. */
         confirmRemove: false,
         removeModel: true,
+        /**
+         * The install finished while this window was open: the screen that ends it shows
+         * "Start a session" alone. Stop and Remove belong to the window opened later.
+         */
+        justInstalled: false,
       };
     }
     return this._localModelUi;
@@ -417,7 +499,15 @@ Object.assign(CodemanApp.prototype, {
     if (!modal || this._localModelRefused()) return;
     const ui = this._localModelWindowState();
     if (ui.open) return;
-    Object.assign(ui, { open: true, view: 'auto', busy: false, notice: null, expected: null, confirmRemove: false });
+    Object.assign(ui, {
+      open: true,
+      view: 'auto',
+      busy: false,
+      notice: null,
+      expected: null,
+      confirmRemove: false,
+      justInstalled: false,
+    });
     this._forgetLocalModelPaint();
     modal.classList.add('active');
     // A trap of its own: the window can open on top of App Settings, whose trap must stay
@@ -503,11 +593,17 @@ Object.assign(CodemanApp.prototype, {
     const data = json && typeof json === 'object' && json.data && typeof json.data === 'object' ? json.data : null;
     let result;
     if (res?.ok && json?.success === true && data && typeof data.state === 'string') {
+      this._noteLocalModelInstall(data);
       if (this._localModelStatus) this._localModelStatus = { ...this._localModelStatus, install: data };
       result = { ok: true, view: data };
     } else if (res?.status === 409 && data) {
       ui.notice = { message: data.message, sessions: data.sessions };
       result = { ok: false, conflict: data };
+    } else if (res && data && data.message && typeof data.message.text === 'string') {
+      // A refusal the server names (a 400, a full disk) carries its sentence with the slots
+      // apart, like a 409, so it is printed in the window's own language.
+      ui.notice = { message: data.message };
+      result = { ok: false };
     } else {
       ui.notice = res
         ? { refused: true, detail: typeof json?.error === 'string' ? json.error : '' }
@@ -732,9 +828,12 @@ Object.assign(CodemanApp.prototype, {
     const meter = body.querySelector('.lm-meter');
 
     if (frame === this._localModelFrameKey && (screen === 'progress' || screen === 'paused') && meter) {
-      meter.replaceWith(this._localModelDownloadMeter(screen, last));
-      this._settleLocalModelBars(body);
-      return;
+      const moved = this._localModelDownloadMeter(screen, last);
+      if (moved) {
+        meter.replaceWith(moved);
+        this._settleLocalModelBars(body);
+        return;
+      }
     }
     this._localModelFrameKey = frame;
 
@@ -742,9 +841,17 @@ Object.assign(CodemanApp.prototype, {
     const active = document.activeElement;
     const inside = !!(modal && active && modal.contains(active));
     const focusKey = inside && active.dataset ? active.dataset.lmKey : undefined;
-    const scrolled = body.scrollTop;
+    const scrolled = body.dataset.screen === screen ? body.scrollTop : 0;
+    const parts = this._buildLocalModelScreen(screen, last);
+    // The buttons (or the Remove question) are the last part a screen builds. They go into
+    // the foot of the frame, outside the part that scrolls, so they stay in one place.
+    const foot = document.getElementById('localModelWindowFoot');
+    const tail = parts[parts.length - 1];
+    const actions =
+      foot && tail && tail.classList && (tail.classList.contains('lm-foot') || tail.classList.contains('lm-remove'));
     body.dataset.screen = screen;
-    body.replaceChildren(...this._buildLocalModelScreen(screen, last));
+    body.replaceChildren(...(actions ? parts.slice(0, -1) : parts));
+    if (foot) foot.replaceChildren(...(actions ? [tail] : []));
     body.scrollTop = scrolled;
     this._settleLocalModelBars(body);
     if (inside || active === document.body) this._focusLocalModelWindow(focusKey);
@@ -776,7 +883,8 @@ Object.assign(CodemanApp.prototype, {
     const modal = document.getElementById('localModelModal');
     const body = document.getElementById('localModelWindowBody');
     if (!modal || !body) return;
-    const keyed = [...body.querySelectorAll('[data-lm-key]')].filter((el) => !el.disabled);
+    // The body and the foot: a screen's controls live in both.
+    const keyed = [...modal.querySelectorAll('[data-lm-key]')].filter((el) => !el.disabled);
     const target =
       (key && keyed.find((el) => el.dataset.lmKey === key && el.getAttribute('tabindex') !== '-1')) ||
       keyed.find((el) => el.dataset.lmKey === 'model' && el.getAttribute('aria-checked') === 'true') ||
@@ -836,27 +944,23 @@ Object.assign(CodemanApp.prototype, {
     );
   },
 
-  /** One model row: the radio of the chooser, or the same line as plain text on the confirm screen. */
-  _localModelRow(candidate, { checked, interactive, tabStop }) {
+  /** One model row of the chooser: a radio with the name, the tag, the speed and the download. */
+  _localModelRow(candidate, { checked, tabStop }) {
     const row = localModelEl('div', 'lm-model');
-    if (interactive) {
-      row.setAttribute('role', 'radio');
-      row.setAttribute('aria-checked', checked ? 'true' : 'false');
-      row.setAttribute('tabindex', tabStop ? '0' : '-1');
-      row.dataset.lmKey = 'model';
-      row.dataset.modelId = candidate.modelId;
-      row.appendChild(localModelEl('span', 'lm-radio'));
-    } else {
-      row.classList.add('lm-model-static');
-    }
+    row.setAttribute('role', 'radio');
+    row.setAttribute('aria-checked', checked ? 'true' : 'false');
+    row.setAttribute('tabindex', tabStop ? '0' : '-1');
+    row.dataset.lmKey = 'model';
+    row.dataset.modelId = candidate.modelId;
+    row.appendChild(localModelEl('span', 'lm-radio'));
     if (checked) row.classList.add('lm-model-on');
     row.appendChild(localModelEl('span', 'lm-model-name', String(candidate.modelLabel || candidate.modelId)));
     const tagSlot = localModelEl('span', 'lm-model-tag');
     const label = candidate.tag && typeof candidate.tag.label === 'string' ? candidate.tag.label : '';
     if (label) {
       const tag = localModelEl('span', 'lm-tag', localModelT(label));
-      // The pick, and a row run on a Mac like this one, take the accent. Every other tag is quiet.
-      if (candidate.tag.kind === 'best' || candidate.tag.kind === 'tested') tag.classList.add('lm-tag-accent');
+      // The tags of the row the window opens on take the accent. Every other tag is quiet.
+      if (LOCAL_MODEL_ACCENT_TAGS.includes(candidate.tag.kind)) tag.classList.add('lm-tag-accent');
       tagSlot.appendChild(tag);
     }
     row.appendChild(tagSlot);
@@ -878,7 +982,8 @@ Object.assign(CodemanApp.prototype, {
     // The memory bar: what this Mac can give a model, filled to what the selected one needs.
     const meter = localModelEl('div', 'lm-meter');
     const head = localModelEl('div', 'lm-meter-head');
-    const sizes = { need: candidate.needGb, budget: recommendation.budgetGb };
+    // An estimate, so whole GB: "about 36 of 38", never an estimate to the decimal.
+    const sizes = { need: localModelWholeGb(candidate.needGb), budget: localModelWholeGb(recommendation.budgetGb) };
     head.appendChild(localModelEl('span', 'lm-figure', localModelT('About {need} of {budget} GB of memory', sizes)));
     // A formula's figure says so, once. A wired limit and the runtime's own figure are facts.
     if (recommendation.budgetSource === 'estimated') {
@@ -897,7 +1002,14 @@ Object.assign(CodemanApp.prototype, {
     );
     const legend = localModelEl('div', 'lm-legend');
     const context = localModelCount(candidate.context);
-    legend.appendChild(localModelEl('span', '', localModelT('The model at {context} tokens of context', { context })));
+    // The fill is the model at its PEAK. The installed line uses the same words for it.
+    legend.appendChild(
+      localModelEl(
+        'span',
+        '',
+        localModelT('The model at its peak, with all {context} tokens of context in use', { context })
+      )
+    );
     legend.appendChild(localModelEl('span', '', localModelT('What stays free')));
     meter.appendChild(legend);
     parts.push(meter);
@@ -925,7 +1037,7 @@ Object.assign(CodemanApp.prototype, {
     group.setAttribute('aria-labelledby', 'localModelListLabel');
     for (const row of candidates) {
       const checked = row === candidate;
-      const el = this._localModelRow(row, { checked, interactive: true, tabStop: checked });
+      const el = this._localModelRow(row, { checked, tabStop: checked });
       el.addEventListener('click', () => this.selectLocalModel(row.modelId));
       group.appendChild(el);
     }
@@ -962,7 +1074,7 @@ Object.assign(CodemanApp.prototype, {
     });
     runs.appendChild(select);
     const hints = [];
-    if (harness.installed === false) hints.push(localModelT('Not on this Mac yet. It is installed for you.'));
+    if (harness.installed === false) hints.push(localModelT('Not on this Mac yet. Codeman installs it for you.'));
     if (harness.slowFirstTurn === true) hints.push(localModelT('The first answer can take minutes.'));
     if (hints.length) runs.appendChild(localModelEl('span', 'lm-runs-hint', hints.join(' ')));
     parts.push(runs);
@@ -1014,6 +1126,13 @@ Object.assign(CodemanApp.prototype, {
     this.selectLocalModel(candidates[next].modelId);
   },
 
+  /**
+   * The confirm screen: the download as a table. One row per thing that is fetched (the chosen
+   * model, the program that runs it while it is missing, the coding agent while it is
+   * missing), each with what it is in a second line, and the total under them in the strong
+   * weight. The table IS the screen; around it only where it goes and, on a Mac without the
+   * developer tools, the one sentence about them.
+   */
   _buildLocalModelConfirm() {
     const ui = this._localModelWindowState();
     const status = this._localModelStatus;
@@ -1023,51 +1142,48 @@ Object.assign(CodemanApp.prototype, {
     const hw = this._localModelHardwareEl();
     if (hw) parts.push(hw);
 
-    // The list collapses to the chosen row.
-    const chosen = localModelEl('div', 'lm-list');
-    const one = localModelEl('div', 'lm-models');
-    one.appendChild(this._localModelRow(candidate, { checked: true, interactive: false }));
-    chosen.appendChild(one);
-    parts.push(chosen);
     const cli = String(harness.cliLabel || harness.cli);
-    const runs = localModelT('Runs with {cli}, at {context} tokens of context.', {
+    const sizes = localModelEl('div', 'lm-sizes');
+    sizes.appendChild(localModelEl('h4', 'lm-heading', localModelT('What will be downloaded')));
+
+    // The list collapses to the chosen row: it is the first row of the table.
+    const about = localModelT('At {context} tokens of context, with {cli}', {
       cli,
       context: localModelCount(candidate.context),
     });
-    parts.push(localModelEl('p', 'lm-aside', runs));
-
-    // What is downloaded, with sizes: the model, the runtime while it is missing, the total.
-    const sizes = localModelEl('div', 'lm-sizes');
-    sizes.appendChild(localModelEl('h4', 'lm-heading', localModelT('What is downloaded')));
-    sizes.appendChild(localModelSizeRow(String(candidate.modelLabel || candidate.modelId), candidate.downloadGb));
+    sizes.appendChild(
+      localModelSizeRow(String(candidate.modelLabel || candidate.modelId), { gb: candidate.downloadGb, note: about })
+    );
     const runtime = install.runtime || {};
     if (runtime.installed !== true && Number(runtime.downloadBytes) > 0 && runtime.downloadGb) {
-      const what = localModelT('Ollama {version}, the program that runs the model', { version: runtime.version });
-      sizes.appendChild(localModelSizeRow(what, runtime.downloadGb));
+      sizes.appendChild(
+        localModelSizeRow(localModelT('Ollama {version}', { version: runtime.version }), {
+          gb: runtime.downloadGb,
+          note: localModelT('The program that runs the model'),
+        })
+      );
+    }
+    // The coding agent, when it is missing: its own installer fetches it, with this literal command.
+    if (harness.installed === false) {
+      const note = harness.installCommand
+        ? localModelT('Not on this Mac yet. Its own installer fetches it with this command:')
+        : localModelT('Not on this Mac yet. Its own installer fetches it.');
+      sizes.appendChild(
+        localModelSizeRow(cli, { note, command: harness.installCommand ? String(harness.installCommand) : '' })
+      );
     }
     const expected = ui.expected && ui.expected.modelId === candidate.modelId ? ui.expected : null;
     const total = expected ? expected.gb : candidate.installGb;
-    if (total) sizes.appendChild(localModelSizeRow(localModelT('Total'), total, { strong: true }));
+    if (total) sizes.appendChild(localModelSizeRow(localModelT('Total'), { gb: total, strong: true }));
     parts.push(sizes);
 
-    // The coding agent, when it is missing: the literal command its installer runs.
-    if (harness.installed === false) {
-      const agent = localModelEl('div', 'lm-agent');
-      const lead = harness.installCommand
-        ? localModelT('{cli} is not on this Mac yet. Its own installer is run with this command:', { cli })
-        : localModelT('{cli} is not on this Mac yet. It is installed with its own installer.', { cli });
-      agent.appendChild(localModelEl('p', 'lm-aside', lead));
-      if (harness.installCommand) agent.appendChild(localModelEl('code', 'lm-command', String(harness.installCommand)));
-      parts.push(agent);
-    }
-
-    const where = localModelEl('div', 'lm-where');
     if (install.folder) {
-      where.appendChild(localModelEl('p', 'lm-aside', localModelT('The model and the program that runs it go into:')));
-      where.appendChild(localModelEl('code', 'lm-command', String(install.folder)));
+      const where = localModelEl('p', 'lm-where');
+      where.appendChild(localModelEl('span', '', localModelT('Goes into')));
+      where.appendChild(document.createTextNode(' '));
+      where.appendChild(localModelEl('code', 'lm-path', String(install.folder)));
+      parts.push(where);
     }
-    where.appendChild(localModelEl('p', 'lm-aside', localModelT('No administrator password.')));
-    parts.push(where);
     const tools = this._localModelDeveloperToolsEl();
     if (tools) parts.push(tools);
 
@@ -1075,6 +1191,7 @@ Object.assign(CodemanApp.prototype, {
     if (notice) parts.push(notice);
 
     const foot = localModelEl('div', 'lm-foot');
+    foot.appendChild(localModelEl('p', 'lm-foot-note', localModelT('No administrator password.')));
     const buttons = localModelEl('div', 'lm-buttons');
     buttons.appendChild(
       localModelButton(localModelT('Back'), { key: 'back', disabled: ui.busy, onClick: () => this.chooseLocalModel() })
@@ -1160,22 +1277,24 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
-   * The download bar and its figure: "6.2 of 23.1 GB", then the speed and the time left. A step
-   * that downloads nothing names itself instead, with the bar full once the model is in.
+   * The download bar and its figure: "6.2 of 23.1 GB", then the speed and the time left. The
+   * bar means ONE thing, the model download: while the runtime is fetched (seconds) it stands
+   * at the start with the size that is coming, it fills while the model arrives, and once the
+   * model is in it is gone (`null`): the step list carries the rest.
    */
   _localModelDownloadMeter(screen, last) {
     const install = localModelInstall(this._localModelStatus);
+    if (install.step !== 'runtime' && install.step !== 'model') return null;
     const paused = screen === 'paused';
-    const progress = install.progress;
+    const progress = install.step === 'model' ? install.progress : null;
     const meter = localModelEl('div', 'lm-meter');
     const head = localModelEl('div', 'lm-meter-head');
-    const steps = Array.isArray(install.steps) ? install.steps : [];
-    const now = localModelStepLabel(install.step, String(install.cliLabel || ''));
-    let share = steps.indexOf(install.step) > steps.indexOf('model') ? 1 : 0;
+    const label = localModelT('Download of the model');
+    let share = 0;
     if (progress && Number(progress.totalBytes) > 0) {
       share = Number(progress.completedBytes) / Number(progress.totalBytes);
       const sizes = { done: progress.completedGb, total: progress.totalGb };
-      head.appendChild(localModelEl('span', 'lm-figure', localModelT('{done} of {total} GB', sizes)));
+      head.appendChild(localModelEl('span', 'lm-figure lm-figure-count', localModelT('{done} of {total} GB', sizes)));
       const left = localModelTimeLeft(progress.secondsLeft);
       let rate = '';
       if (!paused && progress.mbPerSecond && left) {
@@ -1185,10 +1304,15 @@ Object.assign(CodemanApp.prototype, {
       }
       if (rate) head.appendChild(localModelEl('span', 'lm-figure-aside', rate));
     } else {
-      head.appendChild(localModelEl('span', 'lm-figure', now));
+      // Nothing of the model has arrived yet: the size that is coming, from the row it was chosen on.
+      const row = localModelCandidates(this._localModelStatus).find(
+        (candidate) => install.model && candidate.modelId === install.model.id
+      );
+      const text = row && row.downloadGb ? localModelT('0 of {total} GB', { total: row.downloadGb }) : label;
+      head.appendChild(localModelEl('span', 'lm-figure lm-figure-count', text));
     }
     meter.appendChild(head);
-    meter.appendChild(localModelBar({ share, role: 'progressbar', kind: 'download', from: last.download, label: now }));
+    meter.appendChild(localModelBar({ share, role: 'progressbar', kind: 'download', from: last.download, label }));
     return meter;
   },
 
@@ -1204,8 +1328,9 @@ Object.assign(CodemanApp.prototype, {
       : localModelT('Installing {model}', { model });
     parts.push(localModelEl('p', 'lm-title', title));
 
-    // The download bar takes the place of the memory bar.
-    parts.push(this._localModelDownloadMeter(screen, last));
+    // The download bar takes the place of the memory bar, for as long as something downloads.
+    const meter = this._localModelDownloadMeter(screen, last);
+    if (meter) parts.push(meter);
 
     const list = this._localModelStepsEl(install, { stopped: paused });
     if (list) parts.push(list);
@@ -1215,9 +1340,18 @@ Object.assign(CodemanApp.prototype, {
       return parts;
     }
 
-    const note = paused
-      ? localModelT('Nothing is downloaded until you continue.')
-      : localModelT('You can close this window. The download continues while Codeman is running.');
+    // What waits or goes on is the download while there is one, the install after it.
+    const downloading = !!meter;
+    let note;
+    if (paused) {
+      note = downloading
+        ? localModelT('The download waits until you continue.')
+        : localModelT('The install waits until you continue.');
+    } else {
+      note = downloading
+        ? localModelT('You can close this window. The download continues while Codeman is running.')
+        : localModelT('You can close this window. The install continues while Codeman is running.');
+    }
     parts.push(localModelEl('p', 'lm-aside', note));
     const notice = this._localModelNoticeEl();
     if (notice) parts.push(notice);
@@ -1269,6 +1403,7 @@ Object.assign(CodemanApp.prototype, {
   /**
    * The ONE action that helps after an error, as a button, or null when the server does not
    * offer it right now. `error.next` names it; `install.actions` says whether it is possible.
+   * It is the main button of the screen, except a removal, which never takes the accent.
    */
   _localModelNextButton(install, error) {
     const ui = this._localModelWindowState();
@@ -1289,7 +1424,12 @@ Object.assign(CodemanApp.prototype, {
       return primary(localModelT('Start'), () => void this.setLocalModelRuntime('start'));
     }
     if (error.next === 'remove' && can('remove')) {
-      return primary(localModelT('Remove'), () => void this.removeLocalModel());
+      // The one action that helps, and still a removal: quiet here, red only in its question.
+      return localModelButton(localModelT('Remove'), {
+        key: 'primary',
+        disabled: ui.busy,
+        onClick: () => void this.removeLocalModel(),
+      });
     }
     if (error.next === 'next-model' && can('install')) {
       const candidates = localModelCandidates(this._localModelStatus);
@@ -1303,10 +1443,15 @@ Object.assign(CodemanApp.prototype, {
     return null;
   },
 
-  /** An error as the window shows it: the server's sentence, and its raw detail folded away. */
+  /**
+   * An error as the window shows it: the first sentence of the server's text as the headline,
+   * what follows it in the body size, and the raw detail folded away.
+   */
   _localModelErrorEl(error) {
     const box = localModelEl('div', 'lm-error');
-    box.appendChild(localModelEl('p', 'lm-title', localModelMessage(error.message)));
+    const [headline, rest] = localModelSentences(localModelMessage(error.message));
+    box.appendChild(localModelEl('p', 'lm-title', headline));
+    if (rest) box.appendChild(localModelEl('p', 'lm-lead', rest));
     if (typeof error.detail === 'string' && error.detail) {
       const details = localModelEl('details', 'lm-details');
       details.appendChild(localModelEl('summary', '', localModelT('Details')));
@@ -1351,43 +1496,69 @@ Object.assign(CodemanApp.prototype, {
     return parts;
   },
 
+  /**
+   * The line of facts under an installed model: the context, what the model takes now (what
+   * the runtime reported when the install checked it) and, in the words of the chooser's
+   * legend, what it can take at its peak (the row's own estimate, so the two figures a person
+   * meets are told apart instead of read as a contradiction).
+   */
+  _localModelFactsLine(install) {
+    const loaded = install.loaded || {};
+    const context = localModelCount(loaded.context ?? install.context);
+    const row = localModelCandidates(this._localModelStatus).find(
+      (candidate) =>
+        install.model &&
+        candidate.modelId === install.model.id &&
+        candidate.context === (loaded.context ?? install.context)
+    );
+    const facts = { context, memory: loaded.memoryGb, peak: row ? localModelWholeGb(row.needGb) : '' };
+    const sentences = [];
+    if (context) sentences.push(localModelT('Context {context} tokens.', facts));
+    if (loaded.memoryGb && facts.peak) {
+      sentences.push(
+        localModelT(
+          'Takes {memory} GB of memory now, and up to about {peak} GB at its peak, with all of the context in use.',
+          facts
+        )
+      );
+    } else if (loaded.memoryGb) {
+      sentences.push(localModelT('Takes {memory} GB of memory now.', facts));
+    }
+    if (loaded.memoryGb && loaded.onGpu === true) sentences.push(localModelT('All of it is on the GPU.'));
+    return sentences.join(' ');
+  },
+
   _buildLocalModelInstalled() {
     const ui = this._localModelWindowState();
     const install = localModelInstall(this._localModelStatus);
     const model = install.model ? String(install.model.label || install.model.id || '') : '';
+    const error = install.error;
     const parts = [];
-    const title = install.running
-      ? localModelT('{model} is ready on this Mac.', { model })
-      : localModelT('{model} is installed on this Mac.', { model });
-    parts.push(localModelEl('p', 'lm-title', title));
 
-    // The measured facts, in one line: what the runtime reported when the install checked it.
-    const loaded = install.loaded || {};
-    const facts = { context: localModelCount(loaded.context ?? install.context), memory: loaded.memoryGb };
-    let line = '';
-    if (loaded.memoryGb && loaded.onGpu === true) {
-      line = localModelT('Context {context} tokens. Takes {memory} GB of memory when loaded, all on the GPU.', facts);
-    } else if (loaded.memoryGb) {
-      line = localModelT('Context {context} tokens. Takes {memory} GB of memory when loaded.', facts);
-    } else if (facts.context) {
-      line = localModelT('Context {context} tokens.', facts);
+    // Something blocks a session: that sentence is the headline, not "is ready". Its one
+    // action is the main button below.
+    if (error) {
+      parts.push(this._localModelErrorEl(error));
+    } else {
+      const title = install.running
+        ? localModelT('{model} is ready on this Mac.', { model })
+        : localModelT('{model} is installed on this Mac.', { model });
+      parts.push(localModelEl('p', 'lm-title', title));
     }
+
     const state = localModelEl('div', 'lm-state');
-    const dot = localModelEl('span', install.running ? 'lm-dot lm-dot-on' : 'lm-dot');
+    // Green says "a session can be started". A model that is blocked is not that.
+    const dot = localModelEl('span', install.running && !error ? 'lm-dot lm-dot-on' : 'lm-dot');
     dot.setAttribute('aria-hidden', 'true');
     state.appendChild(dot);
-    state.appendChild(
-      localModelEl('span', 'lm-state-text', install.running ? localModelT('Running') : localModelT('Stopped'))
-    );
+    const running = install.running ? localModelT('Running') : localModelT('Stopped');
+    state.appendChild(localModelEl('span', 'lm-state-text', error ? `${model}, ${running}` : running));
     parts.push(state);
     const about = [];
     if (install.cliLabel) about.push(localModelT('Runs with {cli}.', { cli: String(install.cliLabel) }));
+    const line = this._localModelFactsLine(install);
     if (line) about.push(line);
     if (about.length) parts.push(localModelEl('p', 'lm-aside', about.join(' ')));
-
-    // Something blocks a session: the server's sentence. Its one action is the main button below.
-    const error = install.error;
-    if (error) parts.push(this._localModelErrorEl(error));
 
     if (ui.confirmRemove) {
       parts.push(this._localModelRemoveEl());
@@ -1400,9 +1571,12 @@ Object.assign(CodemanApp.prototype, {
 
     const can = (action) => install.actions.includes(action);
     const next = error ? this._localModelNextButton(install, error) : null;
+    // The screen that ends an install has one button. Stop and Remove are for the window
+    // opened later (or for this one once anything else was said in it).
+    const ending = ui.justInstalled === true && can('start-session') && !error && !notice;
     const foot = localModelEl('div', 'lm-foot');
     const buttons = localModelEl('div', 'lm-buttons');
-    if (can('remove') && error?.next !== 'remove') {
+    if (!ending && can('remove') && error?.next !== 'remove') {
       buttons.appendChild(
         localModelButton(localModelT('Remove'), {
           key: 'remove',
@@ -1411,7 +1585,7 @@ Object.assign(CodemanApp.prototype, {
         })
       );
     }
-    if (can('stop')) {
+    if (!ending && can('stop')) {
       buttons.appendChild(
         localModelButton(localModelT('Stop'), {
           key: 'stop',

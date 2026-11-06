@@ -1435,7 +1435,8 @@
     estimated: '估算',
     'The selected model needs {share}% of the memory this Mac can give a model':
       '所选模型需要此 Mac 可分配给模型的内存的 {share}%',
-    'The model at {context} tokens of context': '模型在 {context} 个 Token 上下文下的占用',
+    'The model at its peak, with all {context} tokens of context in use':
+      '模型的峰值占用（{context} 个 Token 的上下文全部用满时）',
     'What stays free': '剩余可用',
     'Models that fit this Mac': '此 Mac 装得下的模型',
     Speed: '速度',
@@ -1444,20 +1445,20 @@
     '{speed} tokens/s': '{speed} Token/秒',
     'about {speed} tokens/s': '约 {speed} Token/秒',
     'Runs with': '搭配',
-    'Not on this Mac yet. It is installed for you.': '此 Mac 上尚未安装，将为你一并安装。',
+    'Not on this Mac yet. Codeman installs it for you.': '此 Mac 上尚未安装，{name} 会为你一并安装。',
     'The first answer can take minutes.': '第一次回答可能需要几分钟。',
     'No account and no API key. The model runs only on this Mac.': '无需账号，也无需 API 密钥。模型只在此 Mac 上运行。',
     'Install on this Mac': '安装到此 Mac',
-    // The confirm screen: what is downloaded, where it goes.
-    'Runs with {cli}, at {context} tokens of context.': '搭配 {cli}，上下文为 {context} 个 Token。',
-    'What is downloaded': '将下载的内容',
-    'Ollama {version}, the program that runs the model': 'Ollama {version}，用于运行模型的程序',
+    // The confirm screen: the download as a table, where it goes.
+    'What will be downloaded': '将下载的内容',
+    'At {context} tokens of context, with {cli}': '上下文 {context} 个 Token，搭配 {cli}',
+    'Ollama {version}': 'Ollama {version}',
+    'The program that runs the model': '用于运行模型的程序',
     Total: '合计',
-    '{cli} is not on this Mac yet. Its own installer is run with this command:':
-      '此 Mac 上尚未安装 {cli}。将用以下命令运行它自带的安装程序：',
-    '{cli} is not on this Mac yet. It is installed with its own installer.':
-      '此 Mac 上尚未安装 {cli}。将用它自带的安装程序进行安装。',
-    'The model and the program that runs it go into:': '模型和运行它的程序将存放在：',
+    'Not on this Mac yet. Its own installer fetches it with this command:':
+      '此 Mac 上尚未安装。它自带的安装程序会用以下命令获取它：',
+    'Not on this Mac yet. Its own installer fetches it.': '此 Mac 上尚未安装。它自带的安装程序会获取它。',
+    'Goes into': '存放位置：',
     'No administrator password.': '无需管理员密码。',
     'Download and install': '下载并安装',
     // Progress, and the same picture paused.
@@ -1474,9 +1475,14 @@
     'Loading and checking': '加载并检查',
     'Installing {cli}': '安装 {cli}',
     Connecting: '正在连接',
+    'Download of the model': '模型下载进度',
+    '0 of {total} GB': '已下载 0 GB，共 {total} GB',
     'You can close this window. The download continues while Codeman is running.':
       '你可以关闭此窗口。只要 {name} 在运行，下载就会继续。',
-    'Nothing is downloaded until you continue.': '在你继续之前不会下载任何内容。',
+    'You can close this window. The install continues while Codeman is running.':
+      '你可以关闭此窗口。只要 {name} 在运行，安装就会继续。',
+    'The download waits until you continue.': '下载会等你点击继续后再进行。',
+    'The install waits until you continue.': '安装会等你点击继续后再进行。',
     Continue: '继续',
     'Choose another model': '选择其他模型',
     // After an error: the one action that helps.
@@ -1488,11 +1494,11 @@
     '{model} is ready on this Mac.': '{model} 已在此 Mac 上准备就绪。',
     '{model} is installed on this Mac.': '{model} 已安装在此 Mac 上。',
     'Runs with {cli}.': '搭配 {cli} 运行。',
-    'Context {context} tokens. Takes {memory} GB of memory when loaded, all on the GPU.':
-      '上下文 {context} 个 Token。加载后占用 {memory} GB 内存，全部位于 GPU 上。',
-    'Context {context} tokens. Takes {memory} GB of memory when loaded.':
-      '上下文 {context} 个 Token。加载后占用 {memory} GB 内存。',
     'Context {context} tokens.': '上下文 {context} 个 Token。',
+    'Takes {memory} GB of memory now, and up to about {peak} GB at its peak, with all of the context in use.':
+      '目前占用 {memory} GB 内存；上下文全部用满时，峰值约为 {peak} GB。',
+    'Takes {memory} GB of memory now.': '目前占用 {memory} GB 内存。',
+    'All of it is on the GPU.': '全部位于 GPU 上。',
     'Start a session': '开始会话',
     'Remove the local model from this Mac?': '要从此 Mac 移除本地模型吗？',
     'Also delete the downloaded model': '同时删除已下载的模型',
@@ -1503,7 +1509,7 @@
     'Recommended for this Mac': '为此 Mac 推荐',
     'This Mac can run a small model. It handles small edits and questions. It does not replace a cloud model.':
       '此 Mac 可以运行小型模型。它能处理小幅修改和问答，但不能替代云端模型。',
-    'Not yet tested by us on a Mac like this.': '我们尚未在类似的 Mac 上测试过。',
+    'Codeman has not run this on a Mac like this yet.': '{name} 尚未在同类 Mac 上运行过它。',
     'The best fit is a small model. It handles small edits and questions. It does not replace a cloud model.':
       '最适合的是一个小型模型。它能处理小幅修改和问答，但不能替代云端模型。',
     '{model} fits the memory of this Mac too, but its download needs about {missing} GB more free disk space.':
@@ -1514,24 +1520,25 @@
     'Speed unknown': '速度未知',
     'Codeman recommends a local model only on a Mac with Apple silicon.':
       '{name} 仅在搭载 Apple 芯片的 Mac 上推荐本地模型。',
-    'This Mac has an Intel processor. Local coding models need Apple silicon.':
-      '此 Mac 使用 Intel 处理器。本地编程模型需要 Apple 芯片。',
-    'This Mac has {memory} GB of memory. That is too little to run a model that can drive a coding agent, so Codeman recommends none here.':
-      '此 Mac 有 {memory} GB 内存，不足以运行能够驱动编程智能体的模型，因此 {name} 在此不推荐任何模型。',
-    'Codeman estimates that this Mac can give a model about {budget} GB of memory. The smallest model a coding agent can work with needs about {need} GB. That leaves no safe margin, so Codeman recommends none here.':
-      '据 {name} 估算，此 Mac 可分配给模型的内存约为 {budget} GB。编程智能体能够使用的最小模型约需 {need} GB。这样没有留出安全余量，因此 {name} 在此不推荐任何模型。',
+    'Local coding models need Apple silicon, and this Mac has an Intel processor.':
+      '本地编程模型需要 Apple 芯片，而此 Mac 使用的是 Intel 处理器。',
+    'With {memory} GB of memory, this Mac cannot run a model that can drive a coding agent.':
+      '此 Mac 只有 {memory} GB 内存，无法运行能够驱动编程智能体的模型。',
+    'This Mac can give a model about {budget} GB of memory, and the smallest model a coding agent can work with needs about {need} GB.':
+      '此 Mac 可分配给模型的内存约为 {budget} GB，而编程智能体能够使用的最小模型约需 {need} GB。',
     'Codeman could not read how much memory this Mac has, so it recommends no model here.':
       '{name} 无法读取此 Mac 的内存大小，因此在此不推荐任何模型。',
-    'Not enough free disk space. The smallest model that fits this Mac is a {download} GB download, and {reserve} GB must stay free after it. {free} GB is free now. Free up about {missing} GB.':
-      '可用磁盘空间不足。适合此 Mac 的最小模型需要下载 {download} GB，下载后还必须保留 {reserve} GB 的可用空间。当前可用空间为 {free} GB。请腾出约 {missing} GB。',
-    'This Mac runs macOS {version}. Local models need macOS {minimum} or newer.':
-      '此 Mac 运行的是 macOS {version}。本地模型需要 macOS {minimum} 或更高版本。',
+    'Free up about {missing} GB of disk space to install the smallest model that fits this Mac.':
+      '请腾出约 {missing} GB 磁盘空间，以便安装适合此 Mac 的最小模型。',
+    'Local models need macOS {minimum} or newer, and this Mac runs macOS {version}.':
+      '本地模型需要 macOS {minimum} 或更高版本，而此 Mac 运行的是 macOS {version}。',
     'No coding agent that Codeman can connect to a local model is available on this Mac.':
       '此 Mac 上没有 {name} 可以连接到本地模型的编程智能体。',
     // The tag of a model row (LOCAL_MODEL_TAG_LABELS in src/types/local-model.ts). Tight and Slow are
     // the entries above.
     'Tested on a Mac like this': '已在同类 Mac 上测试',
     'Best fit': '最适合',
+    'Best fit, tight': '最适合，内存偏紧',
     'Small model': '小型模型',
     // The sentences of the install (LOCAL_MODEL_INSTALL_LABELS in src/types/local-model-install.ts):
     // why a job stopped, why a request was refused, and the one sentence about the developer tools.
@@ -1569,6 +1576,17 @@
     'Sessions are still using this model: {sessions}. Close them first.':
       '仍有会话在使用此模型：{sessions}。请先关闭它们。',
     'That is not possible in the current state.': '当前状态下无法执行此操作。',
+    'This model at this context is not offered for this Mac right now.':
+      '目前不为此 Mac 提供这一上下文大小下的该模型。',
+    'This coding agent is not offered for this model.': '该模型不提供这个编程智能体。',
+    '{cli} is not installed and cannot be installed from here.': '{cli} 尚未安装，也无法从这里安装。',
+    'Only {model} is installed on this Mac. Remove it and install another model first.':
+      '此 Mac 上只安装了 {model}。请先移除它，再安装其他模型。',
+    // What the endpoint routes answer for the record of the model on this Mac (shown as a toast).
+    'This endpoint belongs to the model Codeman runs on this Mac. Change or remove it in the local model window.':
+      '此端点属于 {name} 在此 Mac 上运行的模型。请在本地模型窗口中更改或移除它。',
+    'This endpoint id is reserved for the model Codeman runs on this Mac. Pick another id.':
+      '此端点标识已保留给 {name} 在此 Mac 上运行的模型。请换一个标识。',
     'Coding agents use git and Python. This Mac has no developer tools yet, so macOS will offer to install them the first time an agent needs one.':
       '编程智能体会用到 git 和 Python。此 Mac 尚未安装开发者工具，因此在智能体首次需要时，macOS 会提示安装。',
   });

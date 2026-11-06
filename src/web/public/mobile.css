@@ -1870,14 +1870,26 @@ html.mobile-init .file-browser-panel {
   }
 
   .local-model-window > .lm-body {
-    flex: 1;
-    padding: 1rem 1rem calc(1rem + var(--safe-area-bottom));
+    padding: 1rem;
   }
 
   /* The window fills the screen, so its actions sit at the bottom, under the thumb. */
-  .lm-body > .lm-foot,
-  .lm-body > .lm-remove {
-    margin-top: auto;
+  .local-model-window > .lm-foot-slot {
+    padding: 0 1rem calc(1rem + var(--safe-area-bottom));
+  }
+
+  /* The short screens (progress, paused, a failure, installed, nothing fits)
+     hold a few lines. On a screen this tall they sit right above the buttons,
+     where the eye and the thumb already are, not at the top with half a
+     screen of nothing between the two. */
+  .local-model-window > .lm-body:is(
+      [data-screen='progress'],
+      [data-screen='paused'],
+      [data-screen='failed'],
+      [data-screen='installed'],
+      [data-screen='none']
+    ) {
+    justify-content: flex-end;
   }
 
   /* Ralph wizard responsive */
@@ -4330,14 +4342,6 @@ html[data-session-list="sidebar"] .session-sidebar .session-tab .tab-close {
   .lm-model-size {
     grid-row: 2;
     grid-column: 3;
-  }
-
-  .lm-model-static .lm-model-name {
-    grid-column: 1 / span 2;
-  }
-
-  .lm-model-static .lm-model-speed {
-    grid-column: 1 / span 2;
   }
 
   .lm-foot {
