@@ -29,6 +29,7 @@
  *
  * Port: ephemeral
  */
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -345,6 +346,73 @@ describe('a pane read reaching the session record', () => {
       ).refreshLiveWorktree.call(web, session);
       session.setPaneCwd(repo);
       await refresh;
+      expect(session.liveWorktree).toBeUndefined();
+    });
+  });
+
+  describe('liveWorktree outside the session folder (#765 follow-up)', () => {
+    let base: string;
+    let repo: string;
+    let sibling: string;
+
+    const git = (cwd: string, ...args: string[]): void => {
+      execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { cwd, stdio: 'ignore' });
+    };
+
+    beforeEach(() => {
+      base = realpathSync(mkdtempSync(join(tmpdir(), 'pane-outside-worktree-')));
+      repo = join(base, 'myapp');
+      mkdirSync(repo);
+      git(repo, 'init', '-q');
+      writeFileSync(join(repo, 'README.md'), 'main');
+      git(repo, 'add', 'README.md');
+      git(repo, 'commit', '-q', '-m', 'init');
+      sibling = join(base, 'myapp-feature');
+      git(repo, 'worktree', 'add', '-q', sibling);
+    });
+
+    afterEach(() => {
+      rmSync(base, { recursive: true, force: true });
+    });
+
+    it('publishes a sibling worktree of the session repository as outside, and clears it on the way back', async () => {
+      const { mux, sessions, web } = build();
+      const session = localMuxSession({ workingDir: repo });
+      sessions.set(session.id, session);
+      (web as unknown as { broadcastSessionStateDebounced: (id: string) => void }).broadcastSessionStateDebounced =
+        vi.fn();
+      mux.getPaneExit = () => undefined;
+      let dir = sibling;
+      mux.getPaneCurrentPath = () => dir;
+      // A reading outside `workingDir` waits until the workspace's real path is known, so tick
+      // until it lands.
+      await vi.waitFor(() => {
+        mux.emit('paneExitsUpdated');
+        expect(session.liveWorktree).toEqual({ name: 'myapp-feature', path: sibling, outside: true });
+      });
+      expect(session.toState().workingDir).toBe(repo);
+
+      dir = repo;
+      mux.emit('paneExitsUpdated');
+      await vi.waitFor(() => expect(session.liveWorktree).toBeUndefined());
+    });
+
+    it('follows nothing for a folder outside the session folder that the repository does not list', async () => {
+      const { mux, sessions, web } = build();
+      const session = localMuxSession({ workingDir: repo });
+      sessions.set(session.id, session);
+      (web as unknown as { broadcastSessionStateDebounced: (id: string) => void }).broadcastSessionStateDebounced =
+        vi.fn();
+      const plain = join(base, 'plain');
+      mkdirSync(plain);
+      mux.getPaneExit = () => undefined;
+      mux.getPaneCurrentPath = () => plain;
+      const lookup = vi.spyOn(session, 'setLiveWorktree');
+      await vi.waitFor(() => {
+        mux.emit('paneExitsUpdated');
+        expect(lookup).toHaveBeenCalled();
+      });
+      expect(session.paneCwd).toBe(plain);
       expect(session.liveWorktree).toBeUndefined();
     });
   });

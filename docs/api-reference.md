@@ -1002,15 +1002,31 @@ EnterWorktree moved the running session:
 "liveWorktree": { "name": "feature-a", "path": "/home/me/repo/.claude/worktrees/feature-a" }
 ```
 
-It is derived from `paneCwd`, so it is absent wherever that is, and it is only ever a folder
-strictly below `workingDir`: a worktree elsewhere is never reported. `path` is in `workingDir`'s
-spelling. Like `paneCwd` it is never restored after a restart and never a confinement root.
+It is derived from `paneCwd`, so it is absent wherever that is. Usually it is a folder strictly
+below `workingDir`, with `path` in `workingDir`'s spelling, and then it is never a confinement
+root. Like `paneCwd` it is never restored after a restart.
+
+It can also be a worktree of the session's repository OUTSIDE `workingDir`, such as
+`git worktree add ../feature`. It then carries `"outside": true`, and `path` is the folder's
+real path:
+
+```json
+"liveWorktree": { "name": "repo-feature", "path": "/home/me/repo-feature", "outside": true }
+```
+
+Such a worktree is a second root for the session's file routes. `file-content` (read and edit),
+`file-raw`, `file-preview`, `file-thumbnail` and `GET /api/v1/download` accept an ABSOLUTE path
+inside it, while a relative path still resolves against `workingDir` only. Codeman reports it
+only when the session's own repository lists it, and never for `/`, the home folder or above, a
+folder holding `workingDir`, or a Docker case workspace.
 
 `GET /api/v1/sessions/:id/files` takes an optional `root=live`, which starts the listing, or a
 `q` search, at that worktree instead of at `workingDir`. The response's `root` names the folder
 that was walked: it stays `workingDir` when the session is in no worktree, when the worktree has
-gone, and when the folder no longer resolves inside `workingDir`. A `path` in the response stays
-relative to `workingDir` either way, so it works unchanged on `file-content` and `file-raw`,
+gone, and when the folder no longer resolves inside `workingDir` (for an outside worktree, when it
+no longer resolves to its recorded `path`). A `path` in the response stays relative to
+`workingDir` either way, except in a listing of an outside worktree, where every `path` is
+absolute. Both forms work unchanged on `file-content` and `file-raw`,
 while a `q` containing `/` is matched against paths relative to the folder walked. The response
 also carries `worktree`, the same `{ name, path }`, whenever the session has a `liveWorktree`,
 whichever folder was walked and with or without `root=live`.

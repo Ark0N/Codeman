@@ -53,11 +53,16 @@ Only the Files panel moves. The **Git** panel stays on the session's folder, so 
 folder, so an `.html` file in `.claude/worktrees/<name>` opens as source rather than as a
 rendered page. A session started in the worktree does not have that limit.
 
-A worktree outside the session's folder (`git worktree add ../feature`) is not followed: Codeman
-only serves files inside the session's folder. The same goes for a session started in a subfolder
-of the repository, because Claude Code puts the worktree at the top of the repository, which is
-outside that session's folder. Open such a worktree as a case of its own with Add Case > Link
-Existing.
+A worktree beside the repository (`git worktree add ../feature`, or a setup that makes
+EnterWorktree put worktrees there) is followed too, as long as the session was started at the top
+of the repository or of one of its worktrees. The panel then lists that folder with full paths,
+and you can preview and edit its files there. Codeman follows such a worktree only when the
+session's own repository lists it, and never one that is your home folder or above it, one that
+holds the session's folder, or a Docker case's workspace.
+
+A session started in a subfolder of the repository follows no worktree outside that subfolder,
+including the one Claude Code creates at the top of the repository. Open such a worktree as a case
+of its own with Add Case > Link Existing.
 
 ## Removing one
 

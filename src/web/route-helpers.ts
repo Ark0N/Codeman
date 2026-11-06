@@ -102,6 +102,42 @@ export function validateSessionFilePath(
 }
 
 /**
+ * The outside worktree (#765) a LOCAL session's file routes may serve `filePath` from, else null:
+ * a recorded worktree with `outside` set, an absolute `filePath` lexically inside it, and a
+ * folder that still resolves to the very path that was recorded. `findOutsideWorktree()` records
+ * the real path, so a symlink that took the folder's place (or a parent's) since then fails the
+ * last check and the path is judged against `workingDir` alone.
+ */
+export function outsideWorktreeRootFor(
+  liveWorktree: { path: string; outside?: true } | undefined,
+  filePath: string
+): string | null {
+  if (!liveWorktree?.outside || !isAbsolute(filePath)) return null;
+  const root = liveWorktree.path;
+  const rel = relative(root, resolve(filePath));
+  if (rel.startsWith('..') || isAbsolute(rel)) return null;
+  try {
+    return realpathSync(root) === root ? root : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * {@link validateSessionFilePath} for a LOCAL session that may have a worktree outside its folder
+ * (`liveWorktree.outside`): an absolute path inside that worktree is confined to it, and, when
+ * that refuses it (a worktree file that is a symlink into the session's own folder), to
+ * `workingDir`, which is served anyway. Every other path is judged against `workingDir` alone.
+ */
+export function validateLocalSessionFilePath(
+  scope: { workingDir: string; liveWorktree?: { path: string; outside?: true } },
+  filePath: string
+): { resolvedPath: string; relativePath: string } | null {
+  const root = outsideWorktreeRootFor(scope.liveWorktree, filePath);
+  return (root && validateSessionFilePath(root, filePath)) || validateSessionFilePath(scope.workingDir, filePath);
+}
+
+/**
  * The lexical half of {@link validateSessionFilePath}: same containment rule, but
  * WITHOUT touching the filesystem.
  *

@@ -939,13 +939,17 @@ export interface SessionState {
    */
   paneCwd?: string;
   /**
-   * The linked git worktree inside `workingDir` that the pane is in NOW, when there is one:
-   * Claude Code's `.claude/worktrees/<name>`, or any other worktree of the repository under
-   * the session's folder. Derived from {@link paneCwd} by `live-worktree.ts`, so it is
-   * runtime-only and absent wherever `paneCwd` is, and absent for a worktree outside
-   * `workingDir`: the file routes never serve those. NOT a confinement root; the Files panel
-   * only starts its listing here, after `GET .../files` has checked that the real folder still
-   * lies inside `workingDir`, since a symlink can replace it without moving the pane.
+   * The linked git worktree that the pane is in NOW, when there is one. Derived from
+   * {@link paneCwd} by `live-worktree.ts`, so it is runtime-only and absent wherever `paneCwd` is.
+   *
+   * Usually it lies inside `workingDir` (Claude Code's `.claude/worktrees/<name>`), and then it is
+   * NOT a confinement root: the Files panel only starts its listing here, after `GET .../files`
+   * has checked that the real folder still lies inside `workingDir`, since a symlink can replace
+   * it without moving the pane.
+   *
+   * With `outside: true` it is a worktree of the session's repository outside `workingDir`, which
+   * the repository itself vouched for, and its `path` is a real path. The file routes then serve
+   * absolute paths inside it as a second root, while it still resolves to that same path.
    */
   liveWorktree?: LiveWorktree;
   /** Remote execution metadata, present when this session runs over SSH through local tmux */

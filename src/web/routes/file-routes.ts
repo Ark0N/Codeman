@@ -58,11 +58,13 @@ import {
   getAuthUser,
   parseBody,
   resolveCasesDir,
+  validateLocalSessionFilePath,
   validateSessionFilePath,
   validateSessionFilePathLexical,
 } from '../route-helpers.js';
 import type { FastifyRequest } from 'fastify';
 import type { SessionAttachmentHistoryItem, SessionRemote, SessionState } from '../../types/session.js';
+import type { LiveWorktree } from '../../live-worktree.js';
 import {
   RemoteFileAccessError,
   remoteCreateReadStream,
@@ -574,6 +576,11 @@ function getKnownSessionWorkingDir(
 /** Where a session's files live: this host, or a host reachable over ssh. */
 interface SessionFileScope {
   workingDir: string;
+  /**
+   * A live local session's worktree (#765). Only one with `outside` set changes anything here: it
+   * is a second root that ABSOLUTE paths inside it are confined to (`validateLocalSessionFilePath`).
+   */
+  liveWorktree?: LiveWorktree;
   remote?: SessionRemote;
   /** The session runs inside a Docker case: a local session for these routes, but `~` is the container's. */
   docker?: boolean;
@@ -606,7 +613,12 @@ function getKnownSessionFileScope(
   const user = getAuthUser(req);
   const liveSession = ctx.sessions.get(sessionId);
   if (liveSession && canAccessOwned(user, liveSession.owner)) {
-    return { workingDir: liveSession.workingDir, remote: liveSession.remote, docker: !!liveSession.docker };
+    return {
+      workingDir: liveSession.workingDir,
+      liveWorktree: liveSession.liveWorktree,
+      remote: liveSession.remote,
+      docker: !!liveSession.docker,
+    };
   }
 
   const stored = ctx.store.getSession(sessionId);
@@ -657,7 +669,7 @@ type FileTargetResolution =
  */
 async function resolveFileTarget(scope: SessionFileScope, filePath: string): Promise<FileTargetResolution> {
   if (!scope.remote) {
-    const validated = validateSessionFilePath(scope.workingDir, filePath);
+    const validated = validateLocalSessionFilePath(scope, filePath);
     if (!validated) {
       return {
         ok: false,
@@ -871,6 +883,21 @@ async function canWalkLiveWorktree(workingDir: string, worktreePath: string): Pr
   try {
     const [realRoot, realWorktree] = await Promise.all([fs.realpath(workingDir), fs.realpath(worktreePath)]);
     return realWorktree !== realRoot && isPathWithinRoot(realRoot, realWorktree);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether a `root=live` listing may start at a worktree OUTSIDE `workingDir` (`liveWorktree.outside`).
+ * `findOutsideWorktree()` recorded its real path, and a symlink can take the folder's place, or a
+ * parent's, without moving the pane, so the folder must still resolve to exactly that path. Probed
+ * first (#516).
+ */
+async function canWalkOutsideWorktree(worktreePath: string): Promise<boolean> {
+  if ((await probePathKind(worktreePath, { pastCap: true })) !== 'directory') return false;
+  try {
+    return (await fs.realpath(worktreePath)) === worktreePath;
   } catch {
     return false;
   }
@@ -1708,11 +1735,20 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
     // `workingDir`, so file-content, file-raw and the edit route need nothing new and judge these
     // paths against the same root as any other. Only the search predicate reads a path relative
     // to the listing, since that is the tree the person is looking at.
+    // A worktree OUTSIDE `workingDir` (`liveWorktree.outside`) is a second root: walked only while
+    // it still resolves to the real path recorded for it, and listed with ABSOLUTE `path`s, since a
+    // relative one resolves against `workingDir` on every other route. Those routes confine an
+    // absolute path inside it to it (`validateLocalSessionFilePath`).
     const liveWorktree = session.liveWorktree;
-    const walkRoot =
-      root === 'live' && liveWorktree && (await canWalkLiveWorktree(workingDir, liveWorktree.path))
-        ? liveWorktree.path
-        : workingDir;
+    const walksOutside =
+      root === 'live' && !!liveWorktree?.outside && (await canWalkOutsideWorktree(liveWorktree.path));
+    const walksInside =
+      root === 'live' &&
+      !!liveWorktree &&
+      !liveWorktree.outside &&
+      (await canWalkLiveWorktree(workingDir, liveWorktree.path));
+    const walkRoot = liveWorktree && (walksOutside || walksInside) ? liveWorktree.path : workingDir;
+    const nodePath = (fullPath: string): string => (walksOutside ? fullPath : fullPath.slice(workingDir.length + 1));
     // null for an empty/whitespace query, which is what keeps the default
     // tree response byte-identical when no search is requested.
     const matcher = compileFileQuery(q ?? '');
@@ -1802,7 +1838,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
           while (cursor.index < endIndex && totalFiles + totalDirectories < maxFiles && matches.length < maxMatches) {
             const entry = cursor.entries[cursor.index++];
             const fullPath = join(cursor.dirPath, entry.name);
-            const relativePath = relative(workingDir, fullPath);
+            const relativePath = walksOutside ? fullPath : relative(workingDir, fullPath);
             const listedPath = relative(walkRoot, fullPath);
 
             if (entry.isDirectory()) {
@@ -1893,7 +1929,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
         while (cursor.index < endIndex && totalFiles + totalDirectories < maxFiles) {
           const entry = cursor.entries[cursor.index++];
           const fullPath = join(cursor.dirPath, entry.name);
-          const relativePath = fullPath.slice(workingDir.length + 1);
+          const relativePath = nodePath(fullPath);
           if (entry.isDirectory()) {
             totalDirectories++;
             const node: FileTreeNode = {
@@ -1958,7 +1994,10 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
     // Validate path is within working directory (security: resolve symlinks to prevent traversal)
     // For a remote (SSH) case the same boundary is resolved on the remote host (#415),
     // where the path actually lives.
-    const resolution = await resolveFileTarget({ workingDir: session.workingDir, remote: session.remote }, filePath);
+    const resolution = await resolveFileTarget(
+      { workingDir: session.workingDir, liveWorktree: session.liveWorktree, remote: session.remote },
+      filePath
+    );
     if (!resolution.ok) {
       // An unreachable remote is thrown so the shared handler answers a real 502 (and
       // the test can assert it); a refusal keeps this route's historical returned
@@ -2230,7 +2269,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
         throwFileEditError(413, ApiErrorCode.INVALID_INPUT, `Content too large (${MAX_EDITABLE_BYTES / 1024}KB limit)`);
       }
 
-      const validated = validateSessionFilePath(session.workingDir, body.path);
+      const validated = validateLocalSessionFilePath(session, body.path);
       if (!validated) {
         // Covers missing files, traversal, and symlink escapes alike — a write
         // target that fails confinement is reported identically to a missing
@@ -2333,7 +2372,10 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
     }
 
     // Validate path is within working directory (security: resolve symlinks to prevent traversal)
-    const resolution = await resolveFileTarget({ workingDir: session.workingDir, remote: session.remote }, filePath);
+    const resolution = await resolveFileTarget(
+      { workingDir: session.workingDir, liveWorktree: session.liveWorktree, remote: session.remote },
+      filePath
+    );
     if (!resolution.ok) {
       reply.code(resolution.status).send(createErrorResponse(resolution.errorCode, resolution.message));
       return;
@@ -2972,7 +3014,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
     }
 
     const session = findSessionOrFail(ctx, sessionId, req);
-    const validated = validateSessionFilePath(session.workingDir, filePath);
+    const validated = validateLocalSessionFilePath(session, filePath);
     if (!validated) {
       reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, 'File not found'));
       return;

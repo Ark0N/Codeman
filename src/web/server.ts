@@ -35,7 +35,7 @@ import fastifyWebsocket from '@fastify/websocket';
 import fastifyMultipart from '@fastify/multipart';
 import { pasteImageDirInUseByOtherSession, startPasteImageGc, uploadDirs } from './paste-image-gc.js';
 import { CLEAN_EXIT_CLOSE_REASON, shouldCloseCleanlyExitedSession } from '../pane-exit-sweep.js';
-import { findLiveWorktree } from '../live-worktree.js';
+import { findLiveWorktree, type OutsideWorktreeOptions } from '../live-worktree.js';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync, mkdirSync, readFileSync, chmodSync, statSync } from 'node:fs';
@@ -80,7 +80,7 @@ import {
 import { imageWatcher } from '../image-watcher.js';
 import { workflowRunWatcher, summarizeRun } from '../workflow-run-watcher.js';
 import { attachmentRegistry, buildFileThumbnailRoute, registerExternalAttachment } from '../attachment-registry.js';
-import { folderGrants } from '../folder-listing.js';
+import { folderAllowedForUser, folderGrants } from '../folder-listing.js';
 import { getCli, enabledClis, listClis } from '../config/cli-registry/registry.js';
 import { isCliEntryInstalled, probeStockCliAvailability } from '../utils/cli-installed-probes.js';
 import { readCustomModelHosts, resolveCustomModelContextLength } from '../custom-model-hosts.js';
@@ -213,7 +213,7 @@ import {
   sendLostWebviewFramePage,
 } from './middleware/auth.js';
 import { isMultiUserMode } from '../config/multiuser.js';
-import { bootstrapInitialAdmin, hasUsers, resolveClaudeModeForUsername } from '../user-store.js';
+import { bootstrapInitialAdmin, findUser, hasUsers, resolveClaudeModeForUsername } from '../user-store.js';
 import { installRouteErrorHandler } from './route-error-handler.js';
 import { installEmptyApiPostParser } from './request-body-parser.js';
 import { isExplicitlyEnabled, isLoopbackBindHost, buildHostPolicy, type HostPolicy } from './network-auth-policy.js';
@@ -3021,9 +3021,31 @@ export class WebServer extends EventEmitter {
    */
   private async refreshLiveWorktree(session: Session): Promise<void> {
     const cwd = session.paneCwd;
-    const worktree = await findLiveWorktree(session.workingDir, cwd);
+    const worktree = await findLiveWorktree(session.workingDir, cwd, this.outsideWorktreeOptions(session));
     if (session.paneCwd !== cwd) return;
     if (session.setLiveWorktree(worktree)) this.broadcastSessionStateDebounced(session.id);
+  }
+
+  /**
+   * The rules a worktree OUTSIDE the session's folder must pass to be followed (#765 follow-up):
+   * none in a Docker case workspace (the list is read only when a candidate needs it, and an
+   * unreadable list follows nothing), and in multi-user mode only inside the owner's space or
+   * `workingDir`. Undefined for a remote or Docker session, whose pane directory is not a path the
+   * agent works in on this host (it has no `paneCwd` either, so this is belt and braces).
+   */
+  private outsideWorktreeOptions(session: Session): OutsideWorktreeOptions | undefined {
+    if (session.remote || session.docker) return undefined;
+    return {
+      dockerWorkspaces: defaultDockerWorkspaces,
+      ...(isMultiUserMode() && {
+        allowRoot: async (root: string): Promise<boolean> => {
+          const owner = session.owner ? await findUser(session.owner) : undefined;
+          return folderAllowedForUser(root, owner ? { username: owner.username, role: owner.role } : undefined, {
+            workingDir: session.workingDir,
+          });
+        },
+      }),
+    };
   }
 
   /**

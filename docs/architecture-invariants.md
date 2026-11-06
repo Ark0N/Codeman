@@ -768,7 +768,7 @@ Frontend `readmymind-ui.js`: header 🧠 marker-hidden (`btn-readmymind--hidden`
 
 ⚠️ **Globs are never compiled into a RegExp**: `*a*a*a…` translated to `^.*a.*a.*a…$` is a classic backtracking blowup evaluated synchronously against every walked path, so one pathological query would freeze the event loop for the whole server (the same reason `search-service.ts` is regex-free). `globMatch()` is a two-pointer wildcard walk instead, O(text · pattern) with both operands short by construction, and an overlong query (`MAX_QUERY_LENGTH`, 256) also compiles to `null` rather than running.
 
-Matching semantics: a query containing `/` matches the path relative to the folder being walked (`workingDir`, or the worktree of a `root=live` listing; the returned `path`s stay relative to `workingDir` either way), otherwise the bare entry name; globs match anchored and case-insensitively (`*` spans any run, slashes included, `?` exactly one character), everything else is a plain case-insensitive substring.
+Matching semantics: a query containing `/` matches the path relative to the folder being walked (`workingDir`, or the worktree of a `root=live` listing; the returned `path`s stay relative to `workingDir` either way, except for a worktree outside it, whose `path`s are absolute), otherwise the bare entry name; globs match anchored and case-insensitively (`*` spans any run, slashes included, `?` exactly one character), everything else is a plain case-insensitive substring.
 
 ### Files panel in a worktree
 
@@ -780,7 +780,19 @@ When `paneCwd` changes, `refreshLiveWorktree()` (server.ts) runs `findLiveWorktr
 
 ⚠️ **Only the check uses resolved paths.** The walk keeps the session's spelling, or a workspace reached through a symlink stops producing paths relative to `workingDir`, and the listing's `path`s stop working on the file routes.
 
-⚠️ `liveWorktree` only moves where a listing STARTS, so never make it a confinement root. Returned `path`s stay relative to `workingDir`, which is why `file-content`, `file-raw` and the edit route need nothing new. Serving a worktree outside the folder (`git worktree add ../feature`) would need a second root, so those stay unfollowed, and so does a worktree of a session started below the repository's top, because Claude Code puts it at the top, outside the session's folder.
+⚠️ A `liveWorktree` inside `workingDir` only moves where a listing STARTS, so never make it a confinement root. Returned `path`s stay relative to `workingDir`, which is why `file-content`, `file-raw` and the edit route need nothing new for it.
+
+**A worktree outside the session's folder** (`git worktree add ../feature`, or an EnterWorktree that the user's own tooling places beside the repository) is the one case that IS a second confinement root, and it carries `liveWorktree.outside: true`. `refreshLiveWorktree()` passes `findLiveWorktree()` the outside rules (`outsideWorktreeOptions()`, server.ts; none for a remote or Docker session), and `findOutsideWorktree()` answers only when all of these hold:
+
+- The session's `workingDir` is the top of its repository or of a linked worktree (its `.git` sits there), so its git common dir is known. A session started in a subfolder follows no worktree outside it.
+- The nearest `.git` at or above the pane is a FILE naming `<common dir>/worktrees/<id>`, and that registry entry's own `gitdir` file names the candidate back. Or it is a `.git` FOLDER that is the common dir itself, which is the main worktree seen from a session started in a linked one. These are the files `git worktree list` reads; git is never run, because this fires from the pane watcher on every directory change. A forged `.git` file pointing at a real entry fails the back link.
+- The candidate's real path is not `/`, not the home folder or above it, and does not hold `workingDir`.
+- It is not at, inside or around a Docker case workspace. An unreadable `docker-cases.json` follows nothing, since it could hide a container's workspace.
+- In multi-user mode, the owner's `folderAllowedForUser` rule admits it.
+
+Every comparison uses real paths, and the recorded `path` is the real path. ⚠️ **The routes must re-check it on every request**: `outsideWorktreeRootFor()` (route-helpers.ts) and `canWalkOutsideWorktree()` (file-routes.ts) accept the folder only while `realpath` returns exactly the recorded path, so a symlink swapped in later serves nothing from it. ⚠️ Its listing returns ABSOLUTE `path`s, and only an absolute path inside it is confined to it (`validateLocalSessionFilePath()`, used by `file-content`, the edit route, `file-raw`, `file-preview`, `file-thumbnail`, `/api/download` and `html-view`). A relative path still resolves against `workingDir` alone, so `../feature/x` is refused as before. A symlink inside the worktree into `workingDir` is served, since `workingDir` is served anyway. ⚠️ The browser routes a path inside it to those routes, not to the read-only attachment routes (`_isOutsideWorktreePath()`, panels-ui.js), and the terminal opens it in the preview, because the log viewer's `tail-file` stays confined to `workingDir`.
+
+A worktree of a session started below the repository's top is still not followed, because Claude Code puts it at the top, outside the session's folder, and that session has no common dir to check it against.
 
 ⚠️ A listing reports `worktree` whichever folder it walked, even when the worktree has gone or the check refused it: `_followFileBrowserWorktree()` compares that report with the session's state, and an absent report would reload forever.
 

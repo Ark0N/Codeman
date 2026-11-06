@@ -33,7 +33,7 @@ import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } 
 import { ApiErrorCode, createErrorResponse } from '../../types.js';
 import { isBlockedAttachmentPath, isUnderTree, loadAttachmentGuardConfig } from '../../config/attachment-guard.js';
 import { HTML_VIEW_PREFIX, htmlViewCapabilities } from '../../html-view-capabilities.js';
-import { CASES_DIR, findSessionOrFail, ownerFor, parseBody, validateSessionFilePath } from '../route-helpers.js';
+import { CASES_DIR, findSessionOrFail, ownerFor, parseBody, validateLocalSessionFilePath } from '../route-helpers.js';
 import { HtmlViewOpenSchema } from '../schemas.js';
 import { DOCKER_HOME_PATH_ERROR, localFileSource, sendFileBody } from './file-routes.js';
 import { getUserSpacesDir } from '../../config/multiuser.js';
@@ -175,7 +175,7 @@ export function registerHtmlViewRoutes(app: FastifyInstance, ctx: SessionPort): 
     // Inside the workspace: the same check every file route uses. Outside it: the
     // attachment guard, exactly as an external file preview is admitted.
     let resolvedPath: string;
-    const inWorkspace = validateSessionFilePath(session.workingDir, requestedPath);
+    const inWorkspace = validateLocalSessionFilePath(session, requestedPath);
     if (inWorkspace) {
       resolvedPath = inWorkspace.resolvedPath;
     } else {

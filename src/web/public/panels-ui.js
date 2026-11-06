@@ -4264,7 +4264,24 @@ Object.assign(CodemanApp.prototype, {
     const workingDir = this.sessions.get(sessionId)?.workingDir;
     if (!workingDir) return false;
     const root = workingDir.endsWith('/') ? workingDir : `${workingDir}/`;
-    return filePath !== workingDir && !filePath.startsWith(root);
+    if (filePath === workingDir || filePath.startsWith(root)) return false;
+    // A worktree outside `workingDir` that the agent is in (#765) is a second root the file
+    // routes serve, so a path inside it previews (and edits) like a workspace path.
+    return this._isOutsideWorktreePath?.(filePath, sessionId) !== true;
+  },
+
+  /**
+   * Whether an absolute path lies inside the worktree OUTSIDE `workingDir` that the session's agent
+   * is in (`liveWorktree.outside`, #765). The file routes serve it as a second root, while the log
+   * viewer's `tail-file` stays confined to `workingDir`, so the terminal opens such a path in the
+   * file preview.
+   */
+  _isOutsideWorktreePath(filePath, sessionId) {
+    if (typeof filePath !== 'string' || !filePath.startsWith('/')) return false;
+    const worktree = this.sessions?.get?.(sessionId)?.liveWorktree;
+    if (worktree?.outside !== true || typeof worktree.path !== 'string' || !worktree.path) return false;
+    const root = worktree.path.endsWith('/') ? worktree.path : `${worktree.path}/`;
+    return filePath === worktree.path || filePath.startsWith(root);
   },
 
   /**
@@ -5197,6 +5214,13 @@ Object.assign(CodemanApp.prototype, {
   _rebaseFilePreviewMarkdownRefs(root, { sessionId, filePath, attachmentId }) {
     const dir = filePath.includes('/') ? filePath.slice(0, filePath.lastIndexOf('/') + 1) : '';
     const unresolvable = !!attachmentId && !filePath.startsWith('/');
+    // A root-relative ref (`/docs/x.png`) resolves from the top of the checkout the file is in, as
+    // on GitHub: the workspace, or the worktree outside it that the agent is in (#765).
+    const worktree = this.sessions?.get?.(sessionId)?.liveWorktree;
+    const rootPrefix =
+      worktree?.outside === true && this._isOutsideWorktreePath?.(filePath, sessionId)
+        ? `${worktree.path.replace(/\/+$/, '')}/`
+        : '';
     // Workspace ref = no scheme, not protocol-relative (//host), not a fragment.
     const isWorkspaceRef = (ref) =>
       !!ref && !/^[a-z][a-z0-9+.-]*:/i.test(ref) && !ref.startsWith('//') && !ref.startsWith('#');
@@ -5216,7 +5240,7 @@ Object.assign(CodemanApp.prototype, {
         /* malformed escape: keep the ref as written */
       }
       const parts = [];
-      for (const seg of (rel.startsWith('/') ? rel.slice(1) : dir + rel).split('/')) {
+      for (const seg of (rel.startsWith('/') ? rootPrefix + rel.slice(1) : dir + rel).split('/')) {
         if (seg === '.' || (seg === '' && parts.length)) continue;
         if (seg === '..' && parts.length && parts[parts.length - 1] !== '..' && parts[parts.length - 1] !== '') parts.pop();
         else parts.push(seg);

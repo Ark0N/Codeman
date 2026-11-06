@@ -342,6 +342,15 @@ escapes the session working directory (`..`, absolute paths, and symlinks that
 resolve outside). The realpath‑before‑check ordering closes the validation‑time
 TOCTOU window.
 
+A local session has one more root while its agent works in a git worktree of the
+same repository OUTSIDE its folder (`liveWorktree.outside`). An absolute path inside
+that worktree is confined to it by `validateLocalSessionFilePath()`, and only while the
+worktree folder still `realpath`s to the path recorded for it. Codeman records such a
+worktree only after the session's own repository vouches for it, and never `/`, the
+home folder or above, a folder holding the working directory or a Docker case
+workspace (`src/live-worktree.ts`). A relative path is still confined to the working
+directory alone.
+
 | Route | Cap | Notes |
 |-------|-----|-------|
 | `file-content` | 10 MB | text preview |
