@@ -14,6 +14,8 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+    outputs:
+      published: ${{ steps.changesets.outputs.published }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@v6
@@ -72,3 +74,14 @@ jobs:
           git tag "$NEW_TAG" "$OLD_TAG" 2>/dev/null || true
           git tag -d "$OLD_TAG" 2>/dev/null || true
           git push origin "$NEW_TAG" ":refs/tags/$OLD_TAG" 2>/dev/null || true
+
+  # Its own job: this one alone holds id-token, and a registry failure shows as itself
+  # without touching the npm publish or the tag above.
+  mcp-registry:
+    name: MCP registry
+    needs: release
+    if: needs.release.outputs.published == 'true'
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/publish-mcp.yml
