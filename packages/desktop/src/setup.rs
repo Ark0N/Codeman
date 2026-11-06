@@ -350,7 +350,7 @@ pub fn install_in_progress(command: &str) -> Option<Option<u16>> {
     }) {
         return Some(None);
     }
-    if words.iter().any(|w| name(w).starts_with("codeman-install.")) || gui_install::is_install_run(command) {
+    if words.iter().any(|w| name(w).starts_with("codeman-install.")) || gui_install::Run::Codeman.matches(command) {
         let port = words
             .iter()
             .position(|w| *w == "--port")
@@ -359,15 +359,6 @@ pub fn install_in_progress(command: &str) -> Option<Option<u16>> {
         return Some(port);
     }
     None
-}
-
-/// The process of the graphical install running on this Mac, if one does. It
-/// leads its process group.
-pub fn install_in_app() -> Option<u32> {
-    list_processes()
-        .into_iter()
-        .find(|(_, command)| gui_install::is_install_run(command))
-        .map(|(pid, _)| pid)
 }
 
 fn codeman_servers(procs: &[(u32, String)]) -> Vec<u32> {
@@ -491,6 +482,9 @@ pub struct LocalStatus {
     /// That install is the graphical one, not a Terminal window: the page can
     /// show it (gui_install::follow), also after the app was quit.
     pub install_in_app: bool,
+    /// A coding agent is being added the same way. Not an install: it says
+    /// nothing about Codeman, which may well be running.
+    pub agent_install_in_app: bool,
     /// For RunningElsewhere: the addresses that Codeman listens on.
     pub elsewhere: Vec<String>,
     /// The probe's outcome, for the connect page's explanations.
@@ -517,7 +511,8 @@ pub fn inspect(depth: Depth) -> LocalStatus {
     let servers = codeman_servers(&procs);
     let found = listeners(&servers);
     let install = procs.iter().find_map(|(_, c)| install_in_progress(c));
-    let install_in_app = procs.iter().any(|(_, c)| gui_install::is_install_run(c));
+    let install_in_app = procs.iter().any(|(_, c)| gui_install::Run::Codeman.matches(c));
+    let agent_install_in_app = procs.iter().any(|(_, c)| gui_install::Run::Agent.matches(c));
 
     // The login goes only to this user's own Codeman on that port.
     let auth = if serves_loopback_port(&found, url.port_or_known_default().unwrap_or(0)) {
@@ -611,6 +606,7 @@ pub fn inspect(depth: Depth) -> LocalStatus {
         install_running: install.is_some(),
         install_port: install.flatten(),
         install_in_app,
+        agent_install_in_app,
         elsewhere,
         outcome,
     }

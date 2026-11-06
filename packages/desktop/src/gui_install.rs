@@ -19,6 +19,12 @@
 //! connect page that was reloaded, or an app that was quit and opened again,
 //! finds the running install in `ps` and replays it. That is why this module
 //! keeps no state about a run but the file and the process.
+//!
+//! Adding a coding agent to a Mac that has Codeman is the same machinery with a
+//! smaller job: `install.sh agent <id>`. It is a [`Run`] of its own, in a folder
+//! of its own, because everything else here reads a running install as "Codeman
+//! is being installed", and because it touches no service, so it may run next to
+//! a live server, which `refuse_start` exists to prevent for an install.
 
 use std::fs::{self, DirBuilder, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom};
@@ -35,14 +41,16 @@ use serde_json::{json, Value};
 use crate::local_server;
 use crate::setup;
 
-/// The folder under the per-user temporary folder that holds a run. A fixed
-/// name, so an app that was opened again finds it.
-const RUN_DIR: &str = "codeman-install";
 const SCRIPT_FILE: &str = "install.sh";
 const OUTPUT_FILE: &str = "install.out";
 
 /// The `install.sh preflight` schema this app understands.
 const PREFLIGHT_SCHEMA: u32 = 1;
+
+/// What the app asks the installer. `--no-admin` here and on an agent run: it
+/// decides which agents count as installable, so the two must agree, or the page
+/// offers one the run refuses.
+const PREFLIGHT_ARGS: [&str; 2] = ["preflight", "--no-admin"];
 
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(120);
 const PREFLIGHT_TIMEOUT: Duration = Duration::from_secs(60);
@@ -64,6 +72,46 @@ const PROTOCOL_PREFIX: &str = "@@codeman ";
 
 /// Set by Cancel, so `follow` can tell a cancelled run from a failed one.
 static CANCELLED: AtomicBool = AtomicBool::new(false);
+
+/// The two things the app runs the installer for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Run {
+    /// Install Codeman (`start`).
+    Codeman,
+    /// Add one coding agent (`start_agent`).
+    Agent,
+}
+
+impl Run {
+    /// The folder under the per-user temporary folder that holds the run. A
+    /// fixed name, so an app that was opened again finds it.
+    fn folder(self) -> &'static str {
+        match self {
+            Run::Codeman => "codeman-install",
+            Run::Agent => "codeman-agent",
+        }
+    }
+
+    fn dir(self) -> PathBuf {
+        std::env::temp_dir().join(self.folder())
+    }
+
+    /// Whether a command line is this run. `preflight` from the same file is
+    /// not one: it has no `--progress`.
+    pub fn matches(self, command: &str) -> bool {
+        let suffix = format!("/{}/{SCRIPT_FILE}", self.folder());
+        let mut words = command.split_whitespace();
+        words.any(|w| w.ends_with(&suffix)) && command.split_whitespace().any(|w| w == "--progress")
+    }
+
+    /// A process of this run, if it is running.
+    pub fn process(self) -> Option<u32> {
+        setup::list_processes()
+            .into_iter()
+            .find(|(_, command)| self.matches(command))
+            .map(|(pid, _)| pid)
+    }
+}
 
 /// What `install.sh preflight` found. Fields the installer adds later are
 /// ignored here, and `schema` changes when one changes meaning.
@@ -108,6 +156,15 @@ pub struct Plan {
     pub ai_cli: Option<String>,
 }
 
+/// `install.sh`'s arguments for adding one agent. The id is in the shape
+/// `policy::is_cli_id` allows, and the installer checks it against its catalogue.
+pub fn agent_args(id: &str) -> Vec<String> {
+    ["agent", id, "--no-admin", "--progress"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
+}
+
 /// `install.sh`'s flags for a graphical install. The password is not among
 /// them: anything here can be read in `ps`. Always `--service`, like the
 /// Terminal route: a LaunchAgent runs Codeman, so it keeps running when the app
@@ -133,10 +190,15 @@ pub fn install_args(plan: &Plan) -> Vec<String> {
     args
 }
 
-/// What a graphical install adds to the environment. There is no terminal, so
-/// `CODEMAN_NONINTERACTIVE` is what lets `headless_guard` go ahead.
+/// There is no terminal, so `CODEMAN_NONINTERACTIVE` is what lets
+/// `headless_guard` go ahead.
+fn no_terminal_env() -> Vec<(String, String)> {
+    vec![("CODEMAN_NONINTERACTIVE".to_string(), "1".to_string())]
+}
+
+/// What a graphical install adds to the environment.
 pub fn install_env(plan: &Plan) -> Vec<(String, String)> {
-    let mut env = vec![("CODEMAN_NONINTERACTIVE".to_string(), "1".to_string())];
+    let mut env = no_terminal_env();
     if let Some(password) = &plan.network_password {
         env.push(("CODEMAN_PASSWORD".to_string(), password.clone()));
     }
@@ -160,22 +222,10 @@ pub fn parse_preflight(stdout: &str) -> Result<Preflight, String> {
     Ok(found)
 }
 
-/// Whether a command line is an install this module started. `preflight` from
-/// the same file is not one: it has no `--progress`.
-pub fn is_install_run(command: &str) -> bool {
-    let suffix = format!("/{RUN_DIR}/{SCRIPT_FILE}");
-    let mut words = command.split_whitespace();
-    words.any(|w| w.ends_with(&suffix)) && command.split_whitespace().any(|w| w == "--progress")
-}
-
-fn run_dir() -> PathBuf {
-    std::env::temp_dir().join(RUN_DIR)
-}
-
 /// A fresh folder for a run, for this user only. The per-user temporary folder
 /// of macOS is private already; the mode covers a `TMPDIR` that is not.
-fn fresh_run_dir() -> Result<PathBuf, String> {
-    let dir = run_dir();
+fn fresh_run_dir(run: Run) -> Result<PathBuf, String> {
+    let dir = run.dir();
     match fs::remove_dir_all(&dir) {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -230,7 +280,7 @@ fn download_installer(script: &Path) -> Result<(), String> {
 fn ask_installer(script: &Path, env: &[(String, String)]) -> Result<Preflight, String> {
     let mut cmd = Command::new("/bin/bash");
     cmd.arg(script)
-        .args(["preflight", "--no-admin"])
+        .args(PREFLIGHT_ARGS)
         .envs(env.iter().map(|(k, v)| (k, v)))
         .current_dir(home());
     let out = local_server::exec_bounded(
@@ -249,23 +299,39 @@ pub fn prepare() -> Result<Preflight, String> {
     if let Some(why) = refuse_start() {
         return Err(why);
     }
-    fetch_and_ask()
+    fetch_and_ask(Run::Codeman)
 }
 
-fn fetch_and_ask() -> Result<Preflight, String> {
-    let dir = fresh_run_dir()?;
+/// The same for adding an agent, where a running Codeman is the normal case.
+pub fn prepare_agent() -> Result<Preflight, String> {
+    if let Some(why) = refuse_second_run() {
+        return Err(why);
+    }
+    fetch_and_ask(Run::Agent)
+}
+
+fn fetch_and_ask(run: Run) -> Result<Preflight, String> {
+    let dir = fresh_run_dir(run)?;
     let script = dir.join(SCRIPT_FILE);
     download_installer(&script)?;
     ask_installer(&script, &installer_env())
 }
 
-/// Why no install may start now: one runs already, or a Codeman server does and
-/// the installer's service step would replace it under its sessions.
-fn refuse_start() -> Option<String> {
-    if setup::install_in_app().is_some() {
+/// One run at a time: both may install into the same runtime folder.
+fn refuse_second_run() -> Option<String> {
+    if Run::Codeman.process().is_some() {
         return Some("Codeman is already being installed.".to_string());
     }
-    setup::already_running()
+    if Run::Agent.process().is_some() {
+        return Some("A coding agent is already being installed.".to_string());
+    }
+    None
+}
+
+/// Why no install may start now: a run is going, or a Codeman server is and the
+/// installer's service step would replace it under its sessions.
+fn refuse_start() -> Option<String> {
+    refuse_second_run().or_else(setup::already_running)
 }
 
 /// Run the installer `prepare` fetched. It outlives the app (see the module
@@ -276,11 +342,20 @@ pub fn start(plan: &Plan) -> Result<(), String> {
     if let Some(why) = refuse_start() {
         return Err(why);
     }
-    spawn_run(plan)
+    spawn_run(Run::Codeman, &install_args(plan), &install_env(plan))
 }
 
-fn spawn_run(plan: &Plan) -> Result<(), String> {
-    let dir = run_dir();
+/// Add one coding agent. Runs the same way as an install, so it outlives the
+/// app too, and leaves a running Codeman alone.
+pub fn start_agent(id: &str) -> Result<(), String> {
+    if let Some(why) = refuse_second_run() {
+        return Err(why);
+    }
+    spawn_run(Run::Agent, &agent_args(id), &no_terminal_env())
+}
+
+fn spawn_run(run: Run, args: &[String], env: &[(String, String)]) -> Result<(), String> {
+    let dir = run.dir();
     let script = dir.join(SCRIPT_FILE);
     if !script.is_file() {
         return Err("The installer is gone from the temporary folder. Try again.".to_string());
@@ -298,9 +373,9 @@ fn spawn_run(plan: &Plan) -> Result<(), String> {
     CANCELLED.store(false, Ordering::SeqCst);
     let mut child = Command::new("/bin/bash")
         .arg(&script)
-        .args(install_args(plan))
+        .args(args)
         .envs(installer_env())
-        .envs(install_env(plan))
+        .envs(env.iter().map(|(k, v)| (k, v)))
         .current_dir(home())
         .stdin(Stdio::null())
         .stdout(output)
@@ -314,8 +389,8 @@ fn spawn_run(plan: &Plan) -> Result<(), String> {
     Ok(())
 }
 
-/// The process group of `pid`. `setup::install_in_app` may answer with one of
-/// the installer's subshells, which `ps` shows with the installer's own command
+/// The process group of `pid`. `Run::process` may answer with one of the
+/// installer's subshells, which `ps` shows with the installer's own command
 /// line, so its pid is not always the group's.
 fn group_of(pid: u32) -> Option<u32> {
     let out = Command::new("/bin/ps")
@@ -345,14 +420,17 @@ fn signal_group(group: u32, signal: &str) {
 /// Stop the running install and whatever it started. What it left behind is
 /// picked up by the next run: `install.sh` re-runs a partial install in full.
 pub fn cancel() {
-    let Some(group) = setup::install_in_app().and_then(group_of) else {
+    let running = [Run::Codeman, Run::Agent]
+        .into_iter()
+        .find_map(|run| Some((run, run.process().and_then(group_of)?)));
+    let Some((run, group)) = running else {
         return;
     };
     CANCELLED.store(true, Ordering::SeqCst);
     signal_group(group, "TERM");
     let deadline = Instant::now() + CANCEL_GRACE;
     while Instant::now() < deadline {
-        if setup::install_in_app().is_none() {
+        if run.process().is_none() {
             return;
         }
         std::thread::sleep(Duration::from_millis(200));
@@ -482,8 +560,8 @@ fn read_more(file: &mut Option<File>, path: &Path, offset: &mut u64) -> Vec<u8> 
 /// of the file, so what it wrote just before it ended is never missed. `done`
 /// ends the run by itself: a subshell of the installer that lingers looks just
 /// like the installer, and must not keep the page waiting.
-pub fn follow(stale: impl Fn() -> bool, send: impl Fn(Value)) {
-    let path = run_dir().join(OUTPUT_FILE);
+pub fn follow(run: Run, stale: impl Fn() -> bool, send: impl Fn(Value)) {
+    let path = run.dir().join(OUTPUT_FILE);
     let mut file = None;
     let mut offset = 0;
     let mut progress = Progress::default();
@@ -492,14 +570,14 @@ pub fn follow(stale: impl Fn() -> bool, send: impl Fn(Value)) {
         if stale() {
             return;
         }
-        let running = setup::install_in_app().is_some();
+        let running = run.process().is_some();
         let log = progress.feed(&read_more(&mut file, &path, &mut offset));
         if !running || progress.done {
             let mut log = log;
             log.extend(progress.finish());
             let cancelled = CANCELLED.load(Ordering::SeqCst);
             if progress.done {
-                let _ = fs::remove_dir_all(run_dir());
+                let _ = fs::remove_dir_all(run.dir());
             }
             send(progress.finished_message(cancelled, log));
             return;
@@ -542,6 +620,25 @@ mod tests {
         let mut p = plan();
         p.ai_cli = Some("codex".to_string());
         assert_eq!(at(&install_args(&p)), "codex");
+    }
+
+    #[test]
+    fn the_agent_list_and_the_agent_run_use_the_same_route() {
+        // `cli_offerable` leaves Homebrew entries out only under --no-admin, so
+        // without it on both the page could offer what the run then refuses.
+        let args = agent_args("codex");
+        assert!(args.iter().any(|a| a == "--no-admin"));
+        assert!(PREFLIGHT_ARGS.contains(&"--no-admin"));
+        assert_eq!(args[..2], ["agent".to_string(), "codex".to_string()]);
+    }
+
+    #[test]
+    fn an_agent_run_changes_nothing_but_the_agent() {
+        let args = agent_args("codex");
+        for flag in ["--service", "--local", "--lan", "--port", "--ai-cli"] {
+            assert!(!args.iter().any(|a| a == flag), "{flag}");
+        }
+        assert!(args.iter().any(|a| a == "--progress"));
     }
 
     #[test]
@@ -596,12 +693,21 @@ mod tests {
     #[test]
     fn only_a_real_run_counts_as_an_install() {
         let script = "/var/folders/ab/T/codeman-install/install.sh";
-        assert!(is_install_run(&format!(
+        assert!(Run::Codeman.matches(&format!(
             "/bin/bash {script} --no-admin --progress --service --local --port 3000"
         )));
-        assert!(!is_install_run(&format!("/bin/bash {script} preflight --no-admin")));
-        assert!(!is_install_run("/bin/bash /tmp/other/install.sh --progress"));
-        assert!(!is_install_run("vim /tmp/codeman-install/notes.txt --progress"));
+        assert!(!Run::Codeman.matches(&format!("/bin/bash {script} preflight --no-admin")));
+        assert!(!Run::Codeman.matches("/bin/bash /tmp/other/install.sh --progress"));
+        assert!(!Run::Codeman.matches("vim /tmp/codeman-install/notes.txt --progress"));
+    }
+
+    #[test]
+    fn an_agent_run_is_never_taken_for_an_install() {
+        let command = "/bin/bash /var/folders/ab/T/codeman-agent/install.sh agent codex --no-admin --progress";
+        assert!(Run::Agent.matches(command));
+        assert!(!Run::Codeman.matches(command));
+        assert_eq!(setup::install_in_progress(command), None);
+        assert!(!Run::Agent.matches("/bin/bash /var/folders/ab/T/codeman-agent/install.sh preflight --no-admin"));
     }
 
     #[test]
@@ -707,17 +813,19 @@ mod tests {
             network_password: Some("not-in-ps".to_string()),
             ai_cli: None,
         };
-        let stand_in = |body: &str| {
-            let dir = fresh_run_dir().unwrap();
+        let stand_in_as = |run: Run, body: &str| {
+            let dir = fresh_run_dir(run).unwrap();
             fs::write(dir.join(SCRIPT_FILE), format!("#!/bin/bash\n{body}\n")).unwrap();
-            spawn_run(&plan).unwrap();
+            spawn_run(run, &install_args(&plan), &install_env(&plan)).unwrap();
             dir
         };
-        let collect = |stop_after: Option<usize>| {
+        let stand_in = |body: &str| stand_in_as(Run::Codeman, body);
+        let collect_from = |run: Run, stop_after: Option<usize>| {
             let got = Arc::new(Mutex::new(Vec::<Value>::new()));
             let (seen, sink) = (got.clone(), got.clone());
             let calls = AtomicUsize::new(0);
             follow(
+                run,
                 move || {
                     calls.fetch_add(1, Ordering::SeqCst);
                     stop_after.is_some_and(|n| seen.lock().unwrap().len() >= n)
@@ -727,6 +835,7 @@ mod tests {
             let out = got.lock().unwrap().clone();
             out
         };
+        let collect = |stop_after: Option<usize>| collect_from(Run::Codeman, stop_after);
 
         // A reader that goes away (the page reloaded, the app quit) leaves the
         // install running, and the next reader gets it from the first line.
@@ -740,7 +849,7 @@ echo "@@codeman phase done" >&2"#,
         let first = collect(Some(1));
         assert_eq!(first[0]["phase"], json!("source"));
         assert_eq!(first[0]["log"], json!(["==> first"]));
-        assert!(setup::install_in_app().is_some(), "the install stopped with its reader");
+        assert!(Run::Codeman.process().is_some(), "the install stopped with its reader");
 
         fs::write(dir.join("go"), "").unwrap();
         let replay = collect(None);
@@ -763,7 +872,7 @@ wait"#
         let sleeper = |procs: Vec<(u32, String)>| procs.iter().any(|(_, c)| c == &format!("sleep {marker}"));
         assert!(sleeper(setup::list_processes()), "the stand-in did not start");
         cancel();
-        assert!(setup::install_in_app().is_none());
+        assert!(Run::Codeman.process().is_none());
         std::thread::sleep(Duration::from_millis(300));
         assert!(!sleeper(setup::list_processes()), "a child outlived Cancel");
         let done = collect(None);
@@ -795,6 +904,37 @@ exit 1"#,
         assert_eq!(last["error"], json!("npm said no"));
         assert!(dir.join(OUTPUT_FILE).is_file());
         let _ = fs::remove_dir_all(&dir);
+
+        // An agent run is its own run: an install sees none, a second run of
+        // either kind is refused, and Cancel reaches it all the same.
+        let dir = stand_in_as(
+            Run::Agent,
+            r#"echo "@@codeman phase agent" >&2
+echo "==> Installing Codex..."
+while true; do sleep 1; done"#,
+        );
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(Run::Agent.process().is_some());
+        assert!(Run::Codeman.process().is_none());
+        assert!(start_agent("codex").unwrap_err().contains("coding agent"));
+        assert!(prepare_agent().unwrap_err().contains("coding agent"));
+        assert!(start(&plan).unwrap_err().contains("coding agent"));
+        let first = collect_from(Run::Agent, Some(1));
+        assert_eq!(first[0]["phase"], json!("agent"));
+        assert_eq!(first[0]["log"], json!(["==> Installing Codex..."]));
+        cancel();
+        assert!(Run::Agent.process().is_none());
+        assert_eq!(collect_from(Run::Agent, None).last().unwrap()["cancelled"], json!(true));
+        let _ = fs::remove_dir_all(&dir);
+
+        // Done ends it and leaves nothing, like an install.
+        let dir = stand_in_as(
+            Run::Agent,
+            r#"echo "@@codeman phase agent" >&2
+echo "@@codeman phase done" >&2"#,
+        );
+        assert_eq!(collect_from(Run::Agent, None).last().unwrap()["ok"], json!(true));
+        assert!(!dir.exists());
     }
 
     /// A whole real install, driven down the same path as the page: build with
@@ -805,16 +945,16 @@ exit 1"#,
     #[test]
     #[ignore = "installs Codeman: see the comment"]
     fn a_real_install_under_a_throwaway_home() {
-        let found = fetch_and_ask().unwrap();
+        let found = fetch_and_ask(Run::Codeman).unwrap();
         println!("preflight: {}", serde_json::to_string(&found).unwrap());
         let ai_cli = std::env::var("CODEMAN_E2E_AI_CLI").ok();
         let port = std::env::var("CODEMAN_E2E_PORT").unwrap().parse().unwrap();
-        spawn_run(&Plan {
+        let plan = Plan {
             port,
             network_password: None,
             ai_cli,
-        })
-        .unwrap();
+        };
+        spawn_run(Run::Codeman, &install_args(&plan), &install_env(&plan)).unwrap();
         let ok = std::sync::Arc::new(AtomicBool::new(false));
         let result = ok.clone();
         let started = Instant::now();
@@ -822,6 +962,7 @@ exit 1"#,
         let cancelling = cancel_at.is_some();
         let asked = AtomicBool::new(false);
         follow(
+            Run::Codeman,
             || false,
             move |msg| {
                 let at = started.elapsed().as_secs();
@@ -843,6 +984,36 @@ exit 1"#,
             !cancelling,
             "the install did not end as asked"
         );
+    }
+
+    /// A real agent, down the same path as the page, under a throwaway HOME
+    /// whose login PATH holds that HOME's Node.js: with the machine's own, npm
+    /// would write into its real global prefix. `CODEMAN_E2E_AI_CLI` names it,
+    /// and `CODEMAN_E2E_CANCEL=1` cancels it once it has started.
+    #[test]
+    #[ignore = "installs a coding agent: see the comment"]
+    fn a_real_agent_under_a_throwaway_home() {
+        let id = std::env::var("CODEMAN_E2E_AI_CLI").unwrap();
+        let found = prepare_agent().unwrap();
+        println!("preflight: {}", serde_json::to_string(&found.clis).unwrap());
+        start_agent(&id).unwrap();
+        let ok = std::sync::Arc::new(AtomicBool::new(false));
+        let result = ok.clone();
+        let cancelling = std::env::var("CODEMAN_E2E_CANCEL").is_ok();
+        let asked = AtomicBool::new(false);
+        follow(
+            Run::Agent,
+            || false,
+            move |msg| {
+                if msg["type"] == "installFinished" {
+                    result.store(msg["ok"] == json!(true), Ordering::SeqCst);
+                } else if cancelling && !asked.swap(true, Ordering::SeqCst) {
+                    std::thread::spawn(cancel);
+                }
+                println!("{}", serde_json::to_string(&msg).unwrap());
+            },
+        );
+        assert_eq!(ok.load(Ordering::SeqCst), !cancelling, "the agent did not end as asked");
     }
 
     #[test]

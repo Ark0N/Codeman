@@ -576,7 +576,16 @@ pub enum ConnectCmd {
     },
     /// Show the graphical install that is running already.
     InstallAttach,
+    /// Stop whichever graphical run is going.
     InstallCancel,
+    /// Fetch the installer to add a coding agent to a Mac that has Codeman.
+    AgentPrepare,
+    /// Add this agent: an id in the shape of the installer's catalogue.
+    AgentStart {
+        ai_cli: String,
+    },
+    /// Show the agent install that is running already.
+    AgentAttach,
     /// Run the installer on another machine over SSH, in Terminal. `target`
     /// is what the user typed; setup::SshTarget::parse checks it.
     InstallRemote {
@@ -642,6 +651,12 @@ enum RawConnect {
     },
     InstallAttach,
     InstallCancel,
+    AgentPrepare,
+    AgentStart {
+        #[serde(rename = "aiCli")]
+        ai_cli: String,
+    },
+    AgentAttach,
     InstallRemote {
         target: String,
     },
@@ -741,6 +756,9 @@ pub fn parse_ipc(frame_url: &str, body: &str, phase: &Phase, is_main_window: boo
             }
             RawConnect::InstallAttach => ConnectCmd::InstallAttach,
             RawConnect::InstallCancel => ConnectCmd::InstallCancel,
+            RawConnect::AgentPrepare => ConnectCmd::AgentPrepare,
+            RawConnect::AgentStart { ai_cli } if is_cli_id(&ai_cli) => ConnectCmd::AgentStart { ai_cli },
+            RawConnect::AgentAttach => ConnectCmd::AgentAttach,
             RawConnect::InstallRemote { target } if target.len() <= MAX_FIELD_LEN => {
                 ConnectCmd::InstallRemote { target }
             }
@@ -1594,6 +1612,44 @@ mod tests {
             None
         );
         assert_eq!(parse_ipc(page, r#"{"cmd":"installCancel"}"#, &loaded, true), None);
+    }
+
+    #[test]
+    fn ipc_adding_a_coding_agent() {
+        let page = "codemanapp://localhost/index.html";
+        let c = |body: &str| parse_ipc(page, body, &Phase::Connect, true);
+        assert_eq!(
+            c(r#"{"cmd":"agentPrepare"}"#),
+            Some(Ipc::Connect(ConnectCmd::AgentPrepare))
+        );
+        assert_eq!(
+            c(r#"{"cmd":"agentAttach"}"#),
+            Some(Ipc::Connect(ConnectCmd::AgentAttach))
+        );
+        assert_eq!(
+            c(r#"{"cmd":"agentStart","aiCli":"codex"}"#),
+            Some(Ipc::Connect(ConnectCmd::AgentStart { ai_cli: "codex".into() }))
+        );
+        // It names one agent, in the shape of an id, and nothing else.
+        assert_eq!(c(r#"{"cmd":"agentStart"}"#), None);
+        for id in ["--service", "-y", "Codex", "a b", "a;b", "", "a/b"] {
+            assert_eq!(c(&format!(r#"{{"cmd":"agentStart","aiCli":"{id}"}}"#)), None, "{id}");
+        }
+        assert_eq!(c(r#"{"cmd":"agentStart","aiCli":"codex","port":3000}"#), None);
+        assert_eq!(
+            parse_ipc(page, r#"{"cmd":"agentStart","aiCli":"codex"}"#, &Phase::Connect, false),
+            None
+        );
+        let loaded = Phase::Loaded(u("http://127.0.0.1:3000/"));
+        assert_eq!(
+            parse_ipc(
+                "http://127.0.0.1:3000/",
+                r#"{"cmd":"agentStart","aiCli":"codex"}"#,
+                &loaded,
+                true
+            ),
+            None
+        );
     }
 
     #[test]
