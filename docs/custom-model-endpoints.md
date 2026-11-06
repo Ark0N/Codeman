@@ -663,6 +663,45 @@ each result. `scripts/test-local-llm-harnesses.ts` is the standalone script
 used to check a harness against a real endpoint outside the web UI
 entirely; see its own `--help` for usage.
 
+## The endpoint store has one writer
+
+`~/.codeman/custom-model-hosts.json` is written only through `mutateCustomModelHosts()`
+(`src/custom-model-hosts-writer.ts`): the create, update, delete and discover routes, the
+five-minute re-discovery sweep and the local model install all go through it.
+
+- **One at a time.** Changes run on one queue, and the check a route makes ("this id is
+  free", "this endpoint still exists") runs in the same step as its write. Before, each
+  writer read the file, changed its copy and wrote it back on its own, all through one temp
+  file name: a route and the sweep, or two requests sent together, could lose each other's
+  change or fail outright.
+- **Atomic.** A temp file with a random name beside the target, then a rename. Mode 0600.
+- **A file that does not parse is refused, not replaced.** The writing routes answer
+  `409 CONFLICT` with the fix (repair or delete the file, or restore it from a config
+  backup) and leave it byte for byte. Before, such a file read as an empty list, and the next
+  save replaced every stored endpoint and its API key with one record. The message never
+  quotes the file, which holds keys.
+
+The one direct writer left is config-backup restore, which must work on a file that does
+not parse.
+
+## The endpoint of the model on this Mac
+
+Installing a local model from Codeman ([local-models.md](local-models.md)) saves one endpoint
+with the reserved id `local-ollama` and the label "This Mac". It shows up in the list and in
+the Run menu like any other endpoint. Three things are different:
+
+- A new endpoint cannot be given the id `local-ollama`.
+- While it is the endpoint the install manages, it cannot be edited or deleted here, and
+  "Discover" answers its stored model list without asking the runtime. Its model list must
+  stay the one model the install checked, and its address the port of the runtime Codeman
+  supervises. Change or remove it in the local model window.
+- A session is started on it only while Codeman's own runtime is running and the model is
+  still the one that was installed (its digest is compared). Otherwise the launch answers
+  with one sentence.
+
+An endpoint with that id that somebody made by hand, with no model installed by Codeman, is
+an ordinary endpoint: it can be edited and deleted as before.
+
 ## Security note
 
 Every env var this feature can set that redirects a session's traffic
