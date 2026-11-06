@@ -78,9 +78,10 @@ retrying.
   command** once that way, never a different one; if the user declines, stop. For lasting
   access in Codex, the user turns on **Allow network access** (Codeman App Settings,
   Codex) and starts a new Codex session: it opens the network wherever Codex runs the
-  folder workspace-write, and keeps the sandbox and approvals. A folder Codex runs
-  read-only still needs the per-command approval (or `/permissions`). **Bypass approvals
-  and sandbox** works everywhere but drops the sandbox and approvals.
+  folder workspace-write, and keeps the sandbox and approvals. It does not change the
+  sandbox mode: a folder Codex runs read-only keeps the network closed, so each call
+  still needs the per-command approval (or `/permissions`). **Bypass approvals and
+  sandbox** works everywhere but drops the sandbox and approvals.
 - **`"${CURL[@]}" -o /dev/null -w '%{http_code}' "$API/api/v1/sessions/$SELF"` prints
   `404`.** The commands you run do not carry this session's environment: Codex can run them in a shared background
   process another session started, so `$CODEMAN_SESSION_ID` (and with it `$SELF` and

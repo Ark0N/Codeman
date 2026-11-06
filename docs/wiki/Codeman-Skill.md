@@ -145,10 +145,11 @@ Two things to know:
   drive others. It applies to Codex sessions started after you switch it on, and it keeps
   Codex's sandbox and approval prompts. It opens the network only where Codex runs the
   folder in its workspace-write sandbox, which is what Codex does for a project you
-  trusted. In a folder Codex runs read-only (a new case that is not a git repository, for
-  one), Codex asks you to approve each call to Codeman instead; `/permissions` in Codex
-  switches that session to workspace-write. **Bypass approvals and sandbox** works
-  everywhere, but removes the sandbox and the approval prompts.
+  trusted. It does not change Codex's sandbox mode: a folder Codex runs read-only (a new
+  case that is not a git repository, for one) keeps the network closed, and Codex asks you
+  to approve each call to Codeman. Trust the project in Codex, or use `/permissions` in
+  Codex for that session, to get workspace-write there. **Bypass approvals and sandbox**
+  works everywhere, but removes the sandbox and the approval prompts.
 - Codex 0.162 runs its commands in a shared background process, whose Codeman variables can
   belong to the session that started it. Codeman starts Codex 0.162 and later with
   `--no-daemon`, so each session runs its own; with an older Codex the skill notices and

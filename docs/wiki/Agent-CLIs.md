@@ -140,6 +140,11 @@ Explicit `codexConfig.model` / `codexConfig.reasoningEffort` values take precede
 Custom model endpoints, Docker containers and remote host command overrides keep their own settings.
 Changing a default affects new sessions and does not edit Codex configuration files.
 
+**Allow network access** reaches the same local launches. It opens the network only where
+Codex runs the folder in its workspace-write sandbox and does not change Codex's sandbox
+mode: a folder Codex runs read-only keeps the network closed, and Codex asks per command.
+See [The Codeman Skill](Codeman-Skill#when-the-agent-is-codex).
+
 Two behaviours that are deliberate and worth knowing:
 
 - **Predictive echo instead of buffered echo.** Codex's composer reacts to every keystroke,

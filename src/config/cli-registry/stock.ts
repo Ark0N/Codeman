@@ -674,8 +674,9 @@ const CODEX: CliEntry = {
           // a live pane): loopback stays blocked under workspace-write until this is set.
           // ⚠️ Workspace-write ONLY: a folder codex runs read-only (one it does not trust,
           // such as a fresh non-git case) keeps the network closed and asks per command.
-          // Deliberately not paired with `--sandbox workspace-write`, which would also
-          // grant write access to a folder codex itself chose not to trust.
+          // Deliberately not paired with `--sandbox workspace-write` (owner decision,
+          // 2026-11-06), which would also grant write access to a folder codex itself chose
+          // not to trust, under a label that only says "network".
           {
             flag: '--config',
             value: 'sandbox_workspace_write.network_access=true',

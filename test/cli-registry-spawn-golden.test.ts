@@ -197,6 +197,21 @@ describe('codex', () => {
     expect(cx({ networkAccess: false })).toBe('codex');
   });
 
+  it('never pairs network access with a sandbox mode (owner decision, 2026-11-06)', () => {
+    // A folder codex runs read-only must stay read-only: it keeps the network closed and asks
+    // per command. `--sandbox workspace-write` here would also grant write access to it.
+    for (const version of ['0.162.0', null]) {
+      const command = render({
+        mode: 'codex',
+        sessionId: SID,
+        codexConfig: { networkAccess: true },
+        claudeCliVersion: version,
+      });
+      expect(command).not.toContain('--sandbox');
+      expect(command).not.toContain('-s ');
+    }
+  });
+
   // The `claudeCliVersion` option is the version every gate of THIS entry is measured
   // against (the name predates a second gated CLI); undefined probes codex itself.
   const cxv = (version: string | null, codexConfig?: SpawnBridgeOptions['codexConfig']) =>

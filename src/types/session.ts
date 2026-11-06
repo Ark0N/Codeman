@@ -439,8 +439,10 @@ export interface CodexConfig {
   dangerouslyBypassApprovals?: boolean;
   /**
    * Let commands in codex's workspace-write sandbox use the network, Codeman's loopback API
-   * included (passes --config sandbox_workspace_write.network_access=true). Filled from the
-   * synced `codexNetworkAccess` setting when unset; clamped off for a non-granted owner.
+   * included (passes --config sandbox_workspace_write.network_access=true). Never changes the
+   * sandbox mode: a folder codex runs read-only keeps the network closed and asks per command.
+   * Filled from the synced `codexNetworkAccess` setting when unset; clamped off for a
+   * non-granted owner.
    */
   networkAccess?: boolean;
   /** Enable Codex's decorative TUI animations. Disable to reduce remote terminal redraws. */
