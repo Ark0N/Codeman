@@ -62,12 +62,26 @@ jobs:
           # 1.9.4 lost it to xterm-zerolag-input@0.1.7 by two seconds. All package
           # releases already exist by the time this step runs, so setting it here
           # is deterministic.
+          #
+          # The title and body are the page people land on from the update toast.
+          # changesets copied the body from CHANGELOG.md as one long bullet, so it is
+          # reshaped here (scripts/lib/release-notes.mjs). npm has already published by
+          # now, so a failure in that must not stop the retag below: without the body
+          # field the release keeps the text changesets wrote.
           RELEASE_ID=$(gh release view "$OLD_TAG" --json databaseId -q .databaseId 2>/dev/null || true)
           if [ -n "$RELEASE_ID" ]; then
+            NOTES_FILE="$RUNNER_TEMP/release-notes.md"
+            BODY_ARGS=()
+            if node scripts/generate-release-notes.mjs "$VERSION" > "$NOTES_FILE"; then
+              BODY_ARGS=(-F "body=@$NOTES_FILE")
+            else
+              echo "::warning::Keeping the changesets release notes for $VERSION"
+            fi
             gh api -X PATCH "repos/${{ github.repository }}/releases/${RELEASE_ID}" \
               -f tag_name="$NEW_TAG" \
-              -f name="$NEW_TAG" \
-              -f make_latest=true
+              -f name="Codeman ${VERSION}" \
+              -f make_latest=true \
+              "${BODY_ARGS[@]}"
           fi
 
           # Retag

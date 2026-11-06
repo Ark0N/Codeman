@@ -19,6 +19,24 @@ When user says "COM":
 
    Replace `patch` with `minor` or `major` as needed. Include `"xterm-zerolag-input": patch` on a separate line if that package changed too.
 
+   **Write it in the shape the release page is built from.** `CHANGELOG.md` keeps changesets' format, and the `Release` workflow rebuilds the GitHub release from that section (`scripts/generate-release-notes.mjs`, which also titles it `Codeman <x.y.z>`). The in-app update toast reads the same bold lead-ins:
+
+   ```markdown
+   ### Thanks
+   - @someone for what they did (#123).
+
+   **What the change does for the user (#123).** Two or three plain sentences.
+
+   **Fixes.**
+   - **What works now (#124).** What was wrong. Behaviour change: what a user has to do differently.
+
+   **Fixes applied while landing.** One sentence each.
+
+   **Docs and tests.** One sentence.
+   ```
+
+   `### Thanks` stays first and opens the page. A bold lead-in that ends in punctuation becomes a heading under What's new, so make it a short headline. `**Fixes.**` and its list become a Fixes section, and the last two labels share an Also in this release section (the labels are `SECTION_LABELS` in `scripts/lib/whats-new.mjs`). `Behaviour change:` and `Breaking:` are put in bold wherever they appear, so use those words for anything a user has to act on. Keep each change short: how it works belongs in the docs, and a long paragraph is a wall of text even under a heading. Text the script does not recognise stays on the page as plain paragraphs. After step 3, `node scripts/generate-release-notes.mjs` prints the page. If the workflow warns that it kept the changesets notes, fix the changelog and run `gh release edit codeman@<x.y.z> --notes-file <file>`.
+
 3. **Consume the changeset**: `npm run version-packages` (auto-bumps `package.json` files, updates `CHANGELOG.md`, runs `npm install --package-lock-only`, and verifies lockfile sync via `scripts/check-lockfile-sync.mjs` — all in one command; never hand-edit `CHANGELOG.md` or `package-lock.json` versions. It also writes `src/web/public/whats-new.json` (`scripts/generate-whats-new.mjs`): the bold lead-in of each change in the new `CHANGELOG.md` section, which the browser announces once per version in a toast. Commit it with the release; `test/whats-new.test.ts` fails when its version differs from `package.json`, so a hand bump needs `node scripts/generate-whats-new.mjs && npx prettier --write src/web/public/whats-new.json` too. A release whose notes have no bold lead-ins ships an empty list and shows no toast)
 4. **Sync CLAUDE.md version**: Update the `**Version**` line in the root `CLAUDE.md` (under COM Shorthand) to match the new version from `package.json`
 5. **Commit and deploy**: verify the branch first (`git branch --show-current`), then stage EXPLICIT paths — never `git add -A`, which has swept another session's WIP into a release. `git status --short` and account for every line before committing:
