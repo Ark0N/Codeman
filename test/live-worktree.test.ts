@@ -7,10 +7,10 @@
  * file. Runs against a real filesystem, and one case against a worktree real git made.
  */
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { constants, mkdirSync, mkdtempSync, promises as fsPromises, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { findLiveWorktree, isLinkedWorktreeGitFile } from '../src/live-worktree.js';
 
 describe('isLinkedWorktreeGitFile', () => {
@@ -98,6 +98,28 @@ describe('findLiveWorktree', () => {
     mkdirSync(piped);
     execFileSync('mkfifo', [join(piped, '.git')]);
     expect(await findLiveWorktree(repo, piped)).toBeUndefined();
+  });
+
+  it('refuses a FIFO swapped in after the probe, without waiting for a writer', async () => {
+    const swapped = join(repo, 'swapped');
+    mkdirSync(swapped);
+    execFileSync('mkfifo', [join(swapped, 'fifo')]);
+    const flagsSeen: unknown[] = [];
+    const realOpen = fsPromises.open.bind(fsPromises);
+    const spy = vi.spyOn(fsPromises, 'open').mockImplementationOnce((_path, flags) => {
+      flagsSeen.push(flags);
+      // The test's own open never blocks, so a change that loses the flag fails on the assert below.
+      return realOpen(join(swapped, 'fifo'), constants.O_RDONLY | constants.O_NONBLOCK);
+    });
+    try {
+      // The probe and the open disagree here, which is what a swap between the two looks like.
+      writeFileSync(join(swapped, '.git'), 'gitdir: /home/me/repo/.git/worktrees/swapped\n');
+      expect(await findLiveWorktree(repo, swapped)).toBeUndefined();
+    } finally {
+      spy.mockRestore();
+    }
+    expect(Number(flagsSeen[0]) & constants.O_NONBLOCK).toBeTruthy();
+    expect(Number(flagsSeen[0]) & constants.O_NOFOLLOW).toBeTruthy();
   });
 
   it('answers nothing without an absolute reading', async () => {

@@ -31,7 +31,7 @@
  * @module live-worktree
  */
 
-import { promises as fs } from 'node:fs';
+import { constants, promises as fs } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { probePathKind } from './utils/bounded-path-probe.js';
 
@@ -67,10 +67,11 @@ async function classifyDotGit(dir: string): Promise<'worktree' | 'stop' | 'none'
   if (kind !== 'file') return 'stop';
   let handle: fs.FileHandle | undefined;
   try {
-    // lstat, so a `.git` that is a symlink or a FIFO is refused before anything opens it:
-    // opening a FIFO waits for a writer and would hold a threadpool worker for good.
-    if (!(await fs.lstat(dotGit)).isFile()) return 'stop';
-    handle = await fs.open(dotGit, 'r');
+    // The probe follows symlinks and the file can change after it, so the open itself refuses:
+    // O_NOFOLLOW a symlink, and O_NONBLOCK a FIFO, which would otherwise wait for a writer and
+    // hold a threadpool worker for good. Whatever it did open is then judged on the handle.
+    handle = await fs.open(dotGit, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    if (!(await handle.stat()).isFile()) return 'stop';
     const { buffer, bytesRead } = await handle.read(Buffer.alloc(MAX_DOT_GIT_FILE_BYTES), 0, MAX_DOT_GIT_FILE_BYTES, 0);
     return isLinkedWorktreeGitFile(buffer.toString('utf8', 0, bytesRead)) ? 'worktree' : 'stop';
   } catch {
