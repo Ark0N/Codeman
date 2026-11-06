@@ -136,6 +136,7 @@ import { fetchWorkspaceOnce } from '../git-fetch.js';
 import { GitFetchScheduler } from '../git-fetch-scheduler.js';
 import { probePathKind } from '../utils/bounded-path-probe.js';
 import { defaultDockerWorkspaces } from './routes/git-status-routes.js';
+import { guardSessionConfigDirHome } from './routes/session-routes.js';
 import { composerIsEmpty, plainFrame } from '../session-submit-verifier.js';
 import { detectUsageLimitPause } from '../usage-limit-patterns.js';
 import { EditHistorySync } from './edit-history-sync.js';
@@ -1520,7 +1521,8 @@ export class WebServer extends EventEmitter {
    */
   private async _rebuildCustomModelEnv(
     session: Session,
-    saved: CustomModelBookkeeping
+    saved: CustomModelBookkeeping,
+    ownEnv: Record<string, string> = {}
   ): Promise<AppliedCustomModel | undefined> {
     const entry = getCli(session.mode);
     if (!entry) return undefined;
@@ -1532,17 +1534,21 @@ export class WebServer extends EventEmitter {
       return undefined;
     }
     try {
-      // Boot recovery omits both `workingDir` (no reason to re-answer a trust dialog that
-      // already fired once) and the session-env real-home lookup: the first apply already
-      // linked this directory from the session's own home, and `linkRealHomeEntry()` keeps
-      // what is there. Only a directory someone removed gets its links again, from the
-      // SERVER's `DSH_HOME` or the recipe's `realHomeFallback` (~/.dsh).
+      // Boot recovery omits `workingDir` (no reason to re-answer a trust dialog that already
+      // fired once). The real-home lookup reads the record's own values, since the session's
+      // overrides hold what the previous run injected. `linkRealHomeEntry()` keeps what is
+      // there, so this only decides an entry that is missing, which an own home skips when it
+      // does not hold one. With no own home, or one that does not answer (probed under the
+      // bulk cap, this walks every saved session), a missing entry links from the SERVER's
+      // `DSH_HOME` or the recipe's `realHomeFallback` (~/.dsh).
       return applyCustomModelInjection(
         entry,
         endpoint,
         saved.modelId,
         session.id,
-        resolveCustomModelContextLength(endpoint, saved.modelId)
+        resolveCustomModelContextLength(endpoint, saved.modelId),
+        undefined,
+        await guardSessionConfigDirHome(entry, (envVar) => ownEnv[envVar], {})
       );
     } catch (err) {
       console.warn('[WebServer] Failed to rebuild custom-model env on recovery:', err);
@@ -1565,7 +1571,7 @@ export class WebServer extends EventEmitter {
    */
   private async _restoreCustomModel(session: Session, saved: CustomModelBookkeeping): Promise<void> {
     const ownEnv = (await clampEnvOverridesForOwner(session.owner, saved.ownEnv)) ?? {};
-    const applied = await this._rebuildCustomModelEnv(session, saved);
+    const applied = await this._rebuildCustomModelEnv(session, saved, ownEnv);
     if (!applied) {
       // Endpoint gone or CLI unregistered: restore the bookkeeping exactly as saved, which
       // is what a later clear needs.
@@ -1596,8 +1602,9 @@ export class WebServer extends EventEmitter {
     // __attachmentHistory keeps the private (externalPath-bearing) history on disk,
     // separate from the sanitized public attachmentHistory in toState().
     const attachmentHistory = session.getAttachmentHistoryForPersist();
-    // __customModel keeps the selection's bookkeeping (injected env KEYS, config dir,
-    // launch model; never the values) so recovery can restore and later clear it.
+    // __customModel keeps the selection's bookkeeping (injected env KEYS, config dir, launch
+    // model, the session's own home path; never an injected value or any other own value)
+    // so recovery can restore and later clear it.
     const customModel = session.getCustomModelForPersist();
     const state = {
       ...base,

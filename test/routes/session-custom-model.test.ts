@@ -9,7 +9,7 @@ import { createRouteTestHarness } from './_route-test-utils.js';
 import { createMockSession } from '../mocks/index.js';
 import { getDataDir } from '../../src/config/instance.js';
 import { writeCustomModelHosts, type CustomModelHost } from '../../src/custom-model-hosts.js';
-import { existsSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readlinkSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { webviewFetch } from '../../src/web/webview-egress.js';
 
@@ -95,6 +95,27 @@ describe('POST /api/sessions/:id/custom-model', () => {
     expect(next.configDir).toBe(isolatedDir);
     const trustFile = JSON.parse(readFileSync(join(isolatedDir, '.claude.json'), 'utf8'));
     expect(trustFile.customApiKeyResponses.approved).toEqual(['k']);
+  });
+
+  it("links a switch from the session's own home, never the injected one the map now holds", async () => {
+    const { app, ctx } = await setup();
+    const session = ctx.sessions.get('test-session-1')!;
+    session.mode = 'deepseek';
+    const isolatedDir = join(getDataDir(), 'custom-model-configs', 'test-session-1');
+    const ownHome = join(getDataDir(), 'own-dsh-home');
+    session.envOverrideValue.mockImplementation(() => isolatedDir);
+    session.ownEnvValue.mockImplementation((key: string) => (key === 'DSH_HOME' ? ownHome : undefined));
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/test-session-1/custom-model',
+      payload: { endpointId: 'ep1', modelId: 'qwen3' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(readlinkSync(join(isolatedDir, 'sessions'))).toBe(join(ownHome, 'sessions'));
+    rmSync(isolatedDir, { recursive: true, force: true });
+    rmSync(ownHome, { recursive: true, force: true });
   });
 
   it('clears back to the native default', async () => {

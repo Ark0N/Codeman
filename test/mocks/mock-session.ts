@@ -464,6 +464,8 @@ export class MockSession extends EventEmitter {
   /** Mirrors Session.envOverrideValue; no override map here, so the custom-model
    *  real-home lookup defaults to "session says nothing" (overridable per test). */
   envOverrideValue = vi.fn((_key: string): string | undefined => undefined);
+  /** Mirrors Session.ownEnvValue, same default. */
+  ownEnvValue = vi.fn((_key: string): string | undefined => undefined);
   getCustomModelForPersist = vi.fn(() => this._mockCustomModel);
   /** Mirrors Session.noteReportedModel: the statusline route records the CLI's model. */
   reportedModel: { model: string; source: 'statusline' | 'screen' } | null = null;

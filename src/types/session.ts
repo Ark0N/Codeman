@@ -711,8 +711,9 @@ export interface CustomModelBookkeeping extends CustomModelSelection {
   /**
    * What the session itself had set under keys the selection replaced, put back when the
    * selection goes. In memory this can hold a credential (a session's own `GEMINI_API_KEY`),
-   * so `Session.getCustomModelForPersist()` writes `homeEnvVar`'s entry and nothing else:
-   * tmux keeps only the injected value, so state.json is the one copy left after a restart.
+   * so `Session.getCustomModelForPersist()` writes `homeEnvVar`'s entry, when it is an absolute
+   * path, and nothing else: tmux keeps only the injected value, so state.json is the one copy
+   * left after a restart.
    */
   ownEnv?: Record<string, string>;
 }

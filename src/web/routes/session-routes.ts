@@ -202,7 +202,7 @@ import {
 } from '../../docker-hosts.js';
 import { resolveCaseRepository, resolveManagedWorktree } from '../../git-worktrees.js';
 import { LRUMap } from '../../utils/lru-map.js';
-import { describeUnknownPath, probePathKind } from '../../utils/index.js';
+import { describeUnknownPath, probePathKind, type PathProbeOptions } from '../../utils/index.js';
 import { findLatestOmpSessionId } from '../../utils/omp-session-resolver.js';
 import { scanOmpSessionsHistory } from '../../omp-transcript.js';
 import { scanCodexSessionsHistory, codexThreadBySessionId } from '../../codex-transcript.js';
@@ -244,18 +244,20 @@ function landedInGroup(layout: TabLayout | undefined, sessionId: string): boolea
  * Probe the session's own home with `probePathKind(..., { pastCap: true })` first: on
  * `'unknown'` (a dead mount that never answered) hand the apply a lookup that hides that
  * one env var, so linking falls through to the server's own environment and the unresponsive
- * path is never touched. Any other entry's lookup passes through untouched.
+ * path is never touched. Any other entry's lookup passes through untouched. Boot recovery
+ * passes `probeOptions` of `{}`: it walks every saved session, so it keeps the bulk cap.
  */
 export async function guardSessionConfigDirHome(
   entry: Pick<CliEntry, 'capabilities'>,
-  baseLookup: (envVar: string) => string | undefined
+  baseLookup: (envVar: string) => string | undefined,
+  probeOptions: PathProbeOptions = { pastCap: true }
 ): Promise<(envVar: string) => string | undefined> {
   const recipe = entry.capabilities.customModelInjection;
   if (recipe?.kind !== 'configDir' || !recipe.linkFromRealHome?.length) return baseLookup;
   const dirEnvVar = recipe.dirEnvVar;
   const supplied = baseLookup(dirEnvVar)?.trim();
   if (!supplied || !isAbsolute(supplied)) return baseLookup;
-  if ((await probePathKind(supplied, { pastCap: true })) === 'unknown') {
+  if ((await probePathKind(supplied, probeOptions)) === 'unknown') {
     console.warn(
       `[custom-model] ${dirEnvVar} (${supplied}) did not answer; linking from the server's own home instead`
     );
@@ -1675,7 +1677,7 @@ export function registerSessionRoutes(
       session.id,
       contextLength,
       session.workingDir,
-      await guardSessionConfigDirHome(entry, (envVar) => session.envOverrideValue(envVar))
+      await guardSessionConfigDirHome(entry, (envVar) => session.ownEnvValue(envVar))
     );
     if (!applied) {
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `${session.mode} has no known custom-model mechanism`);

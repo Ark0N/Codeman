@@ -7,17 +7,18 @@
  * home: restoring the saved record unchanged left `DSH_HOME` on a generated config dir
  * that clearing could never delete.
  *
- * Real-home resolution takes no session lookup on this path: the first apply's links are
- * still in the generated directory, and one someone removed links from the server's
- * `DSH_HOME` or the recipe's `realHomeFallback` (~/.dsh), see `_rebuildCustomModelEnv`'s
- * comment. A session's own home comes back on clear from `ownEnv`, the last block here.
+ * Real-home resolution reads the record's `ownEnv` on this path, never the session's
+ * overrides: the first apply's links are still in the generated directory, and an entry
+ * that is missing links from the own home, or with none from the server's `DSH_HOME` or
+ * the recipe's `realHomeFallback` (~/.dsh), see `_rebuildCustomModelEnv`'s comment. The
+ * own home itself comes back on clear from `ownEnv`, the last block here.
  *
  * `_restoreCustomModel` reads no `this` state beyond the rebuild helper (it re-derives
  * everything from the endpoint store and the Session it is handed), so it is driven off
  * the prototype with a minimal receiver: `restoreMuxSessions()` itself cannot be
  * reached under vitest, the same constraint recorded in test/session-model-recovery.test.ts.
  */
-import { mkdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readlinkSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -135,6 +136,34 @@ describe('_restoreCustomModel: bookkeeping rebuilt from the current recipe', () 
 
       session.setCustomModel(undefined);
       expect(session.envOverrideValue('DSH_HOME')).toBe(OWN_HOME);
+    });
+
+    it('never fills an entry the own home lacks from the server home', async () => {
+      // The first apply skipped `settings.yaml`, since the own home has none. Recovery finds
+      // that gap and, with no lookup, used to fill it with the server's settings.
+      const serverHome = join(homedir(), 'codeman-recovery-server-dsh');
+      const ownHome = join(homedir(), 'codeman-recovery-own-dsh');
+      mkdirSync(join(ownHome, 'profiles'), { recursive: true });
+      mkdirSync(serverHome, { recursive: true });
+      writeFileSync(join(serverHome, 'settings.yaml'), 'server: true\n');
+      vi.stubEnv('DSH_HOME', serverHome);
+      await writeCustomModelHosts(getDataDir(), [endpoint()]);
+      const session = new Session({ workingDir: '/tmp', mode: 'deepseek' });
+      configs.push(session.id);
+
+      await restoreCustomModel(session, {
+        endpointId: 'ep',
+        modelId: 'qwen3',
+        envKeys: ['DSH_HOME', 'CODEMAN_CUSTOM_MODEL_API_KEY'],
+        homeEnvVar: 'DSH_HOME',
+        ownEnv: { DSH_HOME: ownHome },
+      });
+
+      const configDir = customModelConfigDir(session.id);
+      expect(readlinkSync(join(configDir, 'profiles'))).toBe(join(ownHome, 'profiles'));
+      expect(existsSync(join(configDir, 'settings.yaml'))).toBe(false);
+      rmSync(ownHome, { recursive: true, force: true });
+      rmSync(serverHome, { recursive: true, force: true });
     });
 
     it('keeps it when the endpoint is gone', async () => {

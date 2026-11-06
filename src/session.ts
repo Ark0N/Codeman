@@ -29,7 +29,7 @@
  */
 
 import { EventEmitter } from 'node:events';
-import { basename } from 'node:path';
+import { basename, isAbsolute } from 'node:path';
 import { realpath } from 'node:fs/promises';
 import { execSync, execFileSync } from 'node:child_process';
 import { v4 as uuidv4 } from 'uuid';
@@ -1374,6 +1374,17 @@ export class Session extends EventEmitter {
     return value && value.trim() ? value.trim() : undefined;
   }
 
+  /**
+   * What the SESSION itself set for `key`, same single-key rule. `envOverrideValue()` answers
+   * with whatever the map holds, which under a selection is the injected value: a re-apply
+   * resolving the CLI's real home must read the session's own home, or none.
+   */
+  ownEnvValue(key: string): string | undefined {
+    const selection = this._customModel;
+    const value = selection?.envKeys.includes(key) ? selection.ownEnv?.[key] : this._envOverrides?.[key];
+    return value?.trim() || undefined;
+  }
+
   /** Owning username in multi-user mode, else undefined. */
   get owner(): string | undefined {
     return this._owner;
@@ -2003,7 +2014,9 @@ export class Session extends EventEmitter {
    * The one value it does carry is the session's own home directory (`ownEnv`, narrowed to
    * `homeEnvVar`), a path like `configDir` beside it: the selection overwrote the tmux
    * `setenv` that held it, so without this a clear after a restart would lose it. Any other
-   * entry of `ownEnv` may be a credential and stays in memory.
+   * entry of `ownEnv` may be a credential and stays in memory, and so does a `homeEnvVar`
+   * value that is not an absolute path: the registry types that name as any env var, so a
+   * `clis.json` override can point it at a credential.
    */
   getCustomModelForPersist(): CustomModelBookkeeping | undefined {
     if (!this._customModel) return undefined;
@@ -2013,7 +2026,7 @@ export class Session extends EventEmitter {
     return {
       ...selection,
       envKeys: [...selection.envKeys],
-      ...(homeEnvVar && ownHome ? { ownEnv: { [homeEnvVar]: ownHome } } : {}),
+      ...(homeEnvVar && ownHome && isAbsolute(ownHome) ? { ownEnv: { [homeEnvVar]: ownHome } } : {}),
     };
   }
 

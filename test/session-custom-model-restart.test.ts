@@ -1,7 +1,7 @@
 /**
  * @fileoverview Custom Model Endpoint Profiles, the Session half of applying and
  * clearing a selection against a live pane (`Session.setCustomModel()` +
- * `Session.restartCli()`), pinned against the three ways the first cut broke a
+ * `Session.restartCli()`), pinned against the four ways the first cut broke a
  * working session:
  *
  * 1. Clearing did not clear. The injected vars reach the CLI via `tmux setenv`,
@@ -345,6 +345,31 @@ describe('a value the session set itself comes back with the selection gone', ()
     // The secret is still put back: it just never leaves memory.
     session.setCustomModel(undefined);
     expect(session.envOverrideValue('GEMINI_API_KEY')).toBe('own-secret');
+  });
+
+  it('keeps a home variable holding anything but an absolute path off disk', () => {
+    // The registry types `configDirVar`/`dirEnvVar` as plain env names, so a clis.json
+    // override can name a credential as the home variable. Only a path may reach disk.
+    const { session } = liveSession('gemini', { envOverrides: { GEMINI_API_KEY: 'own-secret' } });
+    session.setCustomModel(
+      { endpointId: 'ep', modelId: 'q', envKeys: ['GEMINI_API_KEY'], homeEnvVar: 'GEMINI_API_KEY' },
+      { GEMINI_API_KEY: 'endpoint-key' }
+    );
+
+    expect(JSON.stringify(session.getCustomModelForPersist())).not.toContain('own-secret');
+    session.setCustomModel(undefined);
+    expect(session.envOverrideValue('GEMINI_API_KEY')).toBe('own-secret');
+  });
+
+  it('reads the own value while a selection holds the key, never the injected one', () => {
+    const { session } = liveSession('deepseek', { envOverrides: { DSH_HOME: ' /home/u/my-dsh ' } });
+    expect(session.ownEnvValue('DSH_HOME')).toBe('/home/u/my-dsh');
+
+    session.setCustomModel(DSH_SELECTION, DSH_ENV);
+    expect(session.ownEnvValue('DSH_HOME')).toBe('/home/u/my-dsh');
+    // An injected key the session never set has no own value, whatever the map holds now.
+    expect(session.envOverrideValue('CODEMAN_CUSTOM_MODEL_API_KEY')).toBe('k');
+    expect(session.ownEnvValue('CODEMAN_CUSTOM_MODEL_API_KEY')).toBeUndefined();
   });
 
   it('persists nothing extra for a recipe with no home variable', () => {
