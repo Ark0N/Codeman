@@ -2961,7 +2961,7 @@ Object.assign(CodemanApp.prototype, {
       // the column without overlapping the content leaves it hidden.
       this.showHomeSessions?.();
       // Sessions a human opened outside Codeman. Polls only while this screen is
-      // up (stopped in hideWelcome) — see foreign-sessions.js.
+      // up (stopped in hideWelcome), see foreign-sessions.js.
       this.wireForeignSessions?.();
       this.startForeignPolling?.();
     }

@@ -1,5 +1,5 @@
 /**
- * Foreign tmux adoption — the pure core.
+ * Foreign tmux adoption: the pure core.
  *
  * These pin the properties that were established by MEASUREMENT against a real
  * tmux (3.3a) while the feature was built, and that a plausible-looking refactor
@@ -49,7 +49,7 @@ import { hooksAvailableForMode, sessionHookOptions } from '../src/web/session-wa
 // A probe transcript in exactly the shape a real run produces. The pane rows use
 // the LITERAL backslash-t that tmux's `-F` emits (verified on next-3.7 and 3.3a),
 // while the socket line is space-separated because `sh`'s builtin `echo` expands
-// a backslash-t to a real TAB — two different meanings for one escape, two lines
+// a backslash-t to a real TAB: two different meanings for one escape, two lines
 // apart, which is why the socket marker carries no separator at all.
 const PROBE = [
   'CMFS /tmp/tmux-0/default',
@@ -65,14 +65,14 @@ const PROBE = [
 ].join('\n');
 
 describe('buildForeignProbeScript', () => {
-  it('contains no single quote — it is wrapped in one to cross ssh and docker exec', () => {
+  it('contains no single quote: it is wrapped in one to cross ssh and docker exec', () => {
     // The script is embedded as `ssh host '<script>'` and `docker exec c sh -lc
     // '<script>'`. One single quote inside ends the wrapper early and the rest is
     // re-tokenized by the remote shell.
     expect(buildForeignProbeScript()).not.toContain("'");
   });
 
-  it('does not disable globbing — the socket sweep IS a glob', () => {
+  it('does not disable globbing: the socket sweep IS a glob', () => {
     // A `set -f` here turned the whole loop into one literal non-match, and the
     // probe reported zero sessions on a machine that had three.
     expect(buildForeignProbeScript()).not.toMatch(/\bset -f\b/);
@@ -172,7 +172,7 @@ describe('classifyForeignPaneMode', () => {
     expect(classifyForeignPaneMode(pane, probe).mode).toBe('codex');
   });
 
-  it('calls a plain shell a shell — the case this feature exists for', () => {
+  it('calls a plain shell a shell, the case this feature exists for', () => {
     const pane = probe.panes.find((p) => p.sessionName === 'scratch')!;
     const c = classifyForeignPaneMode(pane, probe);
     expect(c.mode).toBe('shell');
@@ -294,7 +294,7 @@ describe('attach command builders', () => {
   it('checks the target exists BEFORE new-session, because new-session invents one', () => {
     // ⚠️ `new-session -t` does not fail on a missing target. Measured on tmux 3.3a
     // with only `work-prod` present: `new-session -t work` succeeded and joined our
-    // view into `work-prod`'s group — someone else's session. On a socket with no
+    // view into `work-prod`'s group, someone else's session. On a socket with no
     // server it starts one. The wrapper pane re-runs this on every respawn, and boot
     // recovery respawns every dead pane, so without this guard the owner exiting
     // their session leaves Codeman creating shells on their machine.
@@ -366,11 +366,11 @@ describe('attach command builders', () => {
   it('never sets window-size on the shared window', () => {
     // Measured: `window-size largest` is the only setting that protects an
     // actively-used session's size, but it is a WINDOW option on a SHARED window
-    // and SURVIVES our detach — it would permanently rewrite the owner's config.
+    // and SURVIVES our detach: it would permanently rewrite the owner's config.
     expect(buildForeignTmuxInvocation(target)).not.toContain('window-size');
   });
 
-  it('leaves NO degraded fallback — it either groups or fails with a message', () => {
+  it('leaves NO degraded fallback: it either groups or fails with a message', () => {
     // A read-only `attach-session -r` used to hang off `||`, nominally for a tmux
     // too old to group. But `||` fires on ANY new-session failure, and the one that
     // happens is a leftover view with the same name: measured, new-session answers
@@ -433,7 +433,7 @@ describe('attach command builders', () => {
       containerName: 'my-box',
     });
 
-    it('looks, then execs — never create, never start', () => {
+    it('looks, then execs: never create, never start', () => {
       // An adopted container belongs to the user. Mirrors the adopted branch of
       // buildDockerLaunchCommand, which fails closed rather than mutating it.
       expect(cmd).toContain('inspect');
@@ -834,7 +834,7 @@ describe('runForeignProbe', () => {
 });
 
 describe('foreignCliSignatures', () => {
-  it('covers every stock CLI that declares a binary — including the one the hand-written table missed', () => {
+  it('covers every stock CLI that declares a binary, including the one the hand-written table missed', () => {
     // The table this replaced listed eight CLI ids by hand and had already gone
     // stale: `omp` shipped without a signature, so a hand-started omp pane was
     // classified `shell`. Deriving from `discovery.binaries` makes that class of
@@ -845,7 +845,7 @@ describe('foreignCliSignatures', () => {
     for (const id of expected) expect(covered).toContain(id);
   });
 
-  it('leaves shell out — it declares no binary and is the FALLBACK answer', () => {
+  it('leaves shell out: it declares no binary and is the FALLBACK answer', () => {
     expect(foreignCliSignatures().some((sig) => sig.mode === 'shell')).toBe(false);
   });
 

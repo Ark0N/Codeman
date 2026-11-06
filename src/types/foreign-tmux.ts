@@ -1,5 +1,5 @@
 /**
- * @fileoverview Discovery contract for FOREIGN tmux sessions — the ones a human
+ * @fileoverview Discovery contract for FOREIGN tmux sessions, the ones a human
  * started by hand (`tmux new -s work`, then `claude` or `codex` inside it), which
  * Codeman did not create and does not own.
  *
@@ -9,7 +9,7 @@
  * tmux inside a container, the tmux on an ssh host.
  *
  * Key exports:
- * - ForeignTmuxLocation, WHERE a foreign tmux server lives — the same three
+ * - ForeignTmuxLocation, WHERE a foreign tmux server lives, the same three
  *   locations Codeman already runs sessions in (local / docker / remote).
  * - ForeignPaneProbe, one parsed row of the probe script's output.
  * - ForeignTmuxSession, one adoptable candidate as the UI sees it.
@@ -50,7 +50,7 @@ export interface ForeignPaneProbe {
   windowIndex: number;
   paneId: string;
   panePid: number;
-  /** tmux's own idea of the running command — `node` for both claude and codex. */
+  /** tmux's own idea of the running command: `node` for both claude and codex. */
   paneCurrentCommand: string;
   paneCurrentPath: string;
   sessionAttached: boolean;
@@ -93,7 +93,7 @@ export interface ForeignTmuxSession {
   adoptedBy?: string;
 }
 
-/** One discovery scan. Never throws — unreachable locations become notes. */
+/** One discovery scan. Never throws: unreachable locations become notes. */
 export interface ForeignDiscoveryResult {
   sessions: ForeignTmuxSession[];
   /** Epoch ms of the scan the result came from (may be a cache hit). */

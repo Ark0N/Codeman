@@ -1,5 +1,5 @@
 /**
- * @fileoverview Pure core for FOREIGN tmux sessions — the ones a human started
+ * @fileoverview Pure core for FOREIGN tmux sessions, the ones a human started
  * by hand, which Codeman neither created nor owns.
  *
  * Everything here is a string in / structure out, so all three locations (local,
@@ -32,13 +32,13 @@
  * ⚠️ The script MUST NOT contain a single quote. It is wrapped in single quotes
  * to cross `ssh <host> '<script>'` and `docker exec <c> sh -lc '<script>'`. That
  * is the single-quote dual of the "no double quotes in the docker launch chain"
- * rule in `tmux-manager.ts` — same class of bug, opposite quote.
+ * rule in `tmux-manager.ts`: same class of bug, opposite quote.
  *
  * ## Why the mode comes from the process tree
  *
  * `#{pane_current_command}` is `node` for BOTH claude and codex, so it cannot
  * distinguish them. The classifier walks the pane's descendants over the `ps`
- * snapshot with `collectDescendants` (bounded: one snapshot, no per-node spawn —
+ * snapshot with `collectDescendants` (bounded: one snapshot, no per-node spawn,
  * see proc-tree.ts for the incident that rule exists for) and matches argv. What
  * it cannot identify is `shell`, which is also the honest answer for the case
  * this feature was built for: a hand-opened shell.
@@ -53,7 +53,7 @@
  *
  * ⚠️ The group session must be created ATTACHED (no `-d`). tmux's
  * `server_check_unattached()` runs every server loop, so a detached session with
- * `destroy-unattached on` is torn down almost immediately — the option has to
+ * `destroy-unattached on` is torn down almost immediately: the option has to
  * land on a session that already has our client on it.
  *
  * ⚠️ **Grouping does NOT give us an independent window SIZE, and believing it did
@@ -66,12 +66,12 @@
  *
  * A window is one object with one size; a group shares the object. So attaching
  * from Codeman resizes a session someone else is actively viewing, exactly like
- * any second tmux client does — that is tmux's normal behavior, and it reverses
+ * any second tmux client does: that is tmux's normal behavior, and it reverses
  * when we detach.
  *
  * `window-size largest` is deliberately NOT set here. It is a WINDOW option on a
  * SHARED window, so it survives our detach (measured: still `largest` after our
- * view is gone) — it would permanently rewrite the owner's configuration to buy
+ * view is gone): it would permanently rewrite the owner's configuration to buy
  * a cropped view for us. Restoring it would need the previous value captured with
  * `$(...)`, and this string carries no command substitution. It reaches `bash -c`
  * verbatim now (`bashCArg()`), but it crossed `bash -c "..."` for a long time, where
@@ -102,7 +102,7 @@ import type { SessionAdopt, SessionMode } from './types/session.js';
 
 /**
  * Field separator. tmux's `-F` does NOT expand a backslash-t escape: it emits the
- * LITERAL two characters (verified on next-3.7 — the same finding that shaped
+ * LITERAL two characters (verified on next-3.7, the same finding that shaped
  * `parseRemoteSessionList` in remote-hosts.ts). The parser accepts a real TAB too,
  * in case some build does expand it.
  */
@@ -145,12 +145,12 @@ export function buildForeignProbeScript(): string {
 
   // `ps -eo` covers procps and macOS; `ps ax -o` is the BSD-ish fallback. If both
   // fail we still emit the pane rows, and classification degrades to the pane
-  // command — which still names a plain shell correctly.
+  // command, which still names a plain shell correctly.
   // ⚠️ No `set -f` here: the socket sweep IS a glob, and disabling pathname
   // expansion turns the loop into a single literal non-match. ⚠️ The marker line
   // must NOT try to carry the field separator at all. Measured: `sh`'s builtin
   // `echo` EXPANDS a backslash-t to a real TAB, while tmux's own `-F` emits the
-  // two literal characters — so the same escape means two different things two
+  // two literal characters, so the same escape means two different things two
   // lines apart. The socket line is space-separated instead (marker first, rest
   // of line is the path), which no shell rewrites.
   //
@@ -234,7 +234,7 @@ export function parseForeignProbeOutput(stdout: string): ForeignProbeOutput {
 
     if (inProcs) {
       if (procCount >= FOREIGN_MAX_PROCS) continue;
-      // `<pid> <ppid> <argv...>` — leading spaces are how `ps -o pid=` pads.
+      // `<pid> <ppid> <argv...>`: leading spaces are how `ps -o pid=` pads.
       // ⚠️ `s`, so `.*$` cannot fail: without it a bare CR in an argv stopped the `.`, and
       // `\s+` handed its spaces back one at a time, quadratic in a row this long.
       const m = /^\s*(\d+)\s+(\d+)\s+(.*)$/s.exec(line);
@@ -305,7 +305,7 @@ export function parseForeignProbeOutput(stdout: string): ForeignProbeOutput {
  *
  * Matched against the WHOLE argv of a pane descendant, so `node .../bin/claude`
  * hits the claude rule via the path. The binary names come from each entry's
- * `discovery.binaries` — the one place that already knows a mode name is NOT
+ * `discovery.binaries`, the one place that already knows a mode name is NOT
  * always a binary name (`antigravity` runs `agy`). The hand-written table this
  * replaces keyed on CLI ids, which CLAUDE.md forbids outside `stock.ts`, and it
  * had already fallen behind: `omp` was missing, so a hand-started omp pane read
@@ -339,7 +339,7 @@ export function foreignCliSignatures(): ReadonlyArray<{ mode: SessionMode; test:
     // on purpose: `SessionMode` is the CLOSED union of the stock ids, so a custom
     // entry has no SessionMode to be. Letting one through would put a value the
     // union does not contain on `SessionState.mode`. A custom CLI's pane falls to
-    // the `shell` answer below, which is the honest one — Codeman has no name for
+    // the `shell` answer below, which is the honest one: Codeman has no name for
     // it, and an adopted wrapper runs `attach` either way.
     if (!entry.stock) continue;
     for (const binary of entry.discovery.binaries) {
@@ -413,7 +413,7 @@ export function classifyForeignPaneMode(
   if (direct) return { mode: direct, command: truncate(own) };
 
   // ⚠️ Report truncation. A walk that stopped at a cap returns "nothing matched",
-  // which is byte-identical to the answer for a real shell — without this line a
+  // which is byte-identical to the answer for a real shell: without this line a
   // deep or wide tree silently downgrades an agent pane to `shell` and there is
   // nothing anywhere to tell the two apart.
   const descendants = collectDescendants(pane.panePid, probe.byParent, {
@@ -503,7 +503,7 @@ function truncate(s: string): string {
 }
 
 // ===========================================================================
-// Exclusion — never adopt what Codeman already owns
+// Exclusion: never adopt what Codeman already owns
 // ===========================================================================
 
 /** tmux servers Codeman runs itself. Sessions on these are never "foreign". */
@@ -518,7 +518,7 @@ const CODEMAN_SESSION_PREFIXES = ['codeman-', 'claudeman-'];
  * Excluding them is not cosmetic. Locally it stops Codeman from adopting its own
  * sessions (which would attach a second PTY to a live pane). On a remote host or
  * inside a container it stops the SAME session from being reachable through two
- * different code paths — `remote-hosts.listRemoteCodemanSessions` already owns
+ * different code paths: `remote-hosts.listRemoteCodemanSessions` already owns
  * the `tmux -L codeman` case there, and two paths to one session is how the two
  * end up disagreeing about ownership.
  *
@@ -539,7 +539,7 @@ export function isCodemanOwnedPane(
 }
 
 // ===========================================================================
-// Adoptability — what may cross the launch chain at all
+// Adoptability: what may cross the launch chain at all
 // ===========================================================================
 
 /**
@@ -568,8 +568,8 @@ export function isCodemanOwnedPane(
  * dropped during discovery, so it has no id, and the adopt endpoint re-resolves
  * through that same discovery and can only 404.
  *
- * Generous on purpose about what real names contain — Unicode letters, digits,
- * marks, spaces, and the punctuation people actually use — because a refusal
+ * Generous on purpose about what real names contain (Unicode letters, digits,
+ * marks, spaces, and the punctuation people actually use), because a refusal
  * here is a session the user cannot open at all.
  */
 const ADOPTABLE_TEXT = /^[\p{L}\p{N}\p{M} _.+=@#%,~^!/-]+$/u;
@@ -732,13 +732,13 @@ export interface ForeignAttachTarget {
  *   target gone tmux takes it as part of the name and creates a group literally
  *   called `=work`. It has to be a separate `has-session`.
  * - `new-session -t` creates a session in the target's GROUP: same windows, our
- *   own session options and current window (NOT our own size — see @fileoverview
+ *   own session options and current window (NOT our own size, see @fileoverview
  *   for the measurement that disproved that).
  * - `status off` is why grouping earns its keep: it lands on OUR session, so the
  *   owner's status bar is untouched.
  * - No `-d`: the session must be attached before `destroy-unattached` lands on it.
  * - The escaped semicolons reach tmux as plain command separators after one shell
- *   parse — the same convention the docker launch chain uses.
+ *   parse, the same convention the docker launch chain uses.
  * - ⚠️ There is NO degraded fallback, on purpose. A read-only `attach-session -r`
  *   used to hang off `||` "for a tmux too old to group", but `||` fires on ANY
  *   `new-session` failure. The one that actually happens is a leftover view with
@@ -796,7 +796,7 @@ export function buildForeignAttachCommand(target: ForeignAttachTarget): string {
 }
 
 export interface ForeignDockerAttachOptions extends ForeignAttachTarget {
-  /** `buildDockerBaseArgs(...)` joined — e.g. `docker` or `docker --context foo`. */
+  /** `buildDockerBaseArgs(...)` joined, e.g. `docker` or `docker --context foo`. */
   dockerBase: string;
   containerName: string;
 }
@@ -805,7 +805,7 @@ export interface ForeignDockerAttachOptions extends ForeignAttachTarget {
  * Docker adoption: `docker exec -it` into the container and attach there.
  *
  * Mirrors the ADOPTED-container branch of `buildDockerLaunchCommand`: look, then
- * exec. Never `create`, never `start` — the container belongs to the user, and a
+ * exec. Never `create`, never `start`: the container belongs to the user, and a
  * missing or stopped one fails closed with a message instead of being mutated.
  */
 export function buildForeignDockerAttachCommand(opts: ForeignDockerAttachOptions): string {
@@ -833,7 +833,7 @@ export function buildForeignDockerAttachCommand(opts: ForeignDockerAttachOptions
  * ⚠️ Needed for docker and NOT for the other two, which is a docker fact rather
  * than a design choice. Killing the wrapper pane kills a LOCAL tmux client
  * directly, and over ssh it sends SIGHUP to the remote client (the same
- * propagation the non-owned remote attach has relied on since COD-105) — either
+ * propagation the non-owned remote attach has relied on since COD-105), either
  * way the client detaches and `destroy-unattached on` collects the view.
  * A `docker exec` process does NOT die when its client goes away: measured, the
  * in-container tmux client stayed attached after the wrapper was killed, so the
@@ -841,7 +841,7 @@ export function buildForeignDockerAttachCommand(opts: ForeignDockerAttachOptions
  * exec process.
  *
  * Killing a session by name affects ONLY that session, never the group's other
- * members — so this can only ever remove the view Codeman created, never the
+ * members, so this can only ever remove the view Codeman created, never the
  * human's session it is grouped with. Sibling of `buildDockerKillCommand`, and
  * fired best-effort on the same path.
  */
@@ -873,9 +873,9 @@ export function foreignRemoteShellCommand(script: string): string {
 }
 
 export interface ForeignRemoteAttachOptions extends ForeignAttachTarget {
-  /** `buildSshConnectionArgs(host)` — `['ssh', '-o BatchMode=yes', ...]`. */
+  /** `buildSshConnectionArgs(host)`: `['ssh', '-o BatchMode=yes', ...]`. */
   sshArgs: string[];
-  /** `remoteSshTarget(host)` — `user@host`. */
+  /** `remoteSshTarget(host)`: `user@host`. */
   sshTarget: string;
 }
 
@@ -883,7 +883,7 @@ export interface ForeignRemoteAttachOptions extends ForeignAttachTarget {
  * Remote adoption: ssh in and attach there.
  *
  * `-t` goes right after `ssh -o BatchMode=yes`, exactly where
- * `buildRemoteAttachCommand` puts it — interactive tmux needs a PTY. Connection
+ * `buildRemoteAttachCommand` puts it: interactive tmux needs a PTY. Connection
  * options come from the shared `buildSshConnectionArgs`, never hand-built here,
  * so adoption reaches a proxied/custom-port host on the same terms discovery did.
  */

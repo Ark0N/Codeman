@@ -9,7 +9,7 @@
  *
  * The home screen shows LOCAL results automatically, so a local scan runs on a
  * TTL cache: N browser tabs polling every few seconds still trigger at most one
- * scan per `FOREIGN_CACHE_TTL_MS`. Docker and remote are ON DEMAND only —
+ * scan per `FOREIGN_CACHE_TTL_MS`. Docker and remote are ON DEMAND only:
  * opening the home page must never fan out one ssh connection per saved host.
  *
  * ## ⚠️ The probe must not cross an extra shell
@@ -18,7 +18,7 @@
  * expand. Local and docker therefore spawn with an argv array, where no outer
  * shell exists to eat them first. Remote is the exception: the ssh
  * command line is a string like every other ssh call in this codebase, so the
- * script is wrapped in SINGLE quotes there — which is exactly why
+ * script is wrapped in SINGLE quotes there, which is exactly why
  * `buildForeignProbeScript()` may not contain one.
  *
  * This was measured, not reasoned: running the probe through `execSync` (which
@@ -316,7 +316,7 @@ export function foreignDockerProbeArgv(target: DockerTargetInfo): string[] {
  * Scan the containers behind the caller's docker cases. On demand only.
  *
  * Read-only by construction: one `docker exec` running the probe. Never inspects
- * lifecycle, never starts anything — a stopped or missing container simply
+ * lifecycle, never starts anything: a stopped or missing container simply
  * contributes a note, mirroring `probeAdoptableContainer`'s "engine unreachable
  * degrades to an empty list" rule.
  */
@@ -372,7 +372,7 @@ export function foreignRemoteProbeCommand(host: RemoteHost): string {
 }
 
 /**
- * Scan saved ssh hosts. On demand only — this is the expensive one.
+ * Scan saved ssh hosts. On demand only: this is the expensive one.
  *
  * ⚠️ The ssh command is a STRING (as every ssh call in this codebase is), so the
  * probe crosses one extra shell and must be single-quoted. `shellescape` does
@@ -416,7 +416,7 @@ export async function discoverRemoteForeign(hosts: RemoteHost[]): Promise<Foreig
 export interface ForeignDiscoveryRequest {
   /** Always scanned (cheap, cached). */
   local?: boolean;
-  /** Docker cases the CALLER may see — ownership filtering happens in the route. */
+  /** Docker cases the CALLER may see; ownership filtering happens in the route. */
   dockerCases?: DockerCase[];
   /** Remote hosts the CALLER may see. */
   remoteHosts?: RemoteHost[];

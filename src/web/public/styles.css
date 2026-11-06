@@ -22134,7 +22134,7 @@ html[data-tile-anim="soft"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.til
 }
 
 /* ═══════════════════════════════════════════════════════════════
-   Foreign sessions — tmux sessions a human started outside Codeman
+   Foreign sessions: tmux sessions a human started outside Codeman
    (foreign-sessions.js). Rendered on the welcome screen and, with the
    same row builder, inside the phone overview.
 

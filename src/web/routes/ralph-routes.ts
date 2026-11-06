@@ -72,7 +72,7 @@ export function registerRalphRoutes(
     // ⚠️ Adoption gate, kept SEPARATE from the external-CLI gate above: an adopted
     // session can be `mode: 'claude'` and still be a process we never launched.
     // Everything below drives the pane on the assumption Codeman owns what runs
-    // in it — sending `/clear`, killing and relaunching the agent — which against
+    // in it (sending `/clear`, killing and relaunching the agent), which against
     // someone else's live session is destructive, not merely unsupported.
     if (session.isAdopted) {
       return createErrorResponse(

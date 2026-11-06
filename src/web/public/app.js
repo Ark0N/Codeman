@@ -10962,7 +10962,7 @@ class CodemanApp {
     // only thing Codeman owns; the server's killSession refuses to reach the
     // foreign server at all (see the adopted early return in tmux-manager). So
     // the red "Terminate the session completely" option is not merely redundant
-    // here, it is a false promise about someone else's live work — and the kind
+    // here, it is a false promise about someone else's live work, and the kind
     // of false promise that stops a user closing the tab at all. Hide it, and say
     // what actually happens instead.
     const killBtn = document.getElementById('closeConfirmKillBtn');

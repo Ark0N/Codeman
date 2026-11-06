@@ -4164,7 +4164,7 @@ export class WebServer extends EventEmitter {
               // and one more: it is the ONLY thing that marks this session as
               // wrapping a process Codeman never launched. Dropping it on recovery
               // silently re-enabled respawn, Ralph and hook-backed waits against
-              // someone else's live tmux session after every server restart —
+              // someone else's live tmux session after every server restart:
               // measured, not hypothetical. The mux record is preferred because it
               // is what `killSession`'s detach-not-kill guard already reads.
               adopt: muxSession.adopt ?? savedState?.adopt,
@@ -4455,7 +4455,7 @@ export class WebServer extends EventEmitter {
       // connection facts live on `adopt.remote` / `adopt.docker`, so a session
       // wrapping someone's in-container or over-ssh claude looks local here.
       // Its workspace was never Codeman's to begin with, so installing hooks
-      // there writes `.claude/settings.local.json` into the human's own repo —
+      // there writes `.claude/settings.local.json` into the human's own repo,
       // on EVERY restart, since this sweep runs from boot recovery.
       if (session.isAdopted) continue;
       if (session.docker && !session.docker.hooksEnabled) continue;

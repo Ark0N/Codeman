@@ -1931,7 +1931,7 @@ function buildRemoteSessionCommand(options: {
 }
 
 /**
- * ADOPTION — the pane command for a wrapper session around a tmux session a
+ * ADOPTION: the pane command for a wrapper session around a tmux session a
  * human started. Sibling of `buildRemoteSessionCommand` and
  * `buildDockerLaunchCommand`, and the same shape of decision: the wrapper is an
  * ordinary `codeman-<8hex>` session on OUR socket, and only what runs INSIDE its
@@ -3227,7 +3227,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     // for a non-owned session. The only `kill-session` we run is on OUR LOCAL
     // socket (`this.tmux()` = `tmux -L codeman` on THIS host), which kills the
     // local pane — it does NOT reach the REMOTE socket.
-    // ADOPTION — DETACH-NOT-KILL, by construction rather than by discipline.
+    // ADOPTION: DETACH-NOT-KILL, by construction rather than by discipline.
     //
     // An adopted session's wrapper is an ordinary session on OUR socket whose
     // pane runs `tmux attach` (or `docker exec …`/`ssh …` then attach) against a
@@ -3235,7 +3235,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     // DETACH on the foreign side; the human's session keeps running, and our
     // grouped view session self-destroys via `destroy-unattached on`.
     //
-    // The guard below is a formality more than a fence — `this.tmux()` only ever
+    // The guard below is a formality more than a fence: `this.tmux()` only ever
     // addresses our own socket, so no code path here CAN reach the foreign
     // server. It is written out anyway so the intent survives future edits, the
     // same way the non-owned-remote early return does.

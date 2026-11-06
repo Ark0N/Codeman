@@ -17,13 +17,13 @@
  *
  * The list is a poll, not an SSE stream: the server caches a local scan on a TTL,
  * so N tabs polling costs one scan per TTL no matter how many are open. But an
- * open tab that has LEFT the home screen must stop — otherwise every background
+ * open tab that has LEFT the home screen must stop, otherwise every background
  * tab keeps sweeping tmux sockets forever. `startForeignPolling` /
  * `stopForeignPolling` are called from `showWelcome`/`hideWelcome`.
  *
  * ⚠️ Docker and remote locations are NOT in that poll. Each costs a `docker exec`
  * or a full ssh handshake per target, each with a ~12s timeout, so riding them
- * along on an 8s tick stacks connections on a slow host — the one cost the
+ * along on an 8s tick stacks connections on a slow host, the one cost the
  * server-side design explicitly refuses. The wide scan is therefore ONE-SHOT:
  * turning the toggle on fetches once, and after that it is the user's Rescan
  * button. The periodic poll stays local-only forever.
@@ -35,7 +35,7 @@
  *
  * ⚠️ Adoption creates a REAL session, so the button locks while in flight and the
  * result goes through the app's normal idempotent create path
- * (`_onSessionCreated` then `selectSession`) — never by inserting a tab here.
+ * (`_onSessionCreated` then `selectSession`), never by inserting a tab here.
  *
  * @mixin Extends CodemanApp.prototype via Object.assign
  * @dependency app.js (this.sessions, _onSessionCreated, selectSession)
@@ -80,12 +80,12 @@ Object.assign(CodemanApp.prototype, {
     if (this._foreignPollTimer || this._foreignRefused) return;
     void this.loadForeignSessions();
     this._foreignPollTimer = setInterval(() => {
-      // Local only — see @fileoverview. The wide scan never rides the timer.
+      // Local only: see @fileoverview. The wide scan never rides the timer.
       void this.loadForeignSessions();
     }, this._foreignPollMs || FOREIGN_POLL_FALLBACK_MS);
   },
 
-  /** Stop polling. MUST run on leaving the home screen — see @fileoverview. */
+  /** Stop polling. MUST run on leaving the home screen, see @fileoverview. */
   stopForeignPolling() {
     if (!this._foreignPollTimer) return;
     clearInterval(this._foreignPollTimer);
@@ -125,7 +125,7 @@ Object.assign(CodemanApp.prototype, {
 
   /**
    * Fetch the list. `wide` asks the server for containers and ssh hosts too, and
-   * ONLY an explicit user action ever passes it — never the interval.
+   * ONLY an explicit user action ever passes it, never the interval.
    */
   async loadForeignSessions({ wide = false } = {}) {
     if (this._foreignRefused) return;
@@ -207,8 +207,8 @@ Object.assign(CodemanApp.prototype, {
       }
       // ⚠️ `_api`, not `_apiJson`: the latter folds a network failure, a non-2xx
       // and `success:false` all into null, and the server deliberately tells
-      // two different stories here — "that tmux session is no longer there" vs
-      // "could not reach it just now (…) — try again". Collapsing them showed a
+      // two different stories here: "that tmux session is no longer there" vs
+      // "could not reach it just now (…), try again". Collapsing them showed a
       // live remote session as deleted every time the link flickered.
       const res = await this._api('/api/sessions/adopt', { method: 'POST', body });
       const payload = await this._readJsonBody(res);
@@ -225,7 +225,7 @@ Object.assign(CodemanApp.prototype, {
       this._onSessionCreated?.(data.session);
       await this.selectSession(data.session.id);
       // Still one explicit user action, so a wide row's "Open" refreshes the
-      // wide list too — otherwise the row just adopted keeps reading as free.
+      // wide list too, otherwise the row just adopted keeps reading as free.
       await this.loadForeignSessions({ wide: this.foreignScanRemote() });
     } finally {
       this._foreignAdoptInFlight = false;
@@ -259,7 +259,7 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
-   * Render into one container. The ONLY row builder — see @fileoverview.
+   * Render into one container. The ONLY row builder, see @fileoverview.
    *
    * Everything is built with DOM APIs and `textContent`: a session name and a
    * command line come from another user's process, so they are never allowed
@@ -277,14 +277,14 @@ Object.assign(CodemanApp.prototype, {
       // Hidden rather than shown-empty: on a first run there is usually nothing,
       // and an empty block on the welcome screen reads as a broken feature.
       // A note is a REASON the list is empty, so a block carrying one must stay
-      // visible — hiding it is exactly how "where did my session go" becomes
+      // visible: hiding it is exactly how "where did my session go" becomes
       // unanswerable.
       const hasNotes =
         (Array.isArray(this._foreignNotes) && this._foreignNotes.length > 0) ||
         (Array.isArray(this._foreignWideNotes) && this._foreignWideNotes.length > 0);
       // ⚠️ `canScanWide` must keep the block visible even with nothing to show.
       // The scan toggle lives in the header, so hiding an empty block also hides
-      // the only control that could fill it — on a host with containers but no
+      // the only control that could fill it: on a host with containers but no
       // local tmux sessions that made the whole feature unreachable.
       container.hidden = !this.foreignScanRemote() && !this._foreignError && !hasNotes && !this._foreignCanScanWide;
       if (!container.hidden) {
@@ -435,7 +435,7 @@ Object.assign(CodemanApp.prototype, {
 
   /**
    * One delegated listener per container, wired once. Delegation matters here
-   * because the list is fully rebuilt on every poll — per-button listeners would
+   * because the list is fully rebuilt on every poll: per-button listeners would
    * leak one set per tick.
    */
   wireForeignSessions() {

@@ -1657,8 +1657,8 @@ export function registerSessionRoutes(
     // pane's cwd. That cwd is an observation about another machine: it can carry
     // characters outside SAFE_PATH_PATTERN (`~/c++`, `Program Files (x86)`), which
     // makes `createSession` throw so the tab never starts at all, and when it is a
-    // container or ssh path every local consumer of `workingDir` — the Files panel,
-    // the boot hook sweep, the fs watchers — reads it as a path on THIS host. The
+    // container or ssh path every local consumer of `workingDir` (the Files panel,
+    // the boot hook sweep, the fs watchers) reads it as a path on THIS host. The
     // foreign cwd stays on `adopt.paneCurrentPath`, which is for display only.
     // `/tmp` is the same neutral cwd `resolveMuxAttachCwd` already gives the pane.
     const session = new Session({

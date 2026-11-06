@@ -6,7 +6,7 @@
  * with a ~12s timeout. Riding them along on the 8s poll stacked connections on
  * a slow host, so the wide scan now runs only when the user asks. That makes a
  * second property load-bearing: the periodic poll's payload cannot contain
- * those rows, so they are kept apart and merged — assert only "the request was
+ * those rows, so they are kept apart and merged: assert only "the request was
  * right" and the real failure (the next tick wiping the container rows off the
  * list) sails through.
  *
@@ -119,7 +119,7 @@ describe('the wide scan is one-shot', () => {
 
   it('keeps the periodic poll local-only, and the container row survives it', async () => {
     // Both halves matter. The first is the cost fix; the second is what makes it
-    // usable — a local-only payload has no container rows in it.
+    // usable: a local-only payload has no container rows in it.
     const { app, calls } = wired();
     app.toggleForeignScanRemote();
     await vi.waitFor(() => expect(app._allForeignRows()).toHaveLength(2));
@@ -176,7 +176,7 @@ describe('an adoption failure reports what the server said', () => {
     // The server deliberately tells two different stories. `_apiJson` folds a
     // non-2xx to null, which collapsed both into one message and reported a
     // live remote session as deleted every time the link flickered.
-    const msg = 'Could not reach it just now (ssh box: timeout). It may still be running — try again.';
+    const msg = 'Could not reach it just now (ssh box: timeout). It may still be running, try again.';
     const { app, toasts } = adoptHarness(404, { success: false, error: msg, errorCode: 'NOT_FOUND' });
     await app.adoptForeignSession('cand-1');
     expect(toasts[0]).toBe(msg);

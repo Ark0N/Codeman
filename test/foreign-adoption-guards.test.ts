@@ -10,7 +10,7 @@
  * claude: Codeman wrote `.claude/settings.local.json` into their repo on every
  * restart, and answered a trust dialog that was theirs to answer.
  *
- * Each one is paired with a session Codeman DID start — without that control,
+ * Each one is paired with a session Codeman DID start: without that control,
  * "nothing was written" is equally explained by a disabled setting or a loop
  * that never ran.
  *
@@ -86,7 +86,7 @@ describe('the boot workspace-hook sweep', () => {
     expect(await sweep([adopted])).not.toContain('/home/them/repo');
   });
 
-  it('still skips a plain remote session — the older rule is untouched', async () => {
+  it('still skips a plain remote session, the older rule is untouched', async () => {
     expect(await sweep([fakeSession({ workingDir: '/srv/far', remote: { host: 'box' } })])).not.toContain('/srv/far');
   });
 });

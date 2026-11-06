@@ -208,7 +208,7 @@ export interface HookCapabilityOptions {
    * be `mode: 'claude'` and still have no hooks, because hooks are installed into
    * a WORKSPACE at session-create time (`applyWorkspaceHooks`) and we never
    * created this one. Answering from the mode there would promise `stop` and
-   * `blocked` for a process that can never post either — the exact
+   * `blocked` for a process that can never post either, the exact
    * infinite-wait-dressed-as-a-timeout this predicate exists to prevent.
    */
   adopted?: boolean;

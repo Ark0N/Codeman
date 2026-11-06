@@ -390,7 +390,7 @@ export interface AdoptDockerConnection {
 }
 
 /**
- * ADOPTION overlay — a tmux session a HUMAN started, that Codeman attached to.
+ * ADOPTION overlay: a tmux session a HUMAN started, that Codeman attached to.
  *
  * This is the FOURTH location overlay, alongside remote-SSH and Docker, and it
  * obeys the same rule they do: it is **not** a `SessionMode`. The mode is still
@@ -400,7 +400,7 @@ export interface AdoptDockerConnection {
  * Shape of an adopted session: Codeman creates a NORMAL wrapper session on its
  * OWN socket (`codeman-<8hex>`, so `isValidMuxName` and every capture/input/
  * recovery path is untouched) whose single pane runs a command that attaches to
- * the foreign target. Killing the tab kills only the wrapper — the foreign
+ * the foreign target. Killing the tab kills only the wrapper: the foreign
  * session is structurally out of reach, exactly like a non-owned remote session.
  *
  * ⚠️ There is no `owned` field here, unlike `SessionRemote`/`SessionDocker`: an
@@ -424,7 +424,7 @@ export interface SessionAdopt {
    * our attach resizes the owner's view exactly as any second tmux client does
    * (measured on 3.3a: bare attach and grouped both shrink a 200x49 target to
    * 80x23; only `window-size largest` holds it, and that is a shared window
-   * option which survives our detach — see foreign-tmux.ts for why it is not set).
+   * option which survives our detach, see foreign-tmux.ts for why it is not set).
    * Created with `destroy-unattached on` so it evaporates with our pane.
    */
   viewSession: string;

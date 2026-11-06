@@ -4219,7 +4219,7 @@ html[data-session-list="sidebar"] .session-sidebar .session-tab .tab-close {
 
 /* Foreign sessions block inside the phone overview (foreign-sessions.js).
    The desktop block sits inside the welcome column; here it is a full-width
-   section between CURRENT and PAST, so it only needs the surrounding spacing —
+   section between CURRENT and PAST, so it only needs the surrounding spacing:
    every row style is shared with styles.css on purpose. */
 .mobile-foreign-sessions {
   margin: 0.75rem 0.75rem 0;

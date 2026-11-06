@@ -28,7 +28,7 @@ export class MockSession extends EventEmitter {
    */
   remote?: SessionRemote;
   /**
-   * Mirrors `Session.isAdopted` — true when this session wraps a process SOMEONE
+   * Mirrors `Session.isAdopted`: true when this session wraps a process SOMEONE
    * ELSE started (a hand-opened tmux session Codeman attached to). A plain field
    * rather than a getter over `adopt`, because the routes only ever read the
    * boolean and the tests only ever need to set it.

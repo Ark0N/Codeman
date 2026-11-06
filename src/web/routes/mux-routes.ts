@@ -4,8 +4,8 @@
  * discovery of FOREIGN tmux sessions (ones a human started outside Codeman).
  *
  * Discovery lives here rather than beside the adopt endpoint on purpose: like
- * every other route in this file it exposes cross-user process state — other
- * people's session names, commands and working directories — so it inherits the
+ * every other route in this file it exposes cross-user process state (other
+ * people's session names, commands and working directories), so it inherits the
  * admin gate this file already applies. Adoption is a session CREATE and stays in
  * `session-routes.ts`, where the owner, capacity and case-space gates live.
  */
@@ -66,7 +66,7 @@ export function registerMuxRoutes(app: FastifyInstance, ctx: InfraPort & Session
     const wantRemote = q.remote === '1' || q.remote === 'true';
 
     // Read the registries either way: `canScanWide` tells the browser whether the
-    // expensive scan has anywhere to go. Without it the UI hides an empty block —
+    // expensive scan has anywhere to go. Without it the UI hides an empty block,
     // and with it the toggle that is the ONLY way to populate that block, which on
     // a host with containers but no local tmux sessions made the feature invisible.
     const dockerCases = await readAllDockerCases();

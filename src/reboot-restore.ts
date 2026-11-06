@@ -229,7 +229,7 @@ export function planRebootRestore(
       // ⚠️ Same family as the rule above, different reason. Codeman never started the
       // process this session wrapped: all it ever had was an attach command. Replaying
       // that builds a connection to a foreign session that a reboot has almost certainly
-      // taken with it, and — worse — the rebuilt tab would present whatever the attach
+      // taken with it, and, worse, the rebuilt tab would present whatever the attach
       // lands on as a session we restored, passing someone else's work off as ours.
       skipped.push({ sessionId, reason: 'adopted' });
       continue;

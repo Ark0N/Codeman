@@ -1370,7 +1370,7 @@ export class Session extends EventEmitter {
    *
    * ⚠️ Deliberately NOT folded into `isExternalCliMode()`. That predicate answers
    * "does this CLI render its own TUI", which is about the PROTOCOL. This one
-   * answers "did we launch the process", which is about AUTHORITY — an adopted
+   * answers "did we launch the process", which is about AUTHORITY: an adopted
    * session can be `mode: 'claude'` and still have no hooks installed, no
    * `envOverrides`, no effort and no `--session-id` we chose. Conflating the two
    * would silently grant claude-shaped automation over a process we do not own.
@@ -1502,7 +1502,7 @@ export class Session extends EventEmitter {
    *
    * ⚠️ An ADOPTED session is the same shape for a different reason: its pane runs
    * `tmux attach` to a session a human started, never the agent. That attach exiting
-   * with 0 says the connection ended or its owner closed the foreign session — neither
+   * with 0 says the connection ended or its owner closed the foreign session; neither
    * means this session finished, and neither is Codeman's to clear the tab for. Without
    * this, the clean-exit sweep (`pane-exit-sweep.ts`) would close someone else's live
    * session's tab the moment they detached from it themselves.

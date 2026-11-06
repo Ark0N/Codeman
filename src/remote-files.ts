@@ -524,7 +524,7 @@ export function isRemoteClaudeTranscriptPath(path: string): boolean {
 
 /**
  * Shell lines that set `cfg` to claude's config dir on the remote host: an absolute
- * `CLAUDE_CONFIG_DIR` from the ssh command's environment, else `$HOME/.claude` — claude's own
+ * `CLAUDE_CONFIG_DIR` from the ssh command's environment, else `$HOME/.claude`, claude's own
  * rule. ⚠️ The remote claude runs under `$SHELL -i -l -c` (`remoteLoginShellCommand`), this
  * script under a plain non-interactive `sh` from sshd's `$SHELL -c`: a `CLAUDE_CONFIG_DIR` set
  * only in a login or interactive profile (`.profile`, `.bash_profile`, `.zshrc`) is not seen

@@ -158,7 +158,7 @@ export function createMockRouteContext(options?: {
       killSession: vi.fn(),
       listSessions: vi.fn(() => []),
       // A DIFFERENT method from listSessions, and the adoption routes call this
-      // one. Missing it is not a type error — the handler throws and the route
+      // one. Missing it is not a type error: the handler throws and the route
       // answers 500, which reads as a broken endpoint rather than a broken mock.
       getSessions: vi.fn(() => []),
       getStats: vi.fn(() => ({})),

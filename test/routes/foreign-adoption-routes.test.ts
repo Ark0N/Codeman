@@ -3,7 +3,7 @@
  * keep Codeman from driving a session it did not start.
  *
  * An adopted session wraps a process SOMEONE ELSE launched. Its `mode` is
- * whatever the probe saw — very often `claude` — so every refusal here has to
+ * whatever the probe saw (very often `claude`), so every refusal here has to
  * be its own `isAdopted` check and not a side effect of the external-CLI rule.
  * The two questions are different ("is this CLI one we drive?" vs "did we start
  * this process?"), and folding them into one means the day the first loosens,
@@ -47,7 +47,7 @@ import type { SessionAdopt } from '../../src/types/session.js';
 const SID = 'adopted-1';
 
 // The stand-in defaults to "found nothing", which is what real discovery gives
-// under VITEST — so mocking the module does not change the tests that predate it.
+// under VITEST, so mocking the module does not change the tests that predate it.
 beforeEach(() => {
   discoverForeignSessions.mockReset();
   discoverForeignSessions.mockResolvedValue({ sessions: [], notes: [] });
@@ -173,7 +173,7 @@ describe('GET /api/mux/foreign', () => {
     else process.env.CODEMAN_MULTIUSER = prev;
   });
 
-  it('is admin-only in multi-user mode — it exposes every user’s processes and cwds', async () => {
+  it('is admin-only in multi-user mode: it exposes every user’s processes and cwds', async () => {
     process.env.CODEMAN_MULTIUSER = '1';
     const { app } = await createRouteTestHarness(registerMuxRoutes, {
       authUser: { username: 'bob', role: 'user' },
@@ -216,7 +216,7 @@ describe('POST /api/sessions/adopt', () => {
     else process.env.CODEMAN_MULTIUSER = prev;
   });
 
-  it('is admin-only in multi-user mode — adopting a shell is arbitrary host execution', async () => {
+  it('is admin-only in multi-user mode: adopting a shell is arbitrary host execution', async () => {
     process.env.CODEMAN_MULTIUSER = '1';
     const { app } = await createRouteTestHarness(registerSessionRoutes, {
       authUser: { username: 'bob', role: 'user' },
