@@ -748,7 +748,7 @@ export function registerCaseRoutes(
                   ? ApiErrorCode.ALREADY_EXISTS
                   : ApiErrorCode.INVALID_INPUT,
             prepared.code === 'EXISTS'
-              ? `${customPath} already has files in it. Pick an empty folder, or a folder that does not exist yet.`
+              ? `${customPath} already has files in it. The clone target must be empty or not exist yet.`
               : prepared.reason
           );
         }

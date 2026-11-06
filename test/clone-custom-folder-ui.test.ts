@@ -33,7 +33,7 @@ function bootClone() {
   const set = (id: string, value: string) => ((doc.getElementById(id) as HTMLInputElement).value = value);
   set('cloneRepoUrl', 'https://github.com/opticon454/bifrost');
   set('cloneCaseName', 'bifrost');
-  return { app, doc, set, fetchMock };
+  return { app, doc, set, fetchMock, win };
 }
 
 async function requestBody(fetchMock: ReturnType<typeof vi.fn>) {
@@ -88,13 +88,13 @@ describe('Clone Repo custom folder', () => {
   });
 
   it('previews the name taken from the URL as it is typed', () => {
-    const { app, doc, set } = bootClone();
+    const { app, doc, set, win } = bootClone();
     app.isCliAvailable = () => true; // lives in settings-ui.js, which this test does not load
     set('cloneCaseName', '');
     set('cloneCasePath', '/mnt/projects');
     set('cloneRepoUrl', 'https://github.com/opticon454/bifrost');
     app.onCloneUrlInput();
-    clearTimeout(app._clonePreflightTimer);
+    win.clearTimeout(app._clonePreflightTimer);
     expect((doc.getElementById('cloneCaseName') as HTMLInputElement).value).toBe('bifrost');
     expect(doc.getElementById('cloneCasePathPreview')?.textContent).toBe('Will clone into: /mnt/projects/bifrost');
   });
