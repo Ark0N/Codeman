@@ -9,10 +9,11 @@
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { TuiClient, type TuiApprovalEvent, type TuiSseStatusDetail } from '../../src/tui/tui-client.js';
 
-const PORT = 3242;
-const BASE_URL = `http://127.0.0.1:${PORT}`;
+let port: number;
+let baseUrl: string;
 
 interface Connection {
   url: string;
@@ -57,7 +58,9 @@ beforeAll(async () => {
     res.flushHeaders();
     connections.push({ url: req.url, headers: req.headers, res });
   });
-  await new Promise<void>((resolve) => server.listen(PORT, '127.0.0.1', resolve));
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  port = (server.address() as AddressInfo).port;
+  baseUrl = `http://127.0.0.1:${port}`;
 });
 
 afterAll(async () => {
@@ -82,7 +85,7 @@ describe('subscribeEvents', () => {
     let planUsage: unknown = null;
     let init: unknown = null;
 
-    client = new TuiClient({ baseUrl: BASE_URL, password: 's3cret' });
+    client = new TuiClient({ baseUrl, password: 's3cret' });
     client.subscribeEvents({
       onInit: (state) => {
         init = state;
@@ -117,7 +120,7 @@ describe('subscribeEvents', () => {
   });
 
   it('suppresses the terminal firehose by default and carries the auth header', async () => {
-    client = new TuiClient({ baseUrl: BASE_URL, password: 's3cret' });
+    client = new TuiClient({ baseUrl, password: 's3cret' });
     client.subscribeEvents({});
     await until(() => connections.length === 1);
     expect(connections[0].url).toBe('/api/events?sessions=tui-no-terminal');
@@ -126,7 +129,7 @@ describe('subscribeEvents', () => {
   });
 
   it('subscribes to the terminal stream of named sessions when asked', async () => {
-    client = new TuiClient({ baseUrl: BASE_URL });
+    client = new TuiClient({ baseUrl });
     client.subscribeEvents({}, { sessionIds: ['a', 'b'] });
     await until(() => connections.length === 1);
     expect(connections[0].url).toBe('/api/events?sessions=a%2Cb');
@@ -134,7 +137,7 @@ describe('subscribeEvents', () => {
 
   it('reconnects when the stream ends', async () => {
     const statuses: Array<[string, TuiSseStatusDetail]> = [];
-    client = new TuiClient({ baseUrl: BASE_URL });
+    client = new TuiClient({ baseUrl });
     const stream = client.subscribeEvents(
       { onStatus: (status, detail) => statuses.push([status, detail]) },
       { baseBackoffMs: 10, maxBackoffMs: 20 }
@@ -148,7 +151,7 @@ describe('subscribeEvents', () => {
   });
 
   it('reconnects when a live stream goes silent, which no socket error reports', async () => {
-    client = new TuiClient({ baseUrl: BASE_URL });
+    client = new TuiClient({ baseUrl });
     client.subscribeEvents({}, { staleTimeoutMs: 150, checkIntervalMs: 25, baseBackoffMs: 10, maxBackoffMs: 20 });
 
     await until(() => connections.length === 1);
@@ -161,7 +164,7 @@ describe('subscribeEvents', () => {
   it('recommends polling once connecting keeps failing', async () => {
     refuse = true;
     const details: TuiSseStatusDetail[] = [];
-    client = new TuiClient({ baseUrl: BASE_URL });
+    client = new TuiClient({ baseUrl });
     const stream = client.subscribeEvents(
       { onStatus: (_status, detail) => details.push(detail) },
       { baseBackoffMs: 10, maxBackoffMs: 20, pollingAfterFailures: 2 }
@@ -175,7 +178,7 @@ describe('subscribeEvents', () => {
   });
 
   it('stops reconnecting after close, so the process can exit', async () => {
-    client = new TuiClient({ baseUrl: BASE_URL });
+    client = new TuiClient({ baseUrl });
     const stream = client.subscribeEvents({}, { baseBackoffMs: 10, maxBackoffMs: 20 });
     await until(() => connections.length === 1);
 
@@ -187,7 +190,7 @@ describe('subscribeEvents', () => {
   });
 
   it('closes every stream the client opened', async () => {
-    client = new TuiClient({ baseUrl: BASE_URL });
+    client = new TuiClient({ baseUrl });
     client.subscribeEvents({});
     client.subscribeEvents({});
     await until(() => connections.length === 2);
@@ -200,7 +203,7 @@ describe('subscribeEvents', () => {
   });
 
   it('refuses to subscribe before the client knows where the server is', () => {
-    const disconnected = new TuiClient({ port: 3999 });
+    const disconnected = new TuiClient({ port });
     expect(() => disconnected.subscribeEvents({})).toThrow(/connect\(\)/);
   });
 });

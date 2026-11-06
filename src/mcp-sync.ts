@@ -12,7 +12,8 @@
  *     does not understand) is never rewritten and nothing is ever removed. Same name with a
  *     different definition is reported as a conflict and left alone.
  *   - A server the user has switched off in its own CLI (codex `enabled = false`, opencode
- *     `enabled: false`, antigravity `disabled: true`) is not propagated: copying it would
+ *     `enabled: false`, antigravity `disabled: true`, Copilot's `disabledMcpServers` in its
+ *     `settings.json`) is not propagated: copying it would
  *     switch it on in every other CLI.
  *   - A file that does not parse (e.g. opencode JSONC with comments, a TOML file with a
  *     duplicate table) is never written, and a write is only made after the NEW text has been
@@ -39,7 +40,7 @@
 import { promises as fs } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
-import { dirname, isAbsolute, join } from 'node:path';
+import { basename, dirname, isAbsolute, join } from 'node:path';
 import { parse as parseToml, TomlError } from 'smol-toml';
 import type { McpConfigFormat } from './config/cli-registry/types.js';
 import type { McpSyncResult, McpSyncTargetResult } from './types/mcp-sync.js';
@@ -65,6 +66,11 @@ export interface McpSyncTarget {
   label: string;
   /** Home-relative default location of the config file. */
   path: string;
+  /**
+   * Home-relative fallback file used when `path` is absent: read, and written in place when it
+   * parses (a JSONC file with comments fails the parse and is never written).
+   */
+  altPath?: string;
   format: McpFormat;
   /** The env var the CLI reads to move the file, and the path under it (`mcpConfig.relocation`). */
   relocation?: { envVar: string; path: string };
@@ -196,11 +202,12 @@ function toClaude(s: McpServer): Record<string, unknown> {
 function fromGemini(raw: unknown): McpServer | null {
   if (!isRecord(raw)) return null;
   // `httpUrl` is the legacy streamable-http key; `url` + `type` is what `gemini mcp add` writes
-  // today, and a bare `url` with no type is the legacy SSE form.
+  // today. A bare `url` with no type used to be the legacy SSE form, but gemini-cli v0.63.0 tries
+  // it as streamable HTTP first (and logs `httpUrl` as deprecated), so map it to 'http'.
   if (typeof raw.httpUrl === 'string')
     return clean({ transport: 'http', url: raw.httpUrl, headers: strMap(raw.headers) });
   if (typeof raw.url === 'string') {
-    return clean({ transport: raw.type === 'http' ? 'http' : 'sse', url: raw.url, headers: strMap(raw.headers) });
+    return clean({ transport: raw.type === 'sse' ? 'sse' : 'http', url: raw.url, headers: strMap(raw.headers) });
   }
   if (typeof raw.command === 'string') {
     return clean({
@@ -254,7 +261,7 @@ function toAntigravity(s: McpServer): Record<string, unknown> | null {
 
 function fromOpencode(raw: unknown): McpServer | null {
   if (!isRecord(raw)) return null;
-  const disabled = raw.enabled === false;
+  const disabled = raw.enabled === false || raw.disabled === true;
   if (raw.type === 'remote' && typeof raw.url === 'string') {
     return clean({ transport: 'http', url: raw.url, headers: strMap(raw.headers), disabled });
   }
@@ -284,21 +291,58 @@ function toOpencode(s: McpServer): Record<string, unknown> {
   return { type: 'remote', url: s.url, ...(s.headers ? { headers: s.headers } : {}), enabled: true };
 }
 
+/**
+ * GitHub Copilot CLI (`copilot mcp add`): `~/.copilot/mcp-config.json`, `mcpServers`. A stdio server is
+ * `type: "local"`; every entry carries `tools` (`["*"]` = all). Whether a server is switched off is NOT in
+ * this file: `copilot mcp disable` records the name in `settings.json` beside it (`disabledMcpServers`).
+ */
+function fromCopilot(raw: unknown): McpServer | null {
+  if (!isRecord(raw)) return null;
+  if ((raw.type === 'http' || raw.type === 'sse') && typeof raw.url === 'string') {
+    return clean({ transport: raw.type, url: raw.url, headers: strMap(raw.headers) });
+  }
+  if ((raw.type === undefined || raw.type === 'local' || raw.type === 'stdio') && typeof raw.command === 'string') {
+    return clean({ transport: 'stdio', command: raw.command, args: strArr(raw.args), env: strMap(raw.env) });
+  }
+  return null;
+}
+
+function toCopilot(s: McpServer): Record<string, unknown> {
+  if (s.transport === 'stdio') {
+    return { tools: ['*'], type: 'local', command: s.command, args: s.args ?? [], ...(s.env ? { env: s.env } : {}) };
+  }
+  return { tools: ['*'], type: s.transport, url: s.url, ...(s.headers ? { headers: s.headers } : {}) };
+}
+
 interface JsonDialect {
   /** Key holding the server table. */
   key: string;
+  /** Servers also read from under `key.nestedKey` (OpenCode V2 nests them under `mcp.servers`). */
+  nestedKey?: string;
   from(raw: unknown): McpServer | null;
   to(s: McpServer): Record<string, unknown> | null;
   /** Top-level keys to seed when creating the file from nothing. */
   seed?: Record<string, unknown>;
+  /**
+   * A file beside the config that lists the names of servers the user switched off (the switch is
+   * not stored on the server entry). Read, never written.
+   */
+  disabledIn?: { file: string; key: string };
 }
 
 const JSON_DIALECTS: Record<Exclude<McpFormat, 'codex-toml'>, JsonDialect> = {
   'claude-json': { key: 'mcpServers', from: fromClaude, to: toClaude },
   'gemini-json': { key: 'mcpServers', from: fromGemini, to: toGemini },
   'antigravity-json': { key: 'mcpServers', from: fromAntigravity, to: toAntigravity },
+  'copilot-json': {
+    key: 'mcpServers',
+    from: fromCopilot,
+    to: toCopilot,
+    disabledIn: { file: 'settings.json', key: 'disabledMcpServers' },
+  },
   'opencode-json': {
     key: 'mcp',
+    nestedKey: 'servers',
     from: fromOpencode,
     to: toOpencode,
     seed: { $schema: 'https://opencode.ai/config.json' },
@@ -370,7 +414,17 @@ function mcpTable(format: McpFormat, text: string | null): Record<string, unknow
   const table = doc[dialect.key];
   if (table === undefined) return dict<unknown>();
   if (!isRecord(table)) throw new McpConfigError(`"${dialect.key}" is not an object`);
-  return table;
+  if (!dialect.nestedKey) return table;
+  const nested = table[dialect.nestedKey];
+  // OpenCode reads `mcp.servers` as a V1 server named "servers" when it carries a V1 `type`.
+  if (nested === undefined || (isRecord(nested) && (nested.type === 'local' || nested.type === 'remote'))) return table;
+  if (!isRecord(nested)) throw new McpConfigError(`"${dialect.key}.${dialect.nestedKey}" is not an object`);
+  // Merge the direct (V1) table with the nested (V2) one. Like OpenCode, the native V2 entry wins a
+  // name collision; sync never writes a name already defined, so this does not affect the read-back.
+  const merged = dict<unknown>();
+  for (const k of safeKeys(table)) if (k !== dialect.nestedKey) merged[k] = table[k];
+  for (const k of safeKeys(nested)) merged[k] = nested[k];
+  return merged;
 }
 
 /** Parse a config file's text (null = file absent). Throws if it cannot be read safely. */
@@ -558,6 +612,56 @@ function resolveFile(
   return { file: join(dir, rel.path) };
 }
 
+/**
+ * The alternate config file for a target (`McpSyncTarget.altPath`), honouring the same relocation
+ * as the primary file: the alt lives in the same directory, so the relocated path is the primary's
+ * directory plus the alt filename. Once chosen it is read and written exactly like the primary; a
+ * JSONC file with comments fails the parse guard and is never written.
+ */
+function resolveAltFile(
+  t: McpSyncTarget,
+  altPath: string,
+  home: string,
+  env: Record<string, string | undefined>
+): { file: string; skip?: string } {
+  const rel = t.relocation;
+  const dir = rel ? env[rel.envVar] : undefined;
+  if (!rel || dir === undefined || dir === '') return { file: join(home, altPath) };
+  if (!isAbsolute(dir)) {
+    return {
+      file: `$${rel.envVar}/…`,
+      skip: `${rel.envVar} is set to a relative path, so the alt file cannot be located safely`,
+    };
+  }
+  return { file: join(dir, dirname(rel.path), basename(altPath)) };
+}
+
+/**
+ * Mark the servers a CLI keeps switched off in a companion file (`JsonDialect.disabledIn`) as
+ * disabled, so they are not copied. If that file cannot be read as intended the target is
+ * reported unreadable rather than guessing: a guess could switch a server on everywhere.
+ */
+async function applyCompanionDisabled(format: McpFormat, file: string, servers: McpServerMap): Promise<void> {
+  if (format === 'codex-toml') return;
+  const companion = JSON_DIALECTS[format].disabledIn;
+  if (!companion) return;
+  const text = await readText(join(dirname(file), companion.file));
+  if (text === null || !text.trim()) return;
+  let doc: unknown;
+  try {
+    doc = JSON.parse(text);
+  } catch {
+    throw new McpConfigError(
+      `${companion.file} next to the config is not valid JSON, so which servers are switched off is unknown`
+    );
+  }
+  const list = isRecord(doc) ? doc[companion.key] : undefined;
+  if (list === undefined) return;
+  const names = strArr(list);
+  if (!names) throw new McpConfigError(`"${companion.key}" in ${companion.file} is not a list of names`);
+  for (const n of names) if (n in servers) servers[n] = { ...servers[n], disabled: true };
+}
+
 let applying = false;
 
 /**
@@ -606,11 +710,21 @@ async function run(targets: McpSyncTarget[], opts: McpSyncOptions, unsupported: 
   for (const s of state) {
     if (s.res.status !== 'ok') continue;
     try {
+      // A config kept under an alternate name (OpenCode's opencode.jsonc) is read when the primary
+      // file is absent, so its servers are synced rather than silently treated as "not installed".
+      if (s.t.altPath && !(await exists(s.file))) {
+        const alt = resolveAltFile(s.t, s.t.altPath, home, env);
+        if (!alt.skip && (await exists(alt.file))) {
+          s.file = alt.file;
+          s.res.file = alt.file;
+        }
+      }
       if (!s.t.installed && !(await exists(s.file))) {
         s.res.status = 'absent';
         continue;
       }
       const parsed = parseConfig(s.t.format, await readText(s.file));
+      await applyCompanionDisabled(s.t.format, s.file, parsed.servers);
       s.servers = parsed.servers;
       s.names = parsed.names;
       s.res.servers = [...parsed.names];

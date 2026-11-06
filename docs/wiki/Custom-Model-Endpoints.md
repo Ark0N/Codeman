@@ -27,14 +27,20 @@ hosts — these are machine-level infra, not a per-user setting.
 shows up without another manual click of **Discover**. One endpoint being unreachable on a
 given cycle (powered off, wrong network) never blocks the others from refreshing.
 
-**Context length is picked up automatically where it can be, safely.** Against a
-llama.cpp/llama-swap server, discovery also learns each _currently loaded_ model's real
-context window and applies it to the launched session (Claude Code today — see below), so
-the harness stops assuming a large default window for a model name it doesn't recognise and
-overflowing a much smaller real one. It's deliberately never probed for a model that isn't
-already loaded, since asking a llama-swap server about an unloaded model can trigger an
-actual, slow model swap as a side effect — a model just not currently loaded keeps whatever
-context length an earlier cycle already learned for it instead.
+**Context length is picked up automatically where it can be, safely.** Every model's own
+listing entry is read for a stated context figure (`context_length`, then `context_window`,
+which current llama.cpp, llama-swap and gateway-style servers state to varying degrees);
+against a llama-swap server the stronger figures from its launch command and from llama.cpp's
+`/props` probe win where they exist, and those probes only ever run for a model the server
+already reports loaded, since asking about an unloaded model can trigger an actual, slow model
+swap as a side effect. A model that states no figure keeps whatever an earlier cycle learned:
+the stored figure always beats the endpoint's **Default context length** field
+(`modelContextLengths[id] ?? defaultContextLength`), which only applies where no figure was
+ever learned (that number is the model's whole window, never a per-slot figure). A model
+neither covers simply gets no override, never a guess. The window is applied to the launched session by the harnesses
+that can take it: Claude Code today (see below), OpenCode as the model's context limit, and
+Codex as a `model_context_window` entry in its generated config file, which also sets Codex's
+own auto-compact point via `model_auto_compact_token_limit` at 75% of the window.
 
 ## Running a session against one
 
@@ -48,21 +54,26 @@ pointed at.
 
 **Which model it uses depends on how many the endpoint has discovered.** With exactly one,
 the session launches straight away on that model — nothing to choose. With two or more, a
-small dialog asks which one to use for this launch before starting the session; the
+small dialog asks which one to use for this launch before starting the session; a search box
+at the top narrows a long list with a case-insensitive substring match, so a server hosting
+hundreds of models stays usable. The
 endpoint's default model, if set, is marked but not auto-picked, so a launch can deliberately
 use a different one without changing the saved default. The list is not raw discovery order
 either: the model llama-swap reports loaded and ready is moved to the top and tagged
-**Currently loaded**, and when nothing is loaded, the model you last launched on this harness
-and endpoint pair is moved up instead and tagged **Last used** (a per-device browser value, so
-another device starts from its own history). The default model keeps its own **Default** pill
-in both cases, and nothing is ever auto-chosen: the promoted row is simply the one under your
-thumb.
+**Currently loaded**. When nothing is reported loaded, the model one of your own running
+sessions is using on that endpoint is moved up instead and tagged **In use by a session** (it
+beats **Last used**, never **Currently loaded**), and failing that the model you last launched
+on this harness and endpoint pair is moved up and tagged **Last used** (a per-device browser
+value, so another device starts from its own history). With none of those, a line under the
+search box says nothing is marked, so the plain list is not mistaken for an answer. The default
+model keeps its own **Default** pill in every case, and nothing is ever auto-chosen: the
+promoted row is simply the one under your thumb.
 
-**For opencode, Codex, Gemini, Pi, Grok, DeepSeek and OMP, picking an entry launches
+**For opencode, Codex, Gemini, Pi, Grok, DeepSeek, OMP and GitHub Copilot, picking an entry launches
 straight onto the endpoint** — no restart, because the endpoint is applied before the
 session's process ever starts. **Claude still restarts the harness's process in place** —
 same tab, same conversation (`--resume`) — after a normal native launch, since that restart
-is far less jarring for Claude than for the other seven, whose own TUI can fully
+is far less jarring for Claude than for the others, whose own TUI can fully
 reinitialize on a restart. Either way, every supported harness reads its endpoint config at
 process start, never per turn, so there is no live hot-swap while a turn is running.
 
@@ -150,14 +161,43 @@ relying on auto-fit (`--fit-ctx`), which sizes the context around fitting the bi
 rather than the biggest context — for example adding `-c 65536` to that model's llama-swap
 entry. "Launch anyway" is still there if you want to try regardless.
 
+**A context that is big enough overall can still be too small once it is split across
+slots.** `llama-server` runs several parallel slots by default (four on the build this was measured on) and,
+unless you say otherwise, they all share one pool of context. Claude Code sends more than one
+request at a time: the main session plus every subagent it runs in parallel, and each of those
+requests carries the roughly 40K tokens of system prompt and tools on its own. Four requests
+of 40K tokens do not fit in a shared 131K pool, so the server refuses them with HTTP 500
+`Context size has been exceeded`, even though any single request would have been fine.
+Discovery therefore also records how many slots each loaded model has. It reads an explicit
+`--parallel` or `-np` from the launch command, and otherwise asks the server for
+`total_slots`, because a server started without the flag chooses the number itself. When the
+context divided by the slot count drops below what Claude Code needs, picking that model shows
+the same in-app dialog, this time explaining the shared slots. The division uses the context
+Codeman read from the launch command (`--fit-ctx` or `-c`), never a larger figure from the
+server's `/props`, which has been measured reporting far more than the server really runs
+with. So a default llama-swap model with auto slots shows the dialog, which names the fix and
+lets you launch anyway. The fix is a single slot:
+
+```yaml
+cmd: >-
+  llama-server -m /models/your-model.gguf --parallel 1 ...
+```
+
+With one slot the active conversation gets the whole context, requests from parallel
+subagents queue behind it instead of failing, and Claude Code's repeated prompt prefix stays
+in the cache instead of being processed again in a different slot each time. The alternative
+is a context large enough that every slot can hold 40K tokens. A slot count Codeman could not
+read is treated as one slot, never guessed.
+
 ## Which harnesses actually work
 
 | Harness                                  | Status                                                                                                                                                                                                               |
 | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **GitHub Copilot CLI**                   | Verified at the CLI level (1.0.95) against a local OpenAI-compatible endpoint: it posts to `/v1/chat/completions` with your key and model name and needs no GitHub sign-in. Tool calls through a custom endpoint were not exercised. |
 | **Claude Code, opencode, Pi, Grok, OMP** | Verified end-to-end against a real local server.                                                                                                                                                                     |
 | **Codex**                                | Config is correct, and plain chat can work against a server that speaks the Responses API — but a real tool-call attempt comes back as inert text instead of running, so it's still not usable for real coding work. |
 | **Gemini**                               | Fails with an auth error gemini-cli raises once redirected. Unresolved; don't rely on it yet.                                                                                                                        |
-| **DeepSeek**                             | The original 404 is root-caused and fixed (DeepSeek Harness's own code was missing a `/v1` most local servers require) — not yet re-run against a real `dsh` install to confirm end-to-end.                          |
+| **DeepSeek**                             | Verified end-to-end against a real `dsh` install (dsh 0.1.1-rc.2, dsh-TUI 0.10.0-beta.1): the original 404 is root-caused and fixed, and the redirect is now a generated per-session patch file whose prompt reaches the endpoint as `POST /v1/chat/completions`. Such a session does not carry over your home-level `cordis.patch.yml`, your own `llm-pi-ai` providers, or a profile-level `effort`/`preset`. |
 | **Antigravity**                          | No known custom-endpoint mechanism at all. Not offered.                                                                                                                                                              |
 
 Which harnesses show up in the Run-menu picker is read live off Codeman's own CLI registry,

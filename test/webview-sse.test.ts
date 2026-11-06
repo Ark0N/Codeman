@@ -34,7 +34,7 @@ function client() {
 
 /** The server's real event → routing-hint derivation, without starting the server. */
 function serverHint(event: string, data: unknown): SseRoutingHint | undefined {
-  const server = new WebServer(3999, false, true) as unknown as {
+  const server = new WebServer(0, false, true) as unknown as {
     deriveSseHint(event: string, data: unknown): SseRoutingHint | undefined;
   };
   return server.deriveSseHint(event, data);

@@ -31,6 +31,7 @@ const SURFACES = [
   { attr: 'win', array: 'WIN_ANIM_STYLES', selector: '.subagent-window.win-enter' },
   { attr: 'line', array: 'LINE_ANIM_STYLES', selector: '.connection-line.line-enter' },
   { attr: 'term', array: 'TERM_ANIM_STYLES', selector: '.terminal-container.term-enter' },
+  { attr: 'tile', array: 'TILE_ANIM_STYLES', selector: '.tile.tile--entering' },
 ] as const;
 
 /**
@@ -40,6 +41,11 @@ const SURFACES = [
  */
 const CSS_LESS_STYLES = new Set(['off', 'fly']);
 
+/** `fly` is CSS-less on the window surface only: a tile's `fly` is keyframes like any other. */
+function isCssLess(attr: string, key: string): boolean {
+  return key === 'off' || (attr === 'win' && CSS_LESS_STYLES.has(key));
+}
+
 function styleKeys(arrayName: string): string[] {
   const start = animSource.indexOf(`const ${arrayName} = [`);
   expect(start, `${arrayName} not found`).toBeGreaterThan(-1);
@@ -47,12 +53,21 @@ function styleKeys(arrayName: string): string[] {
   return [...body.matchAll(/\{ key: '([^']+)'/g)].map((m) => m[1]);
 }
 
-function themes(): { key: string; tab: string; win: string; line: string; term: string }[] {
+type Theme = { key: string; tab: string; win: string; line: string; term: string; tile: string };
+
+function themes(): Theme[] {
   const start = animSource.indexOf('const ANIM_THEMES = [');
   const body = animSource.slice(start, animSource.indexOf('];', start));
-  return [
-    ...body.matchAll(/\{ key: '([^']+)'.*?tab: '([^']+)', win: '([^']+)', line: '([^']+)', term: '([^']+)' \}/g),
-  ].map((m) => ({ key: m[1], tab: m[2], win: m[3], line: m[4], term: m[5] }));
+  const parsed = [
+    ...body.matchAll(
+      /\{ key: '([^']+)'.*?tab: '([^']+)', win: '([^']+)', line: '([^']+)', term: '([^']+)', tile: '([^']+)' \}/g
+    ),
+  ].map((m) => ({ key: m[1], tab: m[2], win: m[3], line: m[4], term: m[5], tile: m[6] }));
+  // Every theme entry must parse: a theme missing a surface (or a regex that
+  // drifted from the source) would otherwise pass the checks below vacuously.
+  expect(parsed.length, 'a theme entry did not parse').toBe((body.match(/\{ key: '/g) || []).length);
+  expect(parsed.length).toBeGreaterThan(0);
+  return parsed;
 }
 
 /**
@@ -82,7 +97,7 @@ describe('entrance animation styles', () => {
     describe(`${surface.attr} surface`, () => {
       it('backs every style with a rule that names a keyframe block that exists', () => {
         for (const key of styleKeys(surface.array)) {
-          if (CSS_LESS_STYLES.has(key)) {
+          if (isCssLess(surface.attr, key)) {
             expect(stylesSource).not.toContain(`html[data-${surface.attr}-anim="${key}"]`);
             continue;
           }
@@ -99,8 +114,16 @@ describe('entrance animation styles', () => {
     });
   }
 
-  it('ships the blur style on all four surfaces', () => {
-    for (const surface of SURFACES) expect(styleKeys(surface.array)).toContain('blur');
+  /**
+   * Tiles are the exception: six frames animate at once, so their styles stay
+   * off `filter`, and a tile's blur is its SCREEN beat (the pane's `blur`
+   * style on .tile-body, one tile at a time), which the Soft focus theme uses.
+   */
+  it('ships the blur style on the four single-element surfaces', () => {
+    for (const surface of SURFACES) {
+      if (surface.attr === 'tile') expect(styleKeys(surface.array)).not.toContain('blur');
+      else expect(styleKeys(surface.array)).toContain('blur');
+    }
   });
 
   it('gives every theme an <option> and only styles that exist', () => {
@@ -171,5 +194,98 @@ describe('entrance animation styles', () => {
     // number here snaps them.
     expect(blur).toMatch(/100%\s*\{\s*filter:[^}]*\}/);
     expect(blur).not.toMatch(/100%\s*\{[^}]*opacity/);
+  });
+});
+
+describe('tile grid entrance styles', () => {
+  /** Keyframes a `html[data-tile-anim=...]` rule names, on the tile or on its ::before wash. */
+  const tileNames = (key: string, scope: RegExp) =>
+    [...stylesSource.matchAll(new RegExp(`html\\[data-tile-anim="${key}"\\]([^{]*)\\{([^}]*)\\}`, 'g'))]
+      .filter((rule) => scope.test(rule[1]))
+      .flatMap((rule) =>
+        [...rule[2].matchAll(/animation(?:-name)?:\s*([\w-]+)/g)].map((m) => ({
+          name: m[1],
+          onPseudo: rule[1].includes('::before'),
+        }))
+      );
+
+  /**
+   * ⚠ The FitAddon rule, for six frames at once: transform and opacity only.
+   * A tile fits once at its final size (#464); a box-model property here would
+   * resize its PTY mid-animation, and a filter on six live terminals at once
+   * is the frame-time cost the pane's `blur` takes for one.
+   */
+  it('animates only transform and opacity on a tile frame, entering and leaving', () => {
+    for (const key of styleKeys('TILE_ANIM_STYLES')) {
+      if (key === 'off') continue;
+      const names = [...tileNames(key, /tile--entering/), ...tileNames(key, /tile--leaving/)];
+      expect(names.length, `no keyframes for tile/${key}`).toBeGreaterThan(0);
+      for (const { name, onPseudo } of names) {
+        const body = keyframeBody(name);
+        expect(body, `@keyframes ${name} missing`).not.toBeNull();
+        if (onPseudo) continue; // a wash over the tile, no layout of its own
+        for (const [, prop] of (body as string).matchAll(/(?:\{|;)\s*([a-z-]+):/g)) {
+          expect(['opacity', 'transform'], `@keyframes ${name} animates ${prop} on a tile`).toContain(prop);
+        }
+      }
+    }
+  });
+
+  /**
+   * The mount clears `.tile--entering` on the tile's own `tile-enter*`
+   * animationend, and the still copy goes on its last tile's `tile-leave*`:
+   * a keyframe named otherwise would leave the class on (or the copy up)
+   * until a backstop timer.
+   */
+  it('names every frame keyframe for the events tile-grid.js listens for', () => {
+    for (const key of styleKeys('TILE_ANIM_STYLES')) {
+      for (const { name, onPseudo } of tileNames(key, /tile--entering/)) {
+        if (!onPseudo) expect(name, `tile/${key} entering`).toMatch(/^tile-enter/);
+      }
+      for (const { name, onPseudo } of tileNames(key, /tile--leaving/)) {
+        if (!onPseudo) expect(name, `tile/${key} leaving`).toMatch(/^tile-leave/);
+      }
+    }
+  });
+
+  it('gives every exit the module times a leaving rule, and keeps `settle` on the grid default', () => {
+    const exits = animSource.slice(animSource.indexOf('const TILE_EXIT_MS = {'));
+    const timed = [...exits.slice(0, exits.indexOf('};')).matchAll(/(\w+): \d+/g)].map((m) => m[1]);
+    expect(timed.length).toBeGreaterThan(0);
+    for (const key of timed) {
+      expect(styleKeys('TILE_ANIM_STYLES')).toContain(key);
+      expect(tileNames(key, /tile--leaving/).length, `no leaving rule for tile/${key}`).toBeGreaterThan(0);
+    }
+    expect(timed).not.toContain('settle');
+    expect(animSource).toContain("const TILE_ANIM_DEFAULT = 'settle';");
+    // The legacy theme (the default) leaves the grid's own motion untouched.
+    expect(themes().find((t) => t.key === 'legacy')?.tile).toBe('settle');
+  });
+
+  /**
+   * App Settings → Appearance → Tile Animations: one option per style, wired
+   * by id (entrance-animations.js _syncEntranceAnimSetting), with the grid's
+   * own `settle` first and named as the off default.
+   */
+  it('lists every tile style in the Tile Animations setting, off by default', () => {
+    const start = indexSource.indexOf('<select id="appSettingsTileAnim"');
+    expect(start, 'the Tile Animations select is missing').toBeGreaterThan(-1);
+    const select = indexSource.slice(start, indexSource.indexOf('</select>', start));
+    const values = [...select.matchAll(/<option value="([^"]+)"/g)].map((m) => m[1]);
+    expect([...values].sort()).toEqual([...styleKeys('TILE_ANIM_STYLES')].sort());
+    expect(values[0]).toBe('settle');
+    expect(select).toContain('<option value="settle">Off (default)</option>');
+    expect(animSource).toContain("document.getElementById('appSettingsTileAnim')");
+    // Nothing new for an install that never picks it: no saved key means settle.
+    expect(animSource).toMatch(/pick\('tileanim', TILE_ANIM_STYLES, ANIM_KEYS\.tile, TILE_ANIM_DEFAULT\)/);
+  });
+
+  /** A tile's screen plays the pane's style: every term rule also reaches .tile-body. */
+  it('plays every terminal pane style on a tile screen too', () => {
+    for (const key of styleKeys('TERM_ANIM_STYLES')) {
+      if (CSS_LESS_STYLES.has(key)) continue;
+      // The body itself, not only its ::before wash.
+      expect(stylesSource).toMatch(new RegExp(`html\\[data-term-anim="${key}"\\] \\.tile-body\\.term-enter \\{`));
+    }
   });
 });

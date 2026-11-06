@@ -24,7 +24,7 @@ import { installRouteErrorHandler } from '../../src/web/route-error-handler.js';
 import { ApiErrorCode, httpStatusForErrorCode } from '../../src/types.js';
 import { createMockRouteContext, type MockRouteContext } from '../mocks/index.js';
 import { sessionWaits } from '../../src/web/session-wait-registry.js';
-import { MAX_WAIT_MS } from '../../src/config/agent-wait.js';
+import { MAX_WAIT_MS, MIN_WAIT_MS } from '../../src/config/agent-wait.js';
 
 // Distinct per file on purpose: the three wait suites share the process-wide
 // `sessionWaits` singleton, so a common id let one file's leftover waiter be counted
@@ -315,6 +315,39 @@ describe('POST /api/sessions/:id/input with wait', () => {
     expect(body.data.status).toBe('busy');
   });
 
+  it('a duplicate on a codex pane showing a dialog answers blocked, as GET .../wait does', async () => {
+    // A screen-read dialog is a level, not an edge: the original delivery may have raised
+    // it before the caller's connection dropped, and the retry must not wait out its
+    // timeout for an edge that already passed.
+    const { app, ctx } = await harness();
+    const session = ctx.sessions.get(SESSION_ID)! as unknown as {
+      mode: string;
+      status: string;
+      screenBlocked?: boolean;
+      writeBuffer: string[];
+    };
+    session.mode = 'codex';
+    await send(app, { input: 'first', clientId: 'c-codex', seq: 1 });
+    session.status = 'idle';
+    session.screenBlocked = true;
+
+    const replay = await send(app, {
+      input: 'first',
+      clientId: 'c-codex',
+      seq: 1,
+      wait: 'blocked',
+      waitTimeout: MIN_WAIT_MS,
+    });
+    const body = replay.json();
+
+    expect(body.data.duplicate).toBe(true);
+    expect(body.data.wait).toMatchObject({ signal: 'blocked', immediate: true, timedOut: false });
+
+    // ...and only to a caller that asked for it: such a pane is idle too.
+    const idle = await send(app, { input: 'first', clientId: 'c-codex', seq: 1, wait: 'idle' });
+    expect(idle.json().data.wait).toMatchObject({ signal: 'idle', immediate: true });
+  });
+
   it('gives the dedup seq back when a full waiter pool rejects the request', async () => {
     // Otherwise the caller's retry is refused as a duplicate and the input vanishes.
     const { app, ctx } = await harness();
@@ -451,13 +484,12 @@ describe('POST /api/sessions/:id/input: delivered reports the write, not just th
  * exactly why this regression needs a POST and a real socket to catch.
  */
 describe('POST /api/sessions/:id/input over real HTTP: hang-up handling', () => {
-  const PORT = 3181;
-  const base = `http://127.0.0.1:${PORT}`;
+  let base: string;
   let app: FastifyInstance;
 
   beforeAll(async () => {
     app = (await harness()).app;
-    await app.listen({ port: PORT, host: '127.0.0.1' });
+    base = await app.listen({ port: 0, host: '127.0.0.1' });
   });
 
   afterAll(async () => {

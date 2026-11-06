@@ -18,6 +18,7 @@ vi.mock('node:fs/promises', () => ({
     readdir: vi.fn(async () => []),
     readFile: vi.fn(async () => 'file content'),
     stat: vi.fn(async () => ({ size: 100, isFile: () => true, isDirectory: () => true })),
+    realpath: vi.fn(async (p: string) => p),
   },
 }));
 
@@ -440,6 +441,86 @@ describe('file-routes', () => {
       } finally {
         await scoped.app.close();
       }
+    });
+
+    // The folder grid is a third file-serving surface (folder-listing.ts): the
+    // same rule as the picker, on the resolved folder AND on each served file.
+    describe('folder grid', () => {
+      const ALICE = `${SPACES}/alice/cases`;
+      const BOB = `${SPACES}/bob/renders`;
+
+      const owned = async (role: 'admin' | 'user', username: string) => {
+        const scoped = await harnessAs(role, username);
+        scoped.ctx._session.owner = username;
+        return scoped;
+      };
+      const grant = (scoped: RouteTestHarness, path: string) =>
+        scoped.app.inject({
+          method: 'POST',
+          url: `/api/sessions/${scoped.ctx._sessionId}/folders`,
+          payload: { path },
+        });
+
+      beforeEach(() => {
+        mockedStat.mockImplementation(async (p) => {
+          const file = /\.\w+$/.test(String(p));
+          return { size: 100, mtimeMs: 1, isFile: () => file, isDirectory: () => !file } as never;
+        });
+      });
+
+      it("refuses another user's space and never reads it", async () => {
+        const scoped = await owned('user', 'bob');
+        try {
+          mockedReaddir.mockClear();
+          const res = await grant(scoped, ALICE);
+          expect(res.statusCode).toBe(403);
+          expect(JSON.parse(res.body).error).toBe('Folder is outside your space');
+          expect(mockedReaddir).not.toHaveBeenCalled();
+        } finally {
+          await scoped.app.close();
+        }
+      });
+
+      it('lists a folder in their own space', async () => {
+        const scoped = await owned('user', 'bob');
+        try {
+          mockedReaddir.mockResolvedValueOnce([] as never);
+          const res = await grant(scoped, BOB);
+          expect(res.statusCode).toBe(200);
+          expect(JSON.parse(res.body).data.path).toBe(BOB);
+        } finally {
+          await scoped.app.close();
+        }
+      });
+
+      it("refuses a file of their own folder that resolves into another user's space", async () => {
+        const scoped = await owned('user', 'bob');
+        try {
+          mockedReaddir.mockResolvedValueOnce([] as never);
+          const { folderId } = JSON.parse((await grant(scoped, BOB)).body).data;
+          mockedRealpathSync.mockImplementation(((p: string) =>
+            p === `${BOB}/plan.png` ? `${ALICE}/secret-project/plan.png` : p) as never);
+          const res = await scoped.app.inject({
+            method: 'GET',
+            url: `/api/sessions/${scoped.ctx._sessionId}/folders/${folderId}/files/plan.png/raw`,
+          });
+          expect(res.statusCode).toBe(403);
+          expect(JSON.parse(res.body).error).toBe('File is outside your space');
+          expect(mockedCreateReadStream).not.toHaveBeenCalled();
+        } finally {
+          await scoped.app.close();
+        }
+      });
+
+      it('lets a multi-user admin list any folder', async () => {
+        const scoped = await owned('admin', 'root');
+        try {
+          mockedReaddir.mockResolvedValueOnce([] as never);
+          expect((await grant(scoped, ALICE)).statusCode).toBe(200);
+        } finally {
+          await scoped.app.close();
+        }
+      });
     });
 
     it('keeps the host-wide roots for a multi-user admin', async () => {

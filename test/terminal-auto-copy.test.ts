@@ -57,6 +57,7 @@ function loadHarness() {
     MobileDetection: { isTouchDevice: () => false },
     KeyboardHandler: { keyboardVisible: false },
     DEC_SYNC_STRIP_RE: /\x1b\[\?2026[hl]/g,
+    OSC52_STRIP_RE: /\x1b\]52;[^\x07\x1b]*(?:\x07|\x1b\\)/g,
     TERMINAL_CHUNK_SIZE: 32 * 1024,
   });
 

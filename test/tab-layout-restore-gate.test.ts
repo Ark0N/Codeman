@@ -45,7 +45,12 @@ describe('tab layout restore gate', () => {
       };
       cleanupStaleSessions(): Promise<number>;
       finalizeRestoredState(restored: boolean): Promise<void>;
+      sessions: Map<string, unknown>;
+      store: { getSessions(): Record<string, unknown> };
     };
+    // Read by the agent-inbox prune at the end of a successful restore.
+    server.sessions = new Map();
+    server.store = { getSessions: () => ({}) };
     server.tabLayouts = {
       markRestorationComplete: () => order.push('complete'),
       markRestorationFailed: () => order.push('failed'),

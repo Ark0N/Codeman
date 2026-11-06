@@ -1,7 +1,7 @@
-// Port 3200 - Virtual keyboard simulation tests
+// Ephemeral port - Virtual keyboard simulation tests
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import type { Page, BrowserContext } from 'playwright';
-import { PORTS, KEYBOARD, SELECTORS, BODY_CLASSES, WAIT } from './helpers/constants.js';
+import { KEYBOARD, SELECTORS, BODY_CLASSES, WAIT } from './helpers/constants.js';
 import { createTestServer, stopTestServer } from './helpers/server.js';
 import { createDevicePage, getBrowser, closeAllBrowsers } from './helpers/browser.js';
 import {
@@ -26,8 +26,7 @@ import {
 import { REPRESENTATIVE_DEVICES } from './devices.js';
 import type { WebServer } from '../src/web/server.js';
 
-const PORT = PORTS.KEYBOARD;
-const BASE_URL = `http://localhost:${PORT}`;
+let baseUrl: string;
 
 // ─── Page-global access helpers ───
 // KeyboardHandler is a `const` in app.js — NOT on `window`.
@@ -59,7 +58,8 @@ describe('Virtual Keyboard', () => {
   let server: WebServer;
 
   beforeAll(async () => {
-    server = await createTestServer(PORT);
+    server = await createTestServer();
+    baseUrl = `http://localhost:${server.boundPort}`;
   });
 
   afterAll(async () => {
@@ -75,7 +75,7 @@ describe('Virtual Keyboard', () => {
     const device = REPRESENTATIVE_DEVICES['standard-phone']; // iPhone 14 Pro
 
     beforeEach(async () => {
-      const result = await createDevicePage(device, BASE_URL, 'chromium');
+      const result = await createDevicePage(device, baseUrl, 'chromium');
       page = result.page;
       context = result.context;
     });
@@ -153,7 +153,7 @@ describe('Virtual Keyboard', () => {
       const { context, page } = await createDevicePage(device, 'about:blank', 'chromium');
       try {
         await setupViewportMock(page);
-        await page.goto(BASE_URL, { waitUntil: WAIT.DOM_CONTENT_LOADED });
+        await page.goto(baseUrl, { waitUntil: WAIT.DOM_CONTENT_LOADED });
         await page.waitForTimeout(2000);
 
         const success = await showKeyboardViaMock(page, KEYBOARD.TYPICAL_IOS_HEIGHT);
@@ -167,7 +167,7 @@ describe('Virtual Keyboard', () => {
       const { context, page } = await createDevicePage(device, 'about:blank', 'chromium');
       try {
         await setupViewportMock(page);
-        await page.goto(BASE_URL, { waitUntil: WAIT.DOM_CONTENT_LOADED });
+        await page.goto(baseUrl, { waitUntil: WAIT.DOM_CONTENT_LOADED });
         await page.waitForTimeout(2000);
 
         const success = await showKeyboardViaMock(page, KEYBOARD.TYPICAL_IOS_HEIGHT);
@@ -186,7 +186,7 @@ describe('Virtual Keyboard', () => {
         const result = await createDevicePage(device, 'about:blank', 'webkit');
         context = result.context;
         await setupViewportMock(result.page);
-        await result.page.goto(BASE_URL, { waitUntil: WAIT.DOM_CONTENT_LOADED });
+        await result.page.goto(baseUrl, { waitUntil: WAIT.DOM_CONTENT_LOADED });
         await result.page.waitForTimeout(2000);
 
         const success = await showKeyboardViaMock(result.page, KEYBOARD.TYPICAL_IOS_HEIGHT);
@@ -213,7 +213,7 @@ describe('Virtual Keyboard', () => {
     const device = REPRESENTATIVE_DEVICES['standard-phone'];
 
     beforeEach(async () => {
-      const result = await createDevicePage(device, BASE_URL, 'chromium');
+      const result = await createDevicePage(device, baseUrl, 'chromium');
       page = result.page;
       context = result.context;
     });
@@ -321,6 +321,99 @@ describe('Virtual Keyboard', () => {
         return main?.style.paddingBottom ?? '';
       });
       expect(mainPadding).toBe('');
+    });
+
+    it('holds the PTY rows under the keyboard and keeps the Claude composer inside the visible box', async () => {
+      // #672: a keyboard-driven height change makes Claude's inline renderer reprint
+      // only the tail that fits and lose the rest, so the rows are held instead, and
+      // --kb-clip has to keep the composer in view of a screen now taller than its box.
+      const modes = await page.evaluate(() => (window as any).__codemanKeyboardHoldModes);
+      expect(modes).toEqual(['claude']);
+      const rowsBefore = await page.evaluate(async () => {
+        (window as any).__resizes = [];
+        app.activeSessionId = 'mobile-keyboard-hold-test';
+        app.sessions.set('mobile-keyboard-hold-test', {
+          id: 'mobile-keyboard-hold-test',
+          mode: 'claude',
+          status: 'running',
+        });
+        app.hideWelcome();
+        // Fit the terminal to its box first, as a selected session is: these are
+        // the keyboard-free rows the hold must keep.
+        app.syncTerminalGeometry();
+        app.sendResize = (id: string) => {
+          (window as any).__resizes.push({ id, ...app.getTerminalDimensions() });
+          return Promise.resolve(true);
+        };
+        app.terminal.reset();
+        const cols = app.terminal.cols;
+        const rule = '\u2500'.repeat(cols);
+        const transcript = Array.from({ length: 100 }, (_, i) => `KBTEST-${String(i + 1).padStart(3, '0')}`);
+        const frame = [...transcript, rule, '\u276f ', rule, '  ? for shortcuts'].join('\r\n');
+        await new Promise<void>((resolve) => app.terminal.write(`${frame}\x1b[2A\x1b[3G`, resolve));
+        return app.terminal.rows;
+      });
+
+      await showKeyboard(page, KEYBOARD.TYPICAL_IOS_HEIGHT);
+      await page.waitForTimeout(800);
+
+      const held = await page.evaluate(() => {
+        const term = app.terminal;
+        const buffer = term.buffer.active;
+        const rowOf = (pattern: RegExp) => {
+          for (let row = 0; row < term.rows; row++) {
+            if (pattern.test(buffer.getLine(buffer.baseY + row)?.translateToString(true) ?? '')) return row;
+          }
+          return -1;
+        };
+        const container = document.getElementById('terminalContainer') as HTMLElement;
+        const box = container.getBoundingClientRect();
+        const screen = (container.querySelector('.xterm-screen') as HTMLElement).getBoundingClientRect();
+        const cell = term._core._renderService.dimensions.css.cell.height;
+        const composer = rowOf(/^\u276f/);
+        const footer = rowOf(/\? for shortcuts/);
+        return {
+          rows: term.rows,
+          heldRows: app._keyboardHeldRows,
+          clip: container.style.getPropertyValue('--kb-clip'),
+          composer,
+          footer,
+          // Where the rows land on the page with the clip applied.
+          composerTop: screen.top + composer * cell,
+          footerBottom: screen.top + (footer + 1) * cell,
+          // Where they would land without it: below the box, i.e. under the keyboard.
+          footerBottomUnclipped: box.top + (footer + 1) * cell,
+          boxTop: box.top,
+          boxBottom: box.bottom,
+          viewportBottom:
+            (window.visualViewport?.offsetTop ?? 0) + (window.visualViewport?.height ?? window.innerHeight),
+          resizes: (window as any).__resizes,
+        };
+      });
+
+      expect(held.rows).toBe(rowsBefore);
+      expect(held.heldRows).toBe(rowsBefore);
+      // Every resize sent while the keyboard was up carried the held rows.
+      for (const r of held.resizes) expect(r.rows).toBe(rowsBefore);
+      expect([held.composer, held.footer]).toEqual([rowsBefore - 3, rowsBefore - 1]);
+      // Not vacuous: unclipped, the footer would sit below the box.
+      expect(held.footerBottomUnclipped).toBeGreaterThan(held.boxBottom + 1);
+      expect(parseFloat(held.clip)).toBeGreaterThan(0);
+      expect(held.composerTop).toBeGreaterThanOrEqual(held.boxTop - 1);
+      expect(held.footerBottom).toBeLessThanOrEqual(held.boxBottom + 1);
+      expect(held.boxBottom).toBeLessThanOrEqual(held.viewportBottom + 1);
+
+      await hideKeyboard(page);
+      await page.waitForTimeout(800);
+      // Released: no hold, no offset, and the rows follow the box again (the box
+      // after a keyboard cycle need not be the one before it, so compare with the fit).
+      const released = await page.evaluate(() => ({
+        heldRows: app._keyboardHeldRows,
+        clip: (document.getElementById('terminalContainer') as HTMLElement).style.getPropertyValue('--kb-clip'),
+        rows: app.terminal.rows,
+        fits: window.CodemanTerminalGeometry.clampTerminalDimensions(app.fitAddon.proposeDimensions()).rows,
+      }));
+      expect(released).toEqual({ heldRows: 0, clip: '', rows: released.fits, fits: released.fits });
     });
 
     it('coalesces keyboard animation frames into one final terminal fit', async () => {
@@ -1254,7 +1347,11 @@ describe('Virtual Keyboard', () => {
     });
 
     it('keeps terminal touch drag available for scrollback with the visible textarea enabled', async () => {
-      const calls = await page.evaluate(async () => {
+      // A Codex pane with REAL local scrollback (an older inline Codex, or any pane
+      // whose output scrolled lines into xterm's normal buffer). A blank pane is
+      // hollow and correctly pages the CLI instead (terminal-touch-paging.browser
+      // test), so the history is written first and checked before the drag.
+      const result = await page.evaluate(async () => {
         app.activeSessionId = 'mobile-touch-scroll-test';
         app.sessions.set('mobile-touch-scroll-test', {
           id: 'mobile-touch-scroll-test',
@@ -1262,7 +1359,24 @@ describe('Virtual Keyboard', () => {
           status: 'running',
         });
         app.hideWelcome();
+        const settings = app.loadAppSettingsFromStorage();
+        settings.cjkInputEnabled = true;
+        app.saveAppSettingsToStorage(settings);
+        app._serverCjkOverride = true;
         app._updateCjkInputState();
+
+        const history = Array.from({ length: 200 }, (_, i) => `history line ${i}`).join('\r\n') + '\r\n';
+        await new Promise<void>((resolve) => app.terminal.write(history, resolve));
+        app.terminal.scrollToBottom();
+        const buffer = app.terminal.buffer.active;
+        const before = {
+          type: buffer.type,
+          baseY: buffer.baseY,
+          viewportY: buffer.viewportY,
+          hollow: app._localScrollbackIsHollow(),
+          forwards: app._shouldForwardWheelToApp({ shiftKey: false }),
+          cjkVisible: document.body.classList.contains('cjk-input-visible'),
+        };
 
         const originalScrollLines = app.terminal.scrollLines.bind(app.terminal);
         const scrollCalls: number[] = [];
@@ -1270,14 +1384,17 @@ describe('Virtual Keyboard', () => {
           scrollCalls.push(lines);
           return originalScrollLines(lines);
         };
+        const sentToCli: string[] = [];
+        app._sendInputEphemeral = (_id: string, data: string) => sentToCli.push(data);
 
         const target =
           document.querySelector('#terminalContainer .xterm-screen') ?? document.getElementById('terminalContainer');
-        if (!target) return scrollCalls;
+        if (!target) return { before, scrollCalls, sentToCli, viewportAfter: -1 };
         const rect = target.getBoundingClientRect();
         const x = rect.left + rect.width / 2;
-        const startY = rect.top + Math.min(180, rect.height - 20);
-        const endY = startY - 120;
+        // The finger moves DOWN the screen, so the content follows it back into history.
+        const startY = rect.top + 20;
+        const endY = startY + 120;
 
         function createTouch(y: number) {
           return new Touch({
@@ -1315,11 +1432,23 @@ describe('Virtual Keyboard', () => {
           })
         );
         await new Promise((resolve) => setTimeout(resolve, 50));
-        return scrollCalls;
+        app._flushWheelSgrQueue?.();
+        return { before, scrollCalls, sentToCli, viewportAfter: app.terminal.buffer.active.viewportY };
       });
 
-      expect(calls.length).toBeGreaterThan(0);
-      expect(calls.some((lines) => lines !== 0)).toBe(true);
+      // The scenario is real local scrollback with the visible textarea on.
+      expect(result.before.cjkVisible).toBe(true);
+      expect(result.before.type).toBe('normal');
+      expect(result.before.baseY).toBeGreaterThan(0);
+      expect(result.before.viewportY).toBe(result.before.baseY);
+      expect(result.before.hollow).toBe(false);
+      expect(result.before.forwards).toBe(false);
+
+      // The drag scrolled xterm's own history upward, and sent nothing to the CLI.
+      expect(result.scrollCalls.length).toBeGreaterThan(0);
+      expect(result.scrollCalls.some((lines) => lines < 0)).toBe(true);
+      expect(result.viewportAfter).toBeLessThan(result.before.viewportY);
+      expect(result.sentToCli).toEqual([]);
     });
 
     it('keeps typed phone text in the terminal local echo path', async () => {
@@ -1469,7 +1598,7 @@ describe('Virtual Keyboard', () => {
     let page: Page;
 
     beforeAll(async () => {
-      ({ context, page } = await createDevicePage(REPRESENTATIVE_DEVICES['standard-phone'], BASE_URL, 'chromium'));
+      ({ context, page } = await createDevicePage(REPRESENTATIVE_DEVICES['standard-phone'], baseUrl, 'chromium'));
       await page.waitForTimeout(WAIT.PAGE_SETTLE);
     });
 
@@ -1638,7 +1767,7 @@ describe('Virtual Keyboard', () => {
   describe('Cross-device keyboard behavior', () => {
     it('phone: full keyboard handling active', async () => {
       const device = REPRESENTATIVE_DEVICES['standard-phone'];
-      const { context, page } = await createDevicePage(device, BASE_URL, 'chromium');
+      const { context, page } = await createDevicePage(device, baseUrl, 'chromium');
       try {
         const state = await getKeyboardState(page);
         expect(state.exists).toBe(true);
@@ -1654,7 +1783,7 @@ describe('Virtual Keyboard', () => {
 
     it('tablet: keyboard handling active', async () => {
       const device = REPRESENTATIVE_DEVICES['standard-tablet']; // iPad Mini
-      const { context, page } = await createDevicePage(device, BASE_URL, 'chromium');
+      const { context, page } = await createDevicePage(device, baseUrl, 'chromium');
       try {
         const state = await getKeyboardState(page);
         expect(state.exists).toBe(true);
@@ -1674,7 +1803,7 @@ describe('Virtual Keyboard', () => {
       });
       const page = await context.newPage();
       try {
-        await page.goto(BASE_URL, { waitUntil: WAIT.DOM_CONTENT_LOADED });
+        await page.goto(baseUrl, { waitUntil: WAIT.DOM_CONTENT_LOADED });
         await page.waitForTimeout(1000);
 
         const state = await getKeyboardState(page);

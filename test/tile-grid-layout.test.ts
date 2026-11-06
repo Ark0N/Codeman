@@ -122,6 +122,9 @@ describe('sanitizeTileGridState', () => {
       open: true,
       ids: ['a', 'b'],
       cells: ['a', 'b'],
+      // Nothing freed; no stored count: the sessions it names.
+      freed: [],
+      count: 2,
       focused: 'b',
       zoomed: 'a',
       colFr: [1, 2],

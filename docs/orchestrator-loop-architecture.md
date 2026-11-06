@@ -244,7 +244,7 @@ RalphLoop.tick() → assignTasks()  // OR OrchestratorLoop does its own assignme
 session.sendInput(task.prompt)
   │
   ▼
-writeViaMux() → tmux send-keys -l "prompt..." + Enter
+writeViaMux() → tmux paste-buffer -p (prompt as one bracketed paste) + Enter
   │
   ▼
 Claude CLI receives prompt, executes, outputs results

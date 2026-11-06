@@ -20,7 +20,8 @@ In order of how much they matter:
 
 1. **Do not expose it without `CODEMAN_PASSWORD`.** Binding a non-loopback host without one
    starts, but warns loudly. A tunnel refuses outright unless you acknowledge the exposure
-   in the UI.
+   in the UI, which asks every time, or set `CODEMAN_ALLOW_UNAUTHENTICATED_TUNNEL`. The
+   installer's `CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK` covers the LAN bind only.
 2. **Prefer Tailscale over a public tunnel.** Keeping the loopback bind and putting a
    private network in front of it removes the public attack surface entirely, and gives you
    real HTTPS. See [Remote Access](Remote-Access).
@@ -53,7 +54,7 @@ When authentication is enabled:
 | ------------------- | ------------------------------------------------------------------------------------------------ |
 | **HTTP Basic**      | `CODEMAN_USERNAME` (default `admin`) and `CODEMAN_PASSWORD`.                                      |
 | **Session cookie**  | A 256-bit opaque token validated server side, so it cannot be forged offline. 24 hours, extended on activity, with a device-context audit trail. |
-| **Rate limiting**   | Ten failed attempts per IP produce a `429` with a 15 minute decay. A correct password or valid cookie recovers immediately even under attack, which matters because all tunnel traffic shares one loopback address. |
+| **Rate limiting**   | Ten failed attempts per IP produce a `429` with a 15 minute decay. A correct password or valid cookie recovers immediately even under attack, which matters because all tunnel traffic shares one loopback address. In multi-user mode the per-IP cap is 50, and each account allows ten failed guesses from any one IP. Both are checked before the password, so past either a correct password from that IP also waits for the decay (the account still logs in from another IP, and a valid cookie keeps working). From the tenth failed guess on, an account's wrong guesses get a `429` from every IP, which never refuses a correct password. |
 | **QR auth**         | Single-use 60-second tokens with their own separate rate limiter, so a mistyped password cannot lock out QR login. |
 | **Hook endpoints**  | The hook and telemetry endpoints skip Basic auth because they are called from localhost by the CLI, but when auth is on, that bypass additionally requires a per-instance hook secret. |
 
@@ -101,11 +102,23 @@ Stated plainly, because a security page that only lists strengths is not useful:
 
 ## Privacy
 
-No telemetry, no analytics, no phone-home. Codeman's only network traffic is between your
-browser and your server. Your agent CLI's traffic is its own, on your account.
+No telemetry, no analytics, no phone-home. Your agent CLI's traffic is its own, on your
+account. Beyond the traffic between your browser and your server, the server itself makes a few
+requests for features you use: the Codex usage poll, web push, and webhooks if you set one up.
+
+The GitHub Copilot quota read behind the plan usage chip's **Copilot** row is **on by default
+while Copilot CLI is installed and signed in** (an absent plan-usage setting reads as on, even
+for a phone-only user whose chip is hidden). Every 10 minutes the server asks `api.github.com`,
+and nothing else, for your premium-request quota, with Copilot's own sign-in token. The token is
+never logged and redirects are refused. Turn off **Plan Usage Limits** in App Settings to stop it.
 
 Two features send data outward, both off by default and both stated where they appear: voice
 dictation through your Claude login, and the Read My Mind prediction call.
+
+[Config Backups](Config-Backups) copies some credential-bearing files (`.env`, `users.json`,
+`custom-model-hosts.json`, `push-keys.json`, `webhook.json`) into a backup folder. The default folder is inside
+the data directory, and every backup is mode `0700`/`0600`, so nothing new is exposed. Only a
+folder you choose yourself can move them somewhere less private; admin only in multi-user mode.
 
 ## Reporting a vulnerability
 

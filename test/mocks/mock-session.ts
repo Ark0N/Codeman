@@ -4,7 +4,14 @@
  */
 import { EventEmitter } from 'node:events';
 import { vi } from 'vitest';
-import type { SessionAttachmentHistoryItem, SessionStatus, SessionRemote } from '../../src/types.js';
+import type {
+  KeepWarmStatus,
+  PromptCacheStatus,
+  SessionAttachmentHistoryItem,
+  SessionStatus,
+  SessionRemote,
+} from '../../src/types.js';
+import type { GitFetchStatus } from '../../src/git-fetch.js';
 
 /**
  * Enhanced mock session for testing RespawnController.
@@ -41,6 +48,44 @@ export class MockSession extends EventEmitter {
    * need to be able to set it.
    */
   watching: string | null = null;
+  /** Mirrors Session.promptCache / setPromptCache (fed by POST /api/status-telemetry). */
+  promptCache: PromptCacheStatus | null = null;
+  setPromptCache(status: PromptCacheStatus): boolean {
+    const changed = JSON.stringify(status) !== JSON.stringify(this.promptCache);
+    this.promptCache = status;
+    return changed;
+  }
+  /** Mirrors the prompt-cache keep-warm surface on Session (prompt-cache-keepwarm.ts). */
+  keepAliveTurnActive = false;
+  endKeepAliveTurn(): void {
+    this.keepAliveTurnActive = false;
+  }
+  keepWarmEnabled: boolean | undefined = undefined;
+  setKeepWarmEnabled(enabled: boolean | undefined): void {
+    this.keepWarmEnabled = enabled;
+  }
+  keepWarm: KeepWarmStatus | null = null;
+  setKeepWarmStatus(status: KeepWarmStatus): boolean {
+    const changed = JSON.stringify(status) !== JSON.stringify(this.keepWarm);
+    this.keepWarm = status;
+    return changed;
+  }
+  /**
+   * Mirrors the Git fetch interval surface on Session (src/git-fetch.ts): the case's own override, `undefined`
+   * for either half meaning the app-wide setting applies, and what the scheduler last reported.
+   */
+  gitFetchEnabled: boolean | undefined = undefined;
+  gitFetchIntervalSeconds: number | undefined = undefined;
+  setGitFetchSettings(enabled: boolean | undefined, intervalSeconds: number | undefined): void {
+    this.gitFetchEnabled = enabled;
+    this.gitFetchIntervalSeconds = intervalSeconds;
+  }
+  gitFetch: GitFetchStatus | null = null;
+  setGitFetchStatus(status: GitFetchStatus): boolean {
+    const changed = JSON.stringify(status) !== JSON.stringify(this.gitFetch);
+    this.gitFetch = status;
+    return changed;
+  }
   private _activeChildProcesses: { pid: number; command: string }[] = [];
   ralphTracker: null = null;
   writeBuffer: string[] = [];
@@ -53,6 +98,13 @@ export class MockSession extends EventEmitter {
   claudeSessionIdIsFirstHand: boolean = false;
   /** Mirrors Session.claudeSessionChain — oldest first, current last. */
   claudeSessionChain: string[] = [];
+  /** The per-session CLAUDE_CONFIG_DIR override that Session.claudeConfigDir() reads. */
+  claudeConfigDirOverride: string | undefined = undefined;
+
+  /** Mirrors Session.claudeConfigDir: the override, trimmed; undefined when unset. */
+  claudeConfigDir(): string | undefined {
+    return this.claudeConfigDirOverride?.trim() || undefined;
+  }
 
   /** Mirrors Session.adoptClaudeSessionId, including the first-hand chain rule. */
   adoptClaudeSessionId(newId: string, options: { firstHand?: boolean } = {}): void {
@@ -69,13 +121,35 @@ export class MockSession extends EventEmitter {
     this.claudeSessionId = newId;
   }
 
-  /** Mirrors Session.markPromptSubmitted. */
-  markPromptSubmitted(): void {
+  /** Mirrors Session.markPromptSubmitted; records the hook's prompt text it was handed. */
+  submittedPrompts: Array<string | undefined> = [];
+  markPromptSubmitted(prompt?: string): void {
+    this.submittedPrompts.push(prompt);
     this.lastSubmitAt = Date.now();
   }
 
   /** Mirrors Session.trackUserInput (the send-key route feeds it around the write path). */
   trackUserInput(_data: string): void {}
+
+  async performAuxiliaryInput(operation: () => Promise<void>): Promise<void> {
+    await operation();
+  }
+
+  /** Mirrors Session.guardedInputHeld; a route test sets it to stand in for a guarded submit's lease. */
+  guardedInputHeld = false;
+  /** Input held behind that lease, in arrival order (see releaseGuardedLease). */
+  heldGuardedInput: Array<() => void | Promise<unknown>> = [];
+  /** Mirrors Session.holdForGuardedLease, without the cap (a test replaces it to model a full queue). */
+  holdForGuardedLease(run: () => void | Promise<unknown>, _bytes = 0, _data?: string): 'free' | 'held' | 'full' {
+    if (!this.guardedInputHeld) return 'free';
+    this.heldGuardedInput.push(run);
+    return 'held';
+  }
+  /** Ends the stand-in lease and runs the held input in arrival order, as Session does. */
+  releaseGuardedLease(): void {
+    this.guardedInputHeld = false;
+    for (const run of this.heldGuardedInput.splice(0)) void run();
+  }
 
   private _muxName: string | null = null;
 
@@ -100,9 +174,14 @@ export class MockSession extends EventEmitter {
 
   /** Write via mux (used by respawn controller) */
   async writeViaMux(data: string): Promise<boolean> {
-    if (this.failWrites) return false;
-    this.writeBuffer.push(data);
-    return true;
+    const write = (): boolean => {
+      if (this.failWrites) return false;
+      this.writeBuffer.push(data);
+      return true;
+    };
+    // Like Session.writeViaMux, it waits its turn behind a stand-in guarded lease.
+    if (!this.guardedInputHeld) return write();
+    return new Promise<boolean>((resolve) => this.heldGuardedInput.push(() => resolve(write())));
   }
 
   /**
@@ -382,6 +461,9 @@ export class MockSession extends EventEmitter {
     }
   );
   restartCli = vi.fn(async () => true);
+  /** Mirrors Session.envOverrideValue; no override map here, so the custom-model
+   *  real-home lookup defaults to "session says nothing" (overridable per test). */
+  envOverrideValue = vi.fn((_key: string): string | undefined => undefined);
   getCustomModelForPersist = vi.fn(() => this._mockCustomModel);
   /** Mirrors Session.noteReportedModel: the statusline route records the CLI's model. */
   reportedModel: { model: string; source: 'statusline' | 'screen' } | null = null;

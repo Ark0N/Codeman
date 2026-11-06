@@ -7,9 +7,9 @@
  * pick that, with the grid open, would be refused (auto never collapses the
  * grid) and leave nothing focused. So the fallback is grid-aware, and it lives
  * IN closeSession: the delete broadcast routinely lands while the request is in
- * flight, and the delete handlers skip ids in `_closingSessions`. The neighbour
- * is captured BEFORE the await, like `wasActive`, because that broadcast may
- * already have removed the tile.
+ * flight, and the delete handlers skip ids in `_closingSessions`. The close is
+ * optimistic, so the tile goes and the neighbour takes focus before the request
+ * is even sent; the broadcast then finds nothing left to do.
  *
  * - closing the focused tile: next tile in grid order, else the previous one;
  *   `s-other` is FIRST in sessionOrder and never tiled, so the old pick would
@@ -33,7 +33,8 @@ function setup(ids = IDS, focus = ids[0]) {
   app.selectSession = vi.fn();
   app.markIdleAlertSeen.mockClear();
   let finish: () => void = () => {};
-  app._apiDelete = vi.fn(() => new Promise<void>((r) => (finish = r)));
+  // Resolves like the real helper's Response once `finish()` is called.
+  app._apiDelete = vi.fn(() => new Promise((r) => (finish = () => r({ ok: true, status: 200 }))));
   // The real cleanup touches a lot of panels; what the fallback reads is the session list.
   app._cleanupSessionData = vi.fn((id: string) => {
     app.sessions.delete(id);
@@ -77,11 +78,12 @@ describe('closeSession on the focused tile', () => {
     const { app, finish } = setup(IDS, 's-b');
     const closing = app.closeSession('s-b');
     await settle();
+    // The close already moved focus to the neighbour before the request went
+    // out; the broadcast for it must not move it again.
+    expect(app.activeSessionId).toBe('s-c');
     app._onSessionDeleted({ id: 's-b' });
-    // Only the tile went; closeSession owns the follow-up (as the split's
-    // wrapper does for ids in _closingSessions), so focus has not moved yet.
     expect(app._tileGrid.ids).toEqual(['s-a', 's-c']);
-    expect(app.activeSessionId).toBe('s-b');
+    expect(app.activeSessionId).toBe('s-c');
     expect(app.showWelcome).not.toHaveBeenCalled();
     finish();
     await closing;

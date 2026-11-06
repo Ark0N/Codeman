@@ -11,6 +11,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { dataPath } from '../../src/config/instance.js';
@@ -24,6 +25,11 @@ import {
   parseSessionOptions,
   parseDetachKey,
   parsePrefixBinding,
+  isTuiSwitchBinding,
+  tuiSwitchBindingTty,
+  tuiSwitchAttachHook,
+  tuiSwitchGuard,
+  isTuiClientTty,
   ATTACH_BANNER_MARKER,
   parseTmuxSessionList,
   parseWindowSizing,
@@ -32,10 +38,22 @@ import {
   type TuiExecFile,
 } from '../../src/tui/tui-client.js';
 
-const PORT = 3241;
-/** Nothing ever listens here: the "no server" path. */
-const DEAD_PORT = 3243;
-const BASE_URL = `http://127.0.0.1:${PORT}`;
+/**
+ * A port nothing listens on: bind 0, read what the OS handed out, close. Free at the
+ * moment of use, unlike "the server's port + 1", which anything may hold.
+ */
+async function closedPort(): Promise<number> {
+  const probe = http.createServer();
+  await new Promise<void>((resolve) => probe.listen(0, '127.0.0.1', resolve));
+  const { port: free } = probe.address() as AddressInfo;
+  await new Promise<void>((resolve) => probe.close(() => resolve()));
+  return free;
+}
+
+let port: number;
+/** A port nothing listens on (`closedPort()`): the "no server" path. */
+let deadPort: number;
+let baseUrl: string;
 
 interface Recorded {
   method: string;
@@ -115,7 +133,7 @@ const defaultResponder: Responder = (req, res) => {
 };
 
 function client(overrides: Record<string, unknown> = {}): TuiClient {
-  return new TuiClient({ baseUrl: BASE_URL, timeoutMs: 4000, ...overrides });
+  return new TuiClient({ baseUrl, timeoutMs: 4000, ...overrides });
 }
 
 let server: http.Server;
@@ -140,7 +158,10 @@ beforeAll(async () => {
       (responder ?? defaultResponder)(req, res, body);
     });
   });
-  await new Promise<void>((resolve) => server.listen(PORT, '127.0.0.1', resolve));
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  port = (server.address() as AddressInfo).port;
+  deadPort = await closedPort();
+  baseUrl = `http://127.0.0.1:${port}`;
 });
 
 afterAll(async () => {
@@ -311,7 +332,7 @@ describe('TuiClient.sendInput', () => {
     expect(JSON.parse(recorded[0].body)).toMatchObject({ input: 'hello world\r', useMux: true });
   });
 
-  it('collapses embedded newlines into spaces (multi-line breaks Ink)', async () => {
+  it('collapses embedded newlines into spaces (a multi-line paste cannot be confirmed as submitted)', async () => {
     await client().sendInput('abc', 'echo A\necho B\r\nline three  ');
     expect(JSON.parse(recorded[0].body).input).toBe('echo A echo B line three\r');
   });
@@ -391,8 +412,8 @@ describe('TuiClient remaining API surface', () => {
 
 describe('TuiClient.connect', () => {
   it('discovers the loopback server and reports its identity', async () => {
-    const info = await new TuiClient({ port: PORT, probeTimeoutMs: 1000 }).connect();
-    expect(info?.baseUrl).toBe(BASE_URL);
+    const info = await new TuiClient({ port, probeTimeoutMs: 1000 }).connect();
+    expect(info?.baseUrl).toBe(baseUrl);
     expect(info?.version).toBe('9.9.9');
     expect(info?.hostname).toBeTruthy();
     expect(info?.authRequired).toBeUndefined();
@@ -403,17 +424,17 @@ describe('TuiClient.connect', () => {
       res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="codeman"' });
       res.end('Unauthorized');
     };
-    const info = await new TuiClient({ port: PORT, probeTimeoutMs: 1000 }).connect();
-    expect(info?.baseUrl).toBe(BASE_URL);
+    const info = await new TuiClient({ port, probeTimeoutMs: 1000 }).connect();
+    expect(info?.baseUrl).toBe(baseUrl);
     expect(info?.authRequired).toBe(true);
   });
 
   it('returns null when nothing answers', async () => {
-    await expect(new TuiClient({ port: DEAD_PORT, probeTimeoutMs: 500 }).connect()).resolves.toBeNull();
+    await expect(new TuiClient({ port: deadPort, probeTimeoutMs: 500 }).connect()).resolves.toBeNull();
   });
 
   it('refuses to talk to an unconnected client', async () => {
-    await expect(new TuiClient({ port: DEAD_PORT }).fetchApprovals()).rejects.toThrow(/not connected/);
+    await expect(new TuiClient({ port: deadPort }).fetchApprovals()).rejects.toThrow(/not connected/);
   });
 });
 
@@ -501,7 +522,7 @@ describe('degraded-mode tmux enumeration', () => {
 describe('attach window sizing', () => {
   /** A client that only ever needs its injected exec: none of this talks to a server. */
   function sizingClient(exec: TuiExecFile): TuiClient {
-    return new TuiClient({ baseUrl: BASE_URL, socket: 'codeman-beta', exec });
+    return new TuiClient({ baseUrl, socket: 'codeman-beta', exec });
   }
 
   it('parses the sizing format, and rejects a window tmux could not measure', () => {
@@ -603,28 +624,99 @@ describe('attach window sizing', () => {
 });
 
 describe('TuiClient.bindSwitchKey', () => {
-  it('escapes the command separator, or tmux runs the second command instead of binding it', () => {
+  it('guards switch-client to one client tty, and keeps both commands inside the if-shell string', () => {
     // ⚠️ A bare `;` argument is a command separator to tmux's OWN parser: it
-    // ends the bind-key and executes what follows immediately. That bound only
-    // `switch-client` and ran `window-size latest` against every session at
-    // attach time, which is why sessions were left on `latest` after a detach —
-    // the sizing snapshot was taken from already-corrupted state. Verified
-    // against real tmux both ways before this test was written.
+    // ends the bind-key and executes what follows immediately. The two commands
+    // therefore live in the single if-shell argument, where `;` separates them
+    // when the key fires rather than when the key is bound. An unscoped
+    // `switch-client` is refused: key tables are server-wide, and that binding
+    // would move a browser tab on Esc then a digit.
     const calls: string[][] = [];
     const exec: TuiExecFile = async (_file, args) => {
       calls.push([...args]);
       return { stdout: '', stderr: '' };
     };
-    const client = new TuiClient({ baseUrl: BASE_URL, socket: 'codeman-beta', exec });
-    return client.bindSwitchKey('M-2', 'codeman-aaaa1111').then(() => {
+    const client = new TuiClient({ baseUrl, socket: 'codeman-beta', exec });
+    return client.bindSwitchKey('M-2', 'codeman-aaaa1111', '/dev/pts/4').then(async () => {
       const bind = calls.find((args) => args.includes('bind-key'));
       expect(bind).toBeDefined();
-      expect(bind).toContain('\\;');
       expect(bind).not.toContain(';');
-      // Both commands have to be in the ONE binding.
-      expect(bind?.join(' ')).toContain('switch-client -t codeman-aaaa1111');
-      expect(bind?.join(' ')).toContain('window-size latest');
+      expect(bind).not.toContain('\\;');
+      const command = bind?.at(-2) ?? '';
+      expect(command).toContain(
+        'switch-client -t codeman-aaaa1111 ; set-window-option -t codeman-aaaa1111 window-size latest'
+      );
+      // The else branch: a client that fails the guard (a browser tab's Esc
+      // then a digit) gets the key in its own pane instead of losing it.
+      expect(bind?.at(-1)).toBe('send-keys M-2');
+      expect(bind).toContain('if-shell');
+      expect(bind).toContain('-F');
+      expect(bind?.join(' ')).toContain('#{client_tty},/dev/pts/4');
+      expect(bind?.join(' ')).toContain('#{@codeman-tui-pid}');
+      expect(await client.bindSwitchKey('M-2', 'codeman-aaaa1111', '/tmp/not-a-tty')).toBe(false);
+      expect(await client.bindSwitchKey('M-2', 'other-session', '/dev/pts/4')).toBe(false);
+      // The key is interpolated into the else command, so only M-1..M-9 bind.
+      expect(await client.bindSwitchKey('M-2 ; kill-server', 'codeman-aaaa1111', '/dev/pts/4')).toBe(false);
+      expect(await client.bindSwitchKey('M-0', 'codeman-aaaa1111', '/dev/pts/4')).toBe(false);
+      expect(calls.filter((args) => args.includes('bind-key'))).toHaveLength(1);
     });
+  });
+});
+
+describe('TUI switch-key guard', () => {
+  const guarded =
+    'if-shell -F "#{&&:#{==:#{client_tty},/dev/pts/4},#{==:#{client_pid},#{@codeman-tui-pid}}}" "switch-client -t codeman-aaaa1111 ; set-window-option -t codeman-aaaa1111 window-size latest" "send-keys M-2"';
+
+  it('recognises our binding and the legacy unscoped one, and leaves a user binding alone', () => {
+    expect(isTuiSwitchBinding(guarded)).toBe(true);
+    expect(tuiSwitchBindingTty(guarded)).toBe('/dev/pts/4');
+    expect(
+      isTuiSwitchBinding(
+        'switch-client -t codeman-aaaa1111 \\; set-window-option -t codeman-aaaa1111 window-size latest'
+      )
+    ).toBe(true);
+    expect(isTuiSwitchBinding('switch-client -t codeman-aaaa1111')).toBe(true);
+    expect(tuiSwitchBindingTty('switch-client -t codeman-aaaa1111')).toBeNull();
+    expect(isTuiSwitchBinding('switch-client -n')).toBe(false);
+    expect(isTuiSwitchBinding('switch-client -t my-session')).toBe(false);
+    expect(isTuiSwitchBinding('display-message mine')).toBe(false);
+  });
+
+  it('refuses a tty that is not safe to interpolate, and defers client_pid in the hook', () => {
+    expect(isTuiClientTty('/dev/pts/4')).toBe(true);
+    expect(isTuiClientTty('/dev/ttys003')).toBe(true);
+    expect(isTuiClientTty('/tmp/pty')).toBe(false);
+    expect(isTuiClientTty('/dev/pts/4; rm')).toBe(false);
+    expect(tuiSwitchGuard('/dev/pts/4')).toContain('#{client_tty},/dev/pts/4');
+    expect(tuiSwitchGuard('/dev/pts/4')).toContain('#{@codeman-tui-pid}');
+    // Defensive. On tmux 3.4 a bare #{client_pid} is also stored verbatim and
+    // records the pid. The backslash stays so a tmux that expands formats while
+    // storing the hook cannot save an empty pid.
+    const hook = tuiSwitchAttachHook('/dev/pts/4');
+    expect(hook).toContain('/dev/pts/4');
+    expect(hook).toContain('\\#{client_pid}');
+    expect(hook).toContain('set-hook -gu client-attached[90]');
+  });
+
+  it('disarms only the hook armed for its own tty, not one for a tty it is a prefix of', async () => {
+    // `/dev/pts/4` is a substring of `/dev/pts/41`: a bare includes() removed a
+    // second TUI's hook and left its Alt keys dead for that attach.
+    const disarm = async (armedFor: string, ownTty: string): Promise<string[][]> => {
+      const calls: string[][] = [];
+      const exec: TuiExecFile = async (_file, args) => {
+        calls.push([...args]);
+        if (args.includes('show-hooks')) {
+          return { stdout: `client-attached[90] ${tuiSwitchAttachHook(armedFor)}\n`, stderr: '' };
+        }
+        return { stdout: '', stderr: '' };
+      };
+      await new TuiClient({ baseUrl, socket: 'codeman-beta', exec }).disarmTuiSwitchGuard(ownTty);
+      return calls.filter((args) => args.includes('set-hook'));
+    };
+    expect(await disarm('/dev/pts/41', '/dev/pts/4')).toEqual([]);
+    expect(await disarm('/dev/pts/4', '/dev/pts/4')).toEqual([
+      ['-L', 'codeman-beta', 'set-hook', '-gu', 'client-attached[90]'],
+    ]);
   });
 });
 
@@ -672,7 +764,7 @@ describe('TuiClient.clearLeakedAttachBanners', () => {
       }
       return { stdout: '', stderr: '' };
     };
-    return { client: new TuiClient({ baseUrl: BASE_URL, socket: 'codeman-beta', exec }), calls };
+    return { client: new TuiClient({ baseUrl, socket: 'codeman-beta', exec }), calls };
   }
 
   it('takes down a bar a killed TUI left behind, and puts status back off', async () => {
@@ -713,7 +805,7 @@ describe('TuiClient.clearLeakedAttachBanners', () => {
     const exec: TuiExecFile = async () => {
       throw new Error('no server running on /tmp/tmux-1000/codeman-beta');
     };
-    const client = new TuiClient({ baseUrl: BASE_URL, socket: 'codeman-beta', exec });
+    const client = new TuiClient({ baseUrl, socket: 'codeman-beta', exec });
     await expect(client.clearLeakedAttachBanners()).resolves.toBe(0);
   });
 });
@@ -761,7 +853,7 @@ describe('parseDetachKey', () => {
 
 describe('attach status bar options', () => {
   function optionsClient(exec: TuiExecFile): TuiClient {
-    return new TuiClient({ baseUrl: BASE_URL, socket: 'codeman-beta', exec });
+    return new TuiClient({ baseUrl, socket: 'codeman-beta', exec });
   }
 
   const SHOW = [

@@ -20,15 +20,14 @@
  * Playwright suites. Run locally:
  *   npm run test:browser -- test/terminal-keycode229-recovery.browser.test.ts
  *
- * Port: 3186 (per CLAUDE.md, ports 3150+ for tests)
+ * Port: ephemeral
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { chromium, type Browser, type Page } from 'playwright';
 import { WebServer } from '../src/web/server.js';
 
-const PORT = 3186;
-const BASE_URL = `http://localhost:${PORT}`;
+let baseUrl: string;
 
 describe('orphaned terminal input recovery wiring', () => {
   let server: WebServer;
@@ -36,11 +35,35 @@ describe('orphaned terminal input recovery wiring', () => {
   let page: Page;
 
   beforeAll(async () => {
-    server = new WebServer(PORT, false, true);
+    server = new WebServer(0, false, true);
     await server.start();
+    baseUrl = `http://localhost:${server.boundPort}`;
     browser = await chromium.launch({ headless: true });
     page = await browser.newPage();
-    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+    // Headless Chromium is a fine pointer, and create() then returns null (#716).
+    // The recovery cases below are the soft-keyboard path, so this page reports
+    // a coarse pointer. Other media queries stay native.
+    await page.addInitScript(() => {
+      const native = window.matchMedia.bind(window);
+      window.matchMedia = (query: string) => {
+        if (query === '(pointer: coarse)') {
+          return {
+            matches: true,
+            media: query,
+            onchange: null,
+            addListener() {},
+            removeListener() {},
+            addEventListener() {},
+            removeEventListener() {},
+            dispatchEvent() {
+              return false;
+            },
+          };
+        }
+        return native(query);
+      };
+    });
+    await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => (window as any).app?.terminal, null, { timeout: 30000 });
     await page.waitForFunction(() => (window as any).app?._keyCode229Recovery, null, { timeout: 30000 });
   }, 90000);
@@ -49,6 +72,18 @@ describe('orphaned terminal input recovery wiring', () => {
     if (browser) await browser.close();
     if (server) await server.stop();
   }, 60000);
+
+  it('does not install recovery when the primary pointer is fine', async () => {
+    const fine = await browser.newPage();
+    try {
+      await fine.goto(baseUrl, { waitUntil: 'domcontentloaded' });
+      await fine.waitForFunction(() => (window as any).app?.terminal?.textarea, null, { timeout: 30000 });
+      const installed = await fine.evaluate(() => (window as any).app?._keyCode229Recovery ?? null);
+      expect(installed).toBeNull();
+    } finally {
+      await fine.close();
+    }
+  });
 
   /**
    * Drive one keystroke through the real textarea and report what reached the

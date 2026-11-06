@@ -1,16 +1,3 @@
-// Port assignments
-export const PORTS = {
-  KEYBOARD: 3200,
-  TABS: 3201,
-  SUBAGENT_WINDOWS: 3202,
-  SETTINGS: 3203,
-  LAYOUT: 3204,
-  DEVICE_MATRIX: 3205,
-  VISUAL_REGRESSION: 3206,
-  ACCESSIBILITY: 3207,
-  HEADER_BUTTONS: 3208,
-} as const;
-
 // CSS Selectors
 export const SELECTORS = {
   // Header
@@ -24,6 +11,10 @@ export const SELECTORS = {
   TOOLBAR_RIGHT: '.toolbar-right',
   SETTINGS_MOBILE: '.btn-settings-mobile',
   CASE_MOBILE: '.btn-case-mobile',
+  ATTACH_MOBILE: '.btn-attach-mobile',
+  // The desktop rule hides the WRAPPER, and assertHidden reads an element's own
+  // computed style (an ancestor's display:none is invisible to it).
+  ATTACH_MOBILE_WRAP: '.btn-attach-mobile-wrap',
 
   // Tabs
   TABS_CONTAINER: '.session-tabs',
@@ -77,11 +68,11 @@ export const KEYBOARD = {
   CONFIRM_TIMEOUT: 2000,
 } as const;
 
-// Swipe constants (match app.js SwipeHandler)
+// Swipe constants (match SwipeHandler in mobile-handlers.js)
 export const SWIPE = {
   MIN_DISTANCE: 80,
-  MAX_TIME: 300,
-  MAX_VERTICAL_DRIFT: 100,
+  MAX_TIME: 500,
+  MAX_VERTICAL_DRIFT: 50,
 } as const;
 
 // Subagent window constants

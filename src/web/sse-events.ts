@@ -5,10 +5,10 @@
  * and referenced by the frontend (`SSE_EVENTS` in `constants.js`).
  * Both files MUST be kept in sync.
  *
- * 161 event constants organized by category:
+ * 163 event constants organized by category:
  * - **Core** (1): init
  * - **Transport** (1): sse:heartbeat
- * - **Session lifecycle** (23): created, updated, deleted, terminal, idle, working, ...
+ * - **Session lifecycle** (25): created, updated, deleted, terminal, idle, working, ...
  * - **Session: Ralph** (6): ralphLoopUpdate, todoUpdate, completionDetected, ...
  * - **Session: Bash tools** (3): bashToolStart, bashToolEnd, bashToolsUpdate
  * - **Session: Plan** (4): planTaskUpdate, planCheckpoint, planRollback, planTaskAdded
@@ -26,12 +26,13 @@
  * - **Tunnel** (7): started, stopped, progress, error, qrRotated, qrRegenerated, qrAuthUsed
  * - **Image / attachments** (2): image:detected, attachment:detected
  * - **Hooks** (10): idle_prompt, permission_prompt, elicitation_dialog, elicitation_complete, elicitation_response, stop, agent_working, teammate_idle, task_completed, prompt_submitted
- *   (agent_working is the odd one out: reported by the DeepSeek Harness status bridge, not by a Claude Code hook)
+ *   (agent_working is the odd one out: reported by the DeepSeek Harness status bridge, not by a Claude Code hook;
+ *   permission_prompt also arrives with `source: 'screen'` for a codex dialog read off its screen)
  * - **Approvals** (3): pending, updated, resolved (cross-session Approvals Inbox)
  * - **Custom Model Endpoint Profiles** (1): swapped-out (a session's model got evicted by another session on the same llama-swap endpoint)
  * - **Orchestrator** (12): stateChanged, planProgress, planReady, phase*, verification, task*, completed, error
  * - **Clipboard** (1): write
- * - **Cases** (4): created, linked, deleted, order-changed
+ * - **Cases** (5): created, linked, deleted, renamed, order-changed
  * - **Docker cases** (8): exportComplete/Failed, importComplete, imageBuild*, containerRecreated
  * - **Multi-user** (3): admin:usersChanged, auth:passwordChangeRequired, session:orderChanged
  * - **Web tabs** (2): webview:changed, tab:layoutChanged
@@ -119,6 +120,10 @@ export const SessionInteractive = 'session:interactive' as const;
 export const SessionRunning = 'session:running' as const;
 /** Combined Claude and main Codex plan-usage telemetry for the shared header chip. */
 export const SessionStatusTelemetry = 'session:statusTelemetry' as const;
+/** Prompt-cache state of one session's main conversation changed (`{ sessionId, ...PromptCacheStatus }`). */
+export const SessionPromptCache = 'session:promptCache' as const;
+/** The prompt-cache keep-warm's status for one session changed (`{ sessionId, ...KeepWarmStatus }`). */
+export const SessionKeepWarm = 'session:keepWarm' as const;
 
 // ─── Session: Ralph ──────────────────────────────────────────────────────────
 
@@ -363,7 +368,11 @@ export const AttachmentDetected = 'attachment:detected' as const;
 
 /** Claude Code hook: session idle, waiting for input. */
 export const HookIdlePrompt = 'hook:idle_prompt' as const;
-/** Claude Code hook: tool requesting permission. */
+/**
+ * Claude Code hook: tool requesting permission. Also raised by the server itself, with
+ * `source: 'screen'`, for a dialog read off a hook-less CLI's screen (codex; see
+ * `web/screen-blocked.ts`), which is cleared by `approval:resolved`.
+ */
 export const HookPermissionPrompt = 'hook:permission_prompt' as const;
 /** Claude Code hook: elicitation dialog (Claude asking a question). */
 export const HookElicitationDialog = 'hook:elicitation_dialog' as const;
@@ -449,6 +458,8 @@ export const CaseCreated = 'case:created' as const;
 export const CaseLinked = 'case:linked' as const;
 /** Case deleted or unlinked. */
 export const CaseDeleted = 'case:deleted' as const;
+/** Case renamed (name and folder). */
+export const CaseRenamed = 'case:renamed' as const;
 /** Case ordering changed. */
 export const CaseOrderChanged = 'case:order-changed' as const;
 
@@ -526,6 +537,8 @@ export const SseEvent = {
   SessionInteractive,
   SessionRunning,
   SessionStatusTelemetry,
+  SessionPromptCache,
+  SessionKeepWarm,
 
   // Session: Ralph
   SessionRalphLoopUpdate,
@@ -691,6 +704,7 @@ export const SseEvent = {
   CaseCreated,
   CaseLinked,
   CaseDeleted,
+  CaseRenamed,
   CaseOrderChanged,
 
   // Docker cases

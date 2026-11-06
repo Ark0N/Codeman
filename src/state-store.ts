@@ -286,6 +286,9 @@ export class StateStore {
     if (this.state.tabLayouts !== undefined) {
       parts.push(`"tabLayouts":${JSON.stringify(this.state.tabLayouts)}`);
     }
+    if (this.state.caseDefaultGroups !== undefined) {
+      parts.push(`"caseDefaultGroups":${JSON.stringify(this.state.caseDefaultGroups)}`);
+    }
 
     return `{${parts.join(',')}}`;
   }
@@ -708,6 +711,38 @@ export class StateStore {
     this.state.sessionOrder = sessionOrder;
     this.save();
     return { layouts: structuredClone(validated), sessionOrder: [...sessionOrder] };
+  }
+
+  /**
+   * An owner's default session group for a case: a group id, `null` for an
+   * intentional Ungrouped choice, or `undefined` when unset. state.json is read
+   * unvalidated, so anything but a string or null reads as unset.
+   */
+  getCaseDefaultGroup(owner: string, caseName: string): string | null | undefined {
+    const all = this.state.caseDefaultGroups;
+    if (!all || typeof all !== 'object' || !Object.hasOwn(all, owner)) return undefined;
+    const forOwner = all[owner];
+    if (!forOwner || typeof forOwner !== 'object' || !Object.hasOwn(forOwner, caseName)) return undefined;
+    const value = forOwner[caseName];
+    return typeof value === 'string' || value === null ? value : undefined;
+  }
+
+  /** Persist an owner's default session group for a case (`null` = Ungrouped). */
+  setCaseDefaultGroup(owner: string, caseName: string, groupId: string | null): void {
+    const all = this.state.caseDefaultGroups ?? {};
+    const forOwner = Object.hasOwn(all, owner) ? all[owner] : {};
+    this.state.caseDefaultGroups = { ...all, [owner]: { ...forOwner, [caseName]: groupId } };
+    this.save();
+  }
+
+  /** Forget an owner's default session group for a case (unset, not Ungrouped). */
+  deleteCaseDefaultGroup(owner: string, caseName: string): void {
+    if (this.getCaseDefaultGroup(owner, caseName) === undefined) return;
+    const all = this.state.caseDefaultGroups ?? {};
+    const forOwner = { ...all[owner] };
+    delete forOwner[caseName];
+    this.state.caseDefaultGroups = { ...all, [owner]: forOwner };
+    this.save();
   }
 
   /** Resets all state to initial values and saves immediately. */

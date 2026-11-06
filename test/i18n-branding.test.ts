@@ -189,11 +189,36 @@ describe('custom display name and browser localization', () => {
     const dom = makeDom('');
     const api = dom.window.CodemanI18n;
     api.configure({ language: 'zh-CN' });
-    const labels = ['Move to "New group"', 'Move to new group', 'Move to "ungrouped"', 'Move to Ungrouped'].map((label) =>
-      api.t(label)
+    const labels = ['Move to "New group"', 'Move to new group', 'Move to "ungrouped"', 'Move to Ungrouped'].map(
+      (label) => api.t(label)
     );
     expect(labels).toEqual(['移到“New group”', '移到新分组', '移到“ungrouped”', '移到未分组']);
     expect(new Set(labels).size).toBe(4);
+    dom.window.close();
+  });
+
+  it('never translates a tab name, even one that reads like a UI string', async () => {
+    const tab = (name: string) =>
+      `<div class="session-tab"><span class="tab-info"><span class="tab-name-row">` +
+      `<span class="tab-name" data-full-name="${name}">${name}</span></span></span></div>`;
+    const dom = makeDom(
+      `<div id="sessionTabs">${tab('New session')}${tab('Follows up on bug')}</div><div id="menu"></div>`
+    );
+    const { window } = dom;
+    const api = window.CodemanI18n;
+    api.start();
+    api.configure({ language: 'zh-CN' });
+    const names = () => [...window.document.querySelectorAll('.tab-name')].map((el) => el.textContent);
+    expect(names()).toEqual(['New session', 'Follows up on bug']);
+    // A tab drawn after the switch stays untranslated too, while the same
+    // strings as real UI text still translate.
+    window.document.getElementById('sessionTabs')!.insertAdjacentHTML('beforeend', tab('New session'));
+    const menu = window.document.getElementById('menu')!;
+    menu.innerHTML = '<button>New session</button><div class="tab-rail-action-menu-note">Follows One</div>';
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(names()).toEqual(['New session', 'Follows up on bug', 'New session']);
+    expect(menu.querySelector('button')?.textContent).toBe('新建会话');
+    expect(menu.querySelector('div')?.textContent).toBe('跟随 One');
     dom.window.close();
   });
 

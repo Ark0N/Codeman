@@ -28,3 +28,5 @@ scripts/remotion/
 
 # Hand-maintained; Prettier escapes underscores in glob paths and corrupts paragraphs.
 CLAUDE.md
+src/web/CLAUDE.md
+docs/releasing.md

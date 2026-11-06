@@ -782,11 +782,9 @@ describe('subagent stop guard helper', () => {
 });
 
 // ========== Hook Event API Integration Tests ==========
-// Port 3130 reserved for hooks integration tests
+// Hooks integration tests use an ephemeral port
 
 import { WebServer } from '../src/web/server.js';
-
-const TEST_PORT = 3130;
 
 describe('Hook Event API', () => {
   let server: WebServer;
@@ -794,9 +792,9 @@ describe('Hook Event API', () => {
   let testSessionId: string;
 
   beforeAll(async () => {
-    server = new WebServer(TEST_PORT, false, true);
+    server = new WebServer(0, false, true);
     await server.start();
-    baseUrl = `http://localhost:${TEST_PORT}`;
+    baseUrl = `http://localhost:${server.boundPort}`;
 
     // Create a test session
     const createRes = await fetch(`${baseUrl}/api/sessions`, {
@@ -976,9 +974,9 @@ describe('Hook Data Sanitization', () => {
   let testSessionId: string;
 
   beforeAll(async () => {
-    server = new WebServer(TEST_PORT + 1, false, true); // Port 3131
+    server = new WebServer(0, false, true);
     await server.start();
-    baseUrl = `http://localhost:${TEST_PORT + 1}`;
+    baseUrl = `http://localhost:${server.boundPort}`;
 
     // Create a test session
     const createRes = await fetch(`${baseUrl}/api/sessions`, {

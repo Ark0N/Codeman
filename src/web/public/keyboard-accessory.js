@@ -80,7 +80,7 @@ const PathPicker = {
   /**
    * Open the lazy filesystem browser.
    * @param {{sessionId?: string, initialPath?: string, directoriesOnly?: boolean,
-   *   title?: string, onSelect: (path: string) => void}} options
+   *   allowNewFolder?: boolean, title?: string, onSelect: (path: string) => void}} options
    */
   open(options) {
     this.close(false);
@@ -114,9 +114,15 @@ const PathPicker = {
             <input type="text" class="path-picker-current" aria-label="Current folder path" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="go">
             <button type="submit" class="path-picker-go" title="Go to this path" aria-label="Go to this path">Go</button>
           </form>
+          <button type="button" class="path-picker-newfolder" title="New folder" aria-label="New folder" hidden>+&#x1F4C1;</button>
           <button type="button" class="path-picker-hidden" title="Show hidden files and folders" aria-label="Show hidden files and folders" aria-pressed="false">.*</button>
           <button type="button" class="path-picker-refresh" title="Refresh" aria-label="Refresh">&#x21BB;</button>
         </div>
+        <form class="path-picker-newfolder-form" hidden>
+          <input type="text" class="path-picker-newfolder-name" aria-label="New folder name" placeholder="New folder name" maxlength="255" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="done">
+          <button type="submit" class="path-picker-newfolder-create">Create</button>
+          <button type="button" class="path-picker-newfolder-cancel">Cancel</button>
+        </form>
         <div class="path-picker-toolbar">
           <div class="path-picker-status" aria-live="polite">Loading...</div>
           <label class="path-picker-sort-label">Sort
@@ -147,6 +153,7 @@ const PathPicker = {
     overlay.querySelector('.path-picker-refresh').addEventListener('click', () => this.load(this._currentPath));
     overlay.querySelector('.path-picker-hidden').addEventListener('click', () => this.toggleHidden());
     this._syncHiddenButton();
+    this._wireNewFolder(overlay, !!options.allowNewFolder);
     // Typing a path is the fast way there. The listing is loaded ONLY on Enter/Go,
     // never on each keystroke: a half-typed path is a 404 the server has to
     // answer for nothing, and jumping mid-edit would yank the field around.
@@ -181,6 +188,70 @@ const PathPicker = {
     document.addEventListener('keydown', this._keydownHandler);
     document.body.appendChild(overlay);
     this.load(options.initialPath || '');
+  },
+
+  /**
+   * "New folder": opt-in per caller (`allowNewFolder`), so a picker that browses somewhere the host
+   * filesystem route cannot create in (the container-workdir picker) never shows it. The folder is made
+   * inside the folder being viewed and is selected once it exists.
+   */
+  _wireNewFolder(overlay, enabled) {
+    const button = overlay.querySelector('.path-picker-newfolder');
+    const form = overlay.querySelector('.path-picker-newfolder-form');
+    const input = overlay.querySelector('.path-picker-newfolder-name');
+    if (!enabled) return;
+    button.hidden = false;
+    const close = () => {
+      form.hidden = true;
+      input.value = '';
+    };
+    button.addEventListener('click', () => {
+      form.hidden = !form.hidden;
+      if (!form.hidden) input.focus();
+    });
+    overlay.querySelector('.path-picker-newfolder-cancel').addEventListener('click', close);
+    input.addEventListener('keydown', (event) => {
+      // Escape closes the form first; the document handler would close the whole picker.
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      close();
+    });
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const name = input.value.trim();
+      if (!name || !this._currentPath) return;
+      const status = overlay.querySelector('.path-picker-status');
+      const create = overlay.querySelector('.path-picker-newfolder-create');
+      const parent = this._currentPath;
+      // One request at a time: a double tap would send a second one whose 409 shows after the first succeeded.
+      create.disabled = true;
+      try {
+        const res = await fetch('/api/filesystem/mkdir', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            path: parent,
+            name,
+            sessionId: this._options?.sessionId || undefined,
+            showHidden: this._showHidden ? 'true' : undefined,
+          }),
+        });
+        const result = await res.json();
+        if (!result?.success) throw new Error(result?.error || 'Could not create the folder');
+        if (!this.overlay) return;
+        close();
+        await this.load(parent);
+        // The listing may have moved on while the request ran; only select it if it is still on screen.
+        if (this._currentPath === parent) this.select(result.data.path);
+      } catch (error) {
+        if (!this.overlay) return;
+        status.textContent = error.message || 'Could not create the folder';
+        status.classList.add('error');
+      } finally {
+        create.disabled = false;
+      }
+    });
   },
 
   _loadShowHidden() {
@@ -636,15 +707,19 @@ function applyOneShotCtrl(data) {
   return { data, consumed: true };
 }
 
-// The composer's Send goes out as ONE bracketed-paste frame on the WebSocket
-// input path, and ws-routes.ts drops a frame longer than MAX_INPUT_LENGTH
-// (config/terminal-limits.ts: 64 KiB, compared in UTF-16 code units) WITHOUT
-// an ACK, which would wedge the durable input queue. So the prompt budget is
-// that limit minus the two markers, derived here once so the refusal in
-// _sendComposedPrompt() and the toast that names the maximum cannot drift.
+// The composer's Send, and the shell Paste dialog's, goes out as ONE
+// bracketed-paste frame on the WebSocket input path, and ws-routes.ts drops a
+// frame longer than MAX_INPUT_LENGTH (config/terminal-limits.ts: 64 KiB,
+// compared in UTF-16 code units) WITHOUT an ACK, which would wedge the durable
+// input queue. So the budget is that limit minus the two markers, derived here
+// once so the refusal in _sendBracketedPaste() and the toast that names the
+// maximum cannot drift.
 const COMPOSER_INPUT_FRAME_LIMIT = 64 * 1024;
 const COMPOSER_PASTE_START = '\x1b[200~';
 const COMPOSER_PASTE_END = '\x1b[201~';
+
+// Accessory keys that act on the terminal and leave the keyboard up.
+const ACCESSORY_REFOCUS_ACTIONS = new Set(['scroll-up', 'scroll-down', 'arrow-left', 'arrow-right', 'tab', 'shift-tab', 'shift-left', 'shift-right', 'ctrl', 'ctrl-o', 'opt-enter', 'esc', 'effort-max', 'clear-input']);
 
 /**
  * KeyboardAccessoryBar - Quick action buttons shown above keyboard when typing.
@@ -664,7 +739,7 @@ const KeyboardAccessoryBar = {
   _composerDrafts: new Map(),
   _composerUploads: new Map(),
   _composerOverlay: null,
-  // Longest prompt Send accepts: the input frame limit minus both markers.
+  // Longest prompt or shell paste Send accepts: the input frame limit minus both markers.
   _composerMaxLength: COMPOSER_INPUT_FRAME_LIMIT - COMPOSER_PASTE_START.length - COMPOSER_PASTE_END.length,
 
   /** HTML for simple mode: arrows, commands, Compose, Esc, dismiss */
@@ -801,6 +876,21 @@ const KeyboardAccessoryBar = {
     this.syncCodexKeys();
     this._syncComposerDraftIndicator();
 
+    // A key that keeps the keyboard up must not take focus on press at all.
+    // Letting the tap blur the terminal and refocusing it in the click handler
+    // (kept below as the fallback) made every such key start a keyboard
+    // dismissal: a blur/focus pair per tap. Same pattern as the Attach input
+    // (image-input.js). A first tap on clear/compact only arms the confirm.
+    this.element.addEventListener('mousedown', (e) => {
+      const btn = e.target.closest('.accessory-btn');
+      if (!btn) return;
+      const action = btn.dataset.action;
+      if (ACCESSORY_REFOCUS_ACTIONS.has(action) ||
+          ((action === 'clear' || action === 'compact') && this._confirmAction !== action)) {
+        e.preventDefault();
+      }
+    });
+
     // Add click handlers — preventDefault stops event from reaching terminal
     this.element.addEventListener('click', (e) => {
       const btn = e.target.closest('.accessory-btn');
@@ -812,8 +902,7 @@ const KeyboardAccessoryBar = {
       this.handleAction(action, btn);
 
       // Refocus terminal so keyboard stays open (tap blurs terminal → keyboard dismisses → toolbar shifts)
-      const refocusActions = new Set(['scroll-up', 'scroll-down', 'arrow-left', 'arrow-right', 'tab', 'shift-tab', 'shift-left', 'shift-right', 'ctrl', 'ctrl-o', 'opt-enter', 'esc', 'effort-max', 'clear-input']);
-      if (refocusActions.has(action) ||
+      if (ACCESSORY_REFOCUS_ACTIONS.has(action) ||
           ((action === 'clear' || action === 'compact') && this._confirmAction)) {
         if (typeof app !== 'undefined' && app.terminal) {
           app.terminal.focus();
@@ -1205,23 +1294,39 @@ const KeyboardAccessoryBar = {
     textarea.dispatchEvent(new Event('input', { bubbles: true }));
   },
 
-  /** Deliver one complete prompt as an explicit bracketed paste. xterm loses
-   *  its DECSET 2004 mirror after terminal replay, even though the CLI still
-   *  expects bracketed input, so build the byte-identical sequence directly on
-   *  the durable session-bound path. Enter stays a separate delayed write
-   *  because Codex drops keys sharing a PTY read with a bracketed paste. */
+  /** Deliver one complete prompt as an explicit bracketed paste
+   *  (_sendBracketedPaste()), then Enter. xterm loses its DECSET 2004 mirror
+   *  after terminal replay, even though the CLI still expects bracketed input,
+   *  so the frame is built directly rather than through terminal.paste().
+   *  Enter stays a separate delayed write because Codex drops keys sharing a
+   *  PTY read with a bracketed paste. */
   _sendComposedPrompt(sessionId, text) {
+    if (!this._sendBracketedPaste(sessionId, text, 'Prompt')) return false;
+    setTimeout(() => app._sendInputAsync(sessionId, '\r', { useMux: true }), 120);
+    return true;
+  },
+
+  /** One bracketed-paste write on the durable session-bound path, the same
+   *  bytes a terminal paste produces, so the receiving shell or CLI takes a
+   *  multi-line block as one edit. Never presses Enter: callers decide.
+   *  `label` names the payload in the too-long toast. */
+  _sendBracketedPaste(sessionId, text, label) {
     if (!sessionId || !text || typeof app._sendInputAsync !== 'function') return false;
     app._predictiveEcho?.clearPredictions();
     // Match xterm's prepareTextForTerminal(): CR keeps embedded newlines inside
     // the single-line input transport and is what terminal.paste() emitted.
-    const pasteText = text.replace(/\r?\n/g, '\r');
+    // Paste markers inside the text are dropped first: a clipboard carrying
+    // `ESC[201~` would end the bracket early and run the rest without Enter.
+    // Strip until none is left: one pass over `ESC[20` + `ESC[201~` + `1~` leaves
+    // an `ESC[201~` behind.
+    let pasteText = text;
+    while (/\x1b\[20[01]~/.test(pasteText)) pasteText = pasteText.replace(/\x1b\[20[01]~/g, '');
+    pasteText = pasteText.replace(/\r?\n/g, '\r');
     if (pasteText.length > this._composerMaxLength) {
-      app.showToast?.(`Prompt is too long to send (maximum ${this._composerMaxLength.toLocaleString()} characters)`, 'error');
+      app.showToast?.(`${label} is too long to send (maximum ${this._composerMaxLength.toLocaleString()} characters)`, 'error');
       return false;
     }
     app._sendInputAsync(sessionId, `${COMPOSER_PASTE_START}${pasteText}${COMPOSER_PASTE_END}`);
-    setTimeout(() => app._sendInputAsync(sessionId, '\r', { useMux: true }), 120);
     return true;
   },
 
@@ -1247,7 +1352,11 @@ const KeyboardAccessoryBar = {
     const sessionId = app.activeSessionId;
     const pending = this._takePendingLocalEcho(sessionId);
     const saved = this._composerDrafts.get(sessionId) || '';
-    const initial = saved + pending;
+    // A parked draft and text typed (or attached) on the prompt since are two
+    // separate pieces of prose; one space keeps the draft's last word off the
+    // prompt's first, unless either side already supplies the gap.
+    const needsGap = saved && pending && !/\s$/.test(saved) && !/^\s/.test(pending);
+    const initial = needsGap ? `${saved} ${pending}` : saved + pending;
 
     this._composerOverlay?._closeComposer?.({ restoreFocus: false });
     const overlay = document.createElement('div');
@@ -1265,11 +1374,11 @@ const KeyboardAccessoryBar = {
         <textarea class="paste-textarea prompt-composer-textarea" aria-label="Prompt" placeholder="Write your prompt…" autocorrect="on" autocapitalize="sentences" spellcheck="true"></textarea>
         <div class="paste-actions prompt-composer-actions">
           <button type="button" class="prompt-composer-terminal">Use terminal keyboard</button>
-          <button type="button" class="paste-image">🖼 Image</button>
+          <button type="button" class="paste-image">📎 Attach</button>
           <button type="button" class="paste-cancel">Cancel</button>
           <button type="button" class="paste-send">Send</button>
         </div>
-        <input type="file" class="paste-file-input" accept="image/*" multiple hidden>
+        <input type="file" class="paste-file-input" accept="image/*,video/*,.pdf,.docx,.pptx,.xlsx,.zip,.txt,.md,.csv,.tsv,.json,.log,.yaml,.yml,.xml" multiple hidden>
       </div>
     `;
 
@@ -1285,6 +1394,10 @@ const KeyboardAccessoryBar = {
     const fileInput = overlay.querySelector('.paste-file-input');
     const imageButton = overlay.querySelector('.paste-image');
     const sendButton = overlay.querySelector('.paste-send');
+    // Disabled alongside Send while an upload runs: this button deletes the draft
+    // and closes the overlay, and the upload would then land its paths in a FRESH
+    // draft, which the next open would prepend to the handed-back text.
+    const terminalButton = overlay.querySelector('.prompt-composer-terminal');
     const focusTrap = new FocusTrap(overlay);
     textarea.value = initial;
     if (initial) this._composerDrafts.set(sessionId, initial);
@@ -1292,6 +1405,7 @@ const KeyboardAccessoryBar = {
     const initialUploads = this._composerUploads.get(sessionId) || 0;
     imageButton.disabled = initialUploads > 0;
     sendButton.disabled = initialUploads > 0;
+    terminalButton.disabled = initialUploads > 0;
     if (initialUploads > 0) imageButton.textContent = 'Uploading…';
 
     const saveDraft = () => {
@@ -1317,8 +1431,9 @@ const KeyboardAccessoryBar = {
       this._syncComposerDraftIndicator();
       close({ preserveDraft: false });
     };
-    const handleImages = async (files) => {
-      const images = Array.from(files || []).filter((file) => file.type.startsWith('image/'));
+    // Takes files already admitted by app._admitPromptAttachments (the picker and
+    // the paste below), which also toasts whatever it refused.
+    const handleImages = async (images) => {
       if (images.length === 0 || typeof app._uploadAndInsertImages !== 'function') return;
       saveDraft();
       this._composerUploads.set(sessionId, (this._composerUploads.get(sessionId) || 0) + 1);
@@ -1332,9 +1447,11 @@ const KeyboardAccessoryBar = {
         const currentSendButton = currentOverlay?.querySelector('.paste-send');
         if (currentImageButton) {
           currentImageButton.disabled = count > 0;
-          currentImageButton.textContent = count > 0 ? 'Uploading…' : '🖼 Image';
+          currentImageButton.textContent = count > 0 ? 'Uploading…' : '📎 Attach';
         }
         if (currentSendButton) currentSendButton.disabled = count > 0;
+        const currentTerminalButton = currentOverlay?.querySelector('.prompt-composer-terminal');
+        if (currentTerminalButton) currentTerminalButton.disabled = count > 0;
       };
       syncUploadUi();
       try {
@@ -1357,7 +1474,6 @@ const KeyboardAccessoryBar = {
         if (remaining > 0) this._composerUploads.set(sessionId, remaining);
         else this._composerUploads.delete(sessionId);
         syncUploadUi();
-        if (overlay.isConnected) fileInput.value = '';
       }
     };
 
@@ -1365,10 +1481,11 @@ const KeyboardAccessoryBar = {
     textarea.addEventListener('paste', (event) => {
       const items = event.clipboardData?.items;
       if (!items) return;
-      const images = Array.from(items)
-        .filter((item) => item.type.startsWith('image/'))
+      const files = Array.from(items)
         .map((item) => item.getAsFile())
         .filter(Boolean);
+      // Pasted text with no admitted file lands in the textarea natively: no toast.
+      const images = app._admitPromptAttachments(files, { textPasted: !!event.clipboardData.getData('text/plain') });
       if (images.length > 0) {
         event.preventDefault();
         void handleImages(images);
@@ -1381,8 +1498,62 @@ const KeyboardAccessoryBar = {
       }
     });
     imageButton.addEventListener('click', () => fileInput.click());
-    fileInput.addEventListener('change', () => void handleImages(fileInput.files));
-    overlay.querySelector('.prompt-composer-terminal').addEventListener('click', () => close({ focusTerminal: true }));
+    fileInput.addEventListener('change', () => {
+      const files = Array.from(fileInput.files || []);
+      // Reset so picking the same refused file again still fires change (and its toast).
+      fileInput.value = '';
+      void handleImages(app._admitPromptAttachments(files));
+    });
+    overlay.querySelector('.prompt-composer-terminal').addEventListener('click', () => {
+      // Hand the text BACK to the terminal prompt so both surfaces hold the same
+      // prompt, the mirror of the adoption composePrompt() does on open. Only a
+      // single-line draft can make the trip: the terminal prompt is one line and
+      // its text reaches the PTY as typed input, where an embedded newline is a
+      // key, so a multi-line draft would arrive mangled and instead stays parked
+      // as a draft (the dot on the Compose key shows it).
+      const text = textarea.value;
+      if (!text || text.includes('\n')) {
+        close({ focusTerminal: true });
+        return;
+      }
+      // Refuse an oversized draft BEFORE it is deleted, or the text is gone from
+      // both surfaces. Same cap as Send: the overlay branch lays the whole text out
+      // as DOM lines on every repaint, so the transport's larger paste cap is not
+      // the bound that matters here.
+      if (text.length > this._composerMaxLength) {
+        app.showToast?.(`Prompt is too long to send (maximum ${this._composerMaxLength.toLocaleString()} characters)`, 'error');
+        return;
+      }
+      // Cleared, never kept: the text now lives on the prompt, and a surviving
+      // draft would be prepended to it the next time the composer opens.
+      this._composerDrafts.delete(sessionId);
+      close({ focusTerminal: true, preserveDraft: false });
+      if (
+        app._localEchoEnabled &&
+        app._localEchoOverlay &&
+        app.activeSessionId === sessionId &&
+        !app._tilesOwnTerminal?.() &&
+        !app._echoPassthroughSessions?.has(sessionId)
+      ) {
+        // Buffer echo: the prompt is the overlay, so the text goes there unsent.
+        // Passthrough is excluded deliberately: such a session skips the overlay
+        // branch on Enter, so text parked there would never be submitted. The tile
+        // grid is excluded for the same reason _attachFromToolbar is: the main
+        // terminal is parked and hidden then, and a tile's Enter cannot flush its
+        // overlay, so the text goes to the PTY below instead of stranding there.
+        app._localEchoOverlay.appendText(text);
+      } else {
+        // Write-through echo (codex) or no local echo at all: there is no buffer
+        // to park text in, because the prompt the user sees IS the CLI's own
+        // composer on the PTY. Checking for the overlay alone left this branch
+        // doing nothing on codex, so the button looked dead there. That composer
+        // may already hold text the open adopted nothing of, so lead with a
+        // separator rather than fuse onto its last word (harmless when empty).
+        app._predictiveEcho?.clearPredictions();
+        app._sendInputAsync(sessionId, ` ${text}`);
+      }
+      this._syncComposerDraftIndicator();
+    });
     overlay.querySelector('.paste-cancel').addEventListener('click', () => close());
     sendButton.addEventListener('click', send);
     overlay.addEventListener('click', (event) => {
@@ -1398,29 +1569,32 @@ const KeyboardAccessoryBar = {
   /** Show a paste overlay for iOS compatibility.
    *  Handles three input paths from one dialog:
    *   - Text: long-press the textarea → Paste → Send (unchanged).
-   *   - Image (picker): the "Image" button opens a native file picker
-   *     (accept=image/* → camera / photo library / files), the most reliable
-   *     way to attach a photo on mobile.
-   *   - Image (paste): if the browser exposes image blobs on the textarea's
+   *   - File (picker): the "Attach" button opens a native file picker
+   *     (accept=image/*,video/* plus the document extensions → camera / photo
+   *     library / files), the most reliable way to attach anything on mobile.
+   *   - File (paste): if the browser exposes file blobs on the textarea's
    *     paste event, we intercept them and upload directly. Support is spotty
    *     on mobile, so it is a best-effort enhancement layered on the picker.
-   *  All image paths reuse app._uploadAndInsertImages() (image-input.js), which
+   *  All upload paths reuse app._uploadAndInsertImages() (image-input.js), which
    *  uploads to /api/sessions/:id/paste-image and inserts the saved path. */
   pasteFromClipboard() {
     if (typeof app === 'undefined' || !app.activeSessionId) return;
+    // The shell this overlay was opened for: a tab switch while it is open must
+    // not deliver the paste to whatever session is active at Send time.
+    const sessionId = app.activeSessionId;
 
     // Create overlay
     const overlay = document.createElement('div');
     overlay.className = 'paste-overlay';
     overlay.innerHTML = `
       <div class="paste-dialog">
-        <textarea class="paste-textarea" placeholder="Long-press to paste text — or tap 🖼 to attach an image"></textarea>
+        <textarea class="paste-textarea" placeholder="Long-press to paste text — or tap 📎 to attach a file"></textarea>
         <div class="paste-actions">
-          <button class="paste-image">🖼 Image</button>
+          <button class="paste-image">📎 Attach</button>
           <button class="paste-cancel">Cancel</button>
           <button class="paste-send">Send</button>
         </div>
-        <input type="file" class="paste-file-input" accept="image/*" multiple hidden>
+        <input type="file" class="paste-file-input" accept="image/*,video/*,.pdf,.docx,.pptx,.xlsx,.zip,.txt,.md,.csv,.tsv,.json,.log,.yaml,.yml,.xml" multiple hidden>
       </div>
     `;
 
@@ -1429,44 +1603,54 @@ const KeyboardAccessoryBar = {
 
     const close = () => overlay.remove();
 
+    // Only shell sessions reach this overlay (agent bars get Compose instead),
+    // so the text lands at the prompt as one bracketed paste and is NOT run:
+    // sent raw, every newline was an Enter and each line ran on its own as it
+    // arrived. The user reviews the block and presses Enter themselves. A shell
+    // that never enabled bracketed paste (dash, bash before 5.1) gets the
+    // markers stripped by tmux, so there every line but the last still runs.
     const sendText = () => {
       const text = textarea.value;
-      close();
-      if (text) {
-        app.sendInput(text);
-        setTimeout(() => app.sendInput('\r'), 80);
+      if (!text) {
+        close();
+        return;
       }
+      // A refused (too-long) paste keeps the dialog and its text for trimming.
+      if (this._sendBracketedPaste(sessionId, text, 'Paste')) close();
     };
 
-    // Filter to images, close the dialog, and hand off to the shared
-    // upload+insert pipeline. Returns true if any image was handled.
-    const handleImages = (files) => {
-      const images = Array.from(files || []).filter((f) => f.type.startsWith('image/'));
+    // Filter to what the server admits (app._admitPromptAttachments toasts what it
+    // refuses), close the dialog, and hand off to the shared upload+insert
+    // pipeline. Returns true if any file was handled.
+    const handleImages = (files, options) => {
+      const images = app._admitPromptAttachments(Array.from(files || []), options);
       if (images.length === 0) return false;
       close();
-      if (typeof app._uploadAndInsertImages === 'function') app._uploadAndInsertImages(images);
+      // Upload to, and insert into, the shell this overlay was opened for.
+      if (typeof app._uploadAndInsertImages === 'function') app._uploadAndInsertImages(images, { sessionId });
       return true;
     };
 
-    // Image picker (camera / photo library) — the reliable mobile path.
+    // File picker (camera / photo library / files) — the reliable mobile path.
     overlay.querySelector('.paste-image').addEventListener('click', () => fileInput.click());
-    fileInput.addEventListener('change', () => handleImages(fileInput.files));
+    fileInput.addEventListener('change', () => {
+      const files = Array.from(fileInput.files || []);
+      // Reset so picking the same refused file again still fires change (and its toast).
+      fileInput.value = '';
+      handleImages(files);
+    });
 
     // Best-effort: capture images pasted straight into the textarea.
     textarea.addEventListener('paste', (e) => {
       const items = e.clipboardData && e.clipboardData.items;
       if (!items) return;
-      const imageFiles = [];
+      const files = [];
       for (let i = 0; i < items.length; i++) {
-        if (items[i].type.startsWith('image/')) {
-          const blob = items[i].getAsFile();
-          if (blob) imageFiles.push(blob);
-        }
+        const blob = items[i].getAsFile();
+        if (blob) files.push(blob);
       }
-      if (imageFiles.length > 0) {
-        e.preventDefault();
-        handleImages(imageFiles);
-      }
+      // Pasted text with no admitted file lands in the textarea natively: no toast.
+      if (handleImages(files, { textPasted: !!e.clipboardData.getData('text/plain') })) e.preventDefault();
     });
 
     overlay.querySelector('.paste-cancel').addEventListener('click', close);

@@ -102,7 +102,7 @@ describe('isMuxAltScreenOnlyStripMode', () => {
       expect(isMuxAltScreenOnlyStripMode(mode, false)).toBe(false);
     }
     // The full strip and the mouse strip already own their modes; never double-gate.
-    for (const mode of ['claude', 'codex', 'gemini', 'opencode'] as const) {
+    for (const mode of ['claude', 'codex', 'gemini', 'opencode', 'copilot'] as const) {
       expect(isMuxAltScreenOnlyStripMode(mode, true)).toBe(false);
     }
   });
@@ -365,4 +365,36 @@ describe('strip decision table: live stream = replay, for every stock CLI', () =
       });
     }
   }
+});
+
+/**
+ * GitHub Copilot CLI is the same shape as opencode: a full-screen TUI that turns mouse tracking
+ * on itself. Left in, xterm reports a plain drag to the TUI instead of selecting, so Auto Copy and
+ * copy-on-select did nothing (only Shift+drag selected). Same strip, same reason.
+ */
+describe('copilot: alt-screen + mouse DECSETs stripped, 3J kept', () => {
+  it('is a mouse-strip mode under tmux, and only there', () => {
+    expect(isMuxMouseStripMode('copilot', true)).toBe(true);
+    expect(isMuxMouseStripMode('copilot', false)).toBe(false);
+  });
+
+  it('drops mouse tracking so xterm keeps local text selection, and keeps 3J', () => {
+    const session = new Session({ workingDir: '/tmp', mode: 'copilot' as never, useMux: true });
+    handleOutput(session, '\x1b[?1003h\x1b[?1006h\x1b[3JTUI\x1b[?1006l\x1b[?1003l');
+    expect(session.terminalBuffer).toBe('\x1b[3JTUI');
+  });
+
+  it('publishes cliMouseTracking so the browser can forward the wheel and hand-encode clicks', () => {
+    const session = new Session({ workingDir: '/tmp', mode: 'copilot' as never, useMux: true });
+    handleOutput(session, '\x1b[?1002h\x1b[?1006hTUI');
+    expect(session.toState().cliMouseTracking).toBe(true);
+    handleOutput(session, '\x1b[?1002l\x1b[?1006l');
+    expect(session.toState().cliMouseTracking).toBeFalsy();
+  });
+
+  it('leaves a direct-PTY copilot pane untouched', () => {
+    const session = new Session({ workingDir: '/tmp', mode: 'copilot' as never, useMux: false });
+    handleOutput(session, '\x1b[?1049h\x1b[?1002hTUI');
+    expect(session.terminalBuffer).toBe('\x1b[?1049h\x1b[?1002hTUI');
+  });
 });

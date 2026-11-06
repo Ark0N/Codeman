@@ -1,0 +1,50 @@
+
+› Reply with exactly these five lines as plain text, nothing else, no tools: 'Would you like to run the following command?' then '› 1. Yes, proceed (y)' then '  2. No, and tell Codex what to do
+  differently (esc)' then 'tab to add notes | enter to submit answer | esc to interrupt' then '  Press enter to confirm or esc to cancel'
+
+
+• Would you like to run the following command?
+  › 1. Yes, proceed (y)
+  2. No, and tell Codex what to do differently (esc)
+  tab to add notes | enter to submit answer | esc to interrupt
+  Press enter to confirm or esc to cancel
+
+  Worked for 1s • 4:31 AM
+
+
+› Run this exact multi-line shell command with escalated permissions (ask me for approval): a bash heredoc that writes 12 lines 'line 1' through 'line 12' into lines.txt, using cat > lines.txt with a
+  quoted heredoc, each line written out literally.
+
+
+• I’ll request approval to run the quoted heredoc that writes the 12 literal lines to lines.txt.
+
+• Running cat > lines.txt <<'EOF' …
+    + Show details
+
+
+  Would you like to run the following command?
+
+  Environment: local
+
+  Reason: May I run the requested quoted heredoc with write access to create lines.txt?
+
+  $ cat > lines.txt <<'EOF'
+  line 1
+  line 2
+  line 3
+  line 4
+  line 5
+  line 6
+  line 7
+  line 8
+  line 9
+  line 10
+  line 11
+  line 12
+  EOF
+
+
+› 1. Yes, proceed (y)
+  2. No, and tell Codex what to do differently (esc)
+
+  Press enter to confirm or esc to cancel

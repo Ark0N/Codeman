@@ -14,6 +14,12 @@
  *    wheel-down scrolls xterm home instead of being paged, and paging resumes
  *    from the live screen.
  *
+ *  - a fullscreen Claude tile sends the wheel to the CLI as SGR wheel reports
+ *    at the pointer's cell in the TILE (Claude scrolls its own transcript on
+ *    them), and xterm's viewport stays on the live screen instead of
+ *    scrolling the stale replayed frames above it. Shift+wheel scrolls the
+ *    local scrollback, which xterm alone turns into a horizontal no-op.
+ *
  * The wheel is a real one (`page.mouse.wheel()`), and the last step proves it
  * reaches xterm: a wheel the tile does not page scrolls xterm's viewport, so
  * "xterm did not scroll" on a paged wheel means something. What keeps xterm
@@ -198,6 +204,226 @@ describe('TerminalTile wheel paging in a real browser', () => {
         w.app._sendInputEphemeral = probe.realEphemeral;
         delete w.__tileProbe;
       }, PROBE_ID);
+    }
+  });
+
+  it("forwards a fullscreen Claude tile's wheel as SGR reports from its own cells, and keeps xterm on the live screen", async () => {
+    await page.evaluate(async (id) => {
+      const w = window as any;
+      const app = w.app;
+      const CAPTURE_ROWS = 40;
+      const capture = Array.from({ length: CAPTURE_ROWS }, (_, i) => `frame ${i}`).join('\r\n');
+
+      // The tile's session: Claude in its fullscreen renderer (mouse tracking on).
+      app.sessions.set(id, { id, mode: 'claude', cliVersion: '2.1.295', cliMouseTracking: true });
+      const sent: Array<[string, string]> = [];
+      const realEphemeral = app._sendInputEphemeral;
+      app._sendInputEphemeral = (sessionId: string, data: string) => sent.push([sessionId, data]);
+      const realFetch = w.fetch;
+      w.fetch = async (url: string, init?: unknown) =>
+        String(url).includes(`/api/sessions/${id}/terminal`)
+          ? new Response(JSON.stringify({ data: { terminalBuffer: capture, captureRows: CAPTURE_ROWS } }))
+          : realFetch(url, init);
+      const RealWebSocket = w.WebSocket;
+      w.WebSocket = class {
+        static OPEN = 1;
+        readyState = 0;
+        send() {}
+        close() {}
+      };
+
+      // Offset from the page corner, so a cell computed against the wrong
+      // element (the primary pane's) would come out different.
+      const mount = document.createElement('div');
+      mount.style.cssText =
+        'position:fixed;left:100px;top:120px;width:640px;height:300px;z-index:99999;background:#000';
+      document.body.appendChild(mount);
+      const tile = new w.TerminalTile(id, mount, { mode: 'claude' });
+      try {
+        await tile.connect();
+      } finally {
+        w.fetch = realFetch;
+        w.WebSocket = RealWebSocket;
+      }
+      w.__tileProbe = { tile, mount, sent, realEphemeral };
+    }, PROBE_ID);
+
+    try {
+      // Where the pointer will be, as the tile's own screen maps it (1-based).
+      const expected = await page.evaluate(() => {
+        const term = (window as any).__tileProbe.tile.terminal;
+        const rect = term.element.querySelector('.xterm-screen').getBoundingClientRect();
+        const cell = term._core._renderService.dimensions.css.cell;
+        const x = rect.left + cell.width * 7.5;
+        const y = rect.top + cell.height * 3.5;
+        return { x, y, col: 8, row: 4 };
+      });
+      // The stale frames sit above the live screen: something xterm COULD scroll.
+      const before = await snap();
+      expect(before.baseY).toBeGreaterThan(0);
+      expect(before.viewportY).toBe(before.baseY);
+
+      await page.mouse.move(expected.x, expected.y);
+      await page.mouse.wheel(0, -100); // one Chrome-on-Windows notch up
+      await page.waitForTimeout(150);
+      await page.mouse.wheel(0, 50); // half a notch down
+      await page.waitForTimeout(150);
+
+      const after = await snap();
+      expect(after.viewportY).toBe(before.baseY); // xterm never scrolled the stale frames
+      expect(after.sent.every(([sid]) => sid === PROBE_ID)).toBe(true);
+      const up = `\x1b[<64;${expected.col};${expected.row}M`;
+      const down = `\x1b[<65;${expected.col};${expected.row}M`;
+      expect(after.sent.map(([, data]) => data)).toEqual([up.repeat(4), down.repeat(2)]);
+
+      // A slow macOS mouse click is only ~4px. Each isolated click must report,
+      // not lose its fraction during the 300ms pause between clicks.
+      await page.waitForTimeout(300);
+      for (let click = 0; click < 5; click++) {
+        await page.mouse.wheel(0, -4);
+        await page.waitForTimeout(300);
+      }
+      const afterSlow = await snap();
+      expect(afterSlow.sent.slice(after.sent.length).map(([, data]) => data)).toEqual(Array(5).fill(up));
+
+      // Shift+wheel is the explicit "local scrollback" gesture: scrolled locally
+      // by the tile (xterm alone turns it into a horizontal no-op), unforwarded.
+      await page.keyboard.down('Shift');
+      await page.mouse.wheel(0, -100);
+      await page.keyboard.up('Shift');
+      await page.waitForTimeout(150);
+      const shifted = await snap();
+      expect(shifted.sent.length).toBe(afterSlow.sent.length);
+      expect(shifted.viewportY).toBeLessThan(before.baseY);
+    } finally {
+      await page.evaluate((id) => {
+        const w = window as any;
+        const probe = w.__tileProbe;
+        probe.tile.destroy();
+        probe.mount.remove();
+        w.app.sessions.delete(id);
+        w.app._sendInputEphemeral = probe.realEphemeral;
+        delete w.__tileProbe;
+      }, PROBE_ID);
+    }
+  });
+
+  it('preserves local Ctrl/sideways scrolling and forwards small native clicks without amplifying touchpad streams', async () => {
+    const id = 'primary-wheel-probe';
+    await page.evaluate(async (id) => {
+      const a = (window as any).app;
+      const t = a.terminal;
+      (window as any).__primaryWheelProbe = {
+        sent: [],
+        activeId: a.activeSessionId,
+        realEphemeral: a._sendInputEphemeral,
+        point: a._clientPointToCell,
+      };
+      a._sendInputEphemeral = (sid: string, data: string) => (window as any).__primaryWheelProbe.sent.push([sid, data]);
+      a._clientPointToCell = () => ({ col: 1, row: 1 });
+      a.sessions.set(id, { id, mode: 'shell' });
+      a.activeSessionId = id;
+      t.reset();
+      await new Promise<void>((resolve) =>
+        t.write(Array.from({ length: 100 }, (_, i) => `LOCAL_${i}\r\n`).join(''), resolve)
+      );
+      t.scrollToBottom();
+    }, id);
+    const fire = async (options: { deltaY: number; deltaX?: number; ctrlKey?: boolean }) => {
+      await page.evaluate((options) => {
+        const t = (window as any).app.terminal;
+        t.element.dispatchEvent(new WheelEvent('wheel', { ...options, deltaMode: 0, bubbles: true, cancelable: true }));
+      }, options);
+      await page.waitForTimeout(80); // actual 40ms batch and animation frames
+    };
+    try {
+      for (const options of [
+        { deltaY: -25, ctrlKey: true },
+        { deltaY: -25, deltaX: 100 },
+      ]) {
+        const before = await page.evaluate(() => {
+          const t = (window as any).app.terminal;
+          t.scrollToBottom();
+          return t.buffer.active.viewportY;
+        });
+        expect(before).toBeGreaterThan(0);
+        await fire(options);
+        const after = await page.evaluate(() => (window as any).app.terminal.buffer.active.viewportY);
+        expect(after).toBe(before - 1); // local shell behavior matches master
+      }
+      for (const mode of ['claude', 'codex', 'copilot']) {
+        await page.evaluate(
+          ({ id, mode }) => {
+            const a = (window as any).app;
+            a.sessions.set(id, {
+              id,
+              mode,
+              cliVersion: mode === 'claude' ? '2.1.300' : undefined,
+              cliMouseTracking: true,
+            });
+            a._wheelTickGesture = null;
+            a._wheelTickSession = null;
+            a._selectGeneration++;
+            (window as any).__primaryWheelProbe.sent.length = 0;
+          },
+          { id, mode }
+        );
+        for (const options of [
+          { deltaY: -25, ctrlKey: true },
+          { deltaY: -25, deltaX: 100 },
+        ])
+          await fire(options);
+        expect(await page.evaluate(() => (window as any).__primaryWheelProbe.sent.length)).toBe(0);
+        for (let click = 0; click < 5; click++) {
+          await fire({ deltaY: -4 });
+          await page.waitForTimeout(220);
+        }
+        expect(await page.evaluate(() => (window as any).__primaryWheelProbe.sent)).toEqual(
+          Array.from({ length: 5 }, () => [id, '\x1b[<64;1;1M'])
+        );
+        await page.waitForTimeout(200);
+        await page.evaluate(() => {
+          (window as any).__primaryWheelProbe.sent.length = 0;
+        });
+        await page.evaluate(() => {
+          const t = (window as any).app.terminal;
+          for (let event = 0; event < 10; event++)
+            t.element.dispatchEvent(
+              new WheelEvent('wheel', {
+                deltaY: -2.5,
+                deltaMode: 0,
+                bubbles: true,
+                cancelable: true,
+              })
+            );
+        });
+        await page.waitForTimeout(80);
+        expect(await page.evaluate(() => (window as any).__primaryWheelProbe.sent)).toEqual([[id, '\x1b[<64;1;1M']]);
+      }
+      await page.evaluate((id) => {
+        const a = (window as any).app;
+        a.sessions.set(id, { id, mode: 'codex', cliMouseTracking: false });
+        a.terminal.clear();
+        a.terminal.scrollToBottom();
+        (window as any).__primaryWheelProbe.sent.length = 0;
+      }, id);
+      expect(await page.evaluate(() => (window as any).app.terminal.buffer.active.baseY)).toBe(0);
+      for (const options of [
+        { deltaY: -25, ctrlKey: true },
+        { deltaY: -25, deltaX: 100 },
+      ])
+        await fire(options);
+      expect(await page.evaluate(() => (window as any).__primaryWheelProbe.sent.length)).toBe(0);
+    } finally {
+      await page.evaluate((id) => {
+        const a = (window as any).app,
+          p = (window as any).__primaryWheelProbe;
+        a.activeSessionId = p.activeId;
+        a._sendInputEphemeral = p.realEphemeral;
+        a._clientPointToCell = p.point;
+        a.sessions.delete(id);
+        delete (window as any).__primaryWheelProbe;
+      }, id);
     }
   });
 });

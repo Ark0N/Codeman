@@ -1070,3 +1070,41 @@ describe('spreadsheet preview worker: element budget', () => {
     expect(harness.imports.some((url) => url.includes('exceljs'))).toBe(false);
   }, 60_000);
 });
+
+// Real files written by openpyxl 3.1.5, the library most agents write
+// spreadsheets with: a "Data" sheet (month, revenue x6) plus ONE feature each.
+// ExcelJS threw on all three before repairExcelJsModel, so the preview failed
+// on the whole workbook. Regenerate with openpyxl's Comment, Table and BarChart.
+function openpyxlFixture(name: string): ArrayBuffer {
+  return toArrayBuffer(new Uint8Array(readFileSync(resolve(root, 'test/fixtures/xlsx', name))));
+}
+
+describe('spreadsheet preview worker: workbooks written by openpyxl', () => {
+  for (const [file, feature] of [
+    ['openpyxl-comment.xlsx', 'a cell comment'],
+    ['openpyxl-table.xlsx', 'a table'],
+    ['openpyxl-chart.xlsx', 'a bar chart'],
+  ] as const) {
+    it(`previews a sheet that has ${feature}`, async () => {
+      const harness = createHarness();
+      const metadata = await loadMetadata(harness, openpyxlFixture(file));
+      expect(metadata.sheets.map((sheet: { name: string }) => sheet.name)).toEqual(['Data']);
+      expect(metadata.sheets[0]).toMatchObject({ rows: 7, cols: 2 });
+      const tile = await requestTile(harness, metadata.sheets[0].id, { r1: 1, c1: 1, r2: 7, c2: 2 });
+      expect(tile.type).toBe('tile');
+      expect(tile.cells).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ row: 1, col: 1, text: 'month' }),
+          expect.objectContaining({ row: 7, col: 1, text: '2026-06' }),
+          expect.objectContaining({ row: 7, col: 2, text: '600' }),
+        ])
+      );
+    });
+  }
+
+  it('still flags the chart it cannot show', async () => {
+    const harness = createHarness();
+    const metadata = await loadMetadata(harness, openpyxlFixture('openpyxl-chart.xlsx'));
+    expect(metadata.warnings).toEqual(expect.arrayContaining(['charts', 'drawings']));
+  });
+});

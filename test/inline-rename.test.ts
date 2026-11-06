@@ -13,18 +13,14 @@
  * Strategy: stub a synthetic .tab-name node and a fake session entry, then
  * drive the rename function directly via page.evaluate(). No real PTY/tmux.
  *
- * Ports: 3164, plus 3165 and 3192 for the two server-backed describes below
- * (per MEMORY.md, ports 3150+ for tests)
+ * Ports: ephemeral, for this and the two server-backed describes below
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { chromium, type Browser, type Page } from 'playwright';
 import { WebServer } from '../src/web/server.js';
 
-const PORT = 3164;
-const ORDERING_PORT = 3165;
-const LONG_PREFIX_PORT = 3192;
-const BASE_URL = `http://localhost:${PORT}`;
+let baseUrl: string;
 
 describe('Inline rename input', () => {
   let server: WebServer;
@@ -32,11 +28,12 @@ describe('Inline rename input', () => {
   let page: Page;
 
   beforeAll(async () => {
-    server = new WebServer(PORT, false, true); // testMode = true
+    server = new WebServer(0, false, true); // testMode = true
     await server.start();
+    baseUrl = `http://localhost:${server.boundPort}`;
     browser = await chromium.launch({ headless: true });
     page = await browser.newPage();
-    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+    await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
     // Wait for app.js to expose window.app and finish constructor init.
     await page.waitForFunction(
       () =>
@@ -667,11 +664,11 @@ describe('Inline rename write ordering', () => {
   type Pending = { body: string; resolve: (response: Response) => void };
 
   beforeAll(async () => {
-    server = new WebServer(ORDERING_PORT, false, true);
+    server = new WebServer(0, false, true);
     await server.start();
     browser = await chromium.launch({ headless: true });
     page = await browser.newPage();
-    await page.goto(`http://localhost:${ORDERING_PORT}`, { waitUntil: 'domcontentloaded' });
+    await page.goto(`http://localhost:${server.boundPort}`, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(
       () =>
         typeof (window as { app?: unknown }).app !== 'undefined' &&
@@ -1010,14 +1007,13 @@ describe('Inline rename write ordering', () => {
 describe('Vertical rail rename editor with a long prefix', () => {
   let server: WebServer;
   let browser: Browser;
-  const port = LONG_PREFIX_PORT;
   const NAME = 'w3-this_is_a_very_long_valid_prefix: charlie';
   let sessionId = '';
 
   beforeAll(async () => {
-    server = new WebServer(port, false, true);
+    server = new WebServer(0, false, true);
     await server.start();
-    const res = await fetch(`http://localhost:${port}/api/sessions`, {
+    const res = await fetch(`http://localhost:${server.boundPort}/api/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: NAME, mode: 'shell' }),
@@ -1048,7 +1044,7 @@ describe('Vertical rail rename editor with a long prefix', () => {
         settings
       );
       const page = await context.newPage();
-      await page.goto(`http://localhost:${port}`, { waitUntil: 'domcontentloaded' });
+      await page.goto(`http://localhost:${server.boundPort}`, { waitUntil: 'domcontentloaded' });
       // One #sessionTabs list, moved into the rail or the sidebar by the layout.
       const row = page.locator(`#sessionTabs .session-tab[data-id="${sessionId}"]`);
       await row.waitFor({ state: 'visible', timeout: 15000 });

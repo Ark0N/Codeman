@@ -11,15 +11,14 @@ import { flattenOwnerSessionOrder, type TabLayout } from '../src/tab-layout.js';
 import { WebServer } from '../src/web/server.js';
 import { SseEvent } from '../src/web/sse-events.js';
 
-const PORT = 3168;
-
 describe('Stable HTTP contract (live server)', () => {
   let server: WebServer;
-  const base = `http://localhost:${PORT}`;
+  let base: string;
 
   beforeAll(async () => {
-    server = new WebServer(PORT, false, true);
+    server = new WebServer(0, false, true);
     await server.start();
+    base = `http://localhost:${server.boundPort}`;
   });
 
   afterAll(async () => {

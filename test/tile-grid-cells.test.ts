@@ -14,8 +14,9 @@
  *   and Ctrl+Tab / Alt+[ ] cycle through the tiles only.
  * - `codeman:tile-grid` stores the cells (ids, `null` for a hole); a reload
  *   brings the holes back when the shape is the same, a session gone by then
- *   leaves its cell empty, a different shape packs, and the old packed format
- *   reads unchanged. A followed `#session=` link keeps the holes.
+ *   frees its cell for the ranking to fill (empty only when no other session
+ *   is left), a different shape packs, and the old packed format reads
+ *   unchanged. A followed `#session=` link keeps the holes.
  * - A divider drag refits only the tiles in its two tracks, holes skipped.
  *
  * Real code via the shared vm harness (test/mocks/tile-grid-vm.ts). Port: N/A.
@@ -246,11 +247,16 @@ describe('focus never lands on an empty cell', () => {
 });
 
 describe('persistence: the cells, holes included', () => {
-  function reload(ids: string[] = SIX): GridApp {
+  function reload(ids: string[] = SIX, { others = true } = {}): GridApp {
     // The page goes away; a fresh one on the same device restores the grid.
     section.children = [];
     FakeTile.all = [];
     const app = makeGridApp(ids);
+    // `others: false`: no session but `ids` is open, so a freed cell has nothing to take.
+    if (!others) {
+      app.sessions.delete('s-other');
+      app.sessionOrder = app.sessionOrder.filter((id: string) => id !== 's-other');
+    }
     expect(app._restoreTileGrid()).toBe(true);
     return app;
   }
@@ -266,10 +272,18 @@ describe('persistence: the cells, holes included', () => {
     expect(slots()[0].dataset.cell).toBe('2');
   });
 
-  it('a session gone by then leaves its cell empty if the shape still fits', () => {
+  it('a session gone by then frees its cell, which the ranking fills, the hole the user left kept', () => {
+    const app = openGrid(FIVE);
+    setCells(app, ['s-a', null, 's-b', 's-c', 's-d', 's-e']);
+    app._tileGrid.open = false;
+    const again = reload(['s-a', 's-b', 's-d', 's-e']);
+    expect(again._tileGrid.cells).toEqual(['s-a', null, 's-b', 's-other', 's-d', 's-e']);
+  });
+
+  it('a freed cell stays empty only when no other session is left, if the shape still fits', () => {
     const app = openGrid(SIX);
     app._tileGrid.open = false;
-    const again = reload(['s-a', 's-b', 's-d', 's-e', 's-f']);
+    const again = reload(['s-a', 's-b', 's-d', 's-e', 's-f'], { others: false });
     expect(again._tileGrid.cells).toEqual(['s-a', 's-b', null, 's-d', 's-e', 's-f']);
   });
 
@@ -277,15 +291,15 @@ describe('persistence: the cells, holes included', () => {
     const app = openGrid(FIVE);
     setCells(app, ['s-a', null, 's-b', 's-c', 's-d', 's-e']);
     app._tileGrid.open = false;
-    // s-d gone: four tiles take a 2x2.
-    const again = reload(['s-a', 's-b', 's-c', 's-e']);
+    // s-d gone and nothing to take its cell: four tiles take a 2x2.
+    const again = reload(['s-a', 's-b', 's-c', 's-e'], { others: false });
     expect(again._tileGrid.cells).toEqual(['s-a', 's-b', 's-c', 's-e']);
   });
 
   it('another shape packs even when the stored holes would fit the new one', () => {
     // Stored as 3x2 [a _ b / c d e]; d and e gone: three tiles take a 2x2.
     localStore.set(KEY, JSON.stringify({ v: 1, open: true, ids: ['s-a', null, 's-b', 's-c', 's-d', 's-e'] }));
-    const again = reload(['s-a', 's-b', 's-c']);
+    const again = reload(['s-a', 's-b', 's-c'], { others: false });
     expect(again._tileGrid.cells).toEqual(['s-a', 's-b', 's-c', null]);
   });
 

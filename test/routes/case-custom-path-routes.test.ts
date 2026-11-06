@@ -24,12 +24,12 @@ import { basename, join } from 'node:path';
 import { createRouteTestHarness } from './_route-test-utils.js';
 import { registerCaseRoutes } from '../../src/web/routes/case-routes.js';
 import { dataPath } from '../../src/config/instance.js';
-import { safeRmHomeTree } from '../mocks/index.js';
+import { isSandboxedHome, safeRmHomeTree } from '../mocks/index.js';
 
 const LINKED = () => dataPath('linked-cases.json');
 const CASES_DIR = () => join(homedir(), 'codeman-cases');
 /** test/setup.ts's temp HOME (its prefix is pinned by test/test-env-isolation.test.ts). */
-const sandboxed = () => basename(homedir()).startsWith('codeman-vitest-');
+const sandboxed = () => isSandboxedHome();
 let workDir = '';
 const work = () => workDir;
 const linked = (): Record<string, string> => (existsSync(LINKED()) ? JSON.parse(readFileSync(LINKED(), 'utf8')) : {});
@@ -180,6 +180,21 @@ describe('POST /api/cases with a custom path', () => {
       expect(linked()).toEqual({});
     } finally {
       safeRmHomeTree(join(CASES_DIR(), 'existing-empty'));
+    }
+  });
+
+  it('creates and links a folder two levels under the cases directory (not listed as a local case)', async () => {
+    const { app } = await createRouteTestHarness(registerCaseRoutes);
+    mkdirSync(join(CASES_DIR(), 'parent-dir'), { recursive: true });
+    try {
+      const target = join(realpathSync(join(CASES_DIR(), 'parent-dir')), 'nested');
+      const res = await create(app, { name: 'nested', path: target });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().data.case).toEqual({ name: 'nested', path: target });
+      expect(linked()).toEqual({ nested: target });
+      expect(existsSync(join(target, 'CLAUDE.md'))).toBe(true);
+    } finally {
+      safeRmHomeTree(join(CASES_DIR(), 'parent-dir'));
     }
   });
 

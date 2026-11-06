@@ -95,6 +95,7 @@ const ALLOWED_BRANCHES: Record<string, Allowance> = {
   "web/routes/session-routes.ts::mode === 'antigravity'": allow(2, 'legacy <Mode>Config plumbing'),
   "web/routes/session-routes.ts::mode === 'pi'": allow(2, 'legacy <Mode>Config plumbing'),
   "web/routes/session-routes.ts::mode === 'grok'": allow(2, 'legacy <Mode>Config plumbing'),
+  "web/routes/session-routes.ts::mode === 'copilot'": allow(2, 'legacy <Mode>Config plumbing'),
   "web/routes/session-routes.ts::mode === 'deepseek'": allow(2, 'legacy <Mode>Config plumbing'),
   "web/server.ts::mode === 'opencode'": allow(1, 'legacy <Mode>Config plumbing (session recovery)'),
   "web/server.ts::mode === 'codex'": allow(1, 'legacy <Mode>Config plumbing (session recovery)'),
@@ -102,6 +103,7 @@ const ALLOWED_BRANCHES: Record<string, Allowance> = {
   "web/server.ts::mode === 'antigravity'": allow(1, 'legacy <Mode>Config plumbing (session recovery)'),
   "web/server.ts::mode === 'pi'": allow(1, 'legacy <Mode>Config plumbing (session recovery)'),
   "web/server.ts::mode === 'grok'": allow(1, 'legacy <Mode>Config plumbing (session recovery)'),
+  "web/server.ts::mode === 'copilot'": allow(1, 'legacy <Mode>Config plumbing (session recovery)'),
   "web/server.ts::mode === 'deepseek'": allow(1, 'legacy <Mode>Config plumbing (session recovery)'),
   "web/server.ts::mode === 'omp'": allow(1, 'legacy <Mode>Config plumbing (session recovery)'),
 
@@ -123,10 +125,6 @@ const ALLOWED_BRANCHES: Record<string, Allowance> = {
   "web/session-wait-registry.ts::mode === 'deepseek'": allow(
     1,
     'an error message explaining why THIS mode in particular will never deliver a stop signal'
-  ),
-  "web/routes/approval-routes.ts::mode === 'deepseek'": allow(
-    1,
-    'the DeepSeek status bridge is the only non-claude source of approval items'
   ),
   "cron/cron-service.ts::mode === 'claude'": allow(1, 'cron launch handling, not yet generalised'),
   "cron/cron-service.ts::mode === 'shell'": allow(1, 'cron launch handling, not yet generalised'),
@@ -169,14 +167,6 @@ const ALLOWED_BRANCHES: Record<string, Allowance> = {
   ),
   "tui/tui-render.ts::mode !== 'claude'": allow(1, 'cosmetic: suppress the mode badge for the default mode'),
 
-  // Push approve/deny BUTTONS are withheld for dsh because the answer route refuses
-  // keystrokes for its dialogs (third-party TUI, unmeasured contract) — a button whose
-  // answer would be refused is worse than none. Arguably wants an "answerable dialogs"
-  // capability; deliberately not invented here.
-  "web/routes/hook-event-routes.ts::mode !== 'deepseek'": allow(
-    1,
-    'push buttons withheld where the answer route refuses keystrokes'
-  ),
 
   // Legacy <Mode>Config plumbing, same category as the `===` entries above.
   "web/routes/session-routes.ts::mode !== 'omp'": allow(

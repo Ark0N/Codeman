@@ -8,14 +8,12 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { WebServer } from '../src/web/server.js';
 
-const PORT = 3197;
-
 describe('reverse-proxy base path: server wiring', () => {
   let server: WebServer;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let app: any;
   beforeAll(async () => {
-    server = new WebServer(PORT, false, true, '127.0.0.1', undefined, false, '/codeman');
+    server = new WebServer(0, false, true, '127.0.0.1', undefined, false, '/codeman');
     await server.start();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     app = (server as any).app;
@@ -66,7 +64,9 @@ describe('reverse-proxy base path: server wiring', () => {
     const { WebSocket } = await import('ws');
     const close = (path: string) =>
       new Promise<{ code: number; reason: string }>((resolve) => {
-        const ws = new WebSocket(`ws://127.0.0.1:${PORT}${path}`, { headers: { origin: `http://127.0.0.1:${PORT}` } });
+        const ws = new WebSocket(`ws://127.0.0.1:${server.boundPort}${path}`, {
+          headers: { origin: `http://127.0.0.1:${server.boundPort}` },
+        });
         ws.on('close', (code, reason) => resolve({ code, reason: reason.toString() }));
         ws.on('error', (e) => resolve({ code: -1, reason: String(e) }));
       });

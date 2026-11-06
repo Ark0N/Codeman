@@ -23,14 +23,18 @@
 
 // Per-device tile font size (a tile is a fraction of the screen).
 const TILE_GRID_FONT_KEY = 'codeman-tile-font-size';
-// The grid this device last had, ids only (sanitizeTileGridState, constants.js):
-// `{ v: 1, open, ids, focused, zoomed, colFr, rowFr }`, `ids` being the cells
-// in reading order with `null` for an empty one. `open: false` keeps it
-// remembered for one-click return; restored on reload inside handleInit.
+// The grid this browser last had, as the user left it (sanitizeTileGridState,
+// constants.js): `{ v: 1, open, ids, count, focused, zoomed, colFr, rowFr }`,
+// `ids` being the cells in reading order with `null` for an empty one, `count`
+// how many tiles the user's own last change left (a session that went away by
+// itself does not lower it). Session ids and layout only, never content.
+// Written on every change while the grid is open; `open: false` keeps it for
+// the Tiles toggle, which brings it back exactly; a grid stored open is
+// restored on reload inside handleInit. Never sent to the server.
 const TILE_GRID_STORAGE_KEY = 'codeman:tile-grid';
-// How many tiles a click on Tiles opens: the count last picked in its
-// right-click menu (2, 4 or 6; owner decision 10), per device. Its own key, so
-// the stored grid above stays ids only.
+// The count last picked in the Tiles button's right-click menu (2, 4 or 6;
+// owner decision 10), per device: what a click opens when there is no stored
+// grid to bring back, and what a pick re-forms the grid to.
 const TILE_GRID_COUNT_KEY = 'codeman:tile-count';
 // The leaving tiles' fade (styles.css .tile--leaving) plus slack: the still
 // copy of a closing grid goes even if animationend never comes (a hidden tab,
@@ -52,6 +56,26 @@ const TILE_GRID_REFIT_MS = 150;
 // the grid section's padding (styles.css .tile-grid), for the drag math.
 const TILE_DIVIDER_PX = 6;
 const TILE_GRID_PADDING_PX = 4;
+// What a tile's header drag (and a popped-out window's title drag) carries:
+// the session id under a type of its own, never text, so no text field or
+// terminal takes it as typing. Another Codeman window reads it on drop.
+const TILE_DRAG_TYPE = 'application/x-codeman-tile';
+// Detach Tiles: a tile dropped outside every window waits this long before it
+// opens as a window of its own, so another window that took it (a
+// 'tile-adopted' message on the window channel) can still say so first.
+const TILE_TEAR_OFF_SETTLE_MS = 120;
+// How long after its drag ended a tile can still be claimed by another
+// window's drop (the claim and the dragend come from two windows).
+const TILE_ADOPT_WINDOW_MS = 5000;
+// A session docked here from another window: its old window's 'detached'
+// announcements this soon after are stale (it is closing), not a new pop-out.
+const TILE_DOCK_GRACE_MS = 2000;
+// The smallest window a detached tile opens as, and roughly how much browser
+// chrome sits above a pop-out's content (its title and address bars), so the
+// window's own header lands near where the tile was let go.
+const TILE_WINDOW_MIN_W = 480;
+const TILE_WINDOW_MIN_H = 320;
+const TILE_WINDOW_CHROME_PX = 60;
 
 /** `minmax(0, 1fr) 6px minmax(0, 2fr) ...`: tracks with a divider track between each. */
 function tileGridTracks(fr) {
@@ -147,6 +171,11 @@ class TileGridModel {
     // session id, or null for an empty cell. THE source of truth for where
     // each tile is (owner: an empty cell can be any cell); `ids` derives from it.
     this.cells = [];
+    // How many tiles the user's own last change left (open, add, remove, a
+    // count picked): a session that goes away by itself (deleted, popped out,
+    // refused) does not lower it, so the next time the grid opens the ranking
+    // fills that place. Stored with the grid (_persistTileGrid).
+    this.count = 0;
     // id -> { tile: TerminalTile, el: HTMLElement }
     this.tiles = new Map();
     this.focusedId = null;
@@ -237,8 +266,15 @@ Object.assign(CodemanApp.prototype, {
           if (state !== 'idle') this._setTileLoadingLabel(entry.body);
           entry.el.classList.toggle('tile--loading', state !== 'idle');
           // The first capture has landed (or failed): the terminal fades in,
-          // whole, instead of showing its replay scroll by.
-          if (state === 'idle') entry.el.classList.remove('tile--revealing');
+          // whole, instead of showing its replay scroll by, or plays the
+          // terminal pane's entrance style (entrance-animations.js).
+          if (state === 'idle') {
+            entry.el.classList.remove('tile--revealing');
+            if (entry.screenOwed) {
+              entry.screenOwed = false;
+              this.playTileScreenEntrance?.(entry.body);
+            }
+          }
         },
       });
     }
@@ -308,12 +344,11 @@ Object.assign(CodemanApp.prototype, {
       const sessionId = tileAt(e.target);
       const files = Array.from(e.dataTransfer?.files || []);
       if (!sessionId || files.length === 0) return;
-      const images = files.filter((f) => String(f?.type || '').startsWith('image/'));
-      if (images.length === 0) {
-        this.showToast?.('Only image files are supported', 'error');
-        return;
-      }
-      this._uploadAndInsertImages?.(images, { sessionId });
+      // The one classifier every pick and drop filter reads (image-input.js):
+      // MIME first, then the name's extension, so documents and videos count too.
+      // It toasts what it refuses.
+      const media = this._admitPromptAttachments(files);
+      if (media.length > 0) this._uploadAndInsertImages?.(media, { sessionId });
     });
   },
 
@@ -389,6 +424,9 @@ Object.assign(CodemanApp.prototype, {
     wanted.forEach((id, k) => this._mountTile(id, { enterIndex: k }));
     // Packed from the first cell (_applyTileLayout pads the shape with empty cells).
     grid.cells = wanted.filter((id) => grid.tiles.has(id));
+    // What the user opened is the grid they want (_openStoredTileGrid keeps a
+    // stored count instead).
+    grid.count = grid.ids.length;
     this._applyTileLayout();
     // The tiles' frames paint first; their terminals are built one per frame
     // after it, the focused tile's first, so its capture is the one the queue
@@ -412,11 +450,13 @@ Object.assign(CodemanApp.prototype, {
    * Leaves the grid: every tile destroyed (sockets closed, xterms disposed,
    * queued loads dropped), the main terminal unparked.
    *
-   * `keepStored` remembers the grid for one-click return (toggleTileGrid).
-   * `reselect` shows the focused session in the single view through a forced
-   * reload; pass false when the caller selects something itself. `animate`
-   * (the Tiles toggle only, owner answer 4) leaves a still copy of the tiles
-   * over the stage until the single view has its content (_ghostTileGrid).
+   * `keepStored` (every caller) keeps the grid as it was, holes, count, sizes,
+   * focus and zoom, closed, for the Tiles toggle to bring back (a reload
+   * restores only a grid stored open); false would forget it. `reselect` shows the focused session in the single
+   * view through a forced reload; pass false when the caller selects
+   * something itself. `animate` (the Tiles toggle only, owner answer 4)
+   * leaves a still copy of the tiles over the stage until the single view has
+   * its content (_ghostTileGrid).
    *
    * The main terminal's cached content for EVERY tiled id is invalidated: it was
    * written before the grid opened, possibly hours ago, and selectSession paints
@@ -457,6 +497,7 @@ Object.assign(CodemanApp.prototype, {
     grid.colFr = [];
     grid.rowFr = [];
     grid.cells = [];
+    grid.count = 0;
     grid.cols = 0;
     grid.rows = 0;
     grid.focusedId = null;
@@ -536,14 +577,28 @@ Object.assign(CodemanApp.prototype, {
     // Zoomed, only the zoomed tile is on screen (the others are display: none
     // under .tile-grid--zoomed, a rule the ghost layer does not carry).
     const zoomed = section.classList.contains('tile-grid--zoomed');
+    const copies = [];
     for (const id of grid.ids) {
       const el = grid.tiles.get(id)?.el;
       if (!el || (zoomed && !el.classList.contains('tile--zoomed'))) continue;
       const ghost = el.cloneNode(true);
-      ghost.classList.remove('tile--entering', 'tile--needs', 'tile--loading', 'tile--drop-target', 'tile--dragging');
+      ghost.classList.remove(
+        'tile--entering',
+        'tile--enter-themed',
+        'tile--enter-hold',
+        'tile--needs',
+        'tile--loading',
+        'tile--drop-target',
+        'tile--dragging'
+      );
+      ghost.querySelector?.('.tile-body')?.classList.remove('term-enter');
       ghost.classList.add('tile--leaving');
       layer.appendChild(ghost);
+      copies.push({ ghost, el, sessionId: id });
     }
+    // The entrance style's own way out (entrance-animations.js): back into the
+    // tabs, a CRT switch-off. Placed while the real tiles are still measurable.
+    const leaveMs = this._stageTileExit?.(copies, { now: !hold }) || 0;
     main.appendChild(layer);
     let fallback = null;
     let holdCap = null;
@@ -557,10 +612,11 @@ Object.assign(CodemanApp.prototype, {
       if (fallback !== null || !layer.isConnected) return;
       clearTimeout(holdCap);
       layer.classList.add('tile-grid-ghosts--release');
-      fallback = setTimeout(done, TILE_GHOST_FALLBACK_MS);
+      fallback = setTimeout(done, Math.max(TILE_GHOST_FALLBACK_MS, leaveMs));
     };
     layer.addEventListener('animationend', (e) => {
-      if (/^tile-leave/.test(e.animationName) && e.target === layer.lastElementChild) done();
+      if (e.pseudoElement || e.target !== layer.lastElementChild) return;
+      if (/^tile-leave/.test(e.animationName)) done();
     });
     if (hold) holdCap = setTimeout(release, TILE_GHOST_HOLD_MAX_MS);
     else release();
@@ -695,8 +751,11 @@ Object.assign(CodemanApp.prototype, {
 
   /**
    * The card's text, from the remembered count, the grid's state and what the
-   * window fits. Compared with the last English text set, never the DOM (in
-   * zh-CN the DOM holds the translation; see _renderTileOverlay).
+   * window fits. With the grid closed and a stored grid to bring back, the
+   * click opens that grid as it was (never trimmed to the window), so the
+   * window line only says what fits. Compared with the last English text set,
+   * never the DOM (in zh-CN the DOM holds the translation; see
+   * _renderTileOverlay).
    */
   _renderTileHint() {
     const hint = this._tileHint;
@@ -712,10 +771,12 @@ Object.assign(CodemanApp.prototype, {
     set(hint.title, 'titleText', `Tiles \u00B7 ${count}`);
     set(hint.click, 'clickText', open ? 'Click: close the grid' : 'Click: open the grid');
     const plural = capacity === 1 ? '' : 's';
+    const restoring = open ? null : this._storedTileGridSet();
+    const opens = restoring ? restoring.ids.length : count;
     const fitsText =
-      count <= capacity
+      opens <= capacity
         ? ''
-        : open
+        : open || restoring
           ? `This window fits ${capacity} tile${plural}`
           : `This window fits ${capacity} tile${plural}: a click opens ${capacity}`;
     set(hint.fits.text, 'fitsText', fitsText);
@@ -976,22 +1037,25 @@ Object.assign(CodemanApp.prototype, {
 
   /**
    * A count picked in the menu: remembered for the click, then the grid opens
-   * with that many tiles (what the click opens), or the open grid is re-formed
-   * to it (_reformTileGrid). Never more than the window fits; fewer open
-   * sessions than the count give fewer tiles.
+   * with that many tiles (a stored grid re-formed to it, its tiles first in
+   * their cells), or the open grid is re-formed to it (_reformTileGrid).
+   * Never more than the window fits; fewer open sessions than the count give
+   * fewer tiles. Either way the grid's count is what the pick left.
    */
   _pickTileCount(count) {
     this.closeTileCountMenu({ refocus: false });
     this._rememberTileGridCount(count);
     const grid = this._tileGrid;
     if (!grid?.open) {
-      this.toggleTileGrid();
+      this._activateTileGrid({ count });
       return;
     }
     const T = window.CodemanTileGrid;
     const n = Math.min(T.sanitizeTileCount(count), this._tileGridLimit().capacity);
-    const all = T.buildTilePickerSessions(this.sessions, this.sessionOrder, this.detachedSessions).map((c) => c.id);
-    this._reformTileGrid(T.tileGridSetForCount(grid.ids, all, n, grid.focusedId));
+    // The tiles that join are the ranking's best (_tileGridRanking).
+    this._reformTileGrid(T.tileGridSetForCount(grid.ids, this._tileGridRanking(), n, grid.focusedId));
+    grid.count = grid.ids.length;
+    this._persistTileGrid();
   },
 
   /**
@@ -1126,14 +1190,18 @@ Object.assign(CodemanApp.prototype, {
   /**
    * The Tiles button's click and Ctrl+Shift+G, one function so the two never
    * drift (owner decision 8): opens the grid at once, no menu in the way, or
-   * closes it to the single view of the focused session. What opens is the
-   * remembered count of tiles (the right-click menu's last pick, default 6,
-   * at most what the window fits; owner decision 10), chosen by
-   * `tileGridOpenSet` (constants.js): the grid this tab last had, else an open
-   * split's two sessions, else the open sessions in tab order, the active one
-   * focused; then trimmed or filled to the count (the focused one kept). A
-   * remembered grid comes back with its tiles in their cells, the ones the
-   * count adds filling its empty cells first (_openStoredTileGrid).
+   * closes it to the single view of the focused session. The grid this
+   * browser last had comes back EXACTLY as the user left it (owner request:
+   * "when I turn tiles off and on, always keep what the last setting was"):
+   * its tiles in their cells, holes included, its count, divider sizes, focus
+   * and zoom; a cell whose session no longer exists is filled from the
+   * ranking (_openStoredTileGrid). With none of its sessions left (or nothing
+   * stored), `tileGridOpenSet` (constants.js) takes an open split's two
+   * sessions, else the open sessions as the ranking orders them
+   * (_tileGridRanking: working, then needing input, then the most recent),
+   * the active one always among them and focused, filled to the remembered
+   * count (the right-click menu's last pick, default 6, at most what the
+   * window fits; owner decision 10).
    */
   toggleTileGrid() {
     this.closeTileCountMenu();
@@ -1141,28 +1209,43 @@ Object.assign(CodemanApp.prototype, {
       this.closeTileGrid({ keepStored: true, reselect: true, animate: true });
       return;
     }
-    if (!this.canOpenTileGrid()) return;
-    const stored = this._readStoredTileGrid();
-    const set = this._tileGridOpenSet(stored);
-    if (!set) {
-      this.showToast?.('No sessions to show as tiles', 'info');
-      return;
-    }
-    if (set.source === 'stored') this._openStoredTileGrid(stored, set.ids);
-    else this.openTileGrid(set.ids, { focusedId: set.focusedId });
+    this._activateTileGrid();
   },
 
   /**
-   * What the toggle would open now (see toggleTileGrid): `count` tiles (the
-   * remembered count), or as many as the window fits; `stored` saves a
-   * second read.
+   * Opens the grid as the toggle does (toggleTileGrid), or, with `count` (a
+   * pick in the count menu while the grid is closed), with that many tiles: a
+   * stored grid re-formed to it, its tiles first in their cells, the ones the
+   * count adds filling its empty cells first, the rest from the ranking.
+   *
+   * @returns {boolean} whether the grid opened
    */
-  _tileGridOpenSet(stored = this._readStoredTileGrid(), count = this._tileGridCount()) {
+  _activateTileGrid({ count = null } = {}) {
+    if (!this.canOpenTileGrid()) return false;
+    const stored = this._readStoredTileGrid();
+    const set = this._tileGridOpenSet(stored, count);
+    if (!set) {
+      this.showToast?.('No sessions to show as tiles', 'info');
+      return false;
+    }
+    if (set.source === 'stored') return this._openStoredTileGrid(stored, set, { keepCount: count === null });
+    return this.openTileGrid(set.ids, { focusedId: set.focusedId });
+  },
+
+  /**
+   * What the toggle would open now (see toggleTileGrid): a stored grid as it
+   * was, or `count` tiles (the remembered count by default), at most what the
+   * window fits. With an explicit `count`, a stored grid is trimmed or filled
+   * to it too. `stored` saves a second read.
+   */
+  _tileGridOpenSet(stored = this._readStoredTileGrid(), count = null) {
     const T = window.CodemanTileGrid;
-    const n = Math.max(1, Math.min(count, this._tileGridLimit().capacity));
+    const n = Math.max(1, Math.min(count ?? this._tileGridCount(), this._tileGridLimit().capacity));
+    const ranked = this._tileGridRanking();
     const set = T.tileGridOpenSet({
       stored,
       split: this._splitPane ? [this.activeSessionId, this._splitSessionId] : null,
+      ranked,
       sessions: this.sessions,
       sessionOrder: this.sessionOrder,
       detachedIds: this.detachedSessions,
@@ -1170,8 +1253,42 @@ Object.assign(CodemanApp.prototype, {
       limit: n,
     });
     if (!set) return null;
-    const all = T.buildTilePickerSessions(this.sessions, this.sessionOrder, this.detachedSessions).map((c) => c.id);
-    return { ...set, ids: T.tileGridSetForCount(set.ids, all, n, set.focusedId) };
+    // A stored grid comes back as it was: the count does not apply to it
+    // unless one was asked for.
+    if (set.source === 'stored' && count === null) return set;
+    return { ...set, ids: T.tileGridSetForCount(set.ids, ranked, n, set.focusedId) };
+  },
+
+  /**
+   * The open sessions the grid takes when nobody said which (the Tiles button
+   * with nothing stored, and every tile it fills on its own), best first:
+   * working (the most recently started turn first), then the ones needing
+   * input (the red and yellow tab alerts), then the rest by most recent
+   * activity, tab order breaking ties (rankTileSessions, constants.js). The
+   * states and stamps are the home screens' own (`_mobileOverviewState()`,
+   * mobile-overview.js). Detached sessions are never in it. Guarded like
+   * the sorted rail: without the classifier (a stale cached
+   * mobile-overview.js) it is plain tab order.
+   *
+   * @returns {string[]}
+   */
+  _tileGridRanking() {
+    const T = window.CodemanTileGrid;
+    const open = T.buildTilePickerSessions(this.sessions, this.sessionOrder, this.detachedSessions);
+    if (typeof this._mobileOverviewState !== 'function' || typeof T.rankTileSessions !== 'function') {
+      return open.map((c) => c.id);
+    }
+    const rows = open.map(({ id }, orderIndex) => {
+      const session = this.sessions.get(id);
+      return {
+        id,
+        state: this._mobileOverviewState(session, this.pendingHooks?.get(id)),
+        lastActivityAt: Number(session.lastActivityAt) || 0,
+        lastSubmitAt: Number(session.lastSubmitAt) || 0,
+        orderIndex,
+      };
+    });
+    return T.rankTileSessions(rows);
   },
 
   /** Alt+Shift+Arrows: a human selection of the tile in that direction. */
@@ -1242,6 +1359,7 @@ Object.assign(CodemanApp.prototype, {
     if (grid.ids.length >= window.CodemanTileGrid.TILE_GRID_MAX) return false;
     if (!this._mountTile(sessionId, { enterIndex })) return false;
     this._placeTile(sessionId, cell);
+    grid.count = grid.ids.length;
     // A tile added while one is zoomed by hand is meant to be seen.
     if (grid.zoomedId && !grid.autoZoom) grid.zoomedId = null;
     this._applyTileLayout();
@@ -1286,17 +1404,20 @@ Object.assign(CodemanApp.prototype, {
    * moves focus to the neighbouring tile (next in grid order, else previous),
    * as the app's choice (`auto`: no idle alert is spent); `focus: false` keeps
    * DOM focus where it is (an app-driven removal: a socket the server closed),
-   * so keystrokes never land in the neighbour's PTY unasked. The last tile
-   * leaving closes the grid: with `refocus` the single view then shows that
-   * session (or, popped out, the next one: _selectAfterTileGrid), without it
-   * the caller decides what comes next.
+   * so keystrokes never land in the neighbour's PTY unasked. `gone`: the
+   * session went away by itself (deleted, popped out, its socket refused), not
+   * by the user's hand, so the grid's count stays and the next time it opens
+   * the ranking fills that place. The last tile leaving closes the grid, kept
+   * as it was: with `refocus` the single view then shows that session (or,
+   * popped out, the next one: _selectAfterTileGrid), without it the caller
+   * decides what comes next.
    */
-  removeTile(sessionId, { refocus = true, focus = true } = {}) {
+  removeTile(sessionId, { refocus = true, focus = true, gone = false } = {}) {
     const grid = this._tileGrid;
     const entry = grid?.open ? grid.tiles.get(sessionId) : null;
     if (!entry) return false;
     if (grid.ids.length === 1) {
-      this.closeTileGrid({ keepStored: false, reselect: refocus });
+      this.closeTileGrid({ keepStored: true, reselect: refocus });
       return true;
     }
     const wasFocused = grid.focusedId === sessionId;
@@ -1312,6 +1433,7 @@ Object.assign(CodemanApp.prototype, {
     entry.el.remove();
     grid.tiles.delete(sessionId);
     grid.cells[grid.cells.indexOf(sessionId)] = null;
+    if (!gone) grid.count = grid.ids.length;
     // Before the layout, which may zoom the focused tile on a small window.
     if (wasFocused) grid.focusedId = null;
     this._applyTileLayout();
@@ -1323,11 +1445,10 @@ Object.assign(CodemanApp.prototype, {
 
   /**
    * Builds one tile (header, body, TerminalTile); where it goes is the
-   * caller's (grid.cells). It enters with a short fade and settle
-   * (styles.css .tile--entering, the `enterIndex`-th of a staggered group),
-   * and its terminal stays transparent until its first capture lands
-   * (.tile--revealing, cleared by the load queue, with a backstop timer).
-   * Opacity and transform only, never anything its fit reads.
+   * caller's (grid.cells). It enters as the `enterIndex`-th of a staggered
+   * group (_beginTileEntrance), and its terminal stays transparent until its
+   * first capture lands (.tile--revealing, cleared by the load queue, with a
+   * backstop timer). Opacity and transform only, never anything its fit reads.
    */
   _mountTile(sessionId, { enterIndex = 0 } = {}) {
     const grid = this._tileGrid;
@@ -1336,16 +1457,11 @@ Object.assign(CodemanApp.prototype, {
     const el = document.createElement('div');
     el.className = 'tile tile--revealing';
     setTimeout(() => el.classList.remove('tile--revealing'), TILE_REVEAL_FALLBACK_MS);
-    if (this._tileMotionAllowed()) {
-      el.classList.add('tile--entering');
-      el.style.setProperty('--tile-enter-index', String(enterIndex));
-      const onEnd = (e) => {
-        if (e.target !== el || e.animationName !== 'tile-enter') return;
-        el.removeEventListener('animationend', onEnd);
-        el.classList.remove('tile--entering');
-      };
-      el.addEventListener('animationend', onEnd);
-    }
+    // Its screen plays the terminal pane's entrance once its first capture
+    // lands, when its frame entered in a tile style (Tile Animations): never
+    // with the default `settle`, nor on a reload's restore, which settles.
+    const entered = this._beginTileEntrance(el, sessionId, enterIndex);
+    const screenOwed = !!entered && entered !== 'settle';
     el.dataset.sessionId = sessionId;
     // Header and body are siblings: the chrome is refreshed in place
     // (_renderTileHeader), never by rewriting the tile, which would take the
@@ -1391,10 +1507,59 @@ Object.assign(CodemanApp.prototype, {
       renaming: false,
       // The pid this tile last saw, so a pane that starts later is noticed.
       pid: this.sessions.get(sessionId)?.pid ?? null,
+      // Its screen plays the terminal entrance once its first capture lands.
+      screenOwed,
     });
     // Where it goes is the caller's (grid.cells).
     this._renderTileHeader(sessionId);
     return true;
+  },
+
+  /**
+   * A tile's frame enters as the `enterIndex`-th of a staggered group, in the
+   * entrance style (entrance-animations.js, App Settings → Entrance
+   * Animations). `settle` is the grid's own fade and settle (styles.css
+   * .tile--entering), and what a reload restores with whatever the theme:
+   * nothing animates on page load. Any other style is timed by the entrance
+   * module a frame later, once the layout is final (_stageTileEntrance).
+   * Opacity and transform only, never anything the fit reads.
+   *
+   * @returns {string|null} the style it enters with, or null when it does not animate
+   */
+  _beginTileEntrance(el, sessionId, enterIndex = 0) {
+    const style = this._tileEnterQuiet ? 'settle' : this.tileEntranceStyle?.() || 'settle';
+    if (!this._tileMotionAllowed() || style === 'off') return null;
+    el.classList.add('tile--entering');
+    el.style.setProperty('--tile-enter-index', String(enterIndex));
+    let backstop = null;
+    const finish = () => {
+      clearTimeout(backstop);
+      el.removeEventListener('animationend', onEnd);
+      el.classList.remove('tile--entering', 'tile--enter-themed', 'tile--enter-hold');
+      if (el._tileEnterFinish === finish) el._tileEnterFinish = null;
+    };
+    // The tile's own entrance (`tile-enter`, or a themed `tile-enter-*`),
+    // never a child's animation or a wash on its ::before.
+    const onEnd = (e) => {
+      if (e.target !== el || e.pseudoElement || !/^tile-enter/.test(e.animationName || '')) return;
+      finish();
+    };
+    el.addEventListener('animationend', onEnd);
+    el._tileEnterFinish = finish;
+    if (style !== 'settle') {
+      this._stageTileEntrance?.(el, sessionId, (ms) => {
+        clearTimeout(backstop);
+        backstop = setTimeout(finish, ms);
+      });
+    }
+    return style;
+  },
+
+  /** Plays a mounted tile's entrance again (the entrance lab's replay): nothing is remounted or refitted. */
+  _replayTileEntrance(el, sessionId, enterIndex = 0) {
+    el._tileEnterFinish?.();
+    void el.offsetWidth;
+    return this._beginTileEntrance(el, sessionId, enterIndex);
   },
 
   /**
@@ -1406,8 +1571,10 @@ Object.assign(CodemanApp.prototype, {
    * `accepts(id)` is the target's own rule (a tile takes any session but its
    * own; an empty cell takes any). A session it does not accept
    * is held there too, but refused (`dropEffect: 'none'`, no highlight, so no
-   * drop follows). Any other drag (a file) is left to the grid section's own
-   * guard (_installTileFileDrop).
+   * drop follows). With Detach Tiles on, a tile dragged from ANOTHER Codeman
+   * window (no drag of this page's own, the tile type in the drag) is taken
+   * too and docks here (_dockForeignTile). Any other drag (a file) is left to
+   * the grid section's own guard (_installTileFileDrop).
    */
   _acceptTabDrops(el, onDrop, { accepts = () => true } = {}) {
     const dragged = () => (this._tileGrid?.open ? this.draggedTabId || this._draggedTileId || null : null);
@@ -1415,7 +1582,16 @@ Object.assign(CodemanApp.prototype, {
       'dragover',
       (e) => {
         const id = dragged();
-        if (!id) return;
+        if (!id) {
+          // A tile from another Codeman window (Detach Tiles). Its id can
+          // only be read on drop, so it is held here whatever it is.
+          if (!this._isForeignTileDrag(e)) return;
+          e.preventDefault?.();
+          e.stopPropagation?.();
+          if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+          el.classList.add('tile--drop-target');
+          return;
+        }
         e.preventDefault?.();
         e.stopPropagation?.();
         const ok = accepts(id);
@@ -1432,7 +1608,13 @@ Object.assign(CodemanApp.prototype, {
       (e) => {
         el.classList.remove('tile--drop-target');
         const id = dragged();
-        if (!id) return;
+        if (!id) {
+          if (!this._isForeignTileDrag(e)) return;
+          e.preventDefault?.();
+          e.stopPropagation?.();
+          this._dockForeignTile(e.dataTransfer?.getData?.(TILE_DRAG_TYPE), onDrop);
+          return;
+        }
         e.preventDefault?.();
         e.stopPropagation?.();
         if (accepts(id)) onDrop(id);
@@ -1575,10 +1757,12 @@ Object.assign(CodemanApp.prototype, {
    * Ctrl/Cmd+click on a tab: that session joins the grid and takes focus (a
    * human selection: the user clicked its tab). With the grid closed it opens
    * what the Tiles toggle would, with this session among the tiles and
-   * focused: the remembered count in total (owner answer to decision 10's
-   * questions), never one more. Returns false
-   * when the grid cannot open here (narrow or solo window), so the click is an
-   * ordinary one.
+   * focused, never past the remembered count (owner answer to decision 10's
+   * questions: N, not N+1): it joins while the grid holds fewer than the
+   * count (a stored grid's first empty cell), else it takes the last tile's
+   * place. A stored grid keeps its cells, sizes and holes around it.
+   * Returns false when the grid cannot open here (narrow or solo window), so
+   * the click is an ordinary one.
    */
   addSessionToTiles(sessionId) {
     if (!this.canOpenTileGrid() || !this.sessions.has(sessionId) || this.detachedSessions?.has(sessionId)) {
@@ -1599,7 +1783,26 @@ Object.assign(CodemanApp.prototype, {
       return true;
     }
     const n = Math.max(1, Math.min(this._tileGridCount(), capacity));
-    const base = this._tileGridOpenSet()?.ids || [];
+    const stored = this._readStoredTileGrid();
+    const plan = this._tileGridOpenSet(stored);
+    if (plan?.source === 'stored') {
+      let { ids, cells } = plan;
+      if (!ids.includes(sessionId)) {
+        if (ids.length < n) {
+          ids = [...ids, sessionId];
+        } else {
+          const last = ids.at(-1);
+          ids = ids.map((id) => (id === last ? sessionId : id));
+          cells = cells.map((id) => (id === last ? sessionId : id));
+        }
+      }
+      return this._openStoredTileGrid(
+        stored,
+        { ids, cells, focusedId: sessionId },
+        { focusedId: sessionId, auto: false, keepCount: false }
+      );
+    }
+    const base = plan?.ids || [];
     const ids = [...base.filter((id) => id !== sessionId).slice(0, n - 1), sessionId];
     // Exactly these: an open split is already in `base` (tileGridOpenSet seeds
     // it), and merging it again went past the count (N+1) and the window.
@@ -1642,7 +1845,8 @@ Object.assign(CodemanApp.prototype, {
   _replaceTileGrid(ids) {
     const focus = ids.includes(this.activeSessionId) ? this.activeSessionId : ids[0];
     if (this._tilesOwnTerminal()) {
-      this.closeTileGrid({ keepStored: false, reselect: false });
+      // Kept until the group's grid, opened next, takes its place.
+      this.closeTileGrid({ keepStored: true, reselect: false });
       this.activeSessionId = null;
     }
     // Exactly the group: an open split closes without joining it (merged, its
@@ -1912,7 +2116,10 @@ Object.assign(CodemanApp.prototype, {
    * input starts no drag. dragstart's target is the header whatever was
    * pressed, so where the press landed is noted in the capture phase, ahead of
    * the buttons' own stopPropagation. `draggable` is off while moving is
-   * (_paintTileHandle: a zoomed grid, a single tile, a rename in progress).
+   * (_paintTileHandle: a zoomed grid, a single tile, a rename in progress),
+   * unless Detach Tiles is on: then a drop outside the window pops the tile
+   * out, and a drop on another Codeman window's tiles moves it there (see the
+   * Detach Tiles section); a rename still turns it off.
    */
   _installTileMoveDrag(sessionId, header, actions) {
     let pressedOnControl = false;
@@ -1926,7 +2133,10 @@ Object.assign(CodemanApp.prototype, {
     );
     header.addEventListener('dragstart', (e) => {
       const entry = this._tileGrid?.open ? this._tileGrid.tiles.get(sessionId) : null;
-      if (!entry || pressedOnControl || entry.renaming || !this._tilesMovable()) {
+      // Detach Tiles lets a tile that cannot move (alone, or zoomed) still be
+      // dragged, out of the window; no drop target here takes it then.
+      const detachable = this._tileDetachAllowed();
+      if (!entry || pressedOnControl || entry.renaming || !(this._tilesMovable() || detachable)) {
         e.preventDefault?.();
         return;
       }
@@ -1934,11 +2144,16 @@ Object.assign(CodemanApp.prototype, {
       entry.el.classList.add('tile--dragging');
       if (e.dataTransfer) {
         e.dataTransfer.effectAllowed = 'move';
-        // Firefox starts no drag without data.
-        e.dataTransfer.setData('application/x-codeman-tile', sessionId);
+        // Firefox starts no drag without data. Another Codeman window reads
+        // the id from it (Detach Tiles).
+        e.dataTransfer.setData(TILE_DRAG_TYPE, sessionId);
       }
+      if (detachable) this._beginTileTearOff(sessionId, entry, e);
     });
-    header.addEventListener('dragend', () => this._endTileMoveDrag());
+    header.addEventListener('dragend', (e) => {
+      this._settleTileTearOff(sessionId, e);
+      this._endTileMoveDrag();
+    });
   },
 
   /**
@@ -1949,6 +2164,7 @@ Object.assign(CodemanApp.prototype, {
    */
   _endTileMoveDrag() {
     this._draggedTileId = null;
+    this._stopTileTearOffTracking();
     const grid = this._tileGrid;
     for (const { el } of grid?.tiles.values() || []) el.classList.remove('tile--dragging', 'tile--drop-target');
     for (const slot of grid?.slots || []) slot.classList.remove('tile--drop-target');
@@ -1956,19 +2172,25 @@ Object.assign(CodemanApp.prototype, {
 
   /**
    * The header as a handle: `draggable` while the tile can move (not while a
-   * tile is zoomed, alone, or being renamed), and its tooltip, the state and
-   * how long ("working 3m") plus, while it can move, that it drags. Diffs on
-   * the last English text, never the DOM (translated in zh-CN; see
+   * tile is zoomed, alone, or being renamed) or, with Detach Tiles on, be
+   * dragged out of the window (then also alone or zoomed), and its tooltip,
+   * the state and how long ("working 3m") plus what a drag does. Diffs on the
+   * last English text, never the DOM (translated in zh-CN; see
    * _renderTileOverlay).
    */
   _paintTileHandle(entry) {
     const movable = this._tilesMovable();
-    const title = [entry.stateLabel, movable ? 'Drag to move the tile' : ''].filter(Boolean).join('\n');
+    const detachable = this._tileDetachAllowed();
+    let hint = '';
+    if (movable && detachable) hint = 'Drag to move the tile, or out of the window to open it on its own';
+    else if (movable) hint = 'Drag to move the tile';
+    else if (detachable) hint = 'Drag out of the window to open the tile on its own';
+    const title = [entry.stateLabel, hint].filter(Boolean).join('\n');
     if (entry.headerLabel !== title) {
       entry.headerLabel = title;
       entry.header.title = title;
     }
-    const draggable = movable && !entry.renaming ? 'true' : 'false';
+    const draggable = (movable || detachable) && !entry.renaming ? 'true' : 'false';
     if (entry.header.getAttribute('draggable') !== draggable) entry.header.setAttribute('draggable', draggable);
   },
 
@@ -2127,7 +2349,7 @@ Object.assign(CodemanApp.prototype, {
       this._renderTileOverlay(sessionId);
       return;
     }
-    this.removeTile(sessionId, { focus: false });
+    this.removeTile(sessionId, { focus: false, gone: true });
   },
 
   /**
@@ -2481,17 +2703,20 @@ Object.assign(CodemanApp.prototype, {
     this._persistTileGrid();
   },
 
-  // ── Persistence (codeman:tile-grid, per device, ids only) ────────────────
+  // ── Persistence (codeman:tile-grid, per browser: ids and layout, never content) ──
 
   /**
-   * Writes the open grid: ids, focus, a zoom the user chose (an automatic one
-   * is worked out again from the window) and the divider fractions. Never
-   * content. `open: false` is the closed-but-remembered state. Never in a solo
-   * window; a storage failure only costs the convenience.
+   * Writes the open grid as it is, on every change (a move, a divider drag, a
+   * tile added or removed, a count picked, a focus, a zoom): its cells, its
+   * count, focus, a zoom the user chose (an automatic one is worked out again
+   * from the window) and the divider fractions. Never content, never to the
+   * server. `open: false` is the closed-but-remembered state. Never in a solo
+   * window, nor while a stored grid is being put back (_openStoredTileGrid
+   * writes once it is); a storage failure only costs the convenience.
    */
   _persistTileGrid({ open = true } = {}) {
     const grid = this._tileGrid;
-    if (this.isSoloWindow || !grid || grid.ids.length === 0) return;
+    if (this.isSoloWindow || this._tilePersistHold || !grid || grid.ids.length === 0) return;
     if (open && !grid.open) return;
     const state = {
       v: 1,
@@ -2500,6 +2725,9 @@ Object.assign(CodemanApp.prototype, {
       // (sanitizeTileGridState; a build before cells drops the nulls and reads
       // the tiles packed, as it always did).
       ids: grid.cells.slice(),
+      // Never fewer than the tiles shown (a build before `count` derives it
+      // from `ids`, and ignores it).
+      count: Math.min(Math.max(grid.count || 0, grid.ids.length), window.CodemanTileGrid.TILE_GRID_MAX),
       focused: grid.focusedId,
       zoomed: grid.autoZoom ? null : grid.zoomedId,
       colFr: grid.colFr.slice(),
@@ -2534,47 +2762,74 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
-   * Opens a stored grid: its tiles and focus, then the fractions it had (only
-   * if they still match the layout) and a zoom the user chose. `auto`: the app
-   * is putting it back, so no idle alert is spent. `ids` is the set to open,
-   * the stored one by default (a reload); the Tiles button passes it trimmed
-   * or filled to the remembered count, a shape change the cell model's rule
-   * handles (reformTileCells).
+   * The stored grid as it would come back now (restoreTileGridCells): its
+   * cells as stored, a cell whose session no longer exists filled from the
+   * ranking while the grid holds fewer than its count. Null when nothing is
+   * stored or none of its sessions survive.
    */
-  _openStoredTileGrid(stored, ids = stored.ids) {
-    const focus = stored.zoomed || stored.focused;
-    // The stored set (an open split closes without joining it, decision 8,
-    // case a), trimmed or filled to the count by the caller.
-    if (!this.openTileGrid(ids, { focusedId: focus, auto: true, mergeSplit: false })) return false;
-    const grid = this._tileGrid;
+  _storedTileGridSet(stored = this._readStoredTileGrid()) {
+    if (!stored) return null;
+    return window.CodemanTileGrid.restoreTileGridCells(stored, this._tileGridRanking());
+  },
+
+  /**
+   * Opens a stored grid as the user left it: `set` (the stored cells with any
+   * freed cell filled, _storedTileGridSet, by default; the Tiles button may
+   * pass it trimmed or filled to a picked count, or with a Ctrl/Cmd+clicked
+   * session in it) goes back into its cells, holes included, a shape change
+   * following the cell model's rule (reformTileCells: the tiles keep their row
+   * and column when all fit, the ones that join fill the empty cells in
+   * reading order); then the fractions it had (only if they still match the
+   * layout) and a zoom the user chose on the focused tile. A grid larger than
+   * the window fits is never trimmed: the focused tile shows alone until the
+   * window fits it (_applyTileLayout), and the arrangement stays. `auto`: the
+   * app is putting it back, so no idle alert is spent. `keepCount`: the
+   * stored count stays the grid's (a session that went away may be filled the
+   * next time); false makes it what opens (a pick, a Ctrl/Cmd+click). Nothing
+   * is written until the grid is back, so a stored grid is never overwritten
+   * by a half-built one.
+   */
+  _openStoredTileGrid(
+    stored,
+    set = this._storedTileGridSet(stored),
+    { focusedId = null, auto = true, keepCount = true } = {}
+  ) {
+    if (!set?.ids?.length) return false;
     const T = window.CodemanTileGrid;
-    // openTileGrid packed the tiles from the first cell. The stored tiles go
-    // back to their cells (a session gone since leaves its cell empty): as
-    // they were when this is the stored set in the shape it was stored with,
-    // otherwise by the cell model's rule, the tiles the count adds filling the
-    // empty cells in reading order, holes first.
-    const storedCells = (stored.cells || []).map((id) => (id && grid.tiles.has(id) ? id : null));
-    const kept = storedCells.filter(Boolean);
-    const sameSet = ids.length === stored.ids.length && ids.every((id) => stored.ids.includes(id));
-    const cells = sameSet
-      ? storedCells
-      : T.reformTileCells(
-          storedCells,
-          T.tileCellCols(storedCells.length),
-          kept,
-          grid.ids.filter((id) => !kept.includes(id)),
-          grid.cols,
-          grid.rows
-        );
+    const focus = focusedId || set.focusedId;
+    // An open split closes without joining it (decision 8, case a).
+    this._tilePersistHold = true;
+    let opened = false;
+    try {
+      opened = this.openTileGrid(set.ids, { focusedId: focus, auto, mergeSplit: false });
+    } finally {
+      this._tilePersistHold = false;
+    }
+    if (!opened) return false;
+    const grid = this._tileGrid;
+    // openTileGrid packed the tiles from the first cell. They go back to their
+    // cells (a session gone since leaves its cell empty, unless the ranking
+    // filled it).
+    const base = (set.cells || []).map((id) => (id && grid.tiles.has(id) ? id : null));
+    const kept = base.filter(Boolean);
+    const cells = T.reformTileCells(
+      base,
+      T.tileCellCols(base.length),
+      kept,
+      grid.ids.filter((id) => !kept.includes(id)),
+      grid.cols,
+      grid.rows
+    );
     if (cells.length === grid.cols * grid.rows && cells.filter(Boolean).length === grid.tiles.size) {
       grid.cells = cells;
     }
+    grid.count = keepCount ? Math.min(Math.max(grid.ids.length, stored.count || 0), T.TILE_GRID_MAX) : grid.ids.length;
     // openTileGrid laid the grid out with equal tracks. The stored ones go back
     // on; _applyTileLayout drops them again if they do not match the column or
     // row count (the window may have changed the layout since).
     if (stored.colFr) grid.colFr = stored.colFr.slice();
     if (stored.rowFr) grid.rowFr = stored.rowFr.slice();
-    if (stored.zoomed && grid.tiles.has(stored.zoomed)) {
+    if (stored.zoomed && stored.zoomed === grid.focusedId && grid.tiles.has(stored.zoomed)) {
       grid.zoomedId = stored.zoomed;
       grid.autoZoom = false;
     }
@@ -2598,17 +2853,27 @@ Object.assign(CodemanApp.prototype, {
     if (this._tilesOwnTerminal()) return false;
     const stored = this._readStoredTileGrid();
     if (!stored?.open || stored.ids.length === 0) return false;
-    return this._openStoredTileGrid(stored);
+    // Put back, not opened: the tiles settle in whatever the entrance theme.
+    this._tileEnterQuiet = true;
+    try {
+      return this._openStoredTileGrid(stored);
+    } finally {
+      this._tileEnterQuiet = false;
+    }
   },
 
-  /** A followed `#session=` link took the screen on load: the stored grid stays remembered, closed. */
+  /**
+   * A followed `#session=` link took the screen on load: the stored grid stays
+   * remembered, closed. Only `open` changes: the value is written back as it
+   * was stored, so a session gone since still frees its cell for the ranking
+   * the next time the grid opens.
+   */
   _closeStoredTileGrid() {
     const stored = this._readStoredTileGrid();
     if (!stored?.open) return;
-    // Stored as it was read, holes included (`ids` carries the cells).
-    const { cells, ...rest } = stored;
     try {
-      localStorage.setItem(TILE_GRID_STORAGE_KEY, JSON.stringify({ ...rest, ids: cells, open: false }));
+      const raw = JSON.parse(localStorage.getItem(TILE_GRID_STORAGE_KEY));
+      localStorage.setItem(TILE_GRID_STORAGE_KEY, JSON.stringify({ ...raw, open: false }));
     } catch {
       /* Per-device convenience only. */
     }
@@ -2637,7 +2902,7 @@ Object.assign(CodemanApp.prototype, {
     const grid = this._tileGrid;
     if (!grid?.open) return false;
     for (const id of grid.ids.slice()) {
-      if (!this.sessions.has(id) || this.detachedSessions?.has(id)) this.removeTile(id, { refocus: false });
+      if (!this.sessions.has(id) || this.detachedSessions?.has(id)) this.removeTile(id, { refocus: false, gone: true });
     }
     if (!grid.open) return false;
     // Only a focus that is gone moves: re-selecting the same tile would hide an
@@ -2647,6 +2912,370 @@ Object.assign(CodemanApp.prototype, {
     if (!grid.has(grid.focusedId)) this._selectTiledSession(grid.ids[0], { auto: true, focus: false });
     for (const { tile } of grid.tiles.values()) tile.reconnectNow();
     return true;
+  },
+
+  // ── Detach Tiles (per-device `tileDetachEnabled`, default OFF) ───────────
+  //
+  // A tile leaves the grid for a window of its own, and comes back into any
+  // Codeman window's grid, by dragging:
+  //
+  //  - its header dropped OUTSIDE every window opens it as a pop-out window
+  //    (detachSession, the tab's own "Open in a new window"), at the drop point
+  //    and the tile's size;
+  //  - its header dropped on ANOTHER Codeman window's tile or empty cell moves
+  //    it there: that window docks it and says so on the window channel
+  //    ('tile-adopted'), and this one lets the tile go;
+  //  - a pop-out window's title dropped on a window's tile or empty cell docks
+  //    the session there, and the pop-out closes.
+  //
+  // Nothing new on the server: a pop-out is another client of the same session
+  // (see detachSession), and a tile is a TerminalTile in whichever window has it.
+  // A session stays in ONE place in this browser, as with every pop-out.
+
+  /** Whether Detach Tiles is on for this device. */
+  tileDetachEnabled() {
+    return this.loadAppSettingsFromStorage?.()?.tileDetachEnabled === true;
+  },
+
+  /** Detach Tiles applies here: on, and a dashboard (a pop-out has no grid to drag from). */
+  _tileDetachAllowed() {
+    return !this.isSoloWindow && this.tileDetachEnabled();
+  },
+
+  /**
+   * A drag over this page that is a tile from another Codeman window: none of
+   * this page's own drags is in flight, Detach Tiles is on and the drag
+   * carries the tile type (its id is only readable on drop).
+   */
+  _isForeignTileDrag(e) {
+    if (this.draggedTabId || this._draggedTileId || !this._tileGrid?.open || !this._tileDetachAllowed()) return false;
+    const types = e?.dataTransfer?.types;
+    return !!types && Array.from(types).includes(TILE_DRAG_TYPE);
+  },
+
+  /**
+   * A tile from another window dropped on one of this grid's targets: it docks
+   * through the target's own drop (`place`: a tile it replaces or trades
+   * places with, an empty cell it fills), and takes focus there (a human
+   * selection: the user just put it there). A session that was popped out comes
+   * back first (its window is asked to close). Once it is a tile here, every
+   * other window hears 'tile-adopted', and the one it was dragged from lets
+   * its tile go (_onTileAdoptedElsewhere). An id this page does not know (a
+   * session closed meanwhile, another user's) docks nowhere.
+   *
+   * @returns {boolean} whether the session is a tile here afterwards
+   */
+  _dockForeignTile(sessionId, place) {
+    const grid = this._tileGrid;
+    if (!grid?.open || typeof sessionId !== 'string' || !this.sessions.has(sessionId)) return false;
+    const poppedOut = !!this.detachedSessions?.has(sessionId);
+    // A pop-out window owns its session's place: take it back before mounting
+    // (a detached session never mounts).
+    if (poppedOut) this._redock?.(sessionId);
+    // Already a tile here too (two windows showed it): it moves to where it
+    // was dropped, as a drag inside this window would move it.
+    place(sessionId);
+    if (!grid.has(sessionId)) return false;
+    (this._tileDockedAt ||= new Map()).set(sessionId, Date.now());
+    // Asked unconditionally: a pop-out this window never heard of (opened from
+    // another dashboard) closes too. Dashboards ignore it; only that id's
+    // pop-out reacts.
+    this._postWindowMessage?.({ type: 'close-request', id: sessionId });
+    this._postWindowMessage?.({ type: 'tile-adopted', id: sessionId, by: this._wsTabNonce });
+    return true;
+  },
+
+  /**
+   * True for a session this window docked from another one a moment ago: a
+   * 'detached' announcement from its old pop-out is that window on its way
+   * out, never a new pop-out (it would take the tile straight back off).
+   */
+  _tileDockedRecently(sessionId) {
+    const at = this._tileDockedAt?.get(sessionId);
+    return typeof at === 'number' && Date.now() - at < TILE_DOCK_GRACE_MS;
+  },
+
+  /**
+   * Another window docked `sessionId` ('tile-adopted'). Only the window it
+   * was dragged FROM acts: its drag is still settling or ended a moment ago.
+   * The tile goes without taking the keyboard anywhere (the user is in the
+   * other window now). The last tile leaving closes the grid onto the welcome
+   * screen, never onto that session: two windows sizing one PTY garble it.
+   */
+  _onTileAdoptedElsewhere(sessionId) {
+    const recent = this._lastTileDrag;
+    // A header drag counts even without a tear-off (Detach Tiles off here): the
+    // other window can take the tile before this drag ends.
+    const dragging = this._tileTearOff?.id === sessionId || this._draggedTileId === sessionId;
+    const pending = this._tileTearOffPending?.id === sessionId;
+    const justEnded = recent?.id === sessionId && Date.now() - recent.at < TILE_ADOPT_WINDOW_MS;
+    if (!dragging && !pending && !justEnded) return false;
+    this._cancelTileTearOff();
+    this._lastTileDrag = null;
+    const grid = this._tileGrid;
+    if (!grid?.has(sessionId)) return false;
+    // One stored grid per browser, and the window that docked the tile has
+    // just written it: this window losing the tile is no change of the
+    // user's to remember over that one (nor to forget it).
+    this._tilePersistHold = true;
+    try {
+      if (grid.ids.length > 1) return this.removeTile(sessionId, { focus: false });
+      this.closeTileGrid({ keepStored: true, reselect: false });
+    } finally {
+      this._tilePersistHold = false;
+    }
+    this.activeSessionId = null;
+    try {
+      localStorage.removeItem('codeman-active-session');
+    } catch {
+      /* Nothing stored. */
+    }
+    this.terminal?.clear();
+    this.showWelcome?.();
+    return true;
+  },
+
+  /**
+   * A header drag starts with Detach Tiles on: note the tile's size and where
+   * in it the press landed (the pop-out opens that size, under the pointer),
+   * and watch whether the pointer leaves the page. Two signals, since
+   * browsers differ in what dragend reports for a drop outside the window:
+   * its coordinates, and the page's own dragleave at the viewport's edge
+   * with nothing entered (cleared again by any dragover inside).
+   */
+  _beginTileTearOff(sessionId, entry, e) {
+    this._stopTileTearOffTracking();
+    const rect = entry.el.getBoundingClientRect();
+    const within = (v, max) => (Number.isFinite(v) ? Math.max(0, Math.min(v, max)) : 0);
+    const drag = {
+      id: sessionId,
+      width: rect.width,
+      height: rect.height,
+      offsetX: within(e?.clientX - rect.left, rect.width),
+      offsetY: within(e?.clientY - rect.top, rect.height),
+      outside: false,
+      stop: null,
+    };
+    const onOver = () => {
+      drag.outside = false;
+    };
+    const onLeave = (ev) => {
+      if (ev.relatedTarget) return;
+      const x = ev.clientX;
+      const y = ev.clientY;
+      if (x <= 0 || y <= 0 || x >= window.innerWidth - 1 || y >= window.innerHeight - 1) drag.outside = true;
+    };
+    document.addEventListener('dragover', onOver, true);
+    document.addEventListener('dragleave', onLeave, true);
+    drag.stop = () => {
+      document.removeEventListener('dragover', onOver, true);
+      document.removeEventListener('dragleave', onLeave, true);
+    };
+    this._tileTearOff = drag;
+  },
+
+  /** The header drag is over (or the grid or tile went mid-drag): stop watching the pointer. */
+  _stopTileTearOffTracking() {
+    const drag = this._tileTearOff;
+    if (!drag) return;
+    this._tileTearOff = null;
+    drag.stop?.();
+  },
+
+  /**
+   * dragend of a tile's header with Detach Tiles on. Taken by a drop target
+   * (here or in another window: `dropEffect` is not 'none'), it stays where
+   * that put it. Let go OUTSIDE the window (the dragend point, or the page's
+   * own record of the pointer leaving), it opens as a window of its own after
+   * TILE_TEAR_OFF_SETTLE_MS, unless another window claims it first. Let go
+   * inside, on nothing, nothing happens, as before.
+   */
+  _settleTileTearOff(sessionId, e) {
+    const drag = this._tileTearOff?.id === sessionId ? this._tileTearOff : null;
+    this._lastTileDrag = { id: sessionId, at: Date.now() };
+    if (!drag) return false;
+    this._stopTileTearOffTracking();
+    const effect = e?.dataTransfer?.dropEffect;
+    if (effect && effect !== 'none') return false;
+    const cx = e?.clientX;
+    const cy = e?.clientY;
+    // (0, 0) is what a browser reports when it does not know where the drop was.
+    const known = Number.isFinite(cx) && Number.isFinite(cy) && !(cx === 0 && cy === 0);
+    const outside = known ? cx < 0 || cy < 0 || cx >= window.innerWidth || cy >= window.innerHeight : drag.outside;
+    if (!outside) return false;
+    const sx = e?.screenX;
+    const sy = e?.screenY;
+    const placed = Number.isFinite(sx) && Number.isFinite(sy) && !(sx === 0 && sy === 0);
+    const placement = {
+      width: drag.width,
+      height: drag.height,
+      ...(placed ? { screenX: sx, screenY: sy, offsetX: drag.offsetX, offsetY: drag.offsetY } : {}),
+    };
+    this._cancelTileTearOff();
+    const pending = { id: sessionId, timer: null };
+    pending.timer = setTimeout(() => {
+      if (this._tileTearOffPending !== pending) return;
+      this._tileTearOffPending = null;
+      this.detachTile(sessionId, placement);
+    }, TILE_TEAR_OFF_SETTLE_MS);
+    this._tileTearOffPending = pending;
+    return true;
+  },
+
+  _cancelTileTearOff() {
+    const pending = this._tileTearOffPending;
+    if (!pending) return;
+    this._tileTearOffPending = null;
+    clearTimeout(pending.timer);
+  },
+
+  /**
+   * Opens a tile as a window of its own (detachSession, which takes it out of
+   * the grid), the tile's size (at least TILE_WINDOW_MIN_W x MIN_H). Placed
+   * with its header under a screen point when given one (`screenX`/`screenY`
+   * and where in the tile it was held, `offsetX`/`offsetY`: a drop outside the
+   * window, a hand let go), otherwise over the tile itself (the ⋯ menu).
+   *
+   * @returns {boolean} whether the session is popped out afterwards
+   */
+  detachTile(sessionId, { screenX, screenY, offsetX = 0, offsetY = 0, width, height } = {}) {
+    const entry = this._tileGrid?.open ? this._tileGrid.tiles.get(sessionId) : null;
+    if (!entry || !this._tileDetachAllowed()) return false;
+    const rect = entry.el.getBoundingClientRect();
+    const availW = window.screen?.availWidth || Infinity;
+    const availH = window.screen?.availHeight || Infinity;
+    const size = (v, min, max) => Math.round(Math.min(Math.max(Number.isFinite(v) ? v : min, min), max));
+    const placement = {
+      width: size(width ?? rect.width, TILE_WINDOW_MIN_W, availW),
+      height: size(height ?? rect.height, TILE_WINDOW_MIN_H, availH),
+    };
+    if (Number.isFinite(screenX) && Number.isFinite(screenY)) {
+      placement.left = Math.round(screenX - offsetX);
+      placement.top = Math.round(screenY - offsetY - TILE_WINDOW_CHROME_PX);
+    } else if (Number.isFinite(window.screenX) && Number.isFinite(window.screenY)) {
+      // Over the tile: the page's own chrome sits above its viewport.
+      const chrome = Math.max(0, (window.outerHeight || 0) - (window.innerHeight || 0));
+      placement.left = Math.round(window.screenX + rect.left);
+      placement.top = Math.round(window.screenY + chrome + rect.top - TILE_WINDOW_CHROME_PX);
+    }
+    this.detachSession?.(sessionId, placement);
+    return !!this.detachedSessions?.has(sessionId);
+  },
+
+  // ── For the gesture overlay (packages/gesture-control, src/codeman/entry.ts)
+  //
+  // A hand is no native drag: the overlay asks where it is and what is under
+  // it, and every move still goes through the paths a mouse drag takes
+  // (dropSessionOnTile / dropSessionOnSlot, and so _reorderTiles), the
+  // pop-out through detachTile.
+
+  /** The tiled session whose tile is at viewport point (x, y), or null. */
+  tileAtPoint(x, y) {
+    const grid = this._tileGrid;
+    if (!grid?.open) return null;
+    const hit = document.elementFromPoint?.(x, y);
+    if (!hit) return null;
+    for (const [id, entry] of grid.tiles) if (entry.el.contains?.(hit)) return id;
+    return null;
+  },
+
+  /** Whether a hand may pick up this tile: it can move, or (Detach Tiles) leave the window. */
+  canGrabTile(sessionId) {
+    return !!this._tileGrid?.has(sessionId) && (this._tilesMovable() || this._tileDetachAllowed());
+  },
+
+  /**
+   * What a session dragged to viewport point (x, y) would drop onto, by the
+   * mouse drag's own rules: another tile (it takes that tile's place, or the
+   * two trade places), an empty cell (it moves or joins there). A tiled
+   * session only while tiles can move (not zoomed). Null for anything else,
+   * a popped-out session included.
+   *
+   * @returns {{kind: 'tile', id: string, el: HTMLElement}|{kind: 'cell', cell: number, el: HTMLElement}|null}
+   */
+  tileDropTargetAt(x, y, draggedId) {
+    const grid = this._tileGrid;
+    if (!grid?.open || !this.sessions.has(draggedId) || this.detachedSessions?.has(draggedId)) return null;
+    if (grid.tiles.has(draggedId) && !this._tilesMovable()) return null;
+    const hit = document.elementFromPoint?.(x, y);
+    if (!hit) return null;
+    for (const [id, entry] of grid.tiles) {
+      if (entry.el.contains?.(hit)) return id === draggedId ? null : { kind: 'tile', id, el: entry.el };
+    }
+    for (const slot of grid.slots || []) {
+      if (slot.contains?.(hit)) return { kind: 'cell', cell: Number(slot.dataset.cell), el: slot };
+    }
+    return null;
+  },
+
+  /**
+   * Drops a session on a target tileDropTargetAt returned (the hand let go).
+   *
+   * @returns {boolean} whether the session is a tile afterwards
+   */
+  dropOnTileTarget(draggedId, target) {
+    if (!target || !this._tileGrid?.open) return false;
+    if (target.kind === 'tile') this.dropSessionOnTile(draggedId, target.id);
+    else if (target.kind === 'cell') this.dropSessionOnSlot(draggedId, target.cell);
+    return !!this._tileGrid?.has(draggedId);
+  },
+
+  /** Whether viewport point (x, y) is over the open grid (a hand let go outside it pops the tile out). */
+  isOverTileGrid(x, y) {
+    if (!this._tileGrid?.open) return false;
+    const rect = document.getElementById('tileGrid')?.getBoundingClientRect?.();
+    return !!rect && x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom;
+  },
+
+  /**
+   * A hand let a tile go outside the grid (Detach Tiles): it opens as a window
+   * of its own with its header near that point. A script opening a window
+   * with no click behind it is what popup blockers stop; detachSession then
+   * says so and the tile stays.
+   */
+  detachTileAtPoint(sessionId, x, y, { offsetX = 0, offsetY = 0 } = {}) {
+    const chrome = Math.max(0, (window.outerHeight || 0) - (window.innerHeight || 0));
+    const sx = (window.screenX || 0) + x;
+    const sy = (window.screenY || 0) + chrome + y;
+    return this.detachTile(sessionId, { screenX: sx, screenY: sy, offsetX, offsetY });
+  },
+
+  /**
+   * A pop-out window's title, as a handle (Detach Tiles): dragged onto a
+   * Codeman window's tile or empty cell, the session docks there as a tile
+   * and this window closes (_dockForeignTile, which asks it to). The same
+   * drag type as a tile's header; on or off follows the setting, also when it
+   * changes in another window.
+   */
+  _installSoloTileHandle() {
+    const title = document.getElementById('soloSessionTitle');
+    if (!this.isSoloWindow || !title || title._codemanTileHandle) return;
+    title._codemanTileHandle = true;
+    const sync = () => {
+      this._cachedAppSettings = null;
+      const on = this.tileDetachEnabled();
+      title.setAttribute('draggable', on ? 'true' : 'false');
+      title.classList.toggle('solo-session-title--handle', on);
+      const label = on ? "Drag onto a Codeman window's tiles to dock this session there" : '';
+      if (title._codemanTileHandleLabel !== label) {
+        title._codemanTileHandleLabel = label;
+        title.title = label;
+      }
+    };
+    sync();
+    window.addEventListener('storage', (e) => {
+      if (!e.key || e.key === this.getSettingsStorageKey?.()) sync();
+    });
+    title.addEventListener('dragstart', (e) => {
+      if (!this.tileDetachEnabled() || !this.soloSessionId) {
+        e.preventDefault?.();
+        return;
+      }
+      if (e.dataTransfer) {
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData(TILE_DRAG_TYPE, this.soloSessionId);
+      }
+    });
   },
 });
 
@@ -2665,7 +3294,7 @@ CodemanApp.prototype._onSessionDeleted = function (data) {
   if (grid?.has(data.id)) {
     const wasFocused = grid.focusedId === data.id;
     const neighbor = window.CodemanTileGrid.tileNeighbor(grid.ids, data.id);
-    this.removeTile(data.id, { refocus: false });
+    this.removeTile(data.id, { refocus: false, gone: true });
     if (wasFocused && grid.open && neighbor && !this._closingSessions?.has(data.id)) {
       this._selectTiledSession(neighbor, { auto: true, focus: false });
     }

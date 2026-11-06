@@ -30,6 +30,7 @@
 
 import { EventEmitter } from 'node:events';
 import { basename } from 'node:path';
+import { realpath } from 'node:fs/promises';
 import { execSync, execFileSync } from 'node:child_process';
 import { v4 as uuidv4 } from 'uuid';
 import * as pty from 'node-pty';
@@ -56,6 +57,7 @@ import {
   type AntigravityConfig,
   type PiConfig,
   type GrokConfig,
+  type CopilotConfig,
   type DeepSeekConfig,
   type OmpConfig,
   type SessionRemote,
@@ -63,9 +65,15 @@ import {
   type SessionNameSource,
   type SessionWriteOptions,
   type PaneExit,
+  type PromptCacheStatus,
+  type StatusLineExporter,
+  type KeepWarmStatus,
 } from './types.js';
+import type { GitFetchStatus } from './git-fetch.js';
 import { resolveAndClaimOmpSessionId } from './utils/omp-session-resolver.js';
 import { claudeTranscriptExists } from './utils/claude-transcript.js';
+import { probePathKind } from './utils/bounded-path-probe.js';
+import { PATH_PROBE_TIMEOUT_MS, WORKSPACE_REALPATH_RETRY_MS } from './config/path-probe.js';
 import { matchesPattern } from './config/cli-registry/patterns.js';
 import { probeDockerCliVersion } from './docker-hosts.js';
 import { probeRemoteCliVersion } from './remote-hosts.js';
@@ -88,7 +96,12 @@ import {
   isPaneQuiet,
   watchingLabel,
   isAwaitingWorkers,
+  isBlockedScreen,
   WATCHING_TAIL_LINES,
+  BLOCKED_TAIL_LINES,
+  BLOCKED_RECHECK_MS,
+  BLOCKED_QUIET_RECHECK_MS,
+  BLOCKED_CLEAR_READS,
   IDLE_RECHECK_MS,
   PANE_PROBE_MIN_INTERVAL_MS,
   PANE_PROBE_RECHECK_MS,
@@ -106,6 +119,7 @@ import {
   getClaudeBinaryPath,
   spawnPtyWithHelperRepair,
   resolveLocalShell,
+  waitForProcessesExit,
 } from './utils/index.js';
 import {
   MAX_TERMINAL_BUFFER_SIZE,
@@ -119,6 +133,15 @@ import { DEFAULT_TMUX_HISTORY_LIMIT } from './config/terminal-history.js';
 import { EXEC_TIMEOUT_MS } from './config/exec-timeout.js';
 import { getCli } from './config/cli-registry/registry.js';
 import { SubmitVerifier } from './session-submit-verifier.js';
+import {
+  guardedComposerChrome,
+  promptSha256,
+  readGuardedSnapshotDetails,
+  type GuardedInputSnapshot,
+} from './agent-staging.js';
+import { isKeyboardTerminalInput } from './terminal-input-classifier.js';
+import { stripAnsi } from './utils/regex-patterns.js';
+import { KEEP_WARM_NUDGE } from './prompt-cache-keepwarm.js';
 import { compileVersionRegex } from './config/cli-registry/patterns.js';
 import { resolveSessionCliVersion } from './utils/cli-resolver.js';
 import {
@@ -140,6 +163,7 @@ import {
 } from './session-attachment-history.js';
 import type { SessionAttachmentHistoryItem, DisplayModel } from './types/session.js';
 import { resolveConfigModel } from './model-config-resolvers.js';
+import { caseSessionSettled, isCasePathLocked, noteCaseSessionStarting } from './case-rename.js';
 import { legacyConfigForMode } from './session-cli-registry-bridge.js';
 import {
   launchModelFor,
@@ -179,7 +203,10 @@ const WIRE_ACTIVITY_SETTLE_MS = 15_000;
 
 // Note: Auto-compact/clear timing constants moved to session-auto-ops.ts
 
-/** Graceful shutdown delay when stopping session (100ms) */
+/**
+ * Longest the PTY process gets to exit on SIGTERM before SIGKILL when stopping a
+ * session. A deadline, not a sleep: stop() moves on as soon as it has exited.
+ */
 const GRACEFUL_SHUTDOWN_DELAY_MS = 100;
 
 // Conversations kept in a pane's chain. A pane that /clears repeatedly would
@@ -374,6 +401,21 @@ const DOCKER_CLI_VERSION_PROBE_DELAY_MS = 3000;
 /** Delay before the over-ssh Claude CLI version probe (keeps session start off the ssh round-trip). */
 const REMOTE_CLI_VERSION_PROBE_DELAY_MS = 3000;
 
+/** Whether absolute `path` is `root` or lies under it (a lexical compare). */
+function isSameOrUnder(path: string, root: string): boolean {
+  return path === root || path.startsWith(root === '/' ? '/' : `${root}/`);
+}
+
+/**
+ * Rewrite `path` from under `from` to the same place under `to`; a path not at or
+ * under `from` comes back unchanged. Exported for unit testing.
+ */
+export function rebasePath(path: string, from: string, to: string): string {
+  if (path === from) return to;
+  if (path.startsWith(`${from}/`)) return to + path.slice(from.length);
+  return path;
+}
+
 /**
  * Ask tmux for the current window geometry of `muxName` so a re-attaching PTY
  * client can spawn at the same size and avoid the resize-flicker / scrollback
@@ -443,6 +485,26 @@ export interface ClaudeMessage {
 }
 
 /**
+ * A write that a guarded submit's lease could not hold, because the per-lease hold
+ * queue (`Session.MAX_GUARDED_HELD_INPUTS`) was full. Nothing was written; retry it.
+ */
+export class GuardedInputBusyError extends Error {
+  constructor() {
+    super('A guarded submit is in progress on this session; nothing was written. Retry the input.');
+    this.name = 'GuardedInputBusyError';
+  }
+}
+
+/**
+ * Whether a programmatic write leaves the keep-alive turn running: the nudge itself, or a bare
+ * Enter (which submits nothing new). Anything else carrying an Enter starts a turn of its own.
+ */
+function isKeepAliveWrite(data: string): boolean {
+  const text = data.replace(/[\r\n]/g, '').trim();
+  return text === '' || text === KEEP_WARM_NUDGE;
+}
+
+/**
  * Event signatures emitted by the Session class.
  * Subscribe using `session.on('eventName', handler)`.
  */
@@ -489,6 +551,8 @@ export class Session extends EventEmitter {
 
   private _name: string;
   private _nameSource: SessionNameSource;
+  /** `pinCliSessionName` as of the last spawn (see {@link _refreshCliNamePin}). */
+  private _pinEveryCliName = false;
   /**
    * Reconstructs the composer draft from USER keystrokes so the first real
    * prompt can name the tab. Fed only when a write says `fromUser`, and never
@@ -558,6 +622,7 @@ export class Session extends EventEmitter {
   private _activityStreak: ActivityStreak | null = null; // Unbroken run of PTY repaints (working detection)
   private _lastPaneProbeAt = 0; // Throttle for the tmux screen probe
   private _lastPaneProbeWorking: boolean | null = null; // Its last verdict (null = could not read)
+  private _lastPaneProbeTrustDialog = false; // Same capture showed the workspace-trust dialog (see _confirmIdle)
   /**
    * Background work the pane's own footer reports, e.g. `1 monitor`; null for none.
    *
@@ -581,6 +646,24 @@ export class Session extends EventEmitter {
    * running. A session that comes back with no label has no chip on its screen.
    */
   private _watching: string | null = null;
+  /** Last `prompt_cache` report from the statusline exporter; null until Claude sends one. */
+  private _promptCache: PromptCacheStatus | null = null;
+  /** Prompt-cache keep-warm opt-in; undefined = follow the app-wide default. Persisted. */
+  private _keepWarmEnabled: boolean | undefined;
+  /** Last status the keep-warm service published for this session; ephemeral. */
+  private _keepWarm: KeepWarmStatus | null = null;
+  /** Git fetch on an interval for this session; undefined = follow the app-wide default. Persisted. */
+  private _gitFetchEnabled: boolean | undefined;
+  /** Seconds between this session's fetch runs; undefined = follow the app-wide default. Persisted. */
+  private _gitFetchIntervalSeconds: number | undefined;
+  /** Last status the fetch scheduler published for this session; ephemeral. */
+  private _gitFetch: GitFetchStatus | null = null;
+  /** Until when the current turn counts as Codeman's own keep-alive (hooks open pre-acknowledged). */
+  private _keepAliveTurnUntil = 0;
+  /** Last keystroke a person sent through a `fromUser` write. */
+  private _lastHumanInputAt = 0;
+  /** Last submit that was not the keep-alive's own; the keep-warm cap's clock. Persisted. */
+  private _lastRealPromptAt = 0;
   /** Lazily compiled `capabilities.workDetect.workingLine`. See _workingLinePattern(). */
   private _workingLineRe: RegExp | undefined = undefined;
   /** Lazily compiled `capabilities.workDetect.watchingLine`. See _watchingLinePattern(). */
@@ -589,6 +672,23 @@ export class Session extends EventEmitter {
   private _watchingWindow = WATCHING_TAIL_LINES;
   /** Lazily compiled `capabilities.workDetect.awaitingLine`. See _awaitingLinePattern(). */
   private _awaitingLineRe: RegExp | null | undefined = undefined;
+  /** Lazily compiled `capabilities.workDetect.blockedLine`. See _blockedLinePattern(). */
+  private _blockedLineRe: RegExp | null | undefined = undefined;
+  /** Resolved with the pattern above: how many rows at the foot of the screen it sees. */
+  private _blockedWindow = BLOCKED_TAIL_LINES;
+  /**
+   * The pane is showing a dialog the CLI blocks on, read off the screen with
+   * `capabilities.workDetect.blockedLine` (codex: an approval, a question, the trust
+   * prompt). Live state, not persisted: a restarted server re-reads it from the attach
+   * repaint the same way the watching label comes back. See `_noteBlockedReading()`.
+   */
+  private _screenBlocked = false;
+  /** Consecutive readable captures without the dialog (cleared at BLOCKED_CLEAR_READS). */
+  private _blockedGoneReads = 0;
+  /** When the last reading that SAW the dialog was taken. See `_armBlockedRecheck()`. */
+  private _blockedSeenAt = 0;
+  /** Re-reads the screen while a dialog is up, so the alert clears with it. */
+  private _blockedRecheckTimer: NodeJS.Timeout | null = null;
   /**
    * The newest model the running CLI reported for itself (its statusline, or its own
    * footer read off the probe's capture), or null when none has. Feeds `displayModel`
@@ -662,6 +762,21 @@ export class Session extends EventEmitter {
    */
   private _paneExit: PaneExit | null = null;
   /**
+   * The pane's live directory, from the pane-exit watcher's read. Runtime-only:
+   * serialized by toState() but never restored by the constructor.
+   */
+  private _paneCwd: string | undefined;
+  /**
+   * `workingDir` with symlinks resolved, so a pane reading (tmux reads the
+   * process cwd, always the resolved path) can be put back into `workingDir`'s
+   * spelling. `undefined` until the first resolution settles; `null` when there
+   * is nothing to translate (no symlink in the path) or it could not be resolved.
+   */
+  private _workspaceRealPath: string | null | undefined;
+  private _workspaceRealPathPending = false;
+  /** When a resolution that met an unreachable folder may be tried again (0 = never). */
+  private _workspaceRealPathRetryAt = 0;
+  /**
    * How many starts, attaches or relaunches are running for this session's
    * pane. While one is, a dead-pane reading may describe a pane that is being
    * revived on purpose, so the exited-agent sweep leaves the session alone
@@ -718,6 +833,8 @@ export class Session extends EventEmitter {
   private _piConfig: PiConfig | undefined;
   // Grok configuration (only for mode === 'grok')
   private _grokConfig: GrokConfig | undefined;
+  // GitHub Copilot configuration (only for mode === 'copilot')
+  private _copilotConfig: CopilotConfig | undefined;
 
   // DeepSeek Harness configuration (only for mode === 'deepseek')
   private _deepSeekConfig: DeepSeekConfig | undefined;
@@ -769,7 +886,7 @@ export class Session extends EventEmitter {
 
   // The session that spawned this one (tab lineage lines). Resolved by the create
   // route before it reaches here, so this is always either an id that existed at
-  // create time or undefined. Decoration only — see SessionState.parentSessionId.
+  // create time or undefined. Decoration only (plus the keep-warm default); see SessionState.parentSessionId.
   private readonly _parentSessionId?: string;
 
   // Session color for visual differentiation
@@ -845,6 +962,7 @@ export class Session extends EventEmitter {
       piConfig?: PiConfig;
       /** Grok configuration (only for mode === 'grok') */
       grokConfig?: GrokConfig;
+      copilotConfig?: CopilotConfig;
       /** DeepSeek Harness configuration (only for mode === 'deepseek') */
       deepSeekConfig?: DeepSeekConfig;
       /** OMP configuration (only for mode === 'omp') */
@@ -863,12 +981,22 @@ export class Session extends EventEmitter {
       attachmentHistory?: SessionAttachmentHistoryItem[];
       /** Restored wall-clock ms of the pane's last Enter (see `lastSubmitAt`). */
       lastSubmitAt?: number;
+      /** Restored last non-keep-alive submit (see `lastRealPromptAt`). */
+      lastRealPromptAt?: number;
+      /** Restored prompt-cache keep-warm choice (see `keepWarmEnabled`). */
+      keepWarmEnabled?: boolean;
+      /** Restored Git fetch override for this session (see `gitFetchEnabled`). */
+      gitFetchEnabled?: boolean;
+      /** Restored Git fetch interval for this session (see `gitFetchIntervalSeconds`). */
+      gitFetchIntervalSeconds?: number;
       /** Restored conversation chain, oldest first (see `claudeSessionChain`). */
       claudeSessionChain?: string[];
       /** Restored agent-exit observation for this session's pane (see `paneExit`). */
       paneExit?: PaneExit;
       /** The previous run's `displayModel`; a CLI-reported one is restored (see `displayModel`). */
       displayModel?: DisplayModel;
+      /** The previous run's last prompt-cache report, restored so the readout is not blank (see `promptCache`). */
+      promptCache?: PromptCacheStatus;
       /** This session was rebuilt from the tmux socket, so its metadata is a guess. */
       discoveredMuxSession?: boolean;
       /** Restored wall-clock ms of the pane's last output (recovery only; see `_wireActivityAt`). */
@@ -884,6 +1012,15 @@ export class Session extends EventEmitter {
     }
   ) {
     super();
+    // A case folder being renamed (src/case-rename.ts) must not gain a session mid-move: its pane would
+    // start in a directory that is about to have a different path.
+    if (config.workingDir && isCasePathLocked(config.workingDir)) {
+      throw new Error(`The case folder ${config.workingDir} is being renamed. Try again in a moment.`);
+    }
+    // And a rename must not start until this session is in the server's map, where it can be listed and
+    // stopped: until registerSessionWithLayout() (or stop()) settles it, the rename route refuses the move.
+    // A remote session's workingDir is the remote path, which the route never counts as the folder's.
+    if (config.workingDir && !config.remote) noteCaseSessionStarting(this, config.workingDir);
     this.setMaxListeners(25);
 
     // Default error handler prevents unhandled 'error' events from crashing the process.
@@ -937,6 +1074,14 @@ export class Session extends EventEmitter {
     // response viewer re-derive the live conversation without waiting for the
     // user to type again.
     this._lastSubmitAt = config.lastSubmitAt ?? 0;
+    // Restored so a restart neither reopens the keep-warm window nor drops the choice. A state.json
+    // from before the field has only `lastSubmitAt`, and every submit then was a real one.
+    this._lastRealPromptAt = config.lastRealPromptAt ?? config.lastSubmitAt ?? 0;
+    this._keepWarmEnabled = config.keepWarmEnabled;
+    // Restored, like the keep-warm choice: the interval is the user's decision about their repositories
+    // and outlives the run that made it, so a restart keeps it rather than falling back to the app default.
+    this._gitFetchEnabled = config.gitFetchEnabled;
+    this._gitFetchIntervalSeconds = config.gitFetchIntervalSeconds;
     // Restored chain: its tail is the conversation the CLI was actually on when
     // the server stopped, which outranks the launch id seeded just above. The
     // FIRST-HAND flag is deliberately NOT restored — a persisted claim is not a
@@ -1005,6 +1150,11 @@ export class Session extends EventEmitter {
       this._grokConfig = config.grokConfig;
     }
 
+    // Apply GitHub Copilot configuration
+    if (config.copilotConfig) {
+      this._copilotConfig = config.copilotConfig;
+    }
+
     // Apply env overrides (exported at spawn, not persisted to disk).
     // Legacy migration: pre-0.7.2 carried effort as the CLAUDE_CODE_EFFORT_LEVEL env var,
     // which hard-locks /effort switching. Extract it into _effort (--settings soft default)
@@ -1037,6 +1187,11 @@ export class Session extends EventEmitter {
     // browser panel arms and disarms — see `startPaneExitWatcher`.
     this.setPaneExit(config.paneExit);
     this._reportedModel = restoredReportedModel(config.displayModel) ?? null;
+    // Last prompt-cache report, restored so the Session Options readout is not blank until
+    // the pane's next statusline render. The readout is time-aware, so a value whose expiry
+    // has passed renders as cold rather than stale-warm. Set directly, not via
+    // setPromptCache, so recovery does not re-stamp a compaction it did not just observe.
+    this._promptCache = config.promptCache ?? null;
     // Never self-parent: a session pointing at itself would draw a zero-length
     // lineage arc under its own tab. Only reachable via the recovery path, where
     // both the id and the saved parent come from disk.
@@ -1208,6 +1363,17 @@ export class Session extends EventEmitter {
     return value && value.trim() ? value.trim() : undefined;
   }
 
+  /**
+   * One env var from this session's overrides, for internal path resolution only
+   * (custom-model injection linking an isolated config dir back to a path that must
+   * survive lives in). Single-key lookup by design, like `deepSeekHomeOverride`: the
+   * map can hold provider credentials and stays off the public `SessionState`.
+   */
+  envOverrideValue(key: string): string | undefined {
+    const value = this._envOverrides?.[key];
+    return value && value.trim() ? value.trim() : undefined;
+  }
+
   /** Owning username in multi-user mode, else undefined. */
   get owner(): string | undefined {
     return this._owner;
@@ -1220,6 +1386,7 @@ export class Session extends EventEmitter {
 
   /** Set the owning username (used by recovery to restore ownership). */
   set owner(username: string | undefined) {
+    if (this._owner !== username) this._guardedPaneRevision++;
     this._owner = username;
   }
 
@@ -1240,6 +1407,11 @@ export class Session extends EventEmitter {
     }
     if (newId === this._claudeSessionId) return;
     this._claudeSessionId = newId;
+    // The conversation itself changed (a post-/clear switch), so the old prefix's cache
+    // report and its compaction baseline belong to a conversation that is gone. Drop them
+    // rather than show the previous conversation's "warm until" against the new one; the
+    // next statusline render repopulates. A same-id reattach returned above, untouched.
+    this._promptCache = null;
   }
 
   /**
@@ -1319,11 +1491,13 @@ export class Session extends EventEmitter {
    * tmux session whose record is about to be deleted (Ark0N/Codeman#446).
    */
   markClosing(closing: boolean): void {
+    if (this._closing !== closing) this._guardedPaneRevision++;
     this._closing = closing;
   }
 
   /** Run one pane start, attach or relaunch with {@link paneLifecycleInFlight} raised. */
   private async _withPaneLifecycle<T>(op: () => Promise<T>): Promise<T> {
+    this._guardedPaneRevision++;
     this._paneLifecycleOps++;
     try {
       return await op();
@@ -1350,8 +1524,102 @@ export class Session extends EventEmitter {
    * Ark0N/Codeman#446 review; both now persist on their success path.
    */
   private clearPaneExitForNewPane(): void {
+    this._guardedPaneRevision++;
     this.setPaneExit(undefined);
     if (this._muxSession) this._mux?.clearPaneExit?.(this._muxSession.muxName);
+  }
+
+  /** The pane's live working directory, when the pane read has reported one. */
+  get paneCwd(): string | undefined {
+    return this._paneCwd;
+  }
+
+  /**
+   * Record the pane's live directory. Returns whether it CHANGED, so the caller
+   * broadcasts only on a real transition.
+   *
+   * Scoped by {@link paneExitApplies}, the same rule as the exit reading: a
+   * remote session's local pane runs the ssh client and a docker case's runs a
+   * `docker exec`, so their pane directory is a host directory the agent was
+   * never in, and a direct-PTY or rediscovered session has no pane Codeman can
+   * vouch for. A relative value is refused rather than stored.
+   *
+   * tmux reads the pane's directory from the process cwd, which is always the
+   * resolved path, while `workingDir` keeps the spelling the case was created
+   * with. A workspace reached through a symlink would otherwise read as outside
+   * itself, and the browser's preview routing (a lexical compare against
+   * `workingDir`) would send every relative link to the attachment route. So a
+   * reading at or under the workspace's resolved path is written back in
+   * `workingDir`'s spelling. Until that resolution has settled, only a reading
+   * lexically inside `workingDir` is accepted.
+   */
+  setPaneCwd(next: string | undefined): boolean {
+    let resolved = this.paneExitApplies && next?.startsWith('/') ? next : undefined;
+    if (resolved !== undefined) {
+      if (
+        this._workspaceRealPath === undefined ||
+        (this._workspaceRealPathRetryAt !== 0 && Date.now() >= this._workspaceRealPathRetryAt)
+      ) {
+        this._resolveWorkspaceRealPath();
+      }
+      if (this._workspaceRealPath === undefined) {
+        // The workspace's resolved path is not known yet. A reading outside
+        // `workingDir` could be the workspace itself seen through its symlink, so
+        // it waits for the next tick rather than mis-route links for one.
+        if (!isSameOrUnder(resolved, this._workspaceSpelling())) return false;
+      } else if (this._workspaceRealPath !== null) {
+        resolved = rebasePath(resolved, this._workspaceRealPath, this._workspaceSpelling());
+      }
+    }
+    if (resolved === this._paneCwd) return false;
+    this._paneCwd = resolved;
+    return true;
+  }
+
+  /** `workingDir` without a trailing separator (the root stays `/`). */
+  private _workspaceSpelling(): string {
+    return this.workingDir.length > 1 ? this.workingDir.replace(/\/+$/, '') : this.workingDir;
+  }
+
+  /**
+   * Resolve `workingDir`'s symlinks in the background for {@link setPaneCwd}.
+   *
+   * Bounded: the folder can sit on a network mount that stopped answering, so it
+   * is probed with `probePathKind()` first and the `realpath()` is raced against
+   * the same timeout. An `unknown` probe, a failed or slow `realpath()` leave no
+   * translation and allow one more try after `WORKSPACE_REALPATH_RETRY_MS`; a
+   * folder that is absent or not a directory is settled for good.
+   */
+  private _resolveWorkspaceRealPath(): void {
+    if (this._workspaceRealPathPending) return;
+    this._workspaceRealPathPending = true;
+    const spelling = this._workspaceSpelling();
+    void (async () => {
+      let real: string | null = null;
+      let retry = false;
+      try {
+        const kind = await probePathKind(spelling);
+        if (kind === 'unknown') {
+          retry = true;
+        } else if (kind === 'directory') {
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          const answer = await Promise.race([
+            realpath(spelling).catch(() => undefined),
+            new Promise<undefined>((resolveTimeout) => {
+              timer = setTimeout(() => resolveTimeout(undefined), PATH_PROBE_TIMEOUT_MS);
+              timer.unref?.();
+            }),
+          ]).finally(() => clearTimeout(timer));
+          if (answer === undefined) retry = true;
+          else if (answer !== spelling && answer !== '/') real = answer;
+        }
+      } catch {
+        retry = true;
+      }
+      this._workspaceRealPath = real;
+      this._workspaceRealPathRetryAt = retry ? Date.now() + WORKSPACE_REALPATH_RETRY_MS : 0;
+      this._workspaceRealPathPending = false;
+    })();
   }
 
   /**
@@ -1408,6 +1676,152 @@ export class Session extends EventEmitter {
    */
   get watching(): string | null {
     return this._watching;
+  }
+
+  /**
+   * True while the pane shows a dialog its CLI is blocked on, as read off the screen
+   * (`capabilities.workDetect.blockedLine`). Always false for a CLI that declares none,
+   * Claude included: its dialogs arrive as hook events instead. The `blocked` wait reads
+   * it so a caller that asks after the dialog appeared is answered at once.
+   */
+  get screenBlocked(): boolean {
+    return this._screenBlocked;
+  }
+
+  /**
+   * Prompt-cache state of the main conversation as Claude Code last reported it on the
+   * statusline (v2.1.251+), fed by `POST /api/status-telemetry`. Null until the first
+   * report. It rides `toState()` for the Session Options readout and is restored on a
+   * Codeman restart (constructor `promptCache`) so the row is not blank until the pane's
+   * next render; the readout is time-aware, so a value whose `expiresAt` has passed renders
+   * as cold rather than as a stale warm, and a future one lets the keep-warm re-arm without a turn.
+   */
+  get promptCache(): PromptCacheStatus | null {
+    return this._promptCache;
+  }
+
+  /** Whether the current launch carries the statusLine exporter (`MuxSession.statusLine`); undefined when unknown. */
+  get statusLineExporter(): StatusLineExporter | undefined {
+    return this._muxSession?.statusLine;
+  }
+
+  /**
+   * Replace the prompt-cache report; true when it differs from the previous one. Stamps
+   * `compactedAt` when this report ENTERS the window in which Claude Code reads
+   * `recacheTokensIfCold` as null: a compaction (`/compact` or its own idle compaction) or
+   * a clearing of old tool results opened it, and the previous report still had a known
+   * value. Claude Code closes the window on the next request (that request is the one that
+   * counts as an expected rebuild), so `expectedRebuilds` never rises inside it and is not
+   * read here. The stamp is carried while the window holds and dropped once it closes; a
+   * first report already inside the window gets none. It is never an alert.
+   */
+  setPromptCache(status: PromptCacheStatus): boolean {
+    const prev = this._promptCache;
+    const inWindow = status.warm && status.recacheTokensIfCold == null;
+    let compactedAt: number | undefined;
+    if (inWindow && prev?.recacheTokensIfCold != null) {
+      compactedAt = Date.now();
+    } else if (inWindow && prev?.compactedAt != null) {
+      compactedAt = prev.compactedAt;
+    }
+    // A NEW object when a stamp applies, never a mutation of the caller's parsed report: the
+    // route broadcasts the STORED object, so the stamp lives here and never leaks back into the
+    // parser's output (which would make the route's "broadcast the stored object" choice vacuous).
+    const next = compactedAt != null ? { ...status, compactedAt } : status;
+    const changed = JSON.stringify(next) !== JSON.stringify(prev);
+    this._promptCache = next;
+    return changed;
+  }
+
+  /** Prompt-cache keep-warm opt-in; undefined means the app-wide default applies. */
+  get keepWarmEnabled(): boolean | undefined {
+    return this._keepWarmEnabled;
+  }
+
+  setKeepWarmEnabled(enabled: boolean | undefined): void {
+    this._keepWarmEnabled = enabled;
+  }
+
+  /** What the keep-warm service last published for this session, or null before its first evaluation. */
+  get keepWarm(): KeepWarmStatus | null {
+    return this._keepWarm;
+  }
+
+  /** Replace the keep-warm status; true when it differs from the previous one. */
+  setKeepWarmStatus(status: KeepWarmStatus): boolean {
+    const changed = JSON.stringify(status) !== JSON.stringify(this._keepWarm);
+    this._keepWarm = status;
+    return changed;
+  }
+
+  /** Git fetch override for this session; undefined means the app-wide setting applies. */
+  get gitFetchEnabled(): boolean | undefined {
+    return this._gitFetchEnabled;
+  }
+
+  /** Interval override for this session; undefined means the app-wide setting applies. */
+  get gitFetchIntervalSeconds(): number | undefined {
+    return this._gitFetchIntervalSeconds;
+  }
+
+  /**
+   * Set the session's override. The Session Options rows save on their own, so a caller passes what it has
+   * and leaves the other half as it was; `undefined` on either means the app-wide setting applies again.
+   */
+  setGitFetchSettings(enabled: boolean | undefined, intervalSeconds: number | undefined): void {
+    this._gitFetchEnabled = enabled;
+    this._gitFetchIntervalSeconds = intervalSeconds;
+  }
+
+  /** What the fetch scheduler last reported for this session, or null before its first run. */
+  get gitFetch(): GitFetchStatus | null {
+    return this._gitFetch;
+  }
+
+  /** Replace the fetch status; true when it differs from the previous one. */
+  setGitFetchStatus(status: GitFetchStatus): boolean {
+    const changed = JSON.stringify(status) !== JSON.stringify(this._gitFetch);
+    this._gitFetch = status;
+    return changed;
+  }
+
+  /**
+   * True while the running turn is Codeman's own keep-alive nudge: its stop hook and idle
+   * prompt open pre-acknowledged, and its submit moves `lastSubmitAt` (it IS a submit, and the
+   * response viewer's conversation correlation needs it) but not `lastRealPromptAt`. The turn's
+   * own idle prompt ends it (`endKeepAliveTurn()`), and so does any other submit: a `fromUser`
+   * write, a programmatic write of anything but the nudge, or a `prompt_submitted` hook for
+   * another prompt, so a prompt right after a nudge counts and alerts normally.
+   */
+  get keepAliveTurnActive(): boolean {
+    return Date.now() < this._keepAliveTurnUntil;
+  }
+
+  beginKeepAliveTurn(windowMs: number): void {
+    this._keepAliveTurnUntil = Date.now() + windowMs;
+  }
+
+  endKeepAliveTurn(): void {
+    this._keepAliveTurnUntil = 0;
+  }
+
+  /** Last keystroke a person sent (`fromUser` write), epoch ms; 0 when none this process. */
+  get lastHumanInputAt(): number {
+    return this._lastHumanInputAt;
+  }
+
+  /**
+   * Last submit that was not the keep-alive's own, from any writer or the UserPromptSubmit hook
+   * (a person typing in an attached tmux client reaches Codeman only through the hook); epoch
+   * ms, 0 if none. The keep-warm cap counts from it; persisted so a restart keeps it.
+   */
+  get lastRealPromptAt(): number {
+    return this._lastRealPromptAt;
+  }
+
+  /** Whether this launch carries `idleCompaction: false` (`MuxSession.idleCompactionOff`). */
+  get idleCompactionOptOut(): boolean {
+    return this._muxSession?.idleCompactionOff === true;
   }
 
   /**
@@ -1714,16 +2128,31 @@ export class Session extends EventEmitter {
   }
 
   /**
-   * The name to pin on the Claude CLI as `--name`, or undefined to let Claude
-   * title the conversation itself. `--name` is the prompt-box label, the
-   * `/resume` picker entry and the terminal title all at once, and a pinned
-   * title stops Claude generating its own, so only a name the user chose is
-   * worth pinning. Pinning the `w1-myapp` placeholder gave every conversation
-   * in a case the same `/resume` entry; an auto name is a cut of the first
-   * prompt, which Claude's own generated title already beats.
+   * The name to pin on the Claude CLI as `--name`, or undefined to let Claude title the
+   * conversation itself. `--name` is the prompt-box label, the `/resume` picker entry and the
+   * terminal title all at once, and a pinned title stops Claude generating its own.
+   *
+   * By default only a name the user chose is pinned. Pinning the `w1-myapp` placeholder gave
+   * every conversation in a case the same `/resume` entry (the tab number restarts once a
+   * case's tabs are closed), and an auto name is a cut of the first prompt, which Claude's
+   * own generated title already beats.
+   *
+   * With the opt-in `pinCliSessionName` setting every non-blank tab name is pinned, so the
+   * CLI's labels read the same as the tabs, at the cost of those generated titles. A rename
+   * in Codeman then holds only until the next turn: a process started with `--name`
+   * re-appends its in-memory title (see claude-session-title.ts). The setting is re-read
+   * at each spawn and respawn by {@link _refreshCliNamePin}.
    */
   get cliPinnedName(): string | undefined {
-    return this._nameSource === 'manual' ? this._name : undefined;
+    if (!this._pinEveryCliName) return this._nameSource === 'manual' ? this._name : undefined;
+    return this._name.trim() ? this._name : undefined;
+  }
+
+  /** Re-read `pinCliSessionName` so `cliPinnedName` decides per launch, with no server restart. */
+  private async _refreshCliNamePin(): Promise<void> {
+    // Dynamic: hooks-config -> route-helpers imports Session, so a static import would be a cycle.
+    const { readPinCliSessionNameEnabled } = await import('./hooks-config.js');
+    this._pinEveryCliName = await readPinCliSessionNameEnabled();
   }
 
   setAutoClear(enabled: boolean, threshold?: number): void {
@@ -1870,6 +2299,7 @@ export class Session extends EventEmitter {
       pid: this.pid,
       status: this._status,
       workingDir: this.workingDir,
+      paneCwd: this._paneCwd,
       remote: this._remote,
       docker: this._docker,
       owner: this._owner,
@@ -1889,6 +2319,13 @@ export class Session extends EventEmitter {
       autoCompactPrompt: this._autoOps.autoCompactPrompt,
       autoResumeEnabled: this._autoOps.autoResumeEnabled,
       autoResumeAt: this._autoOps.autoResumeAt ?? undefined,
+      promptCache: this._promptCache ?? undefined,
+      statusLineExporter: this.statusLineExporter,
+      keepWarmEnabled: this._keepWarmEnabled,
+      keepWarm: this._keepWarm ?? undefined,
+      gitFetchEnabled: this._gitFetchEnabled,
+      gitFetchIntervalSeconds: this._gitFetchIntervalSeconds,
+      gitFetch: this._gitFetch ?? undefined,
       imageWatcherEnabled: this._imageWatcherEnabled,
       pinned: this._pinned || undefined,
       pinnedAt: this._pinned ? (this._pinnedAt ?? undefined) : undefined,
@@ -1915,6 +2352,7 @@ export class Session extends EventEmitter {
       antigravityConfig: this._antigravityConfig,
       piConfig: this._piConfig,
       grokConfig: this._grokConfig,
+      copilotConfig: this._copilotConfig,
       deepSeekConfig: this._deepSeekConfig,
       ompConfig: this._ompConfig,
       resumeSessionId: this._resumeSessionId,
@@ -1936,6 +2374,7 @@ export class Session extends EventEmitter {
       paneExit: this._paneExit ?? undefined,
       attachmentHistory: this.attachmentHistory.length > 0 ? this.attachmentHistory : undefined,
       lastSubmitAt: this._lastSubmitAt || undefined,
+      lastRealPromptAt: this._lastRealPromptAt || undefined,
       // Only a chain the CLI's own hooks vouched for is persisted, and only when
       // the pane actually moved conversation. Its LAST entry is the live one, so
       // it is also what restores `claudeSessionId` across a restart — `start()`
@@ -2287,6 +2726,7 @@ export class Session extends EventEmitter {
       antigravityConfig: this._antigravityConfig,
       piConfig: this._piConfig,
       grokConfig: this._grokConfig,
+      copilotConfig: this._copilotConfig,
       deepSeekConfig: this._deepSeekConfig,
       // OMP resolution/pinning does NOT happen here. This object is built
       // EAGERLY — including on every boot-recovery reattach, before anyone
@@ -2303,6 +2743,8 @@ export class Session extends EventEmitter {
       unsetEnvKeys: this._pendingEnvUnsets.size > 0 ? [...this._pendingEnvUnsets] : undefined,
       effort: this._effort,
       advisorModel: this._advisorModel,
+      keepWarm: this._keepWarmEnabled,
+      spawnedByAgent: !!this._parentSessionId,
       historyLimit: this._tmuxHistoryLimit,
       remote: this._remote,
       docker: this._docker,
@@ -2381,13 +2823,14 @@ export class Session extends EventEmitter {
    * still inside it and renders no local `--session-id` to collide.
    */
   private async _buildRespawnPaneOptionsWithResumePin(): Promise<import('./mux-interface.js').RespawnPaneOptions> {
+    await this._refreshCliNamePin();
     const options = this._buildRespawnPaneOptions();
     if (this._remote || this._docker) return options;
     const entry = getCli(this.mode);
     if (entry?.launch.chain !== 'fallback') return options;
 
     const resumeIdPattern = entry.launch.params?.resumeId;
-    const configDir = this._claudeConfigDir();
+    const configDir = this.claudeConfigDir();
     const chainTail = this._claudeSessionChain[this._claudeSessionChain.length - 1];
     const candidates = [chainTail, options.resumeSessionId, this.id].filter((v): v is string => !!v);
     for (const candidate of candidates) {
@@ -2409,8 +2852,11 @@ export class Session extends EventEmitter {
     return options;
   }
 
-  /** The session's Claude config dir when it has been relocated (#255), else undefined. */
-  private _claudeConfigDir(): string | undefined {
+  /**
+   * The session's Claude config dir when it has been relocated (#255), else undefined.
+   * Public for the edit history reader, which looks for the transcript there.
+   */
+  claudeConfigDir(): string | undefined {
     // Trimmed like `claudeProjectsDir()` trims the process-wide override: the
     // envOverrides schema validates keys only, and a whitespace-only value would
     // otherwise resolve to a relative path and read "no transcript" for everything.
@@ -2419,7 +2865,8 @@ export class Session extends EventEmitter {
 
   /**
    * Force the custom-model selection's `launchModel` (pi/omp `custom/<id>`, grok's
-   * `[model.<name>]` block name) onto the CLI's `model` launch param. Where that param
+   * `[model.<name>]` block name, codex's bare selected id) onto the CLI's `model`
+   * launch param. Where that param
    * lives is registry DATA — the entry's `legacyConfigField` (`piConfig`, `grokConfig`,
    * ...) or the top-level `model` for an entry that declares none — so this stays a
    * generic reader rather than a branch per CLI. Applied on the OPTIONS only: the stored
@@ -2645,11 +3092,14 @@ export class Session extends EventEmitter {
       throw new Error('Session is being closed');
     }
 
+    await this._refreshCliNamePin();
+
     // Bounds the workspace-trust scan (see _maybeAcceptTrustDialog). Stamped here
     // rather than at PTY spawn so a slow mux attach still counts as startup.
     this._interactiveStartedAt = Date.now();
     this._trustDialogAttempts = 0;
     this._lastTrustDialogScanAt = 0;
+    this._lastPaneProbeTrustDialog = false; // the last pane's verdict, not this one's
     if (this._trustDialogTimer) {
       clearTimeout(this._trustDialogTimer);
       this._trustDialogTimer = null;
@@ -2771,12 +3221,15 @@ export class Session extends EventEmitter {
             antigravityConfig: this._antigravityConfig,
             piConfig: this._piConfig,
             grokConfig: this._grokConfig,
+            copilotConfig: this._copilotConfig,
             deepSeekConfig: this._deepSeekConfig,
             ompConfig: this._ompConfig,
             resumeSessionId: this._resumeSessionId,
             envOverrides: this._envOverrides,
             effort: this._effort,
             advisorModel: this._advisorModel,
+            keepWarm: this._keepWarmEnabled,
+            spawnedByAgent: !!this._parentSessionId,
             historyLimit: this._tmuxHistoryLimit,
             remote: this._remote,
             docker: this._docker,
@@ -3020,6 +3473,10 @@ export class Session extends EventEmitter {
         this._expensiveProcessTimer = null;
       }
       this._pendingCleanData = '';
+      // Nothing reads this pane any more, so a dialog on it can no longer be seen to
+      // close: drop the state (and its timer) while the listeners are still attached.
+      // A re-attach re-reads the screen and raises it again if the dialog is still up.
+      this._clearScreenBlocked();
       // If using mux, mark the session as detached but don't kill it
       if (this._muxSession && this._mux) {
         this._mux.setAttached(this.id, false);
@@ -3082,13 +3539,24 @@ export class Session extends EventEmitter {
    * a two-marker match (isTrustDialogScreen), and an attempt cap.
    */
   private _maybeAcceptTrustDialog(): void {
-    if (this._trustDialogAccepted) return;
+    // Stopped: the kill itself produces PTY output, and the buffer tail still holds the
+    // dialog, so without this a deleted session kept "answering" it for several seconds.
+    if (this._trustDialogAccepted || this._isStopped) return;
     const now = Date.now();
     if (now - this._interactiveStartedAt > TRUST_DIALOG_WINDOW_MS) {
       this._trustDialogAccepted = true; // window closed; anything matching now is not the dialog
       return;
     }
-    if (now - this._lastTrustDialogScanAt < TRUST_DIALOG_RETRY_MS) return;
+    const sinceScan = now - this._lastTrustDialogScanAt;
+    if (sinceScan < TRUST_DIALOG_RETRY_MS) {
+      // ⚠️ Defer a throttled read, never drop it. The dialog's own paint is usually the
+      // last output a launching pane produces, and it tends to land inside the throttle
+      // of the read the blank screen before it triggered: dropped, nothing re-read the
+      // screen and the session sat on the dialog for good (2 of 12 fresh launches on
+      // Claude Code 2.1.294). A read already scheduled covers this one.
+      if (!this._trustDialogTimer) this._rescanTrustDialogIn(TRUST_DIALOG_RETRY_MS - sinceScan + 100);
+      return;
+    }
     this._lastTrustDialogScanAt = now;
 
     // Prefer the pane; fall back to the buffer tail on a direct-PTY session,
@@ -3123,14 +3591,17 @@ export class Session extends EventEmitter {
     // on a live 2.1.252 spawn: cursor moved at 6 s, then nothing). The timer is
     // one-shot and self-rearming through this same path, and every exit route
     // goes through _clearAllTimers().
-    // The +100ms puts the re-entry OUTSIDE the scan throttle above; firing at
-    // exactly the throttle boundary would let the scan return early and break
-    // the chain with the dialog still on screen.
+    // The +100ms puts the re-entry OUTSIDE the scan throttle above.
+    this._rescanTrustDialogIn(TRUST_DIALOG_RETRY_MS + 100);
+  }
+
+  /** Re-run the trust-dialog scan after `delayMs`, replacing any read already scheduled. */
+  private _rescanTrustDialogIn(delayMs: number): void {
     if (this._trustDialogTimer) clearTimeout(this._trustDialogTimer);
     this._trustDialogTimer = setTimeout(() => {
       this._trustDialogTimer = null;
       this._maybeAcceptTrustDialog();
-    }, TRUST_DIALOG_RETRY_MS + 100);
+    }, delayMs);
   }
 
   /**
@@ -3204,10 +3675,31 @@ export class Session extends EventEmitter {
     if (now - this._lastPaneProbeAt < PANE_PROBE_MIN_INTERVAL_MS) return this._lastPaneProbeWorking;
     this._lastPaneProbeAt = now;
     const text = this._mux.capturePaneText?.(this._muxSession.muxName) ?? null;
+    // A dialog the CLI is blocked on is not work, whatever else is on screen: codex's
+    // question dialog carries `esc to interrupt` in its own key hints, which is codex's
+    // working line, so without this a session waiting on the user's answer read as busy.
+    // Decided from THIS capture, never from `_screenBlocked`, which lags a vanished dialog
+    // by design (see `_noteBlockedReading`) and would otherwise call a resumed turn idle.
+    const blockedOnScreen = text === null ? null : this._paneShowsBlocked(text);
+    this._noteBlockedReading(blockedOnScreen, text);
     // A turn that ended by handing off to workers the CLI waits for is work too: the
     // composer is up and the pane is quiet, but the next turn starts without the user.
     this._lastPaneProbeWorking =
-      text === null ? null : this._workingLinePattern().test(text) || this._paneAwaitsWorkers(text);
+      text === null
+        ? null
+        : !blockedOnScreen && (this._workingLinePattern().test(text) || this._paneAwaitsWorkers(text));
+    // A capture that failed proves nothing either way, so it keeps the last answer.
+    if (text !== null) {
+      const trustDialog = isTrustDialogScreen(text);
+      if (
+        trustDialog &&
+        !this._lastPaneProbeTrustDialog &&
+        now - this._interactiveStartedAt <= TRUST_DIALOG_WINDOW_MS
+      ) {
+        console.log(`[Session] Holding idle while the workspace trust dialog is on screen: ${this.id}`);
+      }
+      this._lastPaneProbeTrustDialog = trustDialog;
+    }
     this._readWatching(text);
     this._readScreenModel(text);
     return this._lastPaneProbeWorking;
@@ -3296,6 +3788,7 @@ export class Session extends EventEmitter {
       antigravityConfig: this._antigravityConfig,
       piConfig: this._piConfig,
       grokConfig: this._grokConfig,
+      copilotConfig: this._copilotConfig,
       deepSeekConfig: this._deepSeekConfig,
       ompConfig: this._ompConfig,
     };
@@ -3402,6 +3895,111 @@ export class Session extends EventEmitter {
   }
 
   /**
+   * The regex matching the dialog this CLI blocks on, or null for a CLI whose registry
+   * entry declares none (every CLI but codex today, Claude included: its dialogs arrive
+   * as hook events). Compiled once per session through `compileVersionRegex()`, the same
+   * guard the schema applies, so a pattern it refuses yields null rather than a throw.
+   */
+  private _blockedLinePattern(): RegExp | null {
+    if (this._blockedLineRe === undefined) {
+      const detect = getCli(this.mode)?.capabilities.workDetect;
+      this._blockedLineRe = detect?.blockedLine ? compileVersionRegex(detect.blockedLine) : null;
+      this._blockedWindow = detect?.blockedLines ?? BLOCKED_TAIL_LINES;
+    }
+    return this._blockedLineRe;
+  }
+
+  /** Whether this capture shows a dialog the CLI is blocked on. See `isBlockedScreen()`. */
+  private _paneShowsBlocked(paneText: string): boolean {
+    const pattern = this._blockedLinePattern();
+    return pattern ? isBlockedScreen(paneText, pattern, this._blockedWindow) : false;
+  }
+
+  /**
+   * Fold one screen reading into the blocked state, announcing each transition with
+   * `blockedChanged` (the web server turns it into the alert and the `blocked` signal).
+   *
+   * The two directions are deliberately unequal:
+   * - RAISE on one reading. A match needs the dialog's own footer at the foot of the
+   *   screen, which is only there when the dialog is fully drawn.
+   * - CLEAR on BLOCKED_CLEAR_READS readings in a row. A single capture can land inside a
+   *   full-frame repaint, and clearing on it would re-raise a moment later and send the
+   *   alert, push and webhook twice for one dialog.
+   * A capture that could not be read (`null`) is no evidence either way and changes
+   * nothing, so a tmux hiccup can neither raise nor drop an alert. That is the opposite
+   * of `_readWatching`, and for the same reason: each degrades toward the alert.
+   *
+   * While blocked, `_blockedRecheckTimer` keeps reading, since answering resumes the turn
+   * and a busy pane never reaches the settle path that raised it.
+   *
+   * @param frame the capture the reading came from; rides the raise as the alert's context
+   */
+  private _noteBlockedReading(onScreen: boolean | null, frame: string | null): void {
+    if (onScreen === null || !this._blockedLinePattern()) return;
+    if (onScreen) {
+      this._blockedGoneReads = 0;
+      // Stamped after the capture returned: output processed later is newer than it.
+      this._blockedSeenAt = Date.now();
+      if (!this._screenBlocked) {
+        this._screenBlocked = true;
+        this.emit('blockedChanged', true, frame);
+      }
+      this._armBlockedRecheck();
+      return;
+    }
+    if (!this._screenBlocked) return;
+    if (++this._blockedGoneReads < BLOCKED_CLEAR_READS) {
+      this._armBlockedRecheck();
+      return;
+    }
+    this._clearScreenBlocked();
+  }
+
+  /** (Re)arm the while-blocked screen read. One-shot and self-rearming, like the trust scan. */
+  private _armBlockedRecheck(): void {
+    if (this._blockedRecheckTimer) clearTimeout(this._blockedRecheckTimer);
+    this._blockedRecheckTimer = setTimeout(() => {
+      this._blockedRecheckTimer = null;
+      // No pane left to read (detached): nothing can change until a re-attach, whose
+      // `_resetBuffers()` clears the state and whose repaint reads the screen afresh.
+      if (this._isStopped || !this._screenBlocked || !this._mux?.capturePaneText || !this._muxSession) return;
+      // A dialog leaves the screen only through a repaint, and tmux sends every repaint
+      // to this client as PTY output (`_markActivity`). So while the last reading saw
+      // the dialog and nothing has been drawn since, it is still up: skip the capture
+      // (synchronous, see BLOCKED_QUIET_RECHECK_MS) and look again next interval. Never
+      // once a reading has missed it: the confirming read must happen on a quiet pane
+      // too, or the clear would wait for output that may never come.
+      if (
+        this._blockedGoneReads === 0 &&
+        this._lastActivityAt < this._blockedSeenAt &&
+        Date.now() - this._blockedSeenAt < BLOCKED_QUIET_RECHECK_MS
+      ) {
+        this._armBlockedRecheck();
+        return;
+      }
+      const text = this._mux.capturePaneText(this._muxSession.muxName) ?? null;
+      // Unreadable this time: keep the state, keep looking (_noteBlockedReading ignores a null).
+      if (text === null) {
+        this._armBlockedRecheck();
+        return;
+      }
+      this._noteBlockedReading(this._paneShowsBlocked(text), text);
+    }, BLOCKED_RECHECK_MS);
+  }
+
+  /** Drop the blocked state (and its timer), announcing it when it was set. */
+  private _clearScreenBlocked(): void {
+    this._blockedGoneReads = 0;
+    if (this._blockedRecheckTimer) {
+      clearTimeout(this._blockedRecheckTimer);
+      this._blockedRecheckTimer = null;
+    }
+    if (!this._screenBlocked) return;
+    this._screenBlocked = false;
+    this.emit('blockedChanged', false, null);
+  }
+
+  /**
    * The regex matching this CLI's "a turn is running" status line.
    *
    * Compiled once per session and cached: `_probePaneWorking` runs it against a whole
@@ -3459,6 +4057,16 @@ export class Session extends EventEmitter {
     // Ask the screen before concluding, and keep asking on a slow cadence.
     if (this._probePaneWorking() === true) {
       this._markWorking();
+      this.activityTimeout = setTimeout(() => this._confirmIdle(), PANE_PROBE_RECHECK_MS);
+      return;
+    }
+    // ⚠️ The workspace-trust dialog is not a composer, although its `❯` (on "No, exit")
+    // arms this check and the dialog sits quiet. Calling it idle let an agent that waited
+    // for idle send its prompt into the dialog, and the prompt's Enter answered *exit*.
+    // Not working either, so the status stays where it is until the dialog is gone.
+    // Bounded by the auto-accept's own startup window: later on, a screen that merely
+    // quotes the dialog (an agent reading session-trust-dialog.ts) must not hold idle off.
+    if (this._lastPaneProbeTrustDialog && Date.now() - this._interactiveStartedAt <= TRUST_DIALOG_WINDOW_MS) {
       this.activityTimeout = setTimeout(() => this._confirmIdle(), PANE_PROBE_RECHECK_MS);
       return;
     }
@@ -3812,6 +4420,11 @@ export class Session extends EventEmitter {
     prompt: string,
     options?: { model?: string; onProgress?: (info: { tokens?: number; status?: string }) => void }
   ): Promise<{ result: string; cost: number }> {
+    if (this.guardedInputHeld) {
+      this._guardedInputRevision++;
+      throw new Error('Guarded submission in progress');
+    }
+    this._guardedPaneRevision++;
     return new Promise((resolve, reject) => {
       if (this.ptyProcess) {
         reject(new Error('Session already has a running process'));
@@ -3943,6 +4556,9 @@ export class Session extends EventEmitter {
     // into a program that never enabled tracking.
     this._cliMouseModes.clear();
     this._syncCliMouseTracking();
+    // Nor does it start inside a dialog. Announced, so a pending alert for the old
+    // pane's dialog is resolved rather than left behind it.
+    this._clearScreenBlocked();
     this._markActivity(true);
   }
 
@@ -3954,6 +4570,11 @@ export class Session extends EventEmitter {
     if (this._trustDialogTimer) {
       clearTimeout(this._trustDialogTimer);
       this._trustDialogTimer = null;
+    }
+    // Clear the while-blocked screen read (the state itself is left to its owner)
+    if (this._blockedRecheckTimer) {
+      clearTimeout(this._blockedRecheckTimer);
+      this._blockedRecheckTimer = null;
     }
 
     // Clear activity timeout to prevent memory leak
@@ -4313,6 +4934,229 @@ export class Session extends EventEmitter {
 
   // Note: checkAutoCompact/checkAutoClear moved to SessionAutoOps (this._autoOps)
 
+  private readonly _inspectionInstance = uuidv4();
+  private _guardedPaneRevision = 0;
+  private _guardedGeometryRevision = 0;
+  private _guardedInputRevision = 0;
+  private _guardedPendingWrites = 0;
+  private _guardedSubmitInFlight = false;
+  /**
+   * Input that arrived while a guarded submit held the lease, in arrival order. Each
+   * entry runs when the lease is released; an entry that returns a promise (a mux
+   * write, a named key) is waited for before the next runs, so nothing overtakes it.
+   */
+  private _guardedHeld: Array<{ run: () => void | Promise<unknown>; bytes: number }> = [];
+  private _guardedHeldBytes = 0;
+  /** True while the drain waits for a held asynchronous write to finish. */
+  private _guardedHeldDraining = false;
+  /** Held entries per lease. A lease lasts milliseconds; past this the caller backs off. */
+  static readonly MAX_GUARDED_HELD_INPUTS = 256;
+  /** Held bytes per lease (16 browser frames at the 64 KiB frame cap). */
+  static readonly MAX_GUARDED_HELD_BYTES = 16 * 64 * 1024;
+  /** Ephemeral identity, never persisted or based on a potentially reused pid alone. */
+  get inspectionGeneration(): string {
+    return `${this._inspectionInstance}:${this._guardedPaneRevision}:${this.owner ?? ''}`;
+  }
+  /** Staging additionally binds geometry; transcript cursors survive a terminal resize. */
+  get guardedInputGeneration(): string {
+    return `${this.inspectionGeneration}:${this._guardedGeometryRevision}`;
+  }
+  get guardedInputPendingWrites(): number {
+    return this._guardedPendingWrites;
+  }
+  /**
+   * True while a guarded submit holds the input lease (a few milliseconds). Input that
+   * arrives in that span is held and written after it (see {@link guardedInputHeld}).
+   */
+  get guardedSubmitInFlight(): boolean {
+    return this._guardedSubmitInFlight;
+  }
+  /**
+   * True while input is being held behind a guarded submit: the lease itself, or held
+   * input not yet written after it. A write that is not routed through
+   * {@link holdForGuardedLease} must refuse in this window, or it overtakes held input.
+   * `write()` is the known exception: it refuses during the lease only, since the drain
+   * writes held input through it, so a direct `write()` caller (cron's `paste` mode in
+   * `cron/cron-service.ts`) can still land ahead of input that is draining.
+   */
+  get guardedInputHeld(): boolean {
+    return this._guardedSubmitInFlight || this._guardedHeld.length > 0 || this._guardedHeldDraining;
+  }
+  /**
+   * Hold input behind a guarded submit's lease instead of refusing it.
+   *
+   * `free`: nothing is held, so the caller writes inline as it always did. `held`: `run`
+   * is queued and runs, in arrival order with every other held input, once the lease is
+   * released (whatever the submit's outcome). `full`: the per-lease cap is reached and
+   * nothing was queued; the caller must stop delivering from that source until it can
+   * resend in order. Refusing instead lost input: the browser's WebSocket path does not
+   * wait for ACKs, so a refused seq N was overtaken by N+1 and its redelivery was then
+   * rejected as a duplicate. `data`, when given, is observed as input on arrival, so a
+   * keystroke held during the lease still moves the input revision at once.
+   */
+  holdForGuardedLease(run: () => void | Promise<unknown>, bytes = 0, data?: string): 'free' | 'held' | 'full' {
+    if (!this.guardedInputHeld) return 'free';
+    if (data !== undefined) this._observeGuardedKeyboardInput(data);
+    if (
+      this._guardedHeld.length >= Session.MAX_GUARDED_HELD_INPUTS ||
+      this._guardedHeldBytes + bytes > Session.MAX_GUARDED_HELD_BYTES
+    )
+      return 'full';
+    this._guardedHeld.push({ run, bytes });
+    this._guardedHeldBytes += bytes;
+    return 'held';
+  }
+  /**
+   * Run an asynchronous write now, or in its turn behind a guarded submit's lease. The
+   * turn lasts until the write settles, so later held input waits for it. Resolves
+   * `whenFull` without running anything when the hold queue is full.
+   */
+  private _inGuardedTurn<T>(write: () => Promise<T>, whenFull: () => T): Promise<T> {
+    if (!this.guardedInputHeld) return write();
+    return new Promise<T>((resolve, reject) => {
+      const held = this.holdForGuardedLease(() => {
+        const running = write();
+        running.then(resolve, reject);
+        return running;
+      });
+      if (held === 'full') {
+        try {
+          resolve(whenFull());
+        } catch (err) {
+          reject(err);
+        }
+      }
+    });
+  }
+  /** Run held input in arrival order until it is all written or a new lease is taken. */
+  private _drainGuardedHeld(): void {
+    while (this._guardedHeld.length > 0 && !this._guardedSubmitInFlight && !this._guardedHeldDraining) {
+      const entry = this._guardedHeld.shift()!;
+      this._guardedHeldBytes -= entry.bytes;
+      let running: void | Promise<unknown>;
+      try {
+        running = entry.run();
+      } catch (err) {
+        console.error(`[Session ${this.id}] held input failed after a guarded submit:`, getErrorMessage(err));
+        continue;
+      }
+      if (running && typeof running.then === 'function') {
+        this._guardedHeldDraining = true;
+        void running
+          .catch(() => {})
+          .then(() => {
+            this._guardedHeldDraining = false;
+            this._drainGuardedHeld();
+          });
+      }
+    }
+  }
+  /** Expose only the path selection needed for attributed Codex evidence, never credentials. */
+  getCodexHomeOverride(): string | undefined {
+    return this._envOverrides?.CODEX_HOME || undefined;
+  }
+  private _observeGuardedKeyboardInput(data: string): void {
+    if (data && isKeyboardTerminalInput(data)) this._guardedInputRevision++;
+  }
+  guardedInputSnapshot(): GuardedInputSnapshot | null {
+    return this._readGuardedInputSnapshot(false);
+  }
+  private _readGuardedInputSnapshot(allowLease: boolean): GuardedInputSnapshot | null {
+    if (
+      this._isStopped ||
+      this._closing ||
+      this.paneLifecycleInFlight ||
+      this._guardedPendingWrites ||
+      (!allowLease && this.guardedInputHeld) ||
+      this.remote ||
+      this.docker ||
+      this.paneExit ||
+      !this._muxSession
+    )
+      return null;
+    // Only a CLI whose registry entry describes its composer chrome takes guarded input.
+    const chrome = guardedComposerChrome(getCli(this.mode));
+    if (!chrome) return null;
+    const capture: import('./mux-interface.js').PaneCaptureOptions = {};
+    const screen = this._mux?.capturePaneBuffer?.(this._muxSession.muxName, undefined, capture);
+    if (!screen) return null;
+    // tmux's replay has CUP addresses rather than line breaks. Read the SAME
+    // fresh frame for dialog/work chrome and exact composer/caret proof.
+    // eslint-disable-next-line no-control-regex
+    const plain = stripAnsi(screen.replace(/\x1b\[\d+;\d+H/g, '\n'));
+    const working = this._workingLinePattern();
+    working.lastIndex = 0;
+    if (this._paneShowsBlocked(plain) || working.test(plain) || this._paneAwaitsWorkers(plain)) return null;
+    const composer = readGuardedSnapshotDetails(screen, chrome);
+    return composer === null
+      ? null
+      : {
+          generation: this.guardedInputGeneration,
+          revision: this._guardedInputRevision,
+          composerSha: promptSha256(composer.composer),
+          availableColumns: Number.isFinite(capture.capturedGeometry?.cols)
+            ? capture.capturedGeometry!.cols - composer.prefixWidth
+            : 0,
+        };
+  }
+  /** Stage through ordinary delivery, after cancelling any older Enter retry timer. */
+  async stageGuardedInput(message: string): Promise<boolean> {
+    if (/[\r\n]/.test(message)) return false;
+    if (this._guardedPendingWrites || this.guardedInputHeld) {
+      this._guardedInputRevision++;
+      return false;
+    }
+    this._submitVerifier?.cancel();
+    return this.writeViaMux(message, { fromUser: true });
+  }
+  /** One conditional Enter. An ambiguous acknowledgement is never replayed. */
+  async submitGuardedInput(expected: GuardedInputSnapshot): Promise<boolean> {
+    const matches = (current: GuardedInputSnapshot | null): boolean =>
+      !!current &&
+      current.generation === expected.generation &&
+      current.revision === expected.revision &&
+      current.composerSha === expected.composerSha &&
+      current.availableColumns === expected.availableColumns;
+    if (!matches(this.guardedInputSnapshot()) || !this._mux || !this._muxSession) return false;
+    this._guardedSubmitInFlight = true;
+    let dispatched = false;
+    try {
+      const sent = await this._mux.sendInput(this.id, '\r', {
+        beforeDispatch: () => {
+          if (!matches(this._readGuardedInputSnapshot(true))) return false;
+          this._guardedInputRevision++;
+          dispatched = true;
+          return true;
+        },
+      });
+      if (sent && dispatched) this._emitSubmittedPrompt(this._trackSubmit('\r', { fromUser: true }));
+      return sent && dispatched;
+    } finally {
+      this._guardedSubmitInFlight = false;
+      this._drainGuardedHeld();
+    }
+  }
+  /**
+   * Lease/pending boundary for named keys whose bytes bypass the ordinary write methods.
+   * During a guarded submit the operation waits for the lease like any other write;
+   * only a full hold queue refuses it, with {@link GuardedInputBusyError}.
+   */
+  async performAuxiliaryInput(operation: () => Promise<void>): Promise<void> {
+    this._guardedInputRevision++;
+    return this._inGuardedTurn(
+      async () => {
+        this._guardedPendingWrites++;
+        try {
+          await operation();
+        } finally {
+          this._guardedPendingWrites--;
+        }
+      },
+      () => {
+        throw new GuardedInputBusyError();
+      }
+    );
+  }
   /**
    * Sends input directly to the PTY process.
    *
@@ -4332,6 +5176,9 @@ export class Session extends EventEmitter {
    * input could disappear while the caller believed it had been delivered.
    */
   write(data: string, options: SessionWriteOptions = {}): boolean {
+    this._observeGuardedKeyboardInput(data);
+    // The lease only, not the drain, which writes held input through here (see guardedInputHeld).
+    if (this._guardedSubmitInFlight) return false;
     const submittedPrompt = this._trackSubmit(data, options);
     if (!this.ptyProcess) return false;
     this.ptyProcess.write(data);
@@ -4360,9 +5207,16 @@ export class Session extends EventEmitter {
    */
   private _trackSubmit(data: string, options: SessionWriteOptions): string[] {
     const submitted = options.fromUser && this._acceptsPrompts ? this._submittedPromptTracker.feed(data) : [];
-    if (data.includes('\r') || data.includes('\n')) {
-      this._lastSubmitAt = Date.now();
+    const hasEnter = data.includes('\r') || data.includes('\n');
+    if (options.fromUser) {
+      this._lastHumanInputAt = Date.now();
+      // A person is here: whatever turn follows is theirs, not the keep-alive's.
+      this._keepAliveTurnUntil = 0;
+    } else if (hasEnter && !isKeepAliveWrite(data)) {
+      // Anything else submitted (an agent, respawn, auto-resume) starts a turn of its own.
+      this._keepAliveTurnUntil = 0;
     }
+    if (hasEnter) this._stampSubmit();
     return submitted;
   }
 
@@ -4373,6 +5227,7 @@ export class Session extends EventEmitter {
    * separator. Reports submissions like a write would (a line feed never is one).
    */
   trackUserInput(data: string): void {
+    this._observeGuardedKeyboardInput(data);
     if (!this._acceptsPrompts) return;
     this._emitSubmittedPrompt(this._submittedPromptTracker.feed(data));
   }
@@ -4388,9 +5243,21 @@ export class Session extends EventEmitter {
    * `_trackSubmit` only sees input that flows through Codeman's write path, so
    * a pane the user drives by attaching to tmux directly never stamped this and
    * `lastSubmitAt` stayed 0 for its whole life.
+   *
+   * `prompt` is the hook's own prompt text: anything but the keep-alive's ends the keep-alive
+   * window, because a person typing in an attached tmux client reaches Codeman only here, and
+   * their prompt must count as real and alert normally.
    */
-  markPromptSubmitted(): void {
+  markPromptSubmitted(prompt?: string): void {
+    this._guardedInputRevision++;
+    if (prompt !== undefined && prompt.trim() !== KEEP_WARM_NUDGE) this._keepAliveTurnUntil = 0;
+    this._stampSubmit();
+  }
+
+  /** Every submit moves `lastSubmitAt`; only one outside a keep-alive turn moves `lastRealPromptAt`. */
+  private _stampSubmit(): void {
     this._lastSubmitAt = Date.now();
+    if (!this.keepAliveTurnActive) this._lastRealPromptAt = this._lastSubmitAt;
   }
 
   /**
@@ -4466,7 +5333,7 @@ export class Session extends EventEmitter {
    *
    * More reliable than direct PTY write for programmatic input, especially
    * with Claude CLI which uses Ink (React for terminals).
-   * Uses tmux `send-keys -l` to inject text + Enter.
+   * Uses tmux to inject the text (one bracketed paste) + Enter.
    *
    * @param data - Input data with optional `\r` for Enter
    * @returns true if input was sent, false if no mux session or PTY
@@ -4478,22 +5345,39 @@ export class Session extends EventEmitter {
    * ```
    */
   async writeViaMux(data: string, options: SessionWriteOptions = {}): Promise<boolean> {
-    const submittedPrompt = this._trackSubmit(data, options);
-    if (this._mux && this._muxSession) {
-      const sent = await this._mux.sendInput(this.id, data);
-      if (sent) {
-        this._emitSubmittedPrompt(submittedPrompt);
-        this._verifySubmitted(data);
+    this._observeGuardedKeyboardInput(data);
+    // A guarded submit's lease lasts for its Enter only: wait for it, in arrival order,
+    // rather than refusing, so an approval answer or a programmatic prompt is not
+    // dropped. Without a lease the write starts synchronously, so the pending count
+    // rises before any await and no lease can be taken while it is in flight.
+    return this._inGuardedTurn(
+      () => this._writeViaMuxNow(data, options),
+      () => false
+    );
+  }
+
+  private async _writeViaMuxNow(data: string, options: SessionWriteOptions): Promise<boolean> {
+    this._guardedPendingWrites++;
+    try {
+      const submittedPrompt = this._trackSubmit(data, options);
+      if (this._mux && this._muxSession) {
+        const sent = await this._mux.sendInput(this.id, data);
+        if (sent) {
+          this._emitSubmittedPrompt(submittedPrompt);
+          this._verifySubmitted(data);
+        }
+        return sent;
       }
-      return sent;
+      // Fallback to PTY write
+      if (this.ptyProcess) {
+        this.ptyProcess.write(data);
+        this._emitSubmittedPrompt(submittedPrompt);
+        return true;
+      }
+      return false;
+    } finally {
+      this._guardedPendingWrites--;
     }
-    // Fallback to PTY write
-    if (this.ptyProcess) {
-      this.ptyProcess.write(data);
-      this._emitSubmittedPrompt(submittedPrompt);
-      return true;
-    }
-    return false;
   }
 
   /**
@@ -4521,9 +5405,18 @@ export class Session extends EventEmitter {
         this._isStopped || !this._mux || !this._muxSession
           ? null
           : this._mux.capturePaneText?.(this._muxSession.muxName),
-      sendEnter: () => this._mux?.sendInput(this.id, '\r'),
+      sendEnter: () => {
+        // A retry Enter is never held behind a guarded submit: once that submit's
+        // Enter went out, a re-press would submit whatever is on the composer next.
+        if (this.guardedInputHeld) {
+          this._guardedInputRevision++;
+          this._submitVerifier?.cancel();
+          return Promise.resolve(false);
+        }
+        return this.writeViaMux('\r');
+      },
       // ⚠ NO fallback glyph here, unlike the screen-reading probe elsewhere in this file.
-      // Only claude, codex, pi, opencode, omp and gemini declare a promptGlyph; the other modes would fall back
+      // Only claude, codex, pi, opencode, omp, gemini and antigravity declare a promptGlyph; the other modes would fall back
       // to claude's `❯`, which is ALSO starship's default shell prompt (and pure's, and
       // spaceship's, and p10k lean's). On a shell session the line `❯ npm run build` sits
       // on screen for as long as the command runs, promptStillInComposer() reads that as
@@ -4550,6 +5443,7 @@ export class Session extends EventEmitter {
    * `resize()` skipped a real resize that happened to match them.
    */
   private _notePtySpawnGeometry(cols: number, rows: number): void {
+    this._guardedPaneRevision++;
     this._ptyCols = cols;
     this._ptyRows = rows;
   }
@@ -4672,6 +5566,7 @@ export class Session extends EventEmitter {
     }
     const dimsChanged = cols !== this._ptyCols || rows !== this._ptyRows;
     if (this.ptyProcess && (dimsChanged || options.force)) {
+      this._guardedGeometryRevision++;
       this._ptyCols = cols;
       this._ptyRows = rows;
       if (!IS_TEST_MODE && this._mux && this._muxSession) {
@@ -4688,6 +5583,10 @@ export class Session extends EventEmitter {
 
   // Legacy method for sending input - wraps runPrompt
   async sendInput(input: string): Promise<void> {
+    if (this.guardedInputHeld) {
+      this._guardedInputRevision++;
+      throw new Error('Guarded submission in progress');
+    }
     this._status = 'busy';
     this._markActivity(true);
     this.runPrompt(input).catch((err) => {
@@ -4765,6 +5664,8 @@ export class Session extends EventEmitter {
   async stop(killMux: boolean = true): Promise<void> {
     // Set stopped flag first to prevent new timers from being created
     this._isStopped = true;
+    // A session stopped before it was registered (a create that failed) no longer holds up a case rename.
+    caseSessionSettled(this);
     // A pane that is gone is watching nothing. Nothing probes a stopped session, so
     // without this the last chip it drew would ride along on its row forever.
     this._watching = null;
@@ -4801,8 +5702,10 @@ export class Session extends EventEmitter {
           console.warn('[Session] Failed to send SIGTERM to PTY process (may already be dead):', err);
         }
 
-        // Give it a moment to terminate gracefully
-        await new Promise((resolve) => setTimeout(resolve, GRACEFUL_SHUTDOWN_DELAY_MS));
+        // Give it a moment to terminate gracefully. For a tmux-backed session this
+        // is the attach client, gone within a few ms of SIGTERM, and this used to be
+        // a fixed 100ms sleep on every close.
+        if (pid) await waitForProcessesExit([pid], { timeoutMs: GRACEFUL_SHUTDOWN_DELAY_MS });
 
         // Force kill with SIGKILL if still alive
         try {

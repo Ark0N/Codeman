@@ -155,6 +155,37 @@ describe('agent-created case marker', () => {
     expect(await readMarker(name)).toBeNull();
   });
 
+  it('never labels the working directory of a POST /api/sessions, header or not', async () => {
+    // `codeman agent` sends the origin only on quick-start, but the server must not
+    // trust that: a session created on an EXISTING workingDir (somebody's real repo)
+    // is never marked as agent scratch, whatever the request carries.
+    const name = 'existingrepo1';
+    created.push(name);
+    const dir = join(getCasesDir(), name);
+    await mkdir(dir, { recursive: true });
+
+    const res = await harness.app.inject({
+      method: 'POST',
+      url: '/api/sessions',
+      headers: { 'x-codeman-agent-origin': 'codeman-agent-cli', 'x-codeman-parent-session': PARENT_ID },
+      payload: { workingDir: dir, mode: 'claude' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(await readMarker(name)).toBeNull();
+  });
+
+  it('labels a case quick-start creates for `codeman agent spawn`, and not one that existed', async () => {
+    await quickStart('agentclicase1', { headers: { 'x-codeman-agent-origin': 'codeman-agent-cli' } });
+    expect(await readMarker('agentclicase1')).toMatchObject({ createdBy: 'codeman-agent-cli' });
+
+    const name = 'preexisting2';
+    created.push(name);
+    await mkdir(join(getCasesDir(), name), { recursive: true });
+    await quickStart(name, { headers: { 'x-codeman-agent-origin': 'codeman-agent-cli' } });
+    expect(await readMarker(name)).toBeNull();
+  });
+
   it('drops an unrecognised origin token rather than storing it', async () => {
     await quickStart('agentcase4', { payload: { agentOrigin: '<script>alert(1)</script>' } });
 

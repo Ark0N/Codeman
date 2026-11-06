@@ -16,8 +16,11 @@
  *   menu owns its Escape in the global handler, like the tab-group menu), Tab
  *   and a click elsewhere close it.
  * - A pick is remembered per device (`codeman:tile-count`; `codeman:tile-grid`
- *   stays ids only) and opens that many tiles: the session to focus included,
- *   the rest from tab order. The click and Ctrl+Shift+G then open with it.
+ *   holds ids and layout, never content) and opens that many tiles: the
+ *   session to focus included, the rest from the ranking (all quiet and
+ *   unstamped here: tab order). The click and Ctrl+Shift+G then open with it
+ *   when no grid is stored (a stored one comes back as it was:
+ *   tile-grid-layout-memory.test.ts).
  * - With the grid open a pick re-forms it: a shape change under the cell
  *   model's rule, the focused tile always kept, tiles dropped from the end,
  *   new ones filling the empty cells first, all mounted and laid out before
@@ -310,9 +313,10 @@ describe('picking a count', () => {
     expect(app._tileGrid.ids).toEqual(['s-other', 's-c']);
     expect(app._tileGrid.focusedId).toBe('s-c');
     expect(localStore.get('codeman:tile-count')).toBe('2');
-    // The grid's own key stays ids only.
+    // The grid's own key holds ids and layout only (its tile count included), never content.
     const stored = JSON.parse(localStore.get('codeman:tile-grid')!);
-    expect(Object.keys(stored).sort()).toEqual(['colFr', 'focused', 'ids', 'open', 'rowFr', 'v', 'zoomed']);
+    expect(Object.keys(stored).sort()).toEqual(['colFr', 'count', 'focused', 'ids', 'open', 'rowFr', 'v', 'zoomed']);
+    expect(stored.count).toBe(2);
   });
 
   it('a click on 4 opens four, Space works too', () => {

@@ -8,7 +8,7 @@ import type {
   FontStyle,
 } from './types.js';
 import { getCellDimensions } from './cell-dimensions.js';
-import { findPrompt, readTextAfterPrompt } from './prompt-finder.js';
+import { findPrompt, readTextAfterPrompt, promptRowInViewport } from './prompt-finder.js';
 import { renderOverlay, charCellWidth } from './overlay-renderer.js';
 
 const DEFAULT_PROMPT: PromptFinder = { type: 'character', char: '>', offset: 2 };
@@ -69,6 +69,9 @@ export class ZerolagInputAddon implements XtermAddon {
   private _bufferDetectDone = false;
   // IME text still being composed: drawn after the pending text, never sent.
   private _composition = '';
+  // Rows from the top of the screen that are actually visible (see setRowLimit);
+  // null means all of them.
+  private _rowLimit: number | null = null;
 
   // Render cache
   private _lastRenderKey = '';
@@ -122,11 +125,10 @@ export class ZerolagInputAddon implements XtermAddon {
     // Cache font properties
     this._cacheFont();
 
-    // Scroll detection: hide overlay when scrolled away from bottom
+    // Scroll detection: hide the overlay while the cursor row is scrolled out of view
     this._scrollHandler = () => {
       try {
-        const buf = this._terminal!.buffer.active;
-        if (buf.viewportY !== buf.baseY) {
+        if (!promptRowInViewport(this._terminal!)) {
           this._overlay!.style.display = 'none';
           if (this._scrollTimer) {
             clearTimeout(this._scrollTimer);
@@ -328,6 +330,35 @@ export class ZerolagInputAddon implements XtermAddon {
       this._lastRenderKey = '';
       this._render();
     }
+  }
+
+  /**
+   * Bound the layout to the first `limit` rows of the screen, or to all of them
+   * with `null`. It narrows the bound the overlay already keeps itself on
+   * screen with (`totalRows`, see _layoutRows), never adds a second one.
+   *
+   * For a host that keeps the terminal taller than the box showing it and
+   * scrolls the screen element instead (e.g. holding the PTY's rows while an
+   * on-screen keyboard covers the bottom): the composer must grow upward from
+   * the last row the user can SEE, not from the terminal's last row, which is
+   * under the keyboard.
+   */
+  setRowLimit(limit: number | null): void {
+    const next = limit !== null && Number.isFinite(limit) && limit > 0 ? Math.trunc(limit) : null;
+    if (next === this._rowLimit) return;
+    this._rowLimit = next;
+    this.rerender();
+  }
+
+  /**
+   * The `totalRows` bound handed to renderOverlay: the one place that decides
+   * where the block stops growing downward. The terminal's rows, narrowed by
+   * setRowLimit when the host shows fewer; a limit above the terminal's rows
+   * changes nothing.
+   */
+  private _layoutRows(): number {
+    const rows = this._terminal!.rows;
+    return this._rowLimit !== null ? Math.min(this._rowLimit, rows) : rows;
   }
 
   /**
@@ -565,8 +596,8 @@ export class ZerolagInputAddon implements XtermAddon {
     try {
       const buf = this._terminal.buffer.active;
 
-      // Hide overlay when scrolled up — prompt is at bottom, not in viewport
-      if (buf.viewportY !== buf.baseY) {
+      // Hide the overlay while the cursor row is scrolled out of view
+      if (!promptRowInViewport(this._terminal)) {
         this._overlay.style.display = 'none';
         return;
       }
@@ -622,9 +653,11 @@ export class ZerolagInputAddon implements XtermAddon {
       // Skip redundant re-renders — include text content to detect
       // same-length changes (e.g., setFlushed with different text)
       // `rows` is part of the key: the layout is clamped to the visible rows
-      // (see renderOverlay), so a keyboard opening — which changes rows without
-      // changing the text — must not be skipped as a redundant render.
-      const renderKey = `${displayText}:${compositionStart}:${startCol}:${activePrompt.row}:${activePrompt.col}:${totalCols}:${this._terminal.rows}:${this._flushedOffset}`;
+      // (see renderOverlay), so a keyboard opening, which changes rows or the
+      // row limit without changing the text, must not be skipped as a
+      // redundant render.
+      const totalRows = this._layoutRows();
+      const renderKey = `${displayText}:${compositionStart}:${startCol}:${activePrompt.row}:${activePrompt.col}:${totalCols}:${totalRows}:${this._flushedOffset}`;
       if (renderKey === this._lastRenderKey && this._overlay.style.display !== 'none') return;
       this._lastRenderKey = renderKey;
 
@@ -672,7 +705,7 @@ export class ZerolagInputAddon implements XtermAddon {
         charTop,
         charHeight,
         promptRow: activePrompt.row,
-        totalRows: this._terminal.rows,
+        totalRows,
         font: this._font,
         showCursor: this._options.showCursor,
         cursorColor,

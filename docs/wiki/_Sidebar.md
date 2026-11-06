@@ -15,6 +15,7 @@
 - [Agent CLIs](Agent-CLIs)
 - [Custom Model Endpoints](Custom-Model-Endpoints)
 - [Working With Files](Working-With-Files)
+- [Git Worktrees](Git-Worktrees)
 - [Input And Voice](Input-And-Voice)
 - [Mobile Guide](Mobile-Guide)
 - [Keyboard Shortcuts](Keyboard-Shortcuts)
@@ -24,6 +25,7 @@
 
 - [Unattended Runs](Keeping-Agents-Running)
 - [Notifications & Approvals](Notifications-And-Approvals)
+- [Discord Bridge](Discord-Bridge)
 - [Cron Jobs](Cron-Jobs)
 - [Autonomous Loops](Autonomous-Loops)
 - [Watching Agents Work](Watching-Agents-Work)
@@ -42,6 +44,7 @@
 
 **Automation**
 
+- [The Codeman Skill](Codeman-Skill)
 - [Driving It From An Agent](Driving-Codeman-From-An-Agent)
 - [HTTP API](HTTP-API)
 - [Hooks & Integrations](Hooks-And-Integrations)
@@ -49,6 +52,7 @@
 **Operating it**
 
 - [Running As A Service](Running-As-A-Service)
+- [Config Backups](Config-Backups)
 - [Troubleshooting](Troubleshooting)
 - [FAQ](FAQ)
 - [Contributing](Contributing)

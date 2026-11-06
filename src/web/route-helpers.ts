@@ -11,12 +11,22 @@ import fs from 'node:fs/promises';
 import type { z } from 'zod';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { Session } from '../session.js';
-import { ApiErrorCode, createErrorResponse, type AuthUser, type SessionState } from '../types.js';
+import { ApiErrorCode, createErrorResponse, type ApiResponse, type AuthUser, type SessionState } from '../types.js';
+import type { WaitCapacityError } from './session-wait-registry.js';
 import { MAX_CONCURRENT_SESSIONS } from '../config/map-limits.js';
 import { parseRalphLoopConfig, extractCompletionPhrase } from '../ralph-config.js';
 import { SseEvent } from './sse-events.js';
 import type { SessionPort } from './ports/session-port.js';
 import type { EventPort } from './ports/event-port.js';
+
+/**
+ * Longest path PARAMETER the router accepts (Fastify's default is 100). A file
+ * name goes up to 255 characters and arrives percent-encoded, so the folder
+ * grid's `…/files/:name/raw` answered 404 "Route not found" for a name the
+ * listing happily showed. Raw length, not decoded: 255 four-byte characters are
+ * 3060 characters of `%XX`.
+ */
+export const MAX_ROUTE_PARAM_LENGTH = 4096;
 import type { AuthSessionRecord } from './ports/auth-port.js';
 import type { StaleExpirationMap } from '../utils/index.js';
 import { dataPath } from '../config/instance.js';
@@ -315,11 +325,33 @@ function sessionNotFoundError(sessionId: string): Error & { statusCode: number; 
  * Look up a session by ID or throw a structured error.
  * Replaces the pattern: `const session = sessions.get(id); if (!session) return createErrorResponse(...)`.
  *
- * When `req` is passed in multi-user mode, a session the caller does not own is
- * reported as NOT_FOUND (never 403), so existence of other users' sessions is not
- * leaked. Single-user / admin callers are unaffected.
+ * In multi-user mode a session the caller does not own is reported as NOT_FOUND
+ * (never 403), so existence of other users' sessions is not leaked. Single-user /
+ * admin callers are unaffected (`canAccessOwned` short-circuits when multi-user is off).
+ *
+ * `req` is REQUIRED. When it was optional, forgetting it compiled cleanly and
+ * silently performed an UNSCOPED lookup. A caller with no request in flight must
+ * say so at the call site via {@link findSessionUnscopedOrFail}.
  */
-export function findSessionOrFail(ctx: SessionPort, sessionId: string, req?: FastifyRequest): Session {
+export function findSessionOrFail(ctx: SessionPort, sessionId: string, req: FastifyRequest): Session {
+  return lookupSessionOrFail(ctx, sessionId, req);
+}
+
+/**
+ * Look up a session WITHOUT ownership scoping. Deliberately verbose and greppable:
+ * every call is a decision to skip the multi-user ownership check and should carry
+ * a comment saying why (e.g. a startup path with no request in flight). Inside a
+ * request handler use `findSessionOrFail(ctx, id, req)` instead.
+ *
+ * It has no production callers today: every lookup in `src/` is request-scoped. It
+ * exists so the next genuinely request-less caller has somewhere to go other than
+ * making `req` optional again.
+ */
+export function findSessionUnscopedOrFail(ctx: SessionPort, sessionId: string): Session {
+  return lookupSessionOrFail(ctx, sessionId, undefined);
+}
+
+function lookupSessionOrFail(ctx: SessionPort, sessionId: string, req: FastifyRequest | undefined): Session {
   const session = ctx.sessions.get(sessionId);
   if (!session) throw sessionNotFoundError(sessionId);
   if (req && !canAccessOwned(getAuthUser(req), session.owner)) throw sessionNotFoundError(sessionId);
@@ -334,15 +366,18 @@ export function findSessionOrFail(ctx: SessionPort, sessionId: string, req?: Fas
  * return, so this returns the persisted record instead. Same ownership
  * enforcement, same 404-not-403 leak protection — this is that function's
  * missing other half, not a separate check reimplemented inline.
+ *
+ * `req` is REQUIRED for the same reason as on `findSessionOrFail`: an optional
+ * one would let a caller that forgot it retire another user's row in multi-user mode.
  */
 export function findPersistedSessionOrFail(
   store: { getSession(id: string): SessionState | null },
   sessionId: string,
-  req?: FastifyRequest
+  req: FastifyRequest
 ): SessionState {
   const persisted = store.getSession(sessionId);
   if (!persisted) throw sessionNotFoundError(sessionId);
-  if (req && !canAccessOwned(getAuthUser(req), persisted.owner)) throw sessionNotFoundError(sessionId);
+  if (!canAccessOwned(getAuthUser(req), persisted.owner)) throw sessionNotFoundError(sessionId);
   return persisted;
 }
 
@@ -617,4 +652,51 @@ export function autoConfigureRalph(session: Session, workingDir: string, ctx: Ev
       state: session.ralphTracker.loopState,
     });
   }
+}
+
+// ========== Long-poll helpers (shared by the wait routes and the inbox routes) ==========
+
+/**
+ * Map a waiter-cap rejection to the code that tells the caller the truth.
+ *
+ * The two caps mean different things and warrant different recovery: `session` is
+ * genuinely about THIS session, while `owner` and `total` are process-wide budgets
+ * that say nothing about it. Reporting a global cap as `SESSION_BUSY` (409,
+ * documented as "Session is busy") sent an agent off to a different session to hit
+ * the identical error. `RATE_LIMITED` is the code whose whole meaning is "come back
+ * later", and clients and proxies already treat 429 that way.
+ */
+export function waitCapacityResponse(err: WaitCapacityError): ApiResponse<never> {
+  const code = err.scope === 'session' ? ApiErrorCode.SESSION_BUSY : ApiErrorCode.RATE_LIMITED;
+  // The registry's message already names the scope and the limit; passing it through
+  // verbatim keeps the wording in one place.
+  return createErrorResponse(code, err.message);
+}
+
+/**
+ * An `AbortController` that fires when the CLIENT goes away, and only then.
+ *
+ * Freeing an abandoned waiter matters because the documented pattern is a loop of
+ * short waits: `curl --max-time 30 ".../wait?timeout=600000"` abandons a live waiter
+ * every iteration until the cap is hit and an innocent session reports busy. Same for
+ * any proxy that cuts the connection.
+ *
+ * ⚠️ **It must listen on the RESPONSE, not the request.** `req.raw` emits `'close'`
+ * as soon as the request body has finished streaming, which on a POST is BEFORE the
+ * handler ever blocks — measured at +1ms with `aborted: false`, indistinguishable
+ * from a real hang-up at +0ms. Wiring the abort there cancels every send-and-wait
+ * instantly and silently kills the feature (it survives on GET only because a GET has
+ * no body to finish). `reply.raw` emits `'close'` both when the response completes
+ * and when the socket dies, and `writableFinished` is what tells those apart: true
+ * only if the response actually went out. The guard is load-bearing, not defensive.
+ *
+ * `app.inject()` never emits `'close'` at all, so this is only observable over real
+ * HTTP — which is why the regression test for it binds a port.
+ */
+export function abortOnClientHangUp(reply: FastifyReply): AbortController {
+  const controller = new AbortController();
+  reply.raw.on('close', () => {
+    if (!reply.raw.writableFinished) controller.abort();
+  });
+  return controller;
 }

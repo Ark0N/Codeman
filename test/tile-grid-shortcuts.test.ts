@@ -243,14 +243,15 @@ describe('the capture-phase handler', () => {
 });
 
 describe('the actions', () => {
-  it('the toggle brings back the grid this tab last left, focus included, filled to the count', () => {
+  it('the toggle brings back exactly the grid this tab last left, focus included, never filled to the count', () => {
     const app = makeGridApp(IDS);
     app.selectSession = vi.fn();
     app.openTileGrid(IDS, { focusedId: 's-c' });
     app.closeTileGrid({ reselect: false });
     app.toggleTileGrid();
-    // Its three first, then the open sessions in tab order (the default count, 6).
-    expect(app._tileGrid.ids).toEqual([...IDS, 's-other']);
+    // Its three, as left (owner request: "always keep what the last setting
+    // was"), though the default count is 6 and s-other is free.
+    expect(app._tileGrid.ids).toEqual(IDS);
     expect(app.activeSessionId).toBe('s-c');
   });
 
@@ -261,7 +262,7 @@ describe('the actions', () => {
     app.sessions.delete('s-b');
     app.toggleTileGrid();
     expect(app._tileGrid.ids).not.toContain('s-b');
-    // Its cell stays where it was, and the count fills it first (s-other, tab order).
+    // Its cell stays where it was, and the ranking fills it (s-other, the only one left).
     expect(app._tileGrid.cells).toEqual(['s-a', 's-other', 's-c']);
   });
 

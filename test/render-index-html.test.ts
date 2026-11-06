@@ -21,6 +21,7 @@ import { isPiAvailable } from '../src/utils/pi-cli-resolver.js';
 import { isGrokAvailable } from '../src/utils/grok-cli-resolver.js';
 import { isDeepSeekAvailable, isDeepSeekRunnable } from '../src/utils/deepseek-cli-resolver.js';
 import { isOmpAvailable } from '../src/utils/omp-cli-resolver.js';
+import { isCopilotAvailable } from '../src/utils/copilot-cli-resolver.js';
 import { isCloudflaredAvailable } from '../src/utils/cloudflared-resolver.js';
 import { isGitAvailable } from '../src/git-clone.js';
 import { enabledClis, reloadCliRegistry } from '../src/config/cli-registry/registry.js';
@@ -75,6 +76,10 @@ vi.mock('../src/utils/deepseek-cli-resolver.js', () => ({
 vi.mock('../src/utils/omp-cli-resolver.js', () => ({
   isOmpAvailable: vi.fn(() => false),
   resolveOmpDir: vi.fn(() => null),
+}));
+vi.mock('../src/utils/copilot-cli-resolver.js', () => ({
+  isCopilotAvailable: vi.fn(() => false),
+  resolveCopilotDir: vi.fn(() => null),
 }));
 vi.mock('../src/utils/cloudflared-resolver.js', () => ({
   isCloudflaredAvailable: vi.fn(() => false),
@@ -159,6 +164,33 @@ describe('WebServer.renderIndexHtml', () => {
     expect(map.shell).toBeUndefined();
   });
 
+  it('injects the transcript page-key modes, in a /session/:id window too', async () => {
+    // Read off the transcriptPageKeys capability. A solo window scrolls a terminal
+    // like the main page does, so it needs the list as much as the gutter map.
+    for (const solo of [undefined, 'sess-123']) {
+      const { server } = makeServer();
+      const html = await render(server, solo);
+      const match = html.match(/window\.__codemanTranscriptPageKeys=(\[[^<]*\]);/);
+      expect(match).not.toBeNull();
+      const modes = JSON.parse(match![1]) as string[];
+      expect(modes).toContain('claude');
+      expect(modes).toContain('codex');
+      expect(modes).toContain('opencode');
+      expect(modes).not.toContain('shell');
+      expect(modes).not.toContain('gemini');
+    }
+  });
+
+  it('injects the keyboard-hold modes from the keyboardHold capability: inline Claude, never full-height codex', async () => {
+    for (const solo of [undefined, 'sess-123']) {
+      const { server } = makeServer();
+      const html = await render(server, solo);
+      const match = html.match(/window\.__codemanKeyboardHoldModes=(\[[^<]*\]);/);
+      expect(match).not.toBeNull();
+      expect(JSON.parse(match![1])).toEqual(['claude']);
+    }
+  });
+
   it('escapes the solo id so it cannot break out of the inline <script>', async () => {
     const { server } = makeServer({});
     const html = await render(server, 'a</script><b>');
@@ -190,6 +222,7 @@ describe('WebServer.renderIndexHtml', () => {
     vi.mocked(isDeepSeekAvailable).mockReturnValue(false);
     vi.mocked(isDeepSeekRunnable).mockReturnValue(false);
     vi.mocked(isOmpAvailable).mockReturnValue(true);
+    vi.mocked(isCopilotAvailable).mockReturnValue(true);
     vi.mocked(isCloudflaredAvailable).mockReturnValue(true);
     vi.mocked(isGitAvailable).mockReturnValue(true);
     const { server } = makeServer({});
@@ -208,6 +241,7 @@ describe('WebServer.renderIndexHtml', () => {
       deepseek: false,
       deepseekBinary: false,
       omp: true,
+      copilot: true,
       cloudflared: true,
       git: true,
       shell: true,
@@ -348,6 +382,7 @@ describe('WebServer.renderIndexHtml', () => {
       isDeepSeekAvailable,
       isDeepSeekRunnable,
       isOmpAvailable,
+      isCopilotAvailable,
       isCloudflaredAvailable,
       isGitAvailable,
     ]) {

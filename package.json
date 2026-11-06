@@ -1,7 +1,8 @@
 {
   "name": "aicodeman",
-  "version": "1.40.0",
-  "description": "Mission control for AI coding agents - run 20 autonomous agents with real-time monitoring and session persistence",
+  "version": "1.48.0",
+  "description": "Self-hosted mission control for AI coding agents: run Claude Code, Codex, OpenCode, Gemini, DeepSeek, Grok and more 24/7 in tmux, from any device.",
+  "mcpName": "io.github.Ark0N/codeman",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -38,11 +39,11 @@
     "check:public-assets": "node scripts/check-public-assets.mjs",
     "capture:subagents": "node scripts/capture-subagent-screenshots.mjs",
     "changeset": "changeset",
-    "version-packages": "changeset version && node scripts/sync-plugin.mjs && npm install --package-lock-only && node scripts/check-lockfile-sync.mjs",
+    "version-packages": "changeset version && node scripts/generate-whats-new.mjs && prettier --write src/web/public/whats-new.json && node scripts/sync-plugin.mjs && npm install --package-lock-only && node scripts/check-lockfile-sync.mjs",
     "check:lockfile": "node scripts/check-lockfile-sync.mjs",
     "check:plugin": "node scripts/sync-plugin.mjs --check && claude plugin validate --strict plugins/codeman && claude plugin validate --strict .claude-plugin/marketplace.json",
     "knip": "npx --yes knip@latest --config config/knip.json",
-    "release": "changeset publish"
+    "release": "node scripts/npm-release.mjs"
   },
   "prettier": {
     "singleQuote": true,
@@ -132,7 +133,7 @@
     "exceljs": "4.4.0",
     "fflate": "0.8.3",
     "pixelmatch": "^6.0.0",
-    "playwright": "^1.58.0",
+    "playwright": "^1.64.1",
     "pngjs": "^7.0.0",
     "postcss": "^8.5.15",
     "prettier": "^3.4.0",
@@ -171,7 +172,7 @@
   "bugs": {
     "url": "https://github.com/Ark0N/Codeman/issues"
   },
-  "homepage": "https://github.com/Ark0N/Codeman#readme",
+  "homepage": "https://getcodeman.com",
   "files": [
     "dist",
     "scripts/postinstall.js",

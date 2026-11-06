@@ -20,18 +20,19 @@ import { FastifyInstance } from 'fastify';
 import { StatusTelemetrySchema } from '../schemas.js';
 import { parseBody } from '../route-helpers.js';
 import {
+  parsePromptCache,
   parseStatusTelemetry,
   parseSessionStatus,
   formatSessionStatusText,
   telemetrySignature,
   type RawStatuslinePayload,
 } from '../../usage-telemetry.js';
-import { SessionStatusTelemetry } from '../sse-events.js';
+import { SessionPromptCache, SessionStatusTelemetry } from '../sse-events.js';
 import { setLatestPlanUsage } from '../plan-usage-latest.js';
-import type { SessionPort, EventPort } from '../ports/index.js';
+import type { SessionPort, EventPort, KeepWarmPort } from '../ports/index.js';
 import { getCli } from '../../config/cli-registry/index.js';
 
-export function registerStatusTelemetryRoutes(app: FastifyInstance, ctx: SessionPort & EventPort): void {
+export function registerStatusTelemetryRoutes(app: FastifyInstance, ctx: SessionPort & EventPort & KeepWarmPort): void {
   // Last broadcast telemetry signature per session — the statusline fires on
   // every assistant message, so we only rebroadcast when the value changes.
   const lastSig = new Map<string, string>();
@@ -50,13 +51,37 @@ export function registerStatusTelemetryRoutes(app: FastifyInstance, ctx: Session
 
     const payload = data as RawStatuslinePayload | undefined;
 
+    // Only a CLI that has a statusline exporter at all speaks for its own model and
+    // prompt-cache state: both ride the SAME statusline payload the exporter POSTs, so
+    // both are gated on capabilities.statusLineTelemetry (the gate that also decides
+    // whether the exporter is injected at all, in tmux-manager._resolveStatusLine).
+    const session = ctx.sessions.get(sessionId);
+    const reportsStatusLine = !!session && !!getCli(session.mode)?.capabilities.statusLineTelemetry;
+
     // The model the CLI says it is running, for the session headers (displayModel). It
     // rides every render, so it follows an in-session `/model`; the session dedupes and
-    // broadcasts only a change. Only a CLI that has a statusline exporter at all may
-    // report one here.
-    const session = ctx.sessions.get(sessionId);
-    if (session && getCli(session.mode)?.capabilities.statusLineTelemetry) {
+    // broadcasts only a change.
+    if (session && reportsStatusLine) {
       session.noteReportedModel('statusline', payload?.model?.display_name);
+    }
+
+    // Prompt-cache state of the main conversation (Claude Code v2.1.251+): kept on the
+    // session for the Session Options readout and `toState()`, broadcast only when the
+    // report changes (the statusline fires on every assistant message). The broadcast
+    // carries the STORED object, so a compaction stamp set in setPromptCache rides along.
+    // Reports are applied in arrival order. When the exporter wraps a user's own statusline
+    // it backgrounds this POST (hooks-config.ts), so two sub-second loopback reports can
+    // arrive out of order; a stale one then briefly overwrites newer state until the next
+    // render corrects it. Accepted for a display-only readout rather than ordered here.
+    const promptCache = reportsStatusLine ? parsePromptCache(payload) : null;
+    if (promptCache) {
+      if (session?.setPromptCache(promptCache)) {
+        ctx.broadcast(SessionPromptCache, { sessionId, ...session.promptCache });
+        // Persisted on change, like a model change, so a crash restores the latest report.
+        ctx.persistSessionState(session);
+      }
+      // Every report moves `expires_at`, so the keep-warm re-evaluates on each one.
+      void ctx.keepWarm.schedule(sessionId);
     }
 
     // Plan-usage limits (account-wide) → broadcast to the header chip, when

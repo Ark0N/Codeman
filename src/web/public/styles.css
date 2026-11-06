@@ -616,6 +616,52 @@ body {
   padding-left: var(--lineage-spine-channel);
 }
 
+/* L-shaped strip (`_syncTabStripCorner()`, app.js): a wrapped classic strip
+   runs the header's full width, the toolbar sits over its top-right corner,
+   and only the rows beside the toolbar stop short of it. A flex line cannot
+   be shortened on its own, so the strip lays its tabs out inline, around a
+   float the size of the toolbar's box (measured into --tab-corner-width and
+   --tab-corner-height). The strip is a scroll container, so it contains the
+   float and is never shorter than the toolbar it now holds up; a strip that
+   would actually scroll keeps the plain wrap instead. Inline tabs space their
+   rows with a bottom margin (the old row-gap, lineage's included); the strip
+   carries no font size of its own, so the whitespace between tabs is 0 wide. */
+.header:has(> .session-tabs-host > .session-tabs.tabs-corner) > .header-right {
+  position: absolute;
+  top: 0.35rem;
+  right: 0.75rem;
+}
+
+.session-tabs-host > .session-tabs.tabs-corner {
+  display: block;
+  font-size: 0;
+  padding-bottom: 0;
+}
+
+.session-tabs-host > .session-tabs.tabs-corner::before {
+  content: '';
+  float: right;
+  width: var(--tab-corner-width, 0px);
+  height: var(--tab-corner-height, 0px);
+}
+
+.session-tabs-host > .session-tabs.tabs-corner > .session-tab {
+  display: inline-flex;
+  vertical-align: top;
+  margin: 0 2px var(--lineage-row-gap, 4px) 0;
+}
+
+/* The first tab is capped to the room beside the toolbar: one wider than that (a
+   selected one shows its gear and close) has its name trimmed to fit, so the
+   layout never depends on which tab is selected. */
+.session-tabs-host > .session-tabs.tabs-corner > .session-tab.tab-corner-fit {
+  max-width: var(--tab-corner-first-max, none);
+}
+
+.session-tabs-host > .session-tabs.lineage-tree.tabs-corner {
+  padding-bottom: calc(var(--lineage-bottom-room) - var(--lineage-row-gap));
+}
+
 .session-tabs::-webkit-scrollbar {
   width: 4px;
   height: 0;
@@ -716,6 +762,19 @@ html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group-header {
   text-align: left;
 }
 
+/* A tab just arrived inside this collapsed group: a short highlight on its header. */
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group-header.tab-layout-group-arrived {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  transition: background-color 0.6s ease-out, color 0.6s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group-header.tab-layout-group-arrived {
+    transition: none;
+  }
+}
+
 html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group-toggle {
   cursor: pointer;
   user-select: none;
@@ -813,6 +872,141 @@ html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group-rename-input {
 html[data-tab-orientation='vertical'] .tab-rail .session-tabs--grouped .session-tab,
 html[data-tab-orientation='vertical'] .tab-rail .session-tabs--grouped .tab-layout-group-header {
   user-select: none;
+}
+
+/* --- Focus section (pinned shortcuts, app.js _renderTabFocus) ---------- */
+/* Its own element above #sessionTabs in the rail, so it shows above the flat
+   rail and the grouped one alike and never takes part in the list's order,
+   tree or Alt+N numbering. Capped so a long Focus never starves the list. */
+.tab-focus {
+  display: none;
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .tab-focus:not([hidden]) {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 40%;
+  min-height: 0;
+  padding: 0.35rem 0.35rem 0.3rem calc(0.35rem + 24px);
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .tab-focus-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  padding: 4px 6px 2px;
+  border: 0;
+  border-radius: 4px;
+  color: var(--text);
+  background: transparent;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-align: left;
+  cursor: pointer;
+  user-select: none;
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .tab-focus-toggle:hover {
+  background: var(--bg-hover);
+}
+
+html[data-tab-orientation='vertical'] .tab-rail :is(.tab-focus-toggle, .tab-focus-item):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.tab-focus-title {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.tab-focus-count {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+}
+
+.tab-focus--collapsed .tab-layout-group-chevron::before {
+  content: '\25B8';
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .tab-focus-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .tab-focus-list[hidden] {
+  display: none;
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .tab-focus-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  padding: 3px 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+  border-radius: 4px;
+  color: var(--text-dim, var(--text-muted));
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .tab-focus-item:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .tab-focus-item[aria-current='true'] {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+.tab-focus-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The tab's own status dot and alert colour, so a shortcut says what its tab
+   says (the row keeps its full alert ring; a shortcut only recolours the dot). */
+.tab-focus-item .tab-status {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--green);
+}
+.tab-focus-item .tab-status.error { background: var(--red); }
+.tab-focus-item .tab-status.ended { background: var(--text-muted); opacity: 0.5; }
+.tab-focus-item.tab-alert-action .tab-status { background: var(--red); box-shadow: 0 0 6px rgba(239, 68, 68, 0.7); }
+.tab-focus-item.tab-alert-idle .tab-status { background: var(--yellow); box-shadow: 0 0 6px rgba(234, 179, 8, 0.6); }
+.tab-focus-item .tab-web-icon {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  color: var(--text-dim, var(--text-muted));
 }
 
 html[data-tab-orientation='vertical'] .tab-rail .tab-layout-drag-active {
@@ -1270,6 +1464,26 @@ html[data-tab-anim="blur"] .session-tab.tab-enter {
 }
 
 .anim-lab-range output { justify-self: end; color: var(--text); font-variant-numeric: tabular-nums; }
+
+.anim-lab-select {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: -2px 0 10px;
+  padding: 0 2px;
+  color: var(--text-dim);
+  font-size: 0.66rem;
+}
+
+.anim-lab-select select {
+  background: var(--bg-dark, #111);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 0.66rem;
+  padding: 2px 4px;
+}
 .anim-lab-range input { grid-column: 1 / -1; width: 100%; accent-color: #00ff66; }
 
 .anim-lab-demo {
@@ -1456,11 +1670,20 @@ html[data-win-anim="blur"] .ultracode-window.win-enter {
    frame. `will-change` is deliberately not set, the base rule needs its
    `will-change: contents` for terminal compositing. */
 
-.terminal-container.term-enter {
+/* A tile's screen (.tile-body, tile-grid.js) plays the same style when its
+   first capture lands: the same rules, so a tile combines its frame's own
+   entrance with the pane style. Its xterm's opacity fade stands aside for it. */
+.terminal-container.term-enter,
+.tile-body.term-enter {
   animation-fill-mode: both;
 }
 
-.terminal-container.term-enter::before {
+.tile-body.term-enter .xterm {
+  transition: none;
+}
+
+.terminal-container.term-enter::before,
+.tile-body.term-enter::before {
   content: "";
   position: absolute;
   inset: 0;
@@ -1470,14 +1693,29 @@ html[data-win-anim="blur"] .ultracode-window.win-enter {
   animation-fill-mode: both;
 }
 
+/* A screen whose content lands while its frame is still entering waits for
+   it (--tile-screen-delay, entrance-animations.js): the body holds its first
+   keyframe meanwhile (hidden), its wash does not (a held wash is a bright
+   static block). */
+.tile-body.term-enter {
+  animation-delay: var(--tile-screen-delay, 0ms);
+}
+
+.tile-body.term-enter::before {
+  animation-delay: var(--tile-screen-delay, 0ms);
+  animation-fill-mode: forwards;
+}
+
 /* CRT, power-on: a hot line that expands to full height. */
-html[data-term-anim="crt"] .terminal-container.term-enter {
+html[data-term-anim="crt"] .terminal-container.term-enter,
+html[data-term-anim="crt"] .tile-body.term-enter {
   animation-name: term-enter-crt;
   animation-duration: calc(560ms * var(--anim-enter-scale, 1));
   animation-timing-function: cubic-bezier(0.3, 0.9, 0.3, 1);
 }
 
-html[data-term-anim="crt"] .terminal-container.term-enter::before {
+html[data-term-anim="crt"] .terminal-container.term-enter::before,
+html[data-term-anim="crt"] .tile-body.term-enter::before {
   animation-name: term-enter-crt-flash;
   animation-duration: calc(560ms * var(--anim-enter-scale, 1));
   animation-timing-function: ease-out;
@@ -1498,55 +1736,16 @@ html[data-term-anim="crt"] .terminal-container.term-enter::before {
   100% { opacity: 0; background: transparent; }
 }
 
-/* Boot, flickers on under a green scan sweep. */
-html[data-term-anim="boot"] .terminal-container.term-enter {
-  animation-name: term-enter-boot;
-  animation-duration: calc(760ms * var(--anim-enter-scale, 1));
-  animation-timing-function: linear;
-}
-
-html[data-term-anim="boot"] .terminal-container.term-enter::before {
-  background: linear-gradient(
-    180deg,
-    transparent 0%,
-    rgba(0, 255, 102, 0.05) 40%,
-    rgba(200, 255, 220, 0.28) 50%,
-    rgba(0, 255, 102, 0.05) 60%,
-    transparent 100%
-  );
-  background-size: 100% 300%;
-  animation-name: term-enter-boot-scan;
-  animation-duration: calc(760ms * var(--anim-enter-scale, 1));
-  animation-timing-function: ease-in-out;
-}
-
-@keyframes term-enter-boot {
-  0%   { opacity: 0; transform: scale(0.995); }
-  8%   { opacity: 0.85; }
-  15%  { opacity: 0.1; }
-  24%  { opacity: 1; }
-  33%  { opacity: 0.35; }
-  45%  { opacity: 1; transform: none; }
-  58%  { opacity: 0.7; }
-  70%  { opacity: 1; }
-  100% { opacity: 1; transform: none; }
-}
-
-@keyframes term-enter-boot-scan {
-  0%   { opacity: 0; background-position: 0 -150%; }
-  12%  { opacity: 1; }
-  86%  { opacity: 1; }
-  100% { opacity: 0; background-position: 0 150%; }
-}
-
 /* Wipe, reveals top-to-bottom behind a bright edge. */
-html[data-term-anim="wipe"] .terminal-container.term-enter {
+html[data-term-anim="wipe"] .terminal-container.term-enter,
+html[data-term-anim="wipe"] .tile-body.term-enter {
   animation-name: term-enter-wipe;
   animation-duration: calc(520ms * var(--anim-enter-scale, 1));
   animation-timing-function: cubic-bezier(0.35, 0.85, 0.3, 1);
 }
 
-html[data-term-anim="wipe"] .terminal-container.term-enter::before {
+html[data-term-anim="wipe"] .terminal-container.term-enter::before,
+html[data-term-anim="wipe"] .tile-body.term-enter::before {
   background: linear-gradient(180deg, rgba(0, 255, 102, 0.16) 0%, rgba(190, 255, 215, 0.5) 82%, transparent 100%);
   animation-name: term-enter-wipe-edge;
   animation-duration: calc(520ms * var(--anim-enter-scale, 1));
@@ -1565,7 +1764,8 @@ html[data-term-anim="wipe"] .terminal-container.term-enter::before {
 }
 
 /* Slide up, rises into place from below. */
-html[data-term-anim="slide"] .terminal-container.term-enter {
+html[data-term-anim="slide"] .terminal-container.term-enter,
+html[data-term-anim="slide"] .tile-body.term-enter {
   animation-name: term-enter-slide;
   animation-duration: calc(420ms * var(--anim-enter-scale, 1));
   animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
@@ -1577,7 +1777,8 @@ html[data-term-anim="slide"] .terminal-container.term-enter {
 }
 
 /* Fade, quiet, with a touch of scale. */
-html[data-term-anim="fade"] .terminal-container.term-enter {
+html[data-term-anim="fade"] .terminal-container.term-enter,
+html[data-term-anim="fade"] .tile-body.term-enter {
   animation-name: term-enter-fade;
   animation-duration: calc(340ms * var(--anim-enter-scale, 1));
   animation-timing-function: ease-out;
@@ -1615,7 +1816,8 @@ html[data-term-anim="fade"] .terminal-container.term-enter {
    resize() and through to the PTY. `filter` is paint-only (measured live: 178x38
    before, during and after a run), and the property allowlist for every one of
    these keyframes is pinned by test/entrance-animations.test.ts. */
-html[data-term-anim="blur"] .terminal-container.term-enter {
+html[data-term-anim="blur"] .terminal-container.term-enter,
+html[data-term-anim="blur"] .tile-body.term-enter {
   animation-name: term-enter-blur;
   animation-duration: calc(520ms * var(--anim-enter-scale, 1));
   animation-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
@@ -1738,9 +1940,19 @@ html[data-line-anim="blur"] .connection-line.line-enter {
   .ultracode-window.win-enter::before,
   .terminal-container.term-enter,
   .terminal-container.term-enter::before,
+  .tile-body.term-enter,
+  .tile-body.term-enter::before,
+  .tile.tile--entering,
+  .tile.tile--entering::before,
   .connection-line.line-enter,
-  .connection-line-packet {
+  .connection-line-packet,
+  .connection-line.tile-beam-line,
+  .session-tab.tab-launch::after {
     animation: none !important;
+  }
+
+  .tile-beam-lines {
+    display: none;
   }
 }
 
@@ -2083,6 +2295,132 @@ html[data-tab-orientation='vertical'].tab-rail-compact
   margin-left: auto;
   padding-left: 0.75rem;
   border-left: 1px solid var(--glass-border);
+  position: relative;
+}
+
+/* Draggable edge of the toolbar (header-divider.js). Absolute, so it takes no layout room and the
+   existing border-left stays the visible line. */
+.header-divider {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -6px;
+  width: 12px;
+  cursor: col-resize;
+  touch-action: none;
+  z-index: 2;
+}
+
+.header-divider:hover,
+.header-divider:focus-visible {
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+  outline: none;
+}
+
+.header-divider:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+/* Everything below applies only where the tabs share the header with the toolbar, i.e. where the handle is
+   visible to undo it: not in the sidebar layout, the vertical rail or a solo window, and not on a phone. */
+
+/* A width the user chose: the toolbar keeps it and wraps onto a second line when its content is wider. */
+@media (min-width: 769px) {
+  html[data-header-right-width]:not([data-tab-orientation='vertical']):not([data-session-list='sidebar'])
+    body:not(.solo-mode)
+    .header-right {
+    flex: 0 0 var(--header-right-width);
+    width: var(--header-right-width);
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    align-content: center;
+    row-gap: 0.25rem;
+    min-height: var(--header-height);
+  }
+
+  /* The narrower the toolbar, the less each usage reading shows (data-header-density, header-divider.js):
+     tight drops the window and CPU/MEM labels, dense shortens the provider names, tiny keeps only the rings.
+     The prefix outweighs the per-style rules further down, so every header-stats style follows it.
+     The opt-in host readings (.stat-item--host: GPU, VRAM and the two clocks) keep their labels at every
+     step: their values look like CPU's and MEM's ("40%", "3.2G", "1800 MHz" beside "4200 MHz"), so the
+     label is the only thing that says which reading is which. */
+  html[data-header-density]:not([data-tab-orientation='vertical']):not([data-session-list='sidebar'])
+    body:not(.solo-mode)
+    :is(.header-system-stats .stat-item:not(.stat-item--host) .stat-label, .header-plan-usage .pu-label) {
+    display: none;
+  }
+
+  html[data-header-density]:not([data-tab-orientation='vertical']):not([data-session-list='sidebar'])
+    body:not(.solo-mode)
+    :is(.header-system-stats, .header-plan-usage) {
+    gap: 8px;
+    padding: 0 8px;
+  }
+
+  html:is([data-header-density='dense'], [data-header-density='tiny']):not([data-tab-orientation='vertical']):not(
+      [data-session-list='sidebar']
+    )
+    body:not(.solo-mode)
+    .header-plan-usage
+    .pu-provider {
+    font-size: 0;
+  }
+
+  html:is([data-header-density='dense'], [data-header-density='tiny']):not([data-tab-orientation='vertical']):not(
+      [data-session-list='sidebar']
+    )
+    body:not(.solo-mode)
+    .header-plan-usage
+    .pu-provider::after {
+    content: attr(data-short);
+    font-size: 0.6rem;
+  }
+
+  /* Rings-only is a Compact-style reading: the other styles have no rings, so they keep their values. */
+  html[data-header-stats='compact'][data-header-density='tiny']:not([data-tab-orientation='vertical']):not(
+      [data-session-list='sidebar']
+    )
+    body:not(.solo-mode)
+    :is(.header-system-stats .stat-value, .header-plan-usage .pu-val) {
+    display: none;
+  }
+
+  /* With its value gone, a reading with no ring (the two clocks, and VRAM while its total is unknown:
+     .stat-item--ringless, toggled by panels-ui.js) would be an empty item that still takes a gap. */
+  html[data-header-stats='compact'][data-header-density='tiny']:not([data-tab-orientation='vertical']):not(
+      [data-session-list='sidebar']
+    )
+    body:not(.solo-mode)
+    .header-system-stats
+    .stat-item--ringless {
+    display: none;
+  }
+}
+
+body.header-divider-dragging,
+body.header-divider-dragging * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
+/* Only where the tabs share the header with the toolbar. */
+html[data-tab-orientation='vertical'] .header-divider,
+html[data-session-list='sidebar'] .header-divider,
+body.solo-mode .header-divider {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .header-divider {
+    display: none;
+  }
+}
+
+/* The opt-in host readings (GPU, VRAM, MHz) start hidden and are shown by panels-ui.js once the host
+   reports them; a plain `display` on .stat-item would override the attribute, and the Tiles style sets its own
+   (a grid) at a higher specificity, so the selector carries the style attribute to outrank it. */
+html[data-header-stats] .header-system-stats .stat-item[hidden] {
+  display: none;
 }
 
 /* Connection Indicator */
@@ -2700,6 +3038,33 @@ html[data-tab-orientation='vertical'].tab-rail-compact
   transform: rotate(45deg);
 }
 
+/* "+" (new session beside this tab, app.openTabNewSessionMenu): same reveal as the gear. */
+.session-tab .tab-new {
+  opacity: 0;
+  width: 0;
+  padding: 0;
+  font-size: 1rem;
+  line-height: 1;
+  color: var(--text-muted);
+  cursor: pointer;
+  overflow: hidden;
+  transition: opacity 0.15s, width 0.15s, padding 0.15s;
+}
+.session-tab.active .tab-new {
+  opacity: 1;
+  width: auto;
+  padding: 0 0.3rem;
+}
+.session-tab .tab-new:hover {
+  color: var(--accent-hover);
+}
+
+/* Per-device toggle (App Settings → Tab Bar), mirrored as tabs-show-new on <html>
+   by settings-ui.js. !important so no layout's reveal rule (sidebar, touch) wins. */
+html:not(.tabs-show-new) .session-tab .tab-new {
+  display: none !important;
+}
+
 /* ===== Session detach / undock (beta/session-detach) ===================== */
 
 /* Pop-out (detach) icon on each tab — mirrors .tab-gear reveal-on-hover. */
@@ -2853,7 +3218,7 @@ html[data-tab-orientation='vertical']:not(.tab-rail-compact) .tab-rail
   pointer-events: auto;
 }
 
-html[data-tab-orientation='vertical'].tab-rail-compact .session-tab .tab-actions > :is(.tab-gear, .tab-detach, .tab-close) {
+html[data-tab-orientation='vertical'].tab-rail-compact .session-tab .tab-actions > :is(.tab-gear, .tab-new, .tab-detach, .tab-close) {
   display: none;
 }
 
@@ -2907,6 +3272,14 @@ html[data-tab-orientation='vertical'].tab-rail-compact .session-tab .tab-actions
 
 .tab-rail-action-menu .danger {
   color: var(--red);
+}
+
+/* A child session's placement note: information, not an action (no focus, no hover). */
+.tab-rail-action-menu .tab-rail-action-menu-note {
+  padding: 0.45rem 0.6rem;
+  color: var(--text-muted);
+  font-size: 0.85em;
+  cursor: default;
 }
 
 :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-range-field {
@@ -2972,6 +3345,14 @@ body.solo-mode .btn-lifecycle-log {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* Detach Tiles: the title is a handle, dragged onto a Codeman window's tiles
+   to dock the session there (tile-grid.js _installSoloTileHandle). */
+.solo-session-title.solo-session-title--handle {
+  cursor: grab;
+}
+.solo-session-title.solo-session-title--handle:active {
+  cursor: grabbing;
+}
 /* "Session unavailable" overlay for a solo window whose session has ended. */
 .solo-gone-overlay {
   position: fixed;
@@ -3009,6 +3390,19 @@ body.solo-mode .btn-lifecycle-log {
    `.tab-harness.run-mode-dot <id>` slot that the run-mode-dot rules draw: brand
    marks as is, monochrome ones in the tab's own text colour, so no per-CLI tab
    colour lives here any more. Only the shell keeps a pill. */
+
+/* CLI Logos on Tabs off (`showTabCliLogos`, per-device; settings-ui.js
+   applyTabOrientation() and the pre-paint script in index.html stamp the
+   attribute). The logo leaves the session tabs (header strip, vertical rail,
+   sidebar, grouped rail, phone chips) and the desktop home rail; the status
+   dot and the shell's SH pill stay. Every row it sits in spaces its children
+   with flex `gap`, which skips a display:none item, so no empty slot is left.
+   Tile and split headers (.tile-harness, .split-harness) and the Run menus
+   keep their logos: only these two classes are named here. */
+html[data-tab-logos='off'] .session-tab .tab-harness,
+html[data-tab-logos='off'] .home-sessions-harness {
+  display: none;
+}
 
 /* Timer Banner - Compact */
 .timer-banner {
@@ -5590,6 +5984,22 @@ html[data-skin="og"] .welcome-primary:hover {
   color: #eef2ff;
 }
 
+/* GitHub Copilot mode colors */
+.btn-toolbar.btn-run.mode-copilot,
+.btn-toolbar.btn-run-gear.mode-copilot {
+  background: linear-gradient(135deg, #2e1065 0%, #6d28d9 55%, #7c3aed 100%);
+  border-color: rgba(163, 113, 247, 0.5);
+  color: #ede9fe;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+.btn-toolbar.btn-run.mode-copilot:hover,
+.btn-toolbar.btn-run-gear.mode-copilot:hover {
+  background: linear-gradient(135deg, #3b0f8c 0%, #7c3aed 55%, #8b5cf6 100%);
+  box-shadow: 0 0 12px rgba(163, 113, 247, 0.35), 0 2px 8px rgba(109, 40, 217, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  border-color: rgba(196, 167, 252, 0.6);
+  color: #f5f3ff;
+}
+
 /* Grok mode colors. Same cascade note as pi above: this base-sheet pair only
    renders on the `og` skin — the nested `html:not([data-skin="og"])` block
    re-declares `.btn-toolbar.btn-run` at a HIGHER specificity, so grok also
@@ -5749,6 +6159,7 @@ html[data-skin="og"] .welcome-primary:hover {
 .run-mode-dot.opencode,
 .run-mode-dot.pi,
 .run-mode-dot.grok,
+.run-mode-dot.copilot,
 .run-mode-dot.shell,
 .run-mode-dot.web {
   width: 1.15em;
@@ -5769,6 +6180,7 @@ html[data-skin="og"] .welcome-primary:hover {
 .run-mode-dot.opencode,
 .run-mode-dot.pi,
 .run-mode-dot.grok,
+.run-mode-dot.copilot,
 .run-mode-dot.shell,
 .run-mode-dot.web {
   background-color: currentColor;
@@ -5784,6 +6196,7 @@ html[data-skin="og"] .welcome-primary:hover {
 .run-mode-dot.opencode { --run-mode-logo: url("data:image/svg+xml,%3Csvg fill-rule='evenodd' viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M16 6H8v12h8V6zm4 16H4V2h16v20z'/%3E%3C/svg%3E"); }
 .run-mode-dot.pi { --run-mode-logo: url("data:image/svg+xml,%3Csvg fill-rule='evenodd' viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath clip-rule='evenodd' d='M1 1h16.5v11H12v5.5H6.5V23H1V1zm5.5 5.5V12H12V6.5H6.5z'/%3E%3Cpath d='M17.5 12H23v11h-5.5V12z'/%3E%3C/svg%3E"); }
 .run-mode-dot.grok { --run-mode-logo: url("data:image/svg+xml,%3Csvg fill-rule='evenodd' viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M9.27 15.29l7.978-5.897c.391-.29.95-.177 1.137.272.98 2.369.542 5.215-1.41 7.169-1.951 1.954-4.667 2.382-7.149 1.406l-2.711 1.257c3.889 2.661 8.611 2.003 11.562-.953 2.341-2.344 3.066-5.539 2.388-8.42l.006.007c-.983-4.232.242-5.924 2.75-9.383.06-.082.12-.164.179-.248l-3.301 3.305v-.01L9.267 15.292M7.623 16.723c-2.792-2.67-2.31-6.801.071-9.184 1.761-1.763 4.647-2.483 7.166-1.425l2.705-1.25a7.808 7.808 0 00-1.829-1A8.975 8.975 0 005.984 5.83c-2.533 2.536-3.33 6.436-1.962 9.764 1.022 2.487-.653 4.246-2.34 6.022-.599.63-1.199 1.259-1.682 1.925l7.62-6.815'/%3E%3C/svg%3E"); }
+.run-mode-dot.copilot { --run-mode-logo: url("data:image/svg+xml,%3Csvg fill-rule='evenodd' viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M12 3C7 3 3 6.5 3 11v4a3 3 0 003 3h12a3 3 0 003-3v-4c0-4.5-4-8-9-8zM8.5 11.5a1.5 2 0 110 4 1.5 2 0 010-4zm7 0a1.5 2 0 110 4 1.5 2 0 010-4z'/%3E%3C/svg%3E"); }
 .run-mode-dot.shell { --run-mode-logo: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='2.5' y='3.5' width='19' height='17' rx='3'/%3E%3Cpath d='M7 9.5l3 2.5-3 2.5M12.5 15h4.5'/%3E%3C/svg%3E"); }
 .run-mode-dot.web { --run-mode-logo: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpath d='M2 12h20M12 2a15 15 0 0 1 0 20 15 15 0 0 1 0-20'/%3E%3C/svg%3E"); }
 
@@ -5962,6 +6375,12 @@ html[data-skin="og"] .welcome-primary:hover {
 
 /* Mobile voice input button - hidden on desktop */
 .btn-voice-mobile {
+  display: none;
+}
+
+/* Mobile Attach button (wrapper holds the button and its file input) - hidden on
+   desktop; the phone block in mobile.css shows it */
+.btn-attach-mobile-wrap {
   display: none;
 }
 
@@ -6447,6 +6866,27 @@ html[data-skin="og"] .welcome-primary:hover {
 
 .case-settings-popover.hidden {
   display: none;
+}
+
+/* Default session group selector (Case settings, desktop and phone popovers) */
+.case-default-group-label {
+  display: block;
+  margin-top: 8px;
+  font-size: 0.75rem;
+  color: var(--text);
+}
+
+.case-default-group-select {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  padding: 3px 6px;
+  font: inherit;
+  font-size: 0.75rem;
+  color: var(--text);
+  background: var(--bg-input, var(--bg-card));
+  border: 1px solid var(--control-border);
+  border-radius: 6px;
 }
 
 .case-settings-popover .form-hint {
@@ -7374,6 +7814,52 @@ html[data-skin="og"] .welcome-primary:hover {
   opacity: 0.8;
 }
 
+/* The picker's search box reuses .session-sidebar-filter-input's theme-token
+   styling (same reasoning as the .set-scope pill above): only its own spacing
+   and the no-matches line are added here. 0.35rem is the standard gap the
+   modal's neighbouring form fields already use (`.form-hint`'s own margin-top):
+   the global `* { margin: 0 }` reset left the box sitting flush under the CLI
+   hint line above it, and the old 0.5rem read as too big a gap above the list
+   (compounded by the always-visible no-matches line the rule below fixes). */
+#customModelPickModal .custom-model-pick-search {
+  margin-top: 0.35rem;
+  margin-bottom: 0.35rem;
+}
+
+#customModelPickModal .custom-model-pick-no-matches {
+  text-align: center;
+  padding: 1rem 0;
+}
+
+/* "Nothing is marked: this endpoint did not report which model it has loaded": the same
+   `.form-hint` `display: block` beats `[hidden]` trap the two rules below fix for the
+   no-matches line and the filtered rows, so the attribute needs the same re-assertion. */
+#customModelPickModal .custom-model-pick-unknown {
+  padding-bottom: 0.15rem;
+}
+
+#customModelPickModal .custom-model-pick-unknown[hidden] {
+  display: none !important;
+}
+
+/* Same class of bug as the row rule below: the no-matches line carries
+   `.form-hint`, whose `display: block` outranks the UA `[hidden]` rule, so
+   `filterCustomModelPick()` toggling `hidden` changed nothing on screen and
+   "No models match" showed while every model was listed with an empty search
+   box. The `[hidden]` re-assertion makes the attribute hide the line again. */
+#customModelPickModal .custom-model-pick-no-matches[hidden] {
+  display: none !important;
+}
+
+/* A filtered-out row's `hidden` must actually hide it: `.run-mode-option` sets
+   `display: flex` (and mobile.css restates the class in a media query), which
+   outranks the UA `[hidden] { display: none }` rule, so the filter would
+   silently do nothing without this re-assertion. Scoped to this modal's rows;
+   the Run menu's own .run-mode-option entries never take `hidden`. */
+#customModelPickModal .run-mode-option[hidden] {
+  display: none !important;
+}
+
 /* Custom Model Endpoint Profiles: llama-swap model-swap confirmation — replaces a native
    confirm() popup (docs/custom-model-endpoints-plan.md) so it looks and feels like the
    rest of the app instead of a browser chrome dialog. Shares the context-window-too-small
@@ -7592,6 +8078,9 @@ html[data-skin="og"] .welcome-primary:hover {
 .mobile-case-picker-footer {
   padding: 12px 20px 16px;
   border-top: 1px solid rgba(255, 255, 255, 0.1);
+  /* Create New Case and Worktrees share the row, half each. */
+  display: flex;
+  gap: 8px;
 }
 
 .btn-case-create-mobile {
@@ -7945,6 +8434,249 @@ html[data-skin="og"] .welcome-primary:hover {
   justify-content: center;
   padding-top: 0.5rem;
   border-top: 1px solid var(--border);
+}
+
+/* Close Session: "Kill & remove worktree" (a session in a Codeman-managed git
+   worktree only). The wrapper re-asserts [hidden]: it lays out as a column. */
+.close-option-worktree {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.close-option-worktree[hidden] {
+  display: none;
+}
+.close-option-worktree-branch {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  padding: 0 0.25rem;
+  cursor: pointer;
+}
+.close-option-worktree-branch input {
+  margin-top: 0.1rem;
+}
+
+/* Git worktrees dialog (session-ui.js openWorktreeModal). Its own small button
+   set: the skin block greys `.btn-toolbar.btn-primary` on non-OG skins, and this
+   dialog needs a primary action that reads as one on every skin. */
+.modal-content.worktree-modal {
+  max-width: 640px;
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+}
+.worktree-modal > .modal-body {
+  overflow-y: auto;
+  min-height: 0;
+}
+.worktree-modal-case {
+  font-family: 'SF Mono', Monaco, monospace;
+  font-weight: 500;
+  color: var(--text-dim);
+}
+.worktree-intro {
+  margin: 0 0 0.6rem;
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
+.worktree-status {
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  margin-bottom: 0.6rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.worktree-status[hidden],
+.worktree-form-error[hidden] {
+  display: none;
+}
+.worktree-status-error,
+.worktree-form-error {
+  color: var(--red);
+}
+.worktree-form-error {
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin-top: 0.25rem;
+}
+.worktree-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-bottom: 0.9rem;
+}
+.worktree-row {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.5rem 0.65rem;
+  background: var(--control-bg);
+}
+.worktree-row--managed {
+  border-color: var(--border-light);
+}
+.worktree-row-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.45rem;
+}
+.worktree-row-name {
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.worktree-badge {
+  font-size: 0.66rem;
+  line-height: 1.5;
+  padding: 0 0.4rem;
+  border-radius: 999px;
+  border: 1px solid var(--border-light);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.worktree-badge-branch {
+  font-family: 'SF Mono', Monaco, monospace;
+  color: var(--accent);
+  border-color: rgba(var(--accent-rgb), 0.35);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.worktree-badge-dim {
+  color: var(--text-muted);
+}
+.worktree-badge-warn {
+  color: var(--yellow);
+  border-color: var(--yellow);
+}
+.worktree-badge-live {
+  color: var(--green);
+  border-color: var(--green);
+}
+.worktree-row-actions {
+  display: inline-flex;
+  gap: 0.35rem;
+  margin-left: auto;
+}
+.worktree-row-path {
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  margin-top: 0.25rem;
+  overflow-wrap: anywhere;
+}
+.worktree-empty {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  padding: 0.25rem 0.1rem;
+}
+.worktree-remove-confirm {
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px dashed var(--border-light);
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.worktree-remove-note {
+  margin: 0;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+}
+.worktree-remove-branch {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.worktree-remove-error {
+  margin: 0;
+  font-size: 0.72rem;
+  color: var(--red);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: rgba(224, 99, 99, 0.08);
+  border-radius: 6px;
+  padding: 0.4rem 0.5rem;
+}
+.worktree-remove-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.4rem;
+}
+.worktree-mode-row {
+  max-width: 320px;
+}
+.worktree-new {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.6rem 0.75rem 0.4rem;
+  margin: 0;
+  min-width: 0;
+}
+.worktree-new > legend {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  padding: 0 0.3rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.worktree-advanced {
+  margin-bottom: 0.5rem;
+}
+.worktree-advanced > summary {
+  cursor: pointer;
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  margin-bottom: 0.5rem;
+}
+.wt-btn {
+  font: inherit;
+  font-size: 0.8rem;
+  padding: 0.4rem 0.85rem;
+  border-radius: var(--btn-radius);
+  border: 1px solid var(--control-border);
+  background: var(--control-bg);
+  color: var(--text);
+  cursor: pointer;
+  transition: background var(--transition-smooth), border-color var(--transition-smooth);
+}
+.wt-btn:hover:not(:disabled) {
+  background: var(--control-bg-hover);
+  border-color: var(--control-border-hover);
+}
+.wt-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.wt-btn-sm {
+  font-size: 0.72rem;
+  padding: 0.2rem 0.6rem;
+}
+.wt-btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+.wt-btn-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+.wt-btn-danger {
+  color: var(--red);
+  border-color: rgba(224, 99, 99, 0.45);
+}
+.wt-btn-danger:hover:not(:disabled) {
+  background: rgba(224, 99, 99, 0.12);
+  border-color: var(--red);
 }
 
 .modal-session-name {
@@ -8481,6 +9213,37 @@ kbd {
 .command-palette-subtitle {
   color: var(--text-muted);
   font-size: 0.72rem;
+}
+
+/* New-session row: the agent it will start, switchable with Left/Right or the arrows */
+.command-palette-item--agent {
+  grid-template-columns: 26px minmax(0, 1fr) auto;
+}
+.command-palette-agent {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.15rem 0.2rem;
+  font-size: 0.78rem;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+  white-space: nowrap;
+}
+.command-palette-agent-arrow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  color: var(--text-muted);
+  border-radius: 4px;
+  font-size: 1rem;
+  line-height: 1;
+}
+.command-palette-agent-arrow:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.1);
 }
 
 /* COD-192: "Browse all sessions…" escape hatch — visually secondary */
@@ -9275,6 +10038,292 @@ kbd {
 .toast-error { border-color: rgba(239, 68, 68, 0.4); }
 .toast-warning { border-color: rgba(234, 179, 8, 0.4); }
 .toast-info { border-color: rgba(59, 130, 246, 0.4); }
+
+/* Security notice card (security-notices.json; showSecurityNotice / showUpdateNotice in
+   panels-ui.js). Its own card in the toast stack, never the plain pill, and in the SAME
+   container, so it shares the toasts' position and z-index. Theme tokens only, so every skin
+   reads. Small amber text and the primary button use --notice-ink: --yellow on the dark
+   skins, and on the light skins --yellow darkened a step, because their --yellow alone is
+   under 4.5:1 for 11-12px text on white (3.9 to 4.4 measured). The primary button's label is
+   --bg-card (dark on the dark skins' light amber, white on the light skins' dark amber). The
+   entrance animates opacity and transform only, and nothing moves under
+   prefers-reduced-motion.
+
+   The card is capped to the room below the stack's top and scrolls inside itself: the
+   container is fixed and does not scroll, so on a short screen (a phone in landscape) the
+   buttons at the bottom were otherwise off-screen and unreachable. The accent bar down the
+   left edge (amber running into red) is therefore a background layer, not a positioned
+   child: a background stays put while the content scrolls. */
+.security-notice {
+  --notice-ink: var(--yellow);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  column-gap: 0.75rem;
+  align-items: start;
+  box-sizing: border-box;
+  width: min(420px, calc(100vw - 1rem));
+  max-height: calc(var(--app-height, 100dvh) - var(--header-height) - 1rem);
+  padding: 0.85rem 0.55rem 0.9rem 1.05rem;
+  background:
+    linear-gradient(180deg, var(--yellow), var(--red)) left top / 4px 100% no-repeat,
+    linear-gradient(180deg, color-mix(in srgb, var(--yellow) 9%, transparent), transparent 6rem),
+    var(--bg-card);
+  border: 1px solid color-mix(in srgb, var(--yellow) 32%, var(--border));
+  border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28), 0 2px 6px rgba(0, 0, 0, 0.16);
+  color: var(--text);
+  font-size: 0.8rem;
+  line-height: 1.45;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  pointer-events: auto;
+  opacity: 0;
+  transform: translateY(-6px) scale(0.985);
+  transition: opacity 0.22s ease, transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.security-notice.show {
+  opacity: 1;
+  transform: none;
+}
+
+html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) .security-notice {
+  --notice-ink: color-mix(in srgb, var(--yellow) 85%, black);
+}
+
+/* The update toast carrying a notice is still an update: its frame takes the accent colour,
+   and the amber is left to the warning section inside it. */
+.security-notice.update-notice {
+  background:
+    linear-gradient(var(--accent), var(--accent)) left top / 4px 100% no-repeat,
+    var(--bg-card);
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+}
+
+.security-notice-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 50%;
+  color: var(--notice-ink);
+  background: color-mix(in srgb, var(--yellow) 15%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--yellow) 30%, transparent);
+}
+
+.security-notice-icon svg {
+  width: 1.1rem;
+  height: 1.1rem;
+}
+
+/* The update toast carrying a notice leads with the release, in the accent colour. */
+.security-notice-icon.update-notice-icon {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+.security-notice-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  min-width: 0;
+  padding-top: 0.1rem;
+}
+
+.security-notice-eyebrow {
+  color: var(--notice-ink);
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  line-height: 1.3;
+  text-transform: uppercase;
+}
+
+.security-notice-title {
+  color: var(--text);
+  font-size: 0.9rem;
+  font-weight: 700;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+  text-wrap: balance;
+}
+
+/* Chinese has no spaces, so a balanced title would break inside a word (遭入 / 侵).
+   Break only at the spaces and punctuation the title has; overflow-wrap above still
+   rescues a run that cannot fit. */
+:lang(zh) .security-notice-title {
+  word-break: keep-all;
+}
+
+.security-notice-body,
+.update-notice-text {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.security-notice-body {
+  color: var(--text-dim);
+}
+
+.update-notice-text {
+  color: var(--text);
+}
+
+/* One warning section per notice inside the update toast. */
+.security-notice-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-top: 0.4rem;
+  padding: 0.6rem 0.7rem 0.65rem;
+  border: 1px solid color-mix(in srgb, var(--yellow) 26%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--yellow) 7%, transparent);
+}
+
+.security-notice-section-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--notice-ink);
+}
+
+.security-notice-section-head svg {
+  flex-shrink: 0;
+  width: 0.95rem;
+  height: 0.95rem;
+}
+
+.security-notice-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem 0.8rem;
+  margin-top: 0.5rem;
+}
+
+/* The update toast's buttons share their row, and when it wraps (a phone, a long label)
+   each fills its own, so the two never sit at odd widths one under the other. */
+.update-notice .security-notice-actions {
+  column-gap: 0.6rem;
+}
+
+.update-notice .security-notice-actions > button {
+  flex: 1 1 auto;
+}
+
+.security-notice-primary,
+.security-notice-secondary,
+.security-notice-quiet {
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 700;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.security-notice-primary {
+  padding: 0.45rem 0.85rem;
+  border: 1px solid transparent;
+  border-radius: var(--btn-radius);
+  background: var(--notice-ink);
+  color: var(--bg-card);
+}
+
+.security-notice-primary:hover {
+  background: color-mix(in srgb, var(--notice-ink) 86%, var(--text));
+}
+
+.security-notice-secondary {
+  padding: 0.45rem 0.85rem;
+  border: 1px solid var(--border-light);
+  border-radius: var(--btn-radius);
+  background: transparent;
+  color: var(--text);
+}
+
+.security-notice-secondary:hover {
+  background: var(--control-bg-hover);
+}
+
+.security-notice-quiet {
+  padding: 0.45rem 0.15rem;
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  font-weight: 600;
+}
+
+.security-notice-quiet:hover {
+  color: var(--text);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.security-notice-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  margin-top: -0.3rem;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-dim);
+  font-size: 1.15rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.security-notice-close:hover {
+  background: var(--control-bg-hover);
+  color: var(--text);
+}
+
+.security-notice button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Phones: the full width minus the stack's 0.5rem gutters, and every button grows to fill
+   its row (so one that wraps fills its own instead of sitting stray at the left). On a touch
+   pointer, below, buttons are at least --touch-target-min tall and the × gets a touch-sized
+   box, its negative margin keeping the glyph where it sits on a desktop. */
+@media (max-width: 599px) {
+  .security-notice {
+    width: calc(100vw - 1rem);
+  }
+
+  .security-notice-actions > button {
+    flex: 1 1 auto;
+  }
+}
+
+/* Touch sizing follows the pointer, not the width: a phone turned to landscape is wider
+   than 599px and still needs fingertip-sized targets. */
+@media (pointer: coarse) {
+  .security-notice-actions > button {
+    min-height: var(--touch-target-min);
+  }
+
+  .security-notice-close {
+    width: var(--touch-target-min);
+    height: var(--touch-target-min);
+    margin: -0.75rem -0.5rem 0 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .security-notice {
+    transform: none;
+    transition: none;
+  }
+}
 
 /* Notification Bell Button */
 .btn-icon-header.btn-notifications {
@@ -11344,11 +12393,142 @@ kbd {
   display: flex;
 }
 
+/* Folder grid (panels-ui.js openFolderGrid): one step BELOW the file preview, so a
+   tile opens its preview on top and closing that preview lands back on the grid. */
+.folder-grid-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--modal-backdrop);
+  z-index: 5090;
+  display: none;
+  align-items: center;
+  justify-content: center;
+}
+
+.folder-grid-overlay.visible {
+  display: flex;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.folder-grid-window {
+  width: 92vw;
+  max-width: 1400px;
+  height: 88vh;
+  background: var(--floating-bg);
+  border: 1px solid var(--control-border);
+  border-radius: 12px;
+  box-shadow: var(--elevated-shadow);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.folder-grid-folders {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  padding: 0.4rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  max-height: 6.5rem;
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+
+.folder-grid-folders:empty {
+  display: none;
+}
+
+.folder-grid-chip {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid var(--control-border);
+  background: var(--bg-input);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.folder-grid-chip:hover {
+  background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+}
+
+.folder-grid-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.75rem;
+  background: var(--bg-dark);
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  grid-auto-rows: min-content;
+  gap: 0.6rem;
+}
+
+.folder-grid-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.3rem;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: none;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  min-width: 0;
+}
+
+.folder-grid-tile:hover,
+.folder-grid-tile.current {
+  border-color: var(--accent, #4ea1ff);
+}
+
+.folder-grid-thumb {
+  aspect-ratio: 4 / 3;
+  border-radius: 6px;
+  background: var(--bg-input);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-muted, #888);
+}
+
+.folder-grid-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.folder-grid-name {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-grid-empty {
+  grid-column: 1 / -1;
+  padding: 2rem;
+  text-align: center;
+  color: var(--text-muted, #888);
+}
+
 .file-preview-window {
-  width: 80vw;
-  max-width: 900px;
-  height: 80vh;
-  max-height: 700px;
+  position: relative;
+  width: min(80vw, 900px);
+  height: min(80vh, 700px);
+  /* A dragged size (inline width/height) and the expanded state may exceed the
+     default 900x700, but never the screen. */
+  max-width: 96vw;
+  max-height: 94vh;
+  min-width: min(320px, 96vw);
+  min-height: min(240px, 94vh);
   background: var(--floating-bg);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
@@ -11358,6 +12538,36 @@ kbd {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+/* Expanded: fills the screen (a dragged size is ignored while it is on). */
+.file-preview-window.expanded {
+  width: 96vw !important;
+  height: 94vh !important;
+}
+
+/* Corner grip (panels-ui.js _bindFilePreviewResize). The window is centred, so a
+   drag moves both edges: the handler doubles the pointer delta to keep the corner
+   under the pointer. Only phones hide it (with Expand, mobile.css under 600px), since
+   the window is full screen there; tablets show and use it. */
+.file-preview-resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  touch-action: none;
+  background: linear-gradient(135deg, transparent 50%, var(--text-muted, #888) 50%, var(--text-muted, #888) 58%, transparent 58%, transparent 72%, var(--text-muted, #888) 72%, var(--text-muted, #888) 80%, transparent 80%);
+  opacity: 0.6;
+}
+
+.file-preview-resize:hover {
+  opacity: 1;
+}
+
+.file-preview-window.expanded .file-preview-resize {
+  display: none;
 }
 
 .file-preview-header {
@@ -11453,13 +12663,21 @@ kbd {
 
 /* ---- File Viewer rendered markdown ----
    Styling comes from the Response Viewer's .rv-text rules; .rv-text itself
-   carries no padding or base font (the chat card supplies those). */
+   carries no padding or base font (the chat card supplies those).
+
+   No width cap. The window is whatever the user drags or expands it to, so the
+   document must reflow to fill it; the fixed 960px reading column this rule
+   shipped before the resize grip existed stops reflow once the window is wider
+   than the cap. --rv-content-max: none lets ASCII-diagram blocks
+   (.rv-text .rv-diagram-wrap, capped by that variable with a 720px fallback
+   meant for the Response Viewer) follow the rest of the document too. Pinned by
+   test/file-preview-window.test.ts. */
 
 .file-preview-body > .file-preview-md {
   padding: 1rem 1.25rem 2rem;
   font-size: 15px;
   line-height: 1.55;
-  max-width: 960px;
+  --rv-content-max: none;
 }
 
 /* Relative links in the document are rebased onto a.rv-path so the Response
@@ -14048,6 +15266,14 @@ kbd {
   cursor: pointer;
 }
 
+/* A markdown link whose target is a path (`[Our incident record](/tmp/x.json)`)
+   takes the rv-path shape for the click delegate, but its text is a label, not a
+   path: keep it in the prose font and never break it mid-word. */
+.rv-text a.rv-path.rv-path-link {
+  font: inherit;
+  word-break: normal;
+}
+
 /* Tables — scroll wrapper keeps table proper while allowing horizontal overflow */
 .rv-table-wrap {
   margin: 1em 0;
@@ -14591,6 +15817,7 @@ body.touch-device.cjk-input-visible .main {
 
 .path-picker-up,
 .path-picker-refresh,
+.path-picker-newfolder,
 .path-picker-hidden {
   flex: 0 0 38px;
   height: 38px;
@@ -14613,6 +15840,45 @@ body.touch-device.cjk-input-visible .main {
 .path-picker-hidden.active {
   color: var(--accent);
   border-color: var(--accent);
+}
+
+.path-picker-newfolder {
+  flex: 0 0 auto;
+  padding: 0 10px;
+  white-space: nowrap;
+}
+
+.path-picker-newfolder[hidden],
+.path-picker-newfolder-form[hidden] {
+  display: none;
+}
+
+.path-picker-newfolder-form {
+  display: flex;
+  gap: 8px;
+  padding: 0 12px 10px;
+}
+
+.path-picker-newfolder-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 38px;
+  padding: 0 10px;
+  color: var(--text);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.path-picker-newfolder-create,
+.path-picker-newfolder-cancel {
+  height: 38px;
+  padding: 0 12px;
+  color: var(--text);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
 }
 
 .path-picker-up:disabled {
@@ -15802,6 +17068,12 @@ html:not([data-skin="og"]) {
   color: #e0e7ff;
 }
 .btn-toolbar.btn-run.mode-omp:hover { box-shadow: 0 0 14px -2px rgba(129, 140, 248, 0.45); }
+.btn-toolbar.btn-run.mode-copilot {
+  background: linear-gradient(135deg, #6d28d9, #8b5cf6);
+  border-color: #5b21b6;
+  color: #ede9fe;
+}
+.btn-toolbar.btn-run.mode-copilot:hover { box-shadow: 0 0 14px -2px rgba(163, 113, 247, 0.45); }
 .btn-toolbar.btn-run.mode-pi {
   background: linear-gradient(135deg, #be185d, #f472b6);
   border-color: #be185d;
@@ -16972,6 +18244,12 @@ html[data-tab-orientation='vertical'] .home-sessions {
   transition:
     filter 0.15s ease,
     transform 0.1s ease;
+}
+
+:is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-head-save.set-head-apply {
+  background: transparent;
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--border);
 }
 
 :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-head-save:hover {
@@ -18754,6 +20032,7 @@ html[data-tab-orientation='vertical'] .tab-rail .session-tab .tab-name-row > .ta
    actions permanently visible on the active session — no layout jitter when
    the pointer crosses the list. */
 html[data-session-list="sidebar"] .session-sidebar .session-tab.active .tab-gear,
+html[data-session-list="sidebar"] .session-sidebar .session-tab.active .tab-new,
 html[data-session-list="sidebar"] .session-sidebar .session-tab.active .tab-detach,
 html[data-session-list="sidebar"] .session-sidebar .session-tab.active .tab-close {
   opacity: 1;
@@ -18777,9 +20056,81 @@ html[data-tab-orientation='vertical'] .tab-rail .session-tab.drag-over-right {
    Scoped to the sidebar layout on purpose: applySidebarFilter() already strips
    the class whenever the filter box is off screen, and this prefix is the
    second lock — a leaked class must never be able to hide tabs from the header
-   strip, which has no filter control to clear it with. */
-html[data-session-list="sidebar"] .session-tab.tab-filtered-out {
+   strip, which has no filter control to clear it with. The shared filter
+   (_applyTabListFilter) also marks a case box (tabArrangement 'case') the
+   filter emptied, which hides with its label and count rather than staying
+   on screen reading 0. */
+html[data-session-list="sidebar"] .session-tab.tab-filtered-out,
+html[data-session-list="sidebar"] .tab-cluster.tab-filtered-out {
   display: none !important;
+}
+
+/* The vertical rail's session search (app.js _applyTabListFilter) uses the same
+   class, and also hides a group or case box the search emptied. Rail-scoped for
+   the same reason as the sidebar rule above: the header strip has no box. */
+html[data-tab-orientation='vertical'] .tab-rail .session-tab.tab-filtered-out,
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group.tab-filtered-out,
+html[data-tab-orientation='vertical'] .tab-rail .tab-cluster.tab-filtered-out {
+  display: none !important;
+}
+
+/* The box reuses .session-sidebar-filter / -input; this only adds the clear
+   button over its right edge and the "No sessions match" line. */
+.tab-rail-search {
+  position: relative;
+  /* Clear of the 16px resize handle on the rail's right edge. */
+  padding-right: calc(0.25rem + 16px);
+}
+
+.tab-rail-search .session-sidebar-filter-input {
+  padding-right: 1.6rem;
+}
+
+/* The native WebKit clear glyph would sit under ours. */
+.tab-rail-search .session-sidebar-filter-input::-webkit-search-cancel-button {
+  appearance: none;
+}
+
+.tab-rail-search-clear {
+  position: absolute;
+  top: 50%;
+  right: calc(0.45rem + 16px);
+  width: 1.2rem;
+  height: 1.2rem;
+  padding: 0;
+  transform: translateY(-50%);
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 0.95rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.tab-rail-search-clear:hover,
+.tab-rail-search-clear:focus-visible {
+  background: var(--control-bg-hover);
+  color: var(--text);
+}
+
+.tab-rail-search-clear[hidden],
+.tab-rail-search-empty[hidden] {
+  display: none;
+}
+
+.tab-rail-search-empty {
+  flex-shrink: 0;
+  padding: 0.5rem 0.75rem;
+  color: var(--text-dim);
+  font-size: 0.75rem;
+  text-align: center;
+}
+
+/* Every group is drawn open while searching and its header will not toggle,
+   so the chevron dims to say so. */
+html[data-tab-orientation='vertical'] .tab-rail .session-tabs.tabs-filtering .tab-layout-group-chevron {
+  opacity: 0.35;
 }
 
 /* --- Rich rows (sessionListLayout 'sidebar-rich' + tabRailDetail 'rich') --- */
@@ -19196,6 +20547,7 @@ html[data-session-list="sidebar"][data-sidebar="collapsed"] .session-sidebar .se
 html[data-session-list="sidebar"][data-sidebar="collapsed"] .session-sidebar .tab-info,
 html[data-session-list="sidebar"][data-sidebar="collapsed"] .session-sidebar .tab-number,
 html[data-session-list="sidebar"][data-sidebar="collapsed"] .session-sidebar .tab-gear,
+html[data-session-list="sidebar"][data-sidebar="collapsed"] .session-sidebar .tab-new,
 html[data-session-list="sidebar"][data-sidebar="collapsed"] .session-sidebar .tab-detach,
 html[data-session-list="sidebar"][data-sidebar="collapsed"] .session-sidebar .tab-close {
   display: none;
@@ -19277,7 +20629,8 @@ html[data-session-list="sidebar"][data-sidebar="collapsed"] .btn-sidebar-toggle 
 
 /* No gutter of their own. */
 .modal,
-.file-preview-overlay {
+.file-preview-overlay,
+.folder-grid-overlay {
   padding-right: var(--fold-inline-end);
   padding-bottom: var(--fold-block-end);
 }
@@ -20062,6 +21415,314 @@ body.tile-grid-resizing--row * {
   }
 }
 
+/* ── Tile grid entrance styles (entrance-animations.js TILE_ANIM_STYLES) ───
+   Picked in App Settings → Animations (Tile Animations, or preset by the
+   Entrance Theme) or per surface in the lab (?animlab=1); `settle` is the rule above, the default,
+   and what a reload restores with. Any other style is held one frame
+   (.tile--enter-hold: invisible, not animating) while the entrance module
+   orders the cascade and measures the tile's source on the final layout, then
+   arrives with .tile--enter-themed and an inline --tile-enter-delay (and, for
+   `fly` and `deal`, the --tile-from-* offset onto the tab or the Tiles button).
+   FRAME keyframes animate transform and opacity only: FitAddon reads the
+   untransformed layout box (#464), and six tiles run at once, so no filter
+   (a blur belongs to the screen beat, one tile at a time). Colour goes on a
+   ::before wash. Each style also has its own way out on the closing grid's
+   still copy (tile-leave-*, below). */
+html[data-tile-anim="settle"] .tile.tile--entering {
+  animation-name: tile-enter;
+}
+
+.tile.tile--entering.tile--enter-themed {
+  animation-delay: var(--tile-enter-delay, 0ms);
+  animation-fill-mode: both;
+  will-change: transform, opacity;
+}
+
+.tile.tile--entering.tile--enter-themed::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  animation-delay: var(--tile-enter-delay, 0ms);
+  animation-fill-mode: both;
+}
+
+.tile.tile--enter-hold {
+  opacity: 0;
+}
+
+.tile.tile--enter-hold,
+.tile.tile--enter-hold::before {
+  animation: none !important;
+}
+
+/* Fly from tab: grows out of its session tab (FLIP onto the tab's own box),
+   overshoots a hair and lands. */
+html[data-tile-anim="fly"] .tile.tile--entering.tile--enter-themed {
+  animation-name: tile-enter-fly;
+  animation-duration: calc(560ms * var(--anim-enter-scale, 1));
+  animation-timing-function: cubic-bezier(0.2, 0.9, 0.25, 1);
+}
+
+html[data-tile-anim="fly"] .tile.tile--entering.tile--enter-themed::before {
+  animation-name: tile-wash-launch;
+  animation-duration: calc(560ms * var(--anim-enter-scale, 1));
+  animation-timing-function: ease-out;
+}
+
+@keyframes tile-enter-fly {
+  0% {
+    opacity: 0;
+    transform: translate(var(--tile-from-x, 0px), var(--tile-from-y, -48px))
+      scale(var(--tile-from-sx, 0.3), var(--tile-from-sy, 0.1));
+  }
+  16% {
+    opacity: 1;
+  }
+  74% {
+    transform: translate(0, 0) scale(1.01);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes tile-wash-launch {
+  0% {
+    opacity: 1;
+    background: color-mix(in srgb, var(--accent, #4a9eff) 45%, transparent);
+    box-shadow: inset 0 0 0 2px var(--accent, #4a9eff);
+  }
+  55% {
+    opacity: 0.55;
+    background: color-mix(in srgb, var(--accent, #4a9eff) 12%, transparent);
+  }
+  100% {
+    opacity: 0;
+    background: transparent;
+    box-shadow: inset 0 0 0 1px transparent;
+  }
+}
+
+/* Deal: dealt out of the Tiles button like cards, each turned a little, then
+   squared up in its cell. */
+html[data-tile-anim="deal"] .tile.tile--entering.tile--enter-themed {
+  animation-name: tile-enter-deal;
+  animation-duration: calc(600ms * var(--anim-enter-scale, 1));
+  animation-timing-function: cubic-bezier(0.22, 0.85, 0.3, 1);
+}
+
+@keyframes tile-enter-deal {
+  0% {
+    opacity: 0;
+    transform: translate(var(--tile-from-x, 0px), var(--tile-from-y, -240px)) scale(var(--tile-from-sx, 0.1))
+      rotate(var(--tile-from-rot, -10deg));
+  }
+  10% {
+    opacity: 1;
+  }
+  70% {
+    transform: translate(0, 0) scale(1.02) rotate(calc(var(--tile-from-rot, -10deg) * -0.1));
+  }
+  88% {
+    transform: scale(0.996) rotate(0deg);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* CRT: powers on as a hot line, then unfolds, under the agent windows' flash. */
+html[data-tile-anim="crt"] .tile.tile--entering.tile--enter-themed {
+  animation-name: tile-enter-crt;
+  animation-duration: calc(560ms * var(--anim-enter-scale, 1));
+  animation-timing-function: cubic-bezier(0.3, 0.9, 0.3, 1);
+}
+
+html[data-tile-anim="crt"] .tile.tile--entering.tile--enter-themed::before {
+  animation-name: win-enter-crt-flash;
+  animation-duration: calc(560ms * var(--anim-enter-scale, 1));
+  animation-timing-function: ease-out;
+}
+
+@keyframes tile-enter-crt {
+  0% {
+    opacity: 0;
+    transform: scale3d(0.5, 0.006, 1);
+  }
+  22% {
+    opacity: 1;
+    transform: scale3d(1, 0.01, 1);
+  }
+  58% {
+    opacity: 1;
+    transform: scale3d(1, 1.04, 1);
+  }
+  80% {
+    opacity: 1;
+    transform: scale3d(1, 0.985, 1);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Beam down: holds still while a beam draws down from its tab (the entrance
+   module's own overlay, .tile-beam-line), then materializes out of the agent
+   windows' green wash. No transform, so the beam lands where the tile is. */
+html[data-tile-anim="beam"] .tile.tile--entering.tile--enter-themed {
+  animation-name: tile-enter-beam;
+  animation-duration: calc(620ms * var(--anim-enter-scale, 1));
+  animation-timing-function: ease-out;
+}
+
+html[data-tile-anim="beam"] .tile.tile--entering.tile--enter-themed::before {
+  animation-name: win-enter-beam-wash;
+  animation-duration: calc(620ms * var(--anim-enter-scale, 1));
+  animation-timing-function: ease-out;
+}
+
+@keyframes tile-enter-beam {
+  0% {
+    opacity: 0;
+  }
+  20% {
+    opacity: 0.55;
+  }
+  32% {
+    opacity: 0.2;
+  }
+  48% {
+    opacity: 0.9;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+/* Cascade: swings down from its top edge, a diagonal at a time. */
+html[data-tile-anim="cascade"] .tile.tile--entering.tile--enter-themed {
+  animation-name: tile-enter-cascade;
+  animation-duration: calc(600ms * var(--anim-enter-scale, 1));
+  animation-timing-function: cubic-bezier(0.3, 0.9, 0.3, 1);
+  transform-origin: 50% 0%;
+}
+
+@keyframes tile-enter-cascade {
+  0% {
+    opacity: 0;
+    transform: perspective(1400px) rotateX(-80deg);
+  }
+  55% {
+    opacity: 1;
+    transform: perspective(1400px) rotateX(8deg);
+  }
+  80% {
+    transform: perspective(1400px) rotateX(-2.5deg);
+  }
+  100% {
+    opacity: 1;
+    transform: perspective(1400px) rotateX(0deg);
+  }
+}
+
+/* Pop: springs open from its centre, rippling out from the focused tile. */
+html[data-tile-anim="pop"] .tile.tile--entering.tile--enter-themed {
+  animation-name: tile-enter-pop;
+  animation-duration: calc(480ms * var(--anim-enter-scale, 1));
+  animation-timing-function: ease-out;
+}
+
+@keyframes tile-enter-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  58% {
+    opacity: 1;
+    transform: scale(1.03);
+  }
+  80% {
+    transform: scale(0.993);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Soft: a slow drift up into place; with the Soft focus theme each screen
+   then focus-pulls in (the pane's `blur` style on .tile-body). */
+html[data-tile-anim="soft"] .tile.tile--entering.tile--enter-themed {
+  animation-name: tile-enter-soft;
+  animation-duration: calc(620ms * var(--anim-enter-scale, 1));
+  animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes tile-enter-soft {
+  0% {
+    opacity: 0;
+    transform: translateY(16px) scale(0.94);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* The tab a tile flies (or beams) out of glows as it goes. */
+.session-tab.tab-launch:not(.tab-loading)::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  animation: tab-launch-flash calc(520ms * var(--anim-enter-scale, 1)) ease-out var(--tab-launch-delay, 0ms) both;
+}
+
+@keyframes tab-launch-flash {
+  0% {
+    opacity: 0;
+    background: color-mix(in srgb, var(--accent, #4a9eff) 40%, transparent);
+    box-shadow: 0 0 0 1px var(--accent, #4a9eff), 0 0 14px 2px color-mix(in srgb, var(--accent, #4a9eff) 70%, transparent);
+  }
+  18% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    background: transparent;
+    box-shadow: 0 0 0 1px transparent, 0 0 0 0 transparent;
+  }
+}
+
+/* `beam`'s lines: the connection-line look, drawn from the tab down to the
+   tile, held while the tile materializes, then faded. Their own overlay
+   (#tileBeamLines), removed by the entrance module once they are done. */
+.connection-line.tile-beam-line {
+  stroke-dasharray: var(--line-len);
+  animation:
+    line-enter-draw calc(380ms * var(--anim-enter-scale, 1)) cubic-bezier(0.32, 0.8, 0.3, 1)
+      var(--line-enter-delay, 0ms) both,
+    tile-beam-out calc(420ms * var(--anim-enter-scale, 1)) ease-in
+      calc(var(--line-enter-delay, 0ms) + 640ms * var(--anim-enter-scale, 1)) forwards;
+}
+
+@keyframes tile-beam-out {
+  from {
+    opacity: 0.9;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
 .tile-body .xterm {
   transition: opacity 160ms ease-out;
 }
@@ -20136,9 +21797,220 @@ body.tile-grid-resizing--row * {
   }
 }
 
+/* The entrance style's own way out (entrance-animations.js _stageTileExit),
+   on the still copy only and only for the Tiles toggle's close: a re-form's
+   copy (--now) covers tiles that stay, so it keeps the plain fade above.
+   Copies leave in reading order (--tile-exit-delay), so the last one ends
+   last and takes the layer with it. */
+.tile-grid-ghosts.tile-grid-ghosts--release:not(.tile-grid-ghosts--now) .tile.tile--leaving::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+}
+
+html[data-tile-anim="fly"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.tile-grid-ghosts--now) .tile.tile--leaving {
+  animation: tile-leave-fly calc(460ms * var(--anim-enter-scale, 1)) cubic-bezier(0.55, 0, 0.75, 0.2)
+    var(--tile-exit-delay, 0ms) both;
+}
+
+html[data-tile-anim="fly"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.tile-grid-ghosts--now) .tile.tile--leaving::before {
+  animation: tile-wash-return calc(460ms * var(--anim-enter-scale, 1)) ease-in var(--tile-exit-delay, 0ms) both;
+}
+
+@keyframes tile-leave-fly {
+  0% {
+    opacity: 0.8;
+    transform: scale(0.985);
+  }
+  75% {
+    opacity: 0.8;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(var(--tile-to-x, 0px), var(--tile-to-y, -48px))
+      scale(var(--tile-to-sx, 0.3), var(--tile-to-sy, 0.1));
+  }
+}
+
+@keyframes tile-wash-return {
+  0% {
+    opacity: 0;
+    background: transparent;
+  }
+  100% {
+    opacity: 1;
+    background: color-mix(in srgb, var(--accent, #4a9eff) 55%, transparent);
+  }
+}
+
+html[data-tile-anim="deal"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.tile-grid-ghosts--now) .tile.tile--leaving {
+  animation: tile-leave-deal calc(520ms * var(--anim-enter-scale, 1)) cubic-bezier(0.5, 0, 0.75, 0.25)
+    var(--tile-exit-delay, 0ms) both;
+}
+
+@keyframes tile-leave-deal {
+  0% {
+    opacity: 0.8;
+    transform: scale(0.985);
+  }
+  22% {
+    transform: scale(1.02) rotate(calc(var(--tile-to-rot, -10deg) * -0.15));
+  }
+  85% {
+    opacity: 0.85;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(var(--tile-to-x, 0px), var(--tile-to-y, -240px)) scale(var(--tile-to-sx, 0.1))
+      rotate(var(--tile-to-rot, -10deg));
+  }
+}
+
+/* CRT: the classic switch-off, down to a line, then a dot, then dark. */
+html[data-tile-anim="crt"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.tile-grid-ghosts--now) .tile.tile--leaving {
+  animation: tile-leave-crt calc(520ms * var(--anim-enter-scale, 1)) cubic-bezier(0.4, 0, 0.6, 1)
+    var(--tile-exit-delay, 0ms) both;
+}
+
+html[data-tile-anim="crt"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.tile-grid-ghosts--now) .tile.tile--leaving::before {
+  animation: tile-wash-crt-off calc(520ms * var(--anim-enter-scale, 1)) ease-in var(--tile-exit-delay, 0ms) both;
+}
+
+@keyframes tile-leave-crt {
+  0% {
+    opacity: 0.8;
+    transform: scale(0.985);
+  }
+  42% {
+    opacity: 1;
+    transform: scale3d(1, 0.012, 1);
+  }
+  72% {
+    opacity: 1;
+    transform: scale3d(0.03, 0.012, 1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale3d(0, 0, 1);
+  }
+}
+
+@keyframes tile-wash-crt-off {
+  0% {
+    opacity: 0;
+    background: transparent;
+  }
+  38% {
+    opacity: 1;
+    background: rgba(220, 255, 235, 0.95);
+  }
+  100% {
+    opacity: 1;
+    background: rgba(255, 255, 255, 1);
+  }
+}
+
+/* Beam down: beamed back up, flickering out under a rising wash. */
+html[data-tile-anim="beam"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.tile-grid-ghosts--now) .tile.tile--leaving {
+  animation: tile-leave-beam calc(480ms * var(--anim-enter-scale, 1)) ease-in var(--tile-exit-delay, 0ms) both;
+}
+
+html[data-tile-anim="beam"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.tile-grid-ghosts--now) .tile.tile--leaving::before {
+  animation: tile-wash-beam-up calc(480ms * var(--anim-enter-scale, 1)) ease-in var(--tile-exit-delay, 0ms) both;
+}
+
+@keyframes tile-leave-beam {
+  0% {
+    opacity: 0.8;
+  }
+  40% {
+    opacity: 0.9;
+  }
+  55% {
+    opacity: 0.3;
+  }
+  70% {
+    opacity: 0.6;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes tile-wash-beam-up {
+  0% {
+    opacity: 0;
+    background: linear-gradient(0deg, rgba(0, 255, 102, 0.35), rgba(0, 255, 102, 0));
+  }
+  100% {
+    opacity: 1;
+    background: linear-gradient(0deg, rgba(190, 255, 215, 0.85), rgba(0, 255, 102, 0.2));
+  }
+}
+
+/* Cascade: folds back up on its top edge. */
+html[data-tile-anim="cascade"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.tile-grid-ghosts--now) .tile.tile--leaving {
+  animation: tile-leave-cascade calc(480ms * var(--anim-enter-scale, 1)) cubic-bezier(0.5, 0, 0.75, 0.2)
+    var(--tile-exit-delay, 0ms) both;
+  transform-origin: 50% 0%;
+}
+
+@keyframes tile-leave-cascade {
+  0% {
+    opacity: 0.8;
+    transform: perspective(1400px) rotateX(0deg) scale(0.985);
+  }
+  100% {
+    opacity: 0;
+    transform: perspective(1400px) rotateX(82deg) scale(0.985);
+  }
+}
+
+/* Pop: a last swell, then it pops away. */
+html[data-tile-anim="pop"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.tile-grid-ghosts--now) .tile.tile--leaving {
+  animation: tile-leave-pop calc(380ms * var(--anim-enter-scale, 1)) ease-in var(--tile-exit-delay, 0ms) both;
+}
+
+@keyframes tile-leave-pop {
+  0% {
+    opacity: 0.8;
+    transform: scale(0.985);
+  }
+  35% {
+    opacity: 0.9;
+    transform: scale(1.03);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.5);
+  }
+}
+
+/* Soft: sinks away slowly. */
+html[data-tile-anim="soft"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.tile-grid-ghosts--now) .tile.tile--leaving {
+  animation: tile-leave-soft calc(520ms * var(--anim-enter-scale, 1)) cubic-bezier(0.4, 0, 0.7, 0.4)
+    var(--tile-exit-delay, 0ms) both;
+}
+
+@keyframes tile-leave-soft {
+  0% {
+    opacity: 0.8;
+    transform: scale(0.985);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(14px) scale(0.94);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .tile-count-menu,
   .tile.tile--entering,
+  .tile.tile--entering::before,
   .tile.tile--needs::after,
   .tile.tile--loading .tile-body::after,
   .tile-grid-ghosts .tile.tile--leaving,
@@ -20445,6 +22317,42 @@ html .toolbar .btn-git-status[aria-expanded='true'] {
   gap: 0.25rem;
 }
 
+/* A Fetch button cannot be clicked twice while its fetch is running, and is not offered for a session
+   there is nothing to fetch for (no repository, remote or Docker). Scoped to the Git panel's header: the
+   File Viewer's Back/Forward and the folder grid's Up button are .btn-icon-sm too, and keep their own look. */
+.git-status-actions .btn-icon-sm[disabled] {
+  color: var(--text-dim);
+  opacity: 0.45;
+  cursor: default;
+}
+
+.git-status-actions .btn-icon-sm[disabled]:hover {
+  background: none;
+}
+
+.git-status-actions .btn-icon-sm[aria-busy='true'] {
+  color: var(--text);
+  animation: btn-icon-busy 1.1s ease-in-out infinite;
+}
+
+@keyframes btn-icon-busy {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 0.9;
+  }
+}
+
+/* No pulse under reduced motion: the button holds the pulse's brighter step, still dimmer than at rest. */
+@media (prefers-reduced-motion: reduce) {
+  .git-status-actions .btn-icon-sm[aria-busy='true'] {
+    animation: none;
+    opacity: 0.7;
+  }
+}
+
 .git-status-body {
   flex: 1;
   overflow-y: auto;
@@ -20464,13 +22372,32 @@ html .toolbar .btn-git-status[aria-expanded='true'] {
 .git-status-empty,
 .git-status-ok,
 .git-status-note,
-.git-status-more {
+.git-status-more,
+.git-status-fetch-note {
   color: var(--text-muted);
   padding: 0.25rem 0;
 }
 
 .git-status-ok {
   color: rgb(34, 197, 94);
+}
+
+/* The last Fetch's result: a summary line, then a row per repository it could not fetch. */
+.git-status-fetch-note {
+  margin-top: 0.6rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid var(--border);
+}
+
+.git-status-fetch-summary {
+  margin-bottom: 0.2rem;
+}
+
+.git-status-fetch-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  padding: 0.1rem 0;
 }
 
 .git-status-branchline {
@@ -20750,6 +22677,297 @@ html .toolbar .btn-git-status[aria-expanded='true'] {
 .git-status-repo-unreadable {
   color: #e0a030;
   font-size: 0.68rem;
+}
+
+/* ── Edit history: header button + panel (edit-history-ui.js) ───────────────── */
+
+/* "Edit history" header button: opt-in (App Settings → Header & Panels), hidden by default.
+   Same marker pattern as the Attachments button: a base inline-flex !important so an inline
+   style can't override it, and a more-specific marker rule to hide. Phones hide it regardless
+   (mobile.css). */
+.btn-edit-history {
+  display: inline-flex !important;
+}
+.btn-edit-history.btn-edit-history--hidden {
+  display: none !important;
+}
+
+.btn-edit-history[aria-expanded='true'] {
+  background: color-mix(in srgb, currentColor 16%, transparent);
+}
+
+/* Same frame as the Git and Files windows: draggable by the header, resizable at the corner. */
+.edit-history-panel {
+  position: fixed;
+  top: calc(var(--header-height) + 10px);
+  /* Left of the Git window's default spot; on a narrow viewport slide right so the left edge stays on screen. */
+  right: clamp(8px, calc(100vw - 428px), 410px);
+  width: 420px;
+  max-width: calc(100vw - 16px);
+  height: calc(100vh - var(--header-height) - var(--toolbar-height) - 40px);
+  height: calc(100dvh - var(--header-height) - var(--toolbar-height) - 40px);
+  max-height: 640px;
+  min-width: 260px;
+  min-height: 220px;
+  background: var(--floating-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--control-border);
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), 0 2px 8px rgba(0, 0, 0, 0.2);
+  z-index: 100;
+  display: none;
+  flex-direction: column;
+  overflow: hidden;
+  resize: both;
+}
+
+.edit-history-panel.visible {
+  display: flex;
+}
+
+.edit-history-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.4rem 0.6rem;
+  background: var(--bg-input);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  cursor: move;
+  user-select: none;
+  touch-action: none;
+}
+
+.edit-history-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.edit-history-count {
+  margin-left: 0.4rem;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.7rem;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.edit-history-actions {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.edit-history-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 0.9rem;
+  padding: 0.3rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.edit-history-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  cursor: pointer;
+}
+
+.edit-history-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.4rem 0.5rem;
+  font-size: 0.74rem;
+  color: var(--text);
+}
+
+.edit-history-empty,
+.edit-history-note,
+.edit-history-more {
+  color: var(--text-muted);
+  padding: 0.25rem 0;
+}
+
+.edit-history-note--warn {
+  color: #e0a030;
+}
+
+.edit-history-entry {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  padding: 0.15rem 0.25rem;
+  border-radius: 4px;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.edit-history-entry:hover,
+.edit-history-entry:focus-visible,
+.edit-history-entry--open {
+  background: var(--bg-hover);
+  outline: none;
+}
+
+.edit-history-time {
+  flex: 0 0 auto;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.64rem;
+  color: var(--text-muted);
+}
+
+.edit-history-badge {
+  flex: 0 0 auto;
+  min-width: 2rem;
+  text-align: center;
+  font-size: 0.6rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #e0a030;
+}
+
+.edit-history-badge--new {
+  color: rgb(34, 197, 94);
+}
+
+.edit-history-badge--image {
+  color: var(--text-muted);
+  align-self: center;
+}
+
+.edit-history-badge--image svg {
+  display: block;
+  margin: 0 auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Only the name itself opens the preview: the rest of the row (the spacer) toggles the diff. */
+/* The folder part gives way first, so the file name stays readable (…/icons/bremse_alt1.png). */
+.edit-history-path {
+  display: inline-flex;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  text-align: left;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.7rem;
+  cursor: pointer;
+}
+
+.edit-history-path-dir {
+  /* Shrinks long before the name does; the name only gives way once the folder is at min-width. */
+  flex: 0 10000 auto;
+  min-width: 1.2em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* Ellipsis at the START of the folder (rtl); the inner <bdi dir="ltr"> keeps its text in order. */
+  direction: rtl;
+  text-align: left;
+  opacity: 0.7;
+}
+
+.edit-history-path-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.edit-history-path:hover,
+.edit-history-path:focus-visible {
+  text-decoration: underline;
+}
+
+.edit-history-spacer {
+  flex: 1;
+  align-self: stretch;
+  min-width: 0.5rem;
+  min-height: 1em;
+}
+
+.edit-history-stats {
+  flex: 0 0 auto;
+  display: inline-flex;
+  gap: 0.3rem;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.64rem;
+}
+
+.edit-history-add {
+  color: rgb(34, 197, 94);
+}
+
+.edit-history-del {
+  color: #e5534b;
+}
+
+.edit-history-agent {
+  flex: 0 1 auto;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 0.62rem;
+  color: var(--text-muted);
+}
+
+.edit-history-thumb {
+  display: block;
+  max-width: 160px;
+  max-height: 90px;
+  margin: 0.15rem 0 0.35rem 3.2rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  object-fit: contain;
+  cursor: zoom-in;
+}
+
+.edit-history-diff {
+  margin: 0.2rem 0 0.5rem 0.25rem;
+}
+
+.edit-history-group {
+  margin-bottom: 0.45rem;
+  padding-bottom: 0.2rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.edit-history-group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  padding: 0.2rem 0.25rem;
+  min-width: 0;
+}
+
+.edit-history-group-head .edit-history-path {
+  font-weight: 600;
+}
+
+.edit-history-group-count {
+  flex: 0 0 auto;
+  font-size: 0.64rem;
+  color: var(--text-muted);
+}
+
+.edit-history-older {
+  margin: 0.5rem auto 0.25rem;
 }
 
 /* ============================================================
@@ -21491,4 +23709,13 @@ html[data-header-stats='tiles'] .header-plan-usage:not(:has(.pu-row)) {
   background: var(--control-bg);
   border: 1px solid var(--control-border);
   color: var(--text-muted);
+}
+
+/* Rows held under the on-screen keyboard (keyboardHoldsRows; keyboardClipPx in
+   constants.js): the screen stays taller than its box and is scrolled up by
+   --kb-clip, set on #terminalContainer by _applyKeyboardClip (terminal-ui.js).
+   The helper textarea, IME preview, link layer and both echo overlays live
+   inside .xterm-screen, so they move with it, and every hit test reads rects. */
+body.keyboard-visible .terminal-container .xterm-screen {
+  transform: translateY(calc(-1 * var(--kb-clip, 0px)));
 }

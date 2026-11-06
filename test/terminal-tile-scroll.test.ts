@@ -18,6 +18,13 @@
  * history, so the tile discounts them (`_localRows`); the overflow cases below
  * fail without that discount.
  *
+ * Claude's fullscreen renderer is the other half: it scrolls its own
+ * transcript on SGR wheel reports, which the primary pane sends it, while a
+ * tile's xterm holds only replayed repaint frames. A tile left that wheel to
+ * xterm too, so in a grid of fullscreen Claude sessions the wheel dragged
+ * stale frames around or did nothing; it now forwards the reports to its own
+ * session, from its own geometry (`_maybeForwardWheelToCli`).
+ *
  * Real code under test: constants.js + app.js + terminal-ui.js +
  * terminal-tile.js in one `vm` context, as in terminal-tile-input.test.ts.
  * xterm, the fit addon and WebSocket are fakes (test/mocks/terminal-tile-fakes.ts),
@@ -30,9 +37,23 @@ import { performance } from 'node:perf_hooks';
 import { resolve } from 'node:path';
 import vm from 'node:vm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { STOCK_CLIS } from '../src/config/cli-registry/stock.js';
 import { FakeFit, FakeSocket, FakeTerminal } from './mocks/terminal-tile-fakes.js';
 
 const fetchMock = vi.fn();
+
+/**
+ * The run modes that page, read off the shipped registry exactly as the server
+ * builds `window.__codemanTranscriptPageKeys` (renderIndexHtml), which is the only
+ * place either pane learns them.
+ */
+const PAGE_KEY_MODES = STOCK_CLIS.filter((e) => e.capabilities.transcriptPageKeys === true).map((e) => e.id);
+
+/**
+ * The clock both panes read gesture gaps from (`performance.now()`). Real time by
+ * default; a test that needs a pause or a burst moves it by hand.
+ */
+const clock = { now: () => performance.now() };
 
 function loadContext() {
   const read = (f: string) => readFileSync(resolve(import.meta.dirname, `../src/web/public/${f}`), 'utf8');
@@ -40,10 +61,11 @@ function loadContext() {
     addEventListener: vi.fn(),
     removeEventListener: vi.fn(),
     CodemanBase: { base: '' },
+    __codemanTranscriptPageKeys: PAGE_KEY_MODES,
   };
   const context = vm.createContext({
     console: { ...console, log: vi.fn(), debug: vi.fn() },
-    performance,
+    performance: { now: () => clock.now() },
     setInterval: vi.fn(),
     clearInterval: vi.fn(),
     // Late-bound, so vi.useFakeTimers() (which swaps the globals) reaches code
@@ -185,6 +207,7 @@ function flushed(ws: FakeSocket) {
 }
 
 beforeEach(() => {
+  clock.now = () => performance.now();
   vi.useFakeTimers();
   FakeFit.proposed = { cols: 80, rows: 24 };
   FakeSocket.instances = [];
@@ -209,11 +232,20 @@ describe('a tile pages a hollow buffer through the primary pane gates', () => {
 
     expect(up.preventDefault).toHaveBeenCalled();
     expect(up.stopPropagation).toHaveBeenCalled();
-    expect(ws.inputFrames()).toEqual([]); // coalesced, not sent per event
+    expect(ws.inputFrames()).toEqual([]); // fallback page reports remain batched
     expect(flushed(ws)).toEqual([{ t: 'i', d: PAGE_UP }]); // no seq: never persisted
 
     mount.fire('wheel', wheelLines(term.rows / 2));
     expect(flushed(ws).at(-1)).toEqual({ t: 'i', d: PAGE_DOWN });
+  });
+
+  it('pages a copilot tile with an empty local buffer (the stale-tracking fallback)', async () => {
+    const app = makeApp({ other: { mode: 'shell' }, 's-tile': { mode: 'copilot', cliMouseTracking: false } }, 'other');
+    const { ws, mount } = await connectTile(app, { mode: 'copilot' });
+
+    mount.fire('wheel', wheelLines(-12));
+
+    expect(flushed(ws)).toEqual([{ t: 'i', d: PAGE_UP }]);
   });
 
   it("reads the TILE's session, not the active one", async () => {
@@ -226,7 +258,7 @@ describe('a tile pages a hollow buffer through the primary pane gates', () => {
     expect(flushed(ws)).toEqual([{ t: 'i', d: PAGE_UP }]);
   });
 
-  it.each(['shell', 'codex', 'antigravity'])(
+  it.each(['shell', 'gemini', 'antigravity'])(
     'leaves a %s tile to xterm even while the active session is opencode',
     async (mode) => {
       const app = makeApp({ other: { mode: 'opencode' }, 's-tile': { mode } }, 'other');
@@ -260,7 +292,8 @@ describe('a tile pages a hollow buffer through the primary pane gates', () => {
       expect(ev.stopPropagation).not.toHaveBeenCalled();
     };
 
-    fireAndCheck(wheelLines(-12, { shiftKey: true })); // the explicit "local scrollback" gesture
+    // The explicit "local scrollback" gesture: scrolled locally, never paged.
+    mount.fire('wheel', wheelLines(-12, { shiftKey: true }));
 
     term.modes.mouseTrackingMode = 'any'; // xterm's own encoder forwards the wheel
     fireAndCheck(wheelLines(-12));
@@ -280,18 +313,255 @@ describe('a tile pages a hollow buffer through the primary pane gates', () => {
   });
 });
 
-describe("the forwarding gate behaves as in the primary pane, for the tile's session", () => {
-  it('leaves a fullscreen Claude tile to xterm (tiles do not forward SGR wheel yet)', async () => {
-    const app = makeApp({ 's-tile': { mode: 'claude', cliVersion: '2.1.223', cliMouseTracking: true } });
-    const { ws, mount } = await connectTile(app, { mode: 'claude' });
+describe('a fullscreen Claude tile forwards the wheel to the CLI as SGR reports', () => {
+  const FULLSCREEN: Session = { mode: 'claude', cliVersion: '2.1.295', cliMouseTracking: true };
+  // 10 + 8 * 20 + 1, 20 + 16 * 5 + 1 inside the tile's own screen: column 21, row 6.
+  const AT = { clientX: 171, clientY: 101 };
+  const UP = '\x1b[<64;21;6M';
+  const DOWN = '\x1b[<65;21;6M';
 
-    const ev = wheelLines(-12);
-    mount.fire('wheel', ev);
+  it("sends ephemeral reports on the tile's socket, from the tile's own geometry, and keeps xterm out", async () => {
+    const { ws, mount } = await connectTile(makeApp({ 's-tile': FULLSCREEN }), { mode: 'claude' });
 
-    expect(ev.preventDefault).not.toHaveBeenCalled();
+    const up = wheelLines(-3, AT);
+    mount.fire('wheel', up);
+
+    expect(up.preventDefault).toHaveBeenCalled();
+    expect(up.stopPropagation).toHaveBeenCalled();
+    expect(ws.inputFrames()).toEqual([{ t: 'i', d: UP.repeat(3) }]); // first report never waits for a timer
+    expect(flushed(ws)).toEqual([{ t: 'i', d: UP.repeat(3) }]); // no seq: never persisted
+
+    mount.fire('wheel', wheelLines(2, AT));
+    expect(flushed(ws).at(-1)).toEqual({ t: 'i', d: DOWN.repeat(2) });
+  });
+
+  it('uses fractional native scrolling for a tracked Codex tile, never PageUp', async () => {
+    const { ws, mount } = await connectTile(makeApp({ 's-tile': { mode: 'codex', cliMouseTracking: true } }), {
+      mode: 'codex',
+    });
+    for (let i = 0; i < 10; i++) mount.fire('wheel', wheel(-3, AT));
+    expect(flushed(ws)).toEqual([{ t: 'i', d: UP }]);
+  });
+
+  it('preserves coarse pixel wheel travel and caps individual accelerated events', async () => {
+    const { ws, mount } = await connectTile(makeApp({ 's-tile': FULLSCREEN }), { mode: 'claude' });
+
+    mount.fire('wheel', wheel(-100, AT));
+    expect(flushed(ws)).toEqual([{ t: 'i', d: UP.repeat(4) }]);
+
+    mount.fire('wheel', wheelLines(-1000, AT));
+    expect(flushed(ws).at(-1)).toEqual({ t: 'i', d: UP.repeat(5) });
+  });
+
+  it('forwards an isolated small wheel event and five slow clicks for every tracked CLI', async () => {
+    for (const mode of ['claude', 'codex', 'copilot']) {
+      let now = 1000;
+      clock.now = () => now;
+      const session = mode === 'claude' ? FULLSCREEN : { mode, cliMouseTracking: true };
+      const { ws, mount } = await connectTile(makeApp({ 's-tile': session }), { mode });
+      mount.fire('wheel', wheel(-4, AT));
+      expect(flushed(ws)).toEqual([{ t: 'i', d: UP }]);
+      for (let i = 1; i < 5; i++) {
+        now += 300;
+        vi.advanceTimersByTime(300);
+        mount.fire('wheel', wheel(-4, AT));
+        flushed(ws);
+      }
+      expect(ws.inputFrames().map((f) => f.d)).toEqual(Array(5).fill(UP));
+      // Separate pane/visit: ten 2.5px events produce only the pre-paid tick.
+      const fine = await connectTile(makeApp({ 's-tile': session }), { mode });
+      for (let i = 0; i < 10; i++) fine.mount.fire('wheel', wheel(-2.5, AT));
+      expect(flushed(fine.ws)).toEqual([{ t: 'i', d: UP }]);
+    }
+  });
+
+  it('accumulates precision touchpad deltas and consumes a pure horizontal swipe without sending', async () => {
+    const { ws, mount } = await connectTile(makeApp({ 's-tile': FULLSCREEN }), { mode: 'claude' });
+
+    mount.fire('wheel', wheel(-3, AT)); // pre-pay one tick, then repay it
+    expect(flushed(ws)).toEqual([{ t: 'i', d: UP }]);
+    for (let i = 0; i < 8; i++) mount.fire('wheel', wheel(-3, AT));
+    expect(flushed(ws)).toEqual([{ t: 'i', d: UP }]);
+
+    const sideways = wheel(0, { ...AT, deltaX: 120 });
+    mount.fire('wheel', sideways);
+    expect(sideways.preventDefault).toHaveBeenCalled(); // never xterm's stale frames
+    expect(flushed(ws)).toHaveLength(1);
+  });
+
+  it('sends the first report immediately and coalesces subsequent wheels within 40 ms', async () => {
+    const { ws, mount } = await connectTile(makeApp({ 's-tile': FULLSCREEN }), { mode: 'claude' });
+
+    mount.fire('wheel', wheelLines(-2, AT));
+    vi.advanceTimersByTime(20);
+    mount.fire('wheel', wheelLines(-2, AT));
+
+    mount.fire('wheel', wheelLines(-2, AT));
+    expect(ws.inputFrames()).toEqual([{ t: 'i', d: UP.repeat(2) }]);
+    expect(flushed(ws)).toEqual([
+      { t: 'i', d: UP.repeat(2) },
+      { t: 'i', d: UP.repeat(4) },
+    ]);
+  });
+
+  it('does not discard queued reports when a zero-delta wheel arrives', async () => {
+    const { ws, mount } = await connectTile(makeApp({ 's-tile': FULLSCREEN }), { mode: 'claude' });
+    mount.fire('wheel', wheelLines(-1, AT));
+    mount.fire('wheel', wheelLines(-2, AT));
+    mount.fire('wheel', wheel(0, AT));
+    expect(flushed(ws)).toEqual([
+      { t: 'i', d: UP },
+      { t: 'i', d: UP.repeat(2) },
+    ]);
+  });
+
+  it('snaps a scrolled-up viewport home before reporting, since SGR rows address the live screen', async () => {
+    const { ws, term, mount } = await connectTile(makeApp({ 's-tile': FULLSCREEN }), { mode: 'claude' });
+    term.buffer.active.baseY = 10;
+    term.buffer.active.viewportY = 0;
+
+    mount.fire('wheel', wheelLines(-1, AT));
+
+    expect(term.scrolledToBottom).toBe(1);
+    expect(term.buffer.active.viewportY).toBe(10);
+    expect(flushed(ws)).toEqual([{ t: 'i', d: UP }]);
+  });
+
+  it("follows the tile session's gate, never the active session's", async () => {
+    // Active session is a shell; the tile shows fullscreen Claude: the tile forwards.
+    const forwarded = await connectTile(makeApp({ other: { mode: 'shell' }, 's-tile': FULLSCREEN }, 'other'), {
+      mode: 'claude',
+    });
+    forwarded.mount.fire('wheel', wheelLines(-1, AT));
+    expect(flushed(forwarded.ws)).toEqual([{ t: 'i', d: UP }]);
+
+    // Active session is fullscreen Claude; the tile shows inline Claude (no
+    // tracking): no reports, the hollow buffer is paged instead.
+    const inline = await connectTile(
+      makeApp({ other: FULLSCREEN, 's-tile': { ...FULLSCREEN, cliMouseTracking: false } }, 'other'),
+      { mode: 'claude' }
+    );
+    inline.mount.fire('wheel', wheelLines(-12, AT));
+    expect(flushed(inline.ws)).toEqual([{ t: 'i', d: PAGE_UP }]);
+  });
+
+  it('scrolls Shift locally, and leaves a tracking xterm and the alternate buffer to xterm', async () => {
+    const { ws, term, mount } = await connectTile(makeApp({ 's-tile': FULLSCREEN }), { mode: 'claude' });
+    const fireAndCheck = (ev: ReturnType<typeof wheel>) => {
+      mount.fire('wheel', ev);
+      expect(ev.preventDefault).not.toHaveBeenCalled();
+      expect(ev.stopPropagation).not.toHaveBeenCalled();
+    };
+
+    const shifted = wheelLines(-3, { ...AT, shiftKey: true }); // the explicit "local scrollback" gesture
+    mount.fire('wheel', shifted);
+    expect(shifted.preventDefault).toHaveBeenCalled();
+    expect(term.scrolledLines).toEqual([-3]);
+
+    term.modes.mouseTrackingMode = 'any'; // xterm's own encoder forwards the wheel
+    fireAndCheck(wheelLines(-3, AT));
+    term.modes.mouseTrackingMode = 'none';
+
+    term.buffer.active.type = 'alternate'; // xterm's alt-scroll owns it
+    fireAndCheck(wheelLines(-3, AT));
+
     expect(flushed(ws)).toEqual([]);
   });
 
+  it('pages, never reports, a Claude older than 2.1.187', async () => {
+    const app = makeApp({ 's-tile': { ...FULLSCREEN, cliVersion: '2.1.100' } });
+    const { ws, mount } = await connectTile(app, { mode: 'claude' });
+
+    mount.fire('wheel', wheelLines(-12, AT));
+
+    expect(flushed(ws)).toEqual([{ t: 'i', d: PAGE_UP }]);
+  });
+
+  it('sends exactly the bytes the primary pane sends for the same wheel sequence', async () => {
+    const sequence = [-1, -3, 2, -100, 40, -0.2, 7].map((n) => wheelLines(n, AT));
+    const { ws, mount } = await connectTile(makeApp({ 's-tile': FULLSCREEN }), { mode: 'claude' });
+    const tileBytes: string[] = [];
+    for (const ev of sequence) {
+      mount.fire('wheel', ev);
+      tileBytes.push(
+        ...flushed(ws)
+          .splice(tileBytes.length)
+          .map((f) => f.d as string)
+      );
+    }
+
+    const primary = makeApp({ other: FULLSCREEN }, 'other') as App & {
+      terminal: unknown;
+      _sendSyntheticSgrWheel(x: number, y: number, lines: number): void;
+      _wheelScrollLinesFloat(ev: unknown): number;
+      _flushWheelSgrQueue(): void;
+    };
+    const sent: string[] = [];
+    primary._sendInputEphemeral = (_id: string, data: string) => sent.push(data);
+    primary.terminal = new FakeTerminal({});
+    for (const ev of sequence) {
+      primary._sendSyntheticSgrWheel(ev.clientX, ev.clientY, primary._wheelScrollLinesFloat(ev));
+      primary._flushWheelSgrQueue();
+    }
+
+    expect(tileBytes.join('')).not.toBe('');
+    expect(tileBytes).toEqual(sent);
+  });
+});
+
+describe("Shift+wheel scrolls the tile's local scrollback itself", () => {
+  // xterm's own scroller turns a Shift+vertical wheel into a horizontal one off
+  // macOS, and Chrome on Windows already delivers Shift+wheel as deltaX, so
+  // left to xterm the gesture moved nothing.
+  it.each(['claude', 'opencode', 'shell'])('scrolls a %s tile with real history, and sends nothing', async (mode) => {
+    const { ws, term, mount } = await connectTile(makeApp({ 's-tile': { mode } }), { mode });
+    term.write(lines(40));
+    const bottom = term.buffer.active.baseY;
+    expect(bottom).toBeGreaterThan(5);
+
+    const up = wheelLines(-3, { shiftKey: true });
+    mount.fire('wheel', up);
+
+    expect(up.preventDefault).toHaveBeenCalled();
+    expect(up.stopPropagation).toHaveBeenCalled();
+    expect(term.buffer.active.viewportY).toBe(bottom - 3);
+    mount.fire('wheel', wheelLines(3, { shiftKey: true }));
+    expect(term.buffer.active.viewportY).toBe(bottom);
+    expect(flushed(ws)).toEqual([]);
+  });
+
+  it("reads Chrome-on-Windows' horizontal Shift+wheel (deltaX) as vertical travel", async () => {
+    const { term, mount } = await connectTile(makeApp({ 's-tile': { mode: 'claude' } }), { mode: 'claude' });
+
+    mount.fire('wheel', wheel(0, { deltaX: -100, shiftKey: true }));
+
+    expect(term.scrolledLines).toEqual([-4]);
+  });
+
+  it('carries sub-line travel to the next event, so a trackpad still scrolls', async () => {
+    const { term, mount } = await connectTile(makeApp({ 's-tile': { mode: 'claude' } }), { mode: 'claude' });
+
+    mount.fire('wheel', wheel(-10, { shiftKey: true })); // 0.4 of a line
+    mount.fire('wheel', wheel(-10, { shiftKey: true }));
+    expect(term.scrolledLines).toEqual([]);
+    mount.fire('wheel', wheel(-10, { shiftKey: true }));
+
+    expect(term.scrolledLines).toEqual([-1]);
+  });
+
+  it('still pulls history on a Shift+wheel-up at the top of a shell tile', async () => {
+    const { mount } = await connectTile(makeApp({ 's-tile': { mode: 'shell' } }), { mode: 'shell' });
+    expect(fetchMock).toHaveBeenCalledTimes(1); // the initial load
+
+    mount.fire('wheel', wheelLines(-3, { shiftKey: true }));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(String(fetchMock.mock.calls[1][0])).toContain('full=1&tail=');
+  });
+});
+
+describe("the forwarding gate behaves as in the primary pane, for the tile's session", () => {
   it('pages that same tile under the "Wheel scrolls local history" opt-out (the footgun rescue)', async () => {
     const app = makeApp({ 's-tile': { mode: 'claude', cliVersion: '2.1.223', cliMouseTracking: true } });
     app.loadAppSettingsFromStorage = () => ({ terminalWheelLocalScrollback: true });
@@ -318,11 +588,11 @@ describe('page-key travel, cap and coalescing', () => {
     FakeFit.proposed = { cols: 80, rows: 36 };
   });
 
-  it('accumulates sub-page travel: two wheels of 10 lines are one PageUp', async () => {
+  it('pages a coarse opening event at once, and the next one repays it instead of paging again', async () => {
     const { ws, mount } = await connectTile(makeApp({ 's-tile': { mode: 'opencode' } }));
 
     mount.fire('wheel', wheelLines(-10));
-    expect(flushed(ws)).toEqual([]);
+    expect(flushed(ws)).toEqual([{ t: 'i', d: PAGE_UP }]);
     mount.fire('wheel', wheelLines(-10));
 
     expect(flushed(ws)).toEqual([{ t: 'i', d: PAGE_UP }]);
@@ -372,6 +642,252 @@ describe('page-key travel, cap and coalescing', () => {
 
     expect(tileBytes).not.toBe('');
     expect(tileBytes).toBe(sent.join(''));
+  });
+});
+
+describe("gesture handling is the primary pane's, through the shared pure helper", () => {
+  beforeEach(() => {
+    FakeFit.proposed = { cols: 80, rows: 36 }; // half a screen: 18 rows a page
+  });
+
+  /** A hand-moved clock; returns a function that advances it. */
+  function manualClock() {
+    let now = 10_000;
+    clock.now = () => now;
+    return (ms: number) => {
+      now += ms;
+      vi.advanceTimersByTime(ms);
+    };
+  }
+
+  it('pages an untracked Codex tile through the hollow-pane fallback', async () => {
+    const { ws, mount } = await connectTile(makeApp({ 's-tile': { mode: 'codex' } }), { mode: 'codex' });
+
+    mount.fire('wheel', wheelLines(-18));
+
+    expect(flushed(ws)).toEqual([{ t: 'i', d: PAGE_UP }]);
+  });
+
+  it('answers the first trackpad-sized event of a gesture at once, and owes the travel back', async () => {
+    manualClock();
+    const { ws, mount } = await connectTile(makeApp({ 's-tile': { mode: 'codex' } }), { mode: 'codex' });
+
+    mount.fire('wheel', wheelLines(-1)); // a trackpad flick opens with a row or so
+    expect(flushed(ws)).toEqual([{ t: 'i', d: PAGE_UP }]);
+
+    // Same gesture (no pause): the pre-paid page is owed back first, so the next
+    // PageUp needs a further half screen, not another first event.
+    mount.fire('wheel', wheelLines(-16));
+    mount.fire('wheel', wheelLines(-18));
+    expect(flushed(ws)).toHaveLength(1); // 1 + 16 + 18 rows: still one short of two pages
+    mount.fire('wheel', wheelLines(-1));
+    expect(flushed(ws)).toEqual([
+      { t: 'i', d: PAGE_UP },
+      { t: 'i', d: PAGE_UP },
+    ]);
+  });
+
+  it('accumulates slow wheel notches instead of paging a screen per notch', async () => {
+    const advance = manualClock();
+    const { ws, mount } = await connectTile(makeApp({ 's-tile': { mode: 'opencode' } }));
+
+    // Five notches of 4 rows, each past the gesture gap: 20 rows, one page.
+    for (let i = 0; i < 5; i++) {
+      mount.fire('wheel', wheelLines(-4));
+      advance(400);
+    }
+
+    expect(flushed(ws)).toEqual([{ t: 'i', d: PAGE_UP }]);
+  });
+
+  it('consumes a pinch and a mostly horizontal swipe without paging', async () => {
+    const { ws, mount } = await connectTile(makeApp({ 's-tile': { mode: 'codex' } }), { mode: 'codex' });
+
+    // Each carries a full page of vertical travel, so either one pages if it
+    // reaches the travel math at all.
+    const pinch = wheelLines(-18, { ctrlKey: true });
+    const swipe = wheel(-18 * 25, { deltaX: -40 * 25 });
+    mount.fire('wheel', pinch);
+    mount.fire('wheel', swipe);
+
+    // Consumed: xterm must not scroll its stale rows for them either.
+    expect(pinch.preventDefault).toHaveBeenCalled();
+    expect(swipe.preventDefault).toHaveBeenCalled();
+    expect(flushed(ws)).toEqual([]);
+  });
+
+  it('sends exactly the bytes the primary pane sends for a mixed gesture sequence', async () => {
+    const advance = manualClock();
+    // [rows of travel, ms before the next event, extra event fields]
+    const steps: Array<[number, number, Record<string, unknown>?]> = [
+      [-1, 10],
+      [-6, 10],
+      [-30, 300],
+      [-4, 400],
+      [-4, 400],
+      [-1, 10, { ctrlKey: true }],
+      [-1.2, 10, { deltaX: 200 }],
+      [1, 10], // reversal, trackpad-sized: a PageDown at once
+      [2, 500],
+      [-0.05, 10],
+      [-200, 10],
+    ];
+    const events = () => steps.map(([rows, , extra]) => wheelLines(rows, extra));
+
+    const { ws, mount } = await connectTile(makeApp({ 's-tile': { mode: 'codex' } }), { mode: 'codex' });
+    const tileEvents = events();
+    steps.forEach(([, gap], i) => {
+      mount.fire('wheel', tileEvents[i]);
+      advance(gap);
+    });
+    const tileBytes = flushed(ws)
+      .map((f) => f.d)
+      .join('');
+
+    const primary = makeApp({ other: { mode: 'codex' } }, 'other') as App & {
+      terminal: unknown;
+      _maybePageCliTranscript(ev: unknown, lines: number): boolean;
+      _wheelScrollLinesFloat(ev: unknown): number;
+      _flushWheelSgrQueue(): void;
+    };
+    const sent: string[] = [];
+    primary._sendInputEphemeral = (_id: string, data: string) => sent.push(data);
+    primary.terminal = {
+      rows: 36,
+      modes: { mouseTrackingMode: 'none' },
+      buffer: { active: { type: 'normal', baseY: 0, viewportY: 0 } },
+    };
+    const primaryEvents = events();
+    steps.forEach(([, gap], i) => {
+      primary._maybePageCliTranscript(primaryEvents[i], primary._wheelScrollLinesFloat(primaryEvents[i]));
+      advance(gap);
+    });
+    primary._flushWheelSgrQueue();
+
+    expect(tileBytes).toContain(PAGE_UP);
+    expect(tileBytes).toContain(PAGE_DOWN);
+    expect(tileBytes).toBe(sent.join(''));
+  });
+
+  it('pages slow small ticks and a back-and-forth wobble once, exactly as the primary pane does', async () => {
+    const advance = manualClock();
+    // Five 40 px ticks 250 ms apart (each under the 2-row trackpad size), a pause
+    // longer than the pre-paid debt's second, then a +/-3 px wobble at 16 ms.
+    const steps: Array<[number, number]> = [
+      ...Array.from({ length: 5 }, () => [-40, 250] as [number, number]),
+      [0, 1_200],
+      ...Array.from({ length: 12 }, (_, i) => [i % 2 ? 3 : -3, 16] as [number, number]),
+    ];
+    const events = () => steps.filter(([px]) => px).map(([px]) => wheel(px));
+    const gaps = steps.reduce<number[]>((acc, [px, gap]) => {
+      if (px) acc.push(gap);
+      else acc[acc.length - 1] += gap;
+      return acc;
+    }, []);
+
+    const { ws, mount } = await connectTile(makeApp({ 's-tile': { mode: 'codex' } }), { mode: 'codex' });
+    events().forEach((ev, i) => {
+      mount.fire('wheel', ev);
+      advance(gaps[i]);
+    });
+    const tileBytes = flushed(ws)
+      .map((f) => f.d)
+      .join('');
+    // One page for the slow ticks; the wobble cancels its unsent opening page on reversal.
+    expect(tileBytes).toBe(PAGE_UP); // the first slow tick flushed before the later wobble
+
+    const primary = makeApp({ other: { mode: 'codex' } }, 'other') as App & {
+      terminal: unknown;
+      _maybePageCliTranscript(ev: unknown, lines: number): boolean;
+      _wheelScrollLinesFloat(ev: unknown): number;
+      _flushWheelSgrQueue(): void;
+    };
+    const sent: string[] = [];
+    primary._sendInputEphemeral = (_id: string, data: string) => sent.push(data);
+    primary.terminal = {
+      rows: 36,
+      modes: { mouseTrackingMode: 'none' },
+      buffer: { active: { type: 'normal', baseY: 0, viewportY: 0 } },
+    };
+    events().forEach((ev, i) => {
+      primary._maybePageCliTranscript(ev, primary._wheelScrollLinesFloat(ev));
+      advance(gaps[i]);
+    });
+    primary._flushWheelSgrQueue();
+    expect(sent.join('')).toBe(tileBytes);
+  });
+});
+
+describe("the dialog check reads the TILE's session, never the active tab's", () => {
+  it('does not page a tile whose own session has a pending dialog while the active tab is clear', async () => {
+    const app = makeApp({ other: { mode: 'codex' }, 's-tile': { mode: 'codex' } }, 'other');
+    (app as App & { tabAlerts: Map<string, string> }).tabAlerts = new Map([['s-tile', 'action']]);
+    const { ws, mount } = await connectTile(app, { mode: 'codex' });
+
+    const ev = wheelLines(-18);
+    mount.fire('wheel', ev);
+
+    // Consumed, so xterm does not scroll the stale rows under the dialog either.
+    expect(ev.preventDefault).toHaveBeenCalled();
+    expect(flushed(ws)).toEqual([]);
+  });
+
+  it('pages a clear tile while the ACTIVE tab has a pending dialog', async () => {
+    const app = makeApp({ other: { mode: 'codex' }, 's-tile': { mode: 'codex' } }, 'other');
+    (app as App & { tabAlerts: Map<string, string> }).tabAlerts = new Map([['other', 'action']]);
+    const { ws, mount } = await connectTile(app, { mode: 'codex' });
+
+    mount.fire('wheel', wheelLines(-18));
+
+    expect(flushed(ws)).toEqual([{ t: 'i', d: PAGE_UP }]);
+  });
+});
+
+describe("a Codex selection menu on the tile's own screen", () => {
+  const MENU = [
+    '  Implement this plan?',
+    '',
+    '› 1. Yes, implement this plan          Switch to Default and start coding',
+    '  2. Yes, clear context and implement  Start a fresh thread (current context: 2% used)',
+    '  3. No, stay in Plan mode             Continue planning with the model',
+    '',
+    '  enter select · esc back',
+  ];
+  /** Puts `rows` on the bottom of the tile's 24-row screen, the way xterm's buffer answers getLine. */
+  function showOnScreen(term: { rows: number; buffer: { active: Record<string, unknown> } }, rows: string[]) {
+    const screen = [...Array(term.rows - rows.length).fill(''), ...rows];
+    term.buffer.active.getLine = (y: number) => ({ translateToString: () => screen[y] ?? '' });
+  }
+
+  it('consumes the wheel without paging, and pages again once the menu is gone', async () => {
+    const app = makeApp({ other: { mode: 'claude' }, 's-tile': { mode: 'codex' } }, 'other');
+    const { ws, term, mount } = await connectTile(app, { mode: 'codex' });
+    showOnScreen(term, MENU);
+
+    for (const lines of [-18, 18, -18]) {
+      const ev = wheelLines(lines);
+      mount.fire('wheel', ev);
+      // Consumed (xterm does not scroll the stale rows under the menu either), and no key was sent.
+      expect(ev.preventDefault).toHaveBeenCalled();
+    }
+    expect(flushed(ws)).toEqual([]);
+
+    // Menu closed: the composer is back on screen and the same wheel pages the transcript.
+    showOnScreen(term, ['› Ask Codex to do anything', '', '  GPT-6-Astra medium · ~/cases/x', '  ? for shortcuts']);
+    mount.fire('wheel', wheelLines(-18));
+    expect(flushed(ws)).toEqual([{ t: 'i', d: PAGE_UP }]);
+  });
+
+  it("asks about THIS tile's terminal, not the active tab's", async () => {
+    const app = makeApp({ other: { mode: 'codex' }, 's-tile': { mode: 'codex' } }, 'other');
+    (app as App & { terminal: unknown }).terminal = {
+      rows: 24,
+      buffer: { active: { getLine: () => ({ translateToString: () => '' }) } },
+    };
+    const { ws, term, mount } = await connectTile(app, { mode: 'codex' });
+    showOnScreen(term, MENU);
+    mount.fire('wheel', wheelLines(-18));
+    expect(flushed(ws)).toEqual([]);
   });
 });
 
@@ -478,14 +994,14 @@ describe('rows the tile pushed above the screen itself are not history', () => {
     }
     expect(flushed(ws)).toEqual([]);
 
-    // Back on the live screen, only travel made there counts: two quarter-screen
-    // wheels are one PageUp, with nothing carried over from the wheels xterm had
-    // (the gate sits before the pending travel is touched).
+    // Back on the live screen, only travel made there counts: the first quarter-screen wheel pages at
+    // once and the second repays it, with nothing carried over from the wheels xterm had (the gate sits
+    // before the pending travel is touched).
     term.buffer.active.viewportY = baseY;
     const first = wheelLines(-6);
     mount.fire('wheel', first);
     expect(first.preventDefault).toHaveBeenCalled();
-    expect(flushed(ws)).toEqual([]);
+    expect(flushed(ws)).toEqual([{ t: 'i', d: PAGE_UP }]);
     mount.fire('wheel', wheelLines(-6));
     expect(flushed(ws)).toEqual([{ t: 'i', d: PAGE_UP }]);
   });

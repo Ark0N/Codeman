@@ -6,7 +6,7 @@
  * - Close modal shows "Kill Tmux & OpenCode" (not "Claude Code")
  * - needsRefresh handler sends resize
  *
- * Port: 3211 (opencode UI tests)
+ * Port: ephemeral
  *
  * Run: npx vitest run test/opencode-resize.test.ts
  */
@@ -16,8 +16,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
 import { WebServer } from '../src/web/server.js';
 
-const PORT = 3211;
-const BASE_URL = `http://localhost:${PORT}`;
+let baseUrl: string;
 
 const HAS_OPENCODE = (() => {
   try {
@@ -40,15 +39,16 @@ async function freshPage(): Promise<{ context: BrowserContext; page: Page }> {
 }
 
 async function navigateAndWait(page: Page): Promise<void> {
-  await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+  await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => document.body.classList.contains('app-loaded'), {
     timeout: 5000,
   });
 }
 
 beforeAll(async () => {
-  server = new WebServer(PORT, false, true); // testMode
+  server = new WebServer(0, false, true); // testMode
   await server.start();
+  baseUrl = `http://localhost:${server.boundPort}`;
   browser = await chromium.launch({ headless: true });
 }, 30_000);
 

@@ -1,10 +1,10 @@
-// Port 3205 - Cross-device parametric tests
+// Ephemeral port - Cross-device parametric tests
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { BrowserContext, Page } from 'playwright';
 import type { WebServer } from '../src/web/server.js';
 import { createTestServer, stopTestServer } from './helpers/server.js';
 import { createDevicePage, closeAllBrowsers } from './helpers/browser.js';
-import { PORTS, SELECTORS, BREAKPOINTS, BODY_CLASSES } from './helpers/constants.js';
+import { SELECTORS, BREAKPOINTS, BODY_CLASSES } from './helpers/constants.js';
 import {
   assertFixedPosition,
   assertHidden,
@@ -17,8 +17,7 @@ import {
 } from './helpers/assertions.js';
 import { REPRESENTATIVE_DEVICES, DEVICE_REGISTRY, type DeviceEntry, type DeviceCategory } from './devices.js';
 
-const PORT = PORTS.DEVICE_MATRIX;
-const BASE_URL = `http://localhost:${PORT}`;
+let baseUrl: string;
 
 let server: WebServer;
 
@@ -36,7 +35,8 @@ const PHONE_ONLY_SELECTORS = [SELECTORS.SETTINGS_MOBILE, SELECTORS.CASE_MOBILE];
 
 describe('Device Matrix', () => {
   beforeAll(async () => {
-    server = await createTestServer(PORT);
+    server = await createTestServer();
+    baseUrl = `http://localhost:${server.boundPort}`;
   });
 
   afterAll(async () => {
@@ -53,7 +53,7 @@ describe('Device Matrix', () => {
       let page: Page;
 
       beforeAll(async () => {
-        ({ context, page } = await createDevicePage(device, BASE_URL));
+        ({ context, page } = await createDevicePage(device, baseUrl));
       });
 
       afterAll(async () => {
@@ -143,7 +143,7 @@ describe('Device Matrix', () => {
   describe.skipIf(process.env.CI_QUICK === '1')('Full Device Matrix', () => {
     for (const device of DEVICE_REGISTRY) {
       it(`${device.name} (${device.viewport.width}x${device.viewport.height}): correct layout`, async () => {
-        const { context, page } = await createDevicePage(device, BASE_URL);
+        const { context, page } = await createDevicePage(device, baseUrl);
         try {
           // Verify viewport was applied
           const viewportSize = page.viewportSize();
@@ -178,7 +178,7 @@ describe('Device Matrix', () => {
           const results: Record<string, { position: string; top: string; zIndex: number }> = {};
 
           for (const engine of engines) {
-            const { context, page } = await createDevicePage(device, BASE_URL, engine);
+            const { context, page } = await createDevicePage(device, baseUrl, engine);
             try {
               const position = await getCSSProperty(page, SELECTORS.HEADER, 'position');
               const top = await getCSSProperty(page, SELECTORS.HEADER, 'top');

@@ -72,3 +72,20 @@ export function readTextAfterPrompt(terminal: XtermTerminal, prompt: PromptPosit
     return '';
   }
 }
+
+/**
+ * Whether the row the overlay draws on (the cursor row) is inside the viewport. A bare
+ * `viewportY === baseY` test is wrong for a host that parks the viewport a few rows above
+ * the bottom with the prompt still on screen; a buffer without `cursorY` keeps that rule.
+ */
+export function promptRowInViewport(terminal: XtermTerminal): boolean {
+  try {
+    const buf = terminal.buffer.active;
+    if (buf.viewportY === buf.baseY) return true;
+    if (typeof buf.cursorY !== 'number') return false;
+    const cursorRow = buf.baseY + buf.cursorY;
+    return cursorRow >= buf.viewportY && cursorRow < buf.viewportY + terminal.rows;
+  } catch {
+    return false;
+  }
+}

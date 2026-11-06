@@ -97,6 +97,24 @@ describe('sendPushNotifications -> webhook (the headless case)', () => {
     expect(sendNotification).not.toHaveBeenCalled();
   });
 
+  it('carries a screen-read dialog (codex) with its own message, and a hook message stays out', async () => {
+    // web/screen-blocked.ts sends the CLI's own label, built server-side, never the
+    // dialog's text. A Claude hook's `message` keeps the body it always had.
+    const { send } = await headlessServer({});
+    await send('hook:permission_prompt', {
+      sessionId: 's3',
+      sessionName: 'w3-app',
+      source: 'screen',
+      message: 'Codex is waiting for your answer in the terminal',
+    });
+    await send('hook:permission_prompt', {
+      sessionId: 's4',
+      sessionName: 'w4-app',
+      message: 'Claude needs your permission to use Bash',
+    });
+    expect(got.map((g) => g.body)).toEqual(['[w3-app] Codex is waiting for your answer in the terminal', '[w4-app]']);
+  });
+
   it('dedupes an immediate repeat of the same event for the same session', async () => {
     const { send } = await headlessServer({});
     await send('hook:idle_prompt', { sessionId: 's1', sessionName: 'w1-app' });

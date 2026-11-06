@@ -78,3 +78,16 @@ describe('test environment isolation', () => {
     expect(deleted).toEqual(STRIPPED_ENV_VARS.map(([name]) => name).sort());
   });
 });
+
+describe('a bare vitest invocation is still isolated', () => {
+  // Without a root config, `npx vitest run` loads no setup file, so HOME is never redirected and
+  // the suite writes fixtures into the developer's real ~/.codeman. Pin that the root config
+  // exists and carries the setup file, rather than trusting everyone to pass --config.
+  it('has a root vitest.config.ts that loads test/setup.ts', () => {
+    const root = fileURLToPath(new URL('..', import.meta.url));
+    const src = readFileSync(`${root}vitest.config.ts`, 'utf8');
+    expect(src).toContain('./config/vitest.ci.config');
+    const ci = readFileSync(`${root}config/vitest.ci.config.ts`, 'utf8');
+    expect(ci).toContain("setupFiles: ['./test/setup.ts']");
+  });
+});

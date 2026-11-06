@@ -8,8 +8,6 @@ import { WebServer } from '../src/web/server.js';
 
 declare const PathPicker: any; // evaluated inside the page, where it is a global
 
-const PORT = 3193;
-
 describe('Create a case in a custom folder', () => {
   let server: WebServer;
   let browser: Browser;
@@ -18,11 +16,11 @@ describe('Create a case in a custom folder', () => {
 
   beforeAll(async () => {
     parent = mkdtempSync(join(homedir(), 'custom-case-'));
-    server = new WebServer(PORT, false, true);
+    server = new WebServer(0, false, true);
     await server.start();
     browser = await chromium.launch({ headless: true });
     page = await browser.newPage();
-    await page.goto(`http://localhost:${PORT}`, { waitUntil: 'domcontentloaded' });
+    await page.goto(`http://localhost:${server.boundPort}`, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => (window as any).app?.terminal, null, { timeout: 30000 });
   }, 90000);
 

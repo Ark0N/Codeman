@@ -47,13 +47,60 @@ export function stringCellWidth(terminal: XtermTerminal | null | undefined, str:
 // ─── Overlay rendering ────────────────────────────────────────────────
 
 /**
+ * Cell edges are snapped to this fraction of a CSS pixel.
+ *
+ * The glyph spans sit in normal flow, so each one starts where the widths
+ * before it add up to, and a width the layout engine cannot store exactly
+ * would carry its rounding error into every later cell (the drift that plain
+ * DOM text shows against the canvas grid). A quarter pixel is exact in
+ * Blink and WebKit (1/64 px layout units) and in Gecko (1/60 px app units),
+ * so the widths always add up to the snapped edge: no drift at any column,
+ * and every edge is within 1/8 px of `col * cellW`.
+ */
+const EDGE_SNAP = 4;
+
+function cellEdge(col: number, cellW: number): number {
+  return Math.round(col * cellW * EDGE_SNAP) / EDGE_SNAP;
+}
+
+/** What the last render left in a container, so the next one rebuilds only the lines that changed. */
+interface RenderedLines {
+  /** Everything a line's markup depends on besides its own text and position. */
+  styleKey: string;
+  lines: HTMLDivElement[];
+  lineKeys: string[];
+  cursor: HTMLSpanElement | null;
+}
+
+const rendered = new WeakMap<HTMLDivElement, RenderedLines>();
+
+/**
+ * False once anything else has emptied or edited the container (the addon's
+ * hide path clears it): the children must be exactly the recorded lines, in
+ * order, then the cursor.
+ */
+function holdsOnlyRendered(container: HTMLDivElement, state: RenderedLines): boolean {
+  const children = container.children;
+  if (children.length !== state.lines.length + (state.cursor ? 1 : 0)) return false;
+  for (let i = 0; i < state.lines.length; i++) {
+    if (children[i] !== state.lines[i]) return false;
+  }
+  return !state.cursor || children[state.lines.length] === state.cursor;
+}
+
+/**
  * Render the overlay content into the container element.
  *
- * Creates per-character `<span>` elements positioned on an exact grid
- * matching xterm.js's canvas renderer. This avoids sub-pixel drift that
- * occurs with normal DOM text flow.
+ * Each line is a `<div>` holding one `<span>` per character on the cell grid
+ * of xterm.js's canvas renderer (see makeLine). CJK wide characters get
+ * double-width spans.
  *
- * CJK wide characters are rendered with double-width spans.
+ * Only lines whose content or position changed since the previous render
+ * into the same container are rebuilt. Typing a character changes just the
+ * last line, so a keystroke costs one line of DOM work however long the
+ * prompt is; rebuilding everything made each keystroke O(prompt length) in
+ * DOM work, layout and paint, which a long prompt on a phone paid for in
+ * dropped frames.
  */
 export function renderOverlay(container: HTMLDivElement, params: RenderParams): void {
   const {
@@ -94,11 +141,14 @@ export function renderOverlay(container: HTMLDivElement, params: RenderParams): 
   // Code-point offset of each line in the whole text, so the composition
   // styling survives the tail slice below.
   const lineOffsets: number[] = [];
+  const lineLengths: number[] = [];
   {
     let offset = 0;
     for (const line of lines) {
+      const length = [...line].length;
       lineOffsets.push(offset);
-      offset += [...line].length;
+      lineLengths.push(length);
+      offset += length;
     }
   }
   let visibleLines = lines;
@@ -120,8 +170,29 @@ export function renderOverlay(container: HTMLDivElement, params: RenderParams): 
   container.style.left = '0px';
   container.style.top = topRow * cellH + 'px';
 
-  // Clear and rebuild (typically 1-3 line divs, negligible cost)
-  container.innerHTML = '';
+  // Reuse the previous render's lines when nothing they depend on but their
+  // own text and position changed; otherwise start from an empty container.
+  const styleKey = [
+    cellW,
+    cellH,
+    font.fontFamily,
+    font.fontSize,
+    font.fontWeight,
+    font.color,
+    font.backgroundColor,
+    font.letterSpacing,
+    terminal?.unicode?.activeVersion ?? '',
+  ].join('\n');
+  let state = rendered.get(container);
+  if (!state || state.styleKey !== styleKey || !holdsOnlyRendered(container, state)) {
+    container.innerHTML = '';
+    state = { styleKey, lines: [], lineKeys: [], cursor: null };
+    rendered.set(container, state);
+  }
+  // Taken out while the lines change, so it is appended last again below.
+  state.cursor?.remove();
+  state.cursor = null;
+
   const fullWidthPx = totalCols * cellW;
 
   for (let i = 0; i < visibleLines.length; i++) {
@@ -129,8 +200,16 @@ export function renderOverlay(container: HTMLDivElement, params: RenderParams): 
     const leftPx = indents ? startCol * cellW : 0;
     const widthPx = indents ? fullWidthPx - leftPx : fullWidthPx;
     const topPx = i * cellH;
-    const lineCompositionFrom =
-      compositionStart === undefined ? undefined : compositionStart - lineOffsets[firstVisible + i];
+    // Clamped to the line, so a line the composition does not reach keeps
+    // the same key (and its element) while the composition moves along.
+    let lineCompositionFrom: number | undefined;
+    if (compositionStart !== undefined) {
+      const from = compositionStart - lineOffsets[firstVisible + i];
+      if (from < lineLengths[firstVisible + i]) lineCompositionFrom = Math.max(0, from);
+    }
+    // Text goes last, so no character in it can make two different lines collide.
+    const key = `${leftPx}|${topPx}|${widthPx}|${lineCompositionFrom ?? ''}|${visibleLines[i]}`;
+    if (state.lineKeys[i] === key) continue;
     const lineEl = makeLine(
       visibleLines[i],
       leftPx,
@@ -144,8 +223,15 @@ export function renderOverlay(container: HTMLDivElement, params: RenderParams): 
       terminal,
       lineCompositionFrom
     );
-    container.appendChild(lineEl);
+    const previous = state.lines[i];
+    if (previous) container.replaceChild(lineEl, previous);
+    else container.appendChild(lineEl);
+    state.lines[i] = lineEl;
+    state.lineKeys[i] = key;
   }
+  for (let i = state.lines.length - 1; i >= visibleLines.length; i--) state.lines[i].remove();
+  state.lines.length = visibleLines.length;
+  state.lineKeys.length = visibleLines.length;
 
   // Block cursor at end of last line (use visual width for CJK support)
   if (showCursor) {
@@ -161,6 +247,7 @@ export function renderOverlay(container: HTMLDivElement, params: RenderParams): 
       cursor.style.height = cellH + 'px';
       cursor.style.backgroundColor = cursorColor;
       container.appendChild(cursor);
+      state.cursor = cursor;
     }
   }
 
@@ -168,13 +255,20 @@ export function renderOverlay(container: HTMLDivElement, params: RenderParams): 
 }
 
 /**
- * Create a styled line `<div>` with per-character grid positioning.
+ * Create a styled line `<div>` with one `<span>` per character on the cell grid.
  *
- * Each character gets its own `<span>` positioned by visual column offset.
- * CJK wide characters occupy 2 cell widths. Characters at or after
- * `compositionFrom` (a code-point index into `text`, may be negative) are IME
- * composition text: underlined, like xterm's own composition view, and marked
- * `data-zerolag-composition` + `aria-hidden` since they are provisional.
+ * The spans sit side by side in a flex row, each exactly as wide as its cells
+ * (CJK wide characters occupy 2), with every edge snapped by cellEdge() so the
+ * widths add up to the grid without drifting. They are deliberately not
+ * absolutely positioned: a positioned element gets its own paint layer, and
+ * with one per character a long prompt left the browser re-layerizing and
+ * repainting thousands of them on every keystroke. Everything the spans share
+ * (font, colour, line height, centring, ligatures off) is set once on the
+ * line and inherited.
+ *
+ * Characters at or after `compositionFrom` (a code-point index into `text`)
+ * are IME composition text: underlined, like xterm's own composition view, and
+ * marked `data-zerolag-composition` + `aria-hidden` since they are provisional.
  */
 function makeLine(
   text: string,
@@ -190,7 +284,9 @@ function makeLine(
   compositionFrom?: number
 ): HTMLDivElement {
   const el = document.createElement('div');
-  el.style.cssText = 'position:absolute;pointer-events:none';
+  // No ligatures: the canvas renders each glyph independently.
+  el.style.cssText =
+    "position:absolute;display:flex;pointer-events:none;text-align:center;font-feature-settings:'liga' 0,'calt' 0";
   el.style.backgroundColor = font.backgroundColor;
   el.style.left = leftPx + 'px';
   el.style.top = topPx + 'px';
@@ -200,27 +296,24 @@ function makeLine(
   // The extra 1px lands in the next row's charTop gap (empty area before
   // text rendering starts), so no canvas content is obscured.
   el.style.height = cellH + 1 + 'px';
+  el.style.lineHeight = cellH + 'px';
+  el.style.fontFamily = font.fontFamily;
+  el.style.fontSize = font.fontSize;
+  el.style.fontWeight = font.fontWeight;
+  el.style.color = font.color;
+  if (font.letterSpacing) el.style.letterSpacing = font.letterSpacing;
 
-  // CJK wide chars occupy 2 cells — position by visual column offset
-  let colOffset = 0;
+  // Each span runs from the previous snapped edge to its own, so the spans
+  // land on the grid by visual column (CJK wide chars span 2 cells).
+  const spanHeight = ';height:' + cellH + 'px';
+  let col = 0;
+  let edge = 0;
   let index = 0;
   for (const ch of text) {
-    const cw = charCellWidth(terminal, ch);
+    col += charCellWidth(terminal, ch);
+    const nextEdge = cellEdge(col, cellW);
     const span = document.createElement('span');
-    // No ligatures — canvas renders each glyph independently.
-    span.style.cssText =
-      'position:absolute;display:inline-block;text-align:center;pointer-events:none;' +
-      "font-feature-settings:'liga' 0,'calt' 0";
-    span.style.left = colOffset * cellW + 'px';
-    span.style.top = '0px';
-    span.style.width = cw * cellW + 'px';
-    span.style.height = cellH + 'px';
-    span.style.lineHeight = cellH + 'px';
-    span.style.fontFamily = font.fontFamily;
-    span.style.fontSize = font.fontSize;
-    span.style.fontWeight = font.fontWeight;
-    span.style.color = font.color;
-    if (font.letterSpacing) span.style.letterSpacing = font.letterSpacing;
+    span.style.cssText = 'flex:none;width:' + (nextEdge - edge) + 'px' + spanHeight;
     if (compositionFrom !== undefined && index >= compositionFrom) {
       span.style.textDecoration = 'underline';
       span.setAttribute('data-zerolag-composition', '');
@@ -228,7 +321,7 @@ function makeLine(
     }
     span.textContent = ch;
     el.appendChild(span);
-    colOffset += cw;
+    edge = nextEdge;
     index++;
   }
 

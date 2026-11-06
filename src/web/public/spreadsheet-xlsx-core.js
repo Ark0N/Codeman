@@ -472,6 +472,115 @@
     return zipApi.zipSync(admission.entries, { level: 0 });
   }
 
+  // ExcelJS (4.4.0, lib/xlsx/xlsx.js + xform/sheet/worksheet-xform.js `reconcile`)
+  // links a worksheet to its comments, comment notes (VML), tables and drawing by
+  // looking the relationship Target up VERBATIM in maps keyed by its OWN spelling
+  // (`../comments1.xml`, `../drawings/vmlDrawing1.vml`, `../tables/table1.xml`,
+  // `drawing1`), then dereferences the result unchecked. openpyxl, which most
+  // agents write spreadsheets with, uses absolute Targets, its own part names
+  // (`/xl/comments/comment1.xml`) and a drawing XML ExcelJS parses to nothing, so
+  // a workbook with ONE comment, table or chart threw ("reading 'comments'",
+  // "'name'", "'anchors'") before a single cell was shown.
+  //
+  // This runs on ExcelJS's parsed model right before that reconcile. It only
+  // re-points a link to the key ExcelJS itself stored for the same part, or drops
+  // a link (or a drawing) that would dereference nothing; nothing is added. The
+  // preview shows none of these parts. Lookups are own-property only, so a Target
+  // or rId such as `__proto__` cannot resolve through Object.prototype.
+  const REL_TYPE = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/';
+  const REL_COMMENTS = `${REL_TYPE}comments`;
+  const REL_VML_DRAWING = `${REL_TYPE}vmlDrawing`;
+  const REL_TABLE = `${REL_TYPE}table`;
+  const EXCELJS_DRAWING_TARGET = /\/drawings\/([a-zA-Z0-9]+)[.][a-zA-Z]{3,4}$/;
+
+  function ownValue(map, key) {
+    return map && typeof key === 'string' && Object.prototype.hasOwnProperty.call(map, key) ? map[key] : undefined;
+  }
+
+  // The key ExcelJS gives a part it loaded from `xl/<path>` is `../<path>`
+  // (relative to xl/worksheets/). A Target that names the same part another way
+  // (`/xl/tables/table1.xml`) is rewritten to that key.
+  function worksheetRelativeTarget(target) {
+    const path = excelJsEntryName(target[0] === '/' ? target : `xl/worksheets/${target}`);
+    return path.startsWith('xl/') ? `../${path.slice(3)}` : null;
+  }
+
+  function resolveTarget(rel, map, usable) {
+    if (typeof rel.Target !== 'string') return false;
+    if (usable(ownValue(map, rel.Target))) return true;
+    const key = worksheetRelativeTarget(rel.Target);
+    if (key && usable(ownValue(map, key))) {
+      rel.Target = key;
+      return true;
+    }
+    return false;
+  }
+
+  function repairExcelJsModel(model) {
+    if (!model || typeof model !== 'object') return model;
+    const isObject = (value) => Boolean(value) && typeof value === 'object';
+    const drawings = isObject(model.drawings) ? model.drawings : {};
+    // ExcelJS reconciles every drawing that has rels and reads `.anchors` off it.
+    for (const name of Object.keys(drawings)) {
+      if (!isObject(drawings[name]) || !Array.isArray(drawings[name].anchors)) {
+        delete drawings[name];
+        if (isObject(model.drawingRels)) delete model.drawingRels[name];
+      }
+    }
+    // ExcelJS also reconciles every table it parsed, so one it parsed to nothing goes.
+    if (isObject(model.tables)) {
+      for (const key of Object.keys(model.tables)) if (!isObject(model.tables[key])) delete model.tables[key];
+    }
+    const worksheetRels = isObject(model.worksheetRels) ? model.worksheetRels : {};
+    // Worksheets can share a sheetNo (ExcelJS's worksheet pattern is unanchored),
+    // and then they share one rels list: filter and index each list ONCE, or a
+    // long list costs once per worksheet.
+    const relsBySheetNo = new Map();
+    for (const worksheet of Array.isArray(model.worksheets) ? model.worksheets : []) {
+      if (!isObject(worksheet)) continue;
+      const sheetNo = String(worksheet.sheetNo);
+      let byId = relsBySheetNo.get(sheetNo);
+      if (!byId) {
+        const list = ownValue(worksheetRels, sheetNo);
+        const rels = Array.isArray(list) ? list : [];
+        const kept = rels.filter((rel) => {
+          if (!isObject(rel)) return false;
+          if (rel.Type === REL_COMMENTS) return resolveTarget(rel, model.comments, isObject);
+          if (rel.Type === REL_VML_DRAWING) {
+            return resolveTarget(rel, model.vmlDrawings, (vml) => isObject(vml) && Array.isArray(vml.comments));
+          }
+          if (rel.Type === REL_TABLE) return resolveTarget(rel, model.tables, isObject);
+          return true;
+        });
+        if (Array.isArray(list)) worksheetRels[sheetNo] = kept;
+        byId = new Map();
+        for (const rel of kept) byId.set(rel.Id, rel);
+        relsBySheetNo.set(sheetNo, byId);
+      }
+      // `<tablePart r:id>`, `<drawing r:id>` and `<hyperlink r:id>` are followed
+      // through the rels unchecked, so each must name a rel that is still there.
+      if (Array.isArray(worksheet.tables)) {
+        worksheet.tables = worksheet.tables.filter((part) => {
+          const rel = isObject(part) ? byId.get(part.rId) : undefined;
+          return Boolean(rel) && rel.Type === REL_TABLE;
+        });
+      }
+      if (isObject(worksheet.drawing)) {
+        const rel = byId.get(worksheet.drawing.rId);
+        const match = rel && typeof rel.Target === 'string' ? rel.Target.match(EXCELJS_DRAWING_TARGET) : null;
+        if (!rel || typeof rel.Target !== 'string' || (match && !ownValue(drawings, match[1]))) {
+          worksheet.drawing = undefined;
+        }
+      }
+      if (Array.isArray(worksheet.hyperlinks)) {
+        worksheet.hyperlinks = worksheet.hyperlinks.filter(
+          (link) => isObject(link) && (!link.rId || byId.has(link.rId))
+        );
+      }
+    }
+    return model;
+  }
+
   function parseCellRef(ref) {
     const match = /^\$?([A-Z]{1,3})\$?([1-9]\d*)$/i.exec(String(ref || ''));
     if (!match) return null;
@@ -983,6 +1092,7 @@
     createXmlCounter,
     admitXlsx,
     buildAdmittedArchive,
+    repairExcelJsModel,
     excelJsEntryName,
     parseCellRef,
     parseRange,

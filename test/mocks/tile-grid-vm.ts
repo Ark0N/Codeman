@@ -1,7 +1,8 @@
 /**
  * @fileoverview A `vm` harness for the tile grid (tile-grid.js) with the real
  * app around it: constants.js + app.js + terminal-ui.js + terminal-split.js +
- * tile-grid.js in one context, a small fake DOM (just what the grid touches) and a fake
+ * tile-grid.js + mobile-overview.js (the session state classifier the grid's
+ * ranking reuses) in one context, a small fake DOM (just what the grid touches) and a fake
  * TerminalTile that records what the grid asks of it.
  *
  * `makeGridApp()` returns an app instance with everything around the grid that
@@ -212,6 +213,8 @@ export const bySelector = new Map<string, FakeEl>();
 export const body = new FakeEl();
 /** The context's `fetch`; a test sets what it answers. */
 export const fetchSpy = vi.fn(async (..._args: unknown[]) => ({ ok: true, json: async () => ({}) }));
+/** What `document.elementFromPoint` answers (the gesture overlay's hit test); a test sets it. */
+export const pointHits: { at: ((x: number, y: number) => FakeEl | null) | null } = { at: null };
 /** `document.addEventListener`, so a test can find a listener the app installed. */
 export const documentAddEventListener = vi.fn();
 export const documentRemoveEventListener = vi.fn();
@@ -279,6 +282,7 @@ const context = vm.createContext({
       return focusedEl;
     },
     getElementById: (id: string) => (id === 'tileGrid' ? section : (bySelector.get(`#${id}`) ?? null)),
+    elementFromPoint: (x: number, y: number) => pointHits.at?.(x, y) ?? null,
     body,
     querySelector: (sel: string) =>
       bySelector.get(sel) ?? (sel === '.main' ? main : sel === '.terminal-wrap' ? wrap : null),
@@ -295,7 +299,7 @@ const context = vm.createContext({
 });
 vm.runInContext(
   `${read('constants.js')}\n${read('app.js')}\n${read('terminal-ui.js')}\n${read('terminal-split.js')}\n` +
-    `${read('tile-grid.js')}\n` +
+    `${read('tile-grid.js')}\n${read('mobile-overview.js')}\n${read('image-input.js')}\n` +
     'globalThis.__CodemanApp = CodemanApp;',
   context
 );
@@ -388,4 +392,5 @@ export function resetGridHarness() {
   main.appendChild(section);
   bySelector.clear();
   body.children = [];
+  pointHits.at = null;
 }

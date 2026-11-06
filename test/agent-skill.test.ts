@@ -163,6 +163,30 @@ describe('preamble single-source (seed + §0 heredoc parity)', () => {
     expect(preamble).toBe(heredoc);
   });
 
+  it("SKILL.md's shell survives Claude Code's skill-argument substitution unchanged", async () => {
+    // When Claude Code loads a skill WITH arguments (the Skill tool passes the user's request words),
+    // it rewrites the skill body before the model sees it. Measured on 2.1.300: every `$ARGUMENTS[N]`,
+    // `$ARGUMENTS` and bare `$N` (digits, then no word character) becomes the matching argument, 0-based,
+    // and a backslash before `$` is consumed as an escape. A bare `$1` in §0 arrived as
+    // `sessions/5/terminal` and `timeout=claude` for "start 5 claude workers", so an agent pasting §0
+    // wrote a broken preamble. `${1}` is the same bash and is never touched; keep it that way.
+    const skillMd = await readFile(join(packagedDir, 'SKILL.md'), 'utf-8');
+    const substitute = (body: string, args: string[]): string =>
+      body
+        .replace(/(?<!\\)\\\$(?=\d|ARGUMENTS)/g, '$')
+        .replace(/\$ARGUMENTS\[(\d+)\]/g, (m, i: string) => args[Number(i)] ?? m)
+        .replace(/\$(\d+)(?!\w)/g, (m, i: string) => args[Number(i)] ?? m)
+        .replaceAll('$ARGUMENTS', args.join(' '));
+    const args = 'start 5 claude workers, one per TODO item'.split(/\s+/);
+    expect(substitute(skillMd, args)).toBe(skillMd);
+
+    // And the heredoc an agent pastes from the substituted body is still the seeded preamble.
+    const rendered = substitute(skillMd, args);
+    const start = rendered.indexOf("<<'PREAMBLE'\n") + "<<'PREAMBLE'\n".length;
+    const preamble = await readFile(join(packagedDir, 'preamble.sh'), 'utf-8');
+    expect(rendered.slice(start, rendered.indexOf('\nPREAMBLE\n', start) + 1)).toBe(preamble);
+  });
+
   it('seedAgentSessionPreamble writes the stamped preamble to the XDG cache path, 0600', async () => {
     const prevXdg = process.env.XDG_CACHE_HOME;
     const cacheDir = join(casePath, 'xdg-cache');

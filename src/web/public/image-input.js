@@ -14,6 +14,69 @@
 Object.assign(CodemanApp.prototype, {
 
   initImageInput() {
+    // Phone toolbar Attach (index.html): the tap lands on the file INPUT, which
+    // sits invisibly over the button, and the browser opens the picker itself.
+    //
+    // Nothing here may open the picker from script. While the keyboard is up,
+    // app.js's keyboard tap shim cancels every touch on a toolbar BUTTON and
+    // re-dispatches it as a scripted click, and iOS will not open a file picker
+    // from an untrusted click: measured on iOS 17, `isTrusted: false` two
+    // milliseconds after pointerdown, no picker, no error, and no real click after
+    // it either because the gesture was cancelled. A native tap on the input is not
+    // a button tap, so the shim leaves it alone and the click stays trusted. It also
+    // anchors the picker popover to the input's own frame (a `hidden` input has
+    // none, which is why the composer's picker floated loose).
+    //
+    // Cancelling mousedown's default keeps focus on the terminal's hidden textarea,
+    // so the fixed toolbar never reflows out from under the finger mid-tap.
+    //
+    // It does NOT keep the keyboard up, and nothing here can: iOS resigns first
+    // responder to present the picker, and on DEVICE it does not hand the keyboard
+    // back when the picker closes, even though focus never left the textarea.
+    // (An iOS 27 simulator does hand it back, which is a simulator artifact, so do
+    // not take a keyboard measurement from one.) A blur-then-focus on the close
+    // of the picker, cancel and change alike, restores DOM focus and still leaves
+    // the keyboard down, because iOS only raises it inside a user gesture. So the
+    // user taps the prompt when ready to type, which is the keyboard policy
+    // everywhere else in the app.
+    //
+    // Do not try to hide the keyboard's exit by freezing the page's keyboard
+    // state across the picker. That was tried (holdKeyboardState, reverted) to
+    // avoid the reflow and the two PTY resizes the hide/show pair costs: with the
+    // keyboard gone and the layout still keyboard-sized, the toolbar and accessory
+    // bar strand in the MIDDLE of the screen over a dead black band, which is far
+    // worse than the reflow. The page must follow the keyboard out.
+    const attachBtn = document.getElementById('attachBtnMobile');
+    const attachInput = document.getElementById('attachFileInput');
+    if (attachBtn && attachInput) {
+      attachInput.addEventListener('mousedown', (event) => event.preventDefault());
+      // The button is the ACCESSIBLE control (the input is aria-hidden and not
+      // tabbable), so a keyboard or VoiceOver activation arrives here instead of on
+      // the input. That click is trusted, so opening the picker from it is allowed.
+      attachBtn.addEventListener('click', () => attachInput.click());
+      attachInput.addEventListener('click', (event) => {
+        if (!this.activeSessionId) {
+          event.preventDefault(); // refuse before the picker opens, not after a pick
+          this.showToast('Open a session to attach a file', 'error');
+          return;
+        }
+        // Captured before the picker opens: the session can be deleted while it is
+        // up, and the pick must not land on whatever replaced it.
+        this._attachSessionId = this.activeSessionId;
+      });
+      attachInput.addEventListener('change', () => {
+        const files = Array.from(attachInput.files || []);
+        // Reset so picking the same file again still fires change.
+        attachInput.value = '';
+        // Captured when the picker opened (see the click handler above).
+        const sessionId = this._attachSessionId;
+        this._attachSessionId = null;
+        if (files.length > 0) {
+          void this._attachFromToolbar(files, sessionId).catch((err) => console.warn('Attach failed:', err));
+        }
+      });
+    }
+
     // Drag-and-drop handlers on terminal container
     const container = document.getElementById('terminalContainer');
     if (!container) return;
@@ -38,13 +101,91 @@ Object.assign(CodemanApp.prototype, {
       if (!this.activeSessionId) return;
       if (!e.dataTransfer || !e.dataTransfer.files.length) return;
 
-      const imageFiles = Array.from(e.dataTransfer.files).filter((f) => f.type.startsWith('image/'));
-      if (imageFiles.length === 0) {
-        this.showToast('Only image files are supported', 'error');
-        return;
-      }
-      this._uploadAndInsertImages(imageFiles);
+      const mediaFiles = this._admitPromptAttachments(Array.from(e.dataTransfer.files));
+      if (mediaFiles.length > 0) this._uploadAndInsertImages(mediaFiles);
     });
+  },
+
+  /** Upload the toolbar Attach selection and put the paths on the prompt. The
+   *  Compose dialog is deliberately not involved (see initImageInput).
+   *
+   *  With local echo on (every phone by default) the paths go into the OVERLAY as
+   *  pending text rather than to the PTY. That is what makes them part of "what the
+   *  user typed": they paint at the prompt, anything typed after them appends in
+   *  order, Enter flushes the whole line, and opening Compose adopts path and prose
+   *  together (_takePendingLocalEcho reads exactly this buffer). Writing to the PTY
+   *  instead would strand the path on the terminal while Compose took only the prose.
+   *  Without the overlay (local echo off) there is nothing to buffer into, so the
+   *  text goes straight out. The trailing space keeps the next word off the path. */
+  async _attachFromToolbar(files, sessionId) {
+    const media = this._admitPromptAttachments(files);
+    if (media.length === 0) return;
+    if (!sessionId) return; // no captured session: refuse rather than guess at one
+    const paths = await this._uploadAndInsertImages(media, { insert: false, sessionId });
+    if (paths.length === 0) return;
+    // Deleted while the upload ran: a write would go to a dead session, and the
+    // flushed maps below would gain an entry whose cleanup has already run.
+    if (this.sessions && !this.sessions.has(sessionId)) return;
+    const text = paths.join(' ');
+
+    // The prompt composer, if it opened for this session while the upload ran, is
+    // where the prompt now lives: it took the terminal's pending text with it, so
+    // appending behind it would strand the path outside the text being composed.
+    // _insertComposerText adds its own separator and fires the draft save.
+    const openComposer = KeyboardAccessoryBar._composerOverlay;
+    const composerTextarea =
+      openComposer?.isConnected && openComposer.dataset.sessionId === sessionId
+        ? openComposer.querySelector('.prompt-composer-textarea')
+        : null;
+    if (composerTextarea) {
+      KeyboardAccessoryBar._insertComposerText(composerTextarea, text);
+      return;
+    }
+
+    const stillActive = this.activeSessionId === sessionId;
+    // The overlay holds the prompt only while local echo actually owns it. A
+    // session handed back to plain PTY echo by a composer nav key (echo
+    // passthrough) skips the whole overlay branch in onData, Enter included, so
+    // text buffered there would sit on screen and never be submitted. Nor while
+    // the tile grid owns the terminal area: the main terminal is parked and
+    // hidden then, and a tile's Enter never reaches its overlay, so the path
+    // goes to the PTY like any other background write.
+    const overlayOwnsPrompt =
+      stillActive &&
+      !this._tilesOwnTerminal?.() &&
+      this._localEchoEnabled &&
+      this._localEchoOverlay &&
+      !this._echoPassthroughSessions?.has(sessionId);
+    if (overlayOwnsPrompt) {
+      // Prompt text the overlay has not adopted yet (a tab completion, a restored
+      // tab) only lands in its flushed half once detection runs, and appendText
+      // runs it AFTER we would have measured. Detect first, or the separator is
+      // computed against an empty string and the path fuses onto a real word.
+      if (!this._localEchoOverlay.pendingText && !this._localEchoOverlay.getFlushed().count) {
+        this._localEchoOverlay.detectBufferText();
+      }
+      const flushed = this._localEchoOverlay.getFlushed().text || '';
+      const prompt = flushed + (this._localEchoOverlay.pendingText || '');
+      const gap = prompt && !/\s$/.test(prompt) ? ' ' : '';
+      this._localEchoOverlay.appendText(gap + text + ' ');
+    } else {
+      // No buffer to measure, so lead with a separator unconditionally rather than
+      // risk fusing onto whatever the CLI's own composer already holds.
+      const out = ` ${text} `;
+      this._sendInputAsync(sessionId, out);
+      // A background session's prompt is tracked in the flushed maps, which is what
+      // a later composer open adopts and erases. An untracked write leaves that
+      // count short, so the erase would eat the tail of this path instead. Not for
+      // a passthrough session: its cursor can sit mid-text, nothing tracks its
+      // composer, and Enter there never clears the maps, so a record would offset
+      // the overlay for the next prompt instead.
+      if (!stillActive && !this._echoPassthroughSessions?.has(sessionId)) {
+        if (!this._flushedOffsets) this._flushedOffsets = new Map();
+        if (!this._flushedTexts) this._flushedTexts = new Map();
+        this._flushedTexts.set(sessionId, (this._flushedTexts.get(sessionId) || '') + out);
+        this._flushedOffsets.set(sessionId, (this._flushedOffsets.get(sessionId) || 0) + out.length);
+      }
+    }
   },
 
   // Called from customKeyEventHandler in terminal-ui.js on Ctrl+V keydown.
@@ -52,7 +193,10 @@ Object.assign(CodemanApp.prototype, {
   // the result for images. Works on plain HTTP (no Clipboard API needed).
   // `target` names the terminal the Ctrl+V came from and its session; both
   // default to the primary pane. A second terminal (the split pane) passes its
-  // own, so text pastes into THAT xterm and images upload to THAT session.
+  // own. Images upload to THAT session. Plain text goes to that pane's session
+  // as a Codeman-built bracketed-paste frame: the terminal is only refocused
+  // and receives input(framed). onData delivers the frame; it is not written
+  // into the xterm buffer.
   _handleImagePaste(target = {}) {
     const self = this;
     const terminal = target.terminal || this.terminal;
@@ -82,17 +226,17 @@ Object.assign(CodemanApp.prototype, {
       if (pasteConsumed) return;
       pasteConsumed = true;
 
-      // Check for images in clipboard items
-      var imageFiles = [];
+      // Check for images, videos or documents in clipboard items
+      var pastedFiles = [];
       var items = e.clipboardData && e.clipboardData.items;
       if (items) {
         for (var i = 0; i < items.length; i++) {
-          if (items[i].type.startsWith('image/')) {
-            var blob = items[i].getAsFile();
-            if (blob) imageFiles.push(blob);
-          }
+          var blob = items[i].getAsFile();
+          if (blob) pastedFiles.push(blob);
         }
       }
+      var text = e.clipboardData ? e.clipboardData.getData('text/plain') : '';
+      var imageFiles = self._admitPromptAttachments(pastedFiles, { textPasted: !!text });
 
       // Clean up the trap
       setTimeout(function() {
@@ -103,21 +247,66 @@ Object.assign(CodemanApp.prototype, {
 
       if (imageFiles.length > 0) {
         self._uploadAndInsertImages(imageFiles, { sessionId: sessionId });
-      } else {
-        // No image -- route text through xterm's paste() so bracketed-paste
-        // markers (CSI 200~ ... CSI 201~) survive when the inner application
-        // has enabled bracketed-paste mode (Claude Code does). Sending text
-        // via raw sendInput() strips those markers and makes pasted input
-        // indistinguishable from typed input, weakening the CLI's
-        // prompt-injection defenses.
-        var text = e.clipboardData ? e.clipboardData.getData('text/plain') : '';
-        if (text && terminal) terminal.paste(text);
+      } else if (text && terminal) {
+        // No image. xterm's paste() emits CSI 200~/201~ only while its DECSET
+        // 2004 mirror is on, and a terminal replay clears that mirror, so the
+        // markers never arrive and a copied newline submits (#716). Build the
+        // frame here and hand it to this terminal through input(). That fires
+        // onData as user input (scroll to the bottom, clear the selection).
+        // The main pane's bracketed-paste branch and a tile's _onTerminalData
+        // deliver it, including the local-echo flush (#219). Do not also write
+        // the frame from here. Markers are stripped until none is left: one pass over
+        // `ESC[20` + `ESC[201~` + `1~` leaves an `ESC[201~` that would end the frame early.
+        let body = text;
+        while (/\x1b\[20[01]~/.test(body)) body = body.replace(/\x1b\[20[01]~/g, '');
+        body = body.replace(/\r?\n/g, '\r');
+        terminal.input(`\x1b[200~${body}\x1b[201~`);
       }
     });
 
     // Trigger the browser's native paste via execCommand
     // (this fires the paste event on our focused trap element)
     document.execCommand('paste');
+  },
+
+  /** What a pick or a paste may upload: 'image', 'video' for the camera roll's
+   *  clips (the server streams those to disk under their own cap), 'document'
+   *  for the office and text files the server admits, else null. The one filter
+   *  behind Attach, drop, the Compose and paste-dialog pickers and the clipboard
+   *  handlers. For media the MIME type decides, but a video MIME only for the
+   *  containers the server admits; some Android file managers hand over a File
+   *  with none, so the name's extension is the fallback. A document is known by
+   *  its extension alone, as on the server (the MIME a file manager gives a .md
+   *  or .csv is anyone's guess). Mirrors the server's allowlists. */
+  _promptAttachKind(file) {
+    if (file.type.startsWith('image/')) return 'image';
+    // A video MIME counts only for the five containers the server accepts on
+    // ?kind=video (its own set in session-routes.ts); a 3gp or mkv falls to the
+    // extension check below and is refused up front, not after a 1GB upload and a 400.
+    if (/^video\/(mp4|quicktime|x-m4v|webm|ogg)$/i.test(file.type)) return 'video';
+    const ext = (file.name || '').toLowerCase().match(/\.([a-z0-9]+)$/)?.[1] || '';
+    if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'heic', 'heif'].includes(ext)) return 'image';
+    if (['mp4', 'webm', 'mov', 'm4v', 'ogv'].includes(ext)) return 'video';
+    if (['pdf', 'docx', 'pptx', 'xlsx', 'zip', 'txt', 'md', 'csv', 'tsv', 'json', 'log', 'yaml', 'yml', 'xml'].includes(ext)) {
+      return 'document';
+    }
+    return null;
+  },
+
+  /** The files of a pick, drop or paste that _promptAttachKind admits, telling the
+   *  user about any it refuses: all of them is "Unsupported file type", some of
+   *  them a count of what was skipped while the rest still upload. A clipboard
+   *  paste that also carries text passes `textPasted`: when none of its files is
+   *  admitted the text is pasted instead, so that case stays quiet. */
+  _admitPromptAttachments(files, { textPasted = false } = {}) {
+    const admitted = files.filter((f) => this._promptAttachKind(f));
+    const skipped = files.length - admitted.length;
+    if (skipped > 0 && admitted.length > 0) {
+      this.showToast(`${skipped} file${skipped > 1 ? 's' : ''} skipped: unsupported type`, 'info');
+    } else if (skipped > 0 && !textPasted) {
+      this.showToast('Unsupported file type', 'error');
+    }
+    return admitted;
   },
 
   // Max images accepted in one batch (paste / drop / mobile picker). Each is
@@ -136,6 +325,7 @@ Object.assign(CodemanApp.prototype, {
   async _uploadAndInsertImages(fileList, options = {}) {
     const sessionId = options.sessionId || this.activeSessionId;
     if (!sessionId) return [];
+    if (options.sessionId && this.sessions && !this.sessions.has(sessionId)) return [];
 
     let files = Array.from(fileList || []);
     if (files.length === 0) return [];
@@ -150,9 +340,10 @@ Object.assign(CodemanApp.prototype, {
     const total = files.length;
     let done = 0;
     let failed = 0;
+    let failReason = ''; // first server reason, shown in the toast so a failure is not just a count
     const results = new Array(total); // preserve selection order for insertion
     const progress = () =>
-      this.showToast(`Uploading ${Math.min(done + 1, total)}/${total} image${total > 1 ? 's' : ''}…`, 'info');
+      this.showToast(`Uploading ${Math.min(done + 1, total)}/${total} file${total > 1 ? 's' : ''}…`, 'info');
     progress();
 
     // Bounded-concurrency worker pool over the file list.
@@ -173,6 +364,7 @@ Object.assign(CodemanApp.prototype, {
           results[i] = await this._uploadPasteImage(sessionId, normalized);
         } catch (err) {
           failed++;
+          if (!failReason && err && err.message) failReason = err.message;
           console.warn('Image upload failed:', err);
           results[i] = null;
         } finally {
@@ -195,11 +387,11 @@ Object.assign(CodemanApp.prototype, {
 
     // Final status: successes, plus any failures / cap so nothing is silent.
     const parts = [];
-    if (paths.length > 0) parts.push(`${paths.length} image${paths.length > 1 ? 's' : ''} ready`);
-    if (failed > 0) parts.push(`${failed} failed`);
+    if (paths.length > 0) parts.push(`${paths.length} file${paths.length > 1 ? 's' : ''} ready`);
+    if (failed > 0) parts.push(failReason ? `${failed} failed: ${failReason}` : `${failed} failed`);
     if (capped) parts.push(`max ${this._maxBatchImages} per batch`);
     const tone = paths.length > 0 ? (failed > 0 || capped ? 'info' : 'success') : 'error';
-    this.showToast(parts.join(' · ') || 'No images uploaded', tone);
+    this.showToast(parts.join(' · ') || 'No files uploaded', tone);
     return paths;
   },
 
@@ -207,7 +399,10 @@ Object.assign(CodemanApp.prototype, {
     const form = new FormData();
     form.append('image', file);
 
-    const resp = await fetch('/api/sessions/' + sessionId + '/paste-image', {
+    // A video takes the server's disk-streamed path and its larger cap; the flag
+    // has to ride the URL because the size budget is fixed before the part is read.
+    const kind = this._promptAttachKind(file) === 'video' ? '?kind=video' : '';
+    const resp = await fetch('/api/sessions/' + sessionId + '/paste-image' + kind, {
       method: 'POST',
       body: form,
     });
@@ -229,9 +424,14 @@ Object.assign(CodemanApp.prototype, {
   // decode/encode failure the original file is returned unchanged so the server
   // still gets a chance (and logs a precise diagnostic).
   async _normalizeImageForUpload(file) {
-    if (file.type === 'image/gif') return file;
+    // Only an image goes through the canvas; a video is uploaded as picked. With no
+    // MIME (some Android file managers) the name's extension stands in, as it does in
+    // _promptAttachKind, so a .gif keeps its frames and a .png its transparency.
+    const name = (file.name || '').toLowerCase();
+    const isGif = file.type === 'image/gif' || (!file.type && name.endsWith('.gif'));
+    if (this._promptAttachKind(file) !== 'image' || isGif) return file;
 
-    const toPng = file.type === 'image/png';
+    const toPng = file.type === 'image/png' || (!file.type && name.endsWith('.png'));
     const url = URL.createObjectURL(file);
     try {
       const img = new Image();

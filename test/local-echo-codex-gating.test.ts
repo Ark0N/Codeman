@@ -470,3 +470,100 @@ describe('insertTerminalText under predict policy', () => {
     expect(app._predictiveEcho.clearPredictions).toHaveBeenCalled();
   });
 });
+
+describe('CodemanTerminalInput.cursorViewportRow', () => {
+  const cursorViewportRow = terminalInput.cursorViewportRow as (t: unknown) => number | null;
+  const term = (viewportY: number, baseY: number, cursorY: number, rows = 24) => ({
+    rows,
+    buffer: { active: { viewportY, baseY, cursorY } },
+  });
+
+  it('equals cursorY while the viewport sits at the bottom', () => {
+    expect(cursorViewportRow(term(10, 10, 3))).toBe(3);
+  });
+
+  it('shifts by baseY - viewportY when the viewport is parked above the bottom', () => {
+    // scrollToLastNonEmptyLine() parked the viewport at 47 of a baseY of 83: the
+    // cursor on line 83 is screen row 36, where a bare cursorY would say row 0
+    expect(cursorViewportRow(term(47, 83, 0, 38))).toBe(36);
+  });
+
+  it('is null once the cursor row is scrolled off screen', () => {
+    expect(cursorViewportRow(term(0, 83, 0, 38))).toBeNull();
+  });
+
+  it('is null when the buffer is unreadable', () => {
+    expect(cursorViewportRow({ rows: 24, buffer: null })).toBeNull();
+  });
+});
+
+describe('local-echo prompt finders with the viewport parked above the bottom', () => {
+  type Finder = { type: string; find: (t: unknown) => { row: number; col: number } | null };
+  function finderFor(mode: string): Finder {
+    const overlay = makeOverlay();
+    const app = makeApp(mode, overlay);
+    app._updateLocalEchoState();
+    return overlay.prompts[overlay.prompts.length - 1] as Finder;
+  }
+  function terminal(
+    lines: Record<number, string>,
+    geom: { viewportY: number; baseY: number; cursorY: number; cursorX?: number; rows?: number; cols?: number }
+  ) {
+    return {
+      rows: geom.rows ?? 38,
+      cols: geom.cols ?? 80,
+      buffer: {
+        active: {
+          viewportY: geom.viewportY,
+          baseY: geom.baseY,
+          cursorY: geom.cursorY,
+          cursorX: geom.cursorX ?? 5,
+          getLine: (y: number) => (y in lines ? { translateToString: () => lines[y] } : undefined),
+        },
+      },
+    };
+  }
+
+  it('claude: the cursor fallback reports the cursor screen row, not cursorY', () => {
+    const { find } = finderFor('claude');
+    const parked = terminal({ 83: 'user@host:~$ ' }, { viewportY: 47, baseY: 83, cursorY: 0, cursorX: 13 });
+    expect(find(parked)).toEqual({ row: 36, col: 13 });
+  });
+
+  it('claude: reports no prompt once the cursor row is scrolled off screen', () => {
+    const { find } = finderFor('claude');
+    expect(find(terminal({ 83: 'user@host:~$ ' }, { viewportY: 0, baseY: 83, cursorY: 0 }))).toBeNull();
+  });
+
+  it('claude: a prompt glyph on the cursor row wins over the cursor fallback', () => {
+    const { find } = finderFor('claude');
+    const parked = terminal({ 83: '\u276f ' }, { viewportY: 47, baseY: 83, cursorY: 0, cursorX: 2 });
+    expect(find(parked)).toEqual({ row: 36, col: 2 });
+  });
+
+  it('claude: a history glyph right above the live screen is ignored, however close to the cursor', () => {
+    const { find } = finderFor('claude');
+    // line 82 is scrollback (baseY is 83): one row above the cursor on screen, still not the composer
+    const parked = terminal(
+      { 82: '\u276f old prompt', 83: 'user@host:~$ ' },
+      { viewportY: 47, baseY: 83, cursorY: 0, cursorX: 13 }
+    );
+    expect(find(parked)).toEqual({ row: 36, col: 13 });
+  });
+
+  it('claude: a composer taller than a handful of rows still finds its glyph', () => {
+    const { find } = finderFor('claude');
+    // glyph on line 70, cursor thirteen continuation rows below it on line 83, all live screen
+    const parked = terminal(
+      { 70: '\u276f a very long pasted prompt', 83: 'still typing' },
+      { viewportY: 47, baseY: 70, cursorY: 13, cursorX: 12 }
+    );
+    expect(find(parked)).toEqual({ row: 23, col: 2 });
+  });
+
+  it('opencode: reads the border on the cursor screen row when parked', () => {
+    const { find } = finderFor('opencode');
+    const parked = terminal({ 83: '\u2503  hello' }, { viewportY: 47, baseY: 83, cursorY: 0 });
+    expect(find(parked)).toEqual({ row: 36, col: 0 });
+  });
+});

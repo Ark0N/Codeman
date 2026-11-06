@@ -594,6 +594,8 @@ describe('file-preview overlay spreadsheet wiring', () => {
       console,
       escapeHtml: (value: unknown) => String(value ?? ''),
       CodemanBase: { base: '', url: (p: string) => p },
+      // From constants.js (not loaded here): a workbook never renders as an HTML page.
+      rendersAsPage: () => false,
       fetch: fetchMock,
       setTimeout,
       clearTimeout,

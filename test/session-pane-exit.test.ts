@@ -24,7 +24,7 @@
  *     server and the persisted record is the only thing left that can say the
  *     agent was already gone.
  *
- * Port: 3187
+ * Port: ephemeral
  */
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -36,8 +36,6 @@ import { StateStore } from '../src/state-store.js';
 import type { PaneExit, SessionRemote, SessionDocker, SessionState } from '../src/types.js';
 import type { MuxSession, TerminalMultiplexer } from '../src/mux-interface.js';
 import { hasObservablePaneSession } from '../src/tmux-manager.js';
-
-const PORT = 3187;
 
 const EXIT: PaneExit = { status: 0, at: 1_700_000_000_000 };
 
@@ -294,7 +292,7 @@ describe('a pane read reaching the session record', () => {
   });
 
   const build = () => {
-    const web = new WebServer(PORT, false, true);
+    const web = new WebServer(0, false, true);
     const mux = (web as unknown as { mux: Record<string, unknown> }).mux;
     const session = localMuxSession();
     (web as unknown as { sessions: Map<string, Session> }).sessions.set(session.id, session);

@@ -1,5 +1,5 @@
 /**
- * @fileoverview Phase 5 admin API tests (live server, port 3173).
+ * @fileoverview Phase 5 admin API tests (live server, ephemeral port).
  *
  * Covers the admin user-management endpoints: multi-user gate, requireAdmin,
  * create (one-time password), patch + last-admin invariant, reset-password,
@@ -16,9 +16,8 @@ import { createUser, invalidateUsersCache } from '../src/user-store.js';
 
 vi.spyOn(TmuxManager, 'isTmuxAvailable').mockReturnValue(true);
 
-const PORT = 3173;
 const basic = (u: string, p: string) => 'Basic ' + Buffer.from(`${u}:${p}`).toString('base64');
-const url = (p: string) => `http://localhost:${PORT}${p}`;
+const url = (p: string) => `http://localhost:${server.boundPort}${p}`;
 const admin = { Authorization: basic('root', 'rootpass123'), 'Content-Type': 'application/json' };
 const adminNoBody = { Authorization: basic('root', 'rootpass123') };
 const regular = { Authorization: basic('joe', 'joepass1234'), 'Content-Type': 'application/json' };
@@ -48,7 +47,7 @@ beforeAll(async () => {
   invalidateUsersCache();
   await createUser({ username: 'root', role: 'admin', password: 'rootpass123' });
   await createUser({ username: 'joe', role: 'user', password: 'joepass1234' });
-  server = new WebServer(PORT, false, true);
+  server = new WebServer(0, false, true);
   await server.start();
 });
 
@@ -190,10 +189,13 @@ describe('admin case-folder API', () => {
     expect(sl.status).toBe(400);
     await expect(fs.stat(path.join(spacesDir, 'outside'))).resolves.toBeTruthy();
 
-    // A real folder is deleted.
+    // A real folder is deleted, and kim's default session group for it goes with it.
+    const store = (server as unknown as { store: import('../src/state-store.js').StateStore }).store;
+    store.setCaseDefaultGroup('kim', 'proj1', null);
     const del = await fetch(url('/api/admin/users/kim/cases/proj1'), { method: 'DELETE', headers: adminNoBody });
     expect(del.status).toBe(200);
     await expect(fs.stat(path.join(spacesDir, 'kim', 'cases', 'proj1'))).rejects.toBeTruthy();
+    expect(store.getCaseDefaultGroup('kim', 'proj1')).toBeUndefined();
 
     // Deleting it again 404s.
     const gone = await fetch(url('/api/admin/users/kim/cases/proj1'), { method: 'DELETE', headers: adminNoBody });

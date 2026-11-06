@@ -11,15 +11,13 @@
  *   - text/plain bodies kept RAW (the closed "simple request" CSRF vector)
  *   - WebSocket anti-CSWSH (Origin/Host validated on upgrade → close 4003)
  *
- * Port: 3167
+ * Port: ephemeral
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import http from 'node:http';
 import WebSocket from 'ws';
 import { WebServer } from '../src/web/server.js';
 import { TmuxManager } from '../src/tmux-manager.js';
-
-const PORT = 3167;
 
 vi.spyOn(TmuxManager, 'isTmuxAvailable').mockReturnValue(true);
 
@@ -32,7 +30,7 @@ interface RawResponse {
 /** Raw HTTP request with full control over Host/Origin headers (fetch/undici rewrites Host). */
 function raw(method: string, path: string, headers: Record<string, string> = {}, body?: string): Promise<RawResponse> {
   return new Promise((resolve, reject) => {
-    const req = http.request({ host: '127.0.0.1', port: PORT, path, method, headers }, (res) => {
+    const req = http.request({ host: '127.0.0.1', port: server.boundPort, path, method, headers }, (res) => {
       let data = '';
       res.on('data', (c) => (data += c));
       res.on('end', () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body: data }));
@@ -46,7 +44,7 @@ function raw(method: string, path: string, headers: Record<string, string> = {},
 /** Open a WS to `path` with optional Origin and resolve with the close code the server sends. */
 function wsCloseCode(path: string, origin?: string): Promise<number> {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`ws://127.0.0.1:${PORT}${path}`, {
+    const ws = new WebSocket(`ws://127.0.0.1:${server.boundPort}${path}`, {
       headers: origin ? { origin } : {},
     });
     const timer = setTimeout(() => {
@@ -71,7 +69,7 @@ let server: WebServer;
 
 beforeAll(async () => {
   delete process.env.CODEMAN_PASSWORD; // guard must work even on the no-auth default
-  server = new WebServer(PORT, false, true);
+  server = new WebServer(0, false, true);
   await server.start();
 });
 
@@ -87,7 +85,7 @@ describe('Host-header allowlist (anti DNS-rebinding), wired', () => {
   });
 
   it('allows a loopback Host', async () => {
-    const res = await raw('GET', '/api/status', { Host: `localhost:${PORT}` });
+    const res = await raw('GET', '/api/status', { Host: `localhost:${server.boundPort}` });
     expect(res.status).toBe(200);
   });
 
@@ -114,7 +112,7 @@ describe('cross-site Origin / CSRF guard, wired', () => {
   });
 
   it('allows a state-changing request from a same-site Origin', async () => {
-    const res = await raw('POST', PROBE, { Origin: `http://localhost:${PORT}` });
+    const res = await raw('POST', PROBE, { Origin: `http://localhost:${server.boundPort}` });
     expect(res.status).not.toBe(403);
   });
 

@@ -1,6 +1,6 @@
 /**
  * Working/idle detection for an interactive agent pane, Claude's, Codex's, pi's, opencode's, omp's
- * and Gemini CLI's.
+ * Gemini CLI's and Antigravity's.
  *
  * The bug this pins: Claude redraws the composer (`❯`) about once a second all
  * the way through a turn, so the old "saw a ❯, wait 2s, call it idle" rule
@@ -15,8 +15,9 @@
  *
  * The status-line fixtures below are verbatim captures from live panes
  * (`tmux -L codeman capture-pane -p`) on Claude Code 2.1.220, Codex CLI 0.152.1, pi 1.1.0,
- * opencode 1.3.0, omp 18.8.6 / 18.0.11 and Gemini CLI 0.63.0 (its turns driven by a local
- * stand-in for the Gemini API, since the CLI's look does not depend on the backend).
+ * opencode 1.3.0, omp 18.8.6 / 18.0.11, Gemini CLI 0.63.0 (its turns driven by a local
+ * stand-in for the Gemini API, since the CLI's look does not depend on the backend) and
+ * Antigravity `agy` 1.3.3.
  */
 import { describe, expect, it, vi, afterEach } from 'vitest';
 import { Session } from '../src/session.js';
@@ -51,7 +52,7 @@ function feed(session: Session, data: string): void {
  */
 function withFakePane(
   screen: string | (() => string),
-  mode: 'claude' | 'codex' | 'pi' | 'opencode' | 'omp' | 'gemini' = 'claude'
+  mode: 'claude' | 'codex' | 'pi' | 'opencode' | 'omp' | 'gemini' | 'antigravity' = 'claude'
 ): Session {
   const read = typeof screen === 'function' ? screen : () => screen;
   const mux = {
@@ -971,6 +972,154 @@ describe('gemini interactive idle detection', () => {
     session.on('idle', () => events.push('idle'));
 
     feed(session, GEM_TURN_END);
+    vi.advanceTimersByTime(20_000);
+
+    expect(events).toEqual(['idle']);
+    expect(session.status).toBe('idle');
+  });
+});
+
+/**
+ * Antigravity's (`agy` 1.3.3) pane, verbatim from live captures (rules shortened). A running
+ * turn animates an 8-dot braille frame and a label one row above the composer, and the
+ * footer reads `esc to cancel`; at rest the footer reads `? for shortcuts`. The composer
+ * row is `>`, which the echoed prompt starts with as well.
+ */
+const AGY_RULE = '─'.repeat(48);
+const AGY_FOOTER_REST = '? for shortcuts                                  Gemini 3.8 Flash · medium\n';
+const AGY_FOOTER_WORKING = 'esc to cancel                                    Gemini 3.8 Flash · medium\n';
+const AGY_WORKING = `> say ok\n⣷  Generating...\n${AGY_RULE}\n>\n${AGY_RULE}\n${AGY_FOOTER_WORKING}`;
+const AGY_AT_REST = `  ok\n${AGY_RULE}\n>\n${AGY_RULE}\n${AGY_FOOTER_REST}`;
+/** A shell call replaces the composer with a confirmation list and the spinner stops. */
+const AGY_CONFIRM =
+  '> Run the shell command: sleep 6 && echo done\n   sleep 6 && echo done\nRun this command?\n' +
+  "> 1. Yes, run command\n  2. Yes, and always allow in this conversation for commands that start with 'sleep'\n" +
+  '  4. No, cancel\n  ↑/↓ Navigate · tab Amend · ctrl+g edit/expand command\n';
+/** One spinner frame on the wire, verbatim: the glyph is not one of SPINNER_PATTERN's. */
+const AGY_SPINNER_FRAME = '\r\n\x1b[34;1m> say ok\x1b[m\x1b[K\r\n⣷  \x1b[90mGenerating...\x1b[m\x1b[K\r\n';
+/** The turn's last repaint, verbatim (shortened): the footer hint comes back. */
+const AGY_TURN_END = `${AGY_RULE}\x1b[m\r\n\x1b[90m? for shortcuts\x1b[m\x1b[80X\x1b[80C\x1b[2mGemini 3.8 Flash · medium\r`;
+
+describe("antigravity's work-detection descriptor", () => {
+  const agy = getCli('antigravity')?.capabilities.workDetect;
+  const working = () => new RegExp(agy!.workingLine);
+
+  it('matches every frame of the spinner and every label, on screen and on the wire', () => {
+    expect(working().test(AGY_WORKING)).toBe(true);
+    expect(working().test(stripAnsi(AGY_SPINNER_FRAME))).toBe(true);
+    for (const frame of ['⣯', '⡿', '⣻', '⣾', '⣷', '⣟', '⢿', '⣽']) {
+      for (const label of ['Generating...', 'Working...', 'Loading...']) {
+        expect(working().test(`${frame}  ${label}`)).toBe(true);
+      }
+    }
+  });
+
+  it('does not match a pane at rest, a pending confirmation, or prose', () => {
+    expect(working().test(AGY_AT_REST)).toBe(false);
+    expect(working().test(AGY_CONFIRM)).toBe(false);
+    expect(working().test('Loading... is what the spinner label reads\n')).toBe(false);
+    // An answer that quotes the spinner row mid-line must not hold the tab busy.
+    expect(working().test(`  ok\n  it matches \`⣯  Generating...\` in the pane\n${AGY_RULE}\n>\n`)).toBe(false);
+  });
+
+  it('names the footer hint the turn end carries, and no working repaint does', () => {
+    expect(AGY_TURN_END).toContain(agy!.promptGlyph);
+    expect(AGY_AT_REST).toContain(agy!.promptGlyph);
+    expect(AGY_WORKING).not.toContain(agy!.promptGlyph);
+    expect(AGY_SPINNER_FRAME).not.toContain(agy!.promptGlyph);
+  });
+
+  it('leaves the submit verifier unable to press Enter on an antigravity pane', () => {
+    // The composer row starts with `>`, but the glyph is the footer hint, so a prompt
+    // typed into the composer (or echoed above it) is never read as "still unsubmitted".
+    const typed = AGY_AT_REST.replace('>\n', '> say ok\n');
+    expect(promptStillInComposer(typed, 'say ok', agy!.promptGlyph)).not.toBe(true);
+    expect(promptStillInComposer(AGY_WORKING, 'say ok', agy!.promptGlyph)).not.toBe(true);
+    expect(promptStillInComposer(AGY_CONFIRM, 'Run the shell command', agy!.promptGlyph)).not.toBe(true);
+  });
+});
+
+describe('antigravity interactive activity', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function spin(session: Session, ms: number): void {
+    for (let t = 0; t < ms; t += 100) {
+      feed(session, AGY_SPINNER_FRAME);
+      vi.advanceTimersByTime(100);
+    }
+  }
+
+  it('shows a turn as working, and lets it end instead of latching busy', () => {
+    vi.useFakeTimers();
+    let screen = AGY_WORKING;
+    const session = withFakePane(() => screen, 'antigravity');
+    (session as unknown as { _status: string })._status = 'idle';
+    const events: string[] = [];
+    session.on('working', () => events.push('working'));
+    session.on('idle', () => events.push('idle'));
+
+    // Before antigravity declared its spinner line no frame ever marked the tab working.
+    spin(session, 4000);
+    expect(events).toEqual(['working']);
+    expect(session.status).toBe('busy');
+
+    screen = AGY_AT_REST;
+    feed(session, AGY_TURN_END);
+    vi.advanceTimersByTime(20_000);
+
+    expect(events).toEqual(['working', 'idle']);
+    expect(session.status).toBe('idle');
+  });
+
+  it('keeps a pending shell confirmation working until it is answered, and ends the resumed turn too', () => {
+    vi.useFakeTimers();
+    let screen = AGY_WORKING;
+    const session = withFakePane(() => screen, 'antigravity');
+    (session as unknown as { _status: string })._status = 'idle';
+    const events: string[] = [];
+    session.on('working', () => events.push('working'));
+    session.on('idle', () => events.push('idle'));
+
+    spin(session, 3000);
+    expect(events).toEqual(['working']);
+
+    screen = AGY_CONFIRM;
+    feed(session, 'Run this command?\r\n');
+    vi.advanceTimersByTime(60_000);
+    // The footer hint is not drawn under the confirmation, so nothing arms the idle check:
+    // the pane stays working (unlike gemini, whose bar returns on every repaint) until the
+    // user answers and the turn ends below.
+    expect(events).toEqual(['working']);
+    expect(session.status).toBe('busy');
+    screen = AGY_WORKING;
+    spin(session, 3000);
+    screen = AGY_AT_REST;
+    feed(session, AGY_TURN_END);
+    vi.advanceTimersByTime(20_000);
+
+    expect(events[0]).toBe('working');
+    expect(events[events.length - 1]).toBe('idle');
+    expect(session.status).toBe('idle');
+  });
+});
+
+describe('antigravity reattach', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // Declaring workDetect turns off the 3 s settle for a restored pane, so a reattached agy pane
+  // depends on the footer hint arriving in tmux's attach repaint to leave `busy`.
+  it('settles a reattached antigravity pane that is at rest', () => {
+    vi.useFakeTimers();
+    const session = withFakePane(AGY_AT_REST, 'antigravity');
+    (session as unknown as { _status: string })._status = 'busy';
+    const events: string[] = [];
+    session.on('idle', () => events.push('idle'));
+
+    feed(session, AGY_TURN_END);
     vi.advanceTimersByTime(20_000);
 
     expect(events).toEqual(['idle']);
