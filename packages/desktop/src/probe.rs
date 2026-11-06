@@ -9,7 +9,7 @@ use serde::Serialize;
 use std::time::Duration;
 use url::Url;
 
-const TIMEOUT: Duration = Duration::from_secs(5);
+pub const TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_BODY: u64 = 8 * 1024 * 1024;
 
 /// The path the probe asks for, relative to the server's base URL.
@@ -232,7 +232,7 @@ pub fn probe(server: &Url, authorization: Option<&str>) -> ProbeOutcome {
 }
 
 /// `probe` with the time the whole exchange may take.
-fn probe_within(server: &Url, authorization: Option<&str>, timeout: Duration) -> ProbeOutcome {
+pub fn probe_within(server: &Url, authorization: Option<&str>, timeout: Duration) -> ProbeOutcome {
     let status_url = match server.join(STATUS_PATH) {
         Ok(u) => u,
         Err(e) => return ProbeOutcome::Failed { detail: e.to_string() },

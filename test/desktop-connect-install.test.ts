@@ -1,11 +1,13 @@
 /**
- * @fileoverview The graphical install's screens in the Codeman Desktop connect page.
+ * @fileoverview The graphical install's screens in the Codeman Desktop connect page, and the This
+ * Mac tab's rows for the Codeman servers the app found on this Mac.
  *
  * Runs the real packages/desktop/assets/connect.html in jsdom with a fake native side:
  * `window.ipc` records what the page asks the app for, and `onNative` is what the app
  * calls. The Rust side of the same messages is pinned in packages/desktop/src/policy.rs
- * (`ipc_graphical_install_commands`) and src/gui_install.rs, which do not build on Linux
- * CI, so the spelling of every message the page sends is asserted here.
+ * (`ipc_graphical_install_commands`), src/gui_install.rs and src/setup.rs (the `found` list:
+ * `a_found_server_row_says_what_answered`), which do not build on Linux CI, so the spelling of
+ * every message the page sends, and of what it reads, is asserted here.
  *
  * Port: N/A.
  */
@@ -45,7 +47,7 @@ const NOT_INSTALLED = {
   installComplete: false,
   installRunning: false,
   installInApp: false,
-  elsewhere: [],
+  found: [],
   outcome: { kind: 'refused' },
 };
 
@@ -482,7 +484,11 @@ describe('adding a coding agent to a Mac that has Codeman', () => {
       RUNNING,
       STOPPED,
       { ...RUNNING, state: 'needsLogin' },
-      { ...RUNNING, state: 'runningElsewhere', elsewhere: ['127.0.0.1:4000'] },
+      {
+        ...RUNNING,
+        state: 'runningElsewhere',
+        found: [{ url: 'https://127.0.0.1:4000/', version: null, state: 'certificate', isDefault: false }],
+      },
     ]) {
       t.native({ type: 'localStatus', status });
       expect(t.visible('local-agents'), String(status.state)).toBe(true);
@@ -733,5 +739,264 @@ describe('after Skip for now', () => {
       status: { ...NOT_INSTALLED, state: 'running', installed: true, version: '1.50.0' },
     });
     expect(t.sentOf('connect')).toHaveLength(1);
+  });
+});
+
+describe('Codeman servers found on this Mac', () => {
+  type Found = { url: string; version: string | null; state: string; isDefault: boolean };
+  const found = (url: string, state = 'running', version: string | null = '1.49.0'): Found => ({
+    url,
+    version: state === 'running' ? version : null,
+    state,
+    isDefault: false,
+  });
+  const ELSEWHERE = {
+    ...NOT_INSTALLED,
+    state: 'runningElsewhere',
+    installed: true,
+    installComplete: true,
+    found: [found('http://127.0.0.1:4000/'), found('http://192.168.1.5:5000/cm/', 'needsLogin')],
+  };
+  const RUNNING = {
+    ...NOT_INSTALLED,
+    state: 'running',
+    version: '1.49.0',
+    installed: true,
+    installComplete: true,
+    outcome: { kind: 'ok', version: '1.49.0' },
+    found: [{ ...found('http://127.0.0.1:3000/'), isDefault: true }],
+  };
+
+  function at(status: Record<string, unknown>, first?: Record<string, unknown>) {
+    const t = open(first ?? { servers: [] });
+    t.native({ type: 'localStatus', status });
+    const rows = (list: string) =>
+      Array.from(t.$(list).querySelectorAll('.found')).map((row) => ({
+        address: row.querySelector('b')?.textContent,
+        note: row.querySelector('small')?.textContent ?? '',
+        button: row.querySelector('button'),
+      }));
+    return { ...t, rows };
+  }
+
+  it('recommends the server that runs at another address, a row each, with no trip to the other tab', () => {
+    const t = at(ELSEWHERE);
+    expect(t.$('local-title').textContent).toBe('Codeman is already running on this Mac.');
+    expect(t.$('local-detail').textContent).toBe('');
+    const rows = t.rows('local-found');
+    expect(rows.map((r) => [r.address, r.note])).toEqual([
+      ['http://127.0.0.1:4000/', 'version 1.49.0'],
+      ['http://192.168.1.5:5000/cm/', 'Asks for a login.'],
+    ]);
+    expect(rows.map((r) => r.button?.textContent)).toEqual(['Connect', 'Connect']);
+    // The first row the app can open is the tab's main action.
+    expect(rows.map((r) => r.button?.className)).toEqual(['primary', 'secondary']);
+    expect(rows[0].button?.getAttribute('aria-label')).toBe('Connect to http://127.0.0.1:4000/');
+    expect(t.visible('local-found-note')).toBe(true);
+    expect(t.$('local-found-note').textContent).toBe('Starting another server here would take over its sessions.');
+    expect(t.$('pane-local').textContent).not.toContain('Another machine');
+    expect(t.visible('local-check')).toBe(true);
+    for (const id of ['local-open', 'local-start', 'local-install', 'local-also']) {
+      expect(t.visible(id), id).toBe(false);
+    }
+    expect(t.$('local-dot').className).toBe('dot ok');
+    // Finding a server connects to nothing by itself.
+    expect(t.sentOf('connect')).toHaveLength(0);
+  });
+
+  it('Connect is the connect of an address typed under Another machine', () => {
+    const t = at(ELSEWHERE);
+    t.rows('local-found')[1].button!.click();
+    expect(t.sentOf('connect')).toEqual([{ cmd: 'connect', url: 'http://192.168.1.5:5000/cm/', remember: true }]);
+    expect(t.input('url').value).toBe('http://192.168.1.5:5000/cm/');
+    expect(t.$('status-text').textContent).toContain('Connecting to http://192.168.1.5:5000/cm/');
+    // One request at a time, as everywhere on the page.
+    expect(t.rows('local-found').every((r) => r.button!.disabled)).toBe(true);
+    t.rows('local-found')[0].button!.click();
+    expect(t.sentOf('connect')).toHaveLength(1);
+  });
+
+  it('uses the login saved for that server, and never the one of the server shown before', () => {
+    const servers = [
+      { url: 'https://box.ts.net/', username: 'other', hasSavedPassword: true },
+      { url: 'http://127.0.0.1:4000/', username: 'kay', hasSavedPassword: true },
+    ];
+    const t = at(ELSEWHERE, { servers });
+    t.click('tab-local');
+    t.rows('local-found')[0].button!.click();
+    expect(t.sentOf('connect')).toEqual([
+      { cmd: 'connect', url: 'http://127.0.0.1:4000/', remember: true, username: 'kay' },
+    ]);
+    const u = at(ELSEWHERE, { servers: servers.slice(0, 1) });
+    u.click('tab-local');
+    u.rows('local-found')[0].button!.click();
+    expect(u.sentOf('connect')).toEqual([{ cmd: 'connect', url: 'http://127.0.0.1:4000/', remember: true }]);
+  });
+
+  it('a server that asks for a login gets the login fields, as any connect does', () => {
+    const t = at(ELSEWHERE);
+    t.rows('local-found')[1].button!.click();
+    t.native({
+      type: 'probeResult',
+      url: 'http://192.168.1.5:5000/cm/',
+      outcome: { kind: 'needsLogin' },
+      canStart: false,
+    });
+    expect(t.$('tab-remote').getAttribute('aria-selected')).toBe('true');
+    expect(t.visible('login')).toBe(true);
+    expect(t.input('url').value).toBe('http://192.168.1.5:5000/cm/');
+  });
+
+  it('says why instead of offering Connect for a server the app cannot open', () => {
+    const t = at({
+      ...ELSEWHERE,
+      found: [
+        found('https://127.0.0.1:4000/', 'certificate'),
+        found('https://192.168.1.5:4100/', 'certificate'),
+        found('http://[::1]:5000/', 'unreachable'),
+        found('http://127.0.0.1:6000/'),
+      ],
+    });
+    const rows = t.rows('local-found');
+    expect(rows.map((r) => !!r.button)).toEqual([false, false, false, true]);
+    // The wording of a stopped Codeman that is set up with HTTPS.
+    const https =
+      'It is set up with HTTPS (codeman web --https), whose self-signed certificate this app refuses. Run it without --https to open it here.';
+    expect(rows.slice(0, 2).map((r) => r.note)).toEqual([https, https]);
+    expect(rows[2].note).toBe('It does not answer at this address.');
+    const stopped = at({ ...NOT_INSTALLED, state: 'stopped', installed: true, url: 'https://127.0.0.1:3000/' });
+    expect(stopped.$('local-detail').textContent).toBe(https);
+    // The first one it can open is still the main action.
+    expect(rows[3].button?.className).toBe('primary');
+    expect(t.$('local-dot').className).toBe('dot ok');
+  });
+
+  it('with no server it can open, offers no Connect and keeps Check again', () => {
+    const t = at({ ...ELSEWHERE, found: [found('https://127.0.0.1:4000/', 'certificate')] });
+    expect(t.$('pane-local').querySelectorAll('.found button')).toHaveLength(0);
+    expect(t.$('local-dot').className).toBe('dot warn');
+    expect(t.visible('local-found-note')).toBe(true);
+    expect(t.visible('local-check')).toBe(true);
+    t.click('local-check');
+    expect(t.sentOf('localStatus').at(-1)).toEqual({ cmd: 'localStatus', quick: false, deep: true });
+  });
+
+  it('a server process with no address to try still says what to do', () => {
+    const t = at({ ...ELSEWHERE, found: [] });
+    expect(t.$('local-title').textContent).toBe('Codeman is already running on this Mac.');
+    expect(t.$('local-detail').textContent).toContain('could not find the address it listens at');
+    expect(t.$('local-detail').textContent).toContain('take over its sessions');
+    expect(t.visible('local-found')).toBe(false);
+    expect(t.visible('local-found-note')).toBe(false);
+    // A status from before the list existed reads the same.
+    const old = at({ ...ELSEWHERE, found: undefined });
+    expect(old.$('local-detail').textContent).toContain('could not find the address it listens at');
+  });
+
+  it('keeps Open for the Codeman that answers, and lists the others under it', () => {
+    const t = at({
+      ...RUNNING,
+      found: [
+        ...RUNNING.found,
+        found('http://127.0.0.1:5000/', 'running', '1.50.0-beta'),
+        found('https://127.0.0.1:6000/', 'certificate'),
+      ],
+    });
+    expect(t.$('local-title').textContent).toBe('Codeman is running on this Mac.');
+    expect(t.$('local-detail').textContent).toBe('http://127.0.0.1:3000/  ·  version 1.49.0');
+    expect(t.visible('local-open')).toBe(true);
+    expect(t.visible('local-also')).toBe(true);
+    expect(t.$('local-also-head').textContent).toBe('Also running on this Mac');
+    const rows = t.rows('local-also-list');
+    // Not the one the first line is about.
+    expect(rows.map((r) => [r.address, r.note.slice(0, 19)])).toEqual([
+      ['http://127.0.0.1:5000/', 'version 1.50.0-beta'],
+      ['https://127.0.0.1:6000/', 'It is set up with H'],
+    ]);
+    // Open stays the main action: a row's Connect is never the primary one here.
+    expect(rows.map((r) => r.button?.className)).toEqual(['secondary', undefined]);
+    expect(t.visible('local-found')).toBe(false);
+    expect(t.visible('local-found-note')).toBe(false);
+    rows[0].button!.click();
+    expect(t.sentOf('connect')).toEqual([{ cmd: 'connect', url: 'http://127.0.0.1:5000/', remember: true }]);
+  });
+
+  it('lists them beside a Codeman that asks for a login, and beside something else on its port', () => {
+    const other = found('http://127.0.0.1:5000/');
+    const login = at({ ...RUNNING, state: 'needsLogin', outcome: { kind: 'needsLogin' }, found: [other] });
+    expect(login.visible('local-open')).toBe(true);
+    expect(login.rows('local-also-list').map((r) => r.address)).toEqual(['http://127.0.0.1:5000/']);
+
+    const taken = { ...RUNNING, state: 'other', version: null, outcome: { kind: 'notCodeman', status: 404 } };
+    const t = at({ ...taken, found: [other] });
+    expect(t.$('local-title').textContent).toBe('Something else answers at http://127.0.0.1:3000/');
+    expect(t.$('local-detail').textContent).toContain('or connect to the Codeman listed below.');
+    expect(t.rows('local-also-list').map((r) => r.button?.textContent)).toEqual(['Connect']);
+    // With nothing to connect to, the old pointer stays.
+    const none = at({ ...taken, found: [] });
+    expect(none.$('local-detail').textContent).toContain('under Another machine');
+    expect(none.visible('local-also')).toBe(false);
+  });
+
+  it('shows no list when this Mac runs only the Codeman the tab is about', () => {
+    const t = at(RUNNING);
+    expect(t.visible('local-also')).toBe(false);
+    expect(t.$('pane-local').querySelectorAll('.found')).toHaveLength(0);
+    // The rows of an earlier look go when the next one finds none.
+    t.native({ type: 'localStatus', status: ELSEWHERE });
+    expect(t.rows('local-found')).toHaveLength(2);
+    t.native({ type: 'localStatus', status: { ...NOT_INSTALLED, state: 'stopped', installed: true } });
+    expect(t.$('pane-local').querySelectorAll('.found')).toHaveLength(0);
+    expect(t.visible('local-found')).toBe(false);
+    expect(t.visible('local-found-note')).toBe(false);
+  });
+
+  it('shows what the app found as text, never as markup', () => {
+    const hostile = '"><img src=x onerror=alert(1)><script>alert(2)</script>';
+    const t = at({
+      ...ELSEWHERE,
+      found: [{ url: hostile, version: '<b onclick=alert(3)>9</b>', state: 'running', isDefault: false }],
+    });
+    const rows = t.rows('local-found');
+    expect(t.$('pane-local').querySelector('img, script, small b')).toBeNull();
+    expect(rows[0].address).toBe(hostile);
+    expect(rows[0].note).toBe('version <b onclick=alert(3)>9</b>');
+    expect(rows[0].button?.title).toBe('Connect to ' + hostile);
+    // The app gets it as it is, and refuses what is not an address (policy::normalize_server_url).
+    rows[0].button!.click();
+    expect(t.sentOf('connect')).toEqual([{ cmd: 'connect', url: hostile, remember: true }]);
+  });
+
+  it('holds a found address to the length the app accepts (MAX_URL_LEN in policy.rs)', () => {
+    const long = 'http://127.0.0.1:4000/' + 'a'.repeat(4096);
+    const t = at({ ...ELSEWHERE, found: [found(long)] });
+    t.rows('local-found')[0].button!.click();
+    expect(t.sentOf('connect')).toHaveLength(0);
+    expect(t.$('status-text').textContent).toContain('too long');
+  });
+
+  it('looks again when the server it connected to refuses, and opens nothing by itself', () => {
+    const t = at(ELSEWHERE);
+    const looks = t.sentOf('localStatus').length;
+    t.rows('local-found')[0].button!.click();
+    t.native({ type: 'probeResult', url: 'http://127.0.0.1:4000/', outcome: { kind: 'refused' }, canStart: true });
+    expect(t.$('tab-local').getAttribute('aria-selected')).toBe('true');
+    expect(t.$('status-text').textContent).toContain('Nothing is answering at this address.');
+    expect(t.sentOf('localStatus')).toHaveLength(looks + 1);
+    // A server that then turns out to be starting is shown, not opened: the
+    // one that comes up may not be the one this row was about.
+    t.native({ type: 'localStatus', status: { ...ELSEWHERE, state: 'starting', found: [] } });
+    t.native({ type: 'localStatus', status: RUNNING });
+    expect(t.sentOf('connect')).toHaveLength(1);
+    expect(t.visible('local-open')).toBe(true);
+  });
+
+  it('still opens the Codeman of the first line once it is up, after Open was refused', () => {
+    const t = at(RUNNING);
+    t.click('local-open');
+    t.native({ type: 'probeResult', url: RUNNING.url, outcome: { kind: 'refused' }, canStart: true });
+    t.native({ type: 'localStatus', status: { ...RUNNING, state: 'starting', found: [] } });
+    t.native({ type: 'localStatus', status: RUNNING });
+    expect(t.sentOf('connect').map((m) => m.url)).toEqual([RUNNING.url, RUNNING.url]);
   });
 });
