@@ -12207,6 +12207,45 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
   background: var(--bg-hover);
 }
 
+.file-browser-root {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.25rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.7rem;
+  color: var(--text-dim);
+}
+
+.file-browser-root[hidden] {
+  display: none;
+}
+
+.file-browser-root-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.file-browser-root-switch {
+  flex: 0 0 auto;
+  padding: 0.1rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.file-browser-root-switch:hover {
+  color: var(--text);
+  border-color: var(--text-dim);
+}
+
 .file-browser-search {
   padding: 0.4rem;
   border-bottom: 1px solid var(--border);

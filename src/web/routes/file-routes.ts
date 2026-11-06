@@ -782,6 +782,26 @@ export function isPathWithinRoot(root: string, candidate: string): boolean {
   return rel === '' || (!isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${sep}`));
 }
 
+/**
+ * Whether a `root=live` listing may start at a session's `liveWorktree` (#765). `findLiveWorktree()`
+ * judged that path lexically when the pane moved, and a symlink can take its place, or a parent's,
+ * without moving the pane. The probe and `readdir` both follow one, and the walk's `path`s only look
+ * relative to `workingDir`, so this is the request-time half of the rule, the same one
+ * `validateSessionFilePath()` applies to a file: resolved, the worktree must lie strictly inside the
+ * resolved `workingDir`. Only the CHECK uses the resolved paths: the walk keeps the session's spelling,
+ * or a workspace reached through a symlink would stop producing paths relative to `workingDir`.
+ * Probed first (#516); both realpaths then walk the components that probe has just answered for.
+ */
+async function canWalkLiveWorktree(workingDir: string, worktreePath: string): Promise<boolean> {
+  if ((await probePathKind(worktreePath, { pastCap: true })) !== 'directory') return false;
+  try {
+    const [realRoot, realWorktree] = await Promise.all([fs.realpath(workingDir), fs.realpath(worktreePath)]);
+    return realWorktree !== realRoot && isPathWithinRoot(realRoot, realWorktree);
+  } catch {
+    return false;
+  }
+}
+
 function findMatchingPickerRoot(roots: FilesystemBrowseRoot[], candidate: string): FilesystemBrowseRoot | undefined {
   return roots
     .filter((root) => isPathWithinRoot(root.path, candidate))
@@ -1595,12 +1615,27 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
   // File tree listing
   app.get('/api/sessions/:id/files', async (req) => {
     const { id } = req.params as { id: string };
-    const { depth, showHidden, q } = req.query as { depth?: string; showHidden?: string; q?: string };
+    const { depth, showHidden, q, root } = req.query as {
+      depth?: string;
+      showHidden?: string;
+      q?: string;
+      root?: string;
+    };
     const session = findSessionOrFail(ctx, id, req);
 
     const maxDepth = Math.min(parseInt(depth || '5', 10), 10);
     const includeHidden = showHidden === 'true';
     const workingDir = session.workingDir;
+    // `root=live` starts the walk at the linked worktree the pane is in (#765), once that folder
+    // proves to be inside `workingDir` right now, and every `path` below stays relative to
+    // `workingDir`, so file-content, file-raw and the edit route need nothing new and judge these
+    // paths against the same root as any other. Only the search predicate reads a path relative
+    // to the listing, since that is the tree the person is looking at.
+    const liveWorktree = session.liveWorktree;
+    const walkRoot =
+      root === 'live' && liveWorktree && (await canWalkLiveWorktree(workingDir, liveWorktree.path))
+        ? liveWorktree.path
+        : workingDir;
     // null for an empty/whitespace query, which is what keeps the default
     // tree response byte-identical when no search is requested.
     const matcher = compileFileQuery(q ?? '');
@@ -1654,7 +1689,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
         index: number;
       }
 
-      const queue: SearchDirectoryCursor[] = [{ dirPath: workingDir, depth: 1, index: 0 }];
+      const queue: SearchDirectoryCursor[] = [{ dirPath: walkRoot, depth: 1, index: 0 }];
       while (queue.length > 0 && totalFiles + totalDirectories < maxFiles && matches.length < maxMatches) {
         // Give each discovered directory a slice before returning to a large sibling.
         const directoriesInRound = queue.length;
@@ -1692,17 +1727,18 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
 
             const fullPath = join(cursor.dirPath, entry.name);
             const relativePath = relative(workingDir, fullPath);
+            const listedPath = relative(walkRoot, fullPath);
 
             if (entry.isDirectory()) {
               totalDirectories++;
-              if (matcher(entry.name, relativePath)) {
+              if (matcher(entry.name, listedPath)) {
                 matches.push({ name: entry.name, path: relativePath, type: 'directory' });
               }
               // Queue siblings together so one large subtree cannot starve later branches.
               queue.push({ dirPath: fullPath, depth: cursor.depth + 1, index: 0 });
             } else {
               totalFiles++;
-              if (matcher(entry.name, relativePath)) {
+              if (matcher(entry.name, listedPath)) {
                 let size: number | undefined;
                 try {
                   size = (await fs.stat(fullPath)).size;
@@ -1728,7 +1764,8 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
       return {
         success: true,
         data: {
-          root: workingDir,
+          root: walkRoot,
+          ...(liveWorktree && { worktree: liveWorktree }),
           tree: [],
           matches,
           totalFiles,
@@ -1750,7 +1787,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
     }
 
     const tree: FileTreeNode[] = [];
-    const queue: TreeDirectoryCursor[] = [{ dirPath: workingDir, depth: 1, nodes: tree, index: 0 }];
+    const queue: TreeDirectoryCursor[] = [{ dirPath: walkRoot, depth: 1, nodes: tree, index: 0 }];
     while (queue.length > 0 && totalFiles + totalDirectories < maxFiles) {
       const directoriesInRound = queue.length;
       const nodesPerDirectory = Math.max(
@@ -1818,7 +1855,8 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
     return {
       success: true,
       data: {
-        root: workingDir,
+        root: walkRoot,
+        ...(liveWorktree && { worktree: liveWorktree }),
         tree,
         totalFiles,
         totalDirectories,

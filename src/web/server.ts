@@ -35,6 +35,7 @@ import fastifyWebsocket from '@fastify/websocket';
 import fastifyMultipart from '@fastify/multipart';
 import { pasteImageDirInUseByOtherSession, startPasteImageGc, uploadDirs } from './paste-image-gc.js';
 import { CLEAN_EXIT_CLOSE_REASON, shouldCloseCleanlyExitedSession } from '../pane-exit-sweep.js';
+import { findLiveWorktree } from '../live-worktree.js';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync, mkdirSync, readFileSync, chmodSync, statSync } from 'node:fs';
@@ -2967,6 +2968,7 @@ export class WebServer extends EventEmitter {
       // `undefined` here means an authoritative read listed no single directory
       // for the session (split into several panes, or gone from the socket).
       const paneCwdChanged = getPaneCurrentPath ? session.setPaneCwd(getPaneCurrentPath(muxName)) : false;
+      if (paneCwdChanged) void this.refreshLiveWorktree(session);
       if (session.setPaneExit(getPaneExit(muxName))) {
         this.persistSessionState(session);
       } else if (!paneCwdChanged) {
@@ -2975,6 +2977,18 @@ export class WebServer extends EventEmitter {
       this.broadcastSessionStateDebounced(session.id);
     }
     this.closeCleanlyExitedSessions();
+  }
+
+  /**
+   * Work out which linked worktree a session's pane moved into (#765). In the background, since
+   * it reads the folder, and only after the directory changed, so an idle pane costs nothing.
+   * A reading newer than the one this lookup started from owns the answer.
+   */
+  private async refreshLiveWorktree(session: Session): Promise<void> {
+    const cwd = session.paneCwd;
+    const worktree = await findLiveWorktree(session.workingDir, cwd);
+    if (session.paneCwd !== cwd) return;
+    if (session.setLiveWorktree(worktree)) this.broadcastSessionStateDebounced(session.id);
   }
 
   /**

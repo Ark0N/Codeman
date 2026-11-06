@@ -29,11 +29,11 @@
  *
  * Port: ephemeral
  */
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import vm from 'node:vm';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Session, rebasePath } from '../src/session.js';
 import { WebServer } from '../src/web/server.js';
 import type { SessionDocker, SessionRemote } from '../src/types.js';
@@ -276,6 +276,77 @@ describe('a pane read reaching the session record', () => {
     expect(state.paneCwd).toBe('/work/proj/sub');
     // A resolution base only: the confinement root is untouched.
     expect(session.toState().workingDir).toBe('/work/proj');
+  });
+
+  describe('liveWorktree (#765)', () => {
+    let base: string;
+    let repo: string;
+    let worktree: string;
+
+    beforeEach(() => {
+      base = mkdtempSync(join(tmpdir(), 'pane-live-worktree-'));
+      repo = join(base, 'repo');
+      worktree = join(repo, '.claude', 'worktrees', 'probe');
+      mkdirSync(worktree, { recursive: true });
+      writeFileSync(join(worktree, '.git'), `gitdir: ${repo}/.git/worktrees/probe\n`);
+    });
+
+    afterEach(() => {
+      rmSync(base, { recursive: true, force: true });
+    });
+
+    const inRepo = () => {
+      const { mux, sessions, web } = build();
+      const session = localMuxSession({ workingDir: repo });
+      sessions.set(session.id, session);
+      const broadcast = vi.fn();
+      (web as unknown as { broadcastSessionStateDebounced: (id: string) => void }).broadcastSessionStateDebounced =
+        broadcast;
+      mux.getPaneExit = () => undefined;
+      return { mux, session, web, broadcast };
+    };
+
+    it('publishes the worktree the pane moved into, and clears it when the pane leaves', async () => {
+      const { mux, session, web, broadcast } = inRepo();
+      let dir = worktree;
+      mux.getPaneCurrentPath = () => dir;
+      mux.emit('paneExitsUpdated');
+      await vi.waitFor(() => expect(session.liveWorktree).toEqual({ name: 'probe', path: worktree }));
+      // What the browser receives, and what the file routes read: never the confinement root.
+      const state = (
+        web as unknown as { getSessionStateWithRespawn: (s: Session) => { liveWorktree?: unknown } }
+      ).getSessionStateWithRespawn(session);
+      expect(state.liveWorktree).toEqual({ name: 'probe', path: worktree });
+      expect(session.toState().workingDir).toBe(repo);
+
+      const broadcasts = broadcast.mock.calls.length;
+      dir = repo;
+      mux.emit('paneExitsUpdated');
+      await vi.waitFor(() => expect(session.liveWorktree).toBeUndefined());
+      expect(broadcast.mock.calls.length).toBeGreaterThan(broadcasts);
+    });
+
+    it('does nothing for a pane that has not moved', async () => {
+      const { mux, session } = inRepo();
+      mux.getPaneCurrentPath = () => repo;
+      const lookup = vi.spyOn(session, 'setLiveWorktree');
+      mux.emit('paneExitsUpdated');
+      await vi.waitFor(() => expect(lookup).toHaveBeenCalledTimes(1));
+      mux.emit('paneExitsUpdated');
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(lookup).toHaveBeenCalledTimes(1);
+    });
+
+    it('drops an answer for a directory the pane has already left', async () => {
+      const { web, session } = inRepo();
+      session.setPaneCwd(worktree);
+      const refresh = (
+        web as unknown as { refreshLiveWorktree: (s: Session) => Promise<void> }
+      ).refreshLiveWorktree.call(web, session);
+      session.setPaneCwd(repo);
+      await refresh;
+      expect(session.liveWorktree).toBeUndefined();
+    });
   });
 
   it('broadcasts a directory change once, and nothing on an unchanged tick', () => {
