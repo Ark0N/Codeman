@@ -483,6 +483,15 @@ transient mount blip at launch poisons tmux's long‑lived cwd and crashes
   never executes. Large hand‑formatted/generated assets (`app.js`, the gesture
   bundle, vendored libs) are `.prettierignore`d for the style pass, but the NUL +
   syntax checks still cover them.
+- **Installer downloads without a package manager:** on the no-admin route
+  (`docs/wiki/Installation.md`) `install.sh` fetches and runs software no system
+  package manager vetted, each checked before it is unpacked or run. The Node.js
+  tarball is checked against the `SHASUMS256.txt` fetched from nodejs.org over the
+  same TLS connection, which proves integrity, not independent provenance: the
+  signature on that file is not checked. The tmux build is checked against a
+  SHA-256 pinned per platform in the installer. `install.sh cloudflared` takes the
+  latest cloudflared release into `~/.local/bin` unverified, as the system routes
+  take the same release, because Cloudflare publishes no checksum file.
 
 ---
 

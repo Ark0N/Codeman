@@ -353,7 +353,7 @@ On an HTTPS install, add `-k` to the curl commands and use the `https://` URL.
 Open an [issue](https://github.com/Ark0N/Codeman/issues) with:
 
 - OS and version.
-- Install method: installer, npm, or git clone.
+- Install method: installer (with or without git), npm, or git clone.
 - `codeman --version`.
 - Browser and version, if the problem is in the UI.
 - Which CLI the session was running, and its version.

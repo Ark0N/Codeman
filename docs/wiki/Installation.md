@@ -122,6 +122,14 @@ This route is taken by itself when `sudo` is not installed, when the account is 
 `CODEMAN_NO_ADMIN=0` switches the detection off. Nothing on this route runs `sudo`,
 Homebrew or the Xcode tools installer.
 
+The group check cannot see a sudoers entry, so an account that sudoers lists by name, with
+a password, takes this route too. The summary then reads `could not confirm that this
+account may use sudo`, and to use `sudo` anyway:
+
+```bash
+curl -fsSL https://getcodeman.com/install | CODEMAN_NO_ADMIN=0 bash
+```
+
 What to know about it:
 
 - **Linux needs make, a C++ compiler and python3 to be there already.** node-pty compiles
@@ -279,8 +287,10 @@ npm uninstall -g aicodeman      # npm route
 
 The installer route asks before it removes `~/.codeman/runtime` (the Node.js and tmux it
 downloaded, if any), and keeps it by default when you installed CLIs there with
-`npm install -g`. Neither removes `~/.codeman/` or `~/codeman-cases/`. Delete those by hand if you want the
-state and your case folders gone as well, and check `~/codeman-cases/` first: linked cases
+`npm install -g`. That folder is inside `~/.codeman/`, so saying yes to the data directory
+question that follows removes it even if you kept it a step earlier, and the question says
+so. By default neither route removes `~/.codeman/` or `~/codeman-cases/`. Delete those by hand
+if you want the state and your case folders gone as well, and check `~/codeman-cases/` first: linked cases
 point at directories you already had, but cases created from scratch have their only copy
 there.
 
