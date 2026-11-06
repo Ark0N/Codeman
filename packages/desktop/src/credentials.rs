@@ -189,9 +189,11 @@ mod imp {
     }
 }
 
+/// A Keychain on an in-memory store, for these tests and for the tests of the
+/// code that uses a Keychain (main.rs).
 #[cfg(test)]
-mod tests {
-    use super::{start, Backend, Job, Keychain};
+pub(crate) mod memory {
+    use super::{start, Backend, Keychain};
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
@@ -200,7 +202,7 @@ mod tests {
     /// purpose: a queue that did not keep order would let the next job
     /// overtake it, and the tests would see that.
     #[derive(Clone, Default)]
-    struct Memory {
+    pub(crate) struct Memory {
         items: Arc<Mutex<HashMap<String, String>>>,
         log: Arc<Mutex<Vec<String>>>,
     }
@@ -209,7 +211,8 @@ mod tests {
         fn note(&self, entry: String) {
             self.log.lock().unwrap().push(entry);
         }
-        fn log(&self) -> Vec<String> {
+        /// The jobs the store ran, in order.
+        pub(crate) fn log(&self) -> Vec<String> {
             self.log.lock().unwrap().clone()
         }
     }
@@ -234,6 +237,20 @@ mod tests {
         }
     }
 
+    /// A worker on a fresh store, and the store to look into.
+    pub(crate) fn keychain() -> (Keychain, Memory) {
+        let memory = Memory::default();
+        let (keychain, worker) = start(Box::new(memory.clone()));
+        assert!(worker.is_some(), "the worker thread starts");
+        (keychain, memory)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::memory::{keychain, Memory};
+    use super::{start, Backend, Job, Keychain};
+
     /// A store whose load fails the way a crashed worker would.
     struct Crashes;
 
@@ -245,13 +262,6 @@ mod tests {
             Ok(())
         }
         fn delete(&mut self, _account: &str) {}
-    }
-
-    fn keychain() -> (Keychain, Memory) {
-        let memory = Memory::default();
-        let (keychain, worker) = start(Box::new(memory.clone()));
-        assert!(worker.is_some(), "the worker thread starts");
-        (keychain, memory)
     }
 
     #[test]

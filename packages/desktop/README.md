@@ -55,6 +55,12 @@ cargo test                                  # unit tests
 open dist/Codeman.app
 ```
 
+The connect page has its own test, which needs no Mac: from the repository
+root, `npm run test:browser -- test/desktop-connect-page.browser.test.ts` drives
+`assets/connect.html` in Chromium through every state of both tabs, under the
+Content-Security-Policy the app serves it with. It is part of the nightly
+browser suite, not of `npm test`.
+
 The script builds with `--locked` against the committed `Cargo.lock`, targets
 the macOS version in `macos/Info.plist` (`LSMinimumSystemVersion`, 11.3), and
 takes the binary from where cargo says it wrote it, so `CARGO_TARGET_DIR` and a

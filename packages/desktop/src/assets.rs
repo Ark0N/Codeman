@@ -295,6 +295,15 @@ mod tests {
         }
     }
 
+    /// Copy puts setup::INSTALL_ONE_LINER on the clipboard, and the page shows
+    /// the command as text of its own: the two have to be the same command.
+    #[test]
+    fn connect_page_shows_the_command_that_copy_copies() {
+        let page = String::from_utf8_lossy(CONNECT_HTML);
+        let shown = format!("<code id=\"oneliner\">{}</code>", crate::setup::INSTALL_ONE_LINER);
+        assert!(page.contains(&shown), "{shown}");
+    }
+
     #[test]
     fn toast_escapes_file_names() {
         let js = download_toast_script("a\"); alert(1); (\".txt", true);

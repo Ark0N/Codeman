@@ -1335,25 +1335,8 @@ impl App {
                     .as_ref()
                     .and_then(|u| keychain.load_blocking(&credentials::account(&key, u))),
             };
-            let (user, password, source) = match typed_password {
-                Some(p) => (user, Some(p), PasswordSource::Typed),
-                None => match saved {
-                    Some(p) => (user, Some(p), PasswordSource::Keychain),
-                    // The Codeman on this Mac keeps its login where Codeman's
-                    // own clients find it (setup::local_login: its launchd
-                    // job, then ~/.codeman/.env), and only answers it at its
-                    // own loopback address. Used when nothing was typed and
-                    // the Keychain has nothing for this server, for the same
-                    // username only, and never saved anywhere.
-                    None if !expect_saved => match setup::local_login(&url) {
-                        Some((u, p)) if user.as_deref().is_none_or(|current| current == u) => {
-                            (Some(u), Some(p), PasswordSource::LocalServer)
-                        }
-                        _ => (user, None, PasswordSource::Absent),
-                    },
-                    None => (user, None, PasswordSource::Absent),
-                },
-            };
+            let (user, password, source) =
+                choose_login(user, typed_password, saved, expect_saved, || setup::local_login(&url));
             // Codeman's default username when only a password was given.
             let username = password
                 .as_ref()
@@ -1860,6 +1843,38 @@ impl App {
 }
 
 /// A login the probe just tried, and what the user asked for it.
+/// The login a connect goes out with, and where its password came from. A
+/// typed password wins, then the one the Keychain holds for this user. Last
+/// comes the login of the Codeman on this Mac, which keeps it where its own
+/// clients find it (setup::local_login: its launchd job, then
+/// ~/.codeman/.env) and only answers it at its own loopback address. That one
+/// is used only when the config expected no password in the Keychain
+/// (`expect_saved`: one that should be there and is not is reported, not
+/// papered over), only for the username in use when there is one, and it is
+/// never saved anywhere. `local` is asked only then: it runs processes.
+fn choose_login(
+    user: Option<String>,
+    typed_password: Option<String>,
+    saved: Option<String>,
+    expect_saved: bool,
+    local: impl FnOnce() -> Option<(String, String)>,
+) -> (Option<String>, Option<String>, PasswordSource) {
+    if let Some(password) = typed_password {
+        return (user, Some(password), PasswordSource::Typed);
+    }
+    if let Some(password) = saved {
+        return (user, Some(password), PasswordSource::Keychain);
+    }
+    if !expect_saved {
+        if let Some((local_user, password)) = local() {
+            if user.as_deref().is_none_or(|current| current == local_user) {
+                return (Some(local_user), Some(password), PasswordSource::LocalServer);
+            }
+        }
+    }
+    (user, None, PasswordSource::Absent)
+}
+
 struct ProbedLogin<'a> {
     /// The server, as the config and the Keychain accounts key it.
     server: &'a str,
@@ -1938,4 +1953,168 @@ fn update_keychain(keychain: &Keychain, outcome: &ProbeOutcome, login: &ProbedLo
     };
     update.saved = saved;
     update
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::credentials::memory;
+
+    fn none() -> Option<(String, String)> {
+        panic!("the local login must not be looked up here");
+    }
+
+    #[test]
+    fn the_login_a_connect_uses() {
+        let s = |v: &str| Some(v.to_string());
+        let local = || Some(("admin".to_string(), "from-this-mac".to_string()));
+
+        // A typed password wins over everything, and nothing else is asked.
+        assert_eq!(
+            choose_login(s("kay"), s("typed"), s("kept"), true, none),
+            (s("kay"), s("typed"), PasswordSource::Typed)
+        );
+        // Then the Keychain's.
+        assert_eq!(
+            choose_login(s("kay"), None, s("kept"), true, none),
+            (s("kay"), s("kept"), PasswordSource::Keychain)
+        );
+        // The Keychain should hold one and does not: reported as absent, the
+        // local login is not tried in its place.
+        assert_eq!(
+            choose_login(s("kay"), None, None, true, none),
+            (s("kay"), None, PasswordSource::Absent)
+        );
+        // Nothing typed, nothing expected: the Codeman on this Mac's own
+        // login, for no username or the same one.
+        assert_eq!(
+            choose_login(None, None, None, false, local),
+            (s("admin"), s("from-this-mac"), PasswordSource::LocalServer)
+        );
+        assert_eq!(
+            choose_login(s("admin"), None, None, false, local),
+            (s("admin"), s("from-this-mac"), PasswordSource::LocalServer)
+        );
+        // Never for another user: the names are compared exactly.
+        assert_eq!(
+            choose_login(s("kay"), None, None, false, local),
+            (s("kay"), None, PasswordSource::Absent)
+        );
+        assert_eq!(
+            choose_login(s("Admin"), None, None, false, local),
+            (s("Admin"), None, PasswordSource::Absent)
+        );
+        // No local login either.
+        assert_eq!(
+            choose_login(None, None, None, false, || None),
+            (None, None, PasswordSource::Absent)
+        );
+    }
+
+    /// update_keychain for one probe answer; the log is what the Keychain did,
+    /// in order (the last load only waits for the queue to drain).
+    fn keychain_after(outcome: ProbeOutcome, login: ProbedLogin<'_>) -> (KeychainUpdate, Vec<String>) {
+        let (keychain, store) = memory::keychain();
+        let update = update_keychain(&keychain, &outcome, &login);
+        keychain.load_blocking("done");
+        let mut log = store.log();
+        assert_eq!(log.pop().as_deref(), Some("load done"));
+        (update, log)
+    }
+
+    fn login<'a>(
+        previous_user: Option<&'a str>,
+        username: Option<&'a str>,
+        source: PasswordSource,
+        remember: bool,
+    ) -> ProbedLogin<'a> {
+        ProbedLogin {
+            server: "http://a/",
+            previous_user,
+            username,
+            password: (source != PasswordSource::Absent).then_some("secret"),
+            source,
+            remember,
+        }
+    }
+
+    #[test]
+    fn what_the_keychain_keeps_after_a_connect() {
+        let ok = || ProbeOutcome::Ok {
+            version: "1.48.0".into(),
+        };
+        let item = |user: &str| credentials::account("http://a/", user);
+
+        // A typed password is saved when Remember is on, deleted when it is off.
+        let (update, log) = keychain_after(ok(), login(Some("kay"), Some("kay"), PasswordSource::Typed, true));
+        assert!(update.saved && update.deleted.is_empty());
+        assert_eq!(log, [format!("save {}", item("kay"))]);
+        let (update, log) = keychain_after(ok(), login(Some("kay"), Some("kay"), PasswordSource::Typed, false));
+        assert!(!update.saved);
+        assert_eq!(update.deleted, ["kay"]);
+        assert_eq!(log, [format!("delete {}", item("kay"))]);
+
+        // One that came from the Keychain is there already: nothing is written.
+        let (update, log) = keychain_after(ok(), login(Some("kay"), Some("kay"), PasswordSource::Keychain, true));
+        assert!(update.saved && log.is_empty());
+
+        // The local Codeman's own login never gets a copy, Remember or not.
+        let (update, log) = keychain_after(ok(), login(None, Some("admin"), PasswordSource::LocalServer, true));
+        assert!(!update.saved && update.deleted.is_empty() && log.is_empty());
+
+        // Another user than before: the old user's item goes FIRST, then the save.
+        let (update, log) = keychain_after(ok(), login(Some("old"), Some("new"), PasswordSource::Typed, true));
+        assert!(update.saved);
+        assert_eq!(update.deleted, ["old"]);
+        assert_eq!(
+            log,
+            [format!("delete {}", item("old")), format!("save {}", item("new"))]
+        );
+
+        // A password the server wants changed is never kept.
+        let (update, log) = keychain_after(
+            ProbeOutcome::PasswordChangeRequired,
+            login(Some("kay"), Some("kay"), PasswordSource::Typed, true),
+        );
+        assert!(!update.saved);
+        assert_eq!(update.deleted, ["kay"]);
+        assert_eq!(log, [format!("delete {}", item("kay"))]);
+
+        // A login the server did not accept changes nothing.
+        for refused in [
+            ProbeOutcome::BadCredentials,
+            ProbeOutcome::NeedsLogin,
+            ProbeOutcome::Refused,
+            ProbeOutcome::Timeout,
+        ] {
+            let (update, log) = keychain_after(refused, login(Some("old"), Some("new"), PasswordSource::Typed, true));
+            assert!(!update.saved && update.deleted.is_empty() && log.is_empty());
+        }
+    }
+
+    #[test]
+    fn a_commit_from_the_loading_server_is_the_loaded_page() {
+        let server = Url::parse("https://box.ts.net/codeman/").unwrap();
+        let loading = Phase::Loading(server.clone());
+        assert_eq!(
+            loaded_on_commit(&loading, "https://box.ts.net/codeman/"),
+            Some(Phase::Loaded(server.clone()))
+        );
+        // Any page of that origin counts: the server may redirect within it.
+        assert_eq!(
+            loaded_on_commit(&loading, "https://box.ts.net/codeman/session/abc"),
+            Some(Phase::Loaded(server.clone()))
+        );
+        // Another origin, the connect page, or junk: still loading.
+        assert_eq!(loaded_on_commit(&loading, "https://other.ts.net/codeman/"), None);
+        assert_eq!(loaded_on_commit(&loading, "http://box.ts.net/codeman/"), None);
+        assert_eq!(loaded_on_commit(&loading, policy::CONNECT_PAGE), None);
+        assert_eq!(loaded_on_commit(&loading, "not a url"), None);
+        // Only a load under way can finish.
+        assert_eq!(loaded_on_commit(&Phase::Connect, "https://box.ts.net/codeman/"), None);
+        assert_eq!(
+            loaded_on_commit(&Phase::Loaded(server), "https://box.ts.net/codeman/"),
+            None
+        );
+    }
 }
