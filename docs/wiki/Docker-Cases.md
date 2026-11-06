@@ -225,7 +225,8 @@ this does not widen your network exposure. Add it to the service unit and restar
 
 - Per-session environment overrides, effort, and per-CLI configuration are **rejected** for
   docker cases, because they do not cross into the container. Configure the container through
-  the docker host's per-mode command override instead.
+  the docker host's per-mode command override instead. A `$` in that override expands inside
+  the container, not on the Codeman machine.
 - tmux must exist in the base image. It is a hard prerequisite and is probed when linking a
   host.
 - On macOS, Docker Desktop takes a dedicated uid path, and memory caps are subject to the

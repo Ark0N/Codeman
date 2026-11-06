@@ -129,22 +129,19 @@ describe('remote-hosts domain', () => {
 
   describe('per-mode command overrides', () => {
     const modes = ['shell', ...listClis().map((cli) => cli.id)];
+    const host = { id: 'h', label: 'H', host: '10.0.0.1', username: 'u' };
 
     // `.strict()` refuses an unknown key, so a mode missing here cannot take an override, and
     // `commands.*` is the documented way out for a login shell the stock launch cannot run.
     it.each(modes)('accepts a %s override on a remote host and a docker host', (mode) => {
       const commands = { [mode]: 'exec my-agent' };
-      const remote = { id: 'h', label: 'H', host: '10.0.0.1', username: 'u', commands };
       const docker = { id: 'h', label: 'H', image: 'codeman/agent:base', commands };
-      expect(RemoteHostSchema.safeParse(remote).success).toBe(true);
+      expect(RemoteHostSchema.safeParse({ ...host, commands }).success).toBe(true);
       expect(DockerHostSchema.safeParse(docker).success).toBe(true);
     });
 
     it('still refuses a key that is no mode', () => {
-      const commands = { nope: 'exec my-agent' };
-      expect(RemoteHostSchema.safeParse({ id: 'h', label: 'H', host: '10.0.0.1', username: 'u', commands }).success).toBe(
-        false
-      );
+      expect(RemoteHostSchema.safeParse({ ...host, commands: { nope: 'exec my-agent' } }).success).toBe(false);
     });
   });
 

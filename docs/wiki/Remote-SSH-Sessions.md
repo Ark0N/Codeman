@@ -29,10 +29,17 @@ through a jump host. Your laptop can sleep, change networks, or close, and the r
 
 Hosts are saved and reusable, so a second case on the same machine is just a path. Host
 profiles can also carry per-run-mode launch command overrides, for when the binary lives
-somewhere unusual on that host.
+somewhere unusual on that host. An override runs on the remote in your login shell, so a `$`
+in it expands there, not on the Codeman machine.
 
 The remote host needs **tmux**. Codeman probes for it when you link the host rather than
 failing later at launch.
+
+The remote login shell can be bash, zsh, dash or fish. Since 1.49.0 **tcsh needs an override**
+for each run mode you use (`exec claude`), because tcsh refuses the flags of a stock launch and
+the pane dies. The Remote tab offers the codex override, the others go through
+`PUT /api/remote-hosts/:id`, and a claude override gives up resuming the same conversation on a
+respawn. nushell and elvish cannot run a remote session at all.
 
 ## What actually runs
 

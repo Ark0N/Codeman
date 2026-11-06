@@ -1284,11 +1284,14 @@ export function remoteTmuxLocation(remote: SessionRemote, sessionId: string): { 
  *
  * Emits:
  *   ssh -o BatchMode=yes -t [<COD-107 connection opts>] user@host \
- *     'tmux -L codeman-remote new-session -A -s codeman-ssh-<id> -c <path> "cd <path> && exec <cli>" \
+ *     'tmux -L codeman-remote new-session -A -s codeman-ssh-<id> -c <path> /bin/sh -c <pane-command> \
  *        \; set -t codeman-ssh-<id> status off \; set -t codeman-ssh-<id> mouse off \
  *        \; set -t codeman-ssh-<id> prefix C-q \; set -s escape-time 0 \; \
  *        bind-key -T prefix C-q send-prefix \; unbind-key -a -T prefix \; \
  *        bind-key -T prefix C-q send-prefix \; set -t codeman-ssh-<id> remain-on-exit failed'
+ *
+ * `<pane-command>` is `cd <path> && exec <cli>`, quoted as one token. A per-host `commands.*`
+ * override is that one token alone, with no `/bin/sh -c` in front of it.
  *
  * COD-107 — the connection options (`-p`, `-i`, `-J`, SOCKS `-o ProxyCommand`,
  * arbitrary `-o`) come from the shared `buildSshConnectionArgs(remote)`, so the
