@@ -633,20 +633,22 @@ describe('capability shapes', () => {
 
   it('declares which CLIs get the wheel forwarded, and whether a version gates it', () => {
     // Claude forwards from 2.1.187 (fullscreen only); tracked Codex and Copilot
-    // forward without a version gate. Unmeasured entries stay 'never'.
+    // forward without a version gate, and so does pi. Unmeasured entries stay 'never'.
     const mode = (id: string) => STOCK_CLIS.find((e) => (e.id as string) === id)?.capabilities.wheelForward;
     expect(mode('copilot')).toEqual({ mode: 'always' });
     expect(mode('claude')).toEqual({ mode: 'version-gated', minVersion: '2.1.187' });
     const forwarding = STOCK_CLIS.filter((e) => e.capabilities.wheelForward.mode !== 'never').map(
       (e) => e.id as string
     );
-    expect(forwarding.sort()).toEqual(['claude', 'codex', 'copilot']);
+    expect(forwarding.sort()).toEqual(['claude', 'codex', 'copilot', 'pi']);
     expect(CliEntrySchema.safeParse(baseEntry('copilot')).success).toBe(true);
   });
 
   it('declares transcriptPageKeys for exactly the CLIs measured to page on PageUp/PageDown', () => {
     // claude (repaint mode), codex, opencode and copilot (all on the alternate screen) were
     // measured paging their own transcript on PageUp/PageDown; no other stock entry has been.
+    // pi pages too when fullscreen, and stays out on purpose: in `tuiMode: regular` the same keys
+    // move the caret of a multi-line draft.
     const paging = STOCK_CLIS.filter((e) => e.capabilities.transcriptPageKeys === true).map((e) => e.id as string);
     expect(paging.sort()).toEqual(['claude', 'codex', 'copilot', 'opencode']);
   });

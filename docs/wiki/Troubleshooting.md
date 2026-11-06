@@ -221,6 +221,17 @@ Things to try:
 Codex with mouse tracking on gets the wheel forwarded like fullscreen Claude; otherwise
 it pages its transcript or scrolls locally, while `Shift+Wheel` always uses local scrollback.
 
+### The wheel does nothing in a pi session
+
+Fullscreen pi, the default since pi 1.0.0, scrolls its own transcript, so the wheel is
+forwarded to it while it has mouse tracking on. If the wheel does nothing, turn off
+**Wheel Scrolls Local History**: that setting keeps the wheel on a local buffer pi leaves
+empty, and pi has no paging fallback. `PageUp` and `PageDown` on a keyboard still reach pi.
+
+Codeman strips pi's mouse enables, so a drag selects text in the browser rather than using
+pi's own selection or scrollbar drag. With `tuiMode: regular` pi is inline and the wheel
+scrolls local history.
+
 ### Selected text is invisible on a light skin
 
 Update. Every skin named its selection colour under a key xterm renamed in v5, so the four

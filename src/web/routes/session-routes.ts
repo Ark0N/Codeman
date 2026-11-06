@@ -332,7 +332,7 @@ const MOUSE_TRACKING_PATTERN = /\x1b\[\?(?:1000|1001|1002|1003|1005|1006|1007)[h
  * - `strip-full` (claude/codex/gemini): alt-screen toggles, `3J` and mouse DECSETs.
  *   xterm obeys the toggles by switching to its scrollback-less alt buffer and wiping
  *   saved lines, so history disappeared on tab switch.
- * - `strip-mux-and-mouse` (opencode, tmux-backed): alt-screen toggles and mouse DECSETs.
+ * - `strip-mux-and-mouse` (tmux-backed): alt-screen toggles and mouse DECSETs.
  *   A replayed tracking enable parks xterm in report mode, where a drag goes to the CLI
  *   instead of selecting text (and Ctrl+C without a selection is opencode's app_exit).
  *   `3J` stays: a TUI is not a `clear` consumer.

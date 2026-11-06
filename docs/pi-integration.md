@@ -88,9 +88,15 @@ bypass, and project trust is a decision the person at the terminal makes.
 - **`--api-key`.** Never. It would put a provider secret on the spawn command
   line, visible in `ps`, tmux server state and logs. `PI_*` overrides go through
   socket-scoped `tmux setenv` for exactly this reason.
-- **`--tui-mode`.** Pi's default main-screen TUI is the friendly case for a
-  browser terminal. The fullscreen mode (0.84.0) stays your own runtime choice via
-  `/settings`.
+- **`--tui-mode`.** Which TUI you get stays your choice, in pi's `tuiMode` setting.
+  Fullscreen is the default since pi 1.0.0: the wheel and clicks reach pi, and because
+  Codeman strips pi's mouse enables, a drag selects text in the browser rather than
+  using pi's own selection or scrollbar drag. With **Wheel Scrolls Local History** on,
+  the wheel does nothing in fullscreen pi: the setting pins it to a local buffer pi
+  leaves empty, and pi has no paging fallback. `tuiMode: regular`, the default below
+  1.0.0, is inline with terminal-owned scrollback and emits no mouse enables at all. A
+  pi from 0.84.0 set to fullscreen enables mouse tracking the same way the 1.0.0
+  default does, and Codeman treats it the same.
 - **`--name`, `--no-session`, `-p`/`--print`, `--mode json`, `--mode rpc`,
   `--tools`/`--exclude-tools`, `-e`/`--extension`, `--skill`,
   `--system-prompt`.** Tracked as follow-ups in the plan doc.
