@@ -791,7 +791,7 @@ print_access_summary() {
   printf '\n'
   printf '  Logs        cd %s && docker compose logs -f codeman\n' "$dir_q"
   printf '  Stop        cd %s && docker compose down\n' "$dir_q"
-  printf '  Update      App Settings > Updates in the dashboard, or rerun this script\n'
+  printf '  Update      App Settings > Updates in the dashboard, or git pull and rerun this script\n'
 }
 
 report_when_ready() {

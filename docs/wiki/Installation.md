@@ -153,8 +153,9 @@ bash docker/Start-Codeman.sh
 ```
 
 The first run asks for a data folder, a port and a password. Enter takes each default,
-including a generated password that is printed once. It then writes `docker/.env`, builds the
-image (a few minutes the first time) and ends on the URL once Codeman answers. The image
+including a generated password, shown on your terminal and kept in `docker/.env`. It then
+writes that file, builds the image (a few minutes the first time) and ends on the URL once
+Codeman answers. The image
 already includes Claude Code, Codex, Gemini CLI and OpenCode: start a session and log the CLI
 in once, and the login is kept in the data folder.
 

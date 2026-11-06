@@ -620,6 +620,10 @@ Adding the header changed the preamble, so `CODEMAN_PREAMBLE` was bumped (1.22.0
 
 `CODEMAN_DOCKER_DISABLE_SWAP_LIMIT=1` drops `--memory-swap` (and filters only that one kernel warning) for hosts without swap accounting; `--memory` still applies.
 
+⚠️ **`docker/.env` is generated FROM `.env.example`, at 0600, never from a list of keys.** `Start-Codeman.sh`'s first run (only when nothing exists at that path: a dangling symlink or a directory is refused) rewrites the five `KEY=` lines it asks about and copies every other line, because `diffRequiredEnvKeys` refuses an in-app update while the user's file lacks a key the target release's example sets, so a hand-picked subset would block the very next update. Compose's dotenv is not bash: a backslash escapes a single-quoted value's closing quote (measured on 2.33.0 and 5.5.0), so `accept_password` and `accept_appdata_path` refuse a trailing backslash as well as a single quote. Compose also prefers the shell environment over the file, so setup unsets what it wrote, or a preset would beat a typed answer. `test/docker-start-setup.test.ts` pins all of it, against a stub that reproduces both rules.
+
+⚠️ **`changeme` is refused by BOTH scripts**, before anything is built or stopped: the container publishes on every interface and holds the Docker socket, so that password is host root. `Update-Codeman.sh` needs its own check, ahead of its `down`, because a refusal found only at the handoff to `Start-Codeman.sh` would leave the stack stopped.
+
 ⚠️ The deployment ALSO self-updates in place (the repo bind mount at `/opt/codeman` + a restart-by-exiting supervisor) — see Self-update and `docs/docker-self-update.md` before touching `server.Dockerfile`, the compose file or `.env.example`, since each is an input to the updater's environment gate. User guides: `docs/docker-compose.md` + `docker/README.md`.
 
 ### DeepSeek web UI

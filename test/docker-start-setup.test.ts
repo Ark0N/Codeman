@@ -536,6 +536,8 @@ describe.skipIf(process.platform === 'win32')('Start-Codeman.sh first run, start
     expect(r.stdout).toMatch(/Sign in +admin, with the CODEMAN_PASSWORD from .*docker\/\.env/);
     expect(r.stdout).toMatch(/Logs +cd .* && docker compose logs -f codeman/);
     expect(r.stdout).toMatch(/Stop +cd .* && docker compose down/);
+    // Rerunning alone rebuilds the same checkout: nothing here fetches.
+    expect(r.stdout).toMatch(/Update +App Settings > Updates in the dashboard, or git pull and rerun this script/);
     const up = r.log.findIndex((l) => / up --build -d/.test(l));
     expect(up).toBeGreaterThan(-1);
     expect(r.log.findIndex((l) => l.startsWith('docker inspect'))).toBeGreaterThan(up);

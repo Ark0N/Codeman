@@ -94,7 +94,7 @@ git clone https://github.com/Ark0N/Codeman.git && cd Codeman
 bash docker/Start-Codeman.sh
 ```
 
-The first run asks three questions (data folder, port, password; Enter takes the default, including a generated password), writes `docker/.env` for you, builds the image and ends on the URL once Codeman answers. The image already includes Claude Code, Codex, Gemini CLI and OpenCode. Codeman runs in a container and spawns Docker cases as sibling containers through the host socket. To update, use **App Settings → Updates** or run the script again rather than a plain `docker compose up`, so the rebuilt image, refreshed volumes and entrypoint arrive together. See the [Docker deployment guide](docker/README.md) for Unraid, direct Compose commands, storage and networking options.
+The first run asks three questions (data folder, port, password; Enter takes the default, including a generated password), writes `docker/.env` for you, builds the image and ends on the URL once Codeman answers. The image already includes Claude Code, Codex, Gemini CLI and OpenCode. Codeman runs in a container and spawns Docker cases as sibling containers through the host socket. To update, use **App Settings → Updates**, or `git pull` and run the script again rather than a plain `docker compose up`, so the rebuilt image, refreshed volumes and entrypoint arrive together. See the [Docker deployment guide](docker/README.md) for Unraid, direct Compose commands, storage and networking options.
 
 <details>
 <summary><strong>Keep it running in the background</strong></summary>

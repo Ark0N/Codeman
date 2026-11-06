@@ -17,7 +17,7 @@ The first run checks that Docker, the Compose v2 plugin (2.27.2 or newer) and th
 | ----------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | Data folder | `~/codeman-docker`. It becomes the container's home: Codeman's state, CLI logins, and the `codeman-cases` folder for projects. |
 | Port        | 3000, or the next free port when something on the machine already uses 3000.                                                   |
-| Password    | A generated 24-character password, printed once.                                                                               |
+| Password    | A generated 24-character password, shown on your terminal and kept in `docker/.env`.                                           |
 
 It writes `docker/.env` from `.env.example` (readable only by you, with this host's time zone filled in), builds the image, starts the container, waits until Codeman answers, and prints the URL to open, the address for other devices on your network, and the commands for logs and stopping. The first build takes a few minutes.
 
@@ -29,7 +29,7 @@ Your account has to be able to use Docker without sudo. If it cannot, the script
 | `--setup-only` | Write `docker/.env` and stop, so you can review it (or add the optional settings below) before the build. |
 | `--no-wait`    | Start the container without waiting for Codeman to answer.                                                |
 
-On a first run, `CODEMAN_APPDATA_PATH`, `CODEMAN_PORT` and `CODEMAN_PASSWORD` set in the environment replace the defaults. Every later run reads `docker/.env` as it is, asks nothing and never edits it. Change a value by editing the file and running the script again. The script refuses to start while `CODEMAN_PASSWORD` is still the example's `changeme`, because the container is reachable from your network and controls Docker on the host.
+On a first run, `CODEMAN_APPDATA_PATH`, `CODEMAN_PORT` and `CODEMAN_PASSWORD` set in the environment replace the defaults, a different answer typed at the question still wins, and a preset password skips its question. A password the script generates is only ever shown on a terminal: when the output is captured (a log, a pipe), read it from `docker/.env`. Every later run reads `docker/.env` as it is, asks nothing and never edits it, except that Compose prefers a variable exported in your shell over the file. Change a value by editing the file and running the script again. The script refuses to start while `CODEMAN_PASSWORD` is still the example's `changeme`, because the container is reachable from your network and controls Docker on the host.
 
 ### Setting it up by hand
 
