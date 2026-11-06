@@ -86,4 +86,16 @@ describe('Clone Repo custom folder', () => {
     expect((doc.getElementById('cloneCaseName') as HTMLInputElement).value).toBe('bifrost');
     expect(doc.getElementById('cloneCasePathPreview')?.textContent).toBe('Will clone into: /mnt/projects/bifrost');
   });
+
+  it('previews the name taken from the URL as it is typed', () => {
+    const { app, doc, set } = bootClone();
+    app.isCliAvailable = () => true; // lives in settings-ui.js, which this test does not load
+    set('cloneCaseName', '');
+    set('cloneCasePath', '/mnt/projects');
+    set('cloneRepoUrl', 'https://github.com/opticon454/bifrost');
+    app.onCloneUrlInput();
+    clearTimeout(app._clonePreflightTimer);
+    expect((doc.getElementById('cloneCaseName') as HTMLInputElement).value).toBe('bifrost');
+    expect(doc.getElementById('cloneCasePathPreview')?.textContent).toBe('Will clone into: /mnt/projects/bifrost');
+  });
 });
