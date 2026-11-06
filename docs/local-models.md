@@ -150,13 +150,20 @@ Switching the setting on also starts that five-minute sweep for every other save
 ## Starting a session
 
 "Start a session" starts the coding agent on the endpoint `local-ollama` through the
-existing custom model launch. Before any session is started on that endpoint the server
+existing custom model launch. Before a coding agent is STARTED on that endpoint the server
 checks, in this order:
 
 - the runtime child Codeman started is alive (whatever else answers on the port is not
   ours);
 - the digest the runtime reports for the installed model is the one stored at install time;
 - the model asked for is the one that was installed and checked.
+
+That check runs wherever a new agent process comes to be on the endpoint: a session created
+with the model, a model applied to a running session (which restarts its agent), the attach
+that starts an agent in a session that has none or whose agent exited, and the rebuild of a
+session after a reboot (that entry is skipped with "the local model is not ready" and stays
+on offer). An agent that is already running when Codeman restarts is not started by
+Codeman, so it is not asked: it keeps running on its port, see below.
 
 A different digest refuses the launch: "The model on this Mac changed since it was
 installed. Remove it and install it again." The digest is also read again at boot and when
@@ -233,6 +240,11 @@ or `python3`.
 - **A Codeman restart stops the runtime.** A session that is mid-answer on the local model
   loses that answer. The runtime is started again with the server, and the first request
   loads the model again (seconds).
+- **An open session keeps calling the runtime's port.** The coding agent was given the
+  address when it started. While the runtime is stopped, or for the seconds of a Codeman
+  restart, its requests go to a port nothing of ours holds, and any program on this Mac could
+  bind that port and answer them. That is why Stop and "Use another port" are refused while
+  a session uses the model: close those sessions first.
 - **The runtime does not enforce the context length.** A prompt longer than the context was
   accepted in testing. Do not rely on the runtime to stop one.
 - **The model stays in memory for ten minutes** after the last request, then the runtime

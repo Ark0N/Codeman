@@ -22,9 +22,16 @@
  *    CLI over the same prefix.
  *
  * Rules:
- *  - The command executed is only ever a STOCK entry's (`stockInstallCommand()` reads the
- *    compiled `STOCK_CLIS`, never the registry merged with `clis.json`, so an override file
- *    cannot change what runs). A custom entry's install text is never executed.
+ *  - Which command runs is the CALLER's choice, and the two callers choose differently. The
+ *    local model job passes `stockInstallCommand()`, which reads the compiled `STOCK_CLIS`
+ *    and never the registry merged with `clis.json`, so an override file cannot change what
+ *    that job runs. The CLI management route passes the merged entry's command
+ *    (`resolveInstallCommandForPlatform(listClis()...)`), as it did before this module
+ *    existed: a `clis.json` override of a stock entry's install command IS what that route
+ *    runs (behind `cliManagementEnabled`, after a confirm that shows the exact text). A custom
+ *    entry's install text is never executed by either. Switching the route to
+ *    `stockInstallCommand()` would close that gap at the cost of a behaviour change the route
+ *    tests pin; it is an owner decision, not made here.
  *  - Who may call it is the caller's rule, not this module's: the route keeps its
  *    `cliManagementEnabled` gate; the install job runs it only for a harness row of the local
  *    model catalogue, after the person's consent click on a screen that showed the literal
