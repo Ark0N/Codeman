@@ -1,15 +1,21 @@
 /**
- * @fileoverview Right-to-left text in rendered markdown (`CodemanApp._renderMarkdown`, issue #715).
+ * @fileoverview Right-to-left text in rendered markdown (`_applyBlockDirection`, issue #715).
  *
  * The Response Viewer and the File Viewer's markdown view rendered every block left to
  * right, so a Persian, Arabic or Hebrew answer was left-aligned, its punctuation landed on
- * the wrong end and its list markers sat on the left. `_renderMarkdown` now gives each
+ * the wrong end and its list markers sat on the left. `_applyBlockDirection` now gives each
  * OUTERMOST prose block `dir="auto"` (the browser picks the direction from the block's own
- * first letter) and pins code to `dir="ltr"`, which also keeps a code span from deciding a
- * sentence's direction, since `dir="auto"` skips descendants that carry a `dir`.
+ * first letter), and `_renderMarkdown` pins code to `dir="ltr"`, which also keeps a code
+ * span from deciding a sentence's direction, since `dir="auto"` skips descendants that
+ * carry a `dir`.
  *
- * jsdom does not resolve `dir="auto"`, so this pins the attributes the browser acts on;
- * what Chromium makes of them was checked by eye when the change was made.
+ * The pass runs LAST, on the DOM, after the linkifier: an element that already carries
+ * `dir="auto"` re-resolves its direction on every insertion under it, which made a
+ * code-only or path-only document quadratic. Two tests below pin that order.
+ *
+ * jsdom does not resolve `dir="auto"`, so this pins the attributes the browser acts on and
+ * the order, never the cost; what Chromium makes of them was measured when the change was
+ * made.
  *
  * Drives the SHIPPING artifacts (vendored `marked`, vendored DOMPurify + `sanitize-html.js`,
  * `constants.js` and `app.js`) in a `vm` with a jsdom document, the technique from
@@ -54,6 +60,8 @@ function loadShippingMarked(): { parse: (src: string, opts?: unknown) => string 
 type RenderApp = {
   _renderMarkdown(text: string, opts?: { breaks?: boolean }): string;
   _linkifyFilePaths(root: unknown): void;
+  _applyBlockDirection(root: unknown): void;
+  _buildResponseViewerMessage(text: string, role: string, agentLabel: string): HTMLElement;
 };
 
 function loadCodemanAppClass(): { prototype: RenderApp } {
@@ -86,11 +94,13 @@ function loadCodemanAppClass(): { prototype: RenderApp } {
 const CodemanApp = loadCodemanAppClass();
 const app = Object.create(CodemanApp.prototype) as RenderApp;
 
-/** Render markdown the way the response viewer does and return the resulting element. */
+/** Render markdown the way both viewers do (pipeline, linkifier, direction pass) and return the element. */
 function render(markdown: string, opts?: { breaks?: boolean }): HTMLElement {
   const root = document.createElement('div');
   root.className = 'rv-text';
   root.innerHTML = app._renderMarkdown(markdown, opts);
+  app._linkifyFilePaths(root);
+  app._applyBlockDirection(root);
   return root as unknown as HTMLElement;
 }
 
@@ -171,7 +181,6 @@ describe('response viewer right-to-left text (#715)', () => {
 
   it('pins a linkified file path left to right, so it does not decide the sentence direction', () => {
     const root = render('فایل /home/user/project/config.json را باز کن.');
-    app._linkifyFilePaths(root);
 
     const link = root.querySelector('a.rv-path');
     expect(link?.textContent).toBe('/home/user/project/config.json');
@@ -180,10 +189,35 @@ describe('response viewer right-to-left text (#715)', () => {
 
   it('does not pin a markdown link label, which is prose in the sentence language', () => {
     const root = render('[گزارش حادثه](/tmp/report.json)');
-    app._linkifyFilePaths(root);
 
     const link = root.querySelector('a.rv-path-link');
     expect(link, 'a path-target link takes the rv-path shape').not.toBeNull();
     expect(link?.hasAttribute('dir')).toBe(false);
+  });
+
+  it('never puts dir="auto" in the rendered string, where it would make the parse and the linkifier quadratic', () => {
+    // An element carrying dir="auto" re-resolves its direction on every insertion
+    // under it. A document whose letters all sit in `dir` children walks the whole
+    // block each time, which froze the tab for seconds on an all-code list.
+    const html = app._renderMarkdown('- `f1`\n- `f2`\n\nسلام\n\n| ستون |\n| --- |\n| الف |');
+
+    expect(html).not.toContain('dir="auto"');
+    expect(html).toContain('<code dir="ltr">f1</code>');
+  });
+
+  it('gives a Response Viewer message its direction only after the linkifier finished', () => {
+    const probe = Object.create(app) as RenderApp;
+    let autoDuringLinkify = -1;
+    probe._linkifyFilePaths = (root) => {
+      autoDuringLinkify = (root as Element).querySelectorAll('[dir="auto"]').length;
+      app._linkifyFilePaths(root);
+    };
+
+    const message = probe._buildResponseViewerMessage('/home/user/project/config.json را ببین.', 'assistant', 'Claude');
+
+    expect(autoDuringLinkify).toBe(0);
+    const para = message.querySelector('.rv-text p');
+    expect(dirOf(para)).toBe('auto');
+    expect(dirOf(para?.querySelector('a.rv-path') ?? null)).toBe('ltr');
   });
 });
