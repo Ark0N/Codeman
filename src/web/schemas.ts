@@ -867,6 +867,8 @@ const RemoteCommandOverridesSchema = z
     pi: z.string().min(1).max(300).optional(),
     grok: z.string().min(1).max(300).optional(),
     deepseek: z.string().min(1).max(300).optional(),
+    omp: z.string().min(1).max(300).optional(),
+    copilot: z.string().min(1).max(300).optional(),
   })
   .strict()
   .optional();
