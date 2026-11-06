@@ -237,6 +237,29 @@ describe('App Settings modal structure', () => {
     );
   });
 
+  it('never sells Allow network access as leaving the sandbox in charge', () => {
+    // Measured 2026-11-06 on codex 0.162.0: with the network open, a command the sandbox
+    // refused (`touch` outside the workspace) landed by asking Codeman's API for a shell
+    // session, and from inside a Codeman pane it did so with a password set, because a pane
+    // inherits CODEMAN_PASSWORD. So "the sandbox and approvals stay on" is false comfort.
+    const modal = settingsModal();
+    const start = modal.indexOf('data-search="codex network access');
+    expect(start).toBeGreaterThan(-1);
+    const row = modal.slice(start, modal.indexOf('id="appSettingsCodexNetworkAccess"', start));
+    const read = (path: string) => readFileSync(resolve(import.meta.dirname, '..', path), 'utf8');
+    const referenceRow = read('docs/wiki/Settings-Reference.md')
+      .split('\n')
+      .find((line) => line.startsWith('| Allow network access'));
+    expect(referenceRow).toBeDefined();
+    const safetyClaim = /sandbox and approvals? (prompts )?stay on|keeps? (Codex's |the )?sandbox and approval/i;
+    for (const text of [row, referenceRow!, read('docs/wiki/Codeman-Skill.md'), read('skills/codeman/SKILL.md')]) {
+      expect(text).not.toMatch(safetyClaim);
+    }
+    for (const text of [row, referenceRow!, read('docs/wiki/Security.md')]) {
+      expect(text).toContain("Codeman's API");
+    }
+  });
+
   it('has retired the modal-tab chrome everywhere, not just here', () => {
     // Session Options and Add Case moved onto this same `set-*` surface, so the
     // old tab classes have no users left. A reappearance means a modal drifted

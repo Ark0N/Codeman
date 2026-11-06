@@ -77,17 +77,20 @@ retrying.
   can ask the user to run a command outside its sandbox (Codex can), re-run **the same
   command** once that way, never a different one; if the user declines, stop. For lasting
   access in Codex, the user turns on **Allow network access** (Codeman App Settings,
-  Codex) and starts a new Codex session: it opens the network wherever Codex runs the
-  folder workspace-write, and keeps the sandbox and approvals. It does not change the
-  sandbox mode: a folder Codex runs read-only keeps the network closed, so each call
-  still needs the per-command approval (or `/permissions`). **Bypass approvals and
-  sandbox** works everywhere but drops the sandbox and approvals.
+  Codex) and starts a new Codex session. Tell them what it costs first: it applies to
+  every new local Codex session, and commands in Codex's sandbox can then call Codeman's
+  API, which can start a session outside the sandbox with no approval prompt, even when
+  a password is set. It opens the network wherever Codex runs the folder workspace-write
+  and does not change the sandbox mode: a folder Codex runs read-only keeps the network
+  closed, so each call still needs the per-command approval (or `/permissions`).
+  **Bypass approvals and sandbox** works everywhere but drops the sandbox and approvals.
 - **`"${CURL[@]}" -o /dev/null -w '%{http_code}' "$API/api/v1/sessions/$SELF"` prints
   `404`.** The commands you run do not carry this session's environment: Codex can run them in a shared background
   process another session started, so `$CODEMAN_SESSION_ID` (and with it `$SELF` and
-  the delete guard) is that session's. Delete nothing; tell the user. Codeman starts
-  Codex 0.162 and later with `--no-daemon` to prevent this, so seeing it means an older
-  Codex or a server that predates that.
+  the delete guard) is that session's. Delete nothing; tell the user. Codeman starts a
+  local Codex 0.162 or later with `--no-daemon` to prevent this, so seeing it means a
+  Codex started without that flag: an older Codex, a local session whose version Codeman
+  could not read, a remote or Docker session, or a server that predates it.
 
 ⚠️ **Your shell state does not survive between tool calls.** Each Bash call starts a
 fresh shell, so `$API`, `$SELF`, the `CURL` array and `delete_session` are all gone by

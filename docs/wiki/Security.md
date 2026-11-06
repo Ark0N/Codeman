@@ -99,6 +99,12 @@ Stated plainly, because a security page that only lists strengths is not useful:
   bypass requires a secret unconditionally when auth is on.
 - **The agent CLIs have their own trust models.** Pi's project trust executes repo-local
   TypeScript, for instance. See [Agent CLIs](Agent-CLIs).
+- **Allow network access takes Codex's sandbox out of the picture.** The setting (App
+  Settings, Codex, off by default) lets commands in Codex's sandbox call Codeman's API,
+  which can start a session outside the sandbox with no approval prompt. A password does
+  not stop this, because a session inherits the server's password. It applies to every new
+  local Codex session, so a prompt-injected command in any of them can run anything you
+  can. Leave it off unless you trust what those sessions run.
 
 ## Privacy
 

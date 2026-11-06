@@ -669,9 +669,13 @@ const CODEX: CliEntry = {
           { flag: '--dangerously-bypass-approvals-and-sandbox', when: { param: 'bypassApprovals', is: true } },
           // Lets commands in codex's workspace-write sandbox open network connections,
           // Codeman's own API on loopback included (the codeman skill's curl calls fail
-          // with "couldn't connect" without it). Narrower than the bypass above: the
-          // sandbox and the approval prompts stay. Measured on 0.162.0 (`codex sandbox` and
+          // with "couldn't connect" without it). Measured on 0.162.0 (`codex sandbox` and
           // a live pane): loopback stays blocked under workspace-write until this is set.
+          // ⚠️ Not a safe middle ground below the bypass above: that API can start a session
+          // outside the sandbox with no approval prompt, so codex's sandbox no longer contains
+          // a command once this is on. Measured 2026-11-06: a `touch` the sandbox refused
+          // landed through POST /api/sessions, and with a password set too from inside a
+          // Codeman pane, which inherits CODEMAN_PASSWORD by design.
           // ⚠️ Workspace-write ONLY: a folder codex runs read-only (one it does not trust,
           // such as a fresh non-git case) keeps the network closed and asks per command.
           // Deliberately not paired with `--sandbox workspace-write` (owner decision,
