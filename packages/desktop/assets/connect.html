@@ -275,31 +275,46 @@
   // tab: 'local' (This Mac) or 'remote' (Another machine). askedFrom: the tab
   // the connect under way was asked from, where its answer belongs. local: the
   // last This Mac status from the app. wait: set while an install runs in
-  // Terminal and this page polls for the server it brings up.
+  // Terminal and this page polls for the server it brings up. reopen: a
+  // connect to this Mac was refused, so open it if it turns out to be starting.
+  // startingLooks: how often the page has looked again at a starting server.
   var state = {
     servers: [], busy: false, lastUrl: '', startUrl: '', suggestion: '',
     tab: 'local', askedFrom: 'local', local: null, localChecking: false, opening: false,
-    wait: null, waitTimer: 0, stoppedWaiting: false
+    wait: null, waitTimer: 0, stoppedWaiting: false,
+    reopen: false, startingLooks: 0, startingTimer: 0
   };
   // While an install runs: how often to look, how long a finished install may
   // take to answer before Start is offered, and when to stop looking.
   var WAIT_POLL_MS = 3000;
   var WAIT_START_GRACE_MS = 90 * 1000;
   var WAIT_MAX_MS = 30 * 60 * 1000;
+  // A server that is still starting: how often to look again, and how many times.
+  var STARTING_POLL_MS = 1000;
+  var STARTING_MAX_LOOKS = 20;
   // What the app takes in one message, in UTF-8 bytes (MAX_URL_LEN and
   // MAX_FIELD_LEN in policy.rs). It drops a longer one without an answer, so
   // the page has to be the one that says so.
   var MAX_URL = 4096;
   var MAX_FIELD = 1024;
-  var utf8 = new TextEncoder();
-  function tooLong(text, max) { return utf8.encode(text).length > max; }
+  function tooLong(text, max) {
+    var bytes = 0;
+    for (var i = 0; i < text.length; i++) {
+      var c = text.charCodeAt(i);
+      if (c < 0x80) bytes += 1;
+      else if (c < 0x800) bytes += 2;
+      else if (c >= 0xd800 && c < 0xdc00) { bytes += 4; i++; } // a surrogate pair: one character
+      else bytes += 3;
+    }
+    return bytes > max;
+  }
 
   function post(msg) { try { window.ipc.postMessage(JSON.stringify(msg)); } catch (e) { /* not in the app */ } }
 
   function setStatus(kind, text, detail) {
     els.statusRow.hidden = !text;
     // In a small window the line may be below the fold: bring it into view.
-    if (text) els.statusRow.scrollIntoView({ block: 'nearest' });
+    if (text && els.statusRow.scrollIntoView) els.statusRow.scrollIntoView({ block: 'nearest' });
     els.status.className = kind || '';
     els.spinner.hidden = kind !== 'busy';
     els.statusText.textContent = text || '';
@@ -353,14 +368,16 @@
   }
 
   // The address as the app normalizes it (policy::normalize_server_url):
-  // http:// by default, https:// for a .ts.net name, no query or fragment, a
-  // trailing slash. Only used to tell whether two addresses are one server.
+  // http:// by default, https:// for a .ts.net name without a port, no query
+  // or fragment, a trailing slash. Only used to tell whether two addresses
+  // are one server.
   function normalize(raw) {
     var s = String(raw || '').trim();
     if (!s) return '';
     if (s.indexOf('://') < 0) {
       var name = s.split(/[\/:]/)[0].toLowerCase();
-      s = (/\.ts\.net$/.test(name) ? 'https' : 'http') + '://' + s;
+      var tailscaleServe = /\.ts\.net$/.test(name) && s.charAt(name.length) !== ':';
+      s = (tailscaleServe ? 'https' : 'http') + '://' + s;
     }
     try {
       var u = new URL(s);
@@ -497,6 +514,7 @@
       showLogin();
     } else if (asked === 'local') {
       // Opening the Codeman on this Mac failed: look at it again.
+      state.reopen = o.kind === 'refused';
       selectTab('local');
       // selectTab starts the look itself when there has been none yet.
       if (!state.localChecking) checkLocal('login');
@@ -618,6 +636,11 @@
       title = 'Codeman is being installed in Terminal.';
       detail = 'Finish the installer there, then Check again.';
       show.check = true;
+    } else if (s.state === 'starting') {
+      dot = 'busy';
+      title = 'Codeman is starting on this Mac…';
+      detail = 'It will answer at ' + s.url + ' in a moment.';
+      show.check = true;
     } else if (s.state === 'runningElsewhere') {
       dot = 'warn';
       title = 'A Codeman server is already running on this Mac.';
@@ -704,7 +727,34 @@
       onWaitStatus(state.local || {});
       return;
     }
+    if (followStarting(s)) return;
     renderLocal();
+  }
+
+  // A Codeman that is still starting (its process runs, but listens nowhere
+  // yet: the first seconds after login, a restart): look again every second
+  // for a while. Once it is up, open it if a connect to this Mac was refused
+  // on the way here, which is what the user had asked for. True when it opened.
+  function followStarting(s) {
+    clearTimeout(state.startingTimer);
+    if (s && s.state === 'starting') {
+      if (state.startingLooks < STARTING_MAX_LOOKS) {
+        state.startingLooks++;
+        state.startingTimer = setTimeout(function () {
+          if (state.local && state.local.state === 'starting' && !state.wait) checkLocal('quick');
+        }, STARTING_POLL_MS);
+      }
+      return false;
+    }
+    var up = !!s && (s.state === 'running' || s.state === 'needsLogin');
+    var open = up && state.reopen && state.startingLooks > 0 && state.tab === 'local' && !state.busy;
+    state.startingLooks = 0;
+    state.reopen = false;
+    if (open) {
+      renderLocal();
+      openLocal();
+    }
+    return open;
   }
 
   // Point the Another machine form at `url` with only the login saved for it:
@@ -968,7 +1018,9 @@
     if (ev.key === 'Escape' && !els.cancel.hidden) { ev.preventDefault(); els.cancel.click(); return; }
     if (ev.key !== 'Enter' || state.tab !== 'local') return;
     if (ev.target && ev.target.closest && ev.target.closest('button, a, input, summary')) return;
-    var main = [els.localOpen, els.localStart].filter(function (b) { return !b.hidden && !b.disabled; })[0];
+    // offsetParent: really on screen, whatever hides it (its own `hidden`, or
+    // a container that is not shown).
+    var main = [els.localOpen, els.localStart].filter(function (b) { return b.offsetParent && !b.disabled; })[0];
     if (main) { ev.preventDefault(); main.click(); }
   });
   els.localOpen.addEventListener('click', openLocal);

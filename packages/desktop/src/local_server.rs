@@ -107,6 +107,10 @@ impl From<Output> for Run {
     fn from(out: Output) -> Self {
         let mut output = out.stdout;
         if !out.stderr.trim().is_empty() {
+            // On a line of its own, also when stdout ended without a newline.
+            if !output.is_empty() && !output.ends_with('\n') {
+                output.push('\n');
+            }
             output.push_str(&out.stderr);
         }
         Run {
@@ -151,10 +155,16 @@ fn exec(mut cmd: Command, deadline: Instant) -> Result<Output, String> {
     pump(child.stdout.take(), 0, tx.clone());
     pump(child.stderr.take(), 1, tx);
 
+    // A login shell usually answers within tens of milliseconds: look often
+    // at first, then back off.
+    let mut nap = Duration::from_millis(5);
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(100)),
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(nap);
+                nap = (nap * 2).min(Duration::from_millis(100));
+            }
             Ok(None) => {
                 let _ = child.kill();
                 let _ = child.wait();
@@ -265,6 +275,16 @@ fn capture_env(
     }))
 }
 
+/// Run `cmd` in the home folder, where a terminal and the LaunchAgent start
+/// Codeman too. The server keeps the directory it was started in and uses it
+/// as the default for a session that names none; an app opened from the Finder
+/// or the Dock runs in `/`.
+fn in_home(cmd: &mut Command) {
+    if let Some(home) = dirs::home_dir() {
+        cmd.current_dir(home);
+    }
+}
+
 /// `script` (SCRIPT or FIND_SCRIPT) under `/bin/sh` with exactly the captured
 /// environment, so the server gets the profile's PATH, API keys and CODEMAN_*
 /// settings and nothing of launchd's bare one.
@@ -272,6 +292,7 @@ fn run_with_env(script: &str, env: &[(String, String)], args: &[String], deadlin
     let mut cmd = Command::new("/bin/sh");
     cmd.arg("-c").arg(script).arg("codeman-desktop").args(args);
     cmd.env_clear().envs(env.iter().map(|(k, v)| (k, v)));
+    in_home(&mut cmd);
     exec(cmd, deadline).map(Run::from)
 }
 
@@ -289,6 +310,7 @@ fn run_in_shell(
         cmd.arg("-i");
     }
     cmd.arg("-c").arg(script).arg("codeman-desktop").args(args);
+    in_home(&mut cmd);
     exec(cmd, deadline).map(Run::from)
 }
 
@@ -398,6 +420,26 @@ mod tests {
     fn tail_of_output() {
         assert_eq!(last_lines("a\n\nb\nc\n", 2), "b\nc");
         assert_eq!(last_lines("", 3), "");
+    }
+
+    #[test]
+    fn stderr_starts_on_a_line_of_its_own() {
+        let said = |stdout: &str, stderr: &str| {
+            Run::from(Output {
+                code: Some(1),
+                stdout: stdout.into(),
+                stderr: stderr.into(),
+            })
+            .output
+        };
+        // stdout that ended without a newline used to be glued to stderr.
+        assert_eq!(
+            said("Starting Codeman", "Error: port 3000 is in use\n"),
+            "Starting Codeman\nError: port 3000 is in use"
+        );
+        assert_eq!(said("Starting\n", "Error\n"), "Starting\nError");
+        assert_eq!(said("", "Error\n"), "Error");
+        assert_eq!(said("Started\n", "  \n"), "Started");
     }
 
     #[test]

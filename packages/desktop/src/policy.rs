@@ -61,9 +61,14 @@ impl Phase {
     }
 }
 
-/// Turn what the user typed into a server URL: scheme added when missing
-/// (`https` for a tailnet `.ts.net` name, `http` otherwise), query and fragment
-/// dropped, and the path ending in `/` so `api/status` joins below a base path.
+/// Turn what the user typed into a server URL: scheme added when missing,
+/// query and fragment dropped, and the path ending in `/` so `api/status`
+/// joins below a base path. The scheme is `https` for a tailnet `.ts.net`
+/// name on its own, which is `tailscale serve`, and `http` otherwise. A
+/// `.ts.net` name with a port is Codeman's own listener, which speaks plain
+/// http: guessing https there ended in a TLS error with no way forward, while
+/// the other mistake (http to an https port) gets a button for the https
+/// address (ProbeOutcome::MaybeHttps).
 pub fn normalize_server_url(input: &str) -> Result<Url, String> {
     let s = input.trim();
     if s.is_empty() {
@@ -75,8 +80,8 @@ pub fn normalize_server_url(input: &str) -> Result<Url, String> {
     let with_scheme = if s.contains("://") {
         s.to_string()
     } else {
-        let host = s.split(['/', ':']).next().unwrap_or("");
-        let scheme = if host.to_ascii_lowercase().ends_with(".ts.net") {
+        let (host, rest) = s.split_at(s.find(['/', ':']).unwrap_or(s.len()));
+        let scheme = if host.to_ascii_lowercase().ends_with(".ts.net") && !rest.starts_with(':') {
             "https"
         } else {
             "http"
@@ -112,9 +117,15 @@ pub fn same_origin(a: &Url, b: &Url) -> bool {
 /// Basic `Authorization` header goes only to such URLs, so another app sharing
 /// the origin (`/grafana/` next to `/codeman/`) never receives the password.
 /// `server.path()` always ends in `/` (normalize_server_url), so `/codemanx/`
-/// is not below `/codeman/`.
+/// is not below `/codeman/`. The part below the base is decoded once, as
+/// is_popout_target does, and may hold no `.` or `..` segment: the url crate
+/// resolves a literal `..`, but `..%2Fgrafana/` reaches a proxy that decodes
+/// before it routes as a way out of the base. A path that does not decode is
+/// not below it either (fail closed).
 pub fn within_base(url: &Url, server: &Url) -> bool {
-    same_origin(url, server) && url.path().starts_with(server.path())
+    same_origin(url, server)
+        && below_base_decoded(url, server)
+            .is_some_and(|rest| !rest.split(['/', '\\']).any(|segment| segment == "." || segment == ".."))
 }
 
 /// A server on this machine: `localhost`, `127.0.0.0/8` or `::1`.
@@ -253,7 +264,7 @@ fn popout_kind(url: &Url, server: &Url) -> Option<Popout> {
         {
             Some(Popout::File)
         }
-        ["api", "sessions", id, "folders", folder, "files", name, ..]
+        ["api", "sessions", id, "folders", folder, "files", name, "raw" | "preview"]
             if !id.is_empty() && !folder.is_empty() && !name.is_empty() =>
         {
             Some(Popout::File)
@@ -779,6 +790,26 @@ mod tests {
             "https://box.tailf80371.ts.net/"
         );
         assert_eq!(
+            normalize_server_url("Box.Tailf80371.TS.NET/codeman").unwrap().as_str(),
+            "https://box.tailf80371.ts.net/codeman/"
+        );
+        // With a port it is Codeman's own listener, not tailscale serve.
+        assert_eq!(
+            normalize_server_url("box.tailf80371.ts.net:3000").unwrap().as_str(),
+            "http://box.tailf80371.ts.net:3000/"
+        );
+        assert_eq!(
+            normalize_server_url("box.tailf80371.ts.net:8443/x").unwrap().as_str(),
+            "http://box.tailf80371.ts.net:8443/x/"
+        );
+        // A scheme that was typed is never second-guessed.
+        assert_eq!(
+            normalize_server_url("https://box.tailf80371.ts.net:8443")
+                .unwrap()
+                .as_str(),
+            "https://box.tailf80371.ts.net:8443/"
+        );
+        assert_eq!(
             normalize_server_url("https://host/codeman").unwrap().as_str(),
             "https://host/codeman/"
         );
@@ -1175,6 +1206,13 @@ mod tests {
         assert!(!ok("http://127.0.0.1:3000/api/sessions//file-raw"));
         assert!(!ok("http://127.0.0.1:3000/api/sessions/s1/attachments/att1/delete"));
         assert!(!ok("http://127.0.0.1:3000/api/sessions/s1/folders/f1/files/"));
+        assert!(!ok("http://127.0.0.1:3000/api/sessions/s1/folders/f1/files/a.png"));
+        assert!(!ok(
+            "http://127.0.0.1:3000/api/sessions/s1/folders/f1/files/a.png/thumbnail"
+        ));
+        assert!(!ok(
+            "http://127.0.0.1:3000/api/sessions/s1/folders/f1/files/a.png/raw/x"
+        ));
         assert!(!ok("http://127.0.0.1:3000/api/download/x"));
         // The picker's other routes list and create folders: never a window.
         assert!(!ok("http://127.0.0.1:3000/api/filesystem/browse?path=%2F"));
@@ -1252,6 +1290,27 @@ mod tests {
         assert!(!within_base(&u("https://host/grafana/"), &srv));
         assert!(!within_base(&u("https://host/"), &srv));
         assert!(!within_base(&u("https://host/codeman/../grafana/"), &srv));
+        // The same way out, spelled so that only a decoder sees it.
+        for escape in [
+            "https://host/codeman/..%2Fgrafana/",
+            "https://host/codeman/..%2fgrafana/x",
+            "https://host/codeman/%2e%2e%2Fgrafana/",
+            "https://host/codeman/..%5Cgrafana/",
+            "https://host/codeman/a/%2E%2E%2F%2E%2E%2Fgrafana/",
+            "https://host/codeman/session/a%zz",
+        ] {
+            assert!(!within_base(&u(escape), &srv), "{escape}");
+            assert!(!challenge_in_scope(&u(escape), &srv), "{escape}");
+        }
+        // Encoded characters that are part of a name stay inside.
+        for inside in [
+            "https://host/codeman/api/sessions/s1/folders/f1/files/50%25.txt/raw",
+            "https://host/codeman/api/sessions/s1/file-raw?path=..%2Fx",
+            "https://host/codeman/session/a%20b",
+            "https://host/codeman/a..b/c",
+        ] {
+            assert!(within_base(&u(inside), &srv), "{inside}");
+        }
         assert!(!within_base(&u("http://host/codeman/"), &srv));
         assert!(!within_base(&u("https://other/codeman/"), &srv));
         let root = u("http://127.0.0.1:3000/");

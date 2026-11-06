@@ -316,16 +316,17 @@ fn parse_ps(text: &str) -> Vec<(u32, String)> {
 /// `src/index.ts web`), not one of its short-lived control commands.
 pub fn is_codeman_server(command: &str) -> bool {
     let words: Vec<&str> = command.split_whitespace().collect();
-    let entry = words.iter().position(|w| {
+    let is_entry = |w: &str| {
         let name = w.rsplit('/').next().unwrap_or(w);
         w.ends_with("dist/index.js") || w.ends_with("src/index.ts") || name == "codeman" || name == "aicodeman"
-    });
-    match entry {
-        Some(i) => {
-            words.get(i + 1) == Some(&"web") && !words[i + 1..].iter().any(|w| matches!(*w, "--stop" | "--status"))
-        }
-        None => false,
-    }
+    };
+    // Any entry word that `web` follows: an earlier word may only look like
+    // one (a folder named codeman in `tsx watch --cwd ~/codeman src/index.ts web`).
+    (0..words.len()).any(|i| {
+        is_entry(words[i])
+            && words.get(i + 1) == Some(&"web")
+            && !words[i + 1..].iter().any(|w| matches!(*w, "--stop" | "--status"))
+    })
 }
 
 /// Whether a command line is an install the app started on this Mac (the
@@ -431,9 +432,8 @@ fn serves_loopback_port(found: &[Listener], port: u16) -> bool {
 /// all-interfaces bind, else its own address.
 fn listener_url(l: &Listener) -> Option<Url> {
     let host = match l.host.as_str() {
-        "*" | "0.0.0.0" | "127.0.0.1" => "127.0.0.1".to_string(),
-        h if h.starts_with('[') => h.to_string(),
-        h => h.to_string(),
+        "*" | "0.0.0.0" => "127.0.0.1",
+        h => h,
     };
     Url::parse(&format!("http://{host}:{}/", l.port)).ok()
 }
@@ -446,6 +446,9 @@ pub enum LocalState {
     Running,
     /// Codeman answers but wants a login the app does not have.
     NeedsLogin,
+    /// A Codeman server of this user runs but listens nowhere yet: it is
+    /// still starting (the LaunchAgent at login, a restart).
+    Starting,
     /// A Codeman server of this user runs, but not at an address the app can
     /// open (bound to one network address, say): see `elsewhere`.
     RunningElsewhere,
@@ -483,6 +486,33 @@ pub struct LocalStatus {
     pub elsewhere: Vec<String>,
     /// The probe's outcome, for the connect page's explanations.
     pub outcome: ProbeOutcome,
+}
+
+/// Whether the probe got an answer from a Codeman server, logged in or not.
+fn answers(outcome: &ProbeOutcome) -> bool {
+    matches!(
+        outcome,
+        ProbeOutcome::Ok { .. }
+            | ProbeOutcome::PasswordChangeRequired
+            | ProbeOutcome::NeedsLogin
+            | ProbeOutcome::BadCredentials
+            | ProbeOutcome::RateLimited { .. }
+    )
+}
+
+/// What the This Mac tab shows for what `inspect` found. `server_runs`: one of
+/// this user's Codeman server processes exists. `server_listens`: one of them
+/// has a listening socket. `installed`: Codeman is on this Mac.
+fn local_state(outcome: &ProbeOutcome, server_runs: bool, server_listens: bool, installed: bool) -> LocalState {
+    match outcome {
+        ProbeOutcome::Ok { .. } | ProbeOutcome::PasswordChangeRequired => LocalState::Running,
+        _ if answers(outcome) => LocalState::NeedsLogin,
+        ProbeOutcome::Refused if server_runs && !server_listens => LocalState::Starting,
+        ProbeOutcome::Refused if server_runs => LocalState::RunningElsewhere,
+        ProbeOutcome::Refused if installed => LocalState::Stopped,
+        ProbeOutcome::Refused => LocalState::NotInstalled,
+        _ => LocalState::Other,
+    }
 }
 
 /// How hard `inspect` looks for an installed Codeman when nothing answers.
@@ -552,20 +582,13 @@ pub fn inspect(depth: Depth) -> LocalStatus {
 
     let app = home.join(".codeman/app");
     let install_complete = app.join(".install-complete").is_file();
-    let answering = match &outcome {
-        ProbeOutcome::Ok { .. } | ProbeOutcome::PasswordChangeRequired => Some(LocalState::Running),
-        ProbeOutcome::NeedsLogin | ProbeOutcome::BadCredentials | ProbeOutcome::RateLimited { .. } => {
-            Some(LocalState::NeedsLogin)
-        }
-        _ => None,
-    };
     // Something else on Codeman's port (a dev server on 3000, say) says
     // nothing about whether Codeman is installed, so look either way.
     let on_disk = install_complete
         || app.join("dist/index.js").is_file()
         || agent_path(&home).is_file()
         || daemon_path().is_file();
-    let installed = answering.is_some()
+    let installed = answers(&outcome)
         || !servers.is_empty()
         || on_disk
         || match depth {
@@ -573,13 +596,7 @@ pub fn inspect(depth: Depth) -> LocalStatus {
             Depth::Login => local_server::installed(false),
             Depth::Interactive => local_server::installed(true),
         };
-    let state = match (answering, &outcome) {
-        (Some(state), _) => state,
-        (None, ProbeOutcome::Refused) if !servers.is_empty() => LocalState::RunningElsewhere,
-        (None, ProbeOutcome::Refused) if installed => LocalState::Stopped,
-        (None, ProbeOutcome::Refused) => LocalState::NotInstalled,
-        (None, _) => LocalState::Other,
-    };
+    let state = local_state(&outcome, !servers.is_empty(), !found.is_empty(), installed);
     if state != LocalState::RunningElsewhere {
         elsewhere.clear();
     }
@@ -696,7 +713,7 @@ fn start_launch_agent(port: u16) -> Result<String, String> {
         if !port_free(port) {
             return Ok(format!("launchd started Codeman ({SERVICE_LABEL})."));
         }
-        std::thread::sleep(Duration::from_millis(500));
+        std::thread::sleep(Duration::from_millis(100));
     }
     Err("launchd started Codeman, but it did not answer within 30 seconds. Its log is /tmp/codeman.log for an install.sh setup.".into())
 }
@@ -1259,6 +1276,50 @@ mod tests {
     }
 
     #[test]
+    fn this_mac_state_for_what_was_found() {
+        let ok = ProbeOutcome::Ok {
+            version: "1.48.0".into(),
+        };
+        // Whatever else is true, a Codeman that answers is what the tab shows.
+        for (runs, listens, installed) in [(false, false, false), (true, true, true), (true, false, false)] {
+            assert_eq!(local_state(&ok, runs, listens, installed), LocalState::Running);
+            assert_eq!(
+                local_state(&ProbeOutcome::PasswordChangeRequired, runs, listens, installed),
+                LocalState::Running
+            );
+            for login in [
+                ProbeOutcome::NeedsLogin,
+                ProbeOutcome::BadCredentials,
+                ProbeOutcome::RateLimited {
+                    sent_credentials: false,
+                    retry_after_secs: None,
+                },
+            ] {
+                assert_eq!(local_state(&login, runs, listens, installed), LocalState::NeedsLogin);
+            }
+        }
+        // Nothing answers. A server process with no socket yet is starting,
+        // which comes before "runs somewhere else": the app must not send the
+        // user to another address for a server that is two seconds from up.
+        let refused = ProbeOutcome::Refused;
+        assert_eq!(local_state(&refused, true, false, true), LocalState::Starting);
+        assert_eq!(local_state(&refused, true, false, false), LocalState::Starting);
+        assert_eq!(local_state(&refused, true, true, true), LocalState::RunningElsewhere);
+        assert_eq!(local_state(&refused, false, false, true), LocalState::Stopped);
+        assert_eq!(local_state(&refused, false, false, false), LocalState::NotInstalled);
+        // Something else holds the port, or the look itself failed.
+        for other in [
+            ProbeOutcome::NotCodeman { status: 404 },
+            ProbeOutcome::Timeout,
+            ProbeOutcome::MaybeHttps,
+        ] {
+            assert_eq!(local_state(&other, true, true, true), LocalState::Other);
+            assert_eq!(local_state(&other, false, false, false), LocalState::Other);
+        }
+        assert!(answers(&ProbeOutcome::BadCredentials) && !answers(&refused));
+    }
+
+    #[test]
     fn processes_and_listeners() {
         let ps = "  101 /opt/homebrew/bin/node /Users/k/.codeman/app/dist/index.js web\n\
                   202 node /opt/homebrew/bin/codeman web --port 4000\n\
@@ -1271,6 +1332,15 @@ mod tests {
                   909 bash /var/folders/x/T/codeman-install.Ab12Cd --local --service --port 3001\n\
                   1001 /bin/bash /var/folders/x/T/install-codeman-remote-55-1.command\n\
                   garbage line\n";
+        // A folder named like the command comes before the real entry point.
+        assert!(is_codeman_server(
+            "node /x/tsx/cli.mjs watch --cwd /Users/k/codeman src/index.ts web"
+        ));
+        assert!(is_codeman_server(
+            "node --watch-path /Users/k/codeman /Users/k/codeman/src/index.ts web --port 3001"
+        ));
+        assert!(!is_codeman_server("node /Users/k/codeman/scripts/build.mjs web"));
+        assert!(!is_codeman_server("/opt/homebrew/bin/codeman attach web"));
         let procs = parse_ps(ps);
         assert_eq!(
             procs[0],

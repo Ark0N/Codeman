@@ -60,6 +60,9 @@ const DEFAULT_SIZE: (f64, f64) = (1280.0, 820.0);
 const POPOUT_SIZE: (f64, f64) = (960.0, 680.0);
 const MIN_SIZE: (f64, f64) = (480.0, 360.0);
 const MAX_POPOUTS: usize = 24;
+/// How far a pop-out opens down and to the right of the window in use, per
+/// pop-out already open (it starts over after eight).
+const POPOUT_STEP: f64 = 28.0;
 const SAVE_DEBOUNCE: Duration = Duration::from_secs(1);
 /// How long a server load may take to commit before the app gives up on it
 /// and brings the connect page back.
@@ -245,7 +248,10 @@ struct App {
     /// aside, in which case it must not be overwritten.
     config_path: Option<PathBuf>,
     config_dirty: bool,
-    last_save: Instant,
+    /// The settings are written SAVE_DEBOUNCE after this: the last write, or
+    /// the last move or resize of the main window, so a drag writes the file
+    /// once when it ends, not once a second while it goes on.
+    save_held_since: Instant,
     /// Where the main window is in reaching a server. Shared with the web view
     /// handlers, which run on this same thread.
     phase: Rc<RefCell<Phase>>,
@@ -322,7 +328,7 @@ fn main() {
 
     let (window, wants_fullscreen) =
         create_main_window(&event_loop, &config).unwrap_or_else(|e| fatal(&format!("Could not open a window: {e}")));
-    let webview = build_webview(&window, true, Load::ConnectPage { manual: false }, &proxy, &phase)
+    let webview = build_webview(&window, true, true, Load::ConnectPage { manual: false }, &proxy, &phase)
         .unwrap_or_else(|e| fatal(&format!("Could not create the web view: {e}")));
     #[cfg(target_os = "macos")]
     macos::install(&webview);
@@ -346,7 +352,7 @@ fn main() {
         config,
         config_path,
         config_dirty: false,
-        last_save: Instant::now(),
+        save_held_since: Instant::now(),
         phase,
         loading_deadline: None,
         auth: None,
@@ -482,21 +488,21 @@ fn build_menu(config: &Config) -> muda::Result<AppMenu> {
     })
 }
 
+/// A display's whole area in points (the menu bar and the Dock are inside it).
+fn display_rect(monitor: &tao::monitor::MonitorHandle) -> Rect {
+    let sf = monitor.scale_factor();
+    let p = monitor.position().to_logical::<f64>(sf);
+    let s = monitor.size().to_logical::<f64>(sf);
+    Rect {
+        x: p.x,
+        y: p.y,
+        width: s.width,
+        height: s.height,
+    }
+}
+
 fn monitors(target: &EventLoopWindowTarget<UserEvent>) -> Vec<Rect> {
-    target
-        .available_monitors()
-        .map(|m| {
-            let sf = m.scale_factor();
-            let p = m.position().to_logical::<f64>(sf);
-            let s = m.size().to_logical::<f64>(sf);
-            Rect {
-                x: p.x,
-                y: p.y,
-                width: s.width,
-                height: s.height,
-            }
-        })
-        .collect()
+    target.available_monitors().map(|m| display_rect(&m)).collect()
 }
 
 /// The main window, and whether it was asked into full screen (App's
@@ -519,17 +525,10 @@ fn create_main_window(
         None => {
             builder = builder.with_inner_size(LogicalSize::new(DEFAULT_SIZE.0, DEFAULT_SIZE.1));
             if let Some(m) = target.primary_monitor() {
-                let sf = m.scale_factor();
-                let p = m.position().to_logical::<f64>(sf);
-                let s = m.size().to_logical::<f64>(sf);
-                let w = DEFAULT_SIZE.0.min(s.width - 40.0);
-                let h = DEFAULT_SIZE.1.min(s.height - 80.0);
+                let f = WindowFrame::first_run(&display_rect(&m), DEFAULT_SIZE, MIN_SIZE);
                 builder = builder
-                    .with_inner_size(LogicalSize::new(w.max(MIN_SIZE.0), h.max(MIN_SIZE.1)))
-                    .with_position(LogicalPosition::new(
-                        p.x + (s.width - w) / 2.0,
-                        p.y + (s.height - h) / 2.0,
-                    ));
+                    .with_inner_size(LogicalSize::new(f.width, f.height))
+                    .with_position(LogicalPosition::new(f.x, f.y));
             }
         }
     }
@@ -610,9 +609,13 @@ fn loaded_on_commit(phase: &Phase, committed: &str) -> Option<Phase> {
     policy::same_origin(&url, server).then(|| Phase::Loaded(server.clone()))
 }
 
+/// `focused`: the web view takes the keyboard and brings the app to the front
+/// (wry's default). False for a window a script opened: it comes up without
+/// pulling the user out of the app they are typing in.
 fn build_webview(
     window: &Window,
     is_main: bool,
+    focused: bool,
     load: Load<'_>,
     proxy: &EventLoopProxy<UserEvent>,
     phase: &Rc<RefCell<Phase>>,
@@ -621,6 +624,7 @@ fn build_webview(
     let mut builder = WebViewBuilder::new()
         .with_initialization_script(assets::HOST_SHIM)
         .with_devtools(true)
+        .with_focused(focused)
         .with_accept_first_mouse(true)
         .with_back_forward_navigation_gestures(false)
         // false = let WebKit take the drop, so Codeman's own HTML5 drop
@@ -787,7 +791,7 @@ impl App {
     /// so it is only decided here, never reset per event.
     fn on_events_cleared(&mut self, control_flow: &mut ControlFlow) {
         let now = Instant::now();
-        if self.config_dirty && now >= self.last_save + SAVE_DEBOUNCE {
+        if self.config_dirty && now >= self.save_held_since + SAVE_DEBOUNCE {
             self.save_config();
         }
         let loading = matches!(*self.phase.borrow(), Phase::Loading(_));
@@ -802,7 +806,7 @@ impl App {
         if matches!(*control_flow, ControlFlow::ExitWithCode(_)) {
             return;
         }
-        let save_due = self.config_dirty.then(|| self.last_save + SAVE_DEBOUNCE);
+        let save_due = self.config_dirty.then(|| self.save_held_since + SAVE_DEBOUNCE);
         let fullscreen_due = self.fullscreen_retry.map(|(due, _)| due);
         *control_flow = match [save_due, self.loading_deadline, fullscreen_due]
             .into_iter()
@@ -1636,14 +1640,33 @@ impl App {
         }
         let opened_url = policy::webkit_safe_url(url);
         let auth = self.auth.clone().filter(|_| policy::within_base(url, &server));
-        let window = match WindowBuilder::new()
+        // tao centres a window that is given no position, so every pop-out
+        // would open exactly on top of the one before. Each one steps off the
+        // window in use instead.
+        let position = self
+            .focused_window_id()
+            .or(Some(self.main_id))
+            .and_then(|id| self.windows.get(&id))
+            .and_then(|w| {
+                // The corner tao's with_position places (see record_main_frame).
+                #[cfg(target_os = "macos")]
+                let corner = w.window.inner_position();
+                #[cfg(not(target_os = "macos"))]
+                let corner = w.window.outer_position();
+                let p = corner.ok()?.to_logical::<f64>(w.window.scale_factor());
+                let step = POPOUT_STEP * (1 + popouts % 8) as f64;
+                Some(LogicalPosition::new(p.x + step, p.y + step))
+            });
+        let mut builder = WindowBuilder::new()
             .with_title(APP_NAME)
             .with_theme(Some(Theme::Dark))
             .with_inner_size(LogicalSize::new(POPOUT_SIZE.0, POPOUT_SIZE.1))
             .with_min_inner_size(LogicalSize::new(MIN_SIZE.0, MIN_SIZE.1))
-            .with_focused(focused)
-            .build(target)
-        {
+            .with_focused(focused);
+        if let Some(position) = position {
+            builder = builder.with_position(position);
+        }
+        let window = match builder.build(target) {
             Ok(window) => window,
             Err(e) => {
                 eprintln!("codeman-desktop: could not open a window: {e}");
@@ -1654,8 +1677,15 @@ impl App {
             url: &opened_url,
             auth: auth.as_deref(),
         };
-        let webview = match build_webview(&window, false, load, &self.proxy, &self.phase) {
-            Ok(webview) => webview,
+        let webview = match build_webview(&window, false, focused, load, &self.proxy, &self.phase) {
+            Ok(webview) => {
+                // Still the one that takes the keys once the user comes to
+                // this window: first responder in its own window only.
+                if !focused {
+                    let _ = webview.focus();
+                }
+                webview
+            }
             Err(e) => {
                 eprintln!("codeman-desktop: could not create a web view: {e}");
                 return false;
@@ -1795,11 +1825,12 @@ impl App {
         if self.config.window != Some(frame) {
             self.config.window = Some(frame);
             self.config_dirty = true;
+            self.save_held_since = Instant::now();
         }
     }
 
     fn save_config(&mut self) {
-        self.last_save = Instant::now();
+        self.save_held_since = Instant::now();
         self.config_dirty = false;
         if let Some(path) = &self.config_path {
             if let Err(e) = self.config.save_to(path) {
