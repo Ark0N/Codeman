@@ -6711,7 +6711,7 @@ Object.assign(CodemanApp.prototype, {
   _keyboardHoldEligible(sessionId = this.activeSessionId) {
     if (this.loadAppSettingsFromStorage?.()?.keyboardHoldsRows === false) return false;
     const session = sessionId ? this.sessions?.get(sessionId) : null;
-    if (!session || session.remote || session.docker || session.cliMouseTracking) return false;
+    if (!session || session.remote || session.docker || session.adopt || session.cliMouseTracking) return false;
     const modes = window.__codemanKeyboardHoldModes;
     return Array.isArray(modes) && modes.includes(session.mode || 'claude');
   },

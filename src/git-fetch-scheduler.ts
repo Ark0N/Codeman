@@ -79,6 +79,8 @@ export interface GitFetchSessionView {
   /** `unknown`, not `boolean`: a session's remote/Docker markers are objects, and the only question here is whether either is set at all. */
   remote?: unknown;
   docker?: unknown;
+  /** Set on a wrapper around a foreign tmux session: its `workingDir` is a neutral folder, never a repository. */
+  adopt?: unknown;
   gitFetchEnabled?: boolean;
   gitFetchIntervalSeconds?: number;
 }
@@ -176,7 +178,7 @@ export class GitFetchScheduler {
       const groups = new Map<string, GroupMember[]>();
       for (const id of this.ports.sessionIds()) {
         const view = this.ports.getSession(id);
-        if (!view || view.remote || view.docker) continue;
+        if (!view || view.remote || view.docker || view.adopt) continue;
         const effective = effectiveGitFetch(view, settings);
         if (!effective.enabled) continue;
         const folder = resolve(view.workingDir);

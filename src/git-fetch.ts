@@ -346,7 +346,7 @@ export interface GitFetchEntry {
 export interface GitFetchReport {
   /** `ok` when at least one repository was fetched (or attempted); the other states are as in the overview. */
   state: 'ok' | 'not-a-repo' | 'unsupported' | 'error';
-  reason?: 'remote' | 'docker';
+  reason?: 'remote' | 'docker' | 'adopted';
   error?: string;
   /** One entry per repository fetched, in the same order the panel lists them. */
   repos: GitFetchEntry[];

@@ -263,6 +263,8 @@ describe('who runs', () => {
     const h = harness([
       VIEW('ssh', { remote: { host: 'x' } }),
       VIEW('docker', { docker: { container: 'c' } }),
+      // A wrapper around a foreign tmux session sits on the neutral `/tmp`, no repository of its own.
+      VIEW('adopted', { adopt: { location: 'local' } }),
       VIEW('local'),
     ]);
     await h.scheduler.tick(0);

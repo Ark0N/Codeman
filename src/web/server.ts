@@ -552,9 +552,10 @@ export class WebServer extends EventEmitter {
     agentExited: (id) => !!this.sessions.get(id)?.paneExit,
     awaitingChoice: (id) => approvalInbox.listPending().some((item) => item.sessionId === id && item.kind !== 'idle'),
     // Remote (ssh) sessions keep their folder on another host, so received files have nowhere local to go.
+    // An adopted session's folder is the neutral wrapper folder, which its agent need not be able to read.
     sessionDir: (sessionId) => {
       const session = this.sessions.get(sessionId);
-      return session && !session.remote ? session.workingDir : undefined;
+      return session && !session.remote && !session.isAdopted ? session.workingDir : undefined;
     },
   });
   private teamWatcher: TeamWatcher = new TeamWatcher();
@@ -2281,6 +2282,9 @@ export class WebServer extends EventEmitter {
   ): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) return;
+    // ⚠️ A link scanned from an adopted pane was printed by a process on another host or in a
+    // container, while confinement here would be to this host's `/tmp`, the wrapper's folder.
+    if (session.isAdopted) return;
     const event =
       source === 'codex-generated'
         ? await registerGeneratedArtifactAttachment({

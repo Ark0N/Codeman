@@ -38,7 +38,7 @@ describe('the boot workspace-hook sweep', () => {
 
   beforeEach(() => {
     applyWorkspaceHooks.mockClear();
-    server = new WebServer({ port: 3197 });
+    server = new WebServer(0);
     (server as unknown as { getWorkspaceHooksEnabled: () => Promise<boolean> }).getWorkspaceHooksEnabled = async () =>
       true;
   });

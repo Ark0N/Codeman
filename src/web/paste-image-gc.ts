@@ -57,7 +57,9 @@ export const DISCORD_RECEIVED_DIR = '.codeman-discord';
  * and is listed, or the uploads of a workspace like `~/.codeman/app` would
  * never be collected), and nothing for a remote (SSH) session, whose
  * workingDir is the remote path and would name a same-named LOCAL directory
- * here. The working directory is a user-chosen path, so it is probed BOUNDED
+ * here, or for an adopted session, whose workingDir is the neutral `/tmp` that
+ * other sessions may really work in (it receives no uploads). The working
+ * directory is a user-chosen path, so it is probed BOUNDED
  * first (#516): one on a mount that stopped answering reads `unknown` and is
  * skipped, never touched. The sweep keeps the probe's stall cap; the delete,
  * acting on one path at the user's request, passes `pastCap`. The check is
@@ -66,10 +68,10 @@ export const DISCORD_RECEIVED_DIR = '.codeman-discord';
  * can.
  */
 export async function uploadDirs(
-  session: { workingDir: string; remote?: unknown },
+  session: { workingDir: string; remote?: unknown; adopt?: unknown },
   probe: PathProbeOptions = {}
 ): Promise<string[]> {
-  if (session.remote) return [];
+  if (session.remote || session.adopt) return [];
   if ((await probePathKind(session.workingDir, probe)) !== 'directory') return [];
   const dataDir = await realDir(getDataDir());
   const dirs: string[] = [];

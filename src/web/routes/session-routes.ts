@@ -1742,6 +1742,13 @@ export function registerSessionRoutes(
         'Custom model endpoints are not supported for remote (SSH) or Docker sessions yet'
       );
     }
+    // Its own check: this restarts the CLI in the pane, and an adopted pane's CLI is not ours to restart.
+    if (session.isAdopted) {
+      return createErrorResponse(
+        ApiErrorCode.INVALID_INPUT,
+        'Custom model endpoints are not available for adopted sessions: Codeman did not start this agent'
+      );
+    }
     if (session.isBusy()) {
       return createErrorResponse(ApiErrorCode.SESSION_BUSY, 'Session is busy');
     }
@@ -3042,7 +3049,13 @@ export function registerSessionRoutes(
    * effort: the tab rename has already happened and must not fail on this.
    */
   async function syncClaudeTitle(session: Session): Promise<void> {
-    if (getCli(session.mode)?.capabilities.transcript !== 'claude-jsonl' || session.remote || session.docker) return;
+    if (
+      getCli(session.mode)?.capabilities.transcript !== 'claude-jsonl' ||
+      session.remote ||
+      session.docker ||
+      session.isAdopted
+    )
+      return;
     try {
       const projectsDir = join(process.env.HOME || '/tmp', '.claude', 'projects');
       const hookPath = ctx.getTranscriptPath(session.id);
@@ -3120,6 +3133,17 @@ export function registerSessionRoutes(
   // The body of GET /api/sessions/:id/last-response, so the Discord bridge reads the same transcript
   // the response viewer does (per-CLI reader, pane fallback) without a second copy of this logic.
   const lastResponseFor = async (session: Session, context?: string) => {
+    // ⚠️ An adopted session has no transcript Codeman can name. Every reader below pairs one by
+    // the id Codeman launched the CLI with or by the session's folder, and neither means anything
+    // here: the CLI chose its own id, and the folder is the neutral `/tmp`, so the newest file for
+    // that folder would be another conversation's answer shown as this one's. Nothing said yet is
+    // the honest answer.
+    if (session.isAdopted) {
+      return context === 'full' || context === 'turn'
+        ? { text: '', timestamp: '', messages: [] }
+        : { text: '', timestamp: '' };
+    }
+
     // Codex sessions don't write to ~/.claude/projects — their transcripts
     // live in ~/.codex/sessions/**. Branch to a Codex-specific reader so the
     // response-viewer works for Codex panes too.
@@ -3953,8 +3977,11 @@ export function registerSessionRoutes(
     const { id } = req.params as { id: string };
     const body = parseBody(GitFetchSettingsSchema, req.body, 'Invalid request body');
     const session = findSessionOrFail(ctx, id, req);
-    if (session.remote || session.docker) {
-      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Git fetch does not run for remote or Docker sessions');
+    if (session.remote || session.docker || session.isAdopted) {
+      return createErrorResponse(
+        ApiErrorCode.INVALID_INPUT,
+        'Git fetch does not run for remote, Docker or adopted sessions'
+      );
     }
 
     const enabled = 'enabled' in body ? (body.enabled ?? undefined) : session.gitFetchEnabled;
@@ -4059,6 +4086,10 @@ export function registerSessionRoutes(
     // LOCAL disk (a missing folder, or a same-named local one whose images are not the session's).
     if (body.enabled && session.remote) {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Image watching does not run for remote sessions');
+    }
+    // An adopted session's folder is the neutral wrapper folder, not the foreign pane's work.
+    if (body.enabled && session.isAdopted) {
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Image watching does not run for adopted sessions');
     }
 
     if (body.enabled) {
@@ -6024,6 +6055,13 @@ export function registerSessionRoutes(
         ApiErrorCode.INVALID_INPUT,
         'Prompt uploads are not supported for remote (SSH) sessions'
       );
+    }
+    // An adopted session has no workspace of ours: its folder is the neutral `/tmp`, shared with
+    // whatever else runs there, and an agent in a container or on an ssh host could not read it.
+    // The foreign pane's own folder is not ours to write into either.
+    if (session.isAdopted) {
+      reply.code(400);
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Prompt uploads are not supported for adopted sessions');
     }
 
     // The upload is written under session.workingDir (ensureUploadDir below), and

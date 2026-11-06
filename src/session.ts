@@ -3181,8 +3181,10 @@ export class Session extends EventEmitter {
     // wheel-forwarding to Claude's own transcript (the only route to history in
     // repaint/alt-screen mode; issue #154). Remote sessions run claude on
     // another host, so a local probe wouldn't reflect their version; they get
-    // their own over-ssh probe below. Cached process-wide, best-effort.
-    if (cliNeedsVersionProbe(this.mode) && !this._remote && !this._docker && !this._cliVersion) {
+    // their own over-ssh probe below. Cached process-wide, best-effort. An adopted
+    // session's agent is a process someone else started, possibly elsewhere, so
+    // the local binary says nothing about it either.
+    if (cliNeedsVersionProbe(this.mode) && !this._remote && !this._docker && !this._adopt && !this._cliVersion) {
       const probedVersion = resolveSessionCliVersion(this.mode);
       if (probedVersion) {
         this._cliVersion = probedVersion;
@@ -5133,6 +5135,7 @@ export class Session extends EventEmitter {
       (!allowLease && this.guardedInputHeld) ||
       this.remote ||
       this.docker ||
+      this._adopt ||
       this.paneExit ||
       !this._muxSession
     )

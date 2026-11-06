@@ -14,6 +14,8 @@
  *
  * Port: none (app.inject()).
  */
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 // The adopt route RE-RESOLVES the candidate rather than trusting the body, and
@@ -37,6 +39,7 @@ import { registerSessionRoutes } from '../../src/web/routes/session-routes.js';
 import { registerRespawnRoutes } from '../../src/web/routes/respawn-routes.js';
 import { registerRalphRoutes } from '../../src/web/routes/ralph-routes.js';
 import { registerMuxRoutes } from '../../src/web/routes/mux-routes.js';
+import { registerGitStatusRoutes } from '../../src/web/routes/git-status-routes.js';
 import { adoptTargetIdentity, foreignTargetKey } from '../../src/foreign-tmux.js';
 import type { SessionAdopt } from '../../src/types/session.js';
 
@@ -375,5 +378,111 @@ describe('same-named sessions in different locations', () => {
     );
     expect(adoptedBy).toEqual({ 'in-a': undefined, 'in-b': 'wrapper-b', 'in-c': undefined, here: undefined });
     await app.close();
+  });
+});
+
+describe('an adopted session has no workspace of ours', () => {
+  // Its `workingDir` is the neutral `/tmp`, which local-looking code would take for
+  // the session's folder: uploads landed there and the tab's close deleted them, and
+  // a Git panel or fetch ran git on whatever sat there. Each refusal is paired with a
+  // plain session, or a broken route would pass it too.
+  const adopted = (s: { isAdopted: boolean; adopt?: SessionAdopt }) => {
+    s.isAdopted = true;
+    s.adopt = localAdopt('/tmp/tmux-1000/default', 'work');
+  };
+
+  it('refuses a prompt upload before touching disk', async () => {
+    const { app, ctx } = await createRouteTestHarness(registerSessionRoutes);
+    adopted(ctx._session);
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${ctx._sessionId}/paste-image`,
+      headers: { 'x-codeman-csrf': '1' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/adopted/);
+    await app.close();
+  });
+
+  it('refuses the image watcher, and leaves it alone being switched off', async () => {
+    const { app, ctx } = await createRouteTestHarness(registerSessionRoutes);
+    adopted(ctx._session);
+    const post = (enabled: boolean) =>
+      app.inject({ method: 'POST', url: `/api/sessions/${ctx._sessionId}/image-watcher`, payload: { enabled } });
+    expect((await post(true)).json().success).toBe(false);
+    expect((await post(false)).json().success).toBe(true);
+    await app.close();
+  });
+
+  it('refuses the per-session git fetch settings', async () => {
+    const { app, ctx } = await createRouteTestHarness(registerSessionRoutes);
+    adopted(ctx._session);
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${ctx._sessionId}/git-fetch-settings`,
+      payload: { enabled: true },
+    });
+    expect(res.json().success).toBe(false);
+    expect(res.json().error).toMatch(/adopted/);
+    await app.close();
+  });
+
+  it('refuses a custom model, which restarts the CLI in the pane', async () => {
+    const { app, ctx } = await createRouteTestHarness(registerSessionRoutes);
+    adopted(ctx._session);
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${ctx._sessionId}/custom-model`,
+      payload: { clear: true },
+    });
+    expect(res.json().success).toBe(false);
+    expect(res.json().error).toMatch(/adopted/);
+    await app.close();
+  });
+
+  it('answers unsupported on the git routes, running no git', async () => {
+    const git = vi.fn(async () => ({ stdout: '', stderr: '' }));
+    const { app, ctx } = await createRouteTestHarness((a, c) =>
+      registerGitStatusRoutes(a, c, git as never, async () => [])
+    );
+    adopted(ctx._session);
+    const status = await app.inject({ method: 'GET', url: `/api/sessions/${ctx._sessionId}/git-status` });
+    expect(status.json()).toMatchObject({ success: true, data: { state: 'unsupported', reason: 'adopted' } });
+    const fetch = await app.inject({ method: 'POST', url: `/api/sessions/${ctx._sessionId}/git-fetch` });
+    expect(fetch.json()).toMatchObject({ success: true, data: { state: 'unsupported', reason: 'adopted' } });
+    const diff = await app.inject({ method: 'GET', url: `/api/sessions/${ctx._sessionId}/git-diff?repo=x&path=y&kind=z` });
+    expect(diff.statusCode).toBe(400);
+    expect(git).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  describe('last-response', () => {
+    let project: string;
+    beforeEach(() => {
+      project = join(process.env.HOME!, '.claude', 'projects', '-tmp');
+      mkdirSync(project, { recursive: true });
+    });
+    afterEach(() => {
+      rmSync(project, { recursive: true, force: true });
+    });
+
+    it('never pairs a transcript by the wrapper folder or the id we launched nothing with', async () => {
+      const { app, ctx } = await createRouteTestHarness(registerSessionRoutes);
+      (ctx._session as unknown as { mode: string }).mode = 'claude';
+      writeFileSync(
+        join(project, `${ctx._sessionId}.jsonl`),
+        JSON.stringify({
+          type: 'assistant',
+          timestamp: '2026-07-21T00:00:01Z',
+          message: { content: [{ type: 'text', text: 'an answer from another conversation' }] },
+        })
+      );
+      const read = async () =>
+        (await app.inject({ method: 'GET', url: `/api/sessions/${ctx._sessionId}/last-response` })).json();
+      expect((await read()).text).toBe('an answer from another conversation');
+      adopted(ctx._session);
+      expect((await read()).text).toBe('');
+      await app.close();
+    });
   });
 });
