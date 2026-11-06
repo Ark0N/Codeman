@@ -251,4 +251,10 @@ describe('the direct-PTY fallback', () => {
     await expect(s[start]()).rejects.toThrow(/tmux/);
     expect(ptySpawn).not.toHaveBeenCalled();
   });
+
+  it('refuses a one-shot prompt, a new local claude rather than the agent in that pane', async () => {
+    const { s } = session('claude', { adopt });
+    await expect(s.runPrompt('hello')).rejects.toThrow(/adopted/i);
+    expect(ptySpawn).not.toHaveBeenCalled();
+  });
 });

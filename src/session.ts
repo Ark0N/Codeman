@@ -4581,6 +4581,8 @@ export class Session extends EventEmitter {
     prompt: string,
     options?: { model?: string; onProgress?: (info: { tokens?: number; status?: string }) => void }
   ): Promise<{ result: string; cost: number }> {
+    // ⚠️ A one-shot `claude -p` is a new local process in `/tmp`, never the agent in that pane.
+    if (this._adopt) throw new Error('One-shot prompts are not available for adopted sessions');
     if (this.guardedInputHeld) {
       this._guardedInputRevision++;
       throw new Error('Guarded submission in progress');

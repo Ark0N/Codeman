@@ -2070,6 +2070,15 @@ export function registerSessionRoutes(
     const { prompt } = parseBody(RunPromptSchema, req.body);
     const session = findSessionOrFail(ctx, id, req);
 
+    // Its own check: `runPrompt` starts a new local claude, and the answer has to say so
+    // here rather than as a `session:error` after a success.
+    if (session.isAdopted) {
+      return createErrorResponse(
+        ApiErrorCode.INVALID_INPUT,
+        'One-shot prompts are not available for adopted sessions: Codeman did not start this agent'
+      );
+    }
+
     if (session.isBusy()) {
       return createErrorResponse(ApiErrorCode.SESSION_BUSY, 'Session is busy');
     }

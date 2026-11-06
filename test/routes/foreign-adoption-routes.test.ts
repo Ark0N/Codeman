@@ -82,6 +82,27 @@ describe('adopted sessions refuse every auto-op that drives the pane', () => {
     });
   }
 
+  it('refuses a one-shot prompt, which would start a new local claude in /tmp', async () => {
+    const h = await createRouteTestHarness(registerSessionRoutes, { sessionId: SID });
+    (h.ctx._session as unknown as { isAdopted: boolean }).isAdopted = true;
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/sessions/${SID}/run`,
+      payload: { prompt: 'hello' },
+    });
+    expect(res.json().success).toBe(false);
+    expect(res.json().error).toMatch(/adopted/i);
+    expect(h.ctx._session.runPrompt).not.toHaveBeenCalled();
+    await h.app.close();
+  });
+
+  it('still runs a one-shot prompt on a session Codeman started', async () => {
+    const h = await createRouteTestHarness(registerSessionRoutes, { sessionId: SID });
+    await h.app.inject({ method: 'POST', url: `/api/sessions/${SID}/run`, payload: { prompt: 'hello' } });
+    expect(h.ctx._session.runPrompt).toHaveBeenCalledWith('hello');
+    await h.app.close();
+  });
+
   it('refuses respawn, for a harder reason: it kills and restarts the pane', async () => {
     const h = await createRouteTestHarness(registerRespawnRoutes, { sessionId: SID });
     (h.ctx._session as unknown as { isAdopted: boolean }).isAdopted = true;

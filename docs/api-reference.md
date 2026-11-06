@@ -1185,10 +1185,10 @@ Closing the session detaches. The foreign session keeps running, and only Codema
 wrapper and its grouped `codeman-view-<id>` session go, so `DELETE` removes nothing that
 belongs to someone else. Codeman did not start this agent, so these refuse an adopted
 session: respawn, Ralph (its config and the `fix-plan/write`, `fix-plan/read` and
-`ralph-prompt/write` file routes), auto-clear, auto-compact, auto-resume, custom model
-endpoints, prompt uploads and the image watcher. `stop` waits are a 400, and so are
-`blocked` waits unless Codeman reads that CLI's dialogs off its screen (codex), the git
-routes answer `unsupported` with `reason: "adopted"`, and
+`ralph-prompt/write` file routes), one-shot `POST .../run`, auto-clear, auto-compact,
+auto-resume, custom model endpoints, prompt uploads and the image watcher. `stop` waits
+are a 400, and so are `blocked` waits unless Codeman reads that CLI's dialogs off its
+screen (codex), the git routes answer `unsupported` with `reason: "adopted"`, and
 `last-response` answers empty, since Codeman knows no transcript for it. Its `paneExit`
 stays absent, because the pane holds a `tmux attach` and not the agent. Reboot restore
 does not rebuild one. A wrapper that cannot start answers `OPERATION_FAILED` and leaves
