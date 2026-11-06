@@ -882,6 +882,44 @@ install_offered_cli() {
     return 0
 }
 
+# Install one AI CLI and nothing else (`install.sh agent <id>`): how the desktop
+# app adds an agent once Codeman is here, also over a running server, which this
+# never touches. install_offered_cli alone cannot end this run: it is fatal only
+# when NO CLI is left, and here another one usually is, so a failed install would
+# report success. A CLI that is here already is a success, and installs nothing.
+agent_subcommand() {
+    if [[ -z "$AI_CLI_CHOICE" || "$AI_CLI_CHOICE" == "none" ]]; then
+        die "Name the AI CLI to install: install.sh agent <id> (one of: $(cli_catalog_ids))."
+    fi
+    check_curl_or_wget || die "curl or wget is required but neither is installed. Please install one first."
+    detect_all_clis
+    progress_phase agent
+
+    local idx offerable=0
+    idx=$(cli_index "$AI_CLI_CHOICE")
+    if [[ -n "${CLI_FOUND_PATH[$idx]}" ]]; then
+        success "${CLI_LABELS[$idx]} is already installed at ${CLI_FOUND_PATH[$idx]}"
+        progress_phase done
+        return 0
+    fi
+    cli_offerable "$idx" || offerable=$?
+    if [[ "$offerable" -ne 0 ]]; then
+        die "${CLI_LABELS[$idx]} cannot be installed automatically here. See ${CLI_DOCS[$idx]:-its documentation}."
+    fi
+    # What this run sees is a login shell's PATH at best: a Node.js that only an
+    # interactive profile loads (nvm in .zshrc) is not on it.
+    if [[ "${CLI_INSTALL_CMD_TRUSTED[$idx]}" == npm\ * ]] && ! check_npm; then
+        die "${CLI_LABELS[$idx]} installs with npm, and this run cannot find it. Run this in a terminal instead: ${CLI_INSTALL_CMD_TRUSTED[$idx]}"
+    fi
+
+    install_offered_cli "$idx"
+    if [[ -z "${CLI_FOUND_PATH[$idx]}" ]]; then
+        die "${CLI_LABELS[$idx]} did not install. You can run its installer yourself: ${CLI_INSTALL_CMD_TRUSTED[$idx]}"
+    fi
+    progress_phase done
+    return 0
+}
+
 # Offer to install one AI CLI from the catalogue, or let the user skip.
 #
 # Split out of main() so the bash 3.2 CI step and test/install-sh-invariants.test.ts
@@ -4664,6 +4702,7 @@ Subcommands
   status        Print the URLs, the QR code and how to manage the service
   cloudflared   Install cloudflared for the in-app Cloudflare tunnel
   preflight     Print what is on this machine as JSON; changes nothing
+  agent <id>    Install one AI CLI and nothing else, also next to a running Codeman
 
 Environment: CODEMAN_NONINTERACTIVE=1, CODEMAN_INSTALL_DIR, CODEMAN_HOST,
 CODEMAN_PASSWORD, CODEMAN_PORT, CODEMAN_TAILSCALE=1, CODEMAN_TAILSCALE_NAME,
@@ -4713,13 +4752,15 @@ parse_flags() {
                 CODEMAN_PORT="$1"; export CODEMAN_PORT; RECONFIGURE="1" ;;
             --port=*)      CODEMAN_PORT="${1#--port=}"; export CODEMAN_PORT; RECONFIGURE="1" ;;
             --help|-h)     usage; exit 0 ;;
-            update|uninstall|tailscale|name|status|cloudflared|preflight)
+            update|uninstall|tailscale|name|status|cloudflared|preflight|agent)
                 [[ -z "$SUBCOMMAND" ]] || die "Only one subcommand at a time ($SUBCOMMAND and $1 given)."
                 SUBCOMMAND="$1" ;;
             -*)            die "Unknown option: $1 (see --help)" ;;
             *)
                 if [[ "$SUBCOMMAND" == "name" && -z "$SUBCOMMAND_ARG" ]]; then
                     SUBCOMMAND_ARG="$1"
+                elif [[ "$SUBCOMMAND" == "agent" && -z "$AI_CLI_CHOICE" ]]; then
+                    AI_CLI_CHOICE="$1"
                 else
                     die "Unexpected argument: $1 (see --help)"
                 fi ;;
@@ -4757,6 +4798,7 @@ case "$SUBCOMMAND" in
     status)      status_subcommand ;;
     cloudflared) cloudflared_subcommand ;;
     preflight)   preflight_subcommand ;;
+    agent)       agent_subcommand ;;
     *)
         # Only a COMPLETED install re-runs as a quiet update. A partial one
         # (clone succeeded but build/menu never finished) lacks the marker and

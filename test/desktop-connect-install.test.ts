@@ -51,7 +51,8 @@ const NOT_INSTALLED = {
 
 let dom: JSDOM | null = null;
 
-function open() {
+/** `first`: what the app says to a page that just loaded, with no look at this Mac yet. */
+function open(first?: Record<string, unknown>) {
   const sent: Sent[] = [];
   dom = new JSDOM(HTML, {
     url: 'codemanapp://localhost/index.html',
@@ -77,8 +78,8 @@ function open() {
   const rail = () =>
     Array.from(doc.querySelectorAll('#wiz-rail li')).map((li) => [li.querySelector('span')?.textContent, li.className]);
   const sentOf = (cmd: string) => sent.filter((m) => m.cmd === cmd);
-  native({ type: 'init', servers: [], autoConnect: false, startFullscreen: false, version: '0.1.0' });
-  native({ type: 'localStatus', status: NOT_INSTALLED });
+  native({ type: 'init', servers: [], autoConnect: false, startFullscreen: false, version: '0.1.0', ...first });
+  if (!first) native({ type: 'localStatus', status: NOT_INSTALLED });
   return { sent, sentOf, doc, $, input, native, click, visible, rail };
 }
 
@@ -443,5 +444,294 @@ describe('an install that was already running', () => {
     t.native({ type: 'localStatus', status: { ...NOT_INSTALLED, installRunning: true, installInApp: false } });
     expect(t.sentOf('installAttach')).toHaveLength(0);
     expect(t.$('local-title').textContent).toContain('Terminal');
+  });
+});
+
+describe('adding a coding agent to a Mac that has Codeman', () => {
+  const RUNNING = { ...NOT_INSTALLED, state: 'running', version: '1.50.0', installed: true, installComplete: true };
+  const STOPPED = { ...NOT_INSTALLED, state: 'stopped', installed: true, installComplete: true };
+  const AGENTS = {
+    clis: [
+      cli('claude', 'Claude Code', { installed: true, installable: false }),
+      cli('codex', 'Codex'),
+      cli('copilot', 'GitHub Copilot'),
+      cli('deepseek', 'DeepSeek', { installable: false }),
+    ],
+  };
+
+  function chooser(status: Record<string, unknown> = RUNNING, over: Record<string, unknown> = AGENTS) {
+    const t = open();
+    t.native({ type: 'localStatus', status });
+    t.click('local-agents');
+    t.native({ type: 'installPlan', plan: plan({ needs: { node: false, tmux: false, git: false }, ...over }) });
+    return t;
+  }
+
+  function installing(status: Record<string, unknown> = RUNNING) {
+    const t = chooser(status);
+    t.click('wiz-next');
+    t.native({ type: 'installUpdate', phase: 'agent', log: ['Installing Codex...'] });
+    return t;
+  }
+
+  it('is offered whenever Codeman is here, and never when it is not', () => {
+    const t = open();
+    t.native({ type: 'localStatus', status: NOT_INSTALLED });
+    expect(t.visible('local-agents')).toBe(false);
+    for (const status of [
+      RUNNING,
+      STOPPED,
+      { ...RUNNING, state: 'needsLogin' },
+      { ...RUNNING, state: 'runningElsewhere', elsewhere: ['127.0.0.1:4000'] },
+    ]) {
+      t.native({ type: 'localStatus', status });
+      expect(t.visible('local-agents'), String(status.state)).toBe(true);
+    }
+  });
+
+  it('is not offered while an install in Terminal still runs', () => {
+    const t = open();
+    t.native({ type: 'localStatus', status: { ...STOPPED, installRunning: true } });
+    expect(t.visible('local-agents')).toBe(false);
+  });
+
+  it('asks the app for the agent route, never the install route', () => {
+    const t = open();
+    t.native({ type: 'localStatus', status: RUNNING });
+    t.click('local-agents');
+    expect(t.sentOf('agentPrepare')).toHaveLength(1);
+    expect(t.sentOf('installPrepare')).toHaveLength(0);
+    expect(t.$('wiz-title').textContent).toBe('Looking at this Mac');
+    expect(t.visible('wiz-back')).toBe(false); // A second prepare would clear the first one's folder.
+  });
+
+  it('lists what can be added first, what is here after it, and leaves out the rest', () => {
+    const t = chooser();
+    expect(t.$('wiz-title').textContent).toBe('Add a coding agent');
+    const rows = [...t.$('wiz-agents').querySelectorAll('label')];
+    expect(rows.map((r) => r.querySelector('b')?.textContent)).toEqual(['Codex', 'GitHub Copilot', 'Claude Code']);
+    const inputs = rows.map((r) => r.querySelector('input') as HTMLInputElement);
+    expect(inputs.map((i) => i.disabled)).toEqual([false, false, true]);
+    expect(rows[2].textContent).toContain('Installed');
+    expect(inputs[0].checked).toBe(true);
+  });
+
+  it('asks nothing about Codeman, whatever the installer says about installing it', () => {
+    const t = chooser(RUNNING, { ...AGENTS, blocker: 'macOS is too old for the tmux download.' });
+    expect(t.$('wiz-title').textContent).toBe('Add a coding agent');
+    expect(t.visible('wiz-reach-step')).toBe(false);
+    expect(t.visible('wiz-skip')).toBe(false);
+    expect(t.visible('wiz-terminal')).toBe(false);
+  });
+
+  it('sends the one agent chosen, and names it on the button', () => {
+    const t = chooser();
+    expect(t.$('wiz-next').textContent).toBe('Install Codex');
+    const copilot = t.$('wiz-agents').querySelector('input[value=copilot]') as HTMLInputElement;
+    copilot.click();
+    expect(t.$('wiz-next').textContent).toBe('Install GitHub Copilot');
+    t.click('wiz-next');
+    expect(t.sentOf('agentStart')).toEqual([{ cmd: 'agentStart', aiCli: 'copilot' }]);
+    expect(t.sentOf('installStart')).toHaveLength(0);
+    expect(t.$('wiz-title').textContent).toBe('Installing GitHub Copilot');
+  });
+
+  it('draws one row, for that agent', () => {
+    const t = installing();
+    expect(t.rail()).toEqual([['Installing Codex', 'now']]);
+    expect(t.visible('wiz-cancel')).toBe(true);
+  });
+
+  it('ends on what happened, and opens Codeman only when asked', () => {
+    const t = installing();
+    t.native({ type: 'installFinished', ok: true, cancelled: false, error: null, log: [] });
+    expect(t.$('wiz-title').textContent).toBe('Codex is installed');
+    expect(t.$('wiz-lead').textContent).toContain('within a few minutes');
+    expect(t.$('wiz-lead').textContent).toContain('reload');
+    expect(t.rail()).toEqual([['Installing Codex', 'done']]);
+    expect(t.sentOf('localStatus').length).toBeGreaterThan(0);
+    expect(t.sentOf('connect')).toHaveLength(0);
+    t.native({ type: 'localStatus', status: RUNNING });
+    expect(t.$('wiz-title').textContent).toBe('Codex is installed');
+    expect(t.$('wiz-next').textContent).toBe('Open Codeman');
+    expect(t.$('wiz-back').textContent).toBe('Done');
+    t.click('wiz-next');
+    expect(t.sentOf('connect')).toEqual([expect.objectContaining({ url: RUNNING.url })]);
+    expect(t.visible('wizard')).toBe(false);
+  });
+
+  it('has nothing to open when Codeman is stopped, and Done goes back to This Mac', () => {
+    const t = installing(STOPPED);
+    t.native({ type: 'installFinished', ok: true, cancelled: false, error: null, log: [] });
+    t.native({ type: 'localStatus', status: STOPPED });
+    expect(t.visible('wiz-next')).toBe(false);
+    t.click('wiz-back');
+    expect(t.visible('wizard')).toBe(false);
+    expect(t.visible('local-start')).toBe(true);
+    expect(t.visible('local-agents')).toBe(true);
+  });
+
+  it('offers another only when there is another, and asks the installer again', () => {
+    const t = installing();
+    t.native({ type: 'installFinished', ok: true, cancelled: false, error: null, log: [] });
+    expect(t.$('wiz-skip').textContent).toBe('Add another');
+    t.click('wiz-skip');
+    expect(t.sentOf('agentPrepare')).toHaveLength(2);
+    expect(t.$('wiz-title').textContent).toBe('Looking at this Mac');
+
+    const last = chooser(RUNNING, { clis: [cli('codex', 'Codex')] });
+    last.click('wiz-next');
+    last.native({ type: 'installFinished', ok: true, cancelled: false, error: null, log: [] });
+    expect(last.visible('wiz-skip')).toBe(false);
+  });
+
+  it('says so when there is nothing left to add', () => {
+    const t = chooser(RUNNING, { clis: [cli('claude', 'Claude Code', { installed: true, installable: false })] });
+    expect(t.$('wiz-lead').textContent).toContain('already on this Mac');
+    expect(t.visible('wiz-next')).toBe(false);
+    expect(t.visible('wiz-back')).toBe(true);
+    t.click('wiz-back');
+    expect(t.visible('wizard')).toBe(false);
+  });
+
+  it('a failure shows the reason, and Try again asks again with the same choice', () => {
+    const t = chooser();
+    (t.$('wiz-agents').querySelector('input[value=copilot]') as HTMLInputElement).click();
+    t.click('wiz-next');
+    t.native({
+      type: 'installFinished',
+      ok: false,
+      cancelled: false,
+      error: 'GitHub Copilot did not install.',
+      log: ['npm ERR! nope'],
+    });
+    expect(t.$('wiz-title').textContent).toBe('The install stopped');
+    expect(t.$('wiz-message').textContent).toBe('GitHub Copilot did not install.');
+    expect(t.$('wiz-log').textContent).toContain('npm ERR! nope');
+    expect(t.visible('wiz-terminal')).toBe(false);
+    expect(t.visible('wiz-back')).toBe(true);
+    t.click('wiz-next');
+    expect(t.sentOf('agentPrepare')).toHaveLength(2);
+    t.native({ type: 'installPlan', plan: plan(AGENTS) });
+    expect(t.$('wiz-next').textContent).toBe('Install GitHub Copilot');
+  });
+
+  it('a list it could not get says so, with no Terminal route to Codeman', () => {
+    const t = open();
+    t.native({ type: 'localStatus', status: RUNNING });
+    t.click('local-agents');
+    t.native({ type: 'installPrepareFailed', message: 'No network.' });
+    expect(t.$('wiz-title').textContent).toBe('Could not get the list of coding agents');
+    expect(t.$('wiz-message').textContent).toBe('No network.');
+    expect(t.visible('wiz-terminal')).toBe(false);
+    t.click('wiz-next');
+    expect(t.sentOf('agentPrepare')).toHaveLength(2);
+  });
+
+  it('Cancel goes through the same command and leaves This Mac as it was', () => {
+    const t = installing();
+    t.click('wiz-cancel');
+    expect(t.sentOf('installCancel')).toHaveLength(1);
+    t.native({ type: 'installFinished', ok: false, cancelled: true, error: null, log: [] });
+    expect(t.visible('wizard')).toBe(false);
+    expect(t.$('status-text').textContent).toContain('Stopped installing Codex.');
+  });
+
+  it('is picked up after the app was reopened, as an agent run and never as an install', () => {
+    const t = open();
+    t.native({ type: 'localStatus', status: { ...RUNNING, agentInstallInApp: true } });
+    expect(t.sentOf('agentAttach')).toHaveLength(1);
+    expect(t.sentOf('installAttach')).toHaveLength(0);
+    expect(t.$('wiz-title').textContent).toBe('Installing a coding agent');
+    t.native({ type: 'installUpdate', phase: 'agent', log: [] });
+    expect(t.rail()).toEqual([['Installing a coding agent', 'now']]);
+    t.native({ type: 'installFinished', ok: true, cancelled: false, error: null, log: [] });
+    expect(t.$('wiz-title').textContent).toBe('The coding agent is installed');
+  });
+});
+
+describe('the menu item that adds a coding agent', () => {
+  const RUNNING = { ...NOT_INSTALLED, state: 'running', version: '1.50.0', installed: true, installComplete: true };
+
+  it('opens the chooser on a page that is up', () => {
+    const t = open();
+    t.native({ type: 'localStatus', status: RUNNING });
+    t.native({ type: 'addAgent' });
+    expect(t.sentOf('agentPrepare')).toHaveLength(1);
+  });
+
+  it('waits for the first look when it left a Codeman page to get here', () => {
+    const t = open({ servers: [{ url: 'http://example.org:3000/' }], addAgent: true });
+    expect(t.sentOf('agentPrepare')).toHaveLength(0);
+    t.native({ type: 'localStatus', status: RUNNING });
+    expect(t.sentOf('agentPrepare')).toHaveLength(1);
+    expect(t.$('tab-local').getAttribute('aria-selected')).toBe('true');
+  });
+
+  it('leaves a Mac without Codeman on This Mac, with Install', () => {
+    const t = open({ addAgent: true });
+    t.native({ type: 'localStatus', status: NOT_INSTALLED });
+    expect(t.sentOf('agentPrepare')).toHaveLength(0);
+    expect(t.visible('wizard')).toBe(false);
+    expect(t.visible('local-install')).toBe(true);
+  });
+
+  it('never replaces a run on screen', () => {
+    const t = open();
+    t.native({ type: 'localStatus', status: { ...RUNNING, agentInstallInApp: true } });
+    t.native({ type: 'addAgent' });
+    expect(t.sentOf('agentPrepare')).toHaveLength(0);
+  });
+});
+
+describe('after Skip for now', () => {
+  function skipped() {
+    const t = open();
+    t.native({ type: 'localStatus', status: NOT_INSTALLED });
+    t.click('local-install');
+    t.native({ type: 'installPlan', plan: plan() });
+    t.click('wiz-skip');
+    t.click('wiz-next');
+    t.native({ type: 'installFinished', ok: true, cancelled: false, error: null, log: [] });
+    t.native({
+      type: 'localStatus',
+      status: { ...NOT_INSTALLED, state: 'running', installed: true, version: '1.50.0' },
+    });
+    return t;
+  }
+
+  it('stops at Codeman being ready instead of opening it with nothing to run', () => {
+    const t = skipped();
+    expect(t.$('wiz-title').textContent).toBe('Codeman is ready');
+    expect(t.$('wiz-lead').textContent).toContain('no coding agent');
+    expect(t.sentOf('connect')).toHaveLength(0);
+  });
+
+  it('Open Codeman opens it anyway', () => {
+    const t = skipped();
+    t.click('wiz-next');
+    expect(t.sentOf('connect')).toHaveLength(1);
+  });
+
+  it('Add a coding agent goes to the chooser', () => {
+    const t = skipped();
+    expect(t.$('wiz-skip').textContent).toBe('Add a coding agent');
+    t.click('wiz-skip');
+    expect(t.sentOf('agentPrepare')).toHaveLength(1);
+  });
+
+  it('an install that got an agent still opens Codeman by itself', () => {
+    const t = open();
+    t.native({ type: 'localStatus', status: NOT_INSTALLED });
+    t.click('local-install');
+    t.native({ type: 'installPlan', plan: plan() });
+    t.click('wiz-next');
+    t.click('wiz-next');
+    t.native({ type: 'installFinished', ok: true, cancelled: false, error: null, log: [] });
+    t.native({
+      type: 'localStatus',
+      status: { ...NOT_INSTALLED, state: 'running', installed: true, version: '1.50.0' },
+    });
+    expect(t.sentOf('connect')).toHaveLength(1);
   });
 });

@@ -539,6 +539,124 @@ describe('install.sh preflight', () => {
   });
 });
 
+describe('install.sh agent, one AI CLI and nothing else', () => {
+  // The real subcommand in a real bash, with detection pointed at nothing and every
+  // trusted command rewritten: LEAVES names the binary a stand-in install leaves
+  // behind (on PATH, in the run's own folder), FOUND is a CLI already here.
+  const DRIVER = `
+    set -euo pipefail
+    export CODEMAN_INSTALL_SH_LIB=1
+    . "$1"
+    set +e
+    parse_flags "\${@:2}" || exit 9
+    set -e
+    bin=$(mktemp -d); trap 'rm -rf "$bin"' EXIT; export PATH="$bin:$PATH"
+    k=0; while [[ $k -lt \${#CLI_ALL_BINS[@]} ]]; do CLI_ALL_BINS[$k]="codeman-test-no-such-bin-$k"; k=$((k + 1)); done
+    k=0; while [[ $k -lt \${#CLI_ALL_PATHS[@]} ]]; do CLI_ALL_PATHS[$k]="/nonexistent/codeman-test/$k"; k=$((k + 1)); done
+    k=0; while [[ $k -lt \${#CLI_INSTALL_CMD_TRUSTED[@]} ]]; do
+      if [[ "\${KEEP_COMMANDS:-}" != "1" && -n "\${CLI_INSTALL_CMD_TRUSTED[$k]}" ]]; then
+        CLI_INSTALL_CMD_TRUSTED[$k]="echo RAN=\${CLI_IDS[$k]}; if [[ \${CLI_IDS[$k]} == \\"\${LEAVES:-}\\" ]]; then printf '#!/bin/sh\\n' > $bin/codeman-test-left-$k; chmod +x $bin/codeman-test-left-$k; fi"
+      fi
+      if [[ "\${CLI_IDS[$k]}" == "\${FOUND:-}" ]]; then
+        printf '#!/bin/sh\n' > "$bin/codeman-test-found"; chmod +x "$bin/codeman-test-found"
+        off=\${CLI_BIN_OFF[$k]}; CLI_ALL_BINS[$off]=codeman-test-found
+      fi
+      if [[ "\${CLI_IDS[$k]}" == "\${LEAVES:-}" ]]; then
+        off=\${CLI_BIN_OFF[$k]}; CLI_ALL_BINS[$off]=codeman-test-left-$k
+      fi
+      k=$((k + 1))
+    done
+    if [[ -n "\${NO_NPM:-}" ]]; then check_npm() { return 1; }; fi
+    CLI_DETECT_DONE=""
+    agent_subcommand
+    echo "REACHED THE END"
+  `;
+
+  function agent(args: string[], env: Record<string, string> = {}) {
+    const result = spawnSync('bash', ['-c', DRIVER, 'bash', INSTALL_SH, ...args], {
+      encoding: 'utf-8',
+      timeout: 30_000,
+      env: { ...process.env, CODEMAN_PROGRESS: '', ...env },
+    });
+    const stdout = result.stdout ?? '';
+    const stderr = result.stderr ?? '';
+    return { status: result.status, stdout, stderr, ran: [...stdout.matchAll(/^RAN=(.+)$/gm)].map((m) => m[1]) };
+  }
+
+  it('installs the one it was told to, and says done', () => {
+    const run = agent(['--no-admin', '--progress', '--ai-cli', 'codex'], { LEAVES: 'codex' });
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.ran).toEqual(['codex']);
+    expect(run.stderr).toContain('@@codeman phase agent');
+    expect(run.stderr).toContain('@@codeman phase done');
+  });
+
+  it('never says done when that agent did not land, even with another one here', () => {
+    const run = agent(['--no-admin', '--progress', '--ai-cli', 'codex'], { FOUND: 'copilot' });
+    expect(run.ran).toEqual(['codex']);
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain('@@codeman error Codex did not install.');
+    expect(run.stderr).not.toContain('@@codeman phase done');
+    expect(run.stdout).not.toContain('REACHED THE END');
+  });
+
+  it('installs nothing for an agent that is here already, and that is a success', () => {
+    const run = agent(['--no-admin', '--progress', '--ai-cli', 'codex'], { FOUND: 'codex' });
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.ran).toEqual([]);
+    expect(run.stderr).toContain('@@codeman phase done');
+  });
+
+  it('names what is wrong when npm cannot be found, before running anything', () => {
+    const run = agent(['--no-admin', '--progress', '--ai-cli', 'codex'], { KEEP_COMMANDS: '1', NO_NPM: '1' });
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain('Codex installs with npm, and this run cannot find it');
+    expect(run.stderr).toContain('npm install -g @openai/codex');
+    expect(run.stderr).not.toContain('@@codeman phase done');
+  });
+
+  it('refuses an agent it cannot install, and installs no other in its place', () => {
+    const run = agent(['--no-admin', '--progress', '--ai-cli', 'deepseek'], { KEEP_COMMANDS: '1' });
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain('DeepSeek cannot be installed automatically here');
+    expect(run.stderr).not.toContain('@@codeman phase done');
+  });
+
+  it('it takes the name as a plain word, as a person would type it', () => {
+    const driver = `
+      export CODEMAN_INSTALL_SH_LIB=1
+      . "$1"
+      set +e
+      parse_flags "\${@:2}" || exit 9
+      echo "sub=$SUBCOMMAND cli=$AI_CLI_CHOICE"
+    `;
+    const parsed = (...args: string[]) =>
+      spawnSync('bash', ['-c', driver, 'bash', INSTALL_SH, ...args], { encoding: 'utf-8', timeout: 30_000 });
+    expect(parsed('agent', 'codex', '--no-admin').stdout).toContain('sub=agent cli=codex');
+    expect(parsed('agent', '--ai-cli', 'codex').stdout).toContain('sub=agent cli=codex');
+    expect(parsed('agent', 'codx').stderr).toContain('Unknown AI CLI: codx');
+    expect(parsed('agent', 'shell').stderr).toContain('Unknown AI CLI: shell');
+    expect(parsed('agent', 'codex', 'copilot').stderr).toContain('Unexpected argument: copilot');
+    expect(parsed('codex').stderr).toContain('Unexpected argument: codex');
+  });
+
+  it('wants a name, and none is not one', () => {
+    expect(agent([]).stderr).toContain('Name the AI CLI to install');
+    expect(agent(['--ai-cli', 'none']).stderr).toContain('Name the AI CLI to install');
+  });
+
+  it('leaves Codeman alone: nothing in it touches the service, the source or the build', () => {
+    const body = SOURCE.slice(
+      SOURCE.indexOf('\nagent_subcommand() {'),
+      SOURCE.indexOf('\n# Offer to install one AI CLI')
+    );
+    for (const word of ['launchctl', 'systemctl', 'setup_launchd', 'install_or_update_repo', 'npm run', 'sudo']) {
+      expect(body, word).not.toContain(word);
+    }
+    expect(body).toContain('install_offered_cli "$idx"');
+  });
+});
+
 describe('install.sh --progress, the protocol the desktop app reads', () => {
   const CONNECT_HTML = readFileSync(
     fileURLToPath(new URL('../packages/desktop/assets/connect.html', import.meta.url)),

@@ -172,6 +172,7 @@
   .choice input { accent-color: var(--accent-2); margin: 2px 0 0; flex: none; }
   .choice b { display: block; font-weight: 600; }
   .choice small { display: block; margin-top: 1px; color: var(--muted); font-size: 12px; }
+  .choice:has(input:disabled) { border-color: var(--line); background: none; color: var(--muted); }
   #wiz-reach .choice + .choice { margin-top: 6px; }
   #wiz-password { margin-top: 10px; }
   #wiz-agent-note { margin: 10px 0 0; color: var(--muted); font-size: 12px; }
@@ -293,6 +294,7 @@
         <button class="secondary" id="local-stop" type="button" hidden>Stop waiting</button>
         <button class="secondary" id="local-check" type="button" hidden>Check again</button>
       </div>
+      <button class="wiz-link" id="local-agents" type="button" hidden>Add a coding agent</button>
     </section>
 
   <form id="form" role="tabpanel" aria-labelledby="tab-remote" autocomplete="off" novalidate hidden>
@@ -383,7 +385,7 @@
     wizBack: $('wiz-back'), wizSkip: $('wiz-skip'), wizNext: $('wiz-next'), wizCancel: $('wiz-cancel'),
     wizTerminal: $('wiz-terminal'),
     localOpen: $('local-open'), localStart: $('local-start'), localInstall: $('local-install'),
-    localStop: $('local-stop'), localCheck: $('local-check'),
+    localStop: $('local-stop'), localCheck: $('local-check'), localAgents: $('local-agents'),
     elsewhere: $('elsewhere'), ssh: $('ssh'), sshInstall: $('ssh-install'), copy: $('copy')
   };
   var manual = /[?&]manual=1/.test(location.search);
@@ -401,7 +403,7 @@
   var state = {
     servers: [], busy: false, lastUrl: '', startUrl: '', suggestion: '',
     tab: 'local', askedFrom: 'local', local: null, localChecking: false, opening: false,
-    wait: null, waitTimer: 0, stoppedWaiting: false, gui: null,
+    wait: null, waitTimer: 0, stoppedWaiting: false, gui: null, wantAgents: false,
     reopen: false, startingLooks: 0, startingTimer: 0
   };
   // While an install runs: how often to look, how long a finished install may
@@ -737,6 +739,7 @@
     els.localStart.disabled = state.busy || tooOld;
     els.localInstall.disabled = state.busy || tooOld || state.opening;
     els.localCheck.disabled = state.busy || state.localChecking;
+    els.localAgents.disabled = state.busy || tooOld || state.opening;
     els.sshInstall.disabled = state.busy || state.opening;
   }
 
@@ -830,18 +833,22 @@
     els.localInstall.hidden = !show.install;
     els.localStop.hidden = !show.stop;
     els.localCheck.hidden = !show.check;
+    // Codeman is here, in whatever state: adding an agent asks nothing of it.
+    els.localAgents.hidden = !s || !s.installed || !!state.wait || state.localChecking || (s.installRunning && !show.open);
     syncLocalButtons();
   }
 
   function onLocalStatus(s) {
+    var wanted = state.wantAgents;
+    state.wantAgents = false;
     state.localChecking = false;
     state.local = s || null;
-    // The graphical install is running without this page (it was reloaded, or
-    // the app was quit and opened again): show it from its first line.
-    if (s && s.installInApp && !state.gui) {
-      state.gui = newWizard('installing');
+    // A graphical run is going without this page (it was reloaded, or the app
+    // was quit and opened again): show it from its first line.
+    if (s && (s.installInApp || s.agentInstallInApp) && !state.gui) {
+      state.gui = newWizard('installing', s.installInApp ? 'install' : 'agent');
       state.gui.port = s.installPort || 3000;
-      post({ cmd: 'installAttach' });
+      post({ cmd: s.installInApp ? 'installAttach' : 'agentAttach' });
       renderWizard();
       return;
     }
@@ -858,6 +865,8 @@
     }
     if (followStarting(s)) return;
     renderLocal();
+    if (wanted && s && s.installed && !state.gui) openAgentChooser();
+    else if (state.gui && state.gui.step === 'added') renderWizard();
   }
 
   // A Codeman that is still starting (its process runs, but listens nowhere
@@ -924,10 +933,12 @@
     post({ cmd: 'installLocal', network: network });
   }
 
-  function newWizard(step) {
+  // mode 'install': Codeman itself. mode 'agent': one coding agent for a Mac
+  // that has Codeman, on the same screens, with no question about Codeman.
+  function newWizard(step, mode) {
     return {
-      step: step, plan: null, agent: '', reach: 'local', port: 3000, message: '', phase: '',
-      phaseSince: 0, seen: {}, log: [], ok: false
+      step: step, mode: mode || 'install', plan: null, agent: '', reach: 'local', port: 3000, message: '', phase: '',
+      phaseSince: 0, seen: {}, log: [], ok: false, noAgent: false
     };
   }
 
@@ -936,6 +947,22 @@
     state.gui = newWizard('preparing');
     post({ cmd: 'installPrepare' });
     renderWizard();
+  }
+
+  function openAgentChooser() {
+    if (state.busy || tooOld || state.opening) return;
+    state.gui = newWizard('preparing', 'agent');
+    post({ cmd: 'agentPrepare' });
+    renderWizard();
+  }
+
+  // The menu's way in. It can arrive before the first look at this Mac, and a
+  // Mac with no Codeman gets This Mac's Install instead.
+  function addAgent() {
+    selectTab('local');
+    if (state.gui) return;
+    if (!state.local || state.localChecking) state.wantAgents = true;
+    else if (state.local.installed) openAgentChooser();
   }
 
   function closeWizard() {
@@ -948,10 +975,11 @@
   function retryWizard() {
     var reach = state.gui ? state.gui.reach : 'local';
     var agent = state.gui ? state.gui.agent : '';
-    state.gui = newWizard('preparing');
+    var mode = state.gui ? state.gui.mode : 'install';
+    state.gui = newWizard('preparing', mode);
     state.gui.reach = reach;
     state.gui.agent = agent;
-    post({ cmd: 'installPrepare' });
+    post({ cmd: mode === 'agent' ? 'agentPrepare' : 'installPrepare' });
     renderWizard();
   }
 
@@ -969,13 +997,23 @@
     return offeredAgents().filter(function (c) { return c.id === id; })[0] || null;
   }
 
-  // The first step the installer's answer calls for. The agent step exists
-  // only when this Mac has no coding agent at all.
+  // A run this page did not start has no plan, so no name for the agent.
+  function agentName() {
+    var c = agentById(state.gui.agent);
+    return c ? c.label : 'a coding agent';
+  }
+
+  // The first step the installer's answer calls for. In an install the agent
+  // step exists only when this Mac has no coding agent at all.
   function onInstallPlan(plan) {
     var g = state.gui;
     if (!g || g.step !== 'preparing') return;
     g.plan = plan;
-    if (plan.blocker) {
+    if (g.mode === 'agent') {
+      // `blocker` says why Codeman cannot be installed, which is not the question.
+      if (!agentById(g.agent)) g.agent = offeredAgents().length ? offeredAgents()[0].id : '';
+      g.step = 'agent';
+    } else if (plan.blocker) {
       g.step = 'blocked';
     } else if (!installedAgents().length && offeredAgents().length) {
       // Kept across Try again; otherwise the first of the catalogue's order.
@@ -990,7 +1028,8 @@
   function renderAgents() {
     var g = state.gui;
     els.wizAgents.textContent = '';
-    offeredAgents().forEach(function (c) {
+    var rows = g.mode === 'agent' ? offeredAgents().concat(installedAgents()) : offeredAgents();
+    rows.forEach(function (c) {
       var label = document.createElement('label');
       label.className = 'choice';
       var input = document.createElement('input');
@@ -998,14 +1037,21 @@
       input.name = 'agent';
       input.value = c.id;
       input.checked = c.id === g.agent;
+      input.disabled = c.installed;
       input.addEventListener('change', function () {
         g.agent = c.id;
         renderAgentNote();
+        renderWizardButtons();
       });
       var name = document.createElement('b');
       name.textContent = c.label;
       var text = document.createElement('span');
       text.appendChild(name);
+      if (c.installed) {
+        var here = document.createElement('small');
+        here.textContent = 'Installed';
+        text.appendChild(here);
+      }
       label.appendChild(input);
       label.appendChild(text);
       els.wizAgents.appendChild(label);
@@ -1064,6 +1110,7 @@
     var g = state.gui;
     var plan = g.plan;
     var chosen = agentById(g.agent);
+    if (g.mode === 'agent') return [{ id: 'agent', label: 'Installing ' + agentName() }];
     var rows = [];
     PHASES.forEach(function (id) {
       var label = {
@@ -1152,6 +1199,14 @@
     if (!g) return;
     appendLog(msg.log);
     clearInterval(state.clock);
+    if (msg.ok && g.mode === 'agent') {
+      g.ok = true;
+      g.step = 'added';
+      renderWizard();
+      // Whether there is a Codeman to open from here.
+      checkLocal('quick');
+      return;
+    }
     if (msg.ok) {
       g.ok = true;
       g.step = 'finishing';
@@ -1163,9 +1218,11 @@
       return;
     }
     if (msg.cancelled) {
+      var stopped = g.mode === 'agent' ? 'Stopped installing ' + agentName() + '.' : 'Install cancelled.';
+      var again = g.mode === 'agent' ? '' : 'Install again to pick up where it stopped.';
       closeWizard();
       checkLocal('login');
-      setStatus('', 'Install cancelled.', 'Install again to pick up where it stopped.');
+      setStatus('', stopped, again);
       return;
     }
     g.step = 'failed';
@@ -1182,14 +1239,29 @@
     els.wizard.hidden = !g;
     if (!g) return;
     var step = g.step;
-    var copy = {
+    var name = agentName();
+    var installingLead = 'You can close this window. The install keeps going, and the app picks it up when you open it again.';
+    var copy = g.mode === 'agent' ? {
+      preparing: ['Looking at this Mac', 'Getting the list of coding agents and checking which ones are here.'],
+      prepareFailed: ['Could not get the list of coding agents', ''],
+      agent: ['Add a coding agent', offeredAgents().length
+        ? 'Pick one to install on this Mac. It needs no password, and Codeman keeps running.'
+        : installedAgents().length
+          ? 'Every coding agent this app can install is already on this Mac.'
+          : 'This app cannot install a coding agent on this Mac.'],
+      installing: ['Installing ' + name, installingLead],
+      added: [name === 'a coding agent' ? 'The coding agent is installed' : name + ' is installed',
+        'Codeman notices it within a few minutes: reload Codeman if it does not show up. You sign in the first time you start it.'],
+      failed: ['The install stopped', 'Its output is below. Try again, or follow the instructions on the agent’s own site.']
+    }[step] : {
       preparing: ['Looking at this Mac', 'Getting the installer and checking what is already here.'],
       blocked: ['This Mac needs something first', ''],
       prepareFailed: ['Could not get the installer', ''],
       agent: ['Choose a coding agent', 'Codeman runs coding agents, and this Mac has none yet. Pick one to install with Codeman. You can add more later.'],
       reach: ['Who can reach Codeman?', ''],
-      installing: ['Installing Codeman', 'You can close this window. The install keeps going, and the app picks it up when you open it again.'],
+      installing: ['Installing Codeman', installingLead],
       finishing: ['Starting Codeman', 'Codeman opens here as soon as it answers.'],
+      ready: ['Codeman is ready', 'It has no coding agent yet, and sessions need one to run. You can add one now, or later from the Codeman menu.'],
       failed: ['The install stopped', 'Its full log is in ~/.codeman/install.log. Try again picks up where it stopped.']
     }[step];
     els.wizSpinner.hidden = !(step === 'preparing' || step === 'finishing');
@@ -1204,7 +1276,7 @@
 
     els.wizAgentStep.hidden = step !== 'agent';
     els.wizReachStep.hidden = step !== 'reach';
-    var running = step === 'installing' || step === 'finishing' || step === 'failed';
+    var running = step === 'installing' || step === 'finishing' || step === 'failed' || step === 'added';
     els.wizRail.hidden = !running;
     els.wizDetails.hidden = !running;
 
@@ -1222,26 +1294,43 @@
       }, 1000);
     }
 
+    renderWizardButtons();
+    els.wizCancel.disabled = false;
+
+    var checked = step === 'agent' && els.wizAgents.querySelector('input:checked');
+    if (checked) checked.focus();
+    else if (!els.wizNext.hidden) els.wizNext.focus();
+    else if (!els.wizBack.hidden) els.wizBack.focus();
+    else els.wizTitle.focus();
+  }
+
+  function localAnswers() {
+    return !!state.local && (state.local.state === 'running' || state.local.state === 'needsLogin');
+  }
+
+  function renderWizardButtons() {
+    var g = state.gui;
+    var step = g.step;
+    var agentMode = g.mode === 'agent';
+    var chosen = agentById(g.agent);
     var next = {
-      agent: 'Continue', reach: 'Install Codeman', failed: 'Try again', prepareFailed: 'Try again', blocked: 'Install in Terminal'
+      agent: agentMode ? (chosen ? 'Install ' + chosen.label : '') : 'Continue',
+      reach: 'Install Codeman', failed: 'Try again', prepareFailed: 'Try again', blocked: 'Install in Terminal',
+      ready: 'Open Codeman', added: localAnswers() ? 'Open Codeman' : ''
     }[step];
     els.wizNext.hidden = !next;
     els.wizNext.textContent = next || '';
     // Not while preparing: a second prepare would clear the folder of the first.
-    els.wizBack.hidden = !(step === 'blocked' || step === 'prepareFailed' || step === 'agent' || step === 'reach');
-    els.wizSkip.hidden = step !== 'agent';
+    els.wizBack.hidden = !(step === 'blocked' || step === 'prepareFailed' || step === 'agent' || step === 'reach' ||
+      (agentMode && (step === 'failed' || step === 'added')));
+    els.wizBack.textContent = step === 'added' ? 'Done' : 'Back';
+    var aside = step === 'ready' ? 'Add a coding agent'
+      : step === 'added' && offeredAgents().length > 1 ? 'Add another'
+        : step === 'agent' && !agentMode ? 'Skip for now' : '';
+    els.wizSkip.hidden = !aside;
+    els.wizSkip.textContent = aside;
     els.wizCancel.hidden = step !== 'installing';
-    els.wizCancel.disabled = false;
-    els.wizTerminal.hidden = !(step === 'reach' || step === 'failed' || step === 'prepareFailed');
-
-    if (step === 'agent') {
-      var checked = els.wizAgents.querySelector('input:checked');
-      if (checked) checked.focus();
-    } else if (step === 'reach' || step === 'blocked' || step === 'failed' || step === 'prepareFailed') {
-      els.wizNext.focus();
-    } else {
-      els.wizTitle.focus();
-    }
+    els.wizTerminal.hidden = agentMode || !(step === 'reach' || step === 'failed' || step === 'prepareFailed');
   }
 
   function syncReach() {
@@ -1274,23 +1363,43 @@
     if (!installedAgents().length && agentById(g.agent)) msg.aiCli = g.agent;
     els.wizPw.value = '';
     els.wizPw2.value = '';
+    // Skipped: the first thing to say once Codeman answers.
+    g.noAgent = !installedAgents().length && !msg.aiCli && offeredAgents().length > 0;
+    beginRun();
+    post(msg);
+  }
+
+  function startAgent() {
+    var g = state.gui;
+    if (!agentById(g.agent)) return;
+    beginRun();
+    post({ cmd: 'agentStart', aiCli: g.agent });
+  }
+
+  function beginRun() {
+    var g = state.gui;
     g.step = 'installing';
     g.phase = '';
     g.seen = {};
     g.log = [];
     renderLog();
     renderWizard();
-    post(msg);
   }
 
   function wizardNext() {
     var g = state.gui;
     if (!g) return;
-    if (g.step === 'agent') {
+    if (g.step === 'agent' && g.mode === 'agent') {
+      startAgent();
+    } else if (g.step === 'agent') {
       g.step = 'reach';
       renderWizard();
     } else if (g.step === 'reach') {
       startInstall();
+    } else if (g.step === 'ready' || g.step === 'added') {
+      closeWizard();
+      selectTab('local');
+      openLocal();
     } else if (g.step === 'failed' || g.step === 'prepareFailed') {
       retryWizard();
     } else if (g.step === 'blocked') {
@@ -1338,6 +1447,14 @@
     // where something else may answer when the install took another port.
     var ours = portOf(s.url) === w.port;
     if (ours && (s.state === 'running' || s.state === 'needsLogin')) {
+      var g = state.gui;
+      if (g && g.step === 'finishing' && g.noAgent) {
+        clearTimeout(state.waitTimer);
+        state.wait = null;
+        g.step = 'ready';
+        renderWizard();
+        return;
+      }
       endWait();
       selectTab('local');
       renderLocal();
@@ -1412,6 +1529,7 @@
           }
           if (auto) connect();
           else if (state.tab === 'remote') els.url.focus();
+          if (msg.addAgent) addAgent();
           break;
         case 'servers':
           state.servers = msg.servers || [];
@@ -1462,6 +1580,9 @@
           selectTab('local');
           renderLocal();
           scheduleWait();
+          break;
+        case 'addAgent':
+          addAgent();
           break;
         case 'installPlan':
           onInstallPlan(msg.plan);
@@ -1572,12 +1693,18 @@
   els.localOpen.addEventListener('click', openLocal);
   els.localStart.addEventListener('click', startLocal);
   els.localInstall.addEventListener('click', openWizard);
+  els.localAgents.addEventListener('click', openAgentChooser);
   els.wizNext.addEventListener('click', wizardNext);
   els.wizBack.addEventListener('click', wizardBack);
   els.wizSkip.addEventListener('click', function () {
-    if (!state.gui) return;
-    state.gui.agent = '';
-    state.gui.step = 'reach';
+    var g = state.gui;
+    if (!g) return;
+    if (g.step === 'ready' || g.step === 'added') {
+      openAgentChooser();
+      return;
+    }
+    g.agent = '';
+    g.step = 'reach';
     renderWizard();
   });
   els.wizCancel.addEventListener('click', function () {
