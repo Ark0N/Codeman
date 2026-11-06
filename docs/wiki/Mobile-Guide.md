@@ -66,8 +66,9 @@ A row of keys above the virtual keyboard, and what it contains depends on the se
 **Agent sessions** get quick actions: `/init`, `/clear`, `/compact`, a Compose key, `Esc`,
 a path picker, and 🧠 when Read My Mind is on. Compose opens a multiline editor with
 autocorrect: Enter adds a new line, and only Send delivers the text, as one paste followed
-by Enter, so your line breaks reach the agent intact. Anything already typed on the terminal
-prompt moves into the editor when it opens. Drafts are kept per session and in memory only,
+by Enter, so your line breaks reach the agent intact. A prompt written in Persian, Arabic or
+Hebrew lays out right to left. Anything already typed on the terminal prompt moves into the
+editor when it opens. Drafts are kept per session and in memory only,
 so switching tabs keeps them and a page reload forgets them; a dot on the key shows a draft
 is parked. The editor's Attach button attaches photos, videos or documents and puts their paths
 into the draft.
@@ -187,6 +188,7 @@ Setup in [Notifications And Approvals](Notifications-And-Approvals).
 
 The terminal viewport is small. **Last Response** (opt-in header button) renders the agent's
 last answer as scrollable text instead, with a **More** button for additional context.
+Persian, Arabic and Hebrew answers read right to left there.
 
 The [File Viewer](Working-With-Files) works on phones too, including edit mode, which is
 enough to fix a typo an agent introduced while you are away from your desk.

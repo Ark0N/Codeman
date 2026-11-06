@@ -5138,6 +5138,7 @@ Object.assign(CodemanApp.prototype, {
       const doc = tmpl.content.firstElementChild;
       this._rebaseFilePreviewMarkdownRefs(doc, info);
       this._linkifyFilePaths(doc);
+      this._applyBlockDirection(doc);
       // The linkifier's absolute paths name no session; give them the
       // preview's, like the rebased links, or they open in the active tab's.
       for (const a of doc.querySelectorAll('a.rv-path:not([data-session-id])')) a.dataset.sessionId = info.sessionId;

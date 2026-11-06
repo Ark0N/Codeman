@@ -257,6 +257,20 @@ If you are sending input over the API instead, your payload must end with `\r` o
 is ever sent. The request still succeeds and the text sits unsubmitted in the composer. See
 [Driving Codeman From An Agent](Driving-Codeman-From-An-Agent).
 
+### Persian, Arabic or Hebrew looks wrong in the terminal
+
+The terminal is xterm.js, which does not support right-to-left text yet
+([xtermjs/xterm.js#701](https://github.com/xtermjs/xterm.js/issues/701)). It puts each
+character in its own cell from left to right, so a sentence comes out reversed, and the
+default WebGL renderer also draws the letters unjoined. Codeman cannot fix that without
+replacing the terminal.
+
+Read the answer in **Last Response** instead, where it lays out right to left, or open a
+Markdown file in the [File Viewer](Working-With-Files). On desktop, turning off **WebGL
+Renderer** in **App Settings → Terminal & Input** and reloading joins the letters, so each
+word reads correctly, but the words of a sentence still run left to right. Phones already
+use that renderer.
+
 ## Mobile
 
 ### The keyboard covers the terminal, or scroll position jumps

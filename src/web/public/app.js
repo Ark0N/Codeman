@@ -2847,6 +2847,14 @@ class CodemanApp {
           a.setAttribute('target', '_blank');
           a.setAttribute('rel', 'noopener noreferrer');
         });
+        // Code and preformatted text are always left to right. `dir="ltr"`
+        // also isolates them, and `dir="auto"` skips any descendant that
+        // carries a `dir`, so `npm install` at the head of a Persian sentence
+        // no longer turns the whole sentence left to right (issue #715). The
+        // `dir="auto"` itself is `_applyBlockDirection`'s, never this string's.
+        tmpl.content.querySelectorAll('pre, code').forEach((el) => {
+          if (!el.hasAttribute('dir')) el.setAttribute('dir', 'ltr');
+        });
         return tmpl.innerHTML;
       } catch { /* fall through */ }
     }
@@ -3004,8 +3012,36 @@ class CodemanApp {
     renderedText.className = 'rv-text';
     renderedText.innerHTML = this._renderMarkdown(text);
     this._linkifyFilePaths(renderedText);
+    this._applyBlockDirection(renderedText);
     div.appendChild(renderedText);
     return div;
+  }
+
+  /**
+   * Right-to-left text (issue #715). With no `dir`, every block was laid out
+   * left to right, so a Persian, Arabic or Hebrew answer was left-aligned, its
+   * punctuation landed on the wrong end and its lists and quotes hung off the
+   * left edge. Each OUTERMOST prose block now takes its direction from its own
+   * first letter (`dir="auto"`, what GitHub does for rendered markdown), so an
+   * RTL paragraph beside an English one reads correctly in both; nested blocks
+   * inherit, which keeps a list's markers and indent on one side. A `dir` the
+   * agent wrote (the sanitizer allows it) is kept, and so is what it covers.
+   *
+   * ⚠️ Call this LAST, on the DOM, once nothing else inserts under `root`: an
+   * element that already carries `dir="auto"` re-resolves its direction on every
+   * insertion beneath it, and a block whose letters all sit in `dir` children
+   * (a code-only or path-only list) walks its whole subtree each time. Set
+   * during `_renderMarkdown` or before the linkifier, that made rendering
+   * quadratic, for English documents too: a 200 KB list of inline code froze
+   * the tab for 40 s. Not part of `_linkifyFilePaths`, which returns early when
+   * a stale constants.js has no `findFilePathLinks`.
+   */
+  _applyBlockDirection(root) {
+    if (!root) return;
+    for (const el of root.querySelectorAll('p, h1, h2, h3, h4, h5, h6, ul, ol, dl, blockquote, .rv-table-wrap')) {
+      if (el.parentElement?.closest('[dir]') || el.hasAttribute('dir')) continue;
+      el.setAttribute('dir', 'auto');
+    }
   }
 
   /**
@@ -3108,6 +3144,9 @@ class CodemanApp {
         link.dataset.path = path;
         link.dataset.linkified = '1';
         if (folder) link.dataset.folder = '1';
+        // A path reads left to right, and in a right-to-left sentence it must
+        // not vote on the sentence's direction (`_applyBlockDirection`, issue #715).
+        link.dir = 'ltr';
         link.title = path;
         link.textContent = path;
         frag.appendChild(link);
