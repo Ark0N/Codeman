@@ -2,9 +2,6 @@
  * @fileoverview The serialized writer of `custom-model-hosts.json`, the store of the saved
  * custom model endpoints (src/custom-model-hosts.ts).
  *
- * CONTRACT STAGE: the function below has its final signature and a body that throws; the body
- * is written next, and every writer of the file is moved onto it then.
- *
  * Why it exists: `writeCustomModelHosts()` writes through ONE temp file name per process and
  * has no queue, and `readCustomModelHosts()` reads a file that does not parse as an empty
  * list. Two overlapping writers (an endpoint route and the 5-minute discovery sweep) can
@@ -28,13 +25,12 @@
  * direct writer left is config-backup restore, which must work on a file that does not parse.
  */
 
-import type { CustomModelHost } from './custom-model-hosts.js';
-import type { ApiResponse } from './types.js';
-
-/** Marks a body the contract stage left unwritten. */
-function notImplemented(what: string, ..._args: unknown[]): never {
-  throw new Error(`${what} is not implemented yet`);
-}
+import { randomUUID } from 'node:crypto';
+import fs from 'node:fs/promises';
+import { dirname } from 'node:path';
+import { getDataDir } from './config/instance.js';
+import { customModelHostsPath, type CustomModelHost } from './custom-model-hosts.js';
+import { ApiErrorCode, createErrorResponse, getErrorMessage, type ApiResponse } from './types.js';
 
 /** A write refused because the existing `custom-model-hosts.json` must not be overwritten. The message is user-facing. */
 export class CustomModelHostsWriteRefusedError extends Error {
@@ -43,6 +39,49 @@ export class CustomModelHostsWriteRefusedError extends Error {
     this.name = 'CustomModelHostsWriteRefusedError';
   }
 }
+
+/** The list a write starts from. Only a missing or empty file is an empty list; anything else that is not an array is refused. */
+async function readHostsForWrite(path: string): Promise<CustomModelHost[]> {
+  let raw: string;
+  try {
+    raw = await fs.readFile(path, 'utf-8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw new CustomModelHostsWriteRefusedError(
+      `Cannot read ${path} (${(err as Error).message}), so this change was not saved.`
+    );
+  }
+  // An empty file holds no endpoint to lose.
+  if (raw.trim() === '') return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    parsed = undefined;
+  }
+  if (!Array.isArray(parsed)) {
+    throw new CustomModelHostsWriteRefusedError(
+      `${path} is not a valid JSON list, so this change was not saved (saving would have replaced every other model endpoint in it, with its API key). Fix or delete the file, or restore it from a config backup, then try again.`
+    );
+  }
+  return parsed as CustomModelHost[];
+}
+
+async function writeHostsFile(path: string, hosts: CustomModelHost[]): Promise<void> {
+  // Through a symlink: the rename lands on the real file.
+  const target = await fs.realpath(path).catch(() => path);
+  await fs.mkdir(dirname(target), { recursive: true });
+  const tmp = `${target}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    await fs.writeFile(tmp, JSON.stringify(hosts, null, 2), { mode: 0o600 });
+    await fs.rename(tmp, target);
+  } catch (err) {
+    await fs.rm(tmp, { force: true }).catch(() => {});
+    throw err;
+  }
+}
+
+let mutationChain: Promise<unknown> = Promise.resolve();
 
 /** What a mutation returns: the list to write (absent: write nothing) and what the caller gets back. */
 export interface CustomModelHostsMutation<T> {
@@ -63,10 +102,23 @@ export function mutateCustomModelHosts<T>(
   fn: (hosts: CustomModelHost[]) => CustomModelHostsMutation<T>,
   configDir?: string
 ): Promise<T> {
-  return notImplemented('mutateCustomModelHosts', fn, configDir);
+  const run = mutationChain.then(async () => {
+    // Resolved inside the chain: the data dir is read when the mutation runs, like the file.
+    const path = customModelHostsPath(configDir ?? getDataDir());
+    const current = await readHostsForWrite(path).catch((err: unknown) => {
+      console.warn(`[custom-model] write refused: ${getErrorMessage(err)}`);
+      throw err;
+    });
+    const mutation = fn(current);
+    if (mutation.hosts) await writeHostsFile(path, mutation.hosts);
+    return mutation.result;
+  });
+  mutationChain = run.catch(() => {});
+  return run;
 }
 
 /** A refused write answers 409 CONFLICT with the fix; any other failure stays OPERATION_FAILED. Like `settingsWriteErrorResponse()`. */
 export function customModelHostsWriteErrorResponse(err: unknown): ApiResponse<never> {
-  return notImplemented('customModelHostsWriteErrorResponse', err);
+  if (err instanceof CustomModelHostsWriteRefusedError) return createErrorResponse(ApiErrorCode.CONFLICT, err.message);
+  return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
 }
