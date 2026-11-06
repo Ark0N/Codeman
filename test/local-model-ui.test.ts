@@ -16,8 +16,9 @@
  *  - the dismissal is a per-device localStorage key and survives a new app instance;
  *  - one request a minute at most, shared while in flight, and a failed refresh keeps the answer.
  *
- * The route answers 501 until the server stage lands, so the payloads here are fixtures typed
- * with the contract's `LocalModelStatus`, built from `LOCAL_MODEL_LABELS`.
+ * The payloads here are fixtures typed with `LocalModelStatus` and built from
+ * `LOCAL_MODEL_LABELS`, not the output of the route: what the server computes for a given Mac is
+ * pinned by test/local-model-recommend.test.ts and test/routes/local-model-routes.test.ts.
  *
  * Port: none.
  */
@@ -131,7 +132,7 @@ const settle = () => new Promise((done) => setTimeout(done, 0));
 
 // ---------- Fixtures (the contract's types) ----------
 
-/** The MacBook of the probe: 48 GB as sold, a chip that is in no chips row. */
+/** The MacBook of the probe: 48 GB as sold. The candidates below give it an unknown speed, as for a chip in no chips row. */
 const HARDWARE: HardwareFacts = {
   platform: 'darwin',
   arch: 'arm64',

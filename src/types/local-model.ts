@@ -221,9 +221,9 @@ export interface DeviceBudget {
 
 /**
  * Every sentence and label the server may put into the payload, in English (the i18n source
- * language). Frozen for the parallel build: the zh-CN dictionary in src/web/public/i18n.js has
- * one entry per value, keyed by this exact text, and the browser's i18n test imports this
- * constant to list them. Adding a key is fine; changing a text means changing its zh-CN key too.
+ * language). The zh-CN dictionary in src/web/public/i18n.js has one entry per value, keyed by
+ * this exact text, and test/local-model-i18n.test.ts imports this constant to list them. Adding
+ * a key is fine; changing a text means changing its zh-CN key too.
  *
  * `{placeholder}` slots are filled by the browser from `LocalModelMessage.vars`. `{name}` is
  * taken (the translator fills it with the display name), so no slot here is called `name`.
