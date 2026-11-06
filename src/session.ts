@@ -1582,7 +1582,8 @@ export class Session extends EventEmitter {
   /**
    * The linked git worktree inside `workingDir` that {@link paneCwd} is in, when there is one
    * (`live-worktree.ts`). The Files panel lists it instead of the main checkout. Runtime-only and
-   * never a confinement root, like `paneCwd`: it is always a folder the file routes already serve.
+   * never a confinement root, like `paneCwd`: it is judged lexically when the pane moves, and the
+   * listing route re-checks the real folder on every request.
    */
   get liveWorktree(): LiveWorktree | undefined {
     return this._liveWorktree;

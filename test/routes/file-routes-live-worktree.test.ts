@@ -5,7 +5,7 @@
  * `workingDir`: that is what keeps the preview, raw and edit routes working unchanged, inside the
  * same confinement. Real filesystem on purpose, since the walk is the thing under test.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -18,6 +18,8 @@ describe('Files panel listing of a live worktree', () => {
   let harness: RouteTestHarness;
   let repo: string;
   let worktree: string;
+  /** Removed after each test: a folder of the server user's outside the session folder. */
+  let outside: string | undefined;
 
   const list = async (query = '') => {
     const res = await harness.app.inject({
@@ -46,7 +48,29 @@ describe('Files panel listing of a live worktree', () => {
   afterEach(async () => {
     await harness.app.close();
     rmSync(repo, { recursive: true, force: true });
+    if (outside) rmSync(outside, { recursive: true, force: true });
+    outside = undefined;
   });
+
+  /** A folder outside the session folder, holding a visible and a hidden file and a subfolder. */
+  const makeOutsideFolder = () => {
+    outside = mkdtempSync(join(homedir(), 'live-worktree-outside-'));
+    mkdirSync(join(outside, 'inner'));
+    writeFileSync(join(outside, '.hidden-outside'), 'secret');
+    writeFileSync(join(outside, 'inner', 'outside-file.txt'), 'secret');
+    return outside;
+  };
+  const expectSessionFolderListing = (data: {
+    root: string;
+    worktree: unknown;
+    tree: Array<{ name: string; children?: Array<{ path: string }> }>;
+  }) => {
+    expect(data.root).toBe(repo);
+    expect(JSON.stringify(data.tree)).not.toContain('outside');
+    expect(data.tree.find((node) => node.name === 'src')?.children?.[0].path).toBe('src/main-only.ts');
+    // Kept so the panel's comparison with the session's state settles instead of reloading forever.
+    expect(data.worktree).toEqual({ name: 'probe', path: worktree });
+  };
 
   it('lists the worktree with paths relative to the session folder', async () => {
     const data = await list('&root=live');
@@ -84,6 +108,52 @@ describe('Files panel listing of a live worktree', () => {
     expect(data.root).toBe(repo);
     // Kept so the panel's comparison with the session's state settles instead of reloading forever.
     expect(data.worktree).toEqual({ name: 'probe', path: worktree });
+  });
+
+  it('walks the session folder when a symlink replaced the worktree with a folder outside it', async () => {
+    rmSync(worktree, { recursive: true });
+    symlinkSync(makeOutsideFolder(), worktree);
+    expectSessionFolderListing(await list('&root=live&showHidden=true'));
+  });
+
+  it('does not find anything outside the session folder through such a symlink when searching', async () => {
+    rmSync(worktree, { recursive: true });
+    symlinkSync(makeOutsideFolder(), worktree);
+    const data = await list(`&root=live&showHidden=true&q=${encodeURIComponent('outside')}`);
+    expect(data.root).toBe(repo);
+    expect(data.matches).toEqual([]);
+  });
+
+  it('walks the session folder when a parent of the worktree is the symlink', async () => {
+    const parent = join(repo, '.claude/worktrees');
+    rmSync(parent, { recursive: true });
+    mkdirSync(join(makeOutsideFolder(), 'probe'));
+    writeFileSync(join(outside as string, 'probe', 'outside-file.txt'), 'secret');
+    symlinkSync(outside as string, parent);
+    expectSessionFolderListing(await list('&root=live&showHidden=true'));
+  });
+
+  it('walks the session folder when the worktree path is a symlink back to that folder', async () => {
+    rmSync(worktree, { recursive: true });
+    symlinkSync(repo, worktree);
+    expectSessionFolderListing(await list('&root=live'));
+  });
+
+  it('still lists a worktree of a workspace reached through a symlink, in the workspace spelling', async () => {
+    const link = `${repo}-link`;
+    symlinkSync(repo, link);
+    try {
+      const spelled = join(link, PREFIX);
+      Object.assign(harness.ctx._session, {
+        workingDir: link,
+        liveWorktree: { name: 'probe', path: spelled },
+      });
+      const data = await list('&root=live');
+      expect(data.root).toBe(spelled);
+      expect(data.tree[0].children[0].path).toBe(`${PREFIX}/src/worktree-only.ts`);
+    } finally {
+      rmSync(link);
+    }
   });
 
   it('searches the worktree: the query reads paths in the listing, the result in the session folder', async () => {

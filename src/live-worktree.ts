@@ -13,12 +13,17 @@
  * than by running `git worktree list`: this runs from the pane watcher whenever a directory
  * changes, and a file read starts no process, no repository config and no filter.
  *
- * Only a folder at or below `workingDir` is ever an answer, and that is the whole security
- * argument: the file routes already serve everything under `workingDir`, so following a pane
- * there widens nothing, and a planted `.git` file can only move where the listing STARTS inside
- * that same folder. A worktree outside it (`git worktree add ../feature`) stays unfollowed, since
- * listing it would need a second confinement root. Nothing here is a confinement decision: the
- * routes keep judging every path against `workingDir`.
+ * Only a folder strictly below `workingDir` is ever an answer: the file routes already serve
+ * everything under it, so following a pane there widens nothing, and a planted `.git` file can
+ * only move where the listing STARTS inside that same folder. A worktree outside it
+ * (`git worktree add ../feature`) stays unfollowed, since listing it would need a second
+ * confinement root.
+ *
+ * That answer is lexical and only as fresh as the last time the pane moved: a symlink can take the
+ * folder's place afterwards without moving the pane. So nothing here is a confinement decision.
+ * `GET /api/sessions/:id/files` resolves the folder on every request and walks it only while it
+ * really lies inside `workingDir` (`canWalkLiveWorktree()` in file-routes.ts), and the routes keep
+ * judging every path against `workingDir`.
  *
  * Probes are bounded (#516). The folder can sit on a mount that stopped answering, and an
  * `unknown` answer stops the walk rather than being read as "no `.git` here".

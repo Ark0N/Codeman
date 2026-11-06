@@ -854,7 +854,8 @@ export interface SessionState {
    * the session's folder. Derived from {@link paneCwd} by `live-worktree.ts`, so it is
    * runtime-only and absent wherever `paneCwd` is, and absent for a worktree outside
    * `workingDir`: the file routes never serve those. NOT a confinement root; the Files panel
-   * only starts its listing here.
+   * only starts its listing here, after `GET .../files` has checked that the real folder still
+   * lies inside `workingDir`, since a symlink can replace it without moving the pane.
    */
   liveWorktree?: LiveWorktree;
   /** Remote execution metadata, present when this session runs over SSH through local tmux */

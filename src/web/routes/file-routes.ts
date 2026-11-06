@@ -782,6 +782,26 @@ export function isPathWithinRoot(root: string, candidate: string): boolean {
   return rel === '' || (!isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${sep}`));
 }
 
+/**
+ * Whether a `root=live` listing may start at a session's `liveWorktree` (#765). `findLiveWorktree()`
+ * judged that path lexically when the pane moved, and a symlink can take its place, or a parent's,
+ * without moving the pane. The probe and `readdir` both follow one, and the walk's `path`s only look
+ * relative to `workingDir`, so this is the request-time half of the rule, the same one
+ * `validateSessionFilePath()` applies to a file: resolved, the worktree must lie strictly inside the
+ * resolved `workingDir`. Only the CHECK uses the resolved paths: the walk keeps the session's spelling,
+ * or a workspace reached through a symlink would stop producing paths relative to `workingDir`.
+ * Probed first (#516); both realpaths then walk the components that probe has just answered for.
+ */
+async function canWalkLiveWorktree(workingDir: string, worktreePath: string): Promise<boolean> {
+  if ((await probePathKind(worktreePath, { pastCap: true })) !== 'directory') return false;
+  try {
+    const [realRoot, realWorktree] = await Promise.all([fs.realpath(workingDir), fs.realpath(worktreePath)]);
+    return realWorktree !== realRoot && isPathWithinRoot(realRoot, realWorktree);
+  } catch {
+    return false;
+  }
+}
+
 function findMatchingPickerRoot(roots: FilesystemBrowseRoot[], candidate: string): FilesystemBrowseRoot | undefined {
   return roots
     .filter((root) => isPathWithinRoot(root.path, candidate))
@@ -1606,14 +1626,14 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
     const maxDepth = Math.min(parseInt(depth || '5', 10), 10);
     const includeHidden = showHidden === 'true';
     const workingDir = session.workingDir;
-    // `root=live` starts the walk at the linked worktree the pane is in (#765). That folder is
-    // inside `workingDir` (`live-worktree.ts`), and every `path` below stays relative to
+    // `root=live` starts the walk at the linked worktree the pane is in (#765), once that folder
+    // proves to be inside `workingDir` right now, and every `path` below stays relative to
     // `workingDir`, so file-content, file-raw and the edit route need nothing new and judge these
     // paths against the same root as any other. Only the search predicate reads a path relative
     // to the listing, since that is the tree the person is looking at.
     const liveWorktree = session.liveWorktree;
     const walkRoot =
-      root === 'live' && liveWorktree && (await probePathKind(liveWorktree.path, { pastCap: true })) === 'directory'
+      root === 'live' && liveWorktree && (await canWalkLiveWorktree(workingDir, liveWorktree.path))
         ? liveWorktree.path
         : workingDir;
     // null for an empty/whitespace query, which is what keeps the default
