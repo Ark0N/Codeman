@@ -235,6 +235,11 @@ and the Dock icon bounces.
   agents is part of the page.
 - **Agents the app can add are the ones `--no-admin` can install.** OMP's macOS
   install is Homebrew, so it is not offered, also on a Mac that has Homebrew.
+- **Agents that install with npm use whichever Node.js the login shell finds.**
+  With the Node.js the installer downloaded, or Homebrew's, that folder is yours.
+  The nodejs.org installer leaves `/usr/local/lib/node_modules` to root, so those
+  agents would be expected to fail there, with npm's permission error shown, while
+  the ones with their own installer still work. This has not been tried.
 - **Self-signed HTTPS is refused.** A server started with `codeman web --https`
   uses a self-signed certificate, and WKWebView rejects it (wry has no trust
   override). Use `http://127.0.0.1:3000` for a server on this Mac. For another

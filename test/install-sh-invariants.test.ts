@@ -600,6 +600,15 @@ describe('install.sh agent, one AI CLI and nothing else', () => {
     expect(run.stdout).not.toContain('REACHED THE END');
   });
 
+  it('says the same with no other agent here, the way a Mac is after Skip for now', () => {
+    const run = agent(['--no-admin', '--progress', '--ai-cli', 'codex']);
+    expect(run.ran).toEqual(['codex']);
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain('@@codeman error Codex did not install.');
+    expect(run.stderr).not.toContain('re-run the installer');
+    expect(run.stderr).not.toContain('@@codeman phase done');
+  });
+
   it('installs nothing for an agent that is here already, and that is a success', () => {
     const run = agent(['--no-admin', '--progress', '--ai-cli', 'codex'], { FOUND: 'codex' });
     expect(run.status, run.stderr).toBe(0);
@@ -653,7 +662,7 @@ describe('install.sh agent, one AI CLI and nothing else', () => {
     for (const word of ['launchctl', 'systemctl', 'setup_launchd', 'install_or_update_repo', 'npm run', 'sudo']) {
       expect(body, word).not.toContain(word);
     }
-    expect(body).toContain('install_offered_cli "$idx"');
+    expect(body).toContain('run_offered_cli "$idx"');
   });
 });
 
