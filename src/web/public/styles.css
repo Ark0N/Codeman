@@ -15977,8 +15977,10 @@ body.touch-device.cjk-input-visible .main {
   white-space: nowrap;
 }
 
+/* An ordinary status fits one line; a refusal may not, and it must be readable whole. */
 .path-picker-status.error {
   color: var(--danger, #ef4444);
+  white-space: normal;
 }
 
 .path-picker-list {
