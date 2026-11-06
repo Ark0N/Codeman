@@ -25,10 +25,14 @@ const TITLE_ABOVE_Y: f64 = if cfg!(target_os = "macos") { TITLE_BAR } else { 0.0
 /// How much of the title bar must be on a screen to grab it.
 const MIN_GRIP: f64 = 80.0;
 /// Room `fitted_to` leaves when it shrinks a window. Screens are full display
-/// bounds, so the menu bar and the Dock are inside them; these are the margins
-/// main.rs uses for the centred default frame.
+/// bounds, so the menu bar and the Dock are inside them.
 const FIT_MARGIN_X: f64 = 40.0;
 const FIT_MARGIN_Y: f64 = 80.0;
+/// Room a first-run window leaves above its content (the menu bar, taller on
+/// a display with a notch, and its own title bar) and below it (a Dock of the
+/// default size): `Rect` is the whole display, so neither is taken off yet.
+const FIRST_RUN_ROOM_ABOVE: f64 = 66.0;
+const FIRST_RUN_ROOM_BELOW: f64 = 90.0;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
@@ -39,7 +43,15 @@ pub struct Config {
     pub auto_connect: bool,
     /// Always open in full screen (otherwise the last state is restored).
     pub start_fullscreen: bool,
+    /// Anything that is not a whole frame reads as None: a bad frame must not
+    /// make the whole file unreadable, which would cost the server list.
+    #[serde(deserialize_with = "lenient_window")]
     pub window: Option<WindowFrame>,
+}
+
+fn lenient_window<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<WindowFrame>, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    Ok(serde_json::from_value(value).ok())
 }
 
 impl Default for Config {
@@ -92,6 +104,23 @@ pub struct Rect {
 }
 
 impl WindowFrame {
+    /// The frame of a first-run window on `screen`: `size` or what fits, never
+    /// less than `min`, centred across and in the height between the menu bar
+    /// and the Dock. Centring in the whole display put the bottom of a window
+    /// under the Dock on a 900 pt high one.
+    pub fn first_run(screen: &Rect, size: (f64, f64), min: (f64, f64)) -> WindowFrame {
+        let width = size.0.min(screen.width - FIT_MARGIN_X).max(min.0);
+        let room = screen.height - FIRST_RUN_ROOM_ABOVE - FIRST_RUN_ROOM_BELOW;
+        let height = size.1.min(room).max(min.1);
+        WindowFrame {
+            x: screen.x + (screen.width - width) / 2.0,
+            y: screen.y + FIRST_RUN_ROOM_ABOVE + ((room - height) / 2.0).max(0.0),
+            width,
+            height,
+            fullscreen: false,
+        }
+    }
+
     /// The frame clamped to sane sizes, or None when it holds junk.
     pub fn sanitized(self) -> Option<WindowFrame> {
         let vals = [self.x, self.y, self.width, self.height];
@@ -624,6 +653,77 @@ mod tests {
         let c: Config = serde_json::from_str(r#"{"servers":[{"url":"http://a/"}],"future":1}"#).unwrap();
         assert!(c.auto_connect);
         assert_eq!(c.servers[0].username, None);
+    }
+
+    #[test]
+    fn a_bad_window_frame_keeps_the_servers() {
+        for (name, window) in [
+            ("missing-height", r#"{"x":1,"y":2,"width":3}"#),
+            ("not-a-frame", r#""maximized""#),
+            ("null-number", r#"{"x":null,"y":2,"width":3,"height":4}"#),
+        ] {
+            let dir = tmp_dir(&format!("bad-window-{name}"));
+            fs::create_dir_all(&dir).unwrap();
+            let path = dir.join("desktop.json");
+            fs::write(
+                &path,
+                format!(r#"{{"servers":[{{"url":"http://a/"}}],"autoConnect":false,"window":{window}}}"#),
+            )
+            .unwrap();
+            let (c, can_save) = Config::load_from(&path);
+            assert!(can_save, "{name}");
+            assert_eq!(c.servers.len(), 1, "{name}");
+            assert!(!c.auto_connect, "{name}");
+            assert_eq!(c.window, None, "{name}");
+            // The file was read, so it stays where it is.
+            assert!(path.is_file(), "{name}");
+            assert!(!path.with_extension("json.corrupt").exists(), "{name}");
+        }
+        // A whole frame and an absent one read as before.
+        let c: Config =
+            serde_json::from_str(r#"{"window":{"x":1,"y":2,"width":900,"height":600,"fullscreen":true}}"#).unwrap();
+        assert_eq!(c.window.map(|f| (f.width, f.fullscreen)), Some((900.0, true)));
+        assert_eq!(serde_json::from_str::<Config>("{}").unwrap().window, None);
+        assert_eq!(
+            serde_json::from_str::<Config>(r#"{"window":null}"#).unwrap().window,
+            None
+        );
+    }
+
+    #[test]
+    fn first_run_window_sits_between_the_menu_bar_and_the_dock() {
+        let screen = |width: f64, height: f64| Rect {
+            x: 0.0,
+            y: 0.0,
+            width,
+            height,
+        };
+        let size = (1280.0, 820.0);
+        let min = (480.0, 360.0);
+        // A 13 inch MacBook: the window is shortened, and ends above the Dock.
+        let f = WindowFrame::first_run(&screen(1440.0, 900.0), size, min);
+        assert_eq!((f.width, f.height), (1280.0, 744.0));
+        assert_eq!((f.x, f.y), (80.0, 66.0));
+        assert!(f.y + f.height <= 900.0 - 90.0);
+        // A large display: the full size, centred across and in the free height.
+        let f = WindowFrame::first_run(&screen(2560.0, 1440.0), size, min);
+        assert_eq!((f.width, f.height), (1280.0, 820.0));
+        assert_eq!(f.x, 640.0);
+        assert_eq!(f.y - 66.0, 1440.0 - 90.0 - (f.y + f.height));
+        // A second display to the left of the first.
+        let left = Rect {
+            x: -1920.0,
+            y: 120.0,
+            width: 1920.0,
+            height: 1080.0,
+        };
+        let f = WindowFrame::first_run(&left, size, min);
+        assert_eq!(f.x, -1920.0 + 320.0);
+        assert!(f.y >= 120.0 + 66.0 && f.y + f.height <= 120.0 + 1080.0 - 90.0);
+        // Never smaller than the minimum, on a display too small for it too.
+        let f = WindowFrame::first_run(&screen(500.0, 400.0), size, min);
+        assert_eq!((f.width, f.height), min);
+        assert!(!f.fullscreen);
     }
 
     #[test]

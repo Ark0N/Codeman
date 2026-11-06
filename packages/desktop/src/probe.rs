@@ -228,6 +228,11 @@ fn transport_error(err: &ureq::Error, plain_http: bool) -> TransportError {
 
 /// Ask the server. Blocking: call it from a worker thread.
 pub fn probe(server: &Url, authorization: Option<&str>) -> ProbeOutcome {
+    probe_within(server, authorization, TIMEOUT)
+}
+
+/// `probe` with the time the whole exchange may take.
+fn probe_within(server: &Url, authorization: Option<&str>, timeout: Duration) -> ProbeOutcome {
     let status_url = match server.join(STATUS_PATH) {
         Ok(u) => u,
         Err(e) => return ProbeOutcome::Failed { detail: e.to_string() },
@@ -236,7 +241,7 @@ pub fn probe(server: &Url, authorization: Option<&str>) -> ProbeOutcome {
         .root_certs(ureq::tls::RootCerts::PlatformVerifier)
         .build();
     let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_global(Some(TIMEOUT))
+        .timeout_global(Some(timeout))
         .http_status_as_error(false)
         // Never follow: a 3xx comes back as an answer and is explained.
         .max_redirects(0)
@@ -259,12 +264,16 @@ pub fn probe(server: &Url, authorization: Option<&str>) -> ProbeOutcome {
             };
             let location = header("location");
             let retry_after = header("retry-after");
-            let body = resp
-                .body_mut()
-                .with_config()
-                .limit(MAX_BODY)
-                .read_to_string()
-                .unwrap_or_default();
+            let body = match resp.body_mut().with_config().limit(MAX_BODY).read_to_string() {
+                Ok(body) => body,
+                // The answer began but did not finish in time. Where the body
+                // decides what answered (200, 403), that is a timeout, not
+                // "something else answers here".
+                Err(e) if matches!(status, 200 | 403) && transport_error(&e, false) == TransportError::Timeout => {
+                    return ProbeOutcome::Timeout;
+                }
+                Err(_) => String::new(),
+            };
             classify_response(
                 &status_url,
                 status,
@@ -723,5 +732,39 @@ mod tests {
         let p = serve_raw(String::new());
         let url = Url::parse(&format!("http://127.0.0.1:{p}/")).unwrap();
         assert_eq!(probe(&url, None), ProbeOutcome::MaybeHttps);
+    }
+
+    /// A Codeman that sends its status headers and then stalls (a blocked
+    /// event loop, a lossy link) did not answer in time. It is not "something
+    /// else on this port", which is what an empty body read as before.
+    #[test]
+    fn a_body_that_stalls_is_a_timeout() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        /// Send `head` and the start of a body, then hold the connection open.
+        fn serve_stalling(status_line: &'static str) -> u16 {
+            let l = TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = l.local_addr().unwrap().port();
+            std::thread::spawn(move || {
+                if let Ok((mut s, _)) = l.accept() {
+                    let mut buf = [0u8; 4096];
+                    let _ = s.read(&mut buf);
+                    let _ = s.write_all(
+                        format!("HTTP/1.1 {status_line}\r\nContent-Type: application/json\r\nContent-Length: 4096\r\n\r\n{{\"success\":true,").as_bytes(),
+                    );
+                    std::thread::sleep(Duration::from_secs(3));
+                }
+            });
+            port
+        }
+        let short = Duration::from_millis(400);
+
+        let url = Url::parse(&format!("http://127.0.0.1:{}/", serve_stalling("200 OK"))).unwrap();
+        assert_eq!(probe_within(&url, None, short), ProbeOutcome::Timeout);
+
+        // A 401 has said all it needs to with its status line.
+        let url = Url::parse(&format!("http://127.0.0.1:{}/", serve_stalling("401 Unauthorized"))).unwrap();
+        assert_eq!(probe_within(&url, None, short), ProbeOutcome::NeedsLogin);
     }
 }

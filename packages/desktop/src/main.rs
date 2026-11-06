@@ -53,7 +53,7 @@ use wry::{NewWindowResponse, PageLoadEvent, PermissionResponse, WebView, WebView
 
 use config::{Config, Rect, WindowFrame};
 use credentials::Keychain;
-use policy::{ConnectCmd, HostCmd, Ipc, Navigation, NewWindow, OpenBudget, Phase, Via};
+use policy::{ConnectCmd, HostCmd, Ipc, Navigation, NewWindow, OpenBudget, Phase, Recovery, Via};
 use probe::ProbeOutcome;
 
 const APP_NAME: &str = "Codeman";
@@ -62,6 +62,9 @@ const DEFAULT_SIZE: (f64, f64) = (1280.0, 820.0);
 const POPOUT_SIZE: (f64, f64) = (960.0, 680.0);
 const MIN_SIZE: (f64, f64) = (480.0, 360.0);
 const MAX_POPOUTS: usize = 24;
+/// How far a pop-out opens down and to the right of the window in use, per
+/// pop-out already open (it starts over after eight).
+const POPOUT_STEP: f64 = 28.0;
 const SAVE_DEBOUNCE: Duration = Duration::from_secs(1);
 /// How long a server load may take to commit before the app gives up on it
 /// and brings the connect page back.
@@ -70,6 +73,10 @@ const LOAD_TIMEOUT: Duration = Duration::from_secs(15);
 /// page reported that its session is gone, so a login the server keeps
 /// refusing can never turn into a reload loop.
 const SESSION_RELOAD_COOLDOWN: Duration = Duration::from_secs(60);
+/// A window loads its page again at most once in this long after its web
+/// content process ended, so a page that cannot stay up never becomes a reload
+/// loop.
+const CRASH_RELOAD_COOLDOWN: Duration = Duration::from_secs(30);
 /// When the app first looks whether the main window made it into the full
 /// screen it asked for at launch, how often it asks again, and how many times.
 /// tao retries a failed entry only for a window BUILT in full screen, which
@@ -90,6 +97,7 @@ const AUTH_REJECTED: &str = "The server did not accept the saved login. Enter th
 const AUTH_RATE_LIMITED: &str = "Too many failed logins from this address. The saved password may be wrong: \
 enter it again (a single-user Codeman accepts the right password at once), or wait up to 15 minutes.";
 const KEYCHAIN_UNREADABLE: &str = "The saved password could not be read from the Keychain. Enter it again.";
+const PAGE_KEEPS_STOPPING: &str = "Codeman's page stopped twice in a row, so it was closed. Connect again.";
 const START_REFUSED: &str = "Codeman can only be started here for an http://127.0.0.1 or http://localhost address.";
 
 mod menu_id {
@@ -159,6 +167,12 @@ enum UserEvent {
     /// The challenge handler sent its login and got challenged again (macOS).
     /// Not trusted on its own: recheck_login asks the server first.
     AuthRejected,
+    /// The web content process of a window ended (macOS): a crash, or the
+    /// system taking it back under memory pressure. The window is blank until
+    /// something loads in it again (on_content_process_gone).
+    ContentProcessGone {
+        window: WindowId,
+    },
     /// A background step for the connect page finished (This Mac status, an
     /// install opened in Terminal, the install command copied): the message
     /// goes to the page if it is still the one choosing a server.
@@ -213,6 +227,8 @@ struct AppWindow {
     committed: Option<Url>,
     /// When the window last reloaded itself because its session expired.
     session_reload_at: Option<Instant>,
+    /// When the window's web content process last ended.
+    content_process_gone_at: Option<Instant>,
 }
 
 struct AppMenu {
@@ -234,7 +250,10 @@ struct App {
     /// aside, in which case it must not be overwritten.
     config_path: Option<PathBuf>,
     config_dirty: bool,
-    last_save: Instant,
+    /// The settings are written SAVE_DEBOUNCE after this: the last write, or
+    /// the last move or resize of the main window, so a drag writes the file
+    /// once when it ends, not once a second while it goes on.
+    save_held_since: Instant,
     /// Where the main window is in reaching a server. Shared with the web view
     /// handlers, which run on this same thread.
     phase: Rc<RefCell<Phase>>,
@@ -313,7 +332,7 @@ fn main() {
 
     let (window, wants_fullscreen) =
         create_main_window(&event_loop, &config).unwrap_or_else(|e| fatal(&format!("Could not open a window: {e}")));
-    let webview = build_webview(&window, true, Load::ConnectPage { manual: false }, &proxy, &phase)
+    let webview = build_webview(&window, true, true, Load::ConnectPage { manual: false }, &proxy, &phase)
         .unwrap_or_else(|e| fatal(&format!("Could not create the web view: {e}")));
     #[cfg(target_os = "macos")]
     macos::install(&webview);
@@ -328,6 +347,7 @@ fn main() {
             kind: Kind::Main,
             committed: None,
             session_reload_at: None,
+            content_process_gone_at: None,
         },
     );
 
@@ -336,7 +356,7 @@ fn main() {
         config,
         config_path,
         config_dirty: false,
-        last_save: Instant::now(),
+        save_held_since: Instant::now(),
         phase,
         loading_deadline: None,
         auth: None,
@@ -473,21 +493,21 @@ fn build_menu(config: &Config) -> muda::Result<AppMenu> {
     })
 }
 
+/// A display's whole area in points (the menu bar and the Dock are inside it).
+fn display_rect(monitor: &tao::monitor::MonitorHandle) -> Rect {
+    let sf = monitor.scale_factor();
+    let p = monitor.position().to_logical::<f64>(sf);
+    let s = monitor.size().to_logical::<f64>(sf);
+    Rect {
+        x: p.x,
+        y: p.y,
+        width: s.width,
+        height: s.height,
+    }
+}
+
 fn monitors(target: &EventLoopWindowTarget<UserEvent>) -> Vec<Rect> {
-    target
-        .available_monitors()
-        .map(|m| {
-            let sf = m.scale_factor();
-            let p = m.position().to_logical::<f64>(sf);
-            let s = m.size().to_logical::<f64>(sf);
-            Rect {
-                x: p.x,
-                y: p.y,
-                width: s.width,
-                height: s.height,
-            }
-        })
-        .collect()
+    target.available_monitors().map(|m| display_rect(&m)).collect()
 }
 
 /// The main window, and whether it was asked into full screen (App's
@@ -510,17 +530,10 @@ fn create_main_window(
         None => {
             builder = builder.with_inner_size(LogicalSize::new(DEFAULT_SIZE.0, DEFAULT_SIZE.1));
             if let Some(m) = target.primary_monitor() {
-                let sf = m.scale_factor();
-                let p = m.position().to_logical::<f64>(sf);
-                let s = m.size().to_logical::<f64>(sf);
-                let w = DEFAULT_SIZE.0.min(s.width - 40.0);
-                let h = DEFAULT_SIZE.1.min(s.height - 80.0);
+                let f = WindowFrame::first_run(&display_rect(&m), DEFAULT_SIZE, MIN_SIZE);
                 builder = builder
-                    .with_inner_size(LogicalSize::new(w.max(MIN_SIZE.0), h.max(MIN_SIZE.1)))
-                    .with_position(LogicalPosition::new(
-                        p.x + (s.width - w) / 2.0,
-                        p.y + (s.height - h) / 2.0,
-                    ));
+                    .with_inner_size(LogicalSize::new(f.width, f.height))
+                    .with_position(LogicalPosition::new(f.x, f.y));
             }
         }
     }
@@ -601,9 +614,13 @@ fn loaded_on_commit(phase: &Phase, committed: &str) -> Option<Phase> {
     policy::same_origin(&url, server).then(|| Phase::Loaded(server.clone()))
 }
 
+/// `focused`: the web view takes the keyboard and brings the app to the front
+/// (wry's default). False for a window a script opened: it comes up without
+/// pulling the user out of the app they are typing in.
 fn build_webview(
     window: &Window,
     is_main: bool,
+    focused: bool,
     load: Load<'_>,
     proxy: &EventLoopProxy<UserEvent>,
     phase: &Rc<RefCell<Phase>>,
@@ -612,6 +629,7 @@ fn build_webview(
     let mut builder = WebViewBuilder::new()
         .with_initialization_script(assets::HOST_SHIM)
         .with_devtools(true)
+        .with_focused(focused)
         .with_accept_first_mouse(true)
         .with_back_forward_navigation_gestures(false)
         // false = let WebKit take the drop, so Codeman's own HTML5 drop
@@ -719,6 +737,17 @@ fn build_webview(
         });
     });
 
+    // wry answers WebKit's "web content process ended" notice itself, which
+    // turns WebKit's own reload off: without a handler the window stays blank.
+    #[cfg(target_os = "macos")]
+    {
+        use wry::WebViewBuilderExtDarwin;
+        let gone_proxy = proxy.clone();
+        builder = builder.with_on_web_content_process_terminate_handler(move || {
+            let _ = gone_proxy.send_event(UserEvent::ContentProcessGone { window: id });
+        });
+    }
+
     builder = match load {
         Load::ConnectPage { manual: false } => builder.with_url(policy::CONNECT_PAGE),
         Load::ConnectPage { manual: true } => builder.with_url(format!("{}?manual=1", policy::CONNECT_PAGE)),
@@ -767,7 +796,7 @@ impl App {
     /// so it is only decided here, never reset per event.
     fn on_events_cleared(&mut self, control_flow: &mut ControlFlow) {
         let now = Instant::now();
-        if self.config_dirty && now >= self.last_save + SAVE_DEBOUNCE {
+        if self.config_dirty && now >= self.save_held_since + SAVE_DEBOUNCE {
             self.save_config();
         }
         let loading = matches!(*self.phase.borrow(), Phase::Loading(_));
@@ -782,7 +811,7 @@ impl App {
         if matches!(*control_flow, ControlFlow::ExitWithCode(_)) {
             return;
         }
-        let save_due = self.config_dirty.then(|| self.last_save + SAVE_DEBOUNCE);
+        let save_due = self.config_dirty.then(|| self.save_held_since + SAVE_DEBOUNCE);
         let fullscreen_due = self.fullscreen_retry.map(|(due, _)| due);
         *control_flow = match [save_due, self.loading_deadline, fullscreen_due]
             .into_iter()
@@ -978,6 +1007,45 @@ impl App {
                 }
             }
             UserEvent::AuthRejected => self.recheck_login(),
+            UserEvent::ContentProcessGone { window } => self.on_content_process_gone(window),
+        }
+    }
+
+    /// The web content process of `window` ended, so the window is blank
+    /// (policy::recovery decides what it does about it). A second end within
+    /// CRASH_RELOAD_COOLDOWN counts as the same page failing again.
+    fn on_content_process_gone(&mut self, window: WindowId) {
+        let now = Instant::now();
+        let Some(w) = self.windows.get_mut(&window) else {
+            return;
+        };
+        // A pop-out hidden for its download shows no page, and the download
+        // does not run in that process: loading again would fetch it twice.
+        if matches!(
+            w.kind,
+            Kind::Popout {
+                hidden_for_download: true,
+                ..
+            }
+        ) {
+            return;
+        }
+        let again = w
+            .content_process_gone_at
+            .is_some_and(|at| now.saturating_duration_since(at) < CRASH_RELOAD_COOLDOWN);
+        w.content_process_gone_at = Some(now);
+        let on_server = self.phase.borrow().loaded().is_some();
+        match policy::recovery(window == self.main_id, on_server, again) {
+            Recovery::Reload => {
+                if let Some((url, with_auth)) = self.reload_target(window) {
+                    self.load_in(window, &url, with_auth);
+                }
+            }
+            Recovery::ConnectPage { gave_up } => {
+                self.show_connect_page(gave_up.then(|| PAGE_KEEPS_STOPPING.to_string()), false);
+            }
+            Recovery::Close => self.remove_window(window),
+            Recovery::Nothing => eprintln!("codeman-desktop: a page stopped again and was left as it is"),
         }
     }
 
@@ -1328,25 +1396,8 @@ impl App {
                     .as_ref()
                     .and_then(|u| keychain.load_blocking(&credentials::account(&key, u))),
             };
-            let (user, password, source) = match typed_password {
-                Some(p) => (user, Some(p), PasswordSource::Typed),
-                None => match saved {
-                    Some(p) => (user, Some(p), PasswordSource::Keychain),
-                    // The Codeman on this Mac keeps its login where Codeman's
-                    // own clients find it (setup::local_login: its launchd
-                    // job, then ~/.codeman/.env), and only answers it at its
-                    // own loopback address. Used when nothing was typed and
-                    // the Keychain has nothing for this server, for the same
-                    // username only, and never saved anywhere.
-                    None if !expect_saved => match setup::local_login(&url) {
-                        Some((u, p)) if user.as_deref().is_none_or(|current| current == u) => {
-                            (Some(u), Some(p), PasswordSource::LocalServer)
-                        }
-                        _ => (user, None, PasswordSource::Absent),
-                    },
-                    None => (user, None, PasswordSource::Absent),
-                },
-            };
+            let (user, password, source) =
+                choose_login(user, typed_password, saved, expect_saved, || setup::local_login(&url));
             // Codeman's default username when only a password was given.
             let username = password
                 .as_ref()
@@ -1633,14 +1684,33 @@ impl App {
         }
         let opened_url = policy::webkit_safe_url(url);
         let auth = self.auth.clone().filter(|_| policy::within_base(url, &server));
-        let window = match WindowBuilder::new()
+        // tao centres a window that is given no position, so every pop-out
+        // would open exactly on top of the one before. Each one steps off the
+        // window in use instead.
+        let position = self
+            .focused_window_id()
+            .or(Some(self.main_id))
+            .and_then(|id| self.windows.get(&id))
+            .and_then(|w| {
+                // The corner tao's with_position places (see record_main_frame).
+                #[cfg(target_os = "macos")]
+                let corner = w.window.inner_position();
+                #[cfg(not(target_os = "macos"))]
+                let corner = w.window.outer_position();
+                let p = corner.ok()?.to_logical::<f64>(w.window.scale_factor());
+                let step = POPOUT_STEP * (1 + popouts % 8) as f64;
+                Some(LogicalPosition::new(p.x + step, p.y + step))
+            });
+        let mut builder = WindowBuilder::new()
             .with_title(APP_NAME)
             .with_theme(Some(Theme::Dark))
             .with_inner_size(LogicalSize::new(POPOUT_SIZE.0, POPOUT_SIZE.1))
             .with_min_inner_size(LogicalSize::new(MIN_SIZE.0, MIN_SIZE.1))
-            .with_focused(focused)
-            .build(target)
-        {
+            .with_focused(focused);
+        if let Some(position) = position {
+            builder = builder.with_position(position);
+        }
+        let window = match builder.build(target) {
             Ok(window) => window,
             Err(e) => {
                 eprintln!("codeman-desktop: could not open a window: {e}");
@@ -1651,8 +1721,15 @@ impl App {
             url: &opened_url,
             auth: auth.as_deref(),
         };
-        let webview = match build_webview(&window, false, load, &self.proxy, &self.phase) {
-            Ok(webview) => webview,
+        let webview = match build_webview(&window, false, focused, load, &self.proxy, &self.phase) {
+            Ok(webview) => {
+                // Still the one that takes the keys once the user comes to
+                // this window: first responder in its own window only.
+                if !focused {
+                    let _ = webview.focus();
+                }
+                webview
+            }
             Err(e) => {
                 eprintln!("codeman-desktop: could not create a web view: {e}");
                 return false;
@@ -1671,6 +1748,7 @@ impl App {
                 },
                 committed: None,
                 session_reload_at: None,
+                content_process_gone_at: None,
             },
         );
         true
@@ -1791,11 +1869,12 @@ impl App {
         if self.config.window != Some(frame) {
             self.config.window = Some(frame);
             self.config_dirty = true;
+            self.save_held_since = Instant::now();
         }
     }
 
     fn save_config(&mut self) {
-        self.last_save = Instant::now();
+        self.save_held_since = Instant::now();
         self.config_dirty = false;
         if let Some(path) = &self.config_path {
             if let Err(e) = self.config.save_to(path) {
@@ -1825,6 +1904,38 @@ impl App {
 }
 
 /// A login the probe just tried, and what the user asked for it.
+/// The login a connect goes out with, and where its password came from. A
+/// typed password wins, then the one the Keychain holds for this user. Last
+/// comes the login of the Codeman on this Mac, which keeps it where its own
+/// clients find it (setup::local_login: its launchd job, then
+/// ~/.codeman/.env) and only answers it at its own loopback address. That one
+/// is used only when the config expected no password in the Keychain
+/// (`expect_saved`: one that should be there and is not is reported, not
+/// papered over), only for the username in use when there is one, and it is
+/// never saved anywhere. `local` is asked only then: it runs processes.
+fn choose_login(
+    user: Option<String>,
+    typed_password: Option<String>,
+    saved: Option<String>,
+    expect_saved: bool,
+    local: impl FnOnce() -> Option<(String, String)>,
+) -> (Option<String>, Option<String>, PasswordSource) {
+    if let Some(password) = typed_password {
+        return (user, Some(password), PasswordSource::Typed);
+    }
+    if let Some(password) = saved {
+        return (user, Some(password), PasswordSource::Keychain);
+    }
+    if !expect_saved {
+        if let Some((local_user, password)) = local() {
+            if user.as_deref().is_none_or(|current| current == local_user) {
+                return (Some(local_user), Some(password), PasswordSource::LocalServer);
+            }
+        }
+    }
+    (user, None, PasswordSource::Absent)
+}
+
 struct ProbedLogin<'a> {
     /// The server, as the config and the Keychain accounts key it.
     server: &'a str,
@@ -1903,4 +2014,168 @@ fn update_keychain(keychain: &Keychain, outcome: &ProbeOutcome, login: &ProbedLo
     };
     update.saved = saved;
     update
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::credentials::memory;
+
+    fn none() -> Option<(String, String)> {
+        panic!("the local login must not be looked up here");
+    }
+
+    #[test]
+    fn the_login_a_connect_uses() {
+        let s = |v: &str| Some(v.to_string());
+        let local = || Some(("admin".to_string(), "from-this-mac".to_string()));
+
+        // A typed password wins over everything, and nothing else is asked.
+        assert_eq!(
+            choose_login(s("kay"), s("typed"), s("kept"), true, none),
+            (s("kay"), s("typed"), PasswordSource::Typed)
+        );
+        // Then the Keychain's.
+        assert_eq!(
+            choose_login(s("kay"), None, s("kept"), true, none),
+            (s("kay"), s("kept"), PasswordSource::Keychain)
+        );
+        // The Keychain should hold one and does not: reported as absent, the
+        // local login is not tried in its place.
+        assert_eq!(
+            choose_login(s("kay"), None, None, true, none),
+            (s("kay"), None, PasswordSource::Absent)
+        );
+        // Nothing typed, nothing expected: the Codeman on this Mac's own
+        // login, for no username or the same one.
+        assert_eq!(
+            choose_login(None, None, None, false, local),
+            (s("admin"), s("from-this-mac"), PasswordSource::LocalServer)
+        );
+        assert_eq!(
+            choose_login(s("admin"), None, None, false, local),
+            (s("admin"), s("from-this-mac"), PasswordSource::LocalServer)
+        );
+        // Never for another user: the names are compared exactly.
+        assert_eq!(
+            choose_login(s("kay"), None, None, false, local),
+            (s("kay"), None, PasswordSource::Absent)
+        );
+        assert_eq!(
+            choose_login(s("Admin"), None, None, false, local),
+            (s("Admin"), None, PasswordSource::Absent)
+        );
+        // No local login either.
+        assert_eq!(
+            choose_login(None, None, None, false, || None),
+            (None, None, PasswordSource::Absent)
+        );
+    }
+
+    /// update_keychain for one probe answer; the log is what the Keychain did,
+    /// in order (the last load only waits for the queue to drain).
+    fn keychain_after(outcome: ProbeOutcome, login: ProbedLogin<'_>) -> (KeychainUpdate, Vec<String>) {
+        let (keychain, store) = memory::keychain();
+        let update = update_keychain(&keychain, &outcome, &login);
+        keychain.load_blocking("done");
+        let mut log = store.log();
+        assert_eq!(log.pop().as_deref(), Some("load done"));
+        (update, log)
+    }
+
+    fn login<'a>(
+        previous_user: Option<&'a str>,
+        username: Option<&'a str>,
+        source: PasswordSource,
+        remember: bool,
+    ) -> ProbedLogin<'a> {
+        ProbedLogin {
+            server: "http://a/",
+            previous_user,
+            username,
+            password: (source != PasswordSource::Absent).then_some("secret"),
+            source,
+            remember,
+        }
+    }
+
+    #[test]
+    fn what_the_keychain_keeps_after_a_connect() {
+        let ok = || ProbeOutcome::Ok {
+            version: "1.48.0".into(),
+        };
+        let item = |user: &str| credentials::account("http://a/", user);
+
+        // A typed password is saved when Remember is on, deleted when it is off.
+        let (update, log) = keychain_after(ok(), login(Some("kay"), Some("kay"), PasswordSource::Typed, true));
+        assert!(update.saved && update.deleted.is_empty());
+        assert_eq!(log, [format!("save {}", item("kay"))]);
+        let (update, log) = keychain_after(ok(), login(Some("kay"), Some("kay"), PasswordSource::Typed, false));
+        assert!(!update.saved);
+        assert_eq!(update.deleted, ["kay"]);
+        assert_eq!(log, [format!("delete {}", item("kay"))]);
+
+        // One that came from the Keychain is there already: nothing is written.
+        let (update, log) = keychain_after(ok(), login(Some("kay"), Some("kay"), PasswordSource::Keychain, true));
+        assert!(update.saved && log.is_empty());
+
+        // The local Codeman's own login never gets a copy, Remember or not.
+        let (update, log) = keychain_after(ok(), login(None, Some("admin"), PasswordSource::LocalServer, true));
+        assert!(!update.saved && update.deleted.is_empty() && log.is_empty());
+
+        // Another user than before: the old user's item goes FIRST, then the save.
+        let (update, log) = keychain_after(ok(), login(Some("old"), Some("new"), PasswordSource::Typed, true));
+        assert!(update.saved);
+        assert_eq!(update.deleted, ["old"]);
+        assert_eq!(
+            log,
+            [format!("delete {}", item("old")), format!("save {}", item("new"))]
+        );
+
+        // A password the server wants changed is never kept.
+        let (update, log) = keychain_after(
+            ProbeOutcome::PasswordChangeRequired,
+            login(Some("kay"), Some("kay"), PasswordSource::Typed, true),
+        );
+        assert!(!update.saved);
+        assert_eq!(update.deleted, ["kay"]);
+        assert_eq!(log, [format!("delete {}", item("kay"))]);
+
+        // A login the server did not accept changes nothing.
+        for refused in [
+            ProbeOutcome::BadCredentials,
+            ProbeOutcome::NeedsLogin,
+            ProbeOutcome::Refused,
+            ProbeOutcome::Timeout,
+        ] {
+            let (update, log) = keychain_after(refused, login(Some("old"), Some("new"), PasswordSource::Typed, true));
+            assert!(!update.saved && update.deleted.is_empty() && log.is_empty());
+        }
+    }
+
+    #[test]
+    fn a_commit_from_the_loading_server_is_the_loaded_page() {
+        let server = Url::parse("https://box.ts.net/codeman/").unwrap();
+        let loading = Phase::Loading(server.clone());
+        assert_eq!(
+            loaded_on_commit(&loading, "https://box.ts.net/codeman/"),
+            Some(Phase::Loaded(server.clone()))
+        );
+        // Any page of that origin counts: the server may redirect within it.
+        assert_eq!(
+            loaded_on_commit(&loading, "https://box.ts.net/codeman/session/abc"),
+            Some(Phase::Loaded(server.clone()))
+        );
+        // Another origin, the connect page, or junk: still loading.
+        assert_eq!(loaded_on_commit(&loading, "https://other.ts.net/codeman/"), None);
+        assert_eq!(loaded_on_commit(&loading, "http://box.ts.net/codeman/"), None);
+        assert_eq!(loaded_on_commit(&loading, policy::CONNECT_PAGE), None);
+        assert_eq!(loaded_on_commit(&loading, "not a url"), None);
+        // Only a load under way can finish.
+        assert_eq!(loaded_on_commit(&Phase::Connect, "https://box.ts.net/codeman/"), None);
+        assert_eq!(
+            loaded_on_commit(&Phase::Loaded(server), "https://box.ts.net/codeman/"),
+            None
+        );
+    }
 }

@@ -20,22 +20,35 @@
     --ok: #4ade80;
   }
   * { box-sizing: border-box; }
-  html, body { height: 100%; margin: 0; }
+  html { height: 100%; }
   body {
+    min-height: 100%; margin: 0;
     background: radial-gradient(1200px 600px at 50% -10%, #111a2b 0%, var(--bg) 60%) fixed, var(--bg);
     color: var(--text);
     font: 14px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
-    display: flex; justify-content: center;
+    display: flex; flex-direction: column; align-items: center;
     -webkit-user-select: none; user-select: none;
   }
-  /* margin:auto, not align-items:center: a flex child taller than the window
-     then starts at the top instead of being cut off above it. */
-  main { width: min(440px, calc(100vw - 48px)); margin: auto; padding: 24px 0; }
+  /* The top margin centres the tallest everyday page (a saved server with its
+     login, 708px), so the header stays where it is while the card changes: a
+     taller card grows downward, and a window too small for the page scrolls it
+     from the top (centring with align-items would cut the top off, out of
+     reach). */
+  main { width: min(440px, calc(100vw - 48px)); margin: max(20px, calc((100vh - 708px) / 2)) 0 24px; }
   header { text-align: center; margin-bottom: 26px; }
   header img { width: 76px; height: 76px; display: block; margin: 0 auto 12px; }
   h1 { font-size: 24px; font-weight: 650; letter-spacing: -0.01em; margin: 0; }
   header p { margin: 4px 0 0; color: var(--muted); }
+  @media (max-height: 640px) {
+    header { margin-bottom: 16px; }
+    header img { width: 48px; height: 48px; margin-bottom: 8px; }
+    header p { display: none; }
+    h1 { font-size: 20px; }
+  }
+  /* As tall as its usual content at least, with the two settings at its foot,
+     so switching tabs or a status arriving does not resize it. */
   .card {
+    display: flex; flex-direction: column; min-height: 304px;
     background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
     padding: 20px; box-shadow: 0 20px 60px rgba(0,0,0,0.45);
   }
@@ -69,16 +82,23 @@
   button.primary, button.secondary {
     height: 38px; border-radius: 9px; font: inherit; font-weight: 600; padding: 0 16px; cursor: default;
   }
-  button.primary { flex: 1; border: 0; color: white; background: linear-gradient(180deg, var(--accent) 0%, var(--accent-2) 100%); }
-  button.primary:disabled { opacity: 0.55; }
+  button.primary { flex: 1; border: 0; color: white; background: linear-gradient(180deg, #2f6fed 0%, #2563eb 100%); }
   button.secondary { border: 1px solid var(--line-strong); background: #16181d; color: var(--text); }
+  /* A press answers at once, before the app does. Disabled comes last, so a
+     button that cannot be pressed does not look as if it could. */
+  button.primary:hover { filter: brightness(1.07); }
+  button.primary:active { filter: brightness(0.9); }
   button.secondary:hover { border-color: var(--accent-2); }
-  button.secondary:disabled { opacity: 0.55; }
+  button.secondary:active { background: #1f232b; }
+  button.primary:disabled, button.secondary:disabled { opacity: 0.55; filter: none; }
+  button.secondary:disabled { border-color: var(--line-strong); background: #16181d; }
+  button:focus-visible, .check input:focus-visible, summary:focus-visible, footer a:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
   button[hidden] { display: none; }
-  #status { min-height: 20px; margin-top: 14px; font-size: 13px; color: var(--muted); display: flex; gap: 8px; align-items: flex-start; }
+  #status { margin-top: 14px; font-size: 13px; color: var(--muted); display: flex; gap: 8px; align-items: flex-start; }
   #status.bad { color: var(--bad); }
   #status.warn { color: var(--warn); }
   #status.ok { color: var(--ok); }
+  #status-text { min-width: 0; overflow-wrap: anywhere; -webkit-user-select: text; user-select: text; }
   #status .detail { display: block; color: var(--muted); font-size: 12px; margin-top: 4px; white-space: pre-wrap; -webkit-user-select: text; user-select: text; }
   #suggest { display: block; max-width: 100%; margin-top: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #suggest[hidden] { display: none; }
@@ -88,7 +108,8 @@
   .spinner[hidden] { display: none; }
   @keyframes spin { to { transform: rotate(360deg); } }
   @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2.4s; } }
-  .prefs { margin-top: 16px; }
+  .prefs { margin-top: auto; }
+  .prefs::before { content: ''; display: block; margin-top: 16px; padding-top: 4px; border-top: 1px solid var(--line); }
   .tabs { display: flex; gap: 4px; padding: 4px; margin: 0 0 18px; background: #0c0d10; border: 1px solid var(--line); border-radius: 11px; }
   .tabs button { all: unset; flex: 1; text-align: center; height: 30px; line-height: 30px; border-radius: 8px; font-weight: 600; font-size: 13px; color: var(--muted); cursor: default; }
   .tabs button:hover { color: var(--text); }
@@ -104,7 +125,8 @@
   @media (prefers-reduced-motion: reduce) { .dot.busy { animation: none; } }
   #local-title { font-weight: 600; }
   .sub { color: var(--muted); font-size: 12px; margin-top: 3px; -webkit-user-select: text; user-select: text; overflow-wrap: anywhere; }
-  #elsewhere { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
+  #elsewhere { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+  #elsewhere[hidden] { display: none; }
   #elsewhere summary { color: var(--muted); font-size: 13px; cursor: default; list-style: none; }
   #elsewhere summary::-webkit-details-marker { display: none; }
   #elsewhere summary::before { content: '\25B8'; display: inline-block; width: 14px; transition: transform 0.15s; }
@@ -117,14 +139,15 @@
   .oneliner { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
   .oneliner code { flex: 1; min-width: 0; font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; background: #0c0d10; border: 1px solid var(--line-strong); border-radius: 8px; padding: 9px 10px; color: #c9d1d9; -webkit-user-select: all; user-select: all; overflow-x: auto; white-space: nowrap; }
   .statusrow { display: flex; gap: 10px; align-items: flex-start; }
+  .statusrow[hidden] { display: none; }
   .statusrow #status { flex: 1; }
   .statusrow #cancel { margin-top: 10px; }
-  /* The graphical install takes over the card, and its steps differ in height:
-     anchored from the top, so the logo does not jump from one to the next. */
-  main:has(.card.wizard-on) { margin-top: max(0px, calc(14vh - 60px)); margin-bottom: auto; }
+  /* The graphical install takes over the card. Its steps differ in height, and
+     the page is anchored from the top (see `main`), so the logo stays put. */
   main:has(.card.wizard-on) header p { display: none; }
   .card.wizard-on > .tabs, .card.wizard-on > #pane-local, .card.wizard-on > #form,
-  .card.wizard-on > .statusrow, .card.wizard-on > #suggest, .card.wizard-on > .prefs { display: none; }
+  .card.wizard-on > .statusrow, .card.wizard-on > #suggest, .card.wizard-on > #elsewhere,
+  .card.wizard-on > .prefs { display: none; }
   #wizard[hidden], #wizard [hidden] { display: none; }
   .wiz-head { display: flex; align-items: center; gap: 9px; }
   .wiz-head .spinner { margin-top: 0; }
@@ -194,8 +217,8 @@
     white-space: pre-wrap; overflow-wrap: anywhere; -webkit-user-select: text; user-select: text;
   }
   #wizard .actions .wiz-busy { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
-  footer { margin-top: 18px; text-align: center; color: #5d626b; font-size: 12px; }
-  footer a { color: #7c8491; text-decoration: none; cursor: default; }
+  footer { margin-top: 18px; text-align: center; color: var(--muted); font-size: 12px; }
+  footer a { color: #aab1bb; text-decoration: none; cursor: default; }
   footer a:hover { color: var(--accent); }
   kbd { font: 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace; border: 1px solid var(--line-strong); border-bottom-width: 2px; border-radius: 4px; padding: 2px 4px; color: #9aa1ab; }
 </style>
@@ -258,7 +281,7 @@
     <section id="pane-local" role="tabpanel" aria-labelledby="tab-local">
       <div class="local">
         <span class="dot busy" id="local-dot"></span>
-        <div>
+        <div role="status">
           <div id="local-title">Looking for Codeman on this Mac…</div>
           <div class="sub" id="local-detail"></div>
         </div>
@@ -277,7 +300,7 @@
     <input id="url" type="text" spellcheck="false" autocapitalize="off"
            placeholder="http://127.0.0.1:3000  or  https://your-box.ts.net" list="recent-list">
     <datalist id="recent-list"></datalist>
-    <div id="recent" aria-label="Recent servers"></div>
+    <div id="recent" role="group" aria-label="Recent servers"></div>
 
     <div id="login" hidden>
       <div class="row">
@@ -298,26 +321,28 @@
       <button class="secondary" id="start" type="button" hidden>Start Codeman on this Mac</button>
     </div>
 
-    <details id="elsewhere">
-      <summary>Codeman is not installed there yet?</summary>
-      <label class="field" for="ssh">Install it over SSH</label>
-      <div class="inline">
-        <input id="ssh" type="text" spellcheck="false" autocapitalize="off" placeholder="you@machine, or a name from ~/.ssh/config">
-        <button class="secondary" id="ssh-install" type="button">Install</button>
-      </div>
-      <p class="sub">Terminal opens, connects with ssh and runs Codeman’s installer there. Or run this in a terminal on that machine:</p>
-      <div class="oneliner"><code id="oneliner">curl -fsSL https://getcodeman.com/install | bash</code><button class="secondary" id="copy" type="button">Copy</button></div>
-    </details>
   </form>
 
-    <div class="statusrow">
+    <div class="statusrow" id="status-row" hidden>
       <div id="status" role="status" aria-live="polite"><span class="spinner" id="spinner" hidden></span><span id="status-text"></span></div>
       <button class="secondary" id="cancel" type="button" hidden>Cancel</button>
     </div>
     <button class="secondary" id="suggest" type="button" hidden></button>
 
+    <details id="elsewhere" hidden>
+      <summary>Codeman is not installed there yet?</summary>
+      <label class="field" for="ssh">Install it over SSH</label>
+      <div class="inline">
+        <!-- 300 is what setup.rs takes for a login, and at most 900 bytes: under the cap of a message the app accepts. -->
+        <input id="ssh" type="text" maxlength="300" spellcheck="false" autocapitalize="off" placeholder="you@machine, or a name from ~/.ssh/config">
+        <button class="secondary" id="ssh-install" type="button">Install</button>
+      </div>
+      <p class="sub">Terminal opens, connects with ssh and runs Codeman’s installer there. Or run this in a terminal on that machine:</p>
+      <div class="oneliner"><code id="oneliner">curl -fsSL https://getcodeman.com/install | bash</code><button class="secondary" id="copy" type="button">Copy</button></div>
+    </details>
+
     <div class="prefs">
-      <label class="check"><input id="auto" type="checkbox"> Connect automatically when the app opens</label>
+      <label class="check"><input id="auto" type="checkbox" checked> Connect automatically when the app opens</label>
       <label class="check"><input id="fullscreen" type="checkbox"> Always open in full screen <kbd>&#8963;&#8984;F</kbd></label>
     </div>
   </div>
@@ -346,7 +371,7 @@
     form: $('form'), url: $('url'), list: $('recent-list'), recent: $('recent'),
     login: $('login'), username: $('username'), password: $('password'), remember: $('remember'),
     connect: $('connect'), cancel: $('cancel'), start: $('start'), suggest: $('suggest'),
-    status: $('status'), spinner: $('spinner'), statusText: $('status-text'),
+    statusRow: $('status-row'), status: $('status'), spinner: $('spinner'), statusText: $('status-text'),
     auto: $('auto'), fullscreen: $('fullscreen'), version: $('version'), webkit: $('webkit'),
     tabLocal: $('tab-local'), tabRemote: $('tab-remote'), paneLocal: $('pane-local'),
     localDot: $('local-dot'), localTitle: $('local-title'), localDetail: $('local-detail'),
@@ -365,14 +390,19 @@
   // startUrl: the address the user asked to start Codeman for ('' when this
   // page did not ask, e.g. it was reloaded while a start was running).
   // suggestion: the address the suggest button connects to.
-  // tab: 'local' (This Mac) or 'remote' (Another machine). local: the last
-  // This Mac status from the app. wait: set while an install runs in
+  // tab: 'local' (This Mac) or 'remote' (Another machine). askedFrom: the tab
+  // the connect under way was asked from, where its answer belongs. local: the
+  // last This Mac status from the app. wait: set while an install runs in
   // Terminal and this page polls for the server it brings up. gui: the
   // graphical install while its screens are up (newWizard), null otherwise.
+  // reopen: a connect to this Mac was refused, so open it if it turns out to
+  // be starting. startingLooks: how often the page has looked again at a
+  // starting server.
   var state = {
     servers: [], busy: false, lastUrl: '', startUrl: '', suggestion: '',
-    tab: 'local', local: null, localChecking: false, opening: false, wait: null, waitTimer: 0,
-    stoppedWaiting: false, gui: null
+    tab: 'local', askedFrom: 'local', local: null, localChecking: false, opening: false,
+    wait: null, waitTimer: 0, stoppedWaiting: false, gui: null,
+    reopen: false, startingLooks: 0, startingTimer: 0
   };
   // While an install runs: how often to look, how long a finished install may
   // take to answer before Start is offered, and when to stop looking.
@@ -382,10 +412,32 @@
   // The phases `install.sh --progress` reports, in its order.
   var PHASES = ['runtime', 'agent', 'source', 'packages', 'build', 'service'];
   var MAX_LOG_LINES = 600;
+  // A server that is still starting: how often to look again, and how many times.
+  var STARTING_POLL_MS = 1000;
+  var STARTING_MAX_LOOKS = 20;
+  // What the app takes in one message, in UTF-8 bytes (MAX_URL_LEN and
+  // MAX_FIELD_LEN in policy.rs). It drops a longer one without an answer, so
+  // the page has to be the one that says so.
+  var MAX_URL = 4096;
+  var MAX_FIELD = 1024;
+  function tooLong(text, max) {
+    var bytes = 0;
+    for (var i = 0; i < text.length; i++) {
+      var c = text.charCodeAt(i);
+      if (c < 0x80) bytes += 1;
+      else if (c < 0x800) bytes += 2;
+      else if (c >= 0xd800 && c < 0xdc00) { bytes += 4; i++; } // a surrogate pair: one character
+      else bytes += 3;
+    }
+    return bytes > max;
+  }
 
   function post(msg) { try { window.ipc.postMessage(JSON.stringify(msg)); } catch (e) { /* not in the app */ } }
 
   function setStatus(kind, text, detail) {
+    els.statusRow.hidden = !text;
+    // In a small window the line may be below the fold: bring it into view.
+    if (text && els.statusRow.scrollIntoView) els.statusRow.scrollIntoView({ block: 'nearest' });
     els.status.className = kind || '';
     els.spinner.hidden = kind !== 'busy';
     els.statusText.textContent = text || '';
@@ -439,14 +491,16 @@
   }
 
   // The address as the app normalizes it (policy::normalize_server_url):
-  // http:// by default, https:// for a .ts.net name, no query or fragment, a
-  // trailing slash. Only used to tell whether two addresses are one server.
+  // http:// by default, https:// for a .ts.net name without a port, no query
+  // or fragment, a trailing slash. Only used to tell whether two addresses
+  // are one server.
   function normalize(raw) {
     var s = String(raw || '').trim();
     if (!s) return '';
     if (s.indexOf('://') < 0) {
       var name = s.split(/[\/:]/)[0].toLowerCase();
-      s = (/\.ts\.net$/.test(name) ? 'https' : 'http') + '://' + s;
+      var tailscaleServe = /\.ts\.net$/.test(name) && s.charAt(name.length) !== ':';
+      s = (tailscaleServe ? 'https' : 'http') + '://' + s;
     }
     try {
       var u = new URL(s);
@@ -486,6 +540,7 @@
       x.className = 'x';
       x.textContent = '×';
       x.title = 'Forget this server' + (s.hasSavedPassword ? ' and its saved password' : '');
+      x.setAttribute('aria-label', 'Forget ' + host(s.url));
       x.addEventListener('click', function () { if (!state.busy) post({ cmd: 'forget', url: s.url }); });
       chip.appendChild(pick);
       chip.appendChild(x);
@@ -506,20 +561,27 @@
   function matchSaved() {
     var match = state.servers.filter(function (s) { return s.url === els.url.value.trim(); })[0];
     if (match) choose(match);
+    else els.password.placeholder = '';
   }
 
   function connect() {
     if (state.busy || tooOld) return;
     var url = els.url.value.trim();
     if (!url) { setStatus('bad', 'Enter the address of your Codeman server.'); els.url.focus(); return; }
+    var username = els.login.hidden ? '' : els.username.value.trim();
+    var password = els.login.hidden ? '' : els.password.value;
+    if (tooLong(url, MAX_URL)) { setStatus('bad', 'That address is too long.'); els.url.focus(); return; }
+    if (tooLong(username, MAX_FIELD) || tooLong(password, MAX_FIELD)) {
+      setStatus('bad', 'That username or password is too long.');
+      return;
+    }
     state.lastUrl = url;
+    state.askedFrom = state.tab;
     setBusy(true);
     setStatus('busy', 'Connecting to ' + url + '…');
     var msg = { cmd: 'connect', url: url, remember: els.remember.checked };
-    if (!els.login.hidden) {
-      if (els.username.value.trim()) msg.username = els.username.value.trim();
-      if (els.password.value) msg.password = els.password.value;
-    }
+    if (username) msg.username = username;
+    if (password) msg.password = password;
     post(msg);
   }
 
@@ -545,8 +607,7 @@
     unreachable: ['bad', 'This Mac cannot reach that address.', 'Check that the machine is on and on the same network (or that Tailscale is connected). ' + LOCAL_NETWORK],
     unresolvable: ['bad', 'That host name could not be found.', 'Check the spelling, or that Tailscale is connected for a .ts.net name.'],
     maybeHttps: ['bad', 'The server closed the connection without answering.', 'The port may be serving HTTPS: a Codeman started with --https only answers https://. Try the https:// address, or your tailnet name (https://….ts.net). Codeman’s own self-signed certificate names only localhost and 127.0.0.1, so the app cannot accept it at this address: serve Codeman through tailscale serve (a real ts.net certificate) or a reverse proxy with a real certificate.'],
-    tlsUntrusted: ['bad', 'The server’s HTTPS certificate is not trusted.', 'This is usually Codeman’s self-signed certificate (codeman web --https). It names only localhost and 127.0.0.1, so the app cannot accept it at this address. Serve Codeman through tailscale serve (a real https://….ts.net certificate) or a reverse proxy with a real certificate. For a server on this Mac, run Codeman without --https and use http://127.0.0.1:PORT.'],
-    passwordChangeRequired: ['warn', 'Codeman asks for a new password for this account.', 'Open it in a browser to set one, then connect with the new password.']
+    tlsUntrusted: ['bad', 'The server’s HTTPS certificate is not trusted.', 'This is usually Codeman’s self-signed certificate (codeman web --https). It names only localhost and 127.0.0.1, so the app cannot accept it at this address. Serve Codeman through tailscale serve (a real https://….ts.net certificate) or a reverse proxy with a real certificate. For a server on this Mac, run Codeman without --https and use http://127.0.0.1:PORT.']
   };
 
   // The same two at localhost or 127.0.0.1, the only names Codeman's
@@ -563,6 +624,9 @@
   }
 
   function onProbeResult(msg) {
+    // The answer belongs to the tab its connect was asked from, whichever one
+    // shows by now; with no connect under way, to the one in view.
+    var asked = state.busy ? state.askedFrom : state.tab;
     setBusy(false);
     hideSuggestion();
     var o = msg.outcome || {};
@@ -571,9 +635,14 @@
       // The login fields live on the Another machine tab.
       selectTab('remote');
       showLogin();
-    } else if (state.tab === 'local') {
+    } else if (asked === 'local') {
       // Opening the Codeman on this Mac failed: look at it again.
-      checkLocal('login');
+      state.reopen = o.kind === 'refused';
+      selectTab('local');
+      // selectTab starts the look itself when there has been none yet.
+      if (!state.localChecking) checkLocal('login');
+    } else {
+      selectTab('remote');
     }
     if (o.kind === 'notCodeman') {
       setStatus('bad', 'Something answered, but it is not a Codeman server (HTTP ' + o.status + ').', 'Check the port and, behind a proxy, the path Codeman is mounted under.');
@@ -596,6 +665,9 @@
       }
       if (explainLoopback[o.kind] && loopbackName(msg.url)) detail = explainLoopback[o.kind];
       if (o.kind === 'tlsUntrusted' && o.detail) detail += '\n(' + o.detail + ')';
+      if ((o.kind === 'needsLogin' || o.kind === 'badCredentials') && /^http:/i.test(normalize(msg.url)) && !isLocalUrl(msg.url)) {
+        detail += ' This address is http://, so the password crosses the network unencrypted: fine on a tailnet or a network you trust.';
+      }
       setStatus(e[0], e[1], detail);
       if (o.kind === 'maybeHttps' && /^http:/i.test(msg.url || '')) suggest(String(msg.url).replace(/^http:/i, 'https:'));
     } else {
@@ -622,7 +694,13 @@
     return h === 'localhost' || /^127\./.test(h) || h === '[::1]';
   }
 
-  function selectTab(tab) {
+  // Look at this Mac, once, when the This Mac tab shows and nothing has yet.
+  function ensureLocalChecked() {
+    if (state.tab === 'local' && !state.local && !state.localChecking) checkLocal('login');
+  }
+
+  // later: leave the look at this Mac to whoever asked (ensureLocalChecked).
+  function selectTab(tab, later) {
     if (tab !== 'local' && tab !== 'remote') return;
     var changed = state.tab !== tab;
     state.tab = tab;
@@ -633,15 +711,14 @@
     els.tabRemote.tabIndex = local ? -1 : 0;
     els.paneLocal.hidden = !local;
     els.form.hidden = local;
+    els.elsewhere.hidden = local;
     if (changed && !state.busy) {
       setStatus('', '');
       hideSuggestion();
     }
-    if (local && !state.local && !state.localChecking) checkLocal('login');
+    if (!later) ensureLocalChecked();
   }
 
-  // quick: skip the login shell (used while an install runs, when only
-  // "does it answer yet" matters).
   // How hard to look: 'quick' (files and processes, while an install runs),
   // 'login' (also the login shell; every automatic look) or 'deep' (also the
   // interactive profile, only on Check again).
@@ -674,13 +751,18 @@
       title = 'Installing Codeman in Terminal…';
       detail = 'Answer the installer’s questions there. This window opens Codeman when it is done.';
       show.stop = true;
-    } else if (state.localChecking || !s) {
+    } else if (!s) {
       dot = 'busy';
       title = 'Looking for Codeman on this Mac…';
     } else if (s.installRunning && s.state !== 'running' && s.state !== 'needsLogin') {
       dot = 'busy';
       title = 'Codeman is being installed in Terminal.';
       detail = 'Finish the installer there, then Check again.';
+      show.check = true;
+    } else if (s.state === 'starting') {
+      dot = 'busy';
+      title = 'Codeman is starting on this Mac…';
+      detail = 'It will answer at ' + s.url + ' in a moment.';
       show.check = true;
     } else if (s.state === 'runningElsewhere') {
       dot = 'warn';
@@ -738,6 +820,8 @@
       }
       show.check = true;
     }
+    // Looking again: what was found last stays on screen, so nothing jumps.
+    if (state.localChecking && s && !state.wait) dot = 'busy';
     els.localDot.className = 'dot' + (dot ? ' ' + dot : '');
     els.localTitle.textContent = title;
     els.localDetail.textContent = detail;
@@ -772,7 +856,34 @@
       onWaitStatus(state.local || {});
       return;
     }
+    if (followStarting(s)) return;
     renderLocal();
+  }
+
+  // A Codeman that is still starting (its process runs, but listens nowhere
+  // yet: the first seconds after login, a restart): look again every second
+  // for a while. Once it is up, open it if a connect to this Mac was refused
+  // on the way here, which is what the user had asked for. True when it opened.
+  function followStarting(s) {
+    clearTimeout(state.startingTimer);
+    if (s && s.state === 'starting') {
+      if (state.startingLooks < STARTING_MAX_LOOKS) {
+        state.startingLooks++;
+        state.startingTimer = setTimeout(function () {
+          if (state.local && state.local.state === 'starting' && !state.wait) checkLocal('quick');
+        }, STARTING_POLL_MS);
+      }
+      return false;
+    }
+    var up = !!s && (s.state === 'running' || s.state === 'needsLogin');
+    var open = up && state.reopen && state.startingLooks > 0 && state.tab === 'local' && !state.busy;
+    state.startingLooks = 0;
+    state.reopen = false;
+    if (open) {
+      renderLocal();
+      openLocal();
+    }
+    return open;
   }
 
   // Point the Another machine form at `url` with only the login saved for it:
@@ -1209,9 +1320,6 @@
     if (state.gui && state.gui.step === 'finishing') closeWizard();
   }
 
-  // One answer while an install runs. It stops at the first answer from a
-  // server: a password-protected one counts every unauthenticated look as a
-  // failed login.
   function portOf(url) {
     try {
       var u = new URL(url);
@@ -1219,6 +1327,9 @@
     } catch (e) { return 0; }
   }
 
+  // One answer while an install runs. It stops at the first answer from a
+  // server: a password-protected one counts every unauthenticated look as a
+  // failed login.
   function onWaitStatus(s) {
     var w = state.wait;
     var now = Date.now();
@@ -1287,20 +1398,25 @@
           els.version.textContent = 'Codeman Desktop ' + (msg.version || '');
           renderRecent();
           if (state.servers[0]) choose(state.servers[0]);
-          // The tab of the server used last; This Mac on a first run.
-          selectTab(state.servers[0] && !isLocalUrl(state.servers[0].url) ? 'remote' : 'local');
+          var auto = !!(msg.autoConnect && !manual && !tooOld && !msg.starting && !msg.notice && state.servers[0]);
+          // The tab of the server used last; This Mac on a first run. An
+          // automatic connect opens Codeman without looking at this Mac first:
+          // that look runs a few processes and asks the server once more, and
+          // it is only needed when the connect fails, which then asks for it.
+          selectTab(state.servers[0] && !isLocalUrl(state.servers[0].url) ? 'remote' : 'local', auto);
           if (msg.starting) {
             setBusy(true, false);
             setStatus('busy', 'Starting Codeman on this Mac…', msg.notice || '');
           } else if (msg.notice) {
             setStatus('warn', msg.notice);
           }
-          if (msg.autoConnect && !manual && !tooOld && !msg.starting && !msg.notice && state.servers[0]) connect();
+          if (auto) connect();
           else if (state.tab === 'remote') els.url.focus();
           break;
         case 'servers':
           state.servers = msg.servers || [];
           renderRecent();
+          if (!state.busy) matchSaved();
           break;
         case 'prefs':
           if (typeof msg.startFullscreen === 'boolean') els.fullscreen.checked = msg.startFullscreen;
@@ -1316,14 +1432,18 @@
           } else {
             setStatus('ok', msg.version ? 'Opening Codeman ' + msg.version + '…' : 'Opening Codeman…');
           }
+          // The server page is still loading: this is not a finished state.
+          els.spinner.hidden = false;
           break;
         case 'error':
           setBusy(false);
-          setStatus('bad', msg.message || 'Something went wrong.');
+          // The tab first: switching it clears the status line.
           if (msg.needsPassword) {
             selectTab('remote');
             showLogin();
           }
+          setStatus('bad', msg.message || 'Something went wrong.');
+          ensureLocalChecked();
           break;
         case 'serverStarting':
           setBusy(true, false);
@@ -1380,6 +1500,8 @@
         case 'installFailed':
           state.opening = false;
           syncLocalButtons();
+          // The tab first: switching it clears the status line.
+          if (msg.remote) selectTab('remote');
           setStatus('bad', msg.message || 'Could not open Terminal.');
           break;
         case 'copied':
@@ -1389,8 +1511,22 @@
     }
   };
 
+  // The second click of a double click acts only on the control that took the
+  // first: the first may have moved another one under the pointer.
+  var firstControl = null;
+  document.addEventListener('click', function (ev) {
+    var t = ev.target && ev.target.closest ? ev.target : null;
+    var c = t && (t.closest('label') || t.closest('button, summary, a, input'));
+    if (ev.detail < 2) { firstControl = c; return; }
+    if (c !== firstControl) { ev.preventDefault(); ev.stopPropagation(); }
+  }, true);
   els.form.addEventListener('submit', function (ev) { ev.preventDefault(); connect(); });
-  els.cancel.addEventListener('click', function () { post({ cmd: 'cancel' }); setBusy(false); setStatus('', ''); });
+  els.cancel.addEventListener('click', function () {
+    post({ cmd: 'cancel' });
+    setBusy(false);
+    setStatus('', '');
+    ensureLocalChecked();
+  });
   els.start.addEventListener('click', function () {
     if (state.busy) return;
     state.startUrl = state.lastUrl || els.url.value.trim();
@@ -1419,6 +1555,19 @@
       selectTab(next);
       (next === 'local' ? els.tabLocal : els.tabRemote).focus();
     });
+  });
+  // Return opens or starts the Codeman on this Mac and Esc cancels a connect,
+  // as in a Mac dialog. Install is left to a click: a stray Return must not
+  // start an installer.
+  document.addEventListener('keydown', function (ev) {
+    if (ev.defaultPrevented) return;
+    if (ev.key === 'Escape' && !els.cancel.hidden) { ev.preventDefault(); els.cancel.click(); return; }
+    if (ev.key !== 'Enter' || state.tab !== 'local') return;
+    if (ev.target && ev.target.closest && ev.target.closest('button, a, input, summary')) return;
+    // offsetParent: really on screen, whatever hides it (its own `hidden`, or
+    // a container that is not shown).
+    var main = [els.localOpen, els.localStart].filter(function (b) { return b.offsetParent && !b.disabled; })[0];
+    if (main) { ev.preventDefault(); main.click(); }
   });
   els.localOpen.addEventListener('click', openLocal);
   els.localStart.addEventListener('click', startLocal);

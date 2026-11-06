@@ -19,8 +19,8 @@ pub const APP_SCHEME: &str = "codemanapp";
 pub const CONNECT_PAGE: &str = "codemanapp://localhost/index.html";
 
 /// Caps on what a page may hand the native side.
-const MAX_URL_LEN: usize = 4096;
-const MAX_FIELD_LEN: usize = 1024;
+pub const MAX_URL_LEN: usize = 4096;
+pub const MAX_FIELD_LEN: usize = 1024;
 
 /// Where the main window is in reaching a server. The gates below take it
 /// instead of "is a server set", because what may talk to the native side
@@ -61,9 +61,14 @@ impl Phase {
     }
 }
 
-/// Turn what the user typed into a server URL: scheme added when missing
-/// (`https` for a tailnet `.ts.net` name, `http` otherwise), query and fragment
-/// dropped, and the path ending in `/` so `api/status` joins below a base path.
+/// Turn what the user typed into a server URL: scheme added when missing,
+/// query and fragment dropped, and the path ending in `/` so `api/status`
+/// joins below a base path. The scheme is `https` for a tailnet `.ts.net`
+/// name on its own, which is `tailscale serve`, and `http` otherwise. A
+/// `.ts.net` name with a port is Codeman's own listener, which speaks plain
+/// http: guessing https there ended in a TLS error with no way forward, while
+/// the other mistake (http to an https port) gets a button for the https
+/// address (ProbeOutcome::MaybeHttps).
 pub fn normalize_server_url(input: &str) -> Result<Url, String> {
     let s = input.trim();
     if s.is_empty() {
@@ -75,8 +80,8 @@ pub fn normalize_server_url(input: &str) -> Result<Url, String> {
     let with_scheme = if s.contains("://") {
         s.to_string()
     } else {
-        let host = s.split(['/', ':']).next().unwrap_or("");
-        let scheme = if host.to_ascii_lowercase().ends_with(".ts.net") {
+        let (host, rest) = s.split_at(s.find(['/', ':']).unwrap_or(s.len()));
+        let scheme = if host.to_ascii_lowercase().ends_with(".ts.net") && !rest.starts_with(':') {
             "https"
         } else {
             "http"
@@ -112,9 +117,15 @@ pub fn same_origin(a: &Url, b: &Url) -> bool {
 /// Basic `Authorization` header goes only to such URLs, so another app sharing
 /// the origin (`/grafana/` next to `/codeman/`) never receives the password.
 /// `server.path()` always ends in `/` (normalize_server_url), so `/codemanx/`
-/// is not below `/codeman/`.
+/// is not below `/codeman/`. The part below the base is decoded once, as
+/// is_popout_target does, and may hold no `.` or `..` segment: the url crate
+/// resolves a literal `..`, but `..%2Fgrafana/` reaches a proxy that decodes
+/// before it routes as a way out of the base. A path that does not decode is
+/// not below it either (fail closed).
 pub fn within_base(url: &Url, server: &Url) -> bool {
-    same_origin(url, server) && url.path().starts_with(server.path())
+    same_origin(url, server)
+        && below_base_decoded(url, server)
+            .is_some_and(|rest| !rest.split(['/', '\\']).any(|segment| segment == "." || segment == ".."))
 }
 
 /// A server on this machine: `localhost`, `127.0.0.0/8` or `::1`.
@@ -186,8 +197,9 @@ pub fn trusted_frame(frame: &Url, server: &Url) -> bool {
 /// (`session/<id>`), a rendered HTML file (`html-view/...`, served with a
 /// sandbox CSP), a detached file preview or attachment (`api/sessions/<id>/`
 /// `file-raw`, `file-preview`, `attachments/<id>/raw|preview`,
-/// `folders/<id>/files/...`) and a download (`api/download`). A script's
-/// `window.open` gets only the last two kinds (new_window, Via::Script).
+/// `folders/<id>/files/...`, and the path picker's `api/filesystem/preview`)
+/// and a download (`api/download`). A script's `window.open` gets only the
+/// last two kinds (new_window, Via::Script).
 ///
 /// Everything else on the origin is refused, a proxied dashboard under
 /// `webview/` above all. A browser keeps the opener frame's sandbox on a popup;
@@ -222,8 +234,8 @@ enum Popout {
     Session(String),
     /// `html-view/...`: a rendered HTML file.
     HtmlView,
-    /// A detached file preview, an attachment, a file in a granted folder, or
-    /// a download (`api/download`).
+    /// A detached file preview, an attachment, a file in a granted folder,
+    /// the path picker's preview, or a download (`api/download`).
     File,
 }
 
@@ -245,14 +257,14 @@ fn popout_kind(url: &Url, server: &Url) -> Option<Popout> {
     }
     match segments.as_slice() {
         ["session", id] if !id.is_empty() => Some(Popout::Session((*id).to_string())),
-        ["api", "download"] => Some(Popout::File),
+        ["api", "download"] | ["api", "filesystem", "preview"] => Some(Popout::File),
         ["api", "sessions", id, "file-raw" | "file-preview"] if !id.is_empty() => Some(Popout::File),
         ["api", "sessions", id, "attachments", attachment, "raw" | "preview"]
             if !id.is_empty() && !attachment.is_empty() =>
         {
             Some(Popout::File)
         }
-        ["api", "sessions", id, "folders", folder, "files", name, ..]
+        ["api", "sessions", id, "folders", folder, "files", name, "raw" | "preview"]
             if !id.is_empty() && !folder.is_empty() && !name.is_empty() =>
         {
             Some(Popout::File)
@@ -411,6 +423,38 @@ impl OpenBudget {
 impl Default for OpenBudget {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// What a window does once its web content process has ended: a crash, or the
+/// system taking the process back under memory pressure. The window is blank
+/// from then on, since nothing reloads it by itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Recovery {
+    /// Load the window's page again.
+    Reload,
+    /// Show the connect page: with the reason, when a server page was given up.
+    ConnectPage { gave_up: bool },
+    /// Close the pop-out.
+    Close,
+    /// Leave the window as it is.
+    Nothing,
+}
+
+/// How a window recovers from the end of its web content process. `on_server`:
+/// a server page is the main window's document (pop-outs only exist then).
+/// `again`: the same window lost its process a moment ago already, so its page
+/// cannot stay up and loading it once more would only repeat that.
+pub fn recovery(is_main: bool, on_server: bool, again: bool) -> Recovery {
+    match (is_main, on_server, again) {
+        (_, true, false) => Recovery::Reload,
+        (true, true, true) => Recovery::ConnectPage { gave_up: true },
+        // The connect page itself, or a server load that had not committed.
+        (true, false, false) => Recovery::ConnectPage { gave_up: false },
+        (true, false, true) => Recovery::Nothing,
+        (false, _, true) => Recovery::Close,
+        // A pop-out with no server page behind it is on its way out anyway.
+        (false, false, false) => Recovery::Nothing,
     }
 }
 
@@ -795,6 +839,26 @@ mod tests {
             "https://box.tailf80371.ts.net/"
         );
         assert_eq!(
+            normalize_server_url("Box.Tailf80371.TS.NET/codeman").unwrap().as_str(),
+            "https://box.tailf80371.ts.net/codeman/"
+        );
+        // With a port it is Codeman's own listener, not tailscale serve.
+        assert_eq!(
+            normalize_server_url("box.tailf80371.ts.net:3000").unwrap().as_str(),
+            "http://box.tailf80371.ts.net:3000/"
+        );
+        assert_eq!(
+            normalize_server_url("box.tailf80371.ts.net:8443/x").unwrap().as_str(),
+            "http://box.tailf80371.ts.net:8443/x/"
+        );
+        // A scheme that was typed is never second-guessed.
+        assert_eq!(
+            normalize_server_url("https://box.tailf80371.ts.net:8443")
+                .unwrap()
+                .as_str(),
+            "https://box.tailf80371.ts.net:8443/"
+        );
+        assert_eq!(
             normalize_server_url("https://host/codeman").unwrap().as_str(),
             "https://host/codeman/"
         );
@@ -979,6 +1043,7 @@ mod tests {
             "http://127.0.0.1:3000/api/sessions/s1/folders/f1/files/a.png/raw",
             "http://127.0.0.1:3000/api/sessions/s1/folders/f1/files/my%20notes.md/preview",
             "http://127.0.0.1:3000/api/download?path=x",
+            "http://127.0.0.1:3000/api/filesystem/preview?path=%2Fhome%2Fu%2Fa.md",
         ] {
             assert_eq!(script(s), NewWindow::AppWindow(u(s)), "{s}");
             assert_eq!(host(s), NewWindow::AppWindow(u(s)), "{s}");
@@ -1154,6 +1219,10 @@ mod tests {
             "http://127.0.0.1:3000/api/sessions/s1/folders/f1/files/my%20notes.md/preview"
         ));
         assert!(ok("http://127.0.0.1:3000/api/download?path=x"));
+        // The path picker's preview, which its Open link shows in a window.
+        assert!(ok(
+            "http://127.0.0.1:3000/api/filesystem/preview?path=%2Fhome%2Fu%2Fa.md&sessionId=s1"
+        ));
         // A single decode is how the server's router sees the path.
         assert!(ok("http://127.0.0.1:3000/%73ession/abc"));
 
@@ -1186,7 +1255,18 @@ mod tests {
         assert!(!ok("http://127.0.0.1:3000/api/sessions//file-raw"));
         assert!(!ok("http://127.0.0.1:3000/api/sessions/s1/attachments/att1/delete"));
         assert!(!ok("http://127.0.0.1:3000/api/sessions/s1/folders/f1/files/"));
+        assert!(!ok("http://127.0.0.1:3000/api/sessions/s1/folders/f1/files/a.png"));
+        assert!(!ok(
+            "http://127.0.0.1:3000/api/sessions/s1/folders/f1/files/a.png/thumbnail"
+        ));
+        assert!(!ok(
+            "http://127.0.0.1:3000/api/sessions/s1/folders/f1/files/a.png/raw/x"
+        ));
         assert!(!ok("http://127.0.0.1:3000/api/download/x"));
+        // The picker's other routes list and create folders: never a window.
+        assert!(!ok("http://127.0.0.1:3000/api/filesystem/browse?path=%2F"));
+        assert!(!ok("http://127.0.0.1:3000/api/filesystem/mkdir"));
+        assert!(!ok("http://127.0.0.1:3000/api/filesystem/preview/x"));
         assert!(!ok("http://127.0.0.1:3000/api/status"));
         // Other origins and userinfo.
         assert!(!ok("http://127.0.0.1:3001/session/abc"));
@@ -1259,6 +1339,27 @@ mod tests {
         assert!(!within_base(&u("https://host/grafana/"), &srv));
         assert!(!within_base(&u("https://host/"), &srv));
         assert!(!within_base(&u("https://host/codeman/../grafana/"), &srv));
+        // The same way out, spelled so that only a decoder sees it.
+        for escape in [
+            "https://host/codeman/..%2Fgrafana/",
+            "https://host/codeman/..%2fgrafana/x",
+            "https://host/codeman/%2e%2e%2Fgrafana/",
+            "https://host/codeman/..%5Cgrafana/",
+            "https://host/codeman/a/%2E%2E%2F%2E%2E%2Fgrafana/",
+            "https://host/codeman/session/a%zz",
+        ] {
+            assert!(!within_base(&u(escape), &srv), "{escape}");
+            assert!(!challenge_in_scope(&u(escape), &srv), "{escape}");
+        }
+        // Encoded characters that are part of a name stay inside.
+        for inside in [
+            "https://host/codeman/api/sessions/s1/folders/f1/files/50%25.txt/raw",
+            "https://host/codeman/api/sessions/s1/file-raw?path=..%2Fx",
+            "https://host/codeman/session/a%20b",
+            "https://host/codeman/a..b/c",
+        ] {
+            assert!(within_base(&u(inside), &srv), "{inside}");
+        }
         assert!(!within_base(&u("http://host/codeman/"), &srv));
         assert!(!within_base(&u("https://other/codeman/"), &srv));
         let root = u("http://127.0.0.1:3000/");
@@ -1321,6 +1422,24 @@ mod tests {
         assert!(b.allow(later));
         assert!(b.allow(later));
         assert!(!b.allow(later));
+    }
+
+    #[test]
+    fn a_window_recovers_from_a_lost_content_process_once() {
+        // The first time, every window that shows a server page loads it again.
+        assert_eq!(recovery(true, true, false), Recovery::Reload);
+        assert_eq!(recovery(false, true, false), Recovery::Reload);
+        // The connect page is shown anew, which also ends a load under way.
+        assert_eq!(recovery(true, false, false), Recovery::ConnectPage { gave_up: false });
+        // A second time in a row never reloads: that would loop.
+        assert_eq!(recovery(true, true, true), Recovery::ConnectPage { gave_up: true });
+        assert_eq!(recovery(false, true, true), Recovery::Close);
+        assert_eq!(recovery(true, false, true), Recovery::Nothing);
+        for is_main in [true, false] {
+            for on_server in [true, false] {
+                assert_ne!(recovery(is_main, on_server, true), Recovery::Reload);
+            }
+        }
     }
 
     #[test]

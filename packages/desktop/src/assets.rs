@@ -282,6 +282,28 @@ mod tests {
         assert!(!HOST_SHIM.contains("decodeURIComponent"));
     }
 
+    /// The connect page refuses what the app would drop without an answer, so
+    /// its two limits have to be the app's own.
+    #[test]
+    fn connect_page_keeps_the_message_limits() {
+        let page = String::from_utf8_lossy(CONNECT_HTML);
+        for needle in [
+            format!("var MAX_URL = {};", crate::policy::MAX_URL_LEN),
+            format!("var MAX_FIELD = {};", crate::policy::MAX_FIELD_LEN),
+        ] {
+            assert!(page.contains(&needle), "{needle}");
+        }
+    }
+
+    /// Copy puts setup::INSTALL_ONE_LINER on the clipboard, and the page shows
+    /// the command as text of its own: the two have to be the same command.
+    #[test]
+    fn connect_page_shows_the_command_that_copy_copies() {
+        let page = String::from_utf8_lossy(CONNECT_HTML);
+        let shown = format!("<code id=\"oneliner\">{}</code>", crate::setup::INSTALL_ONE_LINER);
+        assert!(page.contains(&shown), "{shown}");
+    }
+
     #[test]
     fn toast_escapes_file_names() {
         let js = download_toast_script("a\"); alert(1); (\".txt", true);
