@@ -806,6 +806,18 @@ describe('install.sh no-admin route', () => {
       expect(existsSync(`${app}.new`)).toBe(false);
       expect(existsSync(`${app}.old`)).toBe(false);
 
+      // A trailing slash on the setting must not put the staging folder inside the install.
+      const slashed = drive(script, {
+        CODEMAN_INSTALL_DIR: `${app}/`,
+        CODEMAN_TARBALL_URL: `file://${first}`,
+        HOME: scratch,
+      });
+      expect(slashed.status, slashed.stderr).toBe(0);
+      expect(slashed.stdout).toContain(`staging=[${app}.new] cwd=${app}.new`);
+      expect(readFileSync(join(app, 'package.json'), 'utf-8')).toContain('1.0.0');
+      expect(existsSync(`${app}.new`)).toBe(false);
+      expect(existsSync(`${app}.old`)).toBe(false);
+
       // A folder that is neither a checkout nor one of ours is never written into.
       const foreign = join(scratch, 'foreign');
       mkdirSync(foreign);
@@ -944,5 +956,157 @@ describe('install.sh no-admin route', () => {
     const rm = body.indexOf('rm -f "$symlink_dir/$runtime_tool"');
     expect(rm).toBeGreaterThan(-1);
     expect(body.slice(body.lastIndexOf('if [[', rm), rm)).toContain('== "$RUNTIME_DIR/"*');
+  });
+
+  it('says the rights were not confirmed, and names the way back to sudo, when it chose this route itself', () => {
+    // A sudoers entry cannot be read without a probe that reports to the administrator, so an
+    // account listed by name, with a password, lands on this route too. It must not be told it
+    // may not use sudo, and every place that ends or sums up the route must name the override.
+    const stops = `
+      detect_arch() { echo x64; }
+      download() { echo "DOWNLOAD $1"; }; download_to_stdout() { echo "DOWNLOAD $1"; }
+      check_node() { return 1; }; check_tmux() { return 1; }; check_git() { return 0; }
+      missing_build_tools() { printf 'make'; }; is_musl_libc() { return 1; }
+      ts_cmd() { return 1; }; check_tailscale() { return 1; }
+      CLI_IDS=(); TS_STATE=""; MISSING_PKGS=""; EXISTING_FOUND=""; EXISTING_VERSION=""
+      section() { echo "== $1"; }
+      NONINTERACTIVE=1
+      section blocker; check_build_tools() { return 1; }; (ask_dependencies_no_admin linux) 2>&1 || true
+      check_build_tools() { return 0; }
+      section declined; prompt_yes_no() { return 1; }; (ask_dependencies_no_admin linux) 2>&1 || true
+      section ensure_sudo; (ensure_sudo) 2>&1 || true
+      section operator; (ensure_tailscale_operator) 2>&1 || true
+      section summary; (print_preflight_summary linux x64 ubuntu) 2>&1
+      NONINTERACTIVE=0
+      section tailscale; (offer_install_tailscale) 2>&1 || true
+    `;
+    const sections = (stdout: string) =>
+      Object.fromEntries(
+        stdout
+          .split(/^== /m)
+          .slice(1)
+          .map((part) => [part.slice(0, part.indexOf('\n')), part])
+      );
+    const detected = drive(`
+      [[ $EUID -ne 0 ]] || { echo "skipped=root"; exit 0; }
+      uname() { echo Linux; }
+      command() { if [[ "$1" == "-v" && "$2" == "sudo" ]]; then return 0; else builtin command "$@"; fi; }
+      id() { echo users; }
+      sudo() { return 1; }
+      NO_ADMIN=""; resolve_admin_mode
+      echo "route=$NO_ADMIN reason=$NO_ADMIN_REASON"
+      ${stops}
+    `);
+    expect(detected.status, detected.stderr).toBe(0);
+    if (detected.stdout.includes('skipped=root')) return;
+    expect(detected.stdout).toMatch(/route=1 reason=.*could not confirm/);
+    expect(detected.stdout).not.toContain('may not use sudo');
+    const parts = sections(detected.stdout);
+    for (const name of ['blocker', 'declined', 'ensure_sudo', 'operator', 'summary', 'tailscale']) {
+      expect(parts[name], `${name}: ${detected.stdout}`).toContain('CODEMAN_NO_ADMIN=0');
+    }
+
+    // Asked for, or sudo really tried: there is no way back to name.
+    for (const reason of ['--no-admin', 'sudo is not installed', 'sudo was refused']) {
+      const other = drive(`
+        uname() { echo Linux; }
+        NO_ADMIN=1; NO_ADMIN_REASON="${reason}"
+        ${stops}
+      `);
+      expect(other.status, other.stderr).toBe(0);
+      expect(other.stdout, reason).not.toContain('CODEMAN_NO_ADMIN=0');
+    }
+  });
+
+  it('proves a downloaded tmux and cloudflared in the home folder, not in the temp folder', () => {
+    // /tmp is commonly mounted noexec on the shared hosts this route is for. The stand-in
+    // below refuses to run from TMPDIR the way such a mount does (126, not a shell error).
+    const home = mkdtempSync(join(tmpdir(), 'codeman-noexec-'));
+    try {
+      const noexec = join(home, 'noexec-tmp');
+      const fake = join(home, 'fake');
+      mkdirSync(noexec);
+      mkdirSync(fake);
+      for (const tool of ['tmux', 'cloudflared']) {
+        writeFileSync(join(fake, tool), `#!/bin/sh\ncase "$0" in "${noexec}"/*) exit 126 ;; esac\necho ok\n`, {
+          mode: 0o755,
+        });
+      }
+      const tarball = join(home, 'tmux.tar.gz');
+      const tar = spawnSync('tar', ['-czf', tarball, '-C', fake, 'tmux']);
+      expect(tar.status, String(tar.stderr)).toBe(0);
+      const result = drive(
+        `
+        run_step() { shift; "$@"; }
+        ensure_on_path() { :; }
+        tmux_build_sha256() { sha256_file "$DRIVE_FAKE/../tmux.tar.gz"; }
+        download() { case "$1" in *tmux*) cp "$DRIVE_FAKE/../tmux.tar.gz" "$2" ;; *) cp "$DRIVE_FAKE/cloudflared" "$2" ;; esac; }
+        (install_tmux_userspace linux x64) && echo "tmux=installed"
+        (install_cloudflared_userspace linux x64) && echo "cloudflared=installed"
+        ls -A "$RUNTIME_DIR" | tr '\n' ' '; echo
+        ls -A "$HOME/.local" | tr '\n' ' '; echo
+        ls -A "$HOME/.local/bin" | tr '\n' ' '; echo
+      `,
+        { HOME: home, TMPDIR: noexec, DRIVE_FAKE: fake }
+      );
+      expect(result.stderr).not.toContain('does not run');
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain('tmux=installed');
+      expect(result.stdout).toContain('cloudflared=installed');
+      expect(existsSync(join(home, '.codeman/runtime/bin/tmux'))).toBe(true);
+      expect(existsSync(join(home, '.local/bin/cloudflared'))).toBe(true);
+      // Nothing left beside them: the listings hold the final names and nothing else.
+      const [runtime, local, bin] = result.stdout.trim().split('\n').slice(-3);
+      expect(runtime.trim()).toBe('bin');
+      expect(local.trim()).toBe('bin');
+      expect(bin.trim().split(' ').sort()).toEqual(['cloudflared', 'tmux']);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('survives an environment with no USER', () => {
+    // docker run -u gives a process no USER, and set -u turns a message that prints it into a
+    // crash. The no-admin route reaches several such lines, and such a container is its first home.
+    const result = drive(
+      `
+      uname() { echo Linux; }
+      NO_ADMIN=1; NO_ADMIN_REASON=test; NONINTERACTIVE=0
+      ts_cmd() { return 1; }; check_tailscale() { return 1; }
+      (ensure_tailscale_operator) 2>&1 || true
+      (offer_install_tailscale) 2>&1 || true
+      BIND_HOST=0.0.0.0; BIND_PASSWORD=""
+      (print_security_notice) 2>&1
+    `,
+      { USER: undefined }
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout + result.stderr).not.toContain('unbound variable');
+    expect(result.stdout.match(/--operator=\S/g)?.length).toBe(2);
+  });
+
+  it('drops a trailing slash from CODEMAN_INSTALL_DIR', () => {
+    // "$INSTALL_DIR.new" must sit beside the install, and app/.new sits inside it.
+    const dir = (value: string) => drive('echo "$INSTALL_DIR"', { CODEMAN_INSTALL_DIR: value }).stdout.trim();
+    expect(dir('/x/app/')).toBe('/x/app');
+    expect(dir('/x/app//')).toBe('/x/app');
+    expect(dir('/x/app')).toBe('/x/app');
+    expect(dir('/')).toBe('/');
+  });
+
+  it('warns that removing the data directory takes a kept runtime with it', () => {
+    // The runtime lives inside ~/.codeman, so the yes to the data directory removes what the
+    // user chose to keep one prompt earlier. Read from the source, never driven: uninstall()
+    // calls `systemctl --user`, which HOME does not redirect, so a drive stops and disables
+    // the real codeman-web of whoever runs this test.
+    const body = fn('uninstall', '\nusage() {');
+    const prompt = body.indexOf('Remove data directory ($data_dir)?');
+    expect(prompt).toBeGreaterThan(-1);
+    const note = body.lastIndexOf('[[ -d "$RUNTIME_DIR" ]]', prompt);
+    expect(note, 'the kept runtime is not looked at before that prompt').toBeGreaterThan(
+      body.indexOf('Kept $RUNTIME_DIR')
+    );
+    expect(body.slice(note, prompt)).toMatch(/data_note=" .*\$RUNTIME_DIR/);
+    expect(body.slice(prompt)).toMatch(/^Remove data directory \(\$data_dir\)\?\$data_note"/);
   });
 });
