@@ -798,11 +798,12 @@
           break;
         case 'error':
           setBusy(false);
-          setStatus('bad', msg.message || 'Something went wrong.');
+          // The tab first: switching it clears the status line.
           if (msg.needsPassword) {
             selectTab('remote');
             showLogin();
           }
+          setStatus('bad', msg.message || 'Something went wrong.');
           break;
         case 'serverStarting':
           setBusy(true, false);

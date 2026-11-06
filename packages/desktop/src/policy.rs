@@ -186,8 +186,9 @@ pub fn trusted_frame(frame: &Url, server: &Url) -> bool {
 /// (`session/<id>`), a rendered HTML file (`html-view/...`, served with a
 /// sandbox CSP), a detached file preview or attachment (`api/sessions/<id>/`
 /// `file-raw`, `file-preview`, `attachments/<id>/raw|preview`,
-/// `folders/<id>/files/...`) and a download (`api/download`). A script's
-/// `window.open` gets only the last two kinds (new_window, Via::Script).
+/// `folders/<id>/files/...`, and the path picker's `api/filesystem/preview`)
+/// and a download (`api/download`). A script's `window.open` gets only the
+/// last two kinds (new_window, Via::Script).
 ///
 /// Everything else on the origin is refused, a proxied dashboard under
 /// `webview/` above all. A browser keeps the opener frame's sandbox on a popup;
@@ -222,8 +223,8 @@ enum Popout {
     Session(String),
     /// `html-view/...`: a rendered HTML file.
     HtmlView,
-    /// A detached file preview, an attachment, a file in a granted folder, or
-    /// a download (`api/download`).
+    /// A detached file preview, an attachment, a file in a granted folder,
+    /// the path picker's preview, or a download (`api/download`).
     File,
 }
 
@@ -245,7 +246,7 @@ fn popout_kind(url: &Url, server: &Url) -> Option<Popout> {
     }
     match segments.as_slice() {
         ["session", id] if !id.is_empty() => Some(Popout::Session((*id).to_string())),
-        ["api", "download"] => Some(Popout::File),
+        ["api", "download"] | ["api", "filesystem", "preview"] => Some(Popout::File),
         ["api", "sessions", id, "file-raw" | "file-preview"] if !id.is_empty() => Some(Popout::File),
         ["api", "sessions", id, "attachments", attachment, "raw" | "preview"]
             if !id.is_empty() && !attachment.is_empty() =>
@@ -411,6 +412,38 @@ impl OpenBudget {
 impl Default for OpenBudget {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// What a window does once its web content process has ended: a crash, or the
+/// system taking the process back under memory pressure. The window is blank
+/// from then on, since nothing reloads it by itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Recovery {
+    /// Load the window's page again.
+    Reload,
+    /// Show the connect page: with the reason, when a server page was given up.
+    ConnectPage { gave_up: bool },
+    /// Close the pop-out.
+    Close,
+    /// Leave the window as it is.
+    Nothing,
+}
+
+/// How a window recovers from the end of its web content process. `on_server`:
+/// a server page is the main window's document (pop-outs only exist then).
+/// `again`: the same window lost its process a moment ago already, so its page
+/// cannot stay up and loading it once more would only repeat that.
+pub fn recovery(is_main: bool, on_server: bool, again: bool) -> Recovery {
+    match (is_main, on_server, again) {
+        (_, true, false) => Recovery::Reload,
+        (true, true, true) => Recovery::ConnectPage { gave_up: true },
+        // The connect page itself, or a server load that had not committed.
+        (true, false, false) => Recovery::ConnectPage { gave_up: false },
+        (true, false, true) => Recovery::Nothing,
+        (false, _, true) => Recovery::Close,
+        // A pop-out with no server page behind it is on its way out anyway.
+        (false, false, false) => Recovery::Nothing,
     }
 }
 
@@ -930,6 +963,7 @@ mod tests {
             "http://127.0.0.1:3000/api/sessions/s1/folders/f1/files/a.png/raw",
             "http://127.0.0.1:3000/api/sessions/s1/folders/f1/files/my%20notes.md/preview",
             "http://127.0.0.1:3000/api/download?path=x",
+            "http://127.0.0.1:3000/api/filesystem/preview?path=%2Fhome%2Fu%2Fa.md",
         ] {
             assert_eq!(script(s), NewWindow::AppWindow(u(s)), "{s}");
             assert_eq!(host(s), NewWindow::AppWindow(u(s)), "{s}");
@@ -1105,6 +1139,10 @@ mod tests {
             "http://127.0.0.1:3000/api/sessions/s1/folders/f1/files/my%20notes.md/preview"
         ));
         assert!(ok("http://127.0.0.1:3000/api/download?path=x"));
+        // The path picker's preview, which its Open link shows in a window.
+        assert!(ok(
+            "http://127.0.0.1:3000/api/filesystem/preview?path=%2Fhome%2Fu%2Fa.md&sessionId=s1"
+        ));
         // A single decode is how the server's router sees the path.
         assert!(ok("http://127.0.0.1:3000/%73ession/abc"));
 
@@ -1138,6 +1176,10 @@ mod tests {
         assert!(!ok("http://127.0.0.1:3000/api/sessions/s1/attachments/att1/delete"));
         assert!(!ok("http://127.0.0.1:3000/api/sessions/s1/folders/f1/files/"));
         assert!(!ok("http://127.0.0.1:3000/api/download/x"));
+        // The picker's other routes list and create folders: never a window.
+        assert!(!ok("http://127.0.0.1:3000/api/filesystem/browse?path=%2F"));
+        assert!(!ok("http://127.0.0.1:3000/api/filesystem/mkdir"));
+        assert!(!ok("http://127.0.0.1:3000/api/filesystem/preview/x"));
         assert!(!ok("http://127.0.0.1:3000/api/status"));
         // Other origins and userinfo.
         assert!(!ok("http://127.0.0.1:3001/session/abc"));
@@ -1272,6 +1314,24 @@ mod tests {
         assert!(b.allow(later));
         assert!(b.allow(later));
         assert!(!b.allow(later));
+    }
+
+    #[test]
+    fn a_window_recovers_from_a_lost_content_process_once() {
+        // The first time, every window that shows a server page loads it again.
+        assert_eq!(recovery(true, true, false), Recovery::Reload);
+        assert_eq!(recovery(false, true, false), Recovery::Reload);
+        // The connect page is shown anew, which also ends a load under way.
+        assert_eq!(recovery(true, false, false), Recovery::ConnectPage { gave_up: false });
+        // A second time in a row never reloads: that would loop.
+        assert_eq!(recovery(true, true, true), Recovery::ConnectPage { gave_up: true });
+        assert_eq!(recovery(false, true, true), Recovery::Close);
+        assert_eq!(recovery(true, false, true), Recovery::Nothing);
+        for is_main in [true, false] {
+            for on_server in [true, false] {
+                assert_ne!(recovery(is_main, on_server, true), Recovery::Reload);
+            }
+        }
     }
 
     #[test]

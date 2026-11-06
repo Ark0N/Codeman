@@ -359,6 +359,16 @@ fn codeman_servers(procs: &[(u32, String)]) -> Vec<u32> {
         .collect()
 }
 
+/// The install the app started on this Mac, if one runs, with the port it
+/// asked for as soon as one of its processes names it. The Terminal script
+/// that wraps the installer names none and is the older process, so the first
+/// match alone would report no port for the whole install.
+fn running_install(procs: &[(u32, String)]) -> Option<Option<u16>> {
+    let mut installs = procs.iter().filter_map(|(_, c)| install_in_progress(c)).peekable();
+    installs.peek()?;
+    Some(installs.flatten().next())
+}
+
 /// A listening TCP socket: its pid, address (`*`, `127.0.0.1`, `[::1]`, a
 /// specific IP) and port.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -494,7 +504,7 @@ pub fn inspect(depth: Depth) -> LocalStatus {
     let procs = list_processes();
     let servers = codeman_servers(&procs);
     let found = listeners(&servers);
-    let install = procs.iter().find_map(|(_, c)| install_in_progress(c));
+    let install = running_install(&procs);
 
     // The login goes only to this user's own Codeman on that port.
     let auth = if serves_loopback_port(&found, url.port_or_known_default().unwrap_or(0)) {
@@ -612,6 +622,15 @@ fn already_running() -> Option<String> {
     ))
 }
 
+/// Whether `url` is where the launchd job `service` answers: its scheme and
+/// port on this Mac, under `localhost` as much as 127.0.0.1. The path is left
+/// out: a job with a base path answers below `/` too, and a second server on
+/// its port would run without the job's settings.
+fn served_by(service: &ServiceConfig, url: &Url) -> bool {
+    let at = local_url(Some(service));
+    policy::is_loopback(url) && url.scheme() == at.scheme() && url.port_or_known_default() == at.port_or_known_default()
+}
+
 /// Start the Codeman on this Mac for `url`. A LaunchAgent that serves that
 /// address is started through launchd, so it runs with its own settings
 /// (host, password) and stays supervised; anything else gets `codeman web -d`
@@ -621,7 +640,7 @@ pub fn start_local(url: &Url) -> Result<String, String> {
         return Err(why);
     }
     match read_service() {
-        Some(s) if local_url(Some(&s)) == *url => {
+        Some(s) if served_by(&s, url) => {
             if s.daemon {
                 return Err(format!(
                     "A system LaunchDaemon runs Codeman on this Mac; an administrator starts it: sudo launchctl kickstart -k system/{SERVICE_LABEL}"
@@ -1219,6 +1238,27 @@ mod tests {
     }
 
     #[test]
+    fn a_start_goes_to_the_launchd_job_that_serves_the_address() {
+        let job = parse_service(&json!({
+            "ProgramArguments": ["node", "i.js", "web"],
+            "EnvironmentVariables": { "CODEMAN_PORT": "3001", "CODEMAN_BASE_URL": "/codeman" }
+        }));
+        // The app's own address for it, and what a user types for the same server.
+        assert!(served_by(&job, &u("http://127.0.0.1:3001/codeman/")));
+        assert!(served_by(&job, &u("http://localhost:3001/codeman/")));
+        assert!(served_by(&job, &u("http://LOCALHOST:3001/")));
+        // Another port, scheme or machine is not this job's server.
+        assert!(!served_by(&job, &u("http://127.0.0.1:3000/codeman/")));
+        assert!(!served_by(&job, &u("https://127.0.0.1:3001/codeman/")));
+        assert!(!served_by(&job, &u("http://192.168.1.5:3001/codeman/")));
+        assert!(!served_by(&job, &u("http://localhost.example.com:3001/")));
+
+        let https = parse_service(&json!({ "ProgramArguments": ["node", "i.js", "web", "--https"] }));
+        assert!(served_by(&https, &u("https://localhost:3000/")));
+        assert!(!served_by(&https, &u("http://localhost:3000/")));
+    }
+
+    #[test]
     fn processes_and_listeners() {
         let ps = "  101 /opt/homebrew/bin/node /Users/k/.codeman/app/dist/index.js web\n\
                   202 node /opt/homebrew/bin/codeman web --port 4000\n\
@@ -1242,6 +1282,11 @@ mod tests {
         assert_eq!(codeman_servers(&procs), [101, 202, 303]);
         let installs: Vec<Option<u16>> = procs.iter().filter_map(|(_, c)| install_in_progress(c)).collect();
         assert_eq!(installs, [None, Some(3001)]);
+        // The Terminal script comes first and names no port: the installer's wins.
+        assert_eq!(running_install(&procs), Some(Some(3001)));
+        // Before the installer is downloaded, only the script runs.
+        assert_eq!(running_install(&procs[..8]), Some(None));
+        assert_eq!(running_install(&procs[..7]), None);
 
         let lsof = "p101\nf21\nn127.0.0.1:3000\nf22\nn172.17.0.1:3999\np202\nf9\nn*:4000\np303\nn[::1]:5000\nnbogus\n";
         let found = parse_lsof(lsof);

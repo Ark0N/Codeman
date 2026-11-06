@@ -161,14 +161,17 @@ fn origin_label(host: &str, port: i64) -> Option<String> {
 }
 
 /// The bold first line of a dialog, like Safari's, so a frame cannot pass its
-/// text off as the app's own. `embedded` is a sandboxed frame (an HTML file
-/// preview, an untrusted web tab): its origin is opaque, so `origin` is only
-/// the server it was loaded from, and it must not read as Codeman speaking.
-fn dialog_title(origin: &str, embedded: bool) -> String {
-    if embedded {
-        format!("An embedded page on {origin} says:")
-    } else {
-        format!("The page at {origin} says:")
+/// text off as the app's own: the page's text always goes below it. `frame` is
+/// the host that names the frame and whether it is embedded, which a sandboxed
+/// frame is (an HTML file preview, an untrusted web tab): its origin is opaque,
+/// so the host is only the server it was loaded from, and it must not read as
+/// Codeman speaking. `None` is a frame nothing names: an opaque origin whose
+/// document has no host either (`about:srcdoc`, a `data:` or `blob:` URL).
+fn dialog_title(frame: Option<(&str, bool)>) -> String {
+    match frame {
+        Some((origin, false)) => format!("The page at {origin} says:"),
+        Some((origin, true)) => format!("An embedded page on {origin} says:"),
+        None => "An embedded page says:".to_string(),
     }
 }
 
@@ -574,13 +577,11 @@ mod imp {
             Some(message) => clipped(message),
             None => NSString::from_str(""),
         };
-        match frame.and_then(frame_origin) {
-            Some((origin, embedded)) => {
-                alert.setMessageText(&NSString::from_str(&dialog_title(&origin, embedded)));
-                alert.setInformativeText(&body);
-            }
-            None => alert.setMessageText(&body),
-        }
+        // The bold line is always the app's own; the page's text goes below.
+        let named = frame.and_then(frame_origin);
+        let title = dialog_title(named.as_ref().map(|(origin, embedded)| (origin.as_str(), *embedded)));
+        alert.setMessageText(&NSString::from_str(&title));
+        alert.setInformativeText(&body);
         let _ = alert.addButtonWithTitle(&NSString::from_str("OK"));
         if panel != Panel::Alert {
             let _ = alert.addButtonWithTitle(&NSString::from_str("Cancel"));
@@ -623,16 +624,18 @@ mod imp {
     }
 
     /// The host (and port) of the frame that opened a dialog: its security
-    /// origin, else its request URL's host. The flag is set when the origin is
-    /// opaque (a sandboxed frame), where only the URL names a host.
+    /// origin, else its request URL's host. The flag says "embedded". It is
+    /// set for every sub-frame, whatever its origin (a trusted web tab is
+    /// proxied under Codeman's own origin and would read as Codeman
+    /// otherwise), and whenever the origin names no host, which is an opaque
+    /// origin (a sandboxed frame) or no origin at all: a frame the app is
+    /// unsure about never speaks as the page.
     fn frame_origin(frame: &WKFrameInfo) -> Option<(String, bool)> {
         autoreleasepool(|_| {
             // SAFETY (every read here): property reads on objects WebKit handed
             // us, with nil handled by the `Option` return types.
+            let sub_frame = !unsafe { frame.isMainFrame() };
             let origin: Option<Retained<WKSecurityOrigin>> = unsafe { msg_send![frame, securityOrigin] };
-            // An origin without a host is opaque; when unsure, say "embedded"
-            // rather than let a frame speak as the page.
-            let opaque = origin.is_some();
             if let Some(origin) = origin {
                 let host: Option<Retained<NSString>> = unsafe { msg_send![&*origin, host] };
                 let port: NSInteger = unsafe { msg_send![&*origin, port] };
@@ -641,7 +644,7 @@ mod imp {
                     .and_then(rust_string)
                     .and_then(|h| origin_label(&h, port as i64))
                 {
-                    return Some((label, false));
+                    return Some((label, sub_frame));
                 }
             }
             let request: Option<Retained<NSURLRequest>> = unsafe { msg_send![frame, request] };
@@ -650,7 +653,7 @@ mod imp {
             let url = url?;
             let host: Option<Retained<NSString>> = unsafe { msg_send![&*url, host] };
             let host = host?;
-            Some((origin_label(&rust_string(&host)?, 0)?, opaque))
+            Some((origin_label(&rust_string(&host)?, 0)?, true))
         })
     }
 
@@ -1042,12 +1045,15 @@ mod tests {
         assert_eq!(origin_label("::1", 3000).as_deref(), Some("[::1]:3000"));
         assert_eq!(origin_label(" ", 3000), None);
         assert_eq!(
-            dialog_title("localhost:3000", false),
+            dialog_title(Some(("localhost:3000", false))),
             "The page at localhost:3000 says:"
         );
         assert_eq!(
-            dialog_title("localhost:3000", true),
+            dialog_title(Some(("localhost:3000", true))),
             "An embedded page on localhost:3000 says:"
         );
+        // A frame nothing names (about:srcdoc under an opaque origin) still
+        // gets a first line of the app's own, never its own text in bold.
+        assert_eq!(dialog_title(None), "An embedded page says:");
     }
 }

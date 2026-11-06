@@ -51,7 +51,7 @@ use wry::{NewWindowResponse, PageLoadEvent, PermissionResponse, WebView, WebView
 
 use config::{Config, Rect, WindowFrame};
 use credentials::Keychain;
-use policy::{ConnectCmd, HostCmd, Ipc, Navigation, NewWindow, OpenBudget, Phase, Via};
+use policy::{ConnectCmd, HostCmd, Ipc, Navigation, NewWindow, OpenBudget, Phase, Recovery, Via};
 use probe::ProbeOutcome;
 
 const APP_NAME: &str = "Codeman";
@@ -68,6 +68,10 @@ const LOAD_TIMEOUT: Duration = Duration::from_secs(15);
 /// page reported that its session is gone, so a login the server keeps
 /// refusing can never turn into a reload loop.
 const SESSION_RELOAD_COOLDOWN: Duration = Duration::from_secs(60);
+/// A window loads its page again at most once in this long after its web
+/// content process ended, so a page that cannot stay up never becomes a reload
+/// loop.
+const CRASH_RELOAD_COOLDOWN: Duration = Duration::from_secs(30);
 /// When the app first looks whether the main window made it into the full
 /// screen it asked for at launch, how often it asks again, and how many times.
 /// tao retries a failed entry only for a window BUILT in full screen, which
@@ -88,6 +92,7 @@ const AUTH_REJECTED: &str = "The server did not accept the saved login. Enter th
 const AUTH_RATE_LIMITED: &str = "Too many failed logins from this address. The saved password may be wrong: \
 enter it again (a single-user Codeman accepts the right password at once), or wait up to 15 minutes.";
 const KEYCHAIN_UNREADABLE: &str = "The saved password could not be read from the Keychain. Enter it again.";
+const PAGE_KEEPS_STOPPING: &str = "Codeman's page stopped twice in a row, so it was closed. Connect again.";
 const START_REFUSED: &str = "Codeman can only be started here for an http://127.0.0.1 or http://localhost address.";
 
 mod menu_id {
@@ -157,6 +162,12 @@ enum UserEvent {
     /// The challenge handler sent its login and got challenged again (macOS).
     /// Not trusted on its own: recheck_login asks the server first.
     AuthRejected,
+    /// The web content process of a window ended (macOS): a crash, or the
+    /// system taking it back under memory pressure. The window is blank until
+    /// something loads in it again (on_content_process_gone).
+    ContentProcessGone {
+        window: WindowId,
+    },
     /// A background step for the connect page finished (This Mac status, an
     /// install opened in Terminal, the install command copied): the message
     /// goes to the page if it is still the one choosing a server.
@@ -211,6 +222,8 @@ struct AppWindow {
     committed: Option<Url>,
     /// When the window last reloaded itself because its session expired.
     session_reload_at: Option<Instant>,
+    /// When the window's web content process last ended.
+    content_process_gone_at: Option<Instant>,
 }
 
 struct AppMenu {
@@ -324,6 +337,7 @@ fn main() {
             kind: Kind::Main,
             committed: None,
             session_reload_at: None,
+            content_process_gone_at: None,
         },
     );
 
@@ -714,6 +728,17 @@ fn build_webview(
         });
     });
 
+    // wry answers WebKit's "web content process ended" notice itself, which
+    // turns WebKit's own reload off: without a handler the window stays blank.
+    #[cfg(target_os = "macos")]
+    {
+        use wry::WebViewBuilderExtDarwin;
+        let gone_proxy = proxy.clone();
+        builder = builder.with_on_web_content_process_terminate_handler(move || {
+            let _ = gone_proxy.send_event(UserEvent::ContentProcessGone { window: id });
+        });
+    }
+
     builder = match load {
         Load::ConnectPage { manual: false } => builder.with_url(policy::CONNECT_PAGE),
         Load::ConnectPage { manual: true } => builder.with_url(format!("{}?manual=1", policy::CONNECT_PAGE)),
@@ -973,6 +998,45 @@ impl App {
                 }
             }
             UserEvent::AuthRejected => self.recheck_login(),
+            UserEvent::ContentProcessGone { window } => self.on_content_process_gone(window),
+        }
+    }
+
+    /// The web content process of `window` ended, so the window is blank
+    /// (policy::recovery decides what it does about it). A second end within
+    /// CRASH_RELOAD_COOLDOWN counts as the same page failing again.
+    fn on_content_process_gone(&mut self, window: WindowId) {
+        let now = Instant::now();
+        let Some(w) = self.windows.get_mut(&window) else {
+            return;
+        };
+        // A pop-out hidden for its download shows no page, and the download
+        // does not run in that process: loading again would fetch it twice.
+        if matches!(
+            w.kind,
+            Kind::Popout {
+                hidden_for_download: true,
+                ..
+            }
+        ) {
+            return;
+        }
+        let again = w
+            .content_process_gone_at
+            .is_some_and(|at| now.saturating_duration_since(at) < CRASH_RELOAD_COOLDOWN);
+        w.content_process_gone_at = Some(now);
+        let on_server = self.phase.borrow().loaded().is_some();
+        match policy::recovery(window == self.main_id, on_server, again) {
+            Recovery::Reload => {
+                if let Some((url, with_auth)) = self.reload_target(window) {
+                    self.load_in(window, &url, with_auth);
+                }
+            }
+            Recovery::ConnectPage { gave_up } => {
+                self.show_connect_page(gave_up.then(|| PAGE_KEEPS_STOPPING.to_string()), false);
+            }
+            Recovery::Close => self.remove_window(window),
+            Recovery::Nothing => eprintln!("codeman-desktop: a page stopped again and was left as it is"),
         }
     }
 
@@ -1610,6 +1674,7 @@ impl App {
                 },
                 committed: None,
                 session_reload_at: None,
+                content_process_gone_at: None,
             },
         );
         true
