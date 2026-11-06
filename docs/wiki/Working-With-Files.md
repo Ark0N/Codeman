@@ -127,9 +127,11 @@ can send what it can read to any host, open HTML only from sources you trust, as
 your own desktop. The **Page**
 pill in the viewer header switches to the source view (where **Edit** works as for any text
 file), and the viewer falls back to source on its own when a page cannot be rendered: a remote
-(SSH) case, an HTML file inside a hidden folder, or one sitting directly in a broad folder such
-as your home folder or `/tmp` (the page may read the files in its own folder tree, so move it
-into a folder of its own). The raw file routes still serve HTML as a download only.
+(SSH) case, an HTML file inside a hidden folder (which includes `.claude/worktrees/<name>` after
+an agent [moved into a worktree](Git-Worktrees#when-an-agent-moves-into-a-worktree)), or one
+sitting directly in a broad folder such as your home folder or `/tmp` (the page may read the
+files in its own folder tree, so move it into a folder of its own). The raw file routes still
+serve HTML as a download only.
 
 Text previews are capped at the first 500 lines, fetched as a partial read, so clicking a
 one-gigabyte log does not try to paint one.
