@@ -986,7 +986,7 @@ the directory the session's local tmux pane is in now (`#{pane_current_path}`), 
 the web UI uses as the base for a relative path printed in the terminal. It is
 never restored after a restart (it is written to `state.json` with the rest of the
 session state but not read back), absent for remote,
-Docker, direct-PTY and rediscovered sessions and for a session split into several panes,
+Docker, adopted, direct-PTY and rediscovered sessions and for a session split into several panes,
 and never a confinement root: file routes stay confined to `workingDir`.
 tmux reports the resolved directory, so for a workspace reached through a symlink a
 directory at or under the resolved workspace is reported in `workingDir`'s spelling.
@@ -1166,7 +1166,8 @@ gave nothing, each opening with where it came from (`local`, `docker <name>`,
 pass to a shell, or whose name tmux reads as a target rather than a name (one starting
 with `=`, `@` or `%`, or a bare `~`), is skipped and counted in a note. A tmux server that
 does not answer within 2 seconds costs only its own rows and gets a note, and a scan cut
-short keeps the rows it read and says so in one. Sessions on a Codeman socket never appear.
+short keeps the rows it read and says so in one. Sessions on a Codeman socket never appear,
+and neither does a session named `codeman-*` or `claudeman-*` on any other socket, with no note.
 
 `POST /api/v1/sessions/adopt` wraps one, with `{ "id": "...", "docker": true, "remote":
 true }` (the two flags must match the listing the id came from; `name` and
