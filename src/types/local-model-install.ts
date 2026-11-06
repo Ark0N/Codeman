@@ -116,6 +116,8 @@ export const LOCAL_MODEL_INSTALL_STEPS: readonly LocalModelInstallStep[] = [
  * | `runtime-unpack-failed`   | `/usr/bin/tar` failed                                                    |
  * | `runtime-start-failed`    | the runtime was started and never answered `/api/version`                |
  * | `runtime-stopped`         | installed: the runtime crashed and was restarted 3 times, then given up  |
+ * | `runtime-not-running`     | installed: the runtime is not running (the person stopped it). Only a    |
+ * |                           | refused session start says it; the view shows no error for a stopped runtime |
  * | `port-in-use`             | another program listens on the stored port, or no port of the span is free |
  * | `disk-full`               | a write failed for lack of space                                         |
  * | `pull-failed`             | the pull still ends on an error line or a cut stream after its retries   |
@@ -137,6 +139,7 @@ export type LocalModelErrorCode =
   | 'runtime-unpack-failed'
   | 'runtime-start-failed'
   | 'runtime-stopped'
+  | 'runtime-not-running'
   | 'port-in-use'
   | 'disk-full'
   | 'pull-failed'
@@ -218,6 +221,7 @@ export const LOCAL_MODEL_INSTALL_LABELS = {
   errRuntimeUnpackFailed: 'The runtime could not be unpacked on this Mac.',
   errRuntimeStartFailed: 'The runtime did not start on this Mac.',
   errRuntimeStopped: 'The runtime keeps stopping, so Codeman no longer restarts it.',
+  errRuntimeNotRunning: 'The model on this Mac is not running. Start it first.',
   errPortInUse: 'Port {port} is in use by another program.',
   errDiskFull: 'The disk is full. Free up space, then try again.',
   errPullFailed: 'The download keeps stopping. The network may be damaging data. Try again or use another network.',
@@ -259,6 +263,7 @@ export const LOCAL_MODEL_ERROR_LABELS: Record<LocalModelErrorCode, LocalModelIns
   'runtime-unpack-failed': LOCAL_MODEL_INSTALL_LABELS.errRuntimeUnpackFailed,
   'runtime-start-failed': LOCAL_MODEL_INSTALL_LABELS.errRuntimeStartFailed,
   'runtime-stopped': LOCAL_MODEL_INSTALL_LABELS.errRuntimeStopped,
+  'runtime-not-running': LOCAL_MODEL_INSTALL_LABELS.errRuntimeNotRunning,
   'port-in-use': LOCAL_MODEL_INSTALL_LABELS.errPortInUse,
   'disk-full': LOCAL_MODEL_INSTALL_LABELS.errDiskFull,
   'pull-failed': LOCAL_MODEL_INSTALL_LABELS.errPullFailed,
@@ -282,6 +287,7 @@ export const LOCAL_MODEL_ERROR_NEXT: Record<LocalModelErrorCode, LocalModelNextS
   'runtime-unpack-failed': 'retry',
   'runtime-start-failed': 'retry',
   'runtime-stopped': 'start',
+  'runtime-not-running': 'start',
   'port-in-use': 'other-port',
   'disk-full': 'retry',
   'pull-failed': 'retry',

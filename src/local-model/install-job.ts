@@ -84,6 +84,7 @@ import type {
   LocalModelConflict,
   LocalModelDeveloperTools,
   LocalModelErrorCode,
+  LocalModelInstallError,
   LocalModelInstallRequest,
   LocalModelInstallState,
   LocalModelInstallStep,
@@ -458,6 +459,16 @@ export interface LocalModelServiceDeps {
 export interface LocalModelService {
   /** The `install` object of the GET. Never throws. */
   view(): Promise<LocalModelInstallView>;
+  /**
+   * Whether a session may be started on the saved endpoint `endpointId` right now. `undefined`:
+   * yes, which is also the answer for every endpoint that is not this feature's. Otherwise the
+   * error that refuses the launch, in this order: `runtime-not-running` (the runtime child
+   * Codeman started is not alive, so whatever answers on the port is not ours),
+   * `port-in-use`, `runtime-stopped`, `model-changed` (the digest is read again and is not the
+   * stored one). The session launch path asks this before it starts a session with the
+   * managed endpoint, and `boot()` asks it once. Never throws.
+   */
+  launchRefusal(endpointId: string): Promise<LocalModelInstallError | undefined>;
   /** What the GET passes to `recommend()`: the stored measured total and the runtime download that is still needed. */
   recommendOptions(): Promise<RecommendOptions>;
   /** `POST /api/local-model/install`. Answers once the job is STARTED; the job runs on in the server. */

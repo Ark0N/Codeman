@@ -23,9 +23,9 @@ import {
   fakeRuntimeLog,
   FakeRuntimeChild,
   freeLoopbackPort,
+  INFERENCE_COMPUTE_LINE_MACBOOK,
   MACBOOK_MEASURED_TOTAL_BYTES,
   REAL_INFERENCE_COMPUTE_LINE_MAC_MINI,
-  REAL_INFERENCE_COMPUTE_LINE_MACBOOK,
   REAL_PULL_ERROR_LINE,
   startFakeOllama,
   type FakeOllama,
@@ -364,7 +364,7 @@ describe('the fake runtime: the archive', () => {
 describe('the fake runtime: the child process', () => {
   it('holds the real log lines with the device total', () => {
     expect(REAL_INFERENCE_COMPUTE_LINE_MAC_MINI).toContain('total="11.8 GiB" available="11.8 GiB"');
-    expect(REAL_INFERENCE_COMPUTE_LINE_MACBOOK).toContain('total="37.4 GiB" available="37.4 GiB"');
+    expect(INFERENCE_COMPUTE_LINE_MACBOOK).toContain('total="37.4 GiB" available="37.4 GiB"');
     expect(MACBOOK_MEASURED_TOTAL_BYTES).toBe(Math.floor(37.4 * 1024 ** 3));
     expect(fakeRuntimeLog('37.4 GiB')[2]).toContain('msg="inference compute"');
   });

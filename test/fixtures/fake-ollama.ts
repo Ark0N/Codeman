@@ -67,12 +67,12 @@ export const REAL_INFERENCE_COMPUTE_LINE_MAC_MINI =
   'time=2026-11-06T13:21:49.885+01:00 level=INFO source=types.go:32 msg="inference compute" id=0 filter_id=0 library=Metal compute=0.0 name=MTL0 description="Apple M4" libdirs="" driver=0.0 pci_id="" type=iGPU total="11.8 GiB" available="11.8 GiB"';
 
 /**
- * The same line as the 48 GB MacBook (Apple M5 Pro) printed it on 2026-11-06. The measurement
- * notes quote `total="37.4 GiB" available="37.4 GiB"`; the rest of the line is the Mac mini's
- * with the chip name and a time filled in. `parseInferenceComputeTotal()` must read
- * 40,157,944,217 bytes from it.
+ * The same line for the 48 GB MacBook (Apple M5 Pro), RECONSTRUCTED: the measurement notes of
+ * 2026-11-06 quote only `total="37.4 GiB" available="37.4 GiB"` from it, so the rest is the
+ * Mac mini's line with the chip name and a time filled in (hence no `REAL_` in the name).
+ * `parseInferenceComputeTotal()` must read 40,157,944,217 bytes from it.
  */
-export const REAL_INFERENCE_COMPUTE_LINE_MACBOOK =
+export const INFERENCE_COMPUTE_LINE_MACBOOK =
   'time=2026-11-06T15:04:12.371+01:00 level=INFO source=types.go:32 msg="inference compute" id=0 filter_id=0 library=Metal compute=0.0 name=MTL0 description="Apple M5 Pro" libdirs="" driver=0.0 pci_id="" type=iGPU total="37.4 GiB" available="37.4 GiB"';
 
 /** 37.4 GiB in bytes, rounded down: what the MacBook line stands for. */
