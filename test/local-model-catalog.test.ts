@@ -2,7 +2,7 @@
  * @fileoverview Tests for src/config/local-model-catalog.ts: the compiled catalogue of models,
  * harnesses and chips, its schema, and the chip lookup.
  *
- * Three things are pinned:
+ * Four things are pinned:
  *
  * 1. The stock constant PARSES. `getLocalModelCatalog()` validates it on first use and throws on
  *    a bad row, so this test is what keeps a bad row from ever reaching the route.
@@ -12,6 +12,9 @@
  *    hides a more specific one).
  * 3. The chip lookup never guesses: a chip that no row names has no bandwidth, including one
  *    whose name merely contains a known name ('Apple M10', 'Apple M6 Pro').
+ * 4. Which figures were MEASURED on a Mac and which are carried over from the measured row:
+ *    one row says `measured` (its size is what a Mac really downloads, and it alone has a
+ *    tested entry), every other row says `estimated`.
  *
  * Port: N/A (pure data and functions).
  */
@@ -39,8 +42,8 @@ function issuesOf(catalog: unknown): string[] {
 }
 
 /** The stock catalogue with its first model changed. */
-/** `url` is no field of a model row: one test passes it to prove the schema refuses an unknown key. */
-function withFirstModel(change: Partial<Record<keyof LocalModelEntry | 'url', unknown>>): unknown {
+/** `url` and `kvBytesPerToken` are no fields of a model row: tests pass them to prove the schema refuses an unknown key. */
+function withFirstModel(change: Partial<Record<keyof LocalModelEntry | 'url' | 'kvBytesPerToken', unknown>>): unknown {
   const catalog = copy();
   return { ...catalog, models: [{ ...catalog.models[0], ...change }, ...catalog.models.slice(1)] };
 }
@@ -70,36 +73,62 @@ describe('the stock catalogue', () => {
     expect(STOCK_LOCAL_MODEL_CATALOG.models.some((m) => m.id.startsWith('flint'))).toBe(false);
   });
 
-  it('carries the byte sizes of the registry manifests', () => {
-    // The sum of the layer sizes of each tag's manifest, as fetched on 2026-11-06.
+  it('carries the size a Mac really downloads where that was measured, else the registry manifest', () => {
     expect(Object.fromEntries(STOCK_LOCAL_MODEL_CATALOG.models.map((m) => [m.id, m.bytes]))).toEqual({
+      // The sum of the layer sizes of each tag's manifest, as fetched on 2026-11-06.
       'qwen3.5:9b': 6_550_825_373,
       'qwen3.5:9b-q8_0': 10_449_217_949,
       'gpt-oss:20b': 13_793_441_427,
-      'qwen3.6:35b-a3b': 22_621_314_161,
+      // The total of the real pull on a Mac (an MLX build). Its manifest sums to 22,621,314,161.
+      'qwen3.6:35b-a3b': 23_105_798_956,
       'qwen3.8:27b': 17_741_871_939,
       'qwen3.8:27b-q8_0': 29_978_241_837,
       'qwen3.5:122b-a10b': 81_370_035_877,
     });
   });
 
-  it('carries the KV cost per token of each model', () => {
-    expect(Object.fromEntries(STOCK_LOCAL_MODEL_CATALOG.models.map((m) => [m.id, m.kvBytesPerToken]))).toEqual({
-      'qwen3.5:9b': 32_768,
-      'qwen3.5:9b-q8_0': 32_768,
-      'gpt-oss:20b': 24_576,
-      'qwen3.6:35b-a3b': 20_480,
-      'qwen3.8:27b': 65_536,
-      'qwen3.8:27b-q8_0': 65_536,
-      'qwen3.5:122b-a10b': 24_576,
+  it('says which row was measured on a Mac: one, and every other row is an estimate', () => {
+    expect(Object.fromEntries(STOCK_LOCAL_MODEL_CATALOG.models.map((m) => [m.id, m.figures]))).toEqual({
+      'qwen3.5:9b': 'estimated',
+      'qwen3.5:9b-q8_0': 'estimated',
+      'gpt-oss:20b': 'estimated',
+      'qwen3.6:35b-a3b': 'measured',
+      'qwen3.8:27b': 'estimated',
+      'qwen3.8:27b-q8_0': 'estimated',
+      'qwen3.5:122b-a10b': 'estimated',
     });
   });
 
-  it('gives every model a parameter count and an empty tested list', () => {
+  it('gives every row the memory figures measured on the one row: 37 KB per token, 3 GB, 5 GB', () => {
+    for (const model of STOCK_LOCAL_MODEL_CATALOG.models) {
+      expect(
+        [model.heldBytesPerToken, model.overheadBytes, model.peakExtraBytes],
+        `${model.id}: an unmeasured row carries the measured row's figures, not invented ones`
+      ).toEqual([37_000, 3_000_000_000, 5_000_000_000]);
+    }
+    // No row keeps the figure that was computed from the model's config.
+    expect(JSON.stringify(STOCK_LOCAL_MODEL_CATALOG)).not.toContain('kvBytesPerToken');
+  });
+
+  it('has one tested entry: the 35B-A3B with OpenCode on the MacBook Pro, with its measured speed', () => {
+    expect(
+      Object.fromEntries(
+        STOCK_LOCAL_MODEL_CATALOG.models.filter((m) => m.tested.length > 0).map((m) => [m.id, m.tested])
+      )
+    ).toEqual({
+      'qwen3.6:35b-a3b': [
+        { chip: 'Apple M5 Pro', memGb: 48, cli: 'opencode', date: '2026-11-06', tokensPerSecond: 67.7 },
+      ],
+    });
+    // A row may claim a test only when its figures were measured.
+    for (const model of STOCK_LOCAL_MODEL_CATALOG.models) {
+      if (model.tested.length > 0) expect(model.figures, model.id).toBe('measured');
+    }
+  });
+
+  it('gives every model a parameter count, an id of the default registry and a license', () => {
     for (const model of STOCK_LOCAL_MODEL_CATALOG.models) {
       expect(model.paramsB, model.id).toBeGreaterThan(0);
-      // Nobody has run any of these with a harness on a Mac yet.
-      expect(model.tested, model.id).toEqual([]);
       expect(model.id).toMatch(LOCAL_MODEL_ID_PATTERN);
       expect(model.license).toBe('Apache-2.0');
     }
@@ -130,11 +159,7 @@ describe('the stock catalogue', () => {
     ]);
   });
 
-  it('counts the prompt cache as 512 MiB below 32 GB and 2 GiB from 32 GB', () => {
-    expect(STOCK_LOCAL_MODEL_CATALOG.promptCacheTiers).toEqual([
-      { minMemGb: 0, bytes: 512 * 1024 ** 2 },
-      { minMemGb: 32, bytes: 2 * 1024 ** 3 },
-    ]);
+  it('names the oldest macOS and its schema version', () => {
     expect(STOCK_LOCAL_MODEL_CATALOG.minMacosMajor).toBe(14);
     expect(STOCK_LOCAL_MODEL_CATALOG.schema).toBe(1);
   });
@@ -144,7 +169,7 @@ describe('the stock catalogue', () => {
     expect(text).not.toMatch(/https?:/);
     expect(text).not.toMatch(/sha256/i);
     expect(Object.keys(STOCK_LOCAL_MODEL_CATALOG).sort()).toEqual(
-      ['chips', 'harnesses', 'minMacosMajor', 'models', 'promptCacheTiers', 'schema', 'updated'].sort()
+      ['chips', 'harnesses', 'minMacosMajor', 'models', 'schema', 'updated'].sort()
     );
   });
 });
@@ -193,6 +218,26 @@ describe('the schema, field by field', () => {
     const catalog = copy();
     expect(issuesOf({ ...catalog, harnesses: [{ ...catalog.harnesses[0], dialect: 'openai' }] })).not.toEqual([]);
     expect(issuesOf({ ...catalog, chips: [{ match: 'M4', gbps: 120, cores: 10 }] })).not.toEqual([]);
+    // The two figures the need was once computed from are gone, and a row that still has one is refused.
+    expect(issuesOf(withFirstModel({ kvBytesPerToken: 32768 }))).not.toEqual([]);
+    expect(issuesOf({ ...catalog, promptCacheTiers: [{ minMemGb: 0, bytes: 1 }] })).not.toEqual([]);
+  });
+
+  it('requires the memory figures and where they come from on every model row', () => {
+    for (const field of ['heldBytesPerToken', 'overheadBytes', 'peakExtraBytes', 'figures'] as const) {
+      const row: Record<string, unknown> = { ...copy().models[0] };
+      delete row[field];
+      const issues = issuesOf({ ...copy(), models: [row] });
+      expect(issues, field).toHaveLength(1);
+      expect(issues[0]).toContain(`models.0.${field}`);
+    }
+    expect(issuesOf(withFirstModel({ figures: 'guessed' }))).not.toEqual([]);
+    // What stays held per token must be a positive whole number of bytes; the other two may be 0.
+    expect(issuesOf(withFirstModel({ heldBytesPerToken: 0 }))).not.toEqual([]);
+    expect(issuesOf(withFirstModel({ heldBytesPerToken: 36.5 }))).not.toEqual([]);
+    expect(issuesOf(withFirstModel({ overheadBytes: 0, peakExtraBytes: 0 }))).toEqual([]);
+    expect(issuesOf(withFirstModel({ overheadBytes: -1 }))).not.toEqual([]);
+    expect(issuesOf(withFirstModel({ peakExtraBytes: 1.5 }))).not.toEqual([]);
   });
 
   it('requires paramsB and tested on every model row', () => {
@@ -208,7 +253,6 @@ describe('the schema, field by field', () => {
   it('refuses sizes and counts that are not positive whole numbers', () => {
     expect(issuesOf(withFirstModel({ bytes: 0 }))).not.toEqual([]);
     expect(issuesOf(withFirstModel({ bytes: 1.5 }))).not.toEqual([]);
-    expect(issuesOf(withFirstModel({ kvBytesPerToken: -1 }))).not.toEqual([]);
     expect(issuesOf(withFirstModel({ contexts: [] }))).not.toEqual([]);
     expect(issuesOf(withFirstModel({ paramsB: 0 }))).not.toEqual([]);
     expect(issuesOf(withFirstModel({ speedPer100Gbps: 0 }))).not.toEqual([]);
@@ -220,6 +264,10 @@ describe('the schema, field by field', () => {
     expect(issuesOf(withFirstModel({ tested: [{ ...good, date: '6 November 2026' }] }))).not.toEqual([]);
     expect(issuesOf(withFirstModel({ tested: [{ ...good, memGb: 0 }] }))).not.toEqual([]);
     expect(issuesOf(withFirstModel({ tested: [{ ...good, result: 'pass' }] }))).not.toEqual([]);
+    // The speed measured in that test is optional, and a speed is above 0.
+    expect(issuesOf(withFirstModel({ tested: [{ ...good, tokensPerSecond: 67.7 }] }))).toEqual([]);
+    expect(issuesOf(withFirstModel({ tested: [{ ...good, tokensPerSecond: 0 }] }))).not.toEqual([]);
+    expect(issuesOf(withFirstModel({ tested: [{ ...good, tokensPerSecond: '67.7' }] }))).not.toEqual([]);
   });
 
   it('refuses another schema version and a date that is not ISO', () => {
@@ -283,20 +331,6 @@ describe('the schema, across rows', () => {
       { match: 'm4', gbps: 130 },
     ];
     expect(issuesOf(repeated)).toHaveLength(1);
-  });
-
-  it('refuses prompt cache tiers that do not start at 0 or do not ascend', () => {
-    const late = copy();
-    late.promptCacheTiers = [{ minMemGb: 16, bytes: 1 }];
-    expect(issuesOf(late)).toEqual(['promptCacheTiers.0.minMemGb: the first prompt cache tier must start at 0']);
-
-    const unordered = copy();
-    unordered.promptCacheTiers = [
-      { minMemGb: 0, bytes: 1 },
-      { minMemGb: 32, bytes: 2 },
-      { minMemGb: 24, bytes: 3 },
-    ];
-    expect(issuesOf(unordered)).toEqual(['promptCacheTiers.2.minMemGb: prompt cache tiers must ascend by minMemGb']);
   });
 });
 

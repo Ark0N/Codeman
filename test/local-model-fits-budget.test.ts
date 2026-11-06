@@ -4,7 +4,9 @@
  *
  * Pinned: it agrees with what `recommend()` offers (a model that is the pick or listed fits,
  * a model that is in neither and is not left out for its rank does not), it does not depend
- * on the ranking, and a model the catalogue does not have never fits.
+ * on the ranking, a model the catalogue does not have never fits, and it judges against the
+ * budget the runtime measured when the caller passes one (the whole point of asking again
+ * after the runtime started).
  *
  * Port: N/A (pure functions).
  */
@@ -86,5 +88,49 @@ describe('modelFitsBudget', () => {
     expect(modelFitsBudget(mac(48), catalog, 'qwen3.5:122b-a10b', 131072)).toBe(false);
     expect(modelFitsBudget(mac(48), catalog, 'no-such:1b', 65536)).toBe(false);
     expect(modelFitsBudget(mac(48), catalog, 'qwen3.6:35b-a3b', 131072)).toBe(true);
+  });
+
+  it('judges against the budget the runtime measured, when it is given one', () => {
+    const id = 'qwen3.6:35b-a3b';
+    // The MacBook: the runtime reported 37.4 GiB, and the model needs 36.0 of those 40.2 GB.
+    expect(modelFitsBudget(mac(48), catalog, id, 131072, { measuredTotalBytes: 40_157_944_217 })).toBe(true);
+    // A runtime that reports less than the estimate rules out what the estimate allowed.
+    expect(modelFitsBudget(mac(48), catalog, id, 131072, { measuredTotalBytes: 33 * 1024 ** 3 })).toBe(false);
+    // And one that reports more admits what the estimate ruled out: the 27B on a 36 GB Mac.
+    expect(modelFitsBudget(mac(36), catalog, 'qwen3.8:27b', 65536)).toBe(false);
+    expect(modelFitsBudget(mac(36), catalog, 'qwen3.8:27b', 65536, { measuredTotalBytes: 27 * 1024 ** 3 })).toBe(true);
+    // The reserve still bounds it: 100 GiB "measured" on a 48 GB Mac is 40 GiB (42.9 GB) of
+    // budget, so the Q8 27B with its 42.8 GB stays out (0.997) although 100 GiB would hold it.
+    const huge = { measuredTotalBytes: 100 * 1024 ** 3 };
+    expect(modelFitsBudget(mac(48), catalog, 'qwen3.8:27b-q8_0', 131072, huge)).toBe(false);
+    expect(modelFitsBudget(mac(128), catalog, 'qwen3.8:27b-q8_0', 131072, huge)).toBe(true);
+  });
+
+  it('agrees with the recommendation under a measured budget too', () => {
+    for (const [gb, measuredGib] of [
+      [16, 11.8],
+      [32, 20],
+      [48, 37.4],
+      [48, 30],
+      [64, 50],
+    ]) {
+      const hw = mac(gb);
+      const options = { measuredTotalBytes: Math.floor(measuredGib * 1024 ** 3) };
+      const offered = recommend(hw, catalog, harnessFacts(), options);
+      expect(offered.verdict === 'none' || offered.budgetSource === 'measured').toBe(true);
+      for (const row of [offered.pick, ...offered.alternatives].filter((entry) => entry !== undefined)) {
+        expect(modelFitsBudget(hw, catalog, row.modelId, row.context, options), `${gb} GB ${row.modelId}`).toBe(true);
+        // The next larger context of the same model does not fit, or the row would be at it.
+        const model = catalog.models.find((entry) => entry.id === row.modelId);
+        const larger = model?.contexts.filter((ctx) => ctx > row.context) ?? [];
+        for (const ctx of larger) expect(modelFitsBudget(hw, catalog, row.modelId, ctx, options)).toBe(false);
+      }
+    }
+  });
+
+  it('is false for a context that is no token count', () => {
+    for (const context of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(modelFitsBudget(mac(128), catalog, 'qwen3.5:9b', context), String(context)).toBe(false);
+    }
   });
 });
