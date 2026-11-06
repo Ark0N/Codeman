@@ -11,16 +11,17 @@
  *    exact check the in-app updater runs (`diffRequiredEnvKeys`), and a
  *    generated file missing a key would block the user's next update. The file
  *    is 0600, the generated password is alphanumeric (Compose's dotenv
- *    interpolates `$` and treats ` #` as a comment), and a data folder that
- *    would collide with a native install's `~/.codeman`, `$HOME` itself or the
- *    image build context is refused.
+ *    interpolates `$` and treats ` #` as a comment) and shown only on a
+ *    terminal, and a data folder that would collide with a native install's
+ *    `~/.codeman`, `$HOME` itself or the image build context is refused.
  * 3. An existing `docker/.env` is never rewritten: the update path
  *    (Update-Codeman.sh hands off to this script) must stay byte-for-byte.
  * 4. A `.env` still carrying the example password `changeme` is refused before
  *    anything is built or started.
  *
  * Runs the REAL script against a stub `docker` on PATH with stdin not a TTY,
- * which is also the "no terminal attached, take the defaults" path.
+ * which is also the "no terminal attached, take the defaults" path. The tests
+ * of the questions themselves run on a real pty.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
@@ -315,8 +316,9 @@ describe('Start-Codeman.sh first run (no docker/.env yet)', () => {
     expect(password).not.toBe('changeme');
     expect(envValue(env, 'CODEMAN_PORT')).toMatch(/^\d+$/);
     expect(envValue(env, 'TZ')).toMatch(/^[A-Za-z0-9_+/-]+$/);
-    // A generated password is shown once, since nobody else knows it.
-    expect(r.stdout).toContain(password);
+    // No terminal here, and a captured log must not hold the password.
+    expect(r.stdout).not.toContain(password);
+    expect(r.stdout).toMatch(/generated; read it from docker\/\.env/);
     expect(r.stdout).toMatch(/No questions asked/);
   });
 
@@ -529,8 +531,9 @@ describe.skipIf(process.platform === 'win32')('Start-Codeman.sh first run, start
     const password = envValue(r.env as string, 'CODEMAN_PASSWORD') as string;
     expect(r.stdout).toMatch(/Waiting for Codeman to answer\.\.\. ready\./);
     expect(r.stdout).toContain('http://localhost:4321');
-    // Printed again at the end, since the build output has scrolled the first one away.
-    expect(r.stdout.split(password).length - 1).toBe(2);
+    // Stdout is captured here, so docker/.env is the only place the password appears.
+    expect(r.stdout).not.toContain(password);
+    expect(r.stdout).toMatch(/Sign in +admin, with the CODEMAN_PASSWORD from .*docker\/\.env/);
     expect(r.stdout).toMatch(/Logs +cd .* && docker compose logs -f codeman/);
     expect(r.stdout).toMatch(/Stop +cd .* && docker compose down/);
     const up = r.log.findIndex((l) => / up --build -d/.test(l));
@@ -560,6 +563,23 @@ describe.skipIf(process.platform === 'win32')('Start-Codeman.sh first run, start
     expect(r.stdout).toContain('http://localhost:5555');
     expect(r.homeEntries).toContain('typed-data');
     expect(r.homeEntries).not.toContain('preset-data');
+  });
+
+  it.skipIf(process.platform !== 'linux')('shows a generated password twice at a terminal', () => {
+    const r = runStart([], { socket: sockPath, terminal: '\n\n\n' });
+    expect(r.status, r.stdout).toBe(0);
+    const password = envValue(r.env as string, 'CODEMAN_PASSWORD') as string;
+    // Again at the end, since the build output has scrolled the first one away.
+    expect(r.stdout.split(password).length - 1).toBe(2);
+  });
+
+  it.skipIf(process.platform !== 'linux')('promises no second showing after --setup-only', () => {
+    const r = runStart(['--setup-only'], { terminal: '\n\n\n' });
+    expect(r.status, r.stdout).toBe(0);
+    const password = envValue(r.env as string, 'CODEMAN_PASSWORD') as string;
+    expect(r.stdout.split(password).length - 1).toBe(1);
+    expect(r.stdout).toMatch(/it stays in docker\/\.env/);
+    expect(r.stdout).not.toMatch(/shown again/);
   });
 
   it('reports a container that keeps restarting, with its last log lines, and exits 1', () => {

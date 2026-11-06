@@ -436,10 +436,14 @@ run_first_run_setup() {
   # summary would name one folder and port and the stack would run on another.
   unset TZ CODEMAN_APPDATA_PATH CODEMAN_CASES_PATH CODEMAN_PORT CODEMAN_PASSWORD
 
-  if [[ -n "$generated_password" ]]; then
-    password_note="$generated_password  (generated; shown again once Codeman is up)"
-  else
+  # A generated password goes to a terminal only: a captured log would be a
+  # weaker copy of a credential that controls Docker on this host.
+  if [[ -z "$generated_password" ]]; then
     password_note='the one you chose'
+  elif [[ -t 1 ]]; then
+    password_note="$generated_password  (generated; it stays in docker/.env)"
+  else
+    password_note='generated; read it from docker/.env'
   fi
   printf '\nWrote %s (readable only by you):\n' "$env_file"
   printf '  Data folder  %s\n' "$setup_appdata"
@@ -777,7 +781,7 @@ print_access_summary() {
       "$codeman_port" "${addresses:-unknown}"
   fi
   printf '  Sign in     %s, with the CODEMAN_PASSWORD from %s\n' "${codeman_username:-admin}" "$env_file"
-  if [[ -n "$generated_password" ]]; then
+  if [[ -n "$generated_password" && -t 1 ]]; then
     printf '  Password    %s  (generated on this first run)\n' "$generated_password"
   fi
   if [[ "$first_run" == '1' ]]; then
