@@ -32,7 +32,7 @@
  */
 
 import { canUsernameRunPrivilegedCommands } from './user-store.js';
-import { enabledClis } from './config/cli-registry/registry.js';
+import { listClis } from './config/cli-registry/registry.js';
 
 /**
  * Env-var keys a non-granted owner must not be able to set, because each one
@@ -68,7 +68,8 @@ import { enabledClis } from './config/cli-registry/registry.js';
  *   already allowlisted for pi and not addressed here — see resolveOmpHome()).
  */
 export function ownerClampedEnvKeys(): string[] {
-  return enabledClis().flatMap((entry) => entry.capabilities.privilegedEnvKeys);
+  // Every CLI, enabled or not: a session can outlive the switch that disabled its CLI.
+  return listClis().flatMap((entry) => entry.capabilities.privilegedEnvKeys);
 }
 
 /**
