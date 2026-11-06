@@ -287,7 +287,8 @@ long turn, but a worker that never comes back is far more likely to be working t
 blocked, and polling `blocked` alone will sit at its timeout.
 
 **`blocked` on `codex` is read off the screen**, because codex has no hooks and is
-launched with its approvals on unless `codexConfig.dangerouslyBypassApprovals` is set.
+launched with its approvals on unless `codexConfig.dangerouslyBypassApprovals` is set
+(`codexConfig.networkAccess` opens the sandbox's network and does not change that).
 A codex pane showing a command, edit or network approval, a question (`request_user_input`)
 or the startup trust prompt raises `blocked` (plus the red alert, push and webhook a Claude
 `permission_prompt` raises, alert-only: answer it in the terminal), and the session reads
