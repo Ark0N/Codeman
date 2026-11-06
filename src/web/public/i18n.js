@@ -55,6 +55,9 @@
       '应用于新本地会话；可用强度取决于模型和 Codex 版本。自定义端点、Docker 和远程会话保留自己的设置。',
     'Default Codex model may only contain letters, digits, ".", "_", "-" and "/"':
       'Codex 默认模型只能包含字母、数字、"."、"_"、"-" 和 "/"',
+    'Allow network access': '允许网络访问',
+    "Lets commands in Codex's workspace-write sandbox use the network, which the Codeman skill needs to reach this server. Those commands can then call Codeman's API, which can start a session outside the sandbox with no approval prompt, even when a password is set. So with this on, Codex's sandbox does not contain a prompt-injected command: treat it as close to Bypass. Applies to every new local Codex session, not scheduled jobs. It does not change Codex's sandbox mode: a folder Codex runs read-only (one it does not trust) keeps the network closed and asks per command.":
+      '允许 Codex 的 workspace-write 沙箱中的命令使用网络，Codeman 技能需要网络才能连接到此服务器。这些命令随后可以调用 Codeman 的 API，而该 API 可以在沙箱之外启动会话且不弹出审批提示，即使设置了密码也是如此。因此开启后，Codex 的沙箱无法约束被提示注入的命令：请把它视为接近“绕过审批与沙箱”。应用于所有新的本地 Codex 会话，不包括定时任务。它不会改变 Codex 的沙箱模式：Codex 以只读方式运行的文件夹（即它不信任的文件夹）仍会保持网络关闭，并逐条命令询问。',
     'Skip to terminal': '跳转到终端',
     'Go to main page': '返回主页',
     'Session tabs': '会话标签页',
