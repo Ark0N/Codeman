@@ -152,17 +152,20 @@ Key points:
   fish refuses `${SHELL:-/bin/sh}` with status 127, which is a dead pane. A `commands.*`
   override stays one argument on purpose, since it is written for the user's own shell
   (`source` and `[[` work in bash and zsh and die under a dash `/bin/sh`).
-- **Login shells**: POSIX shells and fish work. nushell and elvish cannot run the
-  PATH bootstrap at all, so no override helps. A `remotePath` holding an apostrophe
-  does not start under fish.
-- ⚠️ **A tcsh login shell stopped working in 1.49.0.** tcsh refuses `-l` beside any
-  other flag (``Unknown option: `-l'``), so every stock launch leaves a dead pane. On
-  1.48.0 the local `sh` rewrote `${SHELL:-/bin/sh}` to this host's shell, so such a
-  host ran that shell instead (when its path also exists on the remote) and came up.
-  It now needs a `commands.*` override per mode (`exec claude`). The Create Case
-  form's Remote tab offers codex only, the other modes go through
-  `PUT /api/remote-hosts/:id`, and a `commands.claude` override gives up the
-  `--session-id`/`--resume` pair, so a respawn starts a new conversation.
+- **Login shells**: POSIX shells and fish work, and csh and tcsh do within the limits
+  below. nushell and elvish cannot run the PATH bootstrap at all, so no override
+  helps. A `remotePath` holding an apostrophe does not start under fish.
+- **The login flags are picked on the far end**, the only place the shell is known:
+  the pane command passes `-i -l` unless `${SHELL##*/}` is `csh` or `tcsh`, which get
+  neither. tcsh honors `-l` only as its one flag and exits on `-i -l -c`, `-l -c` and
+  `-i -l` (measured on 6.24), so a tcsh session reads `.tcshrc` and not `.login`. The
+  text is one brace group, so `cd <path> && { …; }` starts nothing when the `cd` fails.
+- **The login shell still parses the ssh line itself**, as it did in 1.48.0, so tcsh
+  has two more limits. It has no `export`, so the PATH bootstrap only prints an error
+  there, and `tmux` and the CLI have to be on a PATH that `.tcshrc` sets. And the tmux
+  prerequisite probe's `command -v tmux` needs a `command` executable: macOS and the
+  BSDs ship one, Debian and Ubuntu do not, so linking a tcsh host there is refused
+  with `could not verify tmux`.
 - Connection options come from the **same `buildSshConnectionArgs(remote)`** as
   the prereq probe; `-t` is inserted right after `ssh -o BatchMode=yes`,
   preserving historical token order.

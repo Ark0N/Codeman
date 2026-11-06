@@ -221,7 +221,7 @@ a Docker case only sees that container's own history.
 ## Remote SSH cases
 
 `pi` mode is routed through an interactive login shell
-(`exec "$SHELL" -i -l -c 'pi'`), because sshd's remote-command PATH does not
+(`remoteLoginShellCommand('pi')`), because sshd's remote-command PATH does not
 include npm's global bin on most hosts. Per-session config and `envOverrides` do
 not cross ssh and are rejected rather than silently ignored; use the per-host
 command override instead.

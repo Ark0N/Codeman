@@ -205,7 +205,7 @@ describe('TmuxManager (unit)', () => {
         sessionId: 'abc123def456',
       });
 
-      expect(command).toContain('exec "${SHELL:-/bin/sh}" -i -l');
+      expect(command).toContain('exec "${SHELL:-/bin/sh}" "$@"; }');
       // `failed`, not `on`: `on` also keeps the pane after a CLEAN exit, so typing
       // `exit` in a remote shell strands a dead pane that the next launch's `-A`
       // reattaches to instead of starting a shell.
@@ -228,7 +228,7 @@ describe('TmuxManager (unit)', () => {
       // interactive nor login, so a bare `exec claude` fails with "command not found".
       // The inner quoting is escaped twice over (once per shellescape() layer), so
       // assert on the unescaped substrings rather than the literal quoted form.
-      expect(command).toContain('exec "${SHELL:-/bin/sh}" -i -l -c');
+      expect(command).toContain('exec "${SHELL:-/bin/sh}" "$@" -c');
       expect(command).toContain('claude --dangerously-skip-permissions');
     });
 

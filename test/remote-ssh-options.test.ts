@@ -157,7 +157,8 @@ describe('COD-107 buildRemoteLaunchCommand — threads connection args', () => {
     const sh = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'";
     const remoteName = `codeman-ssh-${SESSION_ID.slice(0, 8)}`;
     const path = sh('/home/ubuntu/work');
-    const paneCommand = `cd ${path} && exec "\${SHELL:-/bin/sh}" -i -l`;
+    const flags = 'set -- -i -l; case ${SHELL##*/} in csh|tcsh) set --;; esac';
+    const paneCommand = `cd ${path} && { ${flags}; exec "\${SHELL:-/bin/sh}" "$@"; }`;
     const tmuxInvocation = [
       `tmux -L codeman-remote new-session -A -s ${remoteName} -c ${path} /bin/sh -c ${sh(paneCommand)}`,
       `set -t ${remoteName} status off`,

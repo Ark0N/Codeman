@@ -35,11 +35,11 @@ in it expands there, not on the Codeman machine.
 The remote host needs **tmux**. Codeman probes for it when you link the host rather than
 failing later at launch.
 
-The remote login shell can be bash, zsh, dash or fish. Since 1.49.0 **tcsh needs an override**
-for each run mode you use (`exec claude`), because tcsh refuses the flags of a stock launch and
-the pane dies. The Remote tab offers the codex override, the others go through
-`PUT /api/remote-hosts/:id`, and a claude override gives up resuming the same conversation on a
-respawn. nushell and elvish cannot run a remote session at all.
+The remote login shell can be bash, zsh, dash, fish, csh or tcsh. A tcsh session reads `.tcshrc`
+and not `.login`, so set the PATH that finds `tmux` and your agent CLI in `.tcshrc`. The tmux check
+also needs a `command` executable under tcsh: macOS and the BSDs ship one, Debian and Ubuntu do
+not, so linking a tcsh host there stops at `could not verify tmux`. nushell and elvish cannot run a
+remote session at all.
 
 ## What actually runs
 

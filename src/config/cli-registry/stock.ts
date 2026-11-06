@@ -1437,8 +1437,7 @@ const GROK: CliEntry = {
     // docs/, bin/ — per-file seeding like pi's credStore, not a whole-dir seedWhole copy.
     credStore: { rel: '.grok', seedFiles: ['auth.json', 'config.toml', 'pager.toml'] },
     // No remote/docker overlay needed: the defaults (exec grok / login-shell `grok`) are
-    // already correct — verified against upstream's own pinned test/grok-mode.test.ts
-    // expectation `exec "${SHELL:-/bin/sh}" -i -l -c 'grok'`.
+    // already correct, verified against upstream's own pinned test/grok-mode.test.ts.
   },
 };
 
