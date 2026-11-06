@@ -227,7 +227,7 @@ Full detail, including logs and the self-updater, is in
 | Installer     | Re-run the one-liner, or **App Settings → System → Updates** in the UI. |
 | npm           | `npm update -g aicodeman`                                          |
 | git clone     | `git pull && npm install && npm run build`, then restart.          |
-| Docker Compose | Re-run `Start-Codeman.sh`. The in-app updater works too, and refuses a release that changes the container definition until you re-run the script. |
+| Docker Compose | `git pull`, then re-run `Start-Codeman.sh`. The in-app updater works too, and refuses a release that changes the container definition until you re-run the script. |
 
 The in-app updater covers git-clone installs supervised by systemd or launchd. It restarts
 the process that is running it, so the actual work happens in a detached script and the

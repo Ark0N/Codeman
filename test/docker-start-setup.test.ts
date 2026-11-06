@@ -51,6 +51,9 @@ const compose = readFileSync(join(ROOT, 'docker/docker-compose.yaml'), 'utf-8');
 /** Absolute, so a run whose PATH deliberately lacks most tools can still start bash. */
 const BASH = execFileSync('bash', ['-c', 'command -v bash'], { encoding: 'utf-8' }).trim();
 
+/** The run on a real terminal needs util-linux `script`; BSD's takes different arguments. */
+const HAS_PTY = process.platform === 'linux' && spawnSync('script', ['--version']).status === 0;
+
 /** The values the first run fills in; every other line must be the example's. */
 const REWRITTEN_KEYS = ['TZ', 'CODEMAN_APPDATA_PATH', 'CODEMAN_CASES_PATH', 'CODEMAN_PORT', 'CODEMAN_PASSWORD'];
 
@@ -350,7 +353,11 @@ describe('Start-Codeman.sh first run (no docker/.env yet)', () => {
     ['the checkout spelled through ..', ({ home }: { home: string }) => `${home}/../repo/data`, /without \. or \.\./],
     ['a path ending in ..', ({ home }: { home: string }) => `${home}/data/..`, /without \. or \.\./],
     ['a native install spelled through .', ({ home }: { home: string }) => `${home}/./.codeman`, /without \. or \.\./],
-    ['a native install behind a doubled slash', ({ home }: { home: string }) => `${home}//.codeman`, /installed directly/],
+    [
+      'a native install behind a doubled slash',
+      ({ home }: { home: string }) => `${home}//.codeman`,
+      /installed directly/,
+    ],
     ['the checkout behind a doubled slash', ({ repo }: { repo: string }) => `${repo}//data`, /copied into the image/],
   ])('refuses %s as the data folder and writes nothing', (_name, appdata, reason) => {
     const r = runStart(['--setup-only'], { appdata });
@@ -525,7 +532,7 @@ describe.skipIf(process.platform === 'win32')('Start-Codeman.sh first run, start
     rmSync(sockDir, { recursive: true, force: true });
   });
 
-  it('ends on the URL, the generated password and the log/stop commands once the container is healthy', () => {
+  it('ends on the URL, where the password is and the log/stop commands once the container is healthy', () => {
     const r = runStart([], { socket: sockPath, env: { CODEMAN_PORT: '4321' } });
     expect(r.status, r.stderr).toBe(0);
     const password = envValue(r.env as string, 'CODEMAN_PASSWORD') as string;
@@ -551,7 +558,7 @@ describe.skipIf(process.platform === 'win32')('Start-Codeman.sh first run, start
     expect(r.stdout).not.toContain('04444');
   });
 
-  it.skipIf(process.platform !== 'linux')('a typed answer beats a preset for the stack itself, not just the file', () => {
+  it.skipIf(!HAS_PTY)('a typed answer beats a preset for the stack itself, not just the file', () => {
     const r = runStart([], {
       socket: sockPath,
       appdata: ({ home }) => join(home, 'preset-data'),
@@ -567,7 +574,7 @@ describe.skipIf(process.platform === 'win32')('Start-Codeman.sh first run, start
     expect(r.homeEntries).not.toContain('preset-data');
   });
 
-  it.skipIf(process.platform !== 'linux')('shows a generated password twice at a terminal', () => {
+  it.skipIf(!HAS_PTY)('shows a generated password twice at a terminal', () => {
     const r = runStart([], { socket: sockPath, terminal: '\n\n\n' });
     expect(r.status, r.stdout).toBe(0);
     const password = envValue(r.env as string, 'CODEMAN_PASSWORD') as string;
@@ -575,7 +582,7 @@ describe.skipIf(process.platform === 'win32')('Start-Codeman.sh first run, start
     expect(r.stdout.split(password).length - 1).toBe(2);
   });
 
-  it.skipIf(process.platform !== 'linux')('promises no second showing after --setup-only', () => {
+  it.skipIf(!HAS_PTY)('promises no second showing after --setup-only', () => {
     const r = runStart(['--setup-only'], { terminal: '\n\n\n' });
     expect(r.status, r.stdout).toBe(0);
     const password = envValue(r.env as string, 'CODEMAN_PASSWORD') as string;
