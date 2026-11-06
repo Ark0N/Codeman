@@ -87,7 +87,14 @@ codeman users add alice --admin      # 创建第一个管理员账号
 codeman web --multiuser              # 命名登录 + 按用户隔离的案例空间
 ```
 
-**更喜欢 Docker Compose？** `docker/` 里附带一套本地镜像的 Compose 部署：把 `docker/.env.example` 复制为 `docker/.env`，设置 `CODEMAN_PASSWORD`，然后在 Linux 上运行 `bash docker/Start-Codeman.sh`。Codeman 自己跑在容器里，并通过宿主机的 socket 把 Docker 案例作为并列容器拉起。更新之后请再跑一次这个脚本，而不是直接 `docker compose up`，这样重建的镜像、刷新的卷和新的入口脚本会一起就位。直接的 Compose 命令、存储与网络选项见 [Docker 部署指南](docker/README.md)（英文）。
+**更喜欢 Docker Compose？** 克隆仓库，运行一个脚本即可（Linux，需要 Docker 和 Compose v2 插件）：
+
+```bash
+git clone https://github.com/Ark0N/Codeman.git && cd Codeman
+bash docker/Start-Codeman.sh
+```
+
+首次运行会问三个问题（数据目录、端口、密码；回车即采用默认值，包括自动生成的密码），替你写好 `docker/.env`，构建镜像，并在 Codeman 响应后给出访问地址。镜像已内置 Claude Code、Codex、Gemini CLI 和 OpenCode。Codeman 自己跑在容器里，并通过宿主机的 socket 把 Docker 案例作为并列容器拉起。更新时请使用 **App Settings → Updates**，或者先 `git pull` 再跑一次这个脚本，而不是直接 `docker compose up`，这样重建的镜像、刷新的卷和新的入口脚本会一起就位。Unraid、直接的 Compose 命令、存储与网络选项见 [Docker 部署指南](docker/README.md)（英文）。
 
 详见下文[多用户模式](#多用户模式可选启用)。
 

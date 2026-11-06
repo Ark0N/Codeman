@@ -354,6 +354,21 @@ Start the stack with `bash docker/Start-Codeman.sh` rather than a plain `docker 
 and update: since 1.29.0 the entrypoint corrects a root-owned bind mount before dropping
 privileges. See [Running As A Service](Running-As-A-Service).
 
+### Compose: `CODEMAN_PASSWORD is still the example value "changeme"`
+
+`Start-Codeman.sh` and `Update-Codeman.sh` refuse that password before they build or stop
+anything, because the container publishes its port on every interface and holds the Docker
+socket, so whoever signs in controls Docker on the host. Set a real password in `docker/.env`
+and run the script again.
+
+### Compose: `Codeman did not come up`, or no answer after 180 seconds
+
+`Start-Codeman.sh` waits for the server after `up -d`. `did not come up` means the container
+exited, restarted or went unhealthy, and the script prints its last log lines. `has not
+answered after 180 seconds` means it is still running but silent, so on a slow host it may
+just need longer: follow it with `docker compose logs -f codeman` from `docker/`. Either way
+the script exits 1, and `--no-wait` skips the wait for scripts that check on their own.
+
 ### A remote SSH session dropped and did not come back
 
 A bounded-backoff watcher reattaches dropped sessions, and it is on by default. Intentional
