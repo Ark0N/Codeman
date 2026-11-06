@@ -157,9 +157,12 @@ their workspace is bind-mounted at the same path.
 
 ## The path picker
 
-For choosing a path rather than typing one. It appears in two places:
+For choosing a path rather than typing one. It appears in these places:
 
 - **Browse** in **Add Case → Link Existing**.
+- **Browse** in **Add Case → Create New**, under **Create in a custom folder**.
+- **Browse** in **Add Case → Clone Repo**, under **Clone into a custom folder**.
+- **Browse** on the folder fields of **Add Case → Docker**.
 - The **📁 Path** key on the mobile keyboard bar.
 
 It browses one directory at a time and can show hidden entries on request. The current
@@ -171,10 +174,11 @@ choice is remembered per device. The picker inserts the path into your prompt
 **without** pressing Enter, so nothing is submitted by accident. Its sibling **⌫ All**
 key clears the unsent prompt, and never sends the agent's `/clear` command.
 
-In the **Link Existing** and **Create New** (custom folder) pickers, **+📁** (New folder) makes a folder inside the folder you
-are viewing and selects it. Names use letters, numbers, spaces and `_ - . ~` (not starting
-with a dot or `~`). The cases folder is refused, since every folder there is already a
-case: use **Add Case → New Case** instead.
+In the **Link Existing** and **Create New** (custom folder) pickers, **+📁** (New folder)
+makes a folder inside the folder you are viewing and selects it. Names use letters,
+numbers, spaces and `_ - . ~` (not starting with a dot or `~`). The cases folder is
+refused, since every folder there is already a case: pick a folder outside it, or make
+the case with **Add Case → Create New** (no custom folder).
 
 This is a separate file-serving surface from the viewer, with its own rules: it allowlists
 your home directory, the cases directory, and anything in `CODEMAN_FILE_PICKER_ROOTS`, and

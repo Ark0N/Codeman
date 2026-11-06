@@ -176,6 +176,7 @@ describe('PathPicker New folder', () => {
   it('is on for Link Existing and off for the other session-ui pickers', () => {
     const block = (name: string) => {
       const start = sessionUiJs.indexOf(`${name}() {`);
+      expect(start, name).toBeGreaterThan(-1);
       return sessionUiJs.slice(start, sessionUiJs.indexOf('PathPicker.open', start) + 400);
     };
     expect(block('openLinkCasePathPicker')).toContain('allowNewFolder: true');
