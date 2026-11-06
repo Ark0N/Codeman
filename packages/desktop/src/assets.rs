@@ -282,6 +282,19 @@ mod tests {
         assert!(!HOST_SHIM.contains("decodeURIComponent"));
     }
 
+    /// The connect page refuses what the app would drop without an answer, so
+    /// its two limits have to be the app's own.
+    #[test]
+    fn connect_page_keeps_the_message_limits() {
+        let page = String::from_utf8_lossy(CONNECT_HTML);
+        for needle in [
+            format!("var MAX_URL = {};", crate::policy::MAX_URL_LEN),
+            format!("var MAX_FIELD = {};", crate::policy::MAX_FIELD_LEN),
+        ] {
+            assert!(page.contains(&needle), "{needle}");
+        }
+    }
+
     #[test]
     fn toast_escapes_file_names() {
         let js = download_toast_script("a\"); alert(1); (\".txt", true);

@@ -19,8 +19,8 @@ pub const APP_SCHEME: &str = "codemanapp";
 pub const CONNECT_PAGE: &str = "codemanapp://localhost/index.html";
 
 /// Caps on what a page may hand the native side.
-const MAX_URL_LEN: usize = 4096;
-const MAX_FIELD_LEN: usize = 1024;
+pub const MAX_URL_LEN: usize = 4096;
+pub const MAX_FIELD_LEN: usize = 1024;
 
 /// Where the main window is in reaching a server. The gates below take it
 /// instead of "is a server set", because what may talk to the native side
