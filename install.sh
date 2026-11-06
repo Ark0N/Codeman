@@ -860,9 +860,9 @@ cli_offerable() {
     return 0
 }
 
-# install_offered_cli <index>: run the trusted command of one entry and prove
-# it left a CLI behind. A chosen install that leaves nothing is fatal.
-install_offered_cli() {
+# run_offered_cli <index>: run the trusted command of one entry and look again
+# at what is installed. What that means is the caller's to judge.
+run_offered_cli() {
     local idx="$1"
     info "Installing ${CLI_LABELS[$idx]}..."
     # </dev/null: under `curl | bash` a child that reads stdin would
@@ -876,6 +876,13 @@ install_offered_cli() {
     else
         warn "${CLI_LABELS[$idx]} installation failed."
     fi
+    return 0
+}
+
+# install_offered_cli <index>: the same during an install, where a chosen CLI
+# that leaves no CLI at all behind is fatal.
+install_offered_cli() {
+    run_offered_cli "$1"
     if [[ "$CLI_FOUND_COUNT" -eq 0 ]]; then
         die "The selected AI CLI failed to install. Install one manually and re-run the installer."
     fi
@@ -884,9 +891,10 @@ install_offered_cli() {
 
 # Install one AI CLI and nothing else (`install.sh agent <id>`): how the desktop
 # app adds an agent once Codeman is here, also over a running server, which this
-# never touches. install_offered_cli alone cannot end this run: it is fatal only
-# when NO CLI is left, and here another one usually is, so a failed install would
-# report success. A CLI that is here already is a success, and installs nothing.
+# never touches. It judges the run itself, because install_offered_cli cannot: its
+# gate is fatal only when NO CLI is left, and here another one usually is, so a
+# failed install would report success, and its message is about re-running the
+# installer. A CLI that is here already is a success, and installs nothing.
 agent_subcommand() {
     if [[ -z "$AI_CLI_CHOICE" || "$AI_CLI_CHOICE" == "none" ]]; then
         die "Name the AI CLI to install: install.sh agent <id> (one of: $(cli_catalog_ids))."
@@ -912,7 +920,7 @@ agent_subcommand() {
         die "${CLI_LABELS[$idx]} installs with npm, and this run cannot find it. Run this in a terminal instead: ${CLI_INSTALL_CMD_TRUSTED[$idx]}"
     fi
 
-    install_offered_cli "$idx"
+    run_offered_cli "$idx"
     if [[ -z "${CLI_FOUND_PATH[$idx]}" ]]; then
         die "${CLI_LABELS[$idx]} did not install. You can run its installer yourself: ${CLI_INSTALL_CMD_TRUSTED[$idx]}"
     fi
