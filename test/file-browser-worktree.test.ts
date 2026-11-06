@@ -217,6 +217,10 @@ describe('Files panel in a git worktree', () => {
     expect(elements.fileBrowserRoot.hidden).toBe(true);
   });
 
+  it('gives the switch button a name before the first listing fills it in', () => {
+    expect(indexHtml).toMatch(/id="fileBrowserRootSwitch"[^>]*>Session folder<\/button>/);
+  });
+
   it('is wired up in the page', () => {
     expect(appJs).toContain('this._followFileBrowserWorktree?.(session)');
     expect(indexHtml).toContain('id="fileBrowserRoot" hidden');
