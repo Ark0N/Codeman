@@ -3050,6 +3050,13 @@
                     </div>
                     <label class="switch switch-sm"><input type="checkbox" id="appSettingsCodexDangerouslyBypassApprovals"><span class="slider"></span></label>
                   </div>
+                  <div class="set-row" data-search="codex network access sandbox loopback codeman skill orchestrate spawn">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Allow network access</span>
+                      <span class="set-row-desc">Lets commands in Codex's workspace-write sandbox use the network, which the Codeman skill needs to reach this server. Those commands can then call Codeman's API, which can start a session outside the sandbox with no approval prompt, even when a password is set. So with this on, Codex's sandbox does not contain a prompt-injected command: treat it as close to Bypass. Applies to every new local Codex session, not scheduled jobs. It does not change Codex's sandbox mode: a folder Codex runs read-only (one it does not trust) keeps the network closed and asks per command.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsCodexNetworkAccess"><span class="slider"></span></label>
+                  </div>
                   <div class="set-row" data-search="codex animations status effects">
                     <div class="set-row-text">
                       <span class="set-row-label">Animated status effects</span>

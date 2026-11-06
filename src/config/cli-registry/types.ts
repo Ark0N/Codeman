@@ -112,7 +112,7 @@ export type ModelConfigResolverName = 'deepseek-route';
  * arbitrary setting onto a command line; each name must also be a `SettingsUpdateSchema`
  * key, which the resolver's typing enforces.
  */
-export type LaunchDefaultSettingKey = 'codexModel' | 'codexReasoningEffort';
+export type LaunchDefaultSettingKey = 'codexModel' | 'codexReasoningEffort' | 'codexNetworkAccess';
 
 /** The MCP config dialects `src/mcp-sync.ts` has an adapter for. */
 export type McpConfigFormat =

@@ -1203,8 +1203,9 @@ export function buildSpawnCommand(options: {
   /** Name pinned on claude as `--name` (version-gated, sanitized; local spawns only). By default only a user-chosen name; `pinCliSessionName` pins every tab name: see `Session.cliPinnedName`. */
   sessionName?: string;
   /**
-   * Claude CLI version for the `--name` gate. Omitted = probe the local CLI
-   * (getClaudeCliVersion; null under vitest). Tests inject a value here; the
+   * CLI version for the launch template's version gates (claude's `--name`, codex's
+   * `--no-daemon`). Omitted = probe the mode's own local CLI (resolveSessionCliVersion;
+   * null under vitest). The name predates the second gated CLI. Tests inject a value here; the
    * docker/remote paths never see this builder's output, which is what keeps the
    * gate measuring the RIGHT binary, the local one.
    */

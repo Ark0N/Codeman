@@ -371,6 +371,7 @@ const CodexConfigSchema = z
       .regex(/^[a-zA-Z0-9_-]+$/)
       .optional(),
     dangerouslyBypassApprovals: z.boolean().optional(),
+    networkAccess: z.boolean().optional(),
     animations: z.boolean().optional(),
     renderMode: z
       .enum(['scrollback', 'hybrid'])
@@ -1723,6 +1724,7 @@ export const SettingsUpdateSchema = z
       .optional(),
     codexReasoningEffort: z.enum(['', ...CODEX_REASONING_EFFORTS]).optional(),
     codexDangerouslyBypassApprovals: z.boolean().optional(),
+    codexNetworkAccess: z.boolean().optional(),
     codexAnimationsEnabled: z.boolean().optional(),
     // Terminal history and retention
     terminalScrollbackLines: z

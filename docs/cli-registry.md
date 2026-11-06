@@ -57,7 +57,11 @@ interface CliEntry {
   //   (where this CLI's own chrome names the model it runs: SessionState.displayModel)
   //   .launchDefaults?: { [launchParam]: settingsKey }
   //   (synced App Settings that seed a LOCAL launch's params the caller left unset;
-  //   codex's model and reasoning effort, via src/web/launch-defaults.ts)
+  //   codex's model, reasoning effort and network access, via src/web/launch-defaults.ts)
+  //   .gates: { [name]: { minVersion, failClosed } }
+  //   (version gates a `capabilityGate` launch condition names: claude's `--name`,
+  //   codex's `--no-daemon`. Measured against THAT CLI's own version, never claude's:
+  //   resolveSessionCliVersion, so an unknown version passes no fail-closed gate)
   overlays: CliOverlays; // remote-SSH / Docker pane commands, credential store
 }
 ```
