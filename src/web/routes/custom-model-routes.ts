@@ -30,7 +30,7 @@
  */
 
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { ApiErrorCode, createErrorResponse, type ApiResponse } from '../../types.js';
+import { ApiErrorCode, createErrorResponse, LOCAL_MODEL_INSTALL_LABELS, type ApiResponse } from '../../types.js';
 import { isAdmin, parseBody, readJsonConfig, SETTINGS_PATH } from '../route-helpers.js';
 import { isMultiUserMode } from '../../config/multiuser.js';
 import { getDataDir } from '../../config/instance.js';
@@ -933,10 +933,7 @@ function refusedHostsWrite(err: unknown, reply: { code: (n: number) => unknown }
 
 /** The answer to an edit or a delete of the record the local model install manages. */
 function managedEndpointRefusal(): ApiResponse<never> {
-  return createErrorResponse(
-    ApiErrorCode.INVALID_INPUT,
-    'This endpoint belongs to the model Codeman runs on this Mac. Change or remove it in the local model window.'
-  );
+  return createErrorResponse(ApiErrorCode.INVALID_INPUT, LOCAL_MODEL_INSTALL_LABELS.endpointManaged);
 }
 
 export function registerCustomModelRoutes(app: FastifyInstance): void {
@@ -956,10 +953,7 @@ export function registerCustomModelRoutes(app: FastifyInstance): void {
     const badDefault = invalidDefaultModel(host);
     if (badDefault) return badDefault;
     if (isLocalModelEndpointId(host.id)) {
-      return createErrorResponse(
-        ApiErrorCode.INVALID_INPUT,
-        `The endpoint id "${host.id}" is reserved for the model Codeman runs on this Mac. Pick another id.`
-      );
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, LOCAL_MODEL_INSTALL_LABELS.endpointIdReserved);
     }
     try {
       return await mutateCustomModelHosts<ApiResponse<{ host: RedactedHost }>>((hosts) => {

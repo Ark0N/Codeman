@@ -27,14 +27,19 @@
  * |                                  |                             | `already-installed`, `size-changed`                   |
  * | `POST /api/local-model/cancel`   | none                        | 409 `wrong-state` (no job is running)                 |
  * | `POST /api/local-model/resume`   | `LocalModelResumeRequest`   | 409 `job-running`, `wrong-state` (not paused or       |
- * |                                  |                             | failed)                                               |
- * | `POST /api/local-model/runtime`  | `LocalModelRuntimeRequest`  | 409 `wrong-state` (not installed), `job-running`      |
+ * |                                  |                             | failed), `sessions-open` (another port while live     |
+ * |                                  |                             | sessions use the model)                               |
+ * | `POST /api/local-model/runtime`  | `LocalModelRuntimeRequest`  | 409 `wrong-state` (not installed), `job-running`,     |
+ * |                                  |                             | `sessions-open` (stop, or another port, while live    |
+ * |                                  |                             | sessions use the model)                               |
  * | `DELETE /api/local-model`        | `LocalModelRemoveRequest`   | 409 `job-running`, `sessions-open`                    |
  *
  * A 409 is the error envelope plus `data: LocalModelConflict`:
  * `{ success: false, error, errorCode: 'CONFLICT', data: { reason, message, ... } }`. A 409
  * WITHOUT `data` is a write of `settings.json` or of the endpoint store that was refused
- * because the file does not parse; `error` names the fix.
+ * because the file does not parse; `error` names the fix. A 400 the service names carries its
+ * sentence the same way: `{ success: false, error, errorCode: 'INVALID_INPUT', data: {
+ * message } }` (`LocalModelRefusal`), so the window can print it in its own language.
  *
  * The rules of src/types/local-model.ts hold here too:
  *  1. A size a person reads travels twice: as bytes and as decimal GB text from `formatGb()`
@@ -118,8 +123,10 @@ export const LOCAL_MODEL_INSTALL_STEPS: readonly LocalModelInstallStep[] = [
  * | `runtime-download-failed` | the archive download still fails after its retries                       |
  * | `runtime-damaged`         | the archive's sha256 is not the pinned one (the file was deleted)        |
  * | `runtime-unpack-failed`   | `/usr/bin/tar` failed                                                    |
- * | `runtime-start-failed`    | the runtime was started and never answered `/api/version`                |
- * | `runtime-stopped`         | installed: the runtime crashed and was restarted 3 times, then given up  |
+ * | `runtime-start-failed`    | the runtime was started and never answered `/api/version`. Installed:    |
+ * |                           | the last start failed (the detail says why), and Start tries again       |
+ * | `runtime-stopped`         | the runtime crashed and was restarted 3 times, then given up: on an      |
+ * |                           | installed model, or during a job's download                             |
  * | `runtime-not-running`     | installed: the runtime is not running (the person stopped it). Only a    |
  * |                           | refused session start says it; the view shows no error for a stopped runtime |
  * | `port-in-use`             | another program listens on the stored port, or no port of the span is free |
@@ -170,6 +177,11 @@ export type LocalModelErrorCode =
  *    Without a `nextModel` the window offers the chooser and Remove.
  *  - `start`: "Start". `POST /api/local-model/runtime` with `action: 'start'`.
  *  - `remove`: "Remove". `DELETE /api/local-model`.
+ *
+ * `LOCAL_MODEL_ERROR_NEXT` is the default of a code. The view adapts it to the state the
+ * error is shown in, so the button is always one the server accepts there: a code whose
+ * default is `start` says `retry` on a failed job (there is no Start verb for a job), and
+ * `runtime-start-failed` says `start` on an installed model (there is nothing to resume).
  */
 export type LocalModelNextStep = 'retry' | 'other-port' | 'next-model' | 'start' | 'remove';
 
@@ -212,11 +224,18 @@ export type LocalModelDeveloperTools =
  * | `errContextNotApplied` | `model`; `actual`: the context the runtime reports; `wanted`: the chosen one |
  * | `errHarnessFailed`     | `cli`: the coding agent's label                                      |
  * | `errEndpointIdTaken`   | `id`: the endpoint id this feature uses                              |
+ * | `refusedAgentNotInstallable` | `cli`: the coding agent's label                                |
+ * | `refusedOtherModel`    | `model`: the label of the model that is installed                    |
  * | `conflictSizeChanged`  | `size`: the server's own total as decimal GB                         |
  * | `conflictSessionsOpen` | `sessions`: the session names, joined with ', '                      |
  *
  * `developerToolsMissing` is not sent: the view carries `developerTools` and the window prints
  * this sentence when it is `missing`. It is here so that its wording has one source.
+ *
+ * `endpointManaged` and `endpointIdReserved` are what the endpoint routes
+ * (src/web/routes/custom-model-routes.ts) answer for the record this feature manages and for
+ * its reserved id. They have no slot, so the App Settings toast that prints them translates
+ * them as it translates every other whole sentence.
  */
 export const LOCAL_MODEL_INSTALL_LABELS = {
   errRuntimeDownloadFailed:
@@ -246,6 +265,13 @@ export const LOCAL_MODEL_INSTALL_LABELS = {
   conflictSizeChanged: 'The download is {size} GB now. Check the sizes and confirm again.',
   conflictSessionsOpen: 'Sessions are still using this model: {sessions}. Close them first.',
   conflictWrongState: 'That is not possible in the current state.',
+  refusedModelNotOffered: 'This model at this context is not offered for this Mac right now.',
+  refusedAgentNotOffered: 'This coding agent is not offered for this model.',
+  refusedAgentNotInstallable: '{cli} is not installed and cannot be installed from here.',
+  refusedOtherModel: 'Only {model} is installed on this Mac. Remove it and install another model first.',
+  endpointManaged:
+    'This endpoint belongs to the model Codeman runs on this Mac. Change or remove it in the local model window.',
+  endpointIdReserved: 'This endpoint id is reserved for the model Codeman runs on this Mac. Pick another id.',
   developerToolsMissing:
     'Coding agents use git and Python. This Mac has no developer tools yet, so macOS will offer to install them the first time an agent needs one.',
 } as const;
@@ -336,11 +362,12 @@ export interface LocalModelInstallError {
   code: LocalModelErrorCode;
   /** `LOCAL_MODEL_ERROR_LABELS[code]` with its slots filled. */
   message: LocalModelInstallMessage;
-  /** `LOCAL_MODEL_ERROR_NEXT[code]`. */
+  /** `LOCAL_MODEL_ERROR_NEXT[code]`, adapted to the state the error is shown in (see `LocalModelNextStep`). */
   next: LocalModelNextStep;
   /**
-   * For `next-model`: the best model that still fits and is not the one that failed. Absent
-   * when there is none.
+   * For `next-model`: the model to try instead. After `does-not-fit` it is one that needs LESS
+   * memory than the one that failed; after the other codes the best other model that fits.
+   * Absent when there is none.
    */
   nextModel?: { modelId: string; modelLabel: string };
   /**
@@ -484,6 +511,11 @@ export interface LocalModelRemoveRequest {
   removeModel?: boolean;
 }
 
+/** The `data` of a 400 the service names: its sentence, for the window to print in its own language. */
+export interface LocalModelRefusal {
+  message: LocalModelInstallMessage;
+}
+
 /** What every verb answers on success: the view after the verb. */
 export type LocalModelVerbAnswer = LocalModelInstallView;
 
@@ -493,7 +525,9 @@ export type LocalModelVerbAnswer = LocalModelInstallView;
  *  - `already-installed`: install while a model is installed. Remove it first.
  *  - `size-changed`: `acknowledgedBytes` is not the server's total; `expectedBytes` and
  *    `expectedGb` carry that total, so the window can show it and ask again.
- *  - `sessions-open`: remove while live sessions use the endpoint; `sessions` names them.
+ *  - `sessions-open`: remove, stop or a change of port while live sessions use the endpoint;
+ *    `sessions` names them. Their coding agents were given the runtime's address when they
+ *    started, so they would go on calling a port nothing of ours holds.
  *  - `wrong-state`: the verb makes no sense in the current state (see the route table above).
  */
 export type LocalModelConflictReason =
@@ -567,11 +601,17 @@ export interface LocalModelStateFile {
   cli?: { id: string; label: string };
   /** The runtime, once its port was chosen. */
   runtime?: {
-    /** The pinned version that was unpacked. */
+    /**
+     * The runtime version this installation runs. A later build with another pin keeps
+     * starting this version for as long as its folder is unpacked.
+     */
     version: string;
     /** The loopback port, chosen once by binding. */
     port: number;
-    /** The pid of the child Codeman last started. Used at boot to tell our own orphan from another program. */
+    /**
+     * The pid of the child Codeman last started, stored the moment it is spawned. Used to
+     * tell our own runtime from another program: at boot, and before the folder is deleted.
+     */
     pid?: number;
     /** False after Stop: the runtime is not started at boot. */
     enabled: boolean;
@@ -582,7 +622,11 @@ export interface LocalModelStateFile {
   progress?: { completedBytes: number; totalBytes: number };
   /** What the runtime reported when the job checked the loaded model. */
   loaded?: { context: number; sizeBytes: number; sizeVramBytes: number };
-  /** Present once the `connect` step wrote: what uninstall must undo. */
+  /**
+   * Present once the `connect` step CLAIMED the connection, which it does before its two
+   * writes: what uninstall must undo. A claim with nothing behind it (the step was interrupted
+   * right after it) is harmless: a resumed job writes both, and uninstall removes nothing.
+   */
   connection?: {
     /** The id of the endpoint record this feature wrote. */
     endpointId: string;

@@ -27,8 +27,10 @@ import {
   connectLocalModel,
   disconnectLocalModel,
   ensureLocalEndpoint,
+  inspectLocalEndpoint,
   isLocalModelEndpointId,
   isManagedLocalEndpoint,
+  isSameLocalEndpoint,
   LOCAL_MODEL_ENDPOINT_ID,
   LOCAL_MODEL_ENDPOINT_LABEL,
   moveLocalEndpoint,
@@ -398,6 +400,76 @@ describe('compareModelDigest', () => {
     expect(compareModelDigest('', digest)).toBe('unknown');
     expect(compareModelDigest(digest, 'sha256:')).toBe('unknown');
     expect(compareModelDigest(undefined, undefined)).toBe('unknown');
+  });
+});
+
+describe('a record that says what ours would say is ours', () => {
+  it('isSameLocalEndpoint: the address, the one model, its context and no key', () => {
+    expect(isSameLocalEndpoint(RECORD, INPUT)).toBe(true);
+    // What discovery may have added does not make it somebody else's.
+    expect(
+      isSameLocalEndpoint(
+        { ...RECORD, modelContextLengths: { 'qwen3.6:35b-a3b': 131072 }, lastDiscoveredAt: '2026-11-06T10:00:00Z' },
+        INPUT
+      )
+    ).toBe(true);
+    const differs: Partial<CustomModelHost>[] = [
+      { baseUrl: 'http://127.0.0.1:11434' },
+      { label: 'My own' },
+      { models: ['qwen3.6:35b-a3b', 'gpt-oss:20b'] },
+      { models: ['gpt-oss:20b'], defaultModelId: 'gpt-oss:20b' },
+      { defaultContextLength: 65536 },
+      { apiKey: 'sk-not-ours' },
+      { authStyle: 'api-key' },
+    ];
+    for (const change of differs) expect(isSameLocalEndpoint({ ...RECORD, ...change }, INPUT)).toBe(false);
+  });
+
+  it('connectLocalModel takes such a record as ours although the caller did not say so', async () => {
+    writeSettings({});
+    writeHosts([OTHER, RECORD]);
+    expect(await connectLocalModel({ ...INPUT, ours: false })).toEqual({ ok: true, flagWasEnabled: false });
+    expect(await readCustomModelHosts(getDataDir())).toEqual([OTHER, RECORD]);
+  });
+
+  it('a record with our id that says something else is still somebody else: taken, and untouched', async () => {
+    const foreign = { ...RECORD, baseUrl: 'http://127.0.0.1:11434' };
+    writeHosts([foreign]);
+    expect(await connectLocalModel({ ...INPUT, ours: false })).toEqual({ ok: false, code: 'endpoint-id-taken' });
+    expect(await readCustomModelHosts(getDataDir())).toEqual([foreign]);
+  });
+});
+
+describe('inspectLocalEndpoint: what the connect step finds before it claims the connection', () => {
+  it('nothing saved and no settings file: absent, and the flag is off', async () => {
+    expect(await inspectLocalEndpoint(INPUT)).toEqual({ record: 'absent', flagEnabled: false });
+  });
+
+  it('reads the flag as it is now, and writes nothing', async () => {
+    writeSettings({ customModelEndpointsEnabled: true, tmuxHistoryLimit: 5000 });
+    writeHosts([OTHER]);
+    const settingsBefore = readFileSync(SETTINGS_PATH, 'utf8');
+    const hostsBefore = readFileSync(HOSTS(), 'utf8');
+    expect(await inspectLocalEndpoint(INPUT)).toEqual({ record: 'absent', flagEnabled: true });
+    expect(readFileSync(SETTINGS_PATH, 'utf8')).toBe(settingsBefore);
+    expect(readFileSync(HOSTS(), 'utf8')).toBe(hostsBefore);
+  });
+
+  it("tells our record from somebody else's under the same id", async () => {
+    writeHosts([RECORD]);
+    expect((await inspectLocalEndpoint(INPUT)).record).toBe('same');
+    expect((await inspectLocalEndpoint({ ...INPUT, port: 11436 })).record).toBe('other');
+  });
+});
+
+describe('moveLocalEndpoint', () => {
+  it('a record that is already on the port is not written again', async () => {
+    writeHosts([RECORD]);
+    const before = readFileSync(HOSTS(), 'utf8');
+    await moveLocalEndpoint(11435);
+    expect(readFileSync(HOSTS(), 'utf8')).toBe(before);
+    await moveLocalEndpoint(11440);
+    expect((await readCustomModelHosts(getDataDir()))[0].baseUrl).toBe('http://127.0.0.1:11440');
   });
 });
 

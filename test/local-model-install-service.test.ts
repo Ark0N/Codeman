@@ -22,7 +22,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { getDataDir } from '../src/config/instance.js';
 import { customModelHostsPath, readCustomModelHosts, type CustomModelHost } from '../src/custom-model-hosts.js';
-import { connectLocalModel, disconnectLocalModel } from '../src/local-model/connect.js';
+import { connectLocalModel, disconnectLocalModel, inspectLocalEndpoint } from '../src/local-model/connect.js';
 import {
   createLocalModelService,
   type LocalModelActor,
@@ -99,7 +99,14 @@ const FACTS: HarnessFact[] = [
   },
 ];
 
-function candidate(modelId: string, modelLabel: string, context: number, bytes: number, installed: boolean): Candidate {
+function candidate(
+  modelId: string,
+  modelLabel: string,
+  context: number,
+  bytes: number,
+  installed: boolean,
+  needBytes = 36_000_000_000
+): Candidate {
   return {
     modelId,
     modelLabel,
@@ -109,8 +116,8 @@ function candidate(modelId: string, modelLabel: string, context: number, bytes: 
     cli: 'opencode',
     cliLabel: 'OpenCode',
     cliInstalled: installed,
-    needBytes: 30_000_000_000,
-    needGb: '30.0',
+    needBytes,
+    needGb: '0.0',
     downloadBytes: bytes,
     downloadGb: '0.0',
     budgetShare: 0.8,
@@ -137,7 +144,8 @@ function recommendation(agentInstalled = false): Recommendation {
     headline: { text: 'Best fit for this Mac' },
     notes: [],
     pick: candidate('qwen3.6:35b-a3b', 'Qwen3.6 35B-A3B', 131072, PULL_BYTES, agentInstalled),
-    alternatives: [candidate('gpt-oss:20b', 'GPT-OSS 20B', 131072, 13_793_441_427, agentInstalled)],
+    // Needs less memory than the pick, so it is what "does not fit" offers next.
+    alternatives: [candidate('gpt-oss:20b', 'GPT-OSS 20B', 131072, 13_793_441_427, agentInstalled, 26_600_000_000)],
     budgetBytes: 37_580_963_840,
     budgetGb: '37.6',
     budgetSource: 'estimated',
@@ -187,20 +195,34 @@ function jobAt(step: LocalModelInstallStep, state: 'installing' | 'paused' = 'in
 
 // ---------- The harness ----------
 
-/** The state file in memory. Every write goes through the real parser, like a write to disk and a read back. */
+/** What a write to a full disk rejects with. */
+function noSpace(): Error {
+  return Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' });
+}
+
+/**
+ * The state file in memory. Every write goes through the real parser, like a write to disk and
+ * a read back. `refuse` makes the disk full: while it answers true for a write, that write
+ * rejects with ENOSPC and the file keeps what it had, like the real temp file plus rename.
+ */
 function memoryStore(initial: LocalModelStateFile = IDLE_LOCAL_MODEL_STATE) {
   let state = initial;
   let chain: Promise<unknown> = Promise.resolve();
   const history: LocalModelStateFile[] = [];
+  const disk = {
+    refuse: undefined as ((next: LocalModelStateFile, before: LocalModelStateFile) => boolean) | undefined,
+  };
   return {
     get: () => state,
     history,
+    disk,
     readState: async () => state,
     mutateState: (fn: (current: LocalModelStateFile) => LocalModelStateFile | undefined) => {
       const run = chain.then(async () => {
         const before = state;
         const next = fn(before);
         if (!next) return { before, after: undefined };
+        if (disk.refuse?.(next, before)) throw noSpace();
         state = parseLocalModelState(JSON.stringify(next));
         history.push(state);
         return { before, after: state };
@@ -256,7 +278,7 @@ function setup(
         ...(world.measured !== undefined ? { measuredTotalBytes: world.measured } : {}),
       };
     }),
-    stop: vi.fn(async () => {
+    stop: vi.fn(async (_options?: { previousPid?: number }) => {
       calls.push('supervisor.stop');
       world.running = false;
     }),
@@ -307,6 +329,10 @@ function setup(
       calls.push('deleteModel');
       return true;
     }),
+    removePartialModelBlobs: vi.fn(async () => {
+      calls.push('removePartialModelBlobs');
+      return 0;
+    }),
     checkDeveloperTools: vi.fn(async () => 'missing' as const),
     stockInstallCommand: vi.fn((id: string) => (id === FACTS[0].cli ? INSTALL_COMMAND : undefined)),
     tryBeginCliInstall: vi.fn((): (() => void) | null => () => {
@@ -322,6 +348,8 @@ function setup(
       return world.agentInstalled;
     }),
     audit: vi.fn(async () => {}),
+    // Nothing saved under the reserved id, and the endpoints setting is off: a first install.
+    inspectLocalEndpoint: vi.fn(async () => ({ record: 'absent' as 'absent' | 'same' | 'other', flagEnabled: false })),
     connectLocalModel: vi.fn(async () => {
       calls.push('connectLocalModel');
       return { ok: true as const, flagWasEnabled: false };
@@ -401,12 +429,14 @@ describe('a job from the click to installed', () => {
     for (const [start] of deps.supervisor.start.mock.calls) {
       expect(start).toMatchObject({ port: 11435, contextLength: 131072 });
     }
-    // The connection names the model as the runtime lists it, at the chosen context.
+    // The connection names the model as the runtime lists it, at the chosen context. It was
+    // claimed in the state file first, so the record is written as ours.
     expect(deps.connectLocalModel).toHaveBeenCalledWith({
       port: 11435,
       modelId: 'qwen3.6:35b-a3b',
       context: 131072,
-      ours: false,
+      ours: true,
+      flagWasEnabled: false,
     });
   });
 
@@ -602,7 +632,7 @@ describe('install is checked before anything is downloaded', () => {
     expect(result).toEqual({
       ok: false,
       status: 400,
-      message: 'OpenCode is not installed and cannot be installed from here.',
+      message: { text: '{cli} is not installed and cannot be installed from here.', vars: { cli: 'OpenCode' } },
     });
     nothingStarted(h);
   });
@@ -614,8 +644,10 @@ describe('install is checked before anything is downloaded', () => {
     expect(result).toEqual({
       ok: false,
       status: 400,
-      message:
-        'A saved model connection named local-ollama already exists and was not created here. Rename or delete it in App Settings, then try again.',
+      message: {
+        text: 'A saved model connection named {id} already exists and was not created here. Rename or delete it in App Settings, then try again.',
+        vars: { id: 'local-ollama' },
+      },
     });
     nothingStarted(h);
   });
@@ -823,6 +855,8 @@ describe('Cancel in every step', () => {
         }),
       },
     });
+    // What the claim keeps: the setting was on before this feature touched it.
+    h.deps.inspectLocalEndpoint.mockResolvedValue({ record: 'absent', flagEnabled: true });
     await h.service.install(REQUEST, ADMIN);
     await vi.waitFor(() => expect(h.deps.connectLocalModel).toHaveBeenCalled());
     const cancelling = h.service.cancel();
@@ -929,8 +963,9 @@ describe('Resume', () => {
     await h.service.idle();
     expect(h.deps.chooseRuntimePort).toHaveBeenCalledWith({ avoid: [11435] });
     expect(h.store.get()).toMatchObject({ state: 'installed', runtime: { port: 11436 } });
-    // The pid that was stored belonged to the old port: it is not passed on as "ours".
-    expect(h.supervisor.start.mock.calls[0][0]).toEqual({ port: 11436, contextLength: 131072 });
+    // The stored pid goes along: when it is still our own runtime on the OLD port, the start
+    // ends it instead of leaving a second runtime behind.
+    expect(h.supervisor.start.mock.calls[0][0]).toEqual({ port: 11436, contextLength: 131072, previousPid: 5000 });
     expect(h.deps.connectLocalModel).toHaveBeenCalledWith(expect.objectContaining({ port: 11436 }));
   });
 });
@@ -951,6 +986,16 @@ describe('a job a server restart interrupted', () => {
     const h = setup({ state: jobAt('verify') });
     await h.service.boot();
     expect(h.store.get()).toMatchObject({ state: 'paused', step: 'verify' });
+    expect(h.supervisor.start).not.toHaveBeenCalled();
+    // The runtime the killed server left behind is ended: nothing would use it until a click.
+    expect(h.calls).toEqual(['supervisor.stop']);
+    expect(h.supervisor.stop).toHaveBeenCalledWith({ previousPid: 5000 });
+  });
+
+  it('boot() ends nothing for a job that never started a runtime', async () => {
+    const h = setup({ state: jobAt('runtime') });
+    await h.service.boot();
+    expect(h.store.get()).toMatchObject({ state: 'paused', step: 'runtime' });
     expect(h.calls).toEqual([]);
   });
 
@@ -1280,9 +1325,9 @@ describe('every failure is a state with a code and a next step', () => {
     expect(h.deps.connectLocalModel).not.toHaveBeenCalled();
   });
 
-  it('a saved endpoint with our id that is not ours: endpoint-id-taken with the id', async () => {
+  it('a saved endpoint with our id that is not ours: endpoint-id-taken with the id, and nothing is claimed or written', async () => {
     const h = setup();
-    h.deps.connectLocalModel.mockResolvedValue({ ok: false, code: 'endpoint-id-taken' } as never);
+    h.deps.inspectLocalEndpoint.mockResolvedValue({ record: 'other', flagEnabled: true });
     const view = await failed(h);
     expect(view.error).toMatchObject({
       code: 'endpoint-id-taken',
@@ -1290,6 +1335,7 @@ describe('every failure is a state with a code and a next step', () => {
       message: { vars: { id: 'local-ollama' } },
     });
     expect(h.store.get()).not.toHaveProperty('connection');
+    expect(h.deps.connectLocalModel).not.toHaveBeenCalled();
   });
 
   it('a refused write of the connection: connect-failed with the reason', async () => {
@@ -1629,7 +1675,8 @@ describe('the runtime verbs', () => {
     const result = await h.service.runtime({ action: 'start', newPort: true });
     expect(h.deps.chooseRuntimePort).toHaveBeenCalledWith({ avoid: [11435] });
     expect(h.deps.moveLocalEndpoint).toHaveBeenCalledWith(11437);
-    expect(h.supervisor.start).toHaveBeenLastCalledWith({ port: 11437, contextLength: 131072 });
+    // The stored pid goes along, so our own runtime on the old port could not be left behind.
+    expect(h.supervisor.start).toHaveBeenLastCalledWith({ port: 11437, contextLength: 131072, previousPid: 4711 });
     expect(result.ok && result.view).toMatchObject({ port: 11437, running: true });
     expect(result.ok && result.view.error).toBeUndefined();
     expect(h.store.get().runtime).toMatchObject({ port: 11437, enabled: true });
@@ -1781,7 +1828,10 @@ describe('Remove with the real connection: the settings flag', () => {
 
   /** Installs with the real connect step, then removes with the real disconnect. */
   async function installThenRemove() {
-    const h = setup({ agentInstalled: true, overrides: { connectLocalModel, disconnectLocalModel } });
+    const h = setup({
+      agentInstalled: true,
+      overrides: { inspectLocalEndpoint, connectLocalModel, disconnectLocalModel },
+    });
     await installAndWait(h.service);
     expect(h.store.get().state).toBe('installed');
     expect(flag()).toBe(true);
@@ -1815,7 +1865,10 @@ describe('Remove with the real connection: the settings flag', () => {
 
   it('a resumed connect step does not forget that the flag was off before', async () => {
     writeSettings({ customModelEndpointsEnabled: false });
-    const h = setup({ agentInstalled: true, overrides: { connectLocalModel, disconnectLocalModel } });
+    const h = setup({
+      agentInstalled: true,
+      overrides: { inspectLocalEndpoint, connectLocalModel, disconnectLocalModel },
+    });
     await installAndWait(h.service);
     // The connection is written a second time, as a resumed job would: the flag is on by now.
     const again = await connectLocalModel({
@@ -1895,5 +1948,643 @@ describe('view()', () => {
     const view = await h.service.view();
     expect(view.error?.next).toBe('next-model');
     expect(view.error).not.toHaveProperty('nextModel');
+  });
+});
+
+// ---------- The connection is claimed before it is written ----------
+
+describe('the connect step claims the connection before it writes anything outside the folder', () => {
+  it('the state file knows the connection is ours before the endpoint record is written', async () => {
+    let claimAtWrite: LocalModelStateFile['connection'];
+    const h = setup();
+    h.deps.inspectLocalEndpoint.mockResolvedValue({ record: 'absent', flagEnabled: true });
+    h.deps.connectLocalModel.mockImplementation(async () => {
+      claimAtWrite = h.store.get().connection;
+      return { ok: true as const, flagWasEnabled: true };
+    });
+    await installAndWait(h.service);
+    // The claim carries the value the setting had BEFORE this feature switched it on.
+    expect(claimAtWrite).toEqual({ endpointId: 'local-ollama', flagWasEnabled: true });
+    expect(h.deps.inspectLocalEndpoint).toHaveBeenCalledWith({
+      port: 11435,
+      modelId: 'qwen3.6:35b-a3b',
+      context: 131072,
+    });
+  });
+
+  it('a claim that cannot be written (a full disk) writes nothing outside, and "Try again" finishes the install', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const h = setup({ state: jobAt('connect', 'paused') });
+    // The claim is refused once; every other write lands.
+    let refused = false;
+    h.store.disk.refuse = (next, before) => {
+      if (refused || !next.connection || before.connection) return false;
+      refused = true;
+      return true;
+    };
+    await h.service.resume({}, ADMIN);
+    await h.service.idle();
+    expect(await h.service.view()).toMatchObject({ state: 'failed', step: 'connect', error: { code: 'disk-full' } });
+    // Nothing was written outside our folder: the record and the setting are untouched.
+    expect(h.deps.connectLocalModel).not.toHaveBeenCalled();
+    expect(h.store.get()).not.toHaveProperty('connection');
+
+    await h.service.resume({}, ADMIN);
+    await h.service.idle();
+    expect(h.store.get()).toMatchObject({
+      state: 'installed',
+      connection: { endpointId: 'local-ollama', flagWasEnabled: false },
+    });
+    expect(h.deps.connectLocalModel).toHaveBeenCalledTimes(1);
+  });
+
+  it('a record that already says what ours would say is ours, and the setting is then never switched off', async () => {
+    const h = setup({ state: jobAt('connect', 'paused') });
+    h.deps.inspectLocalEndpoint.mockResolvedValue({ record: 'same', flagEnabled: true });
+    await h.service.resume({}, ADMIN);
+    await h.service.idle();
+    expect(h.store.get()).toMatchObject({
+      state: 'installed',
+      connection: { endpointId: 'local-ollama', flagWasEnabled: true },
+    });
+  });
+
+  it('an endpoint store that cannot be read: connect-failed, before anything is claimed', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const h = setup({ state: jobAt('connect', 'paused') });
+    h.deps.inspectLocalEndpoint.mockRejectedValue(new Error('custom-model-hosts.json is not a valid JSON list'));
+    await h.service.resume({}, ADMIN);
+    await h.service.idle();
+    expect(await h.service.view()).toMatchObject({
+      state: 'failed',
+      error: { code: 'connect-failed', detail: 'custom-model-hosts.json is not a valid JSON list' },
+    });
+    expect(h.store.get()).not.toHaveProperty('connection');
+    expect(h.deps.connectLocalModel).not.toHaveBeenCalled();
+  });
+
+  it('a resumed job does not look again: the claim it has keeps the value from before', async () => {
+    const h = setup({
+      state: { ...jobAt('connect', 'paused'), connection: { endpointId: 'local-ollama', flagWasEnabled: false } },
+    });
+    await h.service.resume({}, ADMIN);
+    await h.service.idle();
+    expect(h.deps.inspectLocalEndpoint).not.toHaveBeenCalled();
+    expect(h.deps.connectLocalModel).toHaveBeenCalledWith(
+      expect.objectContaining({ ours: true, flagWasEnabled: false })
+    );
+    expect(h.store.get().state).toBe('installed');
+  });
+});
+
+describe('the connect step with the real endpoint store and settings: a write that does not land', () => {
+  const HOSTS = () => customModelHostsPath(getDataDir());
+  const real = { inspectLocalEndpoint, connectLocalModel, disconnectLocalModel };
+  const hostIds = async () => (await readCustomModelHosts(getDataDir())).map((host) => host.id);
+  const flag = (): unknown => {
+    try {
+      return JSON.parse(readFileSync(SETTINGS_PATH, 'utf8')).customModelEndpointsEnabled;
+    } catch {
+      return undefined;
+    }
+  };
+
+  afterEach(() => {
+    rmSync(HOSTS(), { force: true });
+    rmSync(SETTINGS_PATH, { force: true });
+  });
+
+  it('the claim fails once: nothing is left behind, "Try again" installs, and Remove undoes both writes', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const h = setup({ state: jobAt('connect', 'paused'), overrides: real });
+    let refused = false;
+    h.store.disk.refuse = (next, before) => {
+      if (refused || !next.connection || before.connection) return false;
+      refused = true;
+      return true;
+    };
+    await h.service.resume({}, ADMIN);
+    await h.service.idle();
+    expect((await h.service.view()).error?.code).toBe('disk-full');
+    expect(await hostIds()).toEqual([]);
+    expect(flag()).toBeUndefined();
+
+    await h.service.resume({}, ADMIN);
+    await h.service.idle();
+    expect(h.store.get().state).toBe('installed');
+    expect(await hostIds()).toEqual(['local-ollama']);
+    expect(flag()).toBe(true);
+
+    const removed = await h.service.remove({ removeModel: true }, [], ADMIN);
+    expect(removed.ok && removed.view.state).toBe('idle');
+    expect(await hostIds()).toEqual([]);
+    expect(flag()).toBe(false);
+  });
+
+  it('the server is killed after the claim and before the record: the next server finishes it on Continue', async () => {
+    // What the killed server left: the claim in the state file, nothing in the endpoint store.
+    const h = setup({
+      state: { ...jobAt('connect'), connection: { endpointId: 'local-ollama', flagWasEnabled: false } },
+      overrides: real,
+    });
+    await h.service.boot();
+    expect(await h.service.view()).toMatchObject({ state: 'paused', step: 'connect' });
+    await h.service.resume({}, ADMIN);
+    await h.service.idle();
+    expect(h.store.get().state).toBe('installed');
+    expect(await hostIds()).toEqual(['local-ollama']);
+    await h.service.remove({}, [], ADMIN);
+    expect(await hostIds()).toEqual([]);
+    expect(flag()).toBe(false);
+  });
+
+  it('the server is killed after both writes and before the last step was recorded: Continue ends installed', async () => {
+    const h = setup({
+      state: { ...jobAt('connect'), connection: { endpointId: 'local-ollama', flagWasEnabled: false } },
+      overrides: real,
+    });
+    await connectLocalModel({ port: 11435, modelId: 'qwen3.6:35b-a3b', context: 131072, ours: true });
+    await h.service.resume({}, ADMIN);
+    await h.service.idle();
+    expect(await h.service.view()).toMatchObject({ state: 'installed' });
+    expect(await hostIds()).toEqual(['local-ollama']);
+  });
+
+  it('a record of ours the state file does not know (written by an earlier order of the two) is taken as ours', async () => {
+    // The record and the flag exist, the state file has no claim.
+    await connectLocalModel({ port: 11435, modelId: 'qwen3.6:35b-a3b', context: 131072, ours: false });
+    const h = setup({ state: jobAt('connect', 'paused'), overrides: real });
+    await h.service.resume({}, ADMIN);
+    await h.service.idle();
+    expect(await h.service.view()).toMatchObject({ state: 'installed' });
+    // Remove takes the record out. The setting stays: what it was before is not known.
+    await h.service.remove({}, [], ADMIN);
+    expect(await hostIds()).toEqual([]);
+    expect(flag()).toBe(true);
+  });
+
+  it('a record with our id that says something else is never overwritten', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    mkdirSync(dirname(HOSTS()), { recursive: true });
+    const foreign = { id: 'local-ollama', label: 'My own', baseUrl: 'http://127.0.0.1:11434' };
+    writeFileSync(HOSTS(), JSON.stringify([foreign]));
+    const h = setup({ state: jobAt('connect', 'paused'), overrides: real });
+    await h.service.resume({}, ADMIN);
+    await h.service.idle();
+    expect((await h.service.view()).error?.code).toBe('endpoint-id-taken');
+    expect(await readCustomModelHosts(getDataDir())).toEqual([foreign]);
+    expect(h.store.get()).not.toHaveProperty('connection');
+  });
+});
+
+// ---------- A job whose end could not be written ----------
+
+describe('a state file that cannot be written when a step fails (a full disk)', () => {
+  /** A pull that fills the disk: from its failure on, every write of the state file is refused. */
+  function diskFillsDuringPull(h: ReturnType<typeof setup>) {
+    h.deps.pullModel.mockImplementation(
+      async (_target: unknown, _id: string, pull?: { onProgress?: (p: unknown) => void }) => {
+        pull?.onProgress?.({ completedBytes: 14_200_000_000, totalBytes: PULL_BYTES, bytesPerSecond: 58_000_000 });
+        h.store.disk.refuse = () => true;
+        return { ok: false as const, code: 'disk-full' as const, detail: 'write blob: no space left on device' };
+      }
+    );
+  }
+
+  it('the job is not lost: the view says disk-full with the download as it stood, and no speed', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const h = setup({ state: jobAt('model', 'paused') });
+    diskFillsDuringPull(h);
+    await h.service.resume({}, ADMIN);
+    await h.service.idle();
+
+    // The file could not be told and still says the job runs.
+    expect(h.store.get().state).toBe('installing');
+    const view = await h.service.view();
+    expect(view).toMatchObject({
+      state: 'failed',
+      step: 'model',
+      error: { code: 'disk-full', next: 'retry', detail: 'write blob: no space left on device' },
+      actions: ['resume', 'install', 'remove'],
+    });
+    expect(view.progress).toMatchObject({ completedBytes: 14_200_000_000, totalBytes: PULL_BYTES });
+    expect(view.progress).not.toHaveProperty('bytesPerSecond');
+    // A GET writes nothing: the file is as it was.
+    expect(h.store.get().state).toBe('installing');
+  });
+
+  it('Cancel has nothing to cancel (409, not a 500), and "Try again" on a disk that is still full says so again', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const h = setup({ state: jobAt('model', 'paused') });
+    diskFillsDuringPull(h);
+    await h.service.resume({}, ADMIN);
+    await h.service.idle();
+
+    expect(await h.service.cancel()).toMatchObject({ ok: false, status: 409, conflict: { reason: 'wrong-state' } });
+    const again = await h.service.resume({}, ADMIN);
+    expect(again.ok && again.view).toMatchObject({ state: 'failed', error: { code: 'disk-full' } });
+    expect(h.deps.pullModel).toHaveBeenCalledTimes(1);
+  });
+
+  it('once there is space again "Try again" writes the outcome, runs the step and installs', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const h = setup({ state: jobAt('model', 'paused') });
+    diskFillsDuringPull(h);
+    await h.service.resume({}, ADMIN);
+    await h.service.idle();
+
+    h.store.disk.refuse = undefined;
+    h.deps.pullModel.mockImplementation(async () => ({ ok: true as const, totalBytes: PULL_BYTES }));
+    const resumed = await h.service.resume({}, ADMIN);
+    expect(resumed.ok && resumed.view.state).toBe('installing');
+    await h.service.idle();
+    expect(h.store.get().state).toBe('installed');
+    expect((await h.service.view()).error).toBeUndefined();
+  });
+
+  it('another verb writes what the view already showed: a new install replaces the failed job', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const h = setup({ state: jobAt('model', 'paused'), runtimeOnDisk: true });
+    diskFillsDuringPull(h);
+    await h.service.resume({}, ADMIN);
+    await h.service.idle();
+    h.store.disk.refuse = undefined;
+    h.deps.pullModel.mockImplementation(async () => ({ ok: true as const, totalBytes: 13_793_441_427 }));
+    h.deps.recommend.mockImplementation(() => {
+      const rec = recommendation();
+      for (const row of [rec.pick!, ...rec.alternatives]) row.installBytes = row.downloadBytes;
+      return rec;
+    });
+    const result = await installAndWait(h.service, {
+      modelId: 'gpt-oss:20b',
+      cli: 'opencode',
+      context: 131072,
+      acknowledgedBytes: 13_793_441_427,
+    });
+    expect(result.ok).toBe(true);
+    expect(h.store.get()).toMatchObject({ state: 'installed', model: { id: 'gpt-oss:20b' } });
+  });
+
+  it('Cancel while the disk is full stops the job and shows it paused, without throwing', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const h = setup({
+      overrides: {
+        pullModel: vi.fn(async (_t: unknown, _id: string, pull?: PullOptions) => {
+          pull?.onProgress?.({ completedBytes: 6_200_000_000, totalBytes: PULL_BYTES, bytesPerSecond: 58_000_000 });
+          await untilAborted(pull?.signal);
+          return { ok: false as const, code: 'cancelled' as const };
+        }),
+      },
+    });
+    await h.service.install(REQUEST, ADMIN);
+    await vi.waitFor(() => expect(h.deps.pullModel).toHaveBeenCalled());
+    h.store.disk.refuse = () => true;
+    const result = await h.service.cancel();
+    expect(result.ok && result.view).toMatchObject({
+      state: 'paused',
+      step: 'model',
+      progress: { completedBytes: 6_200_000_000 },
+      actions: ['resume', 'install', 'remove'],
+    });
+    // Space again: Continue writes the pause it could not write, and goes on.
+    h.store.disk.refuse = undefined;
+    h.deps.pullModel.mockImplementation(async () => ({ ok: true as const, totalBytes: PULL_BYTES }));
+    await h.service.resume({}, ADMIN);
+    await h.service.idle();
+    expect(h.store.get().state).toBe('installed');
+  });
+
+  it('a first install on a full disk starts nothing and is answered with the sentence', async () => {
+    const h = setup();
+    h.store.disk.refuse = () => true;
+    const result = await h.service.install(REQUEST, ADMIN);
+    expect(result).toEqual({
+      ok: false,
+      status: 507,
+      message: { text: 'The disk is full. Free up space, then try again.' },
+    });
+    expect(h.calls).toEqual([]);
+    expect(h.store.get().state).toBe('idle');
+  });
+
+  it('a step that finished but could not be recorded (a full disk) is disk-full, and the step runs again', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const h = setup({ state: jobAt('verify', 'paused') });
+    // The write that would move the job past `verify` is refused, and every write after it.
+    h.store.disk.refuse = (next, before) => before.step === 'verify' && next.step !== 'verify';
+    await h.service.resume({}, ADMIN);
+    await h.service.idle();
+    expect(await h.service.view()).toMatchObject({ state: 'failed', step: 'verify', error: { code: 'disk-full' } });
+    h.store.disk.refuse = undefined;
+    await h.service.resume({}, ADMIN);
+    await h.service.idle();
+    expect(h.store.get().state).toBe('installed');
+  });
+});
+
+// ---------- A runtime that does not start, and one an earlier server left behind ----------
+
+describe('an installed model whose runtime does not start', () => {
+  it('says so on the view with what the runtime said, and Start tries again', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const h = setup({ state: INSTALLED, runtimeOnDisk: true });
+    h.world.startResult = { ok: false, code: 'runtime-start-failed', detail: 'spawn ENOENT' };
+    await h.service.boot();
+    const view = await h.service.view();
+    expect(view).toMatchObject({ state: 'installed', running: false, actions: ['start', 'remove'] });
+    expect(view.error).toEqual({
+      code: 'runtime-start-failed',
+      message: { text: 'The runtime did not start on this Mac.' },
+      // Start is the verb an installed model has: there is no job to resume.
+      next: 'start',
+      detail: 'spawn ENOENT',
+    });
+    // A session start is refused with the same reason, not with "start it first".
+    expect(await h.service.launchRefusalMessage('local-ollama', 'qwen3.6:35b-a3b')).toBe(
+      'The runtime did not start on this Mac.'
+    );
+
+    // Start again, and it fails again: the view still says why.
+    const again = await h.service.runtime({ action: 'start' });
+    expect(again.ok && again.view.error?.code).toBe('runtime-start-failed');
+
+    // Start again, and it works: the error is gone.
+    h.world.startResult = undefined;
+    const started = await h.service.runtime({ action: 'start' });
+    expect(started.ok && started.view).toMatchObject({ running: true });
+    expect(started.ok && started.view.error).toBeUndefined();
+  });
+
+  it('Stop clears it: a model the person stopped shows no error', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const h = setup({ state: INSTALLED, runtimeOnDisk: true });
+    h.world.startResult = { ok: false, code: 'runtime-start-failed', detail: 'spawn ENOENT' };
+    await h.service.boot();
+    const stopped = await h.service.runtime({ action: 'stop' });
+    expect(stopped.ok && stopped.view.error).toBeUndefined();
+  });
+});
+
+describe('a later build with another runtime pin', () => {
+  const OLD = '0.39.2';
+  const OLD_STATE: LocalModelStateFile = { ...INSTALLED, runtime: { ...INSTALLED.runtime!, version: OLD } };
+  /** Only the old version is unpacked: what an update of Codeman leaves on disk. */
+  const onlyOldOnDisk = async (_pin?: unknown, paths?: LocalModelPaths) =>
+    paths?.binary === `/data/local-model/runtime/ollama-${OLD}/ollama`;
+
+  it('an installed model keeps running the version it was installed with', async () => {
+    const h = setup({ state: OLD_STATE });
+    h.deps.isRuntimeInstalled.mockImplementation(onlyOldOnDisk as never);
+    await h.service.boot();
+    expect(h.supervisor.start).toHaveBeenCalledWith({
+      port: 11435,
+      contextLength: 131072,
+      previousPid: 4711,
+      version: OLD,
+    });
+    // The stored version stays what runs, so the next start finds it again.
+    expect(h.store.get().runtime?.version).toBe(OLD);
+    const view = await h.service.view();
+    expect(view).toMatchObject({ state: 'installed', running: true, actions: ['start-session', 'stop', 'remove'] });
+    expect(view.error).toBeUndefined();
+    // A NEW install would still download the pinned build.
+    expect(view.runtime).toMatchObject({ version: OLLAMA_RUNTIME_PIN.version, installed: false });
+  });
+
+  it('with the pinned build unpacked that one runs, and the state says so', async () => {
+    const h = setup({ state: OLD_STATE, runtimeOnDisk: true });
+    await h.service.boot();
+    expect(h.supervisor.start).toHaveBeenCalledWith({ port: 11435, contextLength: 131072, previousPid: 4711 });
+    expect(h.store.get().runtime?.version).toBe(OLLAMA_RUNTIME_PIN.version);
+  });
+
+  it('with neither on disk the start fails in the open: the view says the runtime did not start', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const h = setup({ state: OLD_STATE });
+    h.world.startResult = { ok: false, code: 'runtime-start-failed', detail: 'spawn ENOENT' };
+    await h.service.boot();
+    expect((await h.service.view()).error).toMatchObject({ code: 'runtime-start-failed', next: 'start' });
+  });
+
+  it('a version the state file could never name is not turned into a path', async () => {
+    const h = setup({ state: { ...INSTALLED, runtime: { ...INSTALLED.runtime!, version: '../../evil' } } });
+    await h.service.boot();
+    expect(h.supervisor.start).toHaveBeenCalledWith({ port: 11435, contextLength: 131072, previousPid: 4711 });
+  });
+});
+
+describe('a runtime an earlier server left behind', () => {
+  it.each(['paused', 'failed'] as const)('Remove of a %s job ends it before any file is deleted', async (state) => {
+    const base = jobAt('model', 'paused');
+    const h = setup({
+      state: state === 'paused' ? base : { ...base, state: 'failed', error: { code: 'pull-failed' } },
+    });
+    const removed = await h.service.remove({ removeModel: true }, [], ADMIN);
+    expect(removed.ok && removed.view.state).toBe('idle');
+    expect(h.supervisor.stop).toHaveBeenCalledWith({ previousPid: 5000 });
+    expect(h.calls.indexOf('supervisor.stop')).toBeLessThan(h.calls.indexOf('removeLocalModelFiles'));
+  });
+
+  it('Stop of an installed model ends it too, also when this server never started it', async () => {
+    const h = setup({ state: INSTALLED });
+    await h.service.runtime({ action: 'stop' });
+    expect(h.supervisor.stop).toHaveBeenCalledWith({ previousPid: 4711 });
+  });
+
+  it('boot ends it for a model the person had stopped', async () => {
+    const h = setup({ state: { ...INSTALLED, runtime: { ...INSTALLED.runtime!, enabled: false } } });
+    await h.service.boot();
+    expect(h.supervisor.start).not.toHaveBeenCalled();
+    expect(h.supervisor.stop).toHaveBeenCalledWith({ previousPid: 4711 });
+  });
+
+  it('the pid is stored the moment the child is spawned, before it answers', async () => {
+    const h = setup({
+      state: { ...jobAt('model', 'paused'), runtime: { version: '0.40.15', port: 11435, enabled: true } },
+    });
+    h.service.onRuntimeChange({ running: false, pid: 7777, restarts: 0, gaveUp: false });
+    await vi.waitFor(() => expect(h.store.get().runtime?.pid).toBe(7777));
+  });
+});
+
+// ---------- What a failed download is called, and what is offered next ----------
+
+describe('a runtime that is gone for good during the download', () => {
+  it('is said as the runtime, not as the network, and "Try again" runs the step again', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const h = setup();
+    h.deps.pullModel.mockImplementation(async () => {
+      h.world.running = false;
+      h.world.gaveUp = true;
+      return { ok: false as const, code: 'pull-failed' as const, detail: 'connect ECONNREFUSED 127.0.0.1:11435' };
+    });
+    await installAndWait(h.service);
+    const view = await h.service.view();
+    expect(view).toMatchObject({ state: 'failed', step: 'model', actions: ['resume', 'install', 'remove'] });
+    expect(view.error).toEqual({
+      code: 'runtime-stopped',
+      message: { text: 'The runtime keeps stopping, so Codeman no longer restarts it.' },
+      // A job has no Start verb: the step is run again.
+      next: 'retry',
+      detail: 'connect ECONNREFUSED 127.0.0.1:11435',
+    });
+  });
+
+  it('a pull that fails while the runtime runs is still the download', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const h = setup();
+    h.deps.pullModel.mockResolvedValue({ ok: false, code: 'pull-failed', detail: 'unexpected EOF' } as never);
+    await installAndWait(h.service);
+    expect((await h.service.view()).error).toMatchObject({ code: 'pull-failed', next: 'retry' });
+  });
+});
+
+describe('the model offered after "does not fit"', () => {
+  it('needs less memory than the one that failed: a model that needs more is not offered', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const h = setup();
+    // The only other row needs MORE than the model that failed.
+    h.deps.recommend.mockImplementation(() => {
+      const rec = recommendation();
+      rec.alternatives = [candidate('qwen3.8:27b', 'Qwen3.8 27B', 131072, 17_700_000_000, false, 39_000_000_000)];
+      return rec;
+    });
+    h.deps.verifyModel.mockResolvedValue({ ok: false, code: 'does-not-fit' } as never);
+    await installAndWait(h.service);
+    const view = await h.service.view();
+    expect(view.error).toMatchObject({ code: 'does-not-fit', next: 'next-model' });
+    expect(view.error).not.toHaveProperty('nextModel');
+  });
+
+  it('skips a larger row for the first one that needs less', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const h = setup();
+    h.deps.getCatalog.mockReturnValue({
+      ...CATALOG,
+      models: [...CATALOG.models, { id: 'qwen3.8:27b', label: 'Qwen3.8 27B' }],
+    } as unknown as LocalModelCatalog);
+    h.deps.recommend.mockImplementation(() => {
+      const rec = recommendation();
+      rec.alternatives = [
+        candidate('qwen3.8:27b', 'Qwen3.8 27B', 131072, 17_700_000_000, false, 39_000_000_000),
+        candidate('gpt-oss:20b', 'GPT-OSS 20B', 131072, 13_793_441_427, false, 26_600_000_000),
+      ];
+      return rec;
+    });
+    h.deps.verifyModel.mockResolvedValue({ ok: false, code: 'does-not-fit' } as never);
+    await installAndWait(h.service);
+    expect((await h.service.view()).error?.nextModel).toEqual({ modelId: 'gpt-oss:20b', modelLabel: 'GPT-OSS 20B' });
+  });
+
+  it('after "no tool call" memory is not the question: the best other model is offered', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const h = setup();
+    h.deps.getCatalog.mockReturnValue({
+      ...CATALOG,
+      models: [...CATALOG.models, { id: 'qwen3.8:27b', label: 'Qwen3.8 27B' }],
+    } as unknown as LocalModelCatalog);
+    h.deps.recommend.mockImplementation(() => {
+      const rec = recommendation();
+      rec.alternatives = [candidate('qwen3.8:27b', 'Qwen3.8 27B', 131072, 17_700_000_000, false, 39_000_000_000)];
+      return rec;
+    });
+    h.deps.verifyModel.mockResolvedValue({ ok: false, code: 'no-tool-call' } as never);
+    await installAndWait(h.service);
+    expect((await h.service.view()).error?.nextModel).toEqual({ modelId: 'qwen3.8:27b', modelLabel: 'Qwen3.8 27B' });
+  });
+});
+
+describe('what a replaced download left behind', () => {
+  it('the partial blobs are deleted as files, after the model was asked for and before the new pull', async () => {
+    const h = setup({
+      state: { ...jobAt('model', 'paused'), replacedModelId: 'gpt-oss:20b' },
+    });
+    h.deps.removePartialModelBlobs.mockImplementation(async () => {
+      h.calls.push('removePartialModelBlobs');
+      return 12_708_189_425;
+    });
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    await h.service.resume({}, ADMIN);
+    await h.service.idle();
+    const order = h.calls.filter((call) => ['deleteModel', 'removePartialModelBlobs', 'pullModel'].includes(call));
+    expect(order).toEqual(['deleteModel', 'removePartialModelBlobs', 'pullModel']);
+    expect(h.deps.removePartialModelBlobs).toHaveBeenCalledWith(PATHS);
+    expect(h.store.get()).not.toHaveProperty('replacedModelId');
+  });
+
+  it('a job that replaced nothing deletes nothing', async () => {
+    const h = setup();
+    await installAndWait(h.service);
+    expect(h.deps.deleteModel).not.toHaveBeenCalled();
+    expect(h.deps.removePartialModelBlobs).not.toHaveBeenCalled();
+  });
+});
+
+// ---------- Live sessions keep the address they were started with ----------
+
+describe('Stop and "Use another port" while live sessions use the model', () => {
+  it('Stop is 409 sessions-open with their names, and the runtime keeps running', async () => {
+    const h = setup({ state: INSTALLED });
+    await h.service.boot();
+    h.supervisor.stop.mockClear();
+    const result = await h.service.runtime({ action: 'stop' }, ['w1-app', 'w4-lib']);
+    expect(result).toMatchObject({
+      ok: false,
+      status: 409,
+      conflict: {
+        reason: 'sessions-open',
+        sessions: ['w1-app', 'w4-lib'],
+        message: { text: LOCAL_MODEL_INSTALL_LABELS.conflictSessionsOpen, vars: { sessions: 'w1-app, w4-lib' } },
+      },
+    });
+    expect(h.supervisor.stop).not.toHaveBeenCalled();
+    expect(h.store.get().runtime?.enabled).toBe(true);
+  });
+
+  it('a start on another port is refused the same way, and nothing moves', async () => {
+    const h = setup({ state: INSTALLED });
+    const result = await h.service.runtime({ action: 'start', newPort: true }, ['w1-app']);
+    expect(result).toMatchObject({ ok: false, status: 409, conflict: { reason: 'sessions-open' } });
+    expect(h.deps.chooseRuntimePort).not.toHaveBeenCalled();
+    expect(h.deps.moveLocalEndpoint).not.toHaveBeenCalled();
+    expect(h.store.get().runtime?.port).toBe(11435);
+  });
+
+  it('a plain Start is not refused: it changes no address', async () => {
+    const h = setup({ state: { ...INSTALLED, runtime: { ...INSTALLED.runtime!, enabled: false } } });
+    const result = await h.service.runtime({ action: 'start' }, ['w1-app']);
+    expect(result.ok && result.view.running).toBe(true);
+  });
+
+  it('"Use another port" of a job is refused only when a connection of ours exists', async () => {
+    const failedOnPort: LocalModelStateFile = {
+      ...jobAt('connect', 'paused'),
+      state: 'failed',
+      error: { code: 'port-in-use', vars: { port: '11435' } },
+    };
+    const connected = setup({
+      state: { ...failedOnPort, connection: { endpointId: 'local-ollama', flagWasEnabled: false } },
+    });
+    expect(await connected.service.resume({ newPort: true }, ADMIN, ['w1-app'])).toMatchObject({
+      ok: false,
+      conflict: { reason: 'sessions-open', sessions: ['w1-app'] },
+    });
+    expect(connected.deps.chooseRuntimePort).not.toHaveBeenCalled();
+
+    // Without a connection of ours no session can be on the model: sessions elsewhere do not matter.
+    const fresh = setup({ state: failedOnPort });
+    fresh.deps.chooseRuntimePort.mockResolvedValue(11436);
+    const result = await fresh.service.resume({ newPort: true }, ADMIN, ['w1-app']);
+    expect(result.ok).toBe(true);
+    await fresh.service.idle();
+  });
+
+  it('a state write that fails before the saved endpoint moved changes nothing', async () => {
+    const h = setup({ state: INSTALLED });
+    h.deps.chooseRuntimePort.mockResolvedValue(11437);
+    h.store.disk.refuse = (next) => next.runtime?.port === 11437;
+    await expect(h.service.runtime({ action: 'start', newPort: true })).rejects.toThrow('ENOSPC');
+    expect(h.deps.moveLocalEndpoint).not.toHaveBeenCalled();
+    expect(h.store.get().runtime?.port).toBe(11435);
   });
 });

@@ -41,7 +41,8 @@
  * |           | never removed by us                   |                                          |                                                |
  * | `connect` | our endpoint record and the settings  | honoured before the first write; once    | writes both again                              |
  * |           | flag: the two writes outside our      | the writes began they finish and the job |                                                |
- * |           | folder                                | ends `installed`                         |                                                |
+ * |           | folder. The state file claims them    | ends `installed`                         |                                                |
+ * |           | first                                 |                                          |                                                |
  *
  * How the memory budget gets measured before a model is downloaded (ONE consent, bound to the
  * size shown): the person confirms `Candidate.installBytes` once. The `runtime` step then
@@ -62,7 +63,9 @@
  *  - A job read as `installing` at boot was interrupted by the restart: the service applies
  *    the event `restart` before anything else, so it is `paused` and waits for a click.
  *  - A new install from `paused` or `failed` REPLACES the job. When it names another model,
- *    what the old job left of its model is deleted from the store first.
+ *    what the old job left of its model is deleted from the store first: the model through the
+ *    runtime when it was downloaded whole, and the partial blobs of a download that was
+ *    interrupted (the runtime knows no model for those, so they are deleted as files).
  *  - Install is checked before anything is downloaded: admin only in multi-user mode; the
  *    model, the context and the coding agent must be a row the current recommendation offers;
  *    the coding agent must be a harness row of the catalogue; `acknowledgedBytes` must be the
@@ -80,13 +83,29 @@
  *  - A download's progress is kept in memory, written to the state file every few seconds and
  *    when the job pauses or fails. The view shows the live figure and its speed.
  *  - What blocks a session on an installed model (another program on the port, a runtime that
- *    keeps stopping, a model whose digest changed) is found live and shown as `error` on the
- *    view. It is never stored, and the state stays `installed`.
- *  - `launchRefusalMessage()` is what both session launch paths ask before they start a
- *    session on the managed endpoint: the digest is read again for every launch.
+ *    keeps stopping or did not start, a model whose digest changed) is found live and shown as
+ *    `error` on the view. It is never stored, and the state stays `installed`.
+ *  - `launchRefusalMessage()` is what every path that STARTS a coding agent on the managed
+ *    endpoint asks first: a new session with the model, a model applied to a session, the
+ *    attach that starts an agent in a session that has none, and the rebuild after a reboot.
+ *    The digest is read again for every one of them. Two things are not launches and are not
+ *    asked: a pane that survived a server restart (its agent is already running), and a
+ *    respawn cycle (it types into the agent that runs).
  *  - With a model installed, `boot()` puts the saved endpoint record back when it is gone (a
  *    config-backup restore can take it away), starts the runtime unless it was stopped, and
  *    reads the digest again.
+ *  - A runtime an earlier server left behind (a crash, a forced quit) is never left running
+ *    under a deleted folder or beside a second one: its pid is stored the moment it is
+ *    spawned, a start adopts or replaces it, and Stop, Remove and the boot of anything that
+ *    is not a running installation end it (`RuntimeSupervisor.stop({ previousPid })`).
+ *  - An installed model keeps the runtime VERSION it was installed with: when a later build
+ *    pins another version, the stored one is started for as long as its folder is unpacked.
+ *  - A job whose end could not be written to the state file (a full disk) is not lost: the
+ *    outcome is kept in memory, the view shows it, Resume and a new install start from it, and
+ *    the next verb writes it. The same holds for any `installing` in the file while this
+ *    process runs no job, which is what a restart leaves too.
+ *  - Stop and "Use another port" are refused (409 `sessions-open`) while live sessions use
+ *    the model: their coding agents were given the address when they started.
  */
 
 import { appendAdminAudit } from '../web/admin-audit.js';
@@ -124,6 +143,7 @@ import {
   type LocalModelInstallState,
   type LocalModelInstallStep,
   type LocalModelInstallView,
+  type LocalModelNextStep,
   type LocalModelProgress,
   type LocalModelRemoveRequest,
   type LocalModelResumeRequest,
@@ -139,12 +159,14 @@ import {
   connectLocalModel,
   disconnectLocalModel,
   ensureLocalEndpoint,
+  inspectLocalEndpoint,
   isLocalModelEndpointId,
   LOCAL_MODEL_ENDPOINT_ID,
   moveLocalEndpoint,
   type ConnectLocalModelInput,
   type ConnectResult,
   type LocalEndpointInput,
+  type LocalEndpointInspection,
 } from './connect.js';
 import { checkDeveloperTools } from './developer-tools.js';
 import { formatGb } from './format.js';
@@ -164,8 +186,8 @@ import {
   type PullResult,
   type VerifyResult,
 } from './ollama-client.js';
-import { localModelPaths, type LocalModelPaths } from './paths.js';
-import { modelFitsBudget, recommend } from './recommend.js';
+import { localModelPaths, runtimeBinaryForVersion, type LocalModelPaths } from './paths.js';
+import { modelFitsBudget, needBytes, recommend } from './recommend.js';
 import {
   chooseRuntimePort,
   createRuntimeSupervisor,
@@ -173,6 +195,7 @@ import {
   isRuntimeInstalled,
   OLLAMA_RUNTIME_PIN,
   removeLocalModelFiles,
+  removePartialModelBlobs,
   RUNTIME_PORT_FIRST,
   type ChooseRuntimePortOptions,
   type RemoveLocalModelFilesOptions,
@@ -304,7 +327,15 @@ export const INSTALL_STEP_TABLE: Readonly<Record<LocalModelInstallStep, InstallS
     resume: 'Pulls again. The runtime continues its partial blobs.',
     progress: true,
     needsRuntime: true,
-    errors: ['pull-failed', 'model-not-found', 'runtime-start-failed', 'port-in-use', 'disk-full', 'internal'],
+    errors: [
+      'pull-failed',
+      'model-not-found',
+      'runtime-start-failed',
+      'runtime-stopped',
+      'port-in-use',
+      'disk-full',
+      'internal',
+    ],
   },
   verify: {
     does: 'Loads the model with one tiny chat, checks that the runtime put all of it on the GPU at the chosen context, runs one tool probe, and stores the digest the runtime reports.',
@@ -335,12 +366,12 @@ export const INSTALL_STEP_TABLE: Readonly<Record<LocalModelInstallStep, InstallS
     errors: ['harness-failed', 'internal'],
   },
   connect: {
-    does: 'Writes the endpoint record and switches the custom model endpoints setting on, keeping its previous value in the state file.',
+    does: 'Claims the connection in the state file (with the value the custom model endpoints setting has now), then writes the endpoint record and switches that setting on.',
     onDisk:
-      'Our record in custom-model-hosts.json and the flag in settings.json: the two writes outside the local model folder.',
+      'Our record in custom-model-hosts.json and the flag in settings.json: the two writes outside the local model folder. The state file records the claim before either is written, so neither can exist without it.',
     cancel:
-      'Honoured before the first write. Once the writes began they finish and the job ends installed, so the pair is never left half done.',
-    resume: 'Writes both again. Both are idempotent.',
+      'Honoured before the first write. Once the writes began they finish and the job ends installed. A job interrupted between the claim and the writes has a claim with nothing behind it, which Resume fills in and Remove undoes.',
+    resume: 'Writes both again. Both are idempotent, and the claim keeps the value the setting had before.',
     progress: false,
     needsRuntime: true,
     errors: ['endpoint-id-taken', 'connect-failed', 'internal'],
@@ -508,6 +539,8 @@ export interface InstallLiveFacts {
   gaveUp: boolean;
   /** Another program holds the stored port: the error `port-in-use` in state `installed`. */
   portInUse: boolean;
+  /** The last start of the runtime failed for another reason: the error `runtime-start-failed` in state `installed`, with what the runtime said. */
+  startFailed?: { detail?: string };
   /** The stored digest against the runtime's current one (`compareModelDigest()`). `changed` is the error `model-changed`. Absent while not installed. */
   digest?: 'same' | 'changed' | 'unknown';
   developerTools: LocalModelDeveloperTools;
@@ -525,9 +558,15 @@ export interface InstallLiveFacts {
 /** An error code with its sentence, its slots and its one next step. Pure. */
 export function buildInstallError(
   code: LocalModelErrorCode,
-  extra: { vars?: Record<string, string>; detail?: string; nextModel?: { modelId: string; modelLabel: string } } = {}
+  extra: {
+    vars?: Record<string, string>;
+    detail?: string;
+    nextModel?: { modelId: string; modelLabel: string };
+    /** The next step in the state the error is shown in, when it is not the code's default. */
+    next?: LocalModelNextStep;
+  } = {}
 ): LocalModelInstallError {
-  const next = LOCAL_MODEL_ERROR_NEXT[code];
+  const next = extra.next ?? LOCAL_MODEL_ERROR_NEXT[code];
   return {
     code,
     message: {
@@ -542,8 +581,8 @@ export function buildInstallError(
 
 /**
  * What blocks a session in state `installed`, found live and never stored: another program
- * on the port, a runtime that keeps stopping, a model that changed. `undefined` when nothing
- * does, which includes a runtime the person stopped. Pure.
+ * on the port, a runtime that keeps stopping, a runtime that did not start, a model that
+ * changed. `undefined` when nothing does, which includes a runtime the person stopped. Pure.
  */
 export function installedBlocker(
   state: LocalModelStateFile,
@@ -554,6 +593,13 @@ export function installedBlocker(
     return buildInstallError('port-in-use', { vars: { port: String(state.runtime?.port ?? '') } });
   }
   if (!live.running && live.gaveUp) return buildInstallError('runtime-stopped');
+  if (!live.running && live.startFailed) {
+    // Start is the verb an installed model has: it tries the start again.
+    return buildInstallError('runtime-start-failed', {
+      next: 'start',
+      ...(live.startFailed.detail ? { detail: live.startFailed.detail } : {}),
+    });
+  }
   if (live.digest === 'changed') return buildInstallError('model-changed');
   return undefined;
 }
@@ -646,6 +692,8 @@ export function buildInstallView(state: LocalModelStateFile, live: InstallLiveFa
       vars: state.error.vars,
       detail: state.error.detail,
       nextModel: live.nextModel,
+      // A job has no Start verb: what helps there is to run the step again.
+      ...(LOCAL_MODEL_ERROR_NEXT[state.error.code] === 'start' ? { next: 'retry' as const } : {}),
     });
   }
   return view;
@@ -667,10 +715,11 @@ export interface LocalModelActor {
   ip?: string;
 }
 
-/** How a verb ended: the view after it, a 400 with its message, or a 409 with its conflict. */
+/** How a verb ended: the view after it, a refusal with its sentence, or a 409 with its conflict. */
 export type LocalModelVerbResult =
   | { ok: true; view: LocalModelInstallView }
-  | { ok: false; status: 400; message: string }
+  /** 400: the request is not something the server offers. 507: nothing could be started because the disk is full. */
+  | { ok: false; status: 400 | 507; message: LocalModelInstallMessage }
   | { ok: false; status: 409; conflict: LocalModelConflict };
 
 /**
@@ -710,6 +759,8 @@ export interface LocalModelServiceDeps {
   listRunning: (target: OllamaTarget, signal?: AbortSignal) => Promise<OllamaPsModel[]>;
   getRuntimeVersion: (target: OllamaTarget, signal?: AbortSignal) => Promise<string | undefined>;
   deleteModel: (target: OllamaTarget, modelId: string, signal?: AbortSignal) => Promise<boolean>;
+  /** `removePartialModelBlobs()` of src/local-model/runtime.ts: what an interrupted download left in the model store. Resolves with the bytes freed. */
+  removePartialModelBlobs: (paths?: LocalModelPaths) => Promise<number>;
   // src/local-model/developer-tools.ts
   checkDeveloperTools: () => Promise<LocalModelDeveloperTools>;
   // src/cli-install-runner.ts
@@ -721,6 +772,8 @@ export interface LocalModelServiceDeps {
   /** Writes one admin audit line (`appendAdminAudit()`). */
   audit: (entry: { admin: string; action: string; target: string; ip?: string; detail?: unknown }) => Promise<void>;
   // src/local-model/connect.ts
+  /** What is saved under the reserved id and what the settings flag is, read before the connection is claimed. Writes nothing. */
+  inspectLocalEndpoint: (input: LocalEndpointInput) => Promise<LocalEndpointInspection>;
   connectLocalModel: (input: ConnectLocalModelInput) => Promise<ConnectResult>;
   moveLocalEndpoint: (port: number) => Promise<void>;
   /** Puts our endpoint record back when it is gone (after a config-backup restore). True when it was added. */
@@ -749,9 +802,10 @@ export interface LocalModelService {
    * yes, which is also the answer for every endpoint that is not this feature's. Otherwise the
    * error that refuses the launch. While the runtime child Codeman started is not alive
    * (whatever answers on the port then is not ours), the reason is the one that is known:
-   * `port-in-use`, `runtime-stopped`, else `runtime-not-running`. While it runs, the digest is
-   * read again: `model-changed` when it is not the stored one or the model is gone. The session
-   * launch path asks this before it starts a session with the managed endpoint. Never throws.
+   * `port-in-use`, `runtime-stopped`, `runtime-start-failed`, else `runtime-not-running`.
+   * While it runs, the digest is read again: `model-changed` when it is not the stored one or
+   * the model is gone. Every path that starts a coding agent on the managed endpoint asks
+   * this first (see the file header for the list). Never throws.
    */
   launchRefusal(endpointId: string): Promise<LocalModelInstallError | undefined>;
   /**
@@ -767,10 +821,21 @@ export interface LocalModelService {
   install(request: LocalModelInstallRequest, actor: LocalModelActor): Promise<LocalModelVerbResult>;
   /** `POST /api/local-model/cancel`. Answers once the step in flight was interrupted. */
   cancel(): Promise<LocalModelVerbResult>;
-  /** `POST /api/local-model/resume`. */
-  resume(request: LocalModelResumeRequest, actor: LocalModelActor): Promise<LocalModelVerbResult>;
-  /** `POST /api/local-model/runtime`. */
-  runtime(request: LocalModelRuntimeRequest): Promise<LocalModelVerbResult>;
+  /**
+   * `POST /api/local-model/resume`. `liveSessionNames` as for `remove()`: with `newPort` and a
+   * connection of ours, not empty answers 409 `sessions-open`.
+   */
+  resume(
+    request: LocalModelResumeRequest,
+    actor: LocalModelActor,
+    liveSessionNames?: readonly string[]
+  ): Promise<LocalModelVerbResult>;
+  /**
+   * `POST /api/local-model/runtime`. `liveSessionNames` as for `remove()`: Stop and a start on
+   * another port answer 409 `sessions-open` while one of them uses the model, because their
+   * coding agents keep calling the address they were started with.
+   */
+  runtime(request: LocalModelRuntimeRequest, liveSessionNames?: readonly string[]): Promise<LocalModelVerbResult>;
   /**
    * `DELETE /api/local-model`. `liveSessionNames` is what `sessionNamesUsingEndpoint()` found:
    * not empty answers 409 `sessions-open` while a connection of ours exists. Else: stop the
@@ -788,13 +853,14 @@ export interface LocalModelService {
    * Called once when the server starts. An interrupted job becomes `paused`. With a model
    * installed: the saved endpoint record is put back when it is gone, a runtime that was not
    * stopped is started (an own orphan on the port is adopted or replaced, another listener is
-   * `port-in-use`) and the digest is read again. Never throws, and never keeps the server
-   * from starting.
+   * `port-in-use`) and the digest is read again. In every other case a runtime an earlier
+   * server left behind is ended: nothing would use it, and it holds the model's memory.
+   * Never throws, and never keeps the server from starting.
    */
   boot(): Promise<void>;
   /** Called when the server stops, beside `stopDeepSeekWeb()`: aborts a job in flight (it reads `paused` at the next boot) and stops the runtime. */
   shutdown(): Promise<void>;
-  /** What the runtime supervisor reports through `onChange`: a new pid after a restart, or the budget line. Stored, never thrown. */
+  /** What the runtime supervisor reports through `onChange`: the pid of a child the moment it is spawned, a new pid after a restart, the budget line. Stored, never thrown. */
   onRuntimeChange(status: RuntimeStatus): void;
   /** Resolves once no job is in flight. For `shutdown()` and for tests. */
   idle(): Promise<void>;
@@ -842,12 +908,22 @@ function lazySupervisor(build: () => RuntimeSupervisor): RuntimeSupervisor {
   let instance: RuntimeSupervisor | undefined;
   return {
     start: (options) => (instance ??= build()).start(options),
-    stop: async () => {
-      if (instance) await instance.stop();
+    stop: async (options) => {
+      // Built for a stored pid too: a runtime an earlier server left behind has no instance here.
+      if (instance || options?.previousPid !== undefined) await (instance ??= build()).stop(options);
     },
     status: () => (instance ? instance.status() : { running: false, restarts: 0, gaveUp: false }),
   };
 }
+
+/** Whether a write failed for lack of space. */
+function isDiskFullError(err: unknown): boolean {
+  const code = typeof err === 'object' && err !== null ? (err as NodeJS.ErrnoException).code : undefined;
+  return code === 'ENOSPC' || code === 'EDQUOT' || /no space left on device/i.test(getErrorMessage(err));
+}
+
+/** How a job ended, as the `fail` event carries it. */
+type JobFailure = Omit<Extract<InstallJobEvent, { type: 'fail' }>, 'type'>;
 
 /** Forgets the cached lookups of a CLI's binaries the way the CLI registry routes do, then probes it again. */
 async function recheckCliInstalledNow(cli: string): Promise<boolean> {
@@ -866,12 +942,22 @@ class LocalModelServiceImpl implements LocalModelService {
   private verbChain: Promise<unknown> = Promise.resolve();
   private recovery: Promise<void> | undefined;
   private stopping = false;
+  /** A verb wrote `installing` and is about to start the job: the view must not take that for a job that is gone. */
+  private jobStarting = false;
+  /**
+   * How the last job ended when the state file could not be told (a full disk): the failure,
+   * or nothing for a pause, and the download as it stood. Shown from memory and written by
+   * the next verb.
+   */
+  private unrecorded: { failure?: JobFailure; progress?: { completedBytes: number; totalBytes: number } } | undefined;
   /** The download in flight, as last reported. The state file gets it every few seconds. */
   private liveProgress: { completedBytes: number; totalBytes: number; bytesPerSecond?: number } | undefined;
   private lastProgressFlush = 0;
   private speedSamples: Array<{ at: number; bytes: number }> = [];
   /** The last start found another program on the stored port. */
   private portInUse = false;
+  /** The last start failed for another reason, with what the runtime said. Cleared by a start that works and by Stop. */
+  private startFailed: { detail?: string } | undefined;
   private digestStatus: 'same' | 'changed' | 'unknown' | undefined;
   private digestCheckedAt = 0;
 
@@ -897,12 +983,14 @@ class LocalModelServiceImpl implements LocalModelService {
       listRunning,
       getRuntimeVersion,
       deleteModel,
+      removePartialModelBlobs,
       checkDeveloperTools: () => checkDeveloperTools(),
       stockInstallCommand,
       tryBeginCliInstall,
       runInstallCommand,
       recheckCliInstalled: recheckCliInstalledNow,
       audit: (entry) => appendAdminAudit({ ...entry, detail: entry.detail as Record<string, unknown> | undefined }),
+      inspectLocalEndpoint,
       connectLocalModel,
       moveLocalEndpoint,
       ensureLocalEndpoint,
@@ -930,13 +1018,83 @@ class LocalModelServiceImpl implements LocalModelService {
     return run;
   }
 
-  /** Applies one event to the stored state. False when the reducer refused it. */
+  /** Applies one event of the running job to the stored state. False when the reducer refused it. */
   private async dispatch(event: InstallJobEvent): Promise<boolean> {
     const { after } = await this.deps.mutateState((current) => {
       const next = reduceInstallJob(current, event);
       return next === current ? undefined : next;
     });
     return after !== undefined;
+  }
+
+  /**
+   * `state` as it stands once a job that is over is counted as over: `installing` in the file
+   * while this process runs no job is a job that ended without the file knowing. It is
+   * `failed` with the outcome kept in memory, or `paused` when there is none (a restart, a
+   * Cancel whose write was refused). A paused or failed job with an outcome in memory is a
+   * Resume that could not be written. Pure apart from reading `this.job` and `this.unrecorded`.
+   */
+  private settled(state: LocalModelStateFile): LocalModelStateFile {
+    if (this.job) return state;
+    const failure = this.unrecorded?.failure;
+    let next: LocalModelStateFile;
+    if (state.state === 'installing') {
+      next = failure
+        ? reduceInstallJob(state, { type: 'fail', ...failure })
+        : reduceInstallJob(state, { type: 'restart' });
+    } else if (failure && (state.state === 'paused' || state.state === 'failed')) {
+      // A Resume that could not even be written (the disk is full): the job did not start,
+      // and it says why instead of looking as if the click did nothing.
+      next = reduceInstallJob({ ...state, state: 'installing' }, { type: 'fail', ...failure });
+    } else {
+      return state;
+    }
+    const progress = this.unrecorded?.progress;
+    return progress ? { ...next, progress } : next;
+  }
+
+  /** The stored state as a view or a verb must see it: settled, unless a verb is just starting a job. */
+  private async currentState(): Promise<LocalModelStateFile> {
+    const state = await this.deps.readState();
+    return this.jobStarting ? state : this.settled(state);
+  }
+
+  /**
+   * Applies one event of a VERB to the stored state, after settling it (`settled()`), in one
+   * write. False when the reducer refused the event; the settlement is written all the same.
+   */
+  private async verbDispatch(event: InstallJobEvent): Promise<boolean> {
+    let applied = false;
+    let settledNow = false;
+    await this.deps.mutateState((current) => {
+      const base = this.settled(current);
+      settledNow = base !== current;
+      const next = reduceInstallJob(base, event);
+      applied = next !== base;
+      if (applied) return next;
+      return settledNow ? base : undefined;
+    });
+    if (settledNow || applied) this.unrecorded = undefined;
+    return applied;
+  }
+
+  /**
+   * Writes the settlement alone, so the file says what the view already shows. Best effort: a
+   * write that is refused (the disk is still full) changes nothing, the outcome stays in
+   * memory and the next verb tries again.
+   */
+  private async settle(): Promise<void> {
+    try {
+      let settledNow = false;
+      await this.deps.mutateState((current) => {
+        const base = this.settled(current);
+        settledNow = base !== current;
+        return settledNow ? base : undefined;
+      });
+      if (settledNow) this.unrecorded = undefined;
+    } catch (err) {
+      console.warn(`[local-model] Could not write the state of the install: ${getErrorMessage(err)}`);
+    }
   }
 
   /** Writes facts a step learned. Never moves the state, and writes nothing once the job's state is gone. */
@@ -946,16 +1104,12 @@ class LocalModelServiceImpl implements LocalModelService {
 
   /**
    * A job the state file still calls `installing` when this process has none is one a restart
-   * interrupted: it becomes `paused`. Done once, before the first view or verb, whether or not
-   * `boot()` ran yet.
+   * interrupted: it becomes `paused`. Written once per process, before the first view or verb,
+   * whether or not `boot()` ran yet. This is the one write a GET makes; a job that ends later
+   * without the file knowing is shown from memory (`settled()`) and written by the next verb.
    */
   private recovered(): Promise<void> {
-    this.recovery ??= this.dispatch({ type: 'restart' }).then(
-      () => undefined,
-      (err: unknown) => {
-        console.warn(`[local-model] Could not read the state at start: ${getErrorMessage(err)}`);
-      }
-    );
+    this.recovery ??= this.settle();
     return this.recovery;
   }
 
@@ -965,6 +1119,28 @@ class LocalModelServiceImpl implements LocalModelService {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * The runtime version to start: the pinned one when it is unpacked, else the version the
+   * state file records when THAT is still unpacked (a model installed by an earlier build
+   * with another pin keeps running), else the pinned one, whose start then says what is
+   * missing.
+   */
+  private async runtimeVersionToRun(state: LocalModelStateFile): Promise<string> {
+    const pinned = this.deps.pin.version;
+    const stored = state.runtime?.version;
+    if (!stored || stored === pinned || (await this.isRuntimeOnDisk())) return pinned;
+    try {
+      const paths = this.paths();
+      const binary = runtimeBinaryForVersion(paths, stored);
+      if (await this.deps.isRuntimeInstalled({ ...this.deps.pin, version: stored }, { ...paths, binary })) {
+        return stored;
+      }
+    } catch {
+      /* not a version this build can name: the pinned one is tried */
+    }
+    return pinned;
   }
 
   private errorVars(code: LocalModelErrorCode, state: LocalModelStateFile): Record<string, string> | undefined {
@@ -987,15 +1163,38 @@ class LocalModelServiceImpl implements LocalModelService {
     }
   }
 
-  /** The best model the current recommendation offers that is not `failedId`. */
-  private async nextModelId(failedId: string, options?: RecommendOptions): Promise<string | undefined> {
+  /**
+   * The model to offer after `failed` did not work: the best one the current recommendation
+   * offers that is another model. With `smallerThan` (the memory the failed model needs, for
+   * `does-not-fit`) only a model that needs LESS is offered: one that needs more would fail
+   * the same way. `undefined` when there is none.
+   */
+  private async nextModelId(
+    failed: { id: string; context: number },
+    options?: RecommendOptions,
+    rule: { needsLessMemory?: boolean } = {}
+  ): Promise<string | undefined> {
     try {
       const hw = await this.deps.readHardware();
       const catalog = this.deps.getCatalog();
       const facts = await this.deps.buildHarnessFacts(catalog);
       const rec = this.deps.recommend(hw, catalog, facts, options ?? (await this.recommendOptions()));
-      const rows = [rec.pick, ...rec.alternatives].filter((row): row is Candidate => row !== undefined);
-      return rows.find((row) => row.modelId !== failedId)?.modelId;
+      const rows = [rec.pick, ...rec.alternatives].filter(
+        (row): row is Candidate => row !== undefined && row.modelId !== failed.id
+      );
+      if (!rule.needsLessMemory) return rows[0]?.modelId;
+      // What the failed model needs: its row when the recommendation still has it, else the
+      // catalogue's figures for it at the context that was chosen.
+      const failedRow = [rec.pick, ...rec.alternatives].find((row) => row?.modelId === failed.id);
+      const entry = catalog.models.find((model) => model.id === failed.id);
+      const limit =
+        failedRow && failedRow.context === failed.context
+          ? failedRow.needBytes
+          : entry
+            ? needBytes(entry, failed.context)
+            : undefined;
+      if (limit === undefined || !Number.isFinite(limit)) return undefined;
+      return rows.find((row) => row.needBytes < limit)?.modelId;
     } catch {
       return undefined;
     }
@@ -1038,6 +1237,12 @@ class LocalModelServiceImpl implements LocalModelService {
     });
   }
 
+  /** The download as it stands, for a job that ends: what a paused or failed job keeps. */
+  private progressNow(): { completedBytes: number; totalBytes: number } | undefined {
+    const progress = this.liveProgress;
+    return progress ? { completedBytes: progress.completedBytes, totalBytes: progress.totalBytes } : undefined;
+  }
+
   private clearProgress(): void {
     this.liveProgress = undefined;
     this.speedSamples = [];
@@ -1052,17 +1257,24 @@ class LocalModelServiceImpl implements LocalModelService {
       return { ok: false, code: 'runtime-start-failed', detail: 'No port was chosen for the runtime yet.' };
     }
     const { port } = state.runtime;
+    const version = await this.runtimeVersionToRun(state);
     let result: RuntimeStartResult;
     try {
       result = await this.deps.supervisor.start({
         port,
         contextLength: state.model.context,
         ...(state.runtime.pid !== undefined ? { previousPid: state.runtime.pid } : {}),
+        ...(version !== this.deps.pin.version ? { version } : {}),
       });
     } catch (err) {
       result = { ok: false, code: 'runtime-start-failed', detail: getErrorMessage(err) };
     }
     this.portInUse = !result.ok && result.code === 'port-in-use';
+    // Kept, so an installed model whose runtime does not start says so instead of only "stopped".
+    this.startFailed =
+      !result.ok && result.code === 'runtime-start-failed'
+        ? { ...(result.detail ? { detail: result.detail } : {}) }
+        : undefined;
     if (result.ok) {
       const { pid, measuredTotalBytes } = result;
       await this.record((current) =>
@@ -1071,7 +1283,7 @@ class LocalModelServiceImpl implements LocalModelService {
               ...current,
               runtime: {
                 ...current.runtime,
-                version: this.deps.pin.version,
+                version,
                 pid,
                 ...(measuredTotalBytes !== undefined ? { measuredTotalBytes } : {}),
               },
@@ -1111,7 +1323,9 @@ class LocalModelServiceImpl implements LocalModelService {
   }
 
   onRuntimeChange(status: RuntimeStatus): void {
-    if (!status.running || status.pid === undefined) return;
+    // The pid is stored from the moment the child is spawned, not only once it answers: a
+    // server that is killed in between must still find its own runtime at the next start.
+    if (status.pid === undefined) return;
     const { pid, measuredTotalBytes } = status;
     void this.record((current) => {
       if (!current.runtime) return undefined;
@@ -1149,6 +1363,7 @@ class LocalModelServiceImpl implements LocalModelService {
       running: status.running,
       gaveUp: status.gaveUp,
       portInUse: this.portInUse,
+      ...(this.startFailed ? { startFailed: this.startFailed } : {}),
       ...(state.state === 'installed' && this.digestStatus ? { digest: this.digestStatus } : {}),
       developerTools,
       runtimeInstalled: await this.isRuntimeOnDisk(),
@@ -1162,7 +1377,7 @@ class LocalModelServiceImpl implements LocalModelService {
   async view(): Promise<LocalModelInstallView> {
     try {
       await this.recovered();
-      let state = await this.deps.readState();
+      let state = await this.currentState();
       if (state.state === 'installing' && this.liveProgress) {
         state = {
           ...state,
@@ -1214,13 +1429,14 @@ class LocalModelServiceImpl implements LocalModelService {
     if (!isLocalModelEndpointId(endpointId)) return undefined;
     try {
       await this.recovered();
-      const state = await this.deps.readState();
+      const state = await this.currentState();
       // A record with the reserved id that this feature did not write is not ours to judge.
       if (state.connection?.endpointId !== endpointId) return undefined;
       const status = this.deps.supervisor.status();
       if (state.state !== 'installed' || !state.runtime || !state.model || !status.running) {
         if (this.portInUse) return buildInstallError('port-in-use', { vars: this.errorVars('port-in-use', state) });
         if (status.gaveUp) return buildInstallError('runtime-stopped');
+        if (this.startFailed) return buildInstallError('runtime-start-failed', { next: 'start' });
         return buildInstallError('runtime-not-running');
       }
       const digest = await this.refreshDigest(state);
@@ -1253,7 +1469,10 @@ class LocalModelServiceImpl implements LocalModelService {
     try {
       const state = await this.deps.readState();
       if (state.connection?.endpointId === endpointId && state.model && state.model.id !== modelId) {
-        return `Only ${state.model.label} is installed on this Mac. Remove it and install another model first.`;
+        return formatInstallMessage({
+          text: LOCAL_MODEL_INSTALL_LABELS.refusedOtherModel,
+          vars: { model: state.model.label },
+        });
       }
     } catch {
       /* an unreadable state is "nothing of ours": nothing to refuse */
@@ -1269,8 +1488,8 @@ class LocalModelServiceImpl implements LocalModelService {
 
   install(request: LocalModelInstallRequest, actor: LocalModelActor): Promise<LocalModelVerbResult> {
     return this.exclusive(async () => {
-      await this.recovered();
-      const state = await this.deps.readState();
+      await this.settle();
+      const state = await this.currentState();
       if (state.state === 'installing') return conflict('job-running');
       if (state.state === 'installed') return conflict('already-installed');
 
@@ -1284,7 +1503,7 @@ class LocalModelServiceImpl implements LocalModelService {
       const rows = [rec.pick, ...rec.alternatives].filter((row): row is Candidate => row !== undefined);
       const candidate = rows.find((row) => row.modelId === request.modelId);
       if (!candidate || candidate.context !== request.context) {
-        return { ok: false, status: 400, message: 'This model at this context is not offered for this Mac right now.' };
+        return { ok: false, status: 400, message: { text: LOCAL_MODEL_INSTALL_LABELS.refusedModelNotOffered } };
       }
       // A row without the list (an older shape) still names its one coding agent in the flat fields.
       const harnesses: CandidateHarness[] = candidate.harnesses ?? [
@@ -1292,13 +1511,13 @@ class LocalModelServiceImpl implements LocalModelService {
       ];
       const harness = harnesses.find((row) => row.cli === request.cli);
       if (!harness || !catalog.harnesses.some((row) => row.cli === request.cli)) {
-        return { ok: false, status: 400, message: 'This coding agent is not offered for this model.' };
+        return { ok: false, status: 400, message: { text: LOCAL_MODEL_INSTALL_LABELS.refusedAgentNotOffered } };
       }
       if (!harness.installed && !this.deps.stockInstallCommand(harness.cli)) {
         return {
           ok: false,
           status: 400,
-          message: `${harness.cliLabel} is not installed and cannot be installed from here.`,
+          message: { text: LOCAL_MODEL_INSTALL_LABELS.refusedAgentNotInstallable, vars: { cli: harness.cliLabel } },
         };
       }
       const expectedBytes = candidate.installBytes ?? candidate.downloadBytes + (options.runtimeDownloadBytes ?? 0);
@@ -1311,19 +1530,17 @@ class LocalModelServiceImpl implements LocalModelService {
         return {
           ok: false,
           status: 400,
-          message: formatInstallMessage(
-            buildInstallError('endpoint-id-taken', { vars: { id: LOCAL_MODEL_ENDPOINT_ID } }).message
-          ),
+          message: buildInstallError('endpoint-id-taken', { vars: { id: LOCAL_MODEL_ENDPOINT_ID } }).message,
         };
       }
 
-      const started = await this.dispatch({
+      const refused = await this.beginJob(actor, {
         type: 'install',
         model: { id: candidate.modelId, label: candidate.modelLabel, context: candidate.context },
         cli: { id: harness.cli, label: harness.cliLabel },
         steps: jobSteps({ agentInstalled: harness.installed }),
       });
-      if (!started) return conflict('wrong-state');
+      if (refused) return refused;
       void this.deps
         .audit({
           admin: actor.username,
@@ -1333,71 +1550,149 @@ class LocalModelServiceImpl implements LocalModelService {
           detail: { cli: harness.cli, context: candidate.context, bytes: expectedBytes },
         })
         .catch(() => {});
-      this.startJob(actor);
       return this.answer();
     });
   }
 
+  /**
+   * Writes the event that starts a job (`install` or `resume`) and starts the job. `undefined`:
+   * started. A state file that cannot be written for lack of space is not a 500: the job did
+   * not start, and the view says `disk-full` with its "Try again" (a first install, which has
+   * no job to show it on, is answered with that sentence).
+   */
+  private async beginJob(
+    actor: LocalModelActor,
+    event: Extract<InstallJobEvent, { type: 'install' | 'resume' }>
+  ): Promise<LocalModelVerbResult | undefined> {
+    this.jobStarting = true;
+    try {
+      const started = await this.verbDispatch(event);
+      if (!started) return conflict('wrong-state');
+      this.startJob(actor);
+      return undefined;
+    } catch (err) {
+      if (!isDiskFullError(err)) throw err;
+      // A first install has no job to show the failure on: the sentence goes back as it is.
+      if (event.type === 'install' && (await this.currentState().catch(() => undefined))?.state === 'idle') {
+        return { ok: false, status: 507, message: { text: LOCAL_MODEL_INSTALL_LABELS.errDiskFull } };
+      }
+      const kept = this.unrecorded?.progress;
+      this.unrecorded = {
+        failure: { code: 'disk-full', detail: getErrorMessage(err) },
+        ...(kept ? { progress: kept } : {}),
+      };
+      return this.answer();
+    } finally {
+      this.jobStarting = false;
+    }
+  }
+
   cancel(): Promise<LocalModelVerbResult> {
     return this.exclusive(async () => {
-      await this.recovered();
-      const state = await this.deps.readState();
-      if (state.state !== 'installing') return conflict('wrong-state');
+      // Taken before anything is awaited: a Cancel that arrives while a job runs is answered
+      // with the view after it, also when the job finishes in the same moment.
       const job = this.job;
-      if (job) {
-        job.controller.abort();
-        await job.promise.catch(() => {});
+      if (!job) {
+        // No job in this process: a job a restart interrupted is paused, never running.
+        await this.settle();
+        return conflict('wrong-state');
       }
+      job.controller.abort();
+      await job.promise.catch(() => {});
       // The step may have finished the job while it was being interrupted (the connect step
       // completes its two writes). Then there is nothing left to pause, and the view says so.
-      await this.flushProgress().catch(() => {});
-      await this.dispatch({ type: 'cancel' });
+      // Otherwise the job is paused with its download as it stood, in ONE write.
+      const progress = this.progressNow();
+      try {
+        await this.deps.mutateState((current) => {
+          if (current.state !== 'installing') return undefined;
+          const kept = progress ? reduceInstallJob(current, { type: 'progress', ...progress }) : current;
+          return reduceInstallJob(kept, { type: 'cancel' });
+        });
+      } catch (err) {
+        // The job IS stopped. The file could not be told: the view shows the pause from memory.
+        console.warn(`[local-model] Could not write the paused install: ${getErrorMessage(err)}`);
+        this.unrecorded = { ...(progress ? { progress } : {}) };
+      }
       this.clearProgress();
       return this.answer();
     });
   }
 
-  resume(request: LocalModelResumeRequest, actor: LocalModelActor): Promise<LocalModelVerbResult> {
+  resume(
+    request: LocalModelResumeRequest,
+    actor: LocalModelActor,
+    liveSessionNames: readonly string[] = []
+  ): Promise<LocalModelVerbResult> {
     return this.exclusive(async () => {
-      await this.recovered();
-      const state = await this.deps.readState();
+      await this.settle();
+      const state = await this.currentState();
       if (state.state === 'installing') return conflict('job-running');
       if (state.state !== 'paused' && state.state !== 'failed') return conflict('wrong-state');
-      if (request.newPort === true && state.runtime) await this.changePort(state);
-      const resumed = await this.dispatch({ type: 'resume' });
-      if (!resumed) return conflict('wrong-state');
-      this.startJob(actor);
-      return this.answer();
+      if (request.newPort === true && state.runtime) {
+        const open = this.sessionsOpen(state, liveSessionNames);
+        if (open) return open;
+        await this.changePort(state);
+      }
+      return (await this.beginJob(actor, { type: 'resume' })) ?? this.answer();
     });
   }
 
-  /** Chooses another port than the stored one and moves the saved endpoint with it. False when no other port is free. */
+  /** 409 `sessions-open` while live sessions use a connection of ours, else `undefined`. */
+  private sessionsOpen(
+    state: LocalModelStateFile,
+    liveSessionNames: readonly string[]
+  ): LocalModelVerbResult | undefined {
+    if (!state.connection || liveSessionNames.length === 0) return undefined;
+    const sessions = [...liveSessionNames];
+    return conflict('sessions-open', { sessions }, { sessions: sessions.join(', ') });
+  }
+
+  /**
+   * Chooses another port than the stored one and moves the saved endpoint with it. False when
+   * no other port is free. The state file first, then the saved endpoint: a state write that
+   * fails changes nothing, and a refused endpoint write puts the old port back, so the two
+   * never disagree. The stored pid stays: when it is still our own runtime on the OLD port,
+   * the next start ends it instead of leaving a second runtime behind.
+   */
   private async changePort(state: LocalModelStateFile): Promise<boolean> {
     if (!state.runtime) return false;
-    const port = await this.deps.chooseRuntimePort({ avoid: [state.runtime.port] });
+    const previous = state.runtime.port;
+    const port = await this.deps.chooseRuntimePort({ avoid: [previous] });
     if (port === undefined) return false;
-    // The saved endpoint first: when that write is refused, nothing has changed yet.
-    if (state.connection) await this.deps.moveLocalEndpoint(port);
-    await this.record((current) => {
-      if (!current.runtime) return undefined;
-      // The stored pid belonged to the old port: it must not make a listener on the new one "ours".
-      const { pid: _pid, ...runtime } = current.runtime;
-      return { ...current, runtime: { ...runtime, port } };
-    });
+    const setPort = (value: number): Promise<void> =>
+      this.record((current) =>
+        current.runtime ? { ...current, runtime: { ...current.runtime, port: value } } : undefined
+      );
+    await setPort(port);
+    if (state.connection) {
+      try {
+        await this.deps.moveLocalEndpoint(port);
+      } catch (err) {
+        await setPort(previous).catch(() => {});
+        throw err;
+      }
+    }
     this.portInUse = false;
     return true;
   }
 
-  runtime(request: LocalModelRuntimeRequest): Promise<LocalModelVerbResult> {
+  runtime(request: LocalModelRuntimeRequest, liveSessionNames: readonly string[] = []): Promise<LocalModelVerbResult> {
     return this.exclusive(async () => {
-      await this.recovered();
-      let state = await this.deps.readState();
+      await this.settle();
+      let state = await this.currentState();
       if (state.state === 'installing') return conflict('job-running');
       if (state.state !== 'installed' || !state.runtime) return conflict('wrong-state');
 
       if (request.action === 'stop') {
-        await this.deps.supervisor.stop();
+        // Their coding agents keep calling the address they were started with.
+        const open = this.sessionsOpen(state, liveSessionNames);
+        if (open) return open;
+        await this.deps.supervisor.stop({
+          ...(state.runtime.pid !== undefined ? { previousPid: state.runtime.pid } : {}),
+        });
         this.portInUse = false;
+        this.startFailed = undefined;
         await this.record((current) =>
           current.runtime ? { ...current, runtime: { ...current.runtime, enabled: false } } : undefined
         );
@@ -1405,8 +1700,12 @@ class LocalModelServiceImpl implements LocalModelService {
       }
 
       if (request.newPort === true) {
+        const open = this.sessionsOpen(state, liveSessionNames);
+        if (open) return open;
         // The old child, when one is still alive, holds the old port: it must go first.
-        await this.deps.supervisor.stop();
+        await this.deps.supervisor.stop({
+          ...(state.runtime.pid !== undefined ? { previousPid: state.runtime.pid } : {}),
+        });
         await this.changePort(state);
       }
       await this.record((current) =>
@@ -1425,15 +1724,17 @@ class LocalModelServiceImpl implements LocalModelService {
     actor?: LocalModelActor
   ): Promise<LocalModelVerbResult> {
     return this.exclusive(async () => {
-      await this.recovered();
-      const state = await this.deps.readState();
+      await this.settle();
+      const state = await this.currentState();
       if (state.state === 'installing') return conflict('job-running');
-      if (state.connection && liveSessionNames.length > 0) {
-        const sessions = [...liveSessionNames];
-        return conflict('sessions-open', { sessions }, { sessions: sessions.join(', ') });
-      }
+      const open = this.sessionsOpen(state, liveSessionNames);
+      if (open) return open;
 
-      await this.deps.supervisor.stop();
+      // Our child, and a runtime an earlier server left behind (known by the stored pid): no
+      // file is deleted under a process that still runs from it.
+      await this.deps.supervisor.stop({
+        ...(state.runtime?.pid !== undefined ? { previousPid: state.runtime.pid } : {}),
+      });
       // The two writes outside our folder are undone first: when one is refused, nothing was
       // deleted yet and the person can try again.
       if (state.connection) {
@@ -1441,9 +1742,11 @@ class LocalModelServiceImpl implements LocalModelService {
       }
       const removeModel = request.removeModel === true;
       await this.deps.removeLocalModelFiles({ models: removeModel, paths: this.paths() });
-      await this.dispatch({ type: 'remove' });
+      await this.verbDispatch({ type: 'remove' });
       this.clearProgress();
+      this.unrecorded = undefined;
       this.portInUse = false;
+      this.startFailed = undefined;
       this.digestStatus = undefined;
       if (actor) {
         void this.deps
@@ -1463,11 +1766,11 @@ class LocalModelServiceImpl implements LocalModelService {
   async boot(): Promise<void> {
     try {
       await this.recovered();
-      const state = await this.deps.readState();
-      if (state.state !== 'installed' || !state.runtime || !state.model) return;
+      const state = await this.currentState();
+      const installed = state.state === 'installed' && state.runtime !== undefined && state.model !== undefined;
       // The record of the connection can be gone while the model is still installed (a
       // config-backup restore of an older endpoint store): it is put back, never replaced.
-      if (state.connection) {
+      if (installed && state.connection && state.runtime && state.model) {
         const restored = await this.deps.ensureLocalEndpoint({
           port: state.runtime.port,
           modelId: state.model.id,
@@ -1476,7 +1779,15 @@ class LocalModelServiceImpl implements LocalModelService {
         if (restored)
           console.warn('[local-model] The saved endpoint of the model on this Mac was missing and was put back.');
       }
-      if (!state.runtime.enabled) return;
+      if (!installed || !state.runtime?.enabled) {
+        // Nothing starts the runtime here (a job waits for a click, the person stopped the
+        // model). One an earlier server left behind is ended: it holds the model's memory,
+        // and a later Remove must not delete its folder under it.
+        if (state.runtime?.pid !== undefined) {
+          await this.deps.supervisor.stop({ previousPid: state.runtime.pid });
+        }
+        return;
+      }
       const started = await this.startRuntime(state);
       if (!started.ok) {
         console.warn(
@@ -1519,6 +1830,7 @@ class LocalModelServiceImpl implements LocalModelService {
   private startJob(actor: LocalModelActor): void {
     const controller = new AbortController();
     this.clearProgress();
+    this.unrecorded = undefined;
     const job = {
       controller,
       promise: this.runJob(actor, controller.signal).finally(() => {
@@ -1538,7 +1850,12 @@ class LocalModelServiceImpl implements LocalModelService {
         try {
           outcome = await this.runStep(state.step, state, actor, signal);
         } catch (err) {
-          outcome = { kind: 'fail', code: 'internal', detail: getErrorMessage(err) };
+          // A write of the step itself that found no space is a full disk, not a mystery.
+          outcome = {
+            kind: 'fail',
+            code: isDiskFullError(err) ? 'disk-full' : 'internal',
+            detail: getErrorMessage(err),
+          };
         }
         if (outcome.kind === 'done') {
           // A step that finished stays finished, also when Cancel arrived while it ran. Its
@@ -1550,19 +1867,38 @@ class LocalModelServiceImpl implements LocalModelService {
         // An interrupted step is not a failed one, whatever its last call answered. Cancel
         // writes `paused` itself; a server that is stopping writes nothing.
         if (outcome.kind === 'cancelled' || signal.aborted || this.stopping) return;
-        await this.flushProgress().catch(() => {});
-        await this.dispatch({
-          type: 'fail',
+        const failure: JobFailure = {
           code: outcome.code,
           ...(outcome.vars ? { vars: outcome.vars } : {}),
           ...(outcome.detail ? { detail: outcome.detail } : {}),
           ...(outcome.nextModelId ? { nextModelId: outcome.nextModelId } : {}),
-        });
+        };
+        const progress = this.progressNow();
+        try {
+          // The failure and the download as it stood, in ONE write.
+          await this.deps.mutateState((current) => {
+            const kept = progress ? reduceInstallJob(current, { type: 'progress', ...progress }) : current;
+            const next = reduceInstallJob(kept, { type: 'fail', ...failure });
+            return next === current ? undefined : next;
+          });
+        } catch (err) {
+          // The disk that failed the step also refuses the state file. The outcome is not
+          // lost: the view shows it from memory and the next verb writes it.
+          console.warn(`[local-model] Could not write why the install stopped: ${getErrorMessage(err)}`);
+          this.unrecorded = { failure, ...(progress ? { progress } : {}) };
+        }
+        this.clearProgress();
         return;
       }
     } catch (err) {
+      // A write of the job itself was refused (the step that finished could not be recorded).
       console.warn(`[local-model] The install job stopped: ${getErrorMessage(err)}`);
-      await this.dispatch({ type: 'fail', code: 'internal', detail: getErrorMessage(err) }).catch(() => {});
+      const progress = this.progressNow();
+      this.unrecorded = {
+        failure: { code: isDiskFullError(err) ? 'disk-full' : 'internal', detail: getErrorMessage(err) },
+        ...(progress ? { progress } : {}),
+      };
+      this.clearProgress();
     }
   }
 
@@ -1629,7 +1965,7 @@ class LocalModelServiceImpl implements LocalModelService {
       const catalog = this.deps.getCatalog();
       const options: RecommendOptions = { measuredTotalBytes, runtimeDownloadBytes: 0 };
       if (!this.deps.modelFitsBudget(hw, catalog, state.model.id, state.model.context, options)) {
-        const nextModelId = await this.nextModelId(state.model.id, options);
+        const nextModelId = await this.nextModelId(state.model, options, { needsLessMemory: true });
         return {
           kind: 'fail',
           code: 'does-not-fit',
@@ -1657,6 +1993,15 @@ class LocalModelServiceImpl implements LocalModelService {
         /* a leftover is not a reason to stop: Remove with the models deletes it */
       }
       if (signal.aborted) return CANCELLED;
+      // A download that was interrupted left partial blobs and no model: the runtime answers
+      // "not found" for it and deletes nothing. No download is in flight here, so every
+      // partial file in the store is a dead one.
+      try {
+        const freed = await this.deps.removePartialModelBlobs(this.paths());
+        if (freed > 0) console.log(`[local-model] Deleted ${formatGb(freed)} GB a replaced download had left.`);
+      } catch {
+        /* as above */
+      }
       await this.record((current) => {
         const { replacedModelId: _replaced, ...rest } = current;
         return rest;
@@ -1669,7 +2014,16 @@ class LocalModelServiceImpl implements LocalModelService {
     });
     if (!pulled.ok) {
       if (pulled.code === 'cancelled') return CANCELLED;
-      const nextModelId = pulled.code === 'model-not-found' ? await this.nextModelId(state.model.id) : undefined;
+      // A runtime that is gone for good looks like a broken network to the pull. It is not.
+      const status = this.deps.supervisor.status();
+      if (pulled.code === 'pull-failed' && (status.gaveUp || !status.running)) {
+        return {
+          kind: 'fail',
+          code: 'runtime-stopped',
+          ...(pulled.detail ? { detail: pulled.detail } : {}),
+        };
+      }
+      const nextModelId = pulled.code === 'model-not-found' ? await this.nextModelId(state.model) : undefined;
       return {
         kind: 'fail',
         code: pulled.code,
@@ -1711,8 +2065,12 @@ class LocalModelServiceImpl implements LocalModelService {
         }
         vars = { model: state.model.label, actual, wanted: String(context) };
       }
-      const offersNext = verified.code === 'does-not-fit' || verified.code === 'no-tool-call';
-      const nextModelId = offersNext ? await this.nextModelId(id) : undefined;
+      const nextModelId =
+        verified.code === 'does-not-fit'
+          ? await this.nextModelId(state.model, undefined, { needsLessMemory: true })
+          : verified.code === 'no-tool-call'
+            ? await this.nextModelId(state.model)
+            : undefined;
       return {
         kind: 'fail',
         code: verified.code,
@@ -1815,13 +2173,41 @@ class LocalModelServiceImpl implements LocalModelService {
       return { kind: 'fail', code: 'connect-failed', detail: `The runtime does not list ${id}.` };
     }
 
+    // The connection is CLAIMED in the state file before either write, so no record of ours
+    // can exist that the state file does not know: a state write that fails, or a server that
+    // is killed between the two, leaves at worst a claim with nothing behind it.
+    let claim = running.connection;
+    if (!claim) {
+      let found: LocalEndpointInspection;
+      try {
+        found = await this.deps.inspectLocalEndpoint({ port, modelId: id, context });
+      } catch (err) {
+        return { kind: 'fail', code: 'connect-failed', detail: getErrorMessage(err) };
+      }
+      if (signal.aborted) return CANCELLED;
+      // A record with our id that says something else is somebody else's: never overwritten.
+      if (found.record === 'other') {
+        return { kind: 'fail', code: 'endpoint-id-taken', vars: this.errorVars('endpoint-id-taken', state) };
+      }
+      // A record that already says what ours would say can only be ours (the routes refuse
+      // the id): the flag was then switched on by us, and its earlier value is not known, so
+      // it is never switched off again.
+      claim = {
+        endpointId: LOCAL_MODEL_ENDPOINT_ID,
+        flagWasEnabled: found.record === 'same' ? true : found.flagEnabled,
+      };
+      const claimed = claim;
+      await this.record((current) => ({ ...current, connection: claimed }));
+    }
+    if (signal.aborted) return CANCELLED;
+
     // From here on the two writes run to their end: Cancel no longer interrupts.
     const connected = await this.deps.connectLocalModel({
       port,
       modelId: id,
       context,
-      ours: running.connection !== undefined,
-      ...(running.connection ? { flagWasEnabled: running.connection.flagWasEnabled } : {}),
+      ours: true,
+      flagWasEnabled: claim.flagWasEnabled,
     });
     if (!connected.ok) {
       return {
@@ -1831,11 +2217,6 @@ class LocalModelServiceImpl implements LocalModelService {
         ...(connected.detail ? { detail: connected.detail } : {}),
       };
     }
-    const flagWasEnabled = connected.flagWasEnabled;
-    await this.record((current) => ({
-      ...current,
-      connection: { endpointId: LOCAL_MODEL_ENDPOINT_ID, flagWasEnabled },
-    }));
     return DONE;
   }
 }

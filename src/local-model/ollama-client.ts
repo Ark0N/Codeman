@@ -31,6 +31,7 @@
  */
 
 import type { LocalModelErrorCode } from '../types.js';
+import { formatGb } from './format.js';
 
 /** How often a pull that ended on an error line or a cut stream is started again. */
 export const PULL_RETRIES = 5;
@@ -683,7 +684,8 @@ export function judgeLoaded(
     return {
       ok: false,
       code: 'does-not-fit',
-      detail: `${model.sizeVram} of ${model.size} bytes are on the GPU`,
+      // A size a person reads: decimal GB, like every other size of this feature.
+      detail: `${formatGb(model.sizeVram)} of ${formatGb(model.size)} GB of the model are on the GPU`,
     };
   }
   if (model.contextLength !== context) {

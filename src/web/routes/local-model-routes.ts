@@ -40,11 +40,14 @@
  *  - A verb answers the view AFTER the verb. A refusal the service names is a 400 (the request
  *    is not a row the server offers) or a 409 whose `data` is the `LocalModelConflict`
  *    (`reason`, the sentence, and for `size-changed` the server's own total, for
- *    `sessions-open` the session names). A write of the settings or of the endpoint store
- *    that was refused (a file that does not parse) is a 409 without `data`, with the fix.
+ *    `sessions-open` the session names). A 400 the service names carries its sentence as
+ *    `data.message` too, so the window prints it in its own language. A write of the settings
+ *    or of the endpoint store that was refused (a file that does not parse) is a 409 without
+ *    `data`, with the fix.
  *  - The verbs do the work in the install service; this file only gates, parses and maps.
- *    `DELETE` is the one that looks at the live sessions: it hands their names to the service,
- *    which refuses while one of them still uses the model.
+ *    `DELETE`, `runtime` and `resume` look at the live sessions: they hand their names to the
+ *    service, which refuses a removal, a stop and a change of port while one of them still
+ *    uses the model.
  *  - Every dependency is injected (`LocalModelRouteDeps`), so a route test spawns nothing and
  *    does not need a Mac: it passes its own hardware, harness facts and service.
  */
@@ -61,6 +64,7 @@ import {
   type LocalModelCatalog,
   type LocalModelConflict,
   type LocalModelInstallView,
+  type LocalModelRefusal,
   type LocalModelStatus,
   type Recommendation,
   type RecommendOptions,
@@ -152,8 +156,20 @@ export interface LocalModelConflictResponse {
   data: LocalModelConflict;
 }
 
-/** What a verb answers: the view after it, an error envelope, or the 409 that carries the conflict. */
-export type LocalModelVerbResponse = ApiResponse<LocalModelInstallView> | LocalModelConflictResponse;
+/** The 400 (or 507) of a verb the service refused with a sentence: the error envelope plus that sentence as `data`. */
+export interface LocalModelRefusalResponse {
+  success: false;
+  /** The sentence in English, its slots filled. */
+  error: string;
+  errorCode: ApiErrorCode;
+  data: LocalModelRefusal;
+}
+
+/** What a verb answers: the view after it, an error envelope, or a refusal that carries its sentence. */
+export type LocalModelVerbResponse =
+  | ApiResponse<LocalModelInstallView>
+  | LocalModelConflictResponse
+  | LocalModelRefusalResponse;
 
 /** 403 for a non-admin in multi-user mode, before anything else runs. `null`: go on. */
 function adminOnly(req: FastifyRequest, reply: FastifyReply): ApiResponse<never> | null {
@@ -170,7 +186,14 @@ function actorOf(req: FastifyRequest): LocalModelActor {
 function respond(result: LocalModelVerbResult, reply: FastifyReply): LocalModelVerbResponse {
   if (result.ok) return { success: true, data: result.view };
   reply.code(result.status);
-  if (result.status === 400) return createErrorResponse(ApiErrorCode.INVALID_INPUT, result.message);
+  if (result.status !== 409) {
+    return {
+      success: false,
+      error: formatInstallMessage(result.message),
+      errorCode: result.status === 400 ? ApiErrorCode.INVALID_INPUT : ApiErrorCode.OPERATION_FAILED,
+      data: { message: result.message },
+    };
+  }
   return {
     success: false,
     error: formatInstallMessage(result.conflict.message),
@@ -258,14 +281,18 @@ export function registerLocalModelRoutes(
     const denied = adminOnly(req, reply);
     if (denied) return denied;
     const body = parseBody(LocalModelResumeSchema, req.body ?? {});
-    return runVerb(reply, () => resolved.service().resume(body, actorOf(req)));
+    const sessionNames = sessionNamesUsingEndpoint(ctx.sessions.values());
+    return runVerb(reply, () => resolved.service().resume(body, actorOf(req), sessionNames));
   });
 
   app.post('/api/local-model/runtime', async (req, reply): Promise<LocalModelVerbResponse> => {
     const denied = adminOnly(req, reply);
     if (denied) return denied;
     const body = parseBody(LocalModelRuntimeSchema, req.body);
-    return runVerb(reply, () => resolved.service().runtime(body));
+    // Asked at the moment of the request, like the DELETE: a stop or a change of port leaves
+    // a live session calling an address nothing of ours holds.
+    const sessionNames = sessionNamesUsingEndpoint(ctx.sessions.values());
+    return runVerb(reply, () => resolved.service().runtime(body, sessionNames));
   });
 
   app.delete('/api/local-model', async (req, reply): Promise<LocalModelVerbResponse> => {

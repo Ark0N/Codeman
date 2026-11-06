@@ -17,7 +17,8 @@
  *
  * The walks: the whole install and its removal; a damaged runtime download; a model download
  * that fails twice and then succeeds; one that keeps failing; a model that calls no tool;
- * Cancel during the model download; a server restart during the model download.
+ * Cancel during the model download; a server restart during the model download; a server
+ * that is KILLED during the model download and leaves its runtime running.
  *
  * "A server" here is one install service with its own runtime supervisor (`startServer()`).
  * A restart is `shutdown()` of the one and a new one over the same data dir.
@@ -45,7 +46,11 @@ import { createLocalModelService, type LocalModelService } from '../src/local-mo
 import { memClassGb, formatGb } from '../src/local-model/format.js';
 import { pullModel, PULL_RETRIES } from '../src/local-model/ollama-client.js';
 import { localModelPaths, type LocalModelPaths } from '../src/local-model/paths.js';
-import { createRuntimeSupervisor, ensureRuntimeInstalled } from '../src/local-model/runtime.js';
+import {
+  createRuntimeSupervisor,
+  ensureRuntimeInstalled,
+  type RuntimeSupervisorDeps,
+} from '../src/local-model/runtime.js';
 import { readLocalModelState } from '../src/local-model/state-store.js';
 import { registerLocalModelRoutes } from '../src/web/routes/local-model-routes.js';
 import { SETTINGS_PATH } from '../src/web/route-helpers.js';
@@ -123,7 +128,7 @@ const archiveFetch: typeof fetch = async (input, init) => {
  * supervisor, over the data dir, the pin and the port of the test. It becomes `world.service`,
  * which is the one the routes ask.
  */
-function startServer(): LocalModelService {
+function startServer(processes: Partial<Pick<RuntimeSupervisorDeps, 'commandOfPid' | 'kill'>> = {}): LocalModelService {
   const pin = world.archive.pin();
   const { paths, port } = world;
   const supervisor = createRuntimeSupervisor({
@@ -136,6 +141,7 @@ function startServer(): LocalModelService {
     env: { PATH: process.env.PATH, CODEMAN_PASSWORD: 'must-not-reach-the-runtime', OLLAMA_ORIGINS: '*' },
     commandOfPid: async () => undefined,
     kill: () => {},
+    ...processes,
     sleep: async () => {},
     pin,
     paths,
@@ -673,5 +679,85 @@ describe('the install from the first GET to Remove, real modules over a fake run
     expect(world.archive.state.archiveRequests).toBe(1);
     expect(world.installerRuns).toBe(1);
     expect(await readCustomModelHosts(getDataDir())).toMatchObject([{ id: 'local-ollama', models: [pick.modelId] }]);
+  }, 60_000);
+});
+
+describe('a server that is killed leaves its runtime running: the next server never deletes under it', () => {
+  /**
+   * Installs up to the model download, then "kills" the server: its job stops and it signals
+   * nothing, as a process that got SIGKILL does. Its runtime child goes on listening. Answers
+   * what the next server needs to find that process: `ps` and `kill` over the fake child.
+   */
+  async function killedDuringTheDownload() {
+    const api = await routes();
+    const pick = (await api.get()).recommendation.pick!;
+    const runtime = prepareRuntime(pick);
+    slowPull(runtime);
+    await api.install(pick);
+    await api.pulling();
+
+    const child = runtime.state.children[0];
+    const signal = child.kill.bind(child);
+    // A killed server sends its child nothing.
+    child.kill = () => false;
+    await world.service.shutdown();
+    expect(runtime.listening).toBe(true);
+    // The pid was stored the moment the child was spawned.
+    expect((await readLocalModelState()).runtime?.pid).toBe(child.pid);
+
+    const signals: Array<{ pid: number; signal: string; folderThere: boolean }> = [];
+    const processes: Partial<Pick<RuntimeSupervisorDeps, 'commandOfPid' | 'kill'>> = {
+      // What `ps -o command= -p <pid>` prints for the runtime while it lives.
+      commandOfPid: async (pid) => (pid === child.pid && runtime.listening ? `${world.paths.binary} serve` : undefined),
+      kill: (pid, sig) => {
+        signals.push({ pid, signal: sig, folderThere: existsSync(world.paths.runtimeDir) });
+        if (pid === child.pid) signal(sig);
+      },
+    };
+    return { ...api, pick, runtime, child, signals, processes };
+  }
+
+  it('Remove of the job it left ends that runtime BEFORE the folder is deleted', async () => {
+    const { app, runtime, child, signals, processes } = await killedDuringTheDownload();
+    startServer(processes);
+    const removed = await app.inject({ method: 'DELETE', url: '/api/local-model', payload: { removeModel: true } });
+    expect(removed.statusCode).toBe(200);
+    expect(removed.json().data.state).toBe('idle');
+    // The process was signalled while its binary was still on disk, and it is gone.
+    expect(signals).toEqual([{ pid: child.pid, signal: 'SIGTERM', folderThere: true }]);
+    await vi.waitFor(() => expect(runtime.listening).toBe(false));
+    expect(existsSync(world.paths.root)).toBe(false);
+    expect(await readLocalModelState()).toEqual(expect.objectContaining({ schema: 1, state: 'idle' }));
+  }, 60_000);
+
+  it('the next start of the server ends it too: nothing would use it until a click', async () => {
+    const { get, settled, app, runtime, child, signals, processes } = await killedDuringTheDownload();
+    const next = startServer(processes);
+    await next.boot();
+    expect(signals.map((entry) => [entry.pid, entry.signal])).toEqual([[child.pid, 'SIGTERM']]);
+    await vi.waitFor(() => expect(runtime.listening).toBe(false));
+    expect((await get()).install).toMatchObject({ state: 'paused', step: 'model', running: false });
+
+    // Continue starts a runtime of its own on the same port and finishes the install.
+    quickPull(runtime);
+    const resumed = await app.inject({ method: 'POST', url: '/api/local-model/resume', payload: {} });
+    expect(resumed.statusCode).toBe(200);
+    const install = await settled();
+    expect(install).toMatchObject({ state: 'installed', running: true });
+    expect(runtime.state.children).toHaveLength(2);
+  }, 60_000);
+
+  it('a pid that now runs something else is never signalled', async () => {
+    const { app, child, signals } = await killedDuringTheDownload();
+    // The pid was reused by another program since.
+    startServer({
+      commandOfPid: async () => '/Applications/Something.app/Contents/MacOS/Something',
+      kill: (pid, sig) => signals.push({ pid, signal: sig, folderThere: true }),
+    });
+    const removed = await app.inject({ method: 'DELETE', url: '/api/local-model', payload: {} });
+    expect(removed.statusCode).toBe(200);
+    expect(signals).toEqual([]);
+    // Left to the test's own cleanup.
+    child.crash(0);
   }, 60_000);
 });

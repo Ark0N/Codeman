@@ -488,6 +488,30 @@ describe('installedBlocker', () => {
     });
   });
 
+  it('a runtime that did not start: what it said, and "Start" to try again (an installed model has no job to resume)', () => {
+    expect(installedBlocker(SAMPLE.installed, { ...LIVE, startFailed: { detail: 'spawn ENOENT' } })).toEqual({
+      code: 'runtime-start-failed',
+      message: { text: 'The runtime did not start on this Mac.' },
+      next: 'start',
+      detail: 'spawn ENOENT',
+    });
+    expect(installedBlocker(SAMPLE.installed, { ...LIVE, startFailed: {} })).toEqual({
+      code: 'runtime-start-failed',
+      message: { text: 'The runtime did not start on this Mac.' },
+      next: 'start',
+    });
+    // A runtime that runs has started: an older failure says nothing any more.
+    expect(
+      installedBlocker(SAMPLE.installed, { ...LIVE, running: true, digest: 'same', startFailed: { detail: 'x' } })
+    ).toBeUndefined();
+  });
+
+  it('the port and a runtime that keeps stopping are said before a failed start', () => {
+    const failed = { startFailed: { detail: 'x' } };
+    expect(installedBlocker(SAMPLE.installed, { ...LIVE, ...failed, portInUse: true })?.code).toBe('port-in-use');
+    expect(installedBlocker(SAMPLE.installed, { ...LIVE, ...failed, gaveUp: true })?.code).toBe('runtime-stopped');
+  });
+
   it('a model that changed: "Remove"', () => {
     expect(installedBlocker(SAMPLE.installed, { ...LIVE, running: true, digest: 'changed' })).toEqual({
       code: 'model-changed',
@@ -615,6 +639,21 @@ describe('buildInstallView', () => {
       nextModel: { modelId: 'gpt-oss:20b', modelLabel: 'GPT-OSS 20B' },
       detail: 'finish_reason stop',
     });
+  });
+
+  it('a failed job never says "Start": a code whose own next step is that says "Try again" there', () => {
+    const state: LocalModelStateFile = { ...SAMPLE.failed, error: { code: 'runtime-stopped', detail: 'ECONNREFUSED' } };
+    expect(buildInstallView(state, LIVE).error).toEqual({
+      code: 'runtime-stopped',
+      message: { text: 'The runtime keeps stopping, so Codeman no longer restarts it.' },
+      next: 'retry',
+      detail: 'ECONNREFUSED',
+    });
+    // Every next step a failed job is shown with is one its actions can carry out.
+    for (const code of Object.keys(LOCAL_MODEL_ERROR_NEXT) as LocalModelErrorCode[]) {
+      const next = buildInstallView({ ...SAMPLE.failed, error: { code } }, LIVE).error?.next;
+      expect(next, code).not.toBe('start');
+    }
   });
 
   it('a next model is named only for an error whose next step is another model', () => {

@@ -708,7 +708,7 @@ describe('judgeLoaded', () => {
     expect(judged).toEqual({
       ok: false,
       code: 'does-not-fit',
-      detail: '20000000000 of 23205798956 bytes are on the GPU',
+      detail: '20.0 of 23.2 GB of the model are on the GPU',
     });
     // One byte is enough.
     expect(judgeLoaded([loaded({ sizeVram: 23_205_798_955 })], MODEL, CONTEXT)).toMatchObject({ code: 'does-not-fit' });
@@ -885,7 +885,7 @@ describe('verifyModel', () => {
     expect(await verifyModel(target, MODEL, CONTEXT)).toEqual({
       ok: false,
       code: 'does-not-fit',
-      detail: '18000000000 of 23205798956 bytes are on the GPU',
+      detail: '18.0 of 23.2 GB of the model are on the GPU',
     });
     expect(server.requests.filter((r) => r.path === '/v1/chat/completions')).toHaveLength(1);
   });

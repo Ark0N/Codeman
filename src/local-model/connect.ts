@@ -15,6 +15,15 @@
  * Rules:
  *  - The id is reserved. A record with it that this feature did not write is never
  *    overwritten: the connect step fails with `endpoint-id-taken`.
+ *  - The connection is CLAIMED before it is written: the install job records `connection` in
+ *    the state file first (`inspectLocalEndpoint()` tells it what is there and what the flag
+ *    is), then calls `connectLocalModel()` with `ours: true`. A state write that fails, or a
+ *    server that is killed between the two, therefore never leaves a record of ours that the
+ *    state file does not know: the worst case is a claim with nothing behind it, which a
+ *    resumed job fills in and Remove undoes.
+ *  - Second net: a record with the reserved id that already says exactly what ours would say
+ *    (`isSameLocalEndpoint()`) is ours whatever `ours` says. Nobody else can have made it: the
+ *    endpoint routes refuse the reserved id.
  *  - Both writes are idempotent, so a resumed job writes them again.
  *  - Undoing removes our record, and switches the flag off again only when this feature
  *    switched it on AND no other endpoint is saved.
@@ -27,7 +36,10 @@
 
 import { mutateCustomModelHosts } from '../custom-model-hosts-writer.js';
 import type { CustomModelHost } from '../custom-model-hosts.js';
+import { getDataDir } from '../config/instance.js';
+import { readCustomModelHosts } from '../custom-model-hosts.js';
 import { getErrorMessage, type LocalModelErrorCode } from '../types.js';
+import { readJsonConfig, SETTINGS_PATH } from '../web/route-helpers.js';
 import { CustomModelHostSchema } from '../web/schemas.js';
 import { mutateSettingsFile } from '../web/settings-writer.js';
 import { readLocalModelState } from './state-store.js';
@@ -63,10 +75,58 @@ export function buildLocalEndpointRecord(input: LocalEndpointInput): CustomModel
   };
 }
 
+/**
+ * Whether a saved record says exactly what our record for `input` says: the same address, the
+ * one model, its context, no key. What discovery may have added to it (context lengths, a
+ * time stamp) does not count. Pure.
+ */
+export function isSameLocalEndpoint(host: CustomModelHost, input: LocalEndpointInput): boolean {
+  const ours = buildLocalEndpointRecord(input);
+  return (
+    host.id === ours.id &&
+    host.label === ours.label &&
+    host.baseUrl === ours.baseUrl &&
+    host.authStyle === ours.authStyle &&
+    host.apiKey === undefined &&
+    Array.isArray(host.models) &&
+    host.models.length === 1 &&
+    host.models[0] === input.modelId &&
+    host.defaultModelId === ours.defaultModelId &&
+    host.defaultContextLength === ours.defaultContextLength
+  );
+}
+
+/** What the connect step finds before it claims the connection. */
+export interface LocalEndpointInspection {
+  /**
+   * The saved record with the reserved id: there is none, it says what ours would say, or it
+   * says something else (somebody else's: `endpoint-id-taken`).
+   */
+  record: 'absent' | 'same' | 'other';
+  /** `customModelEndpointsEnabled` right now: what the claim keeps as the value before this feature. */
+  flagEnabled: boolean;
+}
+
+/**
+ * Looks at the endpoint store and the settings flag WITHOUT writing either. The install job
+ * calls it before it claims the connection in the state file. Rejects when the endpoint store
+ * cannot be read; a settings file that cannot be read counts as "the flag is off".
+ */
+export async function inspectLocalEndpoint(input: LocalEndpointInput): Promise<LocalEndpointInspection> {
+  const hosts = await readCustomModelHosts(getDataDir());
+  const existing = hosts.find((host) => host.id === LOCAL_MODEL_ENDPOINT_ID);
+  const settings = await readJsonConfig<Record<string, unknown>>(SETTINGS_PATH, 'settings.json', {});
+  return {
+    record: !existing ? 'absent' : isSameLocalEndpoint(existing, input) ? 'same' : 'other',
+    flagEnabled: settings[ENDPOINTS_FLAG] === true,
+  };
+}
+
 export interface ConnectLocalModelInput extends LocalEndpointInput {
   /**
    * True when the state file already records a connection of ours: an existing record with
-   * our id is then ours and is replaced. False: such a record is somebody else's.
+   * our id is then ours and is replaced. False: such a record is somebody else's, unless it
+   * says exactly what ours would say (`isSameLocalEndpoint()`).
    */
   ours: boolean;
   /**
@@ -106,7 +166,7 @@ export async function connectLocalModel(input: ConnectLocalModelInput): Promise<
     outcome = await mutateCustomModelHosts<'added' | 'replaced' | 'taken'>((hosts) => {
       const index = hosts.findIndex((host) => host.id === record.id);
       if (index === -1) return { hosts: [...hosts, record], result: 'added' };
-      if (!input.ours) return { result: 'taken' };
+      if (!input.ours && !isSameLocalEndpoint(hosts[index], input)) return { result: 'taken' };
       const next = [...hosts];
       next[index] = record;
       return { hosts: next, result: 'replaced' };
@@ -158,13 +218,17 @@ async function removeLocalEndpoint(): Promise<number> {
   });
 }
 
-/** Moves our record to another port (the answer to "Use another port" once connected). A missing record is not an error. */
+/**
+ * Moves our record to another port (the answer to "Use another port" once connected). A
+ * missing record is not an error, and a record that is already there is not written again.
+ */
 export async function moveLocalEndpoint(port: number): Promise<void> {
+  const baseUrl = `http://127.0.0.1:${port}`;
   await mutateCustomModelHosts<void>((hosts) => {
     const index = hosts.findIndex((host) => host.id === LOCAL_MODEL_ENDPOINT_ID);
-    if (index === -1) return { result: undefined };
+    if (index === -1 || hosts[index].baseUrl === baseUrl) return { result: undefined };
     const next = [...hosts];
-    next[index] = { ...next[index], baseUrl: `http://127.0.0.1:${port}` };
+    next[index] = { ...next[index], baseUrl };
     return { hosts: next, result: undefined };
   });
 }

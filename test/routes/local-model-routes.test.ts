@@ -657,20 +657,43 @@ describe('the install verbs', () => {
       expect(f.service.install).toHaveBeenCalledWith(INSTALL_BODY, { username: 'alice', ip: '127.0.0.1' });
     });
 
-    it('a row the server does not offer is a 400 with the service own sentence', async () => {
+    it('a row the server does not offer is a 400 with the service own sentence, as text and as data', async () => {
       const f = fakes();
       f.service.install.mockResolvedValue({
         ok: false,
         status: 400,
-        message: 'This model at this context is not offered for this Mac right now.',
+        message: { text: LOCAL_MODEL_INSTALL_LABELS.refusedAgentNotInstallable, vars: { cli: 'OpenCode' } },
       });
       const { app } = await harness(f.deps);
       const res = await app.inject({ method: 'POST', url: '/api/local-model/install', payload: INSTALL_BODY });
       expect(res.statusCode).toBe(400);
+      // `error` is the English sentence with its slots filled; `data.message` is the sentence
+      // with its slots apart, which the window prints in its own language.
       expect(res.json()).toEqual({
         success: false,
-        error: 'This model at this context is not offered for this Mac right now.',
+        error: 'OpenCode is not installed and cannot be installed from here.',
         errorCode: 'INVALID_INPUT',
+        data: {
+          message: { text: '{cli} is not installed and cannot be installed from here.', vars: { cli: 'OpenCode' } },
+        },
+      });
+    });
+
+    it('a first install on a full disk is a 507 with the sentence, not a 500', async () => {
+      const f = fakes();
+      f.service.install.mockResolvedValue({
+        ok: false,
+        status: 507,
+        message: { text: LOCAL_MODEL_INSTALL_LABELS.errDiskFull },
+      });
+      const { app } = await harness(f.deps);
+      const res = await app.inject({ method: 'POST', url: '/api/local-model/install', payload: INSTALL_BODY });
+      expect(res.statusCode).toBe(507);
+      expect(res.json()).toEqual({
+        success: false,
+        error: 'The disk is full. Free up space, then try again.',
+        errorCode: 'OPERATION_FAILED',
+        data: { message: { text: 'The disk is full. Free up space, then try again.' } },
       });
     });
 
@@ -741,6 +764,46 @@ describe('the install verbs', () => {
       await app.inject({ method: 'POST', url: '/api/local-model/resume', payload: { newPort: true } });
       expect(f.service.resume.mock.calls.map(([body]) => body)).toEqual([{}, {}, { newPort: true }]);
       expect(f.service.resume.mock.calls[0][1]).toEqual({ username: 'admin', ip: '127.0.0.1' });
+    });
+
+    it('resume and runtime hand the service the live sessions on the model, read at the moment of the request', async () => {
+      const f = fakes();
+      const sessions = new Map<string, SessionLike>([
+        ['a', { name: 'w1-app', customModel: { endpointId: 'local-ollama' } }],
+        ['b', { name: 'w2-app', customModel: { endpointId: 'office-gpu' } }],
+      ]);
+      const { app } = await createRouteTestHarness((instance) =>
+        registerLocalModelRoutes(instance, { sessions }, f.deps)
+      );
+      await app.inject({ method: 'POST', url: '/api/local-model/runtime', payload: { action: 'stop' } });
+      await app.inject({ method: 'POST', url: '/api/local-model/resume', payload: { newPort: true } });
+      sessions.delete('a');
+      await app.inject({ method: 'POST', url: '/api/local-model/runtime', payload: { action: 'stop' } });
+      expect(f.service.runtime.mock.calls.map((args) => args[1])).toEqual([['w1-app'], []]);
+      expect(f.service.resume.mock.calls[0][2]).toEqual(['w1-app']);
+    });
+
+    it('a stop while a live session uses the model: 409 with the session names', async () => {
+      const f = fakes();
+      f.service.runtime.mockImplementation(async (_request, names = []) => ({
+        ok: false,
+        status: 409,
+        conflict: {
+          reason: 'sessions-open',
+          message: { text: LOCAL_MODEL_INSTALL_LABELS.conflictSessionsOpen, vars: { sessions: names.join(', ') } },
+          sessions: [...names],
+        },
+      }));
+      const { app } = await harness(f.deps, undefined, [
+        { name: 'w1-app', customModel: { endpointId: 'local-ollama' } },
+      ]);
+      const res = await app.inject({ method: 'POST', url: '/api/local-model/runtime', payload: { action: 'stop' } });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({
+        errorCode: 'CONFLICT',
+        error: 'Sessions are still using this model: w1-app. Close them first.',
+        data: { reason: 'sessions-open', sessions: ['w1-app'] },
+      });
     });
 
     it('resume refuses a body it does not know', async () => {

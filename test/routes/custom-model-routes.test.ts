@@ -777,7 +777,7 @@ describe('the endpoint the local model install manages', () => {
     });
     expect(res.json()).toEqual({
       success: false,
-      error: 'The endpoint id "local-ollama" is reserved for the model Codeman runs on this Mac. Pick another id.',
+      error: 'This endpoint id is reserved for the model Codeman runs on this Mac. Pick another id.',
       errorCode: 'INVALID_INPUT',
     });
     expect(await readCustomModelHosts(getDataDir())).toEqual([]);
