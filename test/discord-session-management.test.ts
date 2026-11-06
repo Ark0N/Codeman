@@ -103,7 +103,9 @@ it('lists and locates existing sessions without model work and refuses lifecycle
   const { manager, deps, disallow } = setup();
   expect((await manager.control('scope', 'sessions'))?.text).toContain('Work');
   expect((await manager.control('scope', 'open s1'))?.locateSessionId).toBe('s1');
-  await manager.control('scope', 'reconnect s1');
+  const review = await manager.control('scope', 'reconnect s1');
+  expect(deps.reconnect).not.toHaveBeenCalled();
+  await manager.control('scope', review!.actions![0].command);
   expect(deps.reconnect).toHaveBeenCalledExactlyOnceWith('s1');
   expect(deps.create).not.toHaveBeenCalled();
   disallow();

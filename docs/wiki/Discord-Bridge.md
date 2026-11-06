@@ -15,8 +15,8 @@ and it works when you are away from your network.
 - **Alerts** for permission prompts, questions, idle sessions, errors and a stopped crash loop. A
   question or permission prompt shows what is on the tab's screen right now, so you can see what is
   being asked; a finished turn or an error carries the CLI's whole last message.
-- **One thread per tab** in a parent channel, so a reply always reaches exactly one session.
-- **Replies** from an allowed user are typed into that tab as one line plus Enter (a single digit answering a waiting permission or question goes as the key alone, without Enter).
+- **One thread per tab**: under a parent channel in Notifications, or under its private case channel in Full. Replies always reach exactly one session.
+- **Replies** from an allowed user preserve printable multiline text as one paste plus Enter (a single digit answering a waiting permission or question goes as the key alone, without Enter).
 - **Files** you attach are saved in the tab's folder and the agent is given the path. An agent can
   send a file back.
 - **Agents can ask for you.** `codeman notify "Press the reset button on the case" --urgent`
@@ -87,9 +87,17 @@ Discord for them; only the agent-initiated `codeman notify` habit is missing.
 
 - Only user IDs on the allowlist, in your server, inside a thread Codeman made, are acted on.
   Everything else is dropped.
-- A reply is cut to one printable line (1000 characters) and limited to one per second per tab.
+- Replies preserve printable multiline text as one paste, with a 20,000-character cap and one-per-second session limit. Pending dialog answers use verified key-only controls.
 - Posts can ping only the allowlisted users, so agent output cannot ping the whole server.
 - A Discord outage or a bad token never affects a session; it backs off, and the last error shows in Settings.
+
+## Full mode
+
+Notifications is the default. Choose **Full** in Settings to provision one private case channel and one session thread per tab. Use `!codeman help`, `sessions`, `cases`, `groups`, `status`, `history`, `transcript`, `pending` and `stream responses|verbose|off`. Creation uses the same case-aware quick-start as the web UI. Reconnect asks for confirmation and requires the original remote agent to exist; interrupt sends Escape.
+
+Full adds native Claude/Codex live responses, file controls, activity titles and typing. Local history needs no Python; remote history/file helpers need Python 3 on that host. Remote uploads save only explicit incoming attachments in the session workspace's `.codeman-discord/` folder. Shell and Docker tabs can have destinations without native history. An uncertain post or an expired history cursor produces a catch-up notice; later responses continue. `stream off` survives `/clear` and other conversation changes.
+
+Names may lag under Discord's rename limits; typing is independent. Shared case channels survive session deletion. Conversation cursors are deleted with the session, and finished metadata ages out after seven days.
 
 ## Troubleshooting
 

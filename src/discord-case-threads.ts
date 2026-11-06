@@ -1,4 +1,4 @@
-/** One owned channel per case, one exact, durable starter-message thread per live session. */
+/** @fileoverview One owned channel per case, one exact, durable starter-message thread per live session. */
 import fs from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -9,6 +9,7 @@ import {
   type DiscordChannelApi,
   type DiscordManagedChannel,
 } from './discord-session-channels.js';
+import { discordThreadName } from './discord-activity.js';
 import type { DiscordCaseIdentity } from './discord-case-identity.js';
 export interface DiscordStarter {
   id: string;
@@ -38,6 +39,7 @@ interface Entry extends DiscordChannelScope {
   parentId: string;
   intent: string;
   createdAt: number;
+  finishedAt?: number;
   starterId?: string;
   phase: 'intent' | 'posting' | 'thread' | 'active' | 'retiring' | 'kept' | 'archived' | 'deleted';
   policy?: Policy;
@@ -47,16 +49,13 @@ interface State {
   entries: Record<string, Entry>;
   current: Record<string, string>;
   deleted: Record<string, Policy>;
+  deletedAt?: Record<string, number>;
 }
 const snow = (v: unknown): v is string => typeof v === 'string' && /^\d{15,25}$/.test(v);
 const scopeKey = (s: DiscordChannelScope, id: string) => JSON.stringify([s.guildId, s.categoryId, id]);
 const entryKey = (s: DiscordChannelScope, caseKey: string, id: string) =>
   JSON.stringify([s.guildId, s.categoryId, caseKey, id]);
-const safeName = (name: string) =>
-  name
-    .replace(/[\r\n<>`*_]/g, ' ')
-    .trim()
-    .slice(0, 100) || 'session';
+const safeName = discordThreadName;
 const slug = (name: string | undefined) =>
   (name ?? 'case')
     .toLowerCase()
@@ -70,6 +69,7 @@ export class DiscordCaseThreads {
   private pending = new Map<string, Promise<string>>();
   private retirement?: Promise<void>;
   private me?: Promise<string>;
+  private renameRetryAt = new Map<string, number>();
   private readonly parents: DiscordSessionChannels;
   constructor(
     private readonly dir: string,
@@ -140,6 +140,7 @@ export class DiscordCaseThreads {
             e.caseName.length > 100 ||
             !/^[a-f0-9-]{36}$/.test(e.intent) ||
             !Number.isFinite(e.createdAt) ||
+            (e.finishedAt !== undefined && !Number.isFinite(e.finishedAt)) ||
             (e.starterId !== undefined && !snow(e.starterId)) ||
             !['intent', 'posting', 'thread', 'active', 'retiring', 'kept', 'archived', 'deleted'].includes(e.phase) ||
             (e.phase === 'active' && !e.starterId) ||
@@ -152,6 +153,15 @@ export class DiscordCaseThreads {
         }
         for (const [id, policy] of Object.entries(raw.deleted))
           if (!id || id.length > 100 || !['keep', 'archive', 'delete'].includes(policy)) throw new Error();
+        if (
+          raw.deletedAt !== undefined &&
+          (typeof raw.deletedAt !== 'object' ||
+            Array.isArray(raw.deletedAt) ||
+            !raw.deletedAt ||
+            Object.keys(raw.deletedAt).length > 4096 ||
+            Object.values(raw.deletedAt).some((v) => !Number.isFinite(v)))
+        )
+          throw new Error();
         this.state = raw;
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code !== 'ENOENT')
@@ -163,6 +173,28 @@ export class DiscordCaseThreads {
     const run = this.writes.then(async () => {
       await this.load();
       const next = structuredClone(this.state);
+      const cutoff = this.now() - 7 * 86400000;
+      for (const [key, e] of Object.entries(next.entries)) {
+        if (
+          ['kept', 'archived', 'deleted'].includes(e.phase) &&
+          (e.finishedAt ?? e.createdAt) < cutoff &&
+          !this.pending.has(scopeKey(e, e.sessionId))
+        )
+          delete next.entries[key];
+      }
+      for (const [key, value] of Object.entries(next.current)) if (!next.entries[value]) delete next.current[key];
+      next.deletedAt ??= {};
+      for (const id of Object.keys(next.deleted)) {
+        next.deletedAt[id] ??= this.now();
+        if (
+          next.deletedAt[id] < cutoff &&
+          !Object.values(next.entries).some((e) => e.sessionId === id) &&
+          ![...this.pending.keys()].some((key) => JSON.parse(key)[2] === id)
+        ) {
+          delete next.deleted[id];
+          delete next.deletedAt[id];
+        }
+      }
       fn(next);
       if (
         Object.keys(next.entries).length > 4096 ||
@@ -324,7 +356,17 @@ export class DiscordCaseThreads {
       try {
         const thread = await this.verify(e, true);
         const desired = safeName(name ?? id.slice(0, 8));
-        if (thread.name !== desired) await this.api.edit(thread.id, { name: desired });
+        if (thread.name !== desired && (this.renameRetryAt.get(thread.id) ?? 0) <= this.now()) {
+          try {
+            await this.api.edit(thread.id, { name: desired });
+          } catch (error) {
+            const delay = (error as { retryAfterMs?: number }).retryAfterMs;
+            this.renameRetryAt.set(
+              thread.id,
+              this.now() + (typeof delay === 'number' && Number.isFinite(delay) && delay > 0 ? delay : 600000)
+            );
+          }
+        }
         if (!this.active(this.state.entries[key], key)) throw new DiscordChannelProblem('Session was closed');
         return thread.id;
       } catch (err) {
@@ -424,10 +466,15 @@ export class DiscordCaseThreads {
     await this.load();
     await this.edit((s) => {
       Object.defineProperty(s.deleted, id, { value: policy, enumerable: true, configurable: true, writable: true });
+      s.deletedAt ??= {};
+      s.deletedAt[id] = this.now();
+      for (const [key, value] of Object.entries(s.current))
+        if (s.entries[value]?.sessionId === id) delete s.current[key];
       for (const e of Object.values(s.entries))
         if (e.sessionId === id && ['active', 'intent', 'posting', 'thread'].includes(e.phase)) {
           e.policy = policy;
           e.phase = policy === 'keep' ? 'kept' : 'retiring';
+          e.finishedAt = this.now();
         }
     });
     if (guild) await this.flushRetirements(guild);
@@ -462,6 +509,7 @@ export class DiscordCaseThreads {
       if ((err as { status?: number }).status !== 404) throw err;
       await this.edit((s) => {
         s.entries[key].phase = 'deleted';
+        s.entries[key].finishedAt = this.now();
       });
       return;
     }
@@ -469,6 +517,7 @@ export class DiscordCaseThreads {
     else if (e.policy === 'archive') await this.api.edit(e.starterId, { archived: true });
     await this.edit((s) => {
       s.entries[key].phase = e.policy === 'delete' ? 'deleted' : e.policy === 'archive' ? 'archived' : 'kept';
+      s.entries[key].finishedAt = this.now();
     });
   }
 }

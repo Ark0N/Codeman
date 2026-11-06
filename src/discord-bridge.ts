@@ -1,12 +1,3 @@
-import { formatDiscordTables } from './discord-tables.js';
-export { formatDiscordTables } from './discord-tables.js';
-import { discordDisplayText } from './discord-display-text.js';
-import { DiscordCaseCategories } from './discord-case-categories.js';
-import { DiscordCaseThreads, type DiscordStarter } from './discord-case-threads.js';
-import type { DiscordCaseIdentity } from './discord-case-identity.js';
-import { hashDiscordPrompt } from './discord-native-execution.js';
-import { DiscordConversationProgressStore } from './discord-conversation-progress.js';
-import { renderHistory } from './discord-history.js';
 /**
  * @fileoverview Two-way Discord bridge: one thread per tab, alerts out, replies typed back in.
  *
@@ -28,7 +19,15 @@ import { renderHistory } from './discord-history.js';
  *
  * @module discord-bridge
  */
-
+import { formatDiscordTables } from './discord-tables.js';
+export { formatDiscordTables } from './discord-tables.js';
+import { discordDisplayText } from './discord-display-text.js';
+import { DiscordCaseCategories } from './discord-case-categories.js';
+import { DiscordCaseThreads, type DiscordStarter } from './discord-case-threads.js';
+import type { DiscordCaseIdentity } from './discord-case-identity.js';
+import { hashDiscordPrompt } from './discord-native-execution.js';
+import { DiscordConversationProgressStore } from './discord-conversation-progress.js';
+import { renderHistory } from './discord-history.js';
 import { existsSync, mkdirSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
@@ -90,7 +89,6 @@ export const DEFAULT_DISCORD_CONFIG: DiscordConfig = {
   enabled: false,
   mode: 'notifications',
   categoryId: '',
-  onChannelDelete: 'keep',
   token: '',
   guildId: '',
   parentChannelId: '',
@@ -387,7 +385,6 @@ function coerce(raw: unknown): DiscordConfig {
     enabled: r.enabled === true,
     mode: oneOf(DISCORD_MODES, r.mode, d.mode),
     categoryId: typeof r.categoryId === 'string' ? r.categoryId : '',
-    onChannelDelete: oneOf(['keep', 'retain', 'delete'] as const, r.onChannelDelete, d.onChannelDelete),
     token: typeof r.token === 'string' ? r.token : '',
     guildId: typeof r.guildId === 'string' ? r.guildId : '',
     parentChannelId: typeof r.parentChannelId === 'string' ? r.parentChannelId : '',
@@ -416,6 +413,7 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
 
 /** A failure with a reason worth showing as it is (unlike a network error, whose text is not). */
 class BridgeProblem extends Error {}
+class UncertainDiscordDelivery extends BridgeProblem {}
 
 export async function readDiscordConfig(configDir: string): Promise<DiscordConfig> {
   try {
@@ -517,10 +515,12 @@ export class DiscordHttpError extends Error {
 
 /** Thin REST client. The token goes only in the Authorization header and never into a message. */
 export class DiscordApi {
+  private cosmeticRenames = new Map<string, { attempts: number[]; retryAt: number }>();
   constructor(
     private readonly token: () => string,
     private readonly fetchImpl: DiscordFetch,
-    private readonly sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms))
+    private readonly sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
+    private readonly now: () => number = Date.now
   ) {}
 
   async request<T = unknown>(
@@ -534,6 +534,24 @@ export class DiscordApi {
     if (current && !current()) return null;
     const isForm = typeof FormData !== 'undefined' && body instanceof FormData;
     const payload = isForm ? JSON.parse(String((body as FormData).get('payload_json') ?? '{}')) : body;
+    const cosmeticRename =
+      deferRateLimit &&
+      method === 'PATCH' &&
+      /^\/channels\/\d+$/.test(path) &&
+      typeof (payload as { name?: unknown } | undefined)?.name === 'string';
+    if (cosmeticRename) {
+      const now = this.now();
+      for (const [key, value] of this.cosmeticRenames)
+        if (value.retryAt <= now && value.attempts.every((t) => now - t > 600001)) this.cosmeticRenames.delete(key);
+      const budget = this.cosmeticRenames.get(path) ?? { attempts: [], retryAt: 0 };
+      budget.attempts = budget.attempts.filter((t) => now - t <= 600001);
+      const retryAt = Math.max(budget.retryAt, budget.attempts.length >= 2 ? budget.attempts[0] + 600002 : 0);
+      if (retryAt > now) throw new DiscordHttpError(429, undefined, retryAt - now);
+      if (!this.cosmeticRenames.has(path) && this.cosmeticRenames.size >= 4096)
+        throw new DiscordHttpError(429, undefined, 600002);
+      budget.attempts.push(now);
+      this.cosmeticRenames.set(path, budget);
+    }
     const retrySafe = method !== 'POST' || !!(payload as DiscordPost | undefined)?.enforce_nonce;
     let res: Response;
     try {
@@ -564,6 +582,7 @@ export class DiscordApi {
       );
       const delay = seconds > 0 ? Math.max(seconds * 1000, 100) : 1000;
       // Never retry earlier than Discord permits. A longer wait is surfaced instead of blocking a session chain.
+      if (cosmeticRename) this.cosmeticRenames.get(path)!.retryAt = this.now() + delay;
       if (deferRateLimit || attempt >= 2 || delay > 30_000) throw new DiscordHttpError(429, j.code, delay);
       await this.sleep(delay);
       return this.request<T>(method, path, body, attempt + 1, current, deferRateLimit);
@@ -603,7 +622,7 @@ export class DiscordApi {
     return this.request('POST', `/guilds/${id}/channels`, body);
   }
   editChannel(id: string, body: Record<string, unknown>): Promise<unknown> {
-    return this.request('PATCH', `/channels/${id}`, body);
+    return this.request('PATCH', `/channels/${id}`, body, 0, undefined, typeof body.name === 'string');
   }
   post(channelId: string, p: DiscordPost): Promise<{ id: string } | null> {
     return this.request('POST', `/channels/${channelId}/messages`, {
@@ -924,10 +943,21 @@ export interface DiscordBridgeDeps {
     sessionId: string,
     options?: { includeTools?: boolean }
   ) => Promise<import('./discord-history.js').DiscordHistory>;
-  saveRemoteAttachment?: (sessionId: string, name: string, bytes: Uint8Array) => Promise<string>;
+  saveRemoteAttachment?: (
+    sessionId: string,
+    name: string,
+    bytes: Uint8Array,
+    current: () => boolean
+  ) => Promise<string>;
   getAttachment?: (sessionId: string, path: string) => Promise<DiscordFile>;
   /** Snapshot only: never discovers or starts agents. Called after restoration is released. */
-  sessions?: () => Array<{ id: string; name?: string; remote?: boolean; working?: boolean }>;
+  sessions?: () => Array<{
+    id: string;
+    name?: string;
+    remote?: boolean;
+    working?: boolean;
+    historyAvailable?: boolean;
+  }>;
   socketFactory?: SocketFactory;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
@@ -984,6 +1014,7 @@ export class DiscordBridge {
   private readonly api: DiscordApi;
   private readonly now: () => number;
   private readonly deliveries: DiscordDeliveryJournal;
+  private liveSessions = new Set<string>();
   private readonly channels: DiscordCaseThreads;
   private readonly categories: DiscordCaseCategories;
   private readonly conversationProgress: DiscordConversationProgressStore;
@@ -991,9 +1022,9 @@ export class DiscordBridge {
 
   constructor(private readonly deps: DiscordBridgeDeps) {
     this.now = deps.now ?? Date.now;
-    this.conversationProgress = new DiscordConversationProgressStore(deps.configDir);
+    this.conversationProgress = new DiscordConversationProgressStore(deps.configDir, this.now);
     this.deliveries = new DiscordDeliveryJournal(deps.configDir, this.now);
-    this.api = new DiscordApi(() => this.cfg.token, deps.fetchImpl, deps.sleep);
+    this.api = new DiscordApi(() => this.cfg.token, deps.fetchImpl, deps.sleep, this.now);
     this.categories = new DiscordCaseCategories(deps.configDir);
     this.channels = new DiscordCaseThreads(
       deps.configDir,
@@ -1033,7 +1064,9 @@ export class DiscordBridge {
     );
     this.activity = new DiscordActivity({
       scope: () =>
-        !this.stopped && !this.held && this.cfg.enabled && this.cfg.token ? this.destinationScope() : undefined,
+        !this.stopped && !this.held && this.cfg.enabled && this.cfg.mode === 'full' && this.cfg.token
+          ? this.destinationScope()
+          : undefined,
       sessions: () => this.activitySessions(),
       destination: (id) =>
         this.cfg.mode === 'full' ? this.channels.channelForSession(this.cfg, id) : this.threads[id],
@@ -1097,6 +1130,10 @@ export class DiscordBridge {
     });
   }
 
+  /** Opaque revision for cancelling in-flight lifecycle operations after a settings change. */
+  get controlScope(): string {
+    return createHash('sha256').update(JSON.stringify(this.cfg)).digest('hex');
+  }
   get acceptsControls(): boolean {
     return !this.stopped && this.cfg.enabled && this.cfg.mode === 'full' && !!this.cfg.token;
   }
@@ -1175,7 +1212,7 @@ export class DiscordBridge {
         if (typeof result === 'string') {
           this.syncState.ready++;
           try {
-            await this.seedConversation(session.id, result);
+            if (session.historyAvailable !== false) await this.seedConversation(session.id, result);
           } catch {
             this.syncState.failed++;
             this.last = this.fail(
@@ -1199,6 +1236,15 @@ export class DiscordBridge {
           this.last = result;
         }
       }
+      if (this.cfg.enabled && this.cfg.mode === 'full' && parent === this.destinationScope()) {
+        const keys = new Set(
+          sessions.flatMap((session) => {
+            const channel = this.channels.channelForSession(this.cfg, session.id);
+            return channel ? [this.conversationKey(session.id, channel)] : [];
+          })
+        );
+        await this.conversationProgress.reconcile(keys);
+      }
       this.syncState.state = this.syncState.failed ? 'error' : 'complete';
     } catch {
       this.syncState.state = 'error';
@@ -1213,21 +1259,26 @@ export class DiscordBridge {
       .digest('hex');
   }
   /** No body is persisted: only exact native cursors and per-turn confirmed delivery progress. */
-  private seedConversation(sessionId: string, channel: string): Promise<void> {
+  private seedConversation(sessionId: string, channel: string, live = false): Promise<void> {
     if (!this.deps.history || this.cfg.mode !== 'full') return Promise.resolve();
     const key = this.conversationKey(sessionId, channel);
+    if (live) this.liveSessions.add(sessionId);
     const pending = this.conversationRuns.get(key);
     if (pending) return pending;
     const run = (async () => {
       const history = await this.deps.history!(sessionId);
       let progress = await this.conversationProgress.get(key);
+      live ||= this.liveSessions.has(sessionId);
       if (!progress || progress.conversationId !== history.conversationId) {
         progress = {
           conversationId: history.conversationId,
-          seed: history.turns.slice(-6).map((t) => t.cursor),
+          sessionId,
+          seed: live || progress?.streamOff ? [] : history.turns.slice(-6).map((t) => t.cursor),
           seedIndex: 0,
-          seeded: false,
-          cursor: history.turns.at(-1)?.cursor,
+          seeded: live || !!progress?.streamOff,
+          cursor: live ? undefined : history.turns.at(-1)?.cursor,
+          streamOff: progress?.streamOff,
+          verbose: progress?.verbose,
         };
         await this.conversationProgress.set(key, progress);
       }
@@ -1241,7 +1292,12 @@ export class DiscordBridge {
         )
           throw new BridgeProblem('Session changed during history sync');
         const turn = history.turns.find((t) => t.cursor === progress!.seed[i]);
-        if (!turn) throw new BridgeProblem('Historical boundary expired; use !codeman history for catch-up');
+        if (!turn) {
+          progress = { ...progress, seed: [], seedIndex: 0, seeded: true, cursor: history.turns.at(-1)?.cursor };
+          await this.conversationProgress.set(key, progress);
+          await this.catchupNotice(sessionId, channel);
+          return;
+        }
         const visible = formatDiscordTables(turn.role === 'assistant' ? discordDisplayText(turn.text) : turn.text);
         if (!visible.trim()) {
           progress = { ...progress, seedIndex: i + 1 };
@@ -1254,13 +1310,21 @@ export class DiscordBridge {
           '\n' +
           renderHistory([{ ...turn, text: clip(visible, 1000) }], { includeTimestamps: false }) +
           '\n`!codeman history` / `!codeman transcript` for more';
-        await this.deliverPost(
-          channel,
-          { content: text, allowed_mentions: { parse: [], users: [] } },
-          undefined,
-          sessionId,
-          `history:${turn.cursor}`
-        );
+        try {
+          await this.deliverPost(
+            channel,
+            { content: text, allowed_mentions: { parse: [], users: [] } },
+            undefined,
+            sessionId,
+            `history:${turn.cursor}`
+          );
+        } catch (error) {
+          if (!(error instanceof UncertainDiscordDelivery)) throw error;
+          // Never replay an ambiguous send, but do not wedge later turns.
+          progress = { ...progress, seedIndex: i + 1 };
+          await this.conversationProgress.set(key, progress);
+          await this.catchupNotice(sessionId, channel);
+        }
         progress = { ...progress, seedIndex: i + 1 };
         await this.conversationProgress.set(key, progress);
       }
@@ -1286,6 +1350,7 @@ export class DiscordBridge {
     this.outputIndex = (this.outputIndex + batch.length) % sessions.length;
     const reads: Promise<void>[] = [];
     for (const session of batch) {
+      if (session.historyAvailable === false) continue;
       if (this.outputReads.has(session.id) || (this.outputDue.get(session.id) ?? 0) > this.now()) continue;
       const remote = !!session.remote;
       if ([...this.outputReads.values()].filter((r) => r.remote === remote).length >= (remote ? 2 : 4)) continue;
@@ -1311,8 +1376,8 @@ export class DiscordBridge {
     }
     await Promise.all(reads);
   }
-  private async observeConversation(sessionId: string, channel: string): Promise<void> {
-    await this.seedConversation(sessionId, channel);
+  private async observeConversation(sessionId: string, channel: string, live = false): Promise<void> {
+    await this.seedConversation(sessionId, channel, live);
     const key = this.conversationKey(sessionId, channel);
     const active = this.conversationRuns.get(key);
     if (active) {
@@ -1323,12 +1388,17 @@ export class DiscordBridge {
       let progress = await this.conversationProgress.get(key);
       if (!progress?.seeded) return;
       if (progress.streamOff) return;
-      const history = await this.deps.history!(sessionId, { includeTools: progress.verbose });
+      const history = await this.deps.history!(sessionId, { includeTools: true });
       if (history.conversationId !== progress.conversationId)
         throw new BridgeProblem('Conversation changed; synchronize history first');
       await this.deliveries.reconcileNative(sessionId, history);
       const at = progress.cursor ? history.turns.findIndex((t) => t.cursor === progress!.cursor) : -1;
-      if (progress.cursor && at < 0) throw new BridgeProblem('Live boundary expired; request history');
+      if (progress.cursor && at < 0) {
+        progress = { ...progress, cursor: history.turns.at(-1)?.cursor };
+        await this.conversationProgress.set(key, progress);
+        await this.catchupNotice(sessionId, channel);
+        return;
+      }
       for (const turn of history.turns.slice(at + 1, at + 21)) {
         if (
           this.stopped ||
@@ -1337,26 +1407,33 @@ export class DiscordBridge {
           !this.destinationMatches(sessionId, channel)
         )
           throw new BridgeProblem('Session changed');
-        if (turn.role === 'assistant' || (turn.role === 'tool' && progress.verbose)) {
-          const visible = turn.role === 'assistant' ? discordDisplayText(turn.text) : turn.text;
-          const formatted = formatDiscordTables((turn.role === 'tool' ? '**Tool output**\n' : '') + visible);
-          const chunks = splitForDiscord(formatted);
-          for (const [i, content] of chunks.entries())
-            await this.deliverPost(
-              channel,
-              { content, allowed_mentions: { parse: [], users: [] } },
-              undefined,
-              sessionId,
-              `native:${turn.cursor}:${i}`
-            );
-          if (visible.length > 12000 || formatted.length > 12000)
-            await this.deliverPost(
-              channel,
-              { content: 'Full user-visible response', allowed_mentions: { parse: [], users: [] } },
-              { name: 'response.txt', data: Buffer.from(visible) },
-              sessionId,
-              `native:${turn.cursor}:overflow`
-            );
+        try {
+          if (turn.role === 'assistant' || (turn.role === 'tool' && progress.verbose)) {
+            const visible = turn.role === 'assistant' ? discordDisplayText(turn.text) : turn.text;
+            const formatted = formatDiscordTables((turn.role === 'tool' ? '**Tool output**\n' : '') + visible);
+            const chunks = splitForDiscord(formatted);
+            for (const [i, content] of chunks.entries())
+              await this.deliverPost(
+                channel,
+                { content, allowed_mentions: { parse: [], users: [] } },
+                undefined,
+                sessionId,
+                `native:${turn.cursor}:${i}`
+              );
+            if (visible.length > 12000 || formatted.length > 12000)
+              await this.deliverPost(
+                channel,
+                { content: 'Full user-visible response', allowed_mentions: { parse: [], users: [] } },
+                { name: 'response.txt', data: Buffer.from(visible) },
+                sessionId,
+                `native:${turn.cursor}:overflow`
+              );
+          }
+        } catch (error) {
+          if (!(error instanceof UncertainDiscordDelivery)) throw error;
+          progress = { ...progress, cursor: turn.cursor };
+          await this.conversationProgress.set(key, progress);
+          await this.catchupNotice(sessionId, channel);
         }
         progress = { ...progress, cursor: turn.cursor };
         await this.conversationProgress.set(key, progress);
@@ -1555,14 +1632,14 @@ export class DiscordBridge {
     const want = this.cfg.enabled && this.cfg.token && !this.held ? this.cfg.token : '';
     this.activityBot = undefined;
     this.activity.reset();
-    if (want && this.deps.sessions && !this.activityTimer) {
+    if (want && this.cfg.mode === 'full' && this.deps.sessions && !this.activityTimer) {
       this.activityTimer = setInterval(() => void this.pollActivity().catch(() => undefined), 4000);
       this.activityTimer.unref();
-    } else if (!want) {
+    } else if (!want || this.cfg.mode !== 'full') {
       clearInterval(this.activityTimer);
       this.activityTimer = undefined;
     }
-    if (want)
+    if (want && this.cfg.mode === 'full')
       void this.channels.flushRetirements(this.cfg.guildId).catch((err) => {
         this.last = this.fail(err);
       });
@@ -1689,7 +1766,7 @@ export class DiscordBridge {
     const mine: { p?: Promise<string | DiscordResult> } = {};
     const p = (mine.p = (async () => {
       try {
-        const t = await this.api.createThread(parent, threadNameFor(this.activityName(sessionId, name), sessionId));
+        const t = await this.api.createThread(parent, threadNameFor(name, sessionId));
         if (!t?.id) return this.fail(new BridgeProblem('Discord did not return a thread'));
         // A save moved the bridge to another channel meanwhile: this thread belongs to the old one.
         if (parent !== this.cfg.parentChannelId) {
@@ -1756,6 +1833,7 @@ export class DiscordBridge {
     // observer before suppressing an alert, so a failed/off stream retains its fallback notification.
     if (
       this.cfg.mode === 'full' &&
+      this.deps.sessions?.().find((s) => s.id === msg.sessionId)?.historyAvailable !== false &&
       this.deps.history &&
       msg.sessionId &&
       !opts.deliberate &&
@@ -1766,7 +1844,7 @@ export class DiscordBridge {
       try {
         const channel = await this.threadFor(msg.sessionId, msg.sessionName);
         if (typeof channel === 'string') {
-          await this.observeConversation(msg.sessionId, channel);
+          await this.observeConversation(msg.sessionId, channel, true);
           const progress = await this.conversationProgress.get(this.conversationKey(msg.sessionId, channel));
           if (
             progress?.seeded &&
@@ -1915,9 +1993,13 @@ export class DiscordBridge {
     await this.ensureLoaded();
     if (!this.cfg.enabled || this.stopped) return;
     if (this.cfg.mode === 'full' ? this.held : this.cfg.threadCreation !== 'onSessionStart') return;
+    if (this.cfg.mode === 'full') this.liveSessions.add(sessionId);
     const made = await this.threadFor(sessionId, name);
     if (typeof made !== 'string') this.last = made;
-    else if (this.cfg.mode === 'full')
+    else if (
+      this.cfg.mode === 'full' &&
+      this.deps.sessions?.().find((s) => s.id === sessionId)?.historyAvailable !== false
+    )
       await this.seedConversation(sessionId, made).catch(() => {
         this.last = this.fail(new BridgeProblem('History unavailable; retry synchronization to seed it'));
       });
@@ -1939,7 +2021,7 @@ export class DiscordBridge {
     }
     const thread = this.threads[sessionId];
     if (!thread || !this.cfg.enabled) return;
-    await this.api.rename(thread, threadNameFor(this.activityName(sessionId, name), sessionId)).catch(() => undefined);
+    await this.api.rename(thread, threadNameFor(name, sessionId)).catch(() => undefined);
   }
 
   /**
@@ -1948,6 +2030,7 @@ export class DiscordBridge {
    * Per-tab state goes whether or not the tab ever had a thread, so these maps cannot grow for the life of the server.
    */
   forgetTab(sessionId: string): void {
+    this.liveSessions.delete(sessionId);
     this.activity.forget(sessionId);
     this.outputDue.delete(sessionId);
     this.lastReply.delete(sessionId);
@@ -1958,11 +2041,18 @@ export class DiscordBridge {
   /** Session tab deleted: apply `onSessionDelete` and forget the mapping. */
   async sessionDeleted(sessionId: string): Promise<void> {
     this.forgetTab(sessionId);
-    await this.channels
-      .deleted(sessionId, this.cfg.onSessionDelete, this.cfg.enabled ? this.cfg.guildId : undefined)
-      .catch((err) => {
+    if (this.cfg.enabled && this.cfg.mode === 'full') {
+      const channel = this.channels.channelForSession(this.cfg, sessionId);
+      const key = channel ? this.conversationKey(sessionId, channel) : undefined;
+      // Close routing before waiting on readers, so no new observer can start.
+      await this.channels.deleted(sessionId, this.cfg.onSessionDelete, this.cfg.guildId).catch((err) => {
         this.last = this.fail(err);
       });
+      await this.outputReads.get(sessionId)?.run.catch(() => undefined);
+      if (key) await this.conversationRuns.get(key)?.catch(() => undefined);
+      if (key) await this.conversationProgress.delete(key);
+      await this.conversationProgress.deleteSession(sessionId);
+    }
     // Full mode preserves legacy notification resources after switching layouts.
     if (this.cfg.mode === 'full') return;
     // A thread still being created is closed by its creation, which finds no entry to remove here.
@@ -1979,6 +2069,20 @@ export class DiscordBridge {
     if (!this.cfg.enabled) return;
     if (this.cfg.onSessionDelete === 'delete') await this.api.remove(thread).catch(() => undefined);
     else if (this.cfg.onSessionDelete === 'archive') await this.api.archive(thread).catch(() => undefined);
+  }
+
+  private async catchupNotice(sessionId: string, channel: string): Promise<void> {
+    if (this.stopped || !this.cfg.enabled || this.cfg.mode !== 'full' || !this.destinationMatches(sessionId, channel))
+      return;
+    try {
+      await this.channels.assertOwned(this.cfg, sessionId, channel);
+      await this.say(
+        channel,
+        'Some live output could not be confirmed or fell outside the recent transcript. Streaming will continue with later turns. Use !codeman history or !codeman transcript for catch-up.'
+      );
+    } catch {
+      /* A failed notice must not block the next native turn. */
+    }
   }
 
   private async deliverPost(
@@ -2012,7 +2116,9 @@ export class DiscordBridge {
       throw new BridgeProblem('Response formatting changed since the previous delivery; review it before resending');
     if (!claim.fresh && claim.record.state === 'delivered') return { id: claim.record.messageId };
     if (!claim.fresh && ['uncertain', 'submitting'].includes(claim.record.state)) {
-      throw new BridgeProblem('Previous Discord delivery is uncertain; it will not be replayed automatically');
+      throw new UncertainDiscordDelivery(
+        'Previous Discord delivery is uncertain; it will not be replayed automatically'
+      );
     }
     await this.deliveries.update(id, 'submitting');
     const payload = { ...post, nonce: id.slice(0, 24), enforce_nonce: true };
@@ -2025,12 +2131,13 @@ export class DiscordBridge {
       await this.deliveries.update(id, 'delivered');
       return result;
     } catch (err) {
-      const refused = err instanceof DiscordHttpError && err.status < 500;
+      const refused = err instanceof DiscordHttpError && (err.status < 500 || this.cfg.mode === 'notifications');
       await this.deliveries.update(
         id,
         refused ? 'failed' : 'uncertain',
         refused ? 'discord_refused' : 'delivery_uncertain'
       );
+      if (!refused) throw new UncertainDiscordDelivery('Discord delivery was not confirmed');
       throw err;
     }
   }
@@ -2226,8 +2333,9 @@ export class DiscordBridge {
   private async saveAttachments(sessionId: string, m: GatewayMessage): Promise<{ paths: string[]; refused?: string }> {
     const list = m.attachments ?? [];
     if (list.length === 0) return { paths: [] };
+    const scope = this.controlScope;
     const dir = this.deps.sessionDir?.(sessionId);
-    if (!dir && !this.deps.saveRemoteAttachment)
+    if (!dir && (this.cfg.mode !== 'full' || !this.deps.saveRemoteAttachment))
       return { paths: [], refused: 'That tab has no available folder to save files in.' };
     // The message id goes into a file name, so it must be a snowflake and nothing else.
     if (!SNOWFLAKE.test(m.id)) return { paths: [], refused: 'That message could not be saved.' };
@@ -2255,8 +2363,30 @@ export class DiscordBridge {
           skipped.push(name);
           continue;
         }
+        if (
+          this.stopped ||
+          !this.cfg.enabled ||
+          this.controlScope !== scope ||
+          !this.cfg.allowedUserIds.includes(m.author.id) ||
+          !this.destinationMatches(sessionId, m.channel_id)
+        )
+          throw new BridgeProblem('Attachment scope changed');
         if (!target) {
-          paths.push(await this.deps.saveRemoteAttachment!(sessionId, name, buf));
+          if (this.cfg.mode !== 'full') throw new BridgeProblem('Remote attachments require Full mode');
+          paths.push(
+            await this.deps.saveRemoteAttachment!(
+              sessionId,
+              name,
+              buf,
+              () =>
+                !this.stopped &&
+                this.cfg.enabled &&
+                this.cfg.mode === 'full' &&
+                this.controlScope === scope &&
+                this.cfg.allowedUserIds.includes(m.author.id) &&
+                this.destinationMatches(sessionId, m.channel_id)
+            )
+          );
           continue;
         }
         const dest = join(target, `${m.id}-${name}`);
@@ -2362,10 +2492,15 @@ export class DiscordBridge {
         return;
       }
       if (/^!codeman(?:\s|$)/i.test(m.content ?? '')) {
+        if (this.cfg.mode !== 'full') {
+          await this.deliveries.update(id, 'failed', 'invalid_command');
+          await this.say(m.channel_id, 'This command requires Full interface mode in Codeman Discord settings.');
+          return;
+        }
         if (
           this.stopped ||
           !this.cfg.enabled ||
-          (this.cfg.mode !== 'full' && !/^!codeman file /i.test(m.content)) ||
+          this.cfg.mode !== 'full' ||
           this.cfg.guildId !== m.guild_id ||
           !this.cfg.allowedUserIds.includes(m.author.id) ||
           !this.destinationMatches(sessionId, m.channel_id)

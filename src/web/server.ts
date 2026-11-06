@@ -1,8 +1,3 @@
-import { resolveDiscordCase } from '../discord-case-identity.js';
-import { DiscordSessionManagement } from '../discord-session-management.js';
-import { discordTaskControl, discordControlCurrent } from '../discord-task-controls.js';
-import { discordHistoryControl, readDiscordSessionHistory } from '../discord-history.js';
-import { readDiscordSessionFile, writeDiscordRemoteAttachment } from '../discord-file-transfers.js';
 /**
  * @fileoverview Codeman web server — central hub coordinating all subsystems.
  *
@@ -31,7 +26,13 @@ import { readDiscordSessionFile, writeDiscordRemoteAttachment } from '../discord
  *
  * @module web/server
  */
-
+import { remoteTmuxSessionAlive } from '../remote-hosts.js';
+import { remoteTmuxSessionName } from '../tmux-manager.js';
+import { resolveDiscordCase } from '../discord-case-identity.js';
+import { DiscordSessionManagement } from '../discord-session-management.js';
+import { discordTaskControl, discordControlCurrent } from '../discord-task-controls.js';
+import { discordHistoryControl, readDiscordSessionHistory } from '../discord-history.js';
+import { readDiscordSessionFile, writeDiscordRemoteAttachment } from '../discord-file-transfers.js';
 import Fastify, { FastifyInstance } from 'fastify';
 import fastifyCompress from '@fastify/compress';
 import fastifyCookie from '@fastify/cookie';
@@ -578,16 +579,21 @@ export class WebServer extends EventEmitter {
       if (!this.discordCreate) throw new Error('Session routes unavailable');
       return this.discordCreate(body);
     },
-    recoveries: () => [],
-    recoveryUnavailableReason: 'Saved-conversation recovery is unavailable in this build; use the web UI.',
-    recover: async () => {
-      throw new Error('Saved-conversation recovery is unavailable in this build; use the web UI.');
-    },
     reconnect: async (id) => {
       const session = this.sessions.get(id);
       if (!session?.remote || !session.muxName) return false;
-      await this.handleRemoteSessionDropped(id);
-      return !(await this.mux.isPaneDead(session.muxName));
+      const remote = session.remote;
+      const scope = this.discordBridge.controlScope;
+      if ((await remoteTmuxSessionAlive(remote, remote.remoteSessionName ?? remoteTmuxSessionName(id))) !== true)
+        return false;
+      if (
+        this.sessions.get(id) !== session ||
+        session.remote !== remote ||
+        !this.discordBridge.acceptsControls ||
+        this.discordBridge.controlScope !== scope
+      )
+        return false;
+      return this.handleRemoteSessionDropped(id);
     },
   });
   private discordBridge: DiscordBridge = new DiscordBridge({
@@ -618,6 +624,9 @@ export class WebServer extends EventEmitter {
         name: session.name,
         remote: !!session.remote,
         working: session.isWorking,
+        historyAvailable:
+          !session.docker &&
+          ['claude-jsonl', 'codex-rollout'].includes(getCli(session.mode)?.capabilities.transcript ?? ''),
       })),
     history: async (id, options) => {
       const session = this.sessions.get(id);
@@ -645,10 +654,20 @@ export class WebServer extends EventEmitter {
       if (!session) throw new Error('Session unavailable');
       return readDiscordSessionFile({ workingDir: session.workingDir, remote: session.remote }, path);
     },
-    saveRemoteAttachment: async (id, name, bytes) => {
-      const remote = this.sessions.get(id)?.remote;
+    saveRemoteAttachment: async (id, name, bytes, current) => {
+      const session = this.sessions.get(id);
+      const remote = session?.remote;
       if (!remote) throw new Error('Remote session unavailable');
-      return writeDiscordRemoteAttachment(remote, name, bytes);
+      return writeDiscordRemoteAttachment(
+        remote,
+        name,
+        bytes,
+        () =>
+          current() &&
+          this.discordBridge.acceptsControls &&
+          this.sessions.get(id) === session &&
+          session.remote === remote
+      );
     },
     sessionDir: (sessionId) => {
       const session = this.sessions.get(sessionId);
@@ -1470,19 +1489,27 @@ export class WebServer extends EventEmitter {
     // The registry's lifetime is the server's: it drops per-session wake state on every
     // cleanup path and resolves in-flight wakes on shutdown.
     this.remoteWake = registerSessionRoutes(this.app, ctx, {
-      onCreateReady: (create) => {
+      onQuickStartReady: (create) => {
         this.discordCreate = async (body) => {
           if (isMultiUserMode() || !this.discordBridge.acceptsControls)
             throw new Error('Discord lifecycle unavailable');
-          const result = (await create({ body, headers: {} } as import('fastify').FastifyRequest)) as {
-            session?: { id?: string };
+          const input = body as { caseName: string; mode?: string };
+          const prefix = getCli(input.mode ?? 'claude')?.capabilities.startMode === 'shell' ? 's' : 'w';
+          const used = new Set([...this.sessions.values()].map((session) => session.name));
+          let number = 1;
+          while (used.has(`${prefix}${number}-${input.caseName}`)) number++;
+          const requestBody = { ...input, sessionName: `${prefix}${number}-${input.caseName}` };
+          const scope = this.discordBridge.controlScope;
+          const current = () =>
+            !isMultiUserMode() && this.discordBridge.acceptsControls && this.discordBridge.controlScope === scope;
+          const result = (await create(
+            { body: requestBody, headers: {} } as import('fastify').FastifyRequest,
+            current
+          )) as {
+            sessionId?: string;
           };
-          const session = result.session?.id ? this.sessions.get(result.session.id) : undefined;
+          const session = result.sessionId ? this.sessions.get(result.sessionId) : undefined;
           if (!session) throw new Error('Session creation refused');
-          if (!this.discordBridge.acceptsControls) throw new Error('Bridge disabled before agent launch');
-          if (getCli(session.mode)?.capabilities.startMode === 'shell') await session.startShell();
-          else await session.startInteractive();
-          ctx.persistSessionStateNow(session);
           return session.id;
         };
       },
@@ -4532,8 +4559,8 @@ export class WebServer extends EventEmitter {
    * can reset/advance its backoff. Re-running the idempotent remote command
    * REATTACHES the durable remote tmux session (does NOT recreate it).
    */
-  private readonly remoteReconnectRuns = new Map<string, Promise<void>>();
-  private handleRemoteSessionDropped(sessionId: string): Promise<void> {
+  private readonly remoteReconnectRuns = new Map<string, Promise<boolean>>();
+  private handleRemoteSessionDropped(sessionId: string): Promise<boolean> {
     const pending = this.remoteReconnectRuns.get(sessionId);
     if (pending) return pending;
     const run = this.performRemoteSessionDropped(sessionId).finally(() => {
@@ -4542,15 +4569,28 @@ export class WebServer extends EventEmitter {
     this.remoteReconnectRuns.set(sessionId, run);
     return run;
   }
-  private async performRemoteSessionDropped(sessionId: string): Promise<void> {
+  private async performRemoteSessionDropped(sessionId: string): Promise<boolean> {
     const session = this.sessions.get(sessionId);
     // No live Session object (e.g. detached/restored-but-not-attached) — nothing
     // to drive the reattach; report failure so the watcher backs off and retries.
     if (!session) {
       this.noteRemoteReconnect(sessionId, false);
-      return;
+      return false;
     }
-    if (session.muxName && !(await this.mux.isPaneDead(session.muxName))) return;
+    try {
+      if (session.muxName && !(await this.mux.isPaneDead(session.muxName))) {
+        // A false result also covers tmux query errors: clear in-flight, retaining retry backoff.
+        this.noteRemoteReconnect(sessionId, false);
+        return false;
+      }
+    } catch {
+      this.noteRemoteReconnect(sessionId, false);
+      return false;
+    }
+    if (this.sessions.get(sessionId) !== session) {
+      this.noteRemoteReconnect(sessionId, false);
+      return false;
+    }
     let ok = false;
     try {
       ok = await session.reattachRemote();
@@ -4563,6 +4603,7 @@ export class WebServer extends EventEmitter {
       this.persistSessionState(session);
       this.broadcast(SseEvent.RemoteSessionReconnected, { sessionId });
     }
+    return ok;
   }
 
   /** Forward a reattach outcome to the TmuxManager watcher (resets/clears backoff). */

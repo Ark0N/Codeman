@@ -1,4 +1,4 @@
-/** Resolve only the exact Codex resume invocation belonging to the attached remote pane. */
+/** @fileoverview Resolve only the exact Codex resume invocation belonging to the attached remote pane. */
 import type { SessionRemote } from './types/session.js';
 import { remoteTmuxLocation } from './tmux-manager.js';
 import { withRemotePathBootstrap, shellescape } from './remote-hosts.js';

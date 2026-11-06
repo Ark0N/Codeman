@@ -1,4 +1,4 @@
-/** Exact prompt-bound controls. Reuses the same answer checks as the web UI. */
+/** @fileoverview Exact prompt-bound controls. Reuses the same answer checks as the web UI. */
 import { createHash } from 'node:crypto';
 import { approvalInbox, type ApprovalItem } from './web/approval-inbox.js';
 import { answerPendingApproval } from './web/routes/approval-routes.js';
@@ -67,7 +67,7 @@ export async function discordTaskControl(session: Session, command: string): Pro
       return { text: 'No current task can be safely identified for interruption.' };
     const token = String(session.lastSubmitAt);
     return {
-      text: `Interrupt the current task? This sends Ctrl+C; the session remains open.\nText fallback: !codeman interrupt confirm ${token}`,
+      text: `Interrupt the current task? This sends Escape; the session remains open.\nText fallback: !codeman interrupt confirm ${token}`,
       actions: [
         { label: 'Interrupt task', command: 'interrupt confirm ' + token, validity: 'interrupt:' + token, style: 4 },
       ],
@@ -77,7 +77,7 @@ export async function discordTaskControl(session: Session, command: string): Pro
   if (interrupt) {
     if (!discordControlCurrent(session, 'interrupt:' + interrupt[1]))
       return { text: 'The task changed or ended. Request !codeman interrupt again.' };
-    const ok = await session.writeViaMux('\x03', { fromUser: true });
+    const ok = await session.writeViaMux('\x1b', { fromUser: true });
     return {
       text: ok
         ? 'Interrupt requested. Native completion/interruption still requires confirmation.'

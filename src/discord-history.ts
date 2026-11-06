@@ -1,17 +1,20 @@
+/** @fileoverview discord history helpers for the Discord bridge. */
 import { discordDisplayText } from './discord-display-text.js';
 import { probeRemoteDiscordConversation } from './discord-remote-conversation.js';
 import { getCli } from './config/cli-registry/registry.js';
 import { nativeExecutions, type DiscordNativeExecution } from './discord-native-execution.js';
 /** Read-only, exact-conversation history. No cwd guesses, model turns, tool results or reasoning. */
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
+import { open, opendir, stat } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { homedir } from 'node:os';
+import { probePathKind } from './utils/bounded-path-probe.js';
+import { findExactCodexConversation, resolveEffectiveCodexHome } from './agent-codex-identity.js';
 import { createHash } from 'node:crypto';
-import { resolve, posix } from 'node:path';
+import { resolve, posix, join } from 'node:path';
 import { codexMessageFromLine, isCodexInjectedContext } from './codex-rollout-format.js';
 import { shellescape, withRemotePathBootstrap } from './remote-hosts.js';
 import { runDiscordRemoteRead } from './discord-file-transfers.js';
 import type { SessionRemote } from './types/session.js';
-const exec = promisify(execFile);
 interface NativeHistoryRow {
   type?: string;
   timestamp?: string;
@@ -83,6 +86,8 @@ export interface DiscordHistorySource {
   remote?: SessionRemote;
   configHome?: string;
   includeTools?: boolean;
+  /** Already attributed by the bounded Codex resolver; local only. */
+  exactPath?: string;
 }
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** Bounded inventory and bounded tail. Exact UUID only; ambiguous copies are unavailable. */
@@ -265,11 +270,103 @@ export function parseDiscordHistory(source: DiscordHistorySource, raw: string): 
   );
   return { conversationId: source.conversationId!, turns, partial: packet.partial === true, executions };
 }
+const claudePaths = new Map<
+  string,
+  { path: string; stamps: Array<{ path: string; mtime: number; ino: number; dev: number }> }
+>();
+async function localHistoryPacket(source: DiscordHistorySource): Promise<string> {
+  const format = getCli(source.mode)?.capabilities.transcript;
+  const id = source.conversationId;
+  if (!id || !UUID.test(id) || !['claude-jsonl', 'codex-rollout'].includes(format ?? ''))
+    throw new Error('Exact Claude/Codex conversation identity is unavailable');
+  const configured =
+    source.configHome ?? (format === 'claude-jsonl' ? process.env.CLAUDE_CONFIG_DIR : process.env.CODEX_HOME);
+  const home = configured?.startsWith('~/')
+    ? join(homedir(), configured.slice(2))
+    : (configured ?? join(homedir(), format === 'claude-jsonl' ? '.claude' : '.codex'));
+  let path = source.exactPath;
+  if (!path) {
+    const root = join(home, format === 'claude-jsonl' ? 'projects' : 'sessions');
+    const key = root + ':' + id;
+    if (
+      (await probePathKind(home, { pastCap: true })) !== 'directory' ||
+      (await probePathKind(root, { pastCap: true })) !== 'directory'
+    )
+      throw new Error('History root unavailable');
+    const cached = claudePaths.get(key);
+    let unchanged = !!cached;
+    for (const entry of cached?.stamps ?? []) {
+      if ((await probePathKind(entry.path, { pastCap: true })) !== 'directory')
+        throw new Error('History directory unavailable');
+      const info = await stat(entry.path);
+      if (info.mtimeMs !== entry.mtime || info.ino !== entry.ino || info.dev !== entry.dev) {
+        unchanged = false;
+        break;
+      }
+    }
+    if (cached && unchanged) path = cached.path;
+    if (!path) {
+      if (
+        (await probePathKind(home, { pastCap: true })) !== 'directory' ||
+        (await probePathKind(root, { pastCap: true })) !== 'directory'
+      )
+        throw new Error('History root unavailable');
+      const found: string[] = [];
+      const stamps: Array<{ path: string; mtime: number; ino: number; dev: number }> = [];
+      let budget = 16384;
+      const visit = async (dirPath: string, depth: number): Promise<void> => {
+        if (depth > (format === 'claude-jsonl' ? 1 : 5)) return;
+        if ((await probePathKind(dirPath, { pastCap: true })) !== 'directory')
+          throw new Error('History directory unavailable');
+        const info = await stat(dirPath);
+        stamps.push({ path: dirPath, mtime: info.mtimeMs, ino: info.ino, dev: info.dev });
+        const entries = await opendir(dirPath);
+        for await (const entry of entries) {
+          if (--budget < 0) throw new Error('History inventory limit');
+          if (entry.isDirectory() && !entry.isSymbolicLink()) await visit(join(dirPath, entry.name), depth + 1);
+          const matches =
+            format === 'claude-jsonl' ? entry.name === id + '.jsonl' : entry.name.endsWith('-' + id + '.jsonl');
+          if (matches && entry.isFile() && !entry.isSymbolicLink()) found.push(join(dirPath, entry.name));
+        }
+      };
+      await visit(root, 0);
+      if (found.length !== 1) throw new Error('Missing or ambiguous transcript');
+      path = found[0];
+      if (claudePaths.size >= 128) claudePaths.delete(claudePaths.keys().next().value!);
+      claudePaths.set(key, { path, stamps });
+    }
+  }
+  if (!path) throw new Error('Exact transcript unavailable');
+  const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const info = await file.stat();
+    if (!info.isFile()) throw new Error('Transcript is not regular');
+    if (format === 'codex-rollout') {
+      const head = Buffer.alloc(Math.min(info.size, 131072));
+      const { bytesRead } = await file.read(head, 0, head.length, 0);
+      const meta = JSON.parse(head.subarray(0, bytesRead).toString('utf8').split('\n')[0]);
+      if (meta.type !== 'session_meta' || meta.payload?.id !== id) throw new Error('Transcript identity changed');
+    }
+    let offset = Math.max(0, info.size - 2 * 1024 * 1024);
+    const buffer = Buffer.alloc(Math.min(info.size, 2 * 1024 * 1024));
+    const { bytesRead } = await file.read(buffer, 0, buffer.length, offset);
+    let data = buffer.subarray(0, bytesRead);
+    if (offset) {
+      const end = data.indexOf(10);
+      if (end < 0) throw new Error('Oversize transcript row');
+      offset += end + 1;
+      data = data.subarray(end + 1);
+    }
+    data = data.subarray(0, data.lastIndexOf(10) + 1);
+    return JSON.stringify({ offset, data: data.toString('base64'), partial: offset > 0 });
+  } finally {
+    await file.close();
+  }
+}
 export async function readDiscordHistory(source: DiscordHistorySource): Promise<DiscordHistory> {
-  const command = discordHistoryCommand(source);
   const raw = source.remote
-    ? await runDiscordRemoteRead(source.remote, command)
-    : (await exec('sh', ['-c', command], { timeout: 30000, maxBuffer: 4 * 1024 * 1024 })).stdout;
+    ? await runDiscordRemoteRead(source.remote, discordHistoryCommand(source))
+    : await localHistoryPacket(source);
   return parseDiscordHistory(source, String(raw));
 }
 export function historyPage(
@@ -297,28 +394,30 @@ export async function readDiscordSessionHistory(
   const format = getCli(session.mode)?.capabilities.transcript;
   let id =
     format === 'claude-jsonl'
-      ? session.claudeSessionId
+      ? (session.claudeSessionChain?.at(-1) ??
+        (session.claudeSessionIdIsFirstHand ? session.claudeSessionId : undefined) ??
+        session.id)
       : (session.nativeResumeId ?? adoptedNativeIds.get(session) ?? session.codexConfig?.resumeSessionId);
   const key = format === 'claude-jsonl' ? 'CLAUDE_CONFIG_DIR' : 'CODEX_HOME';
   let configHome = session.envOverrideValue(key) ?? (!session.remote ? process.env[key] : undefined);
+  if (!session.remote && configHome?.startsWith('~/')) configHome = join(homedir(), configHome.slice(2));
   if (configHome && !configHome.startsWith('~/'))
     configHome = session.remote
       ? posix.isAbsolute(configHome)
         ? configHome
         : posix.resolve(session.remote.remotePath, configHome)
       : resolve(session.workingDir, configHome);
+  let exactPath: string | undefined;
   if (format === 'codex-rollout' && !session.remote) {
-    const { findOwnedCodexConversation, resolveEffectiveCodexHome } =
-      await import('./checkpoint-conversation-identity.js');
-    id =
-      (
-        await findOwnedCodexConversation({
-          codexHome: resolveEffectiveCodexHome(configHome, session.workingDir),
-          sessionId: session.id,
-          nativeResumeId: id ?? undefined,
-          lastSubmitAt: session.lastSubmitAt,
-        })
-      )?.id ?? id;
+    const attributed = await findExactCodexConversation({
+      codexHome: resolveEffectiveCodexHome(configHome, session.workingDir),
+      sessionId: session.id,
+      workingDir: session.workingDir,
+      resumeSessionId: id ?? undefined,
+    });
+    if (!attributed) throw new Error('Exact Codex conversation identity is unavailable');
+    id = attributed.id;
+    exactPath = attributed.path;
   }
   if (session.docker) throw new Error('Container history is not available through this reader');
   const remote = session.remote;
@@ -333,6 +432,7 @@ export async function readDiscordSessionHistory(
     remote: session.remote,
     configHome,
     includeTools: options?.includeTools,
+    exactPath,
   });
   // Publish only after the exact transcript header was verified, and never overwrite a concurrent adoption.
   if (discovered && (session.remote !== remote || (session.nativeResumeId && session.nativeResumeId !== discovered)))
@@ -381,7 +481,7 @@ export async function discordHistoryControl(
     };
   } catch {
     return {
-      text: 'History unavailable: exact native conversation identity, Python 3, or its transcript is missing/unavailable. No terminal history was guessed. Try again after reconnecting; other CLIs require the web UI.',
+      text: 'History unavailable: exact native conversation identity or its transcript is missing/unavailable. Remote history also requires Python 3. No terminal history was guessed. Try again after reconnecting; other CLIs require the web UI.',
     };
   }
 }

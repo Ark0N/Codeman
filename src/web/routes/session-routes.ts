@@ -1069,7 +1069,7 @@ export function registerSessionRoutes(
   /** Test seam: inject a registry with fake IO instead of the real TCP/WoL probes. */
   options: {
     remoteWake?: RemoteWakeRegistry;
-    onCreateReady?: (create: (request: FastifyRequest) => Promise<unknown>) => void;
+    onQuickStartReady?: (create: (request: FastifyRequest, current?: () => boolean) => Promise<unknown>) => void;
   } = {}
 ): RemoteWakeRegistry {
   // Wake-on-LAN for sleeping remote hosts (see remote-wake.ts). One registry per
@@ -1490,7 +1490,6 @@ export function registerSessionRoutes(
     };
   };
   app.post('/api/sessions', createSessionForRequest);
-  options.onCreateReady?.(createSessionForRequest);
 
   // ========== Rename Session ==========
 
@@ -3954,7 +3953,8 @@ export function registerSessionRoutes(
 
   // ========== Quick Start ==========
 
-  app.post('/api/quick-start', async (req) => {
+  const quickStartForRequest = async (req: FastifyRequest, current: () => boolean = () => true) => {
+    if (!current()) return createErrorResponse(ApiErrorCode.FORBIDDEN, 'Session creation authorization changed');
     const owner = ownerFor(req);
     const capMsg = sessionCapacityMessage(ctx.sessions, owner);
     if (capMsg) return createErrorResponse(ApiErrorCode.SESSION_BUSY, capMsg);
@@ -4682,6 +4682,10 @@ export function registerSessionRoutes(
       }
     }
 
+    if (!current()) {
+      await ctx.cleanupSession(session.id, true, 'quick_start_cancelled');
+      return createErrorResponse(ApiErrorCode.FORBIDDEN, 'Session creation authorization changed');
+    }
     const tabLayout = await ctx.addSession(session, { caseName, ...(tabGroupId ? { tabGroupId } : {}) });
     ctx.store.incrementSessionsCreated();
     ctx.persistSessionState(session);
@@ -4704,6 +4708,7 @@ export function registerSessionRoutes(
 
     // Start in the appropriate mode
     try {
+      if (!current()) throw new Error('Session creation authorization changed before launch');
       if (getCli(mode)?.capabilities.startMode === 'shell') {
         await session.startShell();
         getLifecycleLog().log({
@@ -4767,7 +4772,9 @@ export function registerSessionRoutes(
       await ctx.cleanupSession(session.id, true, 'quick_start_error');
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
     }
-  });
+  };
+  app.post('/api/quick-start', (req) => quickStartForRequest(req));
+  options.onQuickStartReady?.(quickStartForRequest);
 
   // ═══════════════════════════════════════════════════════════════
   // History — list past Claude conversations for resume

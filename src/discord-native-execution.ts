@@ -1,4 +1,4 @@
-/** Strict execution proof from native events, separate from transport acceptance and display activity. */
+/** @fileoverview Strict execution proof from native events, separate from transport acceptance and display activity. */
 import { createHash } from 'node:crypto';
 import type { DiscordHistoryTurn } from './discord-history.js';
 export interface DiscordNativeExecution {

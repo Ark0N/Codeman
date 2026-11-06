@@ -1,4 +1,4 @@
-/** Render Markdown tables as labeled records that wrap naturally in narrow Discord views. */
+/** @fileoverview Render Markdown tables as labeled records that wrap naturally in narrow Discord views. */
 const MAX_COLS = 24;
 const MAX_ROWS = 200;
 function cells(row: string): string[] {

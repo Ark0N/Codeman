@@ -1,4 +1,4 @@
-/** Case grouping uses workspace/transport/owner metadata, never a tab's display-name prefix. */
+/** @fileoverview Case grouping uses workspace/transport/owner metadata, never a tab's display-name prefix. */
 import { createHash } from 'node:crypto';
 import { resolve, relative, isAbsolute, basename, posix } from 'node:path';
 import type { CaseInfo, SessionRemote, SessionDocker } from './types.js';

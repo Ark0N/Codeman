@@ -1768,7 +1768,6 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('discordAllowedUserIds').value = (d.allowedUserIds || []).join(', ');
     document.getElementById('discordMode').value = d.mode || 'notifications';
     document.getElementById('discordCategoryId').value = d.categoryId || '';
-    document.getElementById('discordOnChannelDelete').value = d.onChannelDelete || 'keep';
     this.updateDiscordMode();
     const sync = d.sessionSync;
     document.getElementById('discordSyncStatus').textContent = sync?.state === 'syncing'
@@ -1802,7 +1801,6 @@ Object.assign(CodemanApp.prototype, {
       : 'Notifications keeps the current alerts and thread replies. Threads appear on the first alert unless configured below.';
     document.getElementById('discordThreadCreation').disabled = full;
     document.getElementById('discordCategoryRow').style.display = full ? '' : 'none';
-    document.getElementById('discordChannelDeleteRow').style.display = 'none';
     document.getElementById('discordStaleThreadsRow').style.display = full ? 'none' : '';
     document.getElementById('discordThreadCreationRow').style.display = full ? 'none' : '';
     document.getElementById('discordSyncRow').style.display = full ? '' : 'none';
@@ -1839,7 +1837,6 @@ Object.assign(CodemanApp.prototype, {
       enabled: document.getElementById('discordEnabled').checked,
       mode: document.getElementById('discordMode').value,
       categoryId: document.getElementById('discordCategoryId').value.trim(),
-      onChannelDelete: document.getElementById('discordOnChannelDelete').value,
       guildId: document.getElementById('discordGuildId').value.trim(),
       parentChannelId: document.getElementById('discordParentChannelId').value.trim(),
       allowedUserIds: ids,

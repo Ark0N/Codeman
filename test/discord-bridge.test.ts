@@ -631,7 +631,7 @@ describe('DiscordBridge', () => {
         const path = new URL(String(url)).pathname.replace('/api/v10', '');
         posts.push({ path, method: String(init.method), body: init.body ? JSON.parse(String(init.body)) : undefined });
         if (path.endsWith('/threads')) return jsonRes({ id: THREAD });
-        if (fail && path.endsWith('/messages')) return new Response('{}', { status: 403 });
+        if (fail && path.endsWith('/messages')) return new Response('{}', { status: 500 });
         return jsonRes({ id: 'msg' });
       });
       const first = await b.notify({ ...MSG, event: 'hook:stop', fullText: async () => ({ text: 'The answer.' }) });
@@ -1096,12 +1096,12 @@ describe('DiscordBridge files and startup hint', () => {
   });
   afterEach(() => rmSync(work, { recursive: true, force: true }));
 
-  it('uploads to SSH before submitting only the verified remote path', async () => {
+  it('does not write remote attachments in Notifications mode', async () => {
     const upload = vi.fn(async () => '/workspace/.codeman-discord/verified.png');
     const b = await make({}, () => undefined, undefined, undefined, { saveRemoteAttachment: upload });
     await b.onGatewayMessage(reply());
-    expect(upload).toHaveBeenCalledWith('s1', 'shot_one.png', Buffer.from([7, 8, 9]));
-    expect(sent).toEqual([['s1', '[attached: /workspace/.codeman-discord/verified.png]\r']]);
+    expect(upload).not.toHaveBeenCalled();
+    expect(sent).toEqual([]);
     b.stop();
   });
   it('does not submit any prompt when SSH upload fails', async () => {
@@ -1114,7 +1114,7 @@ describe('DiscordBridge files and startup hint', () => {
     expect(sent).toEqual([]);
     b.stop();
   });
-  it('routes file commands as controls even when the native agent has exited', async () => {
+  it('does not expose Full-mode file controls in Notifications mode', async () => {
     const get = vi.fn(async () => ({ name: 'answer.txt', data: new Uint8Array([1]) }));
     const b = await make(
       {},
@@ -1124,7 +1124,7 @@ describe('DiscordBridge files and startup hint', () => {
       { getAttachment: get }
     );
     await b.onGatewayMessage(reply({ content: '!codeman file /workspace/a b.txt', attachments: [] }));
-    expect(get).toHaveBeenCalledWith('s1', '/workspace/a b.txt');
+    expect(get).not.toHaveBeenCalled();
     expect(sent).toEqual([]);
     b.stop();
   });

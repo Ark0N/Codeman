@@ -2260,7 +2260,6 @@ export const DiscordUpdateSchema = z
     enabled: z.boolean().optional(),
     mode: z.enum(DISCORD_MODES).optional(),
     categoryId: z.string().max(25).optional(),
-    onChannelDelete: z.enum(['keep', 'retain', 'delete']).optional(),
     token: z.string().max(200).optional(),
     guildId: z.string().max(25).optional(),
     parentChannelId: z.string().max(25).optional(),

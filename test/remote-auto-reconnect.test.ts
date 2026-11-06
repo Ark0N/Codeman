@@ -397,3 +397,11 @@ describe('TmuxManager remote reconnect watcher (integration)', () => {
     expect(dropped).toEqual([{ sessionId: 'eeee5555', attempt: 1 }]);
   });
 });
+it('probes the original codeman socket when reconnecting a non-owned remote session', () => {
+  const command = buildRemoteSessionAliveCommand(
+    { host: 'box', username: 'dev', port: 22, owned: false },
+    'codeman-existing'
+  );
+  expect(command).toContain('tmux -L codeman has-session');
+  expect(command).not.toContain('tmux -L codeman-remote');
+});

@@ -3326,14 +3326,6 @@
                     <div class="set-row-text"><label class="set-row-label" for="discordCategoryId">Case category ID (optional)</label><span class="set-row-desc">Leave blank to create a private Codeman category automatically when saving Full mode. Or enter an existing category ID. The bot needs Manage Channels and Manage Threads. Case channels contain session threads.</span></div>
                     <input id="discordCategoryId" class="set-input" placeholder="Created automatically when you save" type="text" inputmode="numeric" autocomplete="off">
                   </div>
-                  <div class="set-row has-field" id="discordChannelDeleteRow" style="display:none">
-                    <div class="set-row-text"><label class="set-row-label" for="discordOnChannelDelete">When a session is deleted</label><span class="set-row-desc">Disconnects and crashes keep the channel. Making history read-only also needs Manage Roles on the channel.</span></div>
-                    <select id="discordOnChannelDelete" class="set-select">
-                      <option value="keep">Keep channel; stop routing</option>
-                      <option value="retain">Keep read-only history</option>
-                      <option value="delete">Delete channel and its history</option>
-                    </select>
-                  </div>
                   <div class="set-row has-field" id="discordThreadCreationRow">
                     <div class="set-row-text"><span class="set-row-label">Create threads</span></div>
                     <select id="discordThreadCreation" class="set-select">

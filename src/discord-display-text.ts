@@ -1,4 +1,4 @@
-/** Hide reserved assistant annotations in chat, while preserving literal code and other XML/citations. */
+/** @fileoverview Hide reserved assistant annotations in chat, while preserving literal code and other XML/citations. */
 export function discordDisplayText(text: string): string {
   const out: string[] = [];
   let hidden = false,

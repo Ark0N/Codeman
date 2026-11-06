@@ -45,12 +45,12 @@ it('keeps unverified provider dialogs terminal-only and never blindly sends appr
   expect(reply?.text).toContain('requires the terminal');
   expect(s.writeViaMux).not.toHaveBeenCalled();
 });
-it('requires confirmation of the current task before Ctrl+C and rejects a changed task', async () => {
+it('requires confirmation of the current task before Escape and rejects a changed task', async () => {
   const s = session();
   const reply = await discordTaskControl(s, 'interrupt');
   expect(s.writeViaMux).not.toHaveBeenCalled();
   await discordTaskControl(s, 'interrupt confirm 124');
   expect(s.writeViaMux).not.toHaveBeenCalled();
   await discordTaskControl(s, reply!.actions![0].command);
-  expect(s.writeViaMux).toHaveBeenCalledExactlyOnceWith('\x03', { fromUser: true });
+  expect(s.writeViaMux).toHaveBeenCalledExactlyOnceWith('\x1b', { fromUser: true });
 });

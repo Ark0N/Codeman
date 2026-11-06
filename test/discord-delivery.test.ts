@@ -414,3 +414,20 @@ describe('inbound submission safety', () => {
     expect(count).toBe(before);
   });
 });
+it('shares a two-per-ten-minute budget across Full-mode cosmetic rename paths', async () => {
+  let now = 1000;
+  const fetch = vi.fn(async () => Response.json({}));
+  const api = new DiscordApi(
+    () => 'test',
+    fetch,
+    async () => undefined,
+    () => now
+  );
+  await api.rename(THREAD, 'one', () => true);
+  await api.editChannel(THREAD, { name: 'two' });
+  await expect(api.rename(THREAD, 'three', () => true)).rejects.toMatchObject({ status: 429, retryAfterMs: 600002 });
+  expect(fetch).toHaveBeenCalledTimes(2);
+  now += 600003;
+  await api.rename(THREAD, 'three', () => true);
+  expect(fetch).toHaveBeenCalledTimes(3);
+});

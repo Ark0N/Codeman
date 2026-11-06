@@ -1,4 +1,4 @@
-/**
+/** @fileoverview
  * Private, bounded Discord delivery metadata. No prompt, file bytes, token or message body is stored.
  * A durable claim precedes input; interrupted input is uncertain and is never replayed automatically.
  */

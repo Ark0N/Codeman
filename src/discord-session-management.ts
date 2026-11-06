@@ -1,4 +1,4 @@
-/** Explicit session lifecycle choices using shared web/backend services. No blank recovery or task replay. */
+/** @fileoverview Explicit session lifecycle choices using shared web/backend services. No blank recovery or task replay. */
 import { randomUUID, createHash } from 'node:crypto';
 import type { CaseInfo, SessionMode } from './types.js';
 /** Connector-facing recovery metadata; hosts without a saved recovery queue expose none. */
@@ -31,9 +31,9 @@ export interface DiscordSessionManagementDeps {
   groups(): Promise<Array<{ id: string; name: string }>>;
   modes(): string[];
   create(body: { caseName: string; mode: SessionMode; tabGroupId?: string }): Promise<string>;
-  recoveries(): DiscordRecoveryRecord[];
+  recoveries?(): DiscordRecoveryRecord[];
   recoveryUnavailableReason?: string;
-  recover(id: string, action: 'reconnect' | 'resume'): Promise<string>;
+  recover?(id: string, action: 'reconnect' | 'resume'): Promise<string>;
   reconnect(id: string): Promise<boolean>;
   now?: () => number;
 }
@@ -140,6 +140,12 @@ export class DiscordSessionManagement {
     }
     if (command === 'recoveries') {
       if (this.deps.recoveryUnavailableReason) return { text: this.deps.recoveryUnavailableReason };
+      if (!this.deps.recoveries || !this.deps.recover)
+        return {
+          text:
+            this.deps.recoveryUnavailableReason ??
+            'Saved-conversation recovery is unavailable in this build; use the web UI.',
+        };
       const records = this.deps.recoveries().filter((r) => r.status !== 'recovered');
       return {
         text:
@@ -196,6 +202,12 @@ export class DiscordSessionManagement {
     const recovery = /^recover ([A-Za-z0-9._-]+) (reconnect|resume)$/.exec(command);
     if (recovery) {
       if (this.deps.recoveryUnavailableReason) return { text: this.deps.recoveryUnavailableReason };
+      if (!this.deps.recoveries || !this.deps.recover)
+        return {
+          text:
+            this.deps.recoveryUnavailableReason ??
+            'Saved-conversation recovery is unavailable in this build; use the web UI.',
+        };
       const record = this.deps.recoveries().find((r) => r.id === recovery[1]);
       const action = recovery[2] as 'reconnect' | 'resume';
       if (
@@ -220,10 +232,10 @@ export class DiscordSessionManagement {
         async () => {
           if (
             !this.deps.allowed() ||
-            JSON.stringify(this.deps.recoveries().find((r) => r.id === record.id)) !== fingerprint
+            JSON.stringify(this.deps.recoveries?.().find((r) => r.id === record.id)) !== fingerprint
           )
             return { text: 'Recovery changed. Request it again.' };
-          const id = await this.deps.recover(record.id, action);
+          const id = await this.deps.recover!(record.id, action);
           return {
             text: 'Recovery launch/attachment returned; native readiness remains unconfirmed until observed.',
             locateSessionId: id,
@@ -234,14 +246,28 @@ export class DiscordSessionManagement {
     const reconnect = /^reconnect ([A-Za-z0-9._-]+)$/.exec(command);
     if (reconnect) {
       const id = reconnect[1];
-      if (!(await this.deps.sessions()).some((s) => s.id === id))
-        return { text: 'Session not found. Use !codeman sessions or !codeman recoveries.' };
-      return {
-        text: (await this.deps.reconnect(id))
-          ? 'Transport connected. Use !codeman status to check native activity.'
-          : 'Reconnect is unavailable. Inspect the Recovery Queue; a blank conversation was not launched.',
-        locateSessionId: id,
-      };
+      const session = (await this.deps.sessions()).find((s) => s.id === id);
+      if (!session) return { text: 'Session not found. Use !codeman sessions or !codeman recoveries.' };
+      const fingerprint = JSON.stringify(session);
+      return this.review(
+        scope,
+        'reconnect:' + id,
+        `Reconnect to the existing remote agent for ${session.name || id}? No new agent will be created.`,
+        async () => {
+          if (
+            !this.deps.allowed() ||
+            JSON.stringify((await this.deps.sessions()).find((s) => s.id === id)) !== fingerprint
+          )
+            return { text: 'Session changed. Request reconnect again.' };
+          const ok = await this.deps.reconnect(id);
+          return {
+            text: ok
+              ? 'Transport connected. Use !codeman status to check native activity.'
+              : 'Reconnect is unavailable. Inspect the Recovery Queue; a blank conversation was not launched.',
+            ...(ok ? { locateSessionId: id } : {}),
+          };
+        }
+      );
     }
     return {
       text: 'Commands: sessions [offset] · open <session-id> · cases · groups · create <case> <host-id|local> <CLI> <group-id|default> · recoveries · recover <record-id> <reconnect|resume> · reconnect <session-id> · status · history · transcript · pending · interrupt. Prefix commands with !codeman.',

@@ -1,4 +1,3 @@
-import { DiscordCategoryProblem } from '../../discord-case-categories.js';
 /**
  * @fileoverview Discord bridge settings and the deliberate-post route (src/discord-bridge.ts).
  *
@@ -11,7 +10,7 @@ import { DiscordCategoryProblem } from '../../discord-case-categories.js';
  * multi-user mode the three settings routes are admin only: the server receives every session's
  * events. `discord-notify` follows the session's own ownership rules instead.
  */
-
+import { DiscordCategoryProblem } from '../../discord-case-categories.js';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ApiErrorCode, createErrorResponse, getErrorMessage, type ApiResponse } from '../../types.js';
 import { canAccessOwned, findSessionOrFail, getAuthUser, isAdmin, parseBody } from '../route-helpers.js';

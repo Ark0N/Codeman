@@ -1,4 +1,4 @@
-/** Private Full-mode category provisioning with durable, non-name-based ownership. */
+/** @fileoverview Private Full-mode category provisioning with durable, non-name-based ownership. */
 import fs from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';

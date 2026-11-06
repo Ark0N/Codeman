@@ -259,3 +259,33 @@ describe('owned case channels and session threads', () => {
     expect(api.createThread).toHaveBeenCalledTimes(1);
   });
 });
+it('continues routing owned alerts when a cosmetic rename is rate limited, honoring retry_after', async () => {
+  const m = manager();
+  const id = await m.forSession(scope, 's1', 'old');
+  const edit = api.edit;
+  api.edit = vi.fn(async (target, body) => {
+    if (target === id && body.name)
+      throw Object.assign(new Error('rate limited'), { status: 429, retryAfterMs: 600000 });
+    return edit(target, body);
+  });
+  expect(await m.forSession(scope, 's1', 'new')).toBe(id);
+  expect(api.edit).toHaveBeenCalledTimes(1);
+  now += 30000;
+  expect(await m.forSession(scope, 's1', 'new')).toBe(id);
+  expect(api.edit).toHaveBeenCalledTimes(1);
+  now += 600000;
+  expect(await m.forSession(scope, 's1', 'new')).toBe(id);
+  expect(api.edit).toHaveBeenCalledTimes(2);
+});
+it('ages finished records and tombstones out without evicting live thread ownership', async () => {
+  const m = manager();
+  const live = await m.forSession(scope, 'live');
+  await m.forSession(scope, 'old');
+  await m.deleted('old', 'keep', scope.guildId);
+  now += 8 * 86400000;
+  await m.forSession(scope, 'new');
+  const state = JSON.parse(await readFile(join(dir, 'discord-case-threads.json'), 'utf8'));
+  expect(Object.values(state.entries).some((e: any) => e.sessionId === 'old')).toBe(false);
+  expect(state.deleted.old).toBeUndefined();
+  expect(m.channelForSession(scope, 'live')).toBe(live);
+});

@@ -1,4 +1,4 @@
-/** Bounded local/SSH attachment access using the session workspace and shared path/SSH guards. */
+/** @fileoverview Bounded local/SSH attachment access using the session workspace and shared path/SSH guards. */
 import fs from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { basename, isAbsolute, relative, sep, posix } from 'node:path';
@@ -171,7 +171,8 @@ export async function readDiscordSessionFile(scope: DiscordFileScope, path: stri
 export async function writeDiscordRemoteAttachment(
   remote: SessionRemote,
   name: string,
-  bytes: Uint8Array
+  bytes: Uint8Array,
+  current: () => boolean = () => true
 ): Promise<string> {
   validRemote(remote);
   if (bytes.byteLength > DISCORD_FILE_LIMIT) throw new DiscordFileProblem('The file is over 8 MB');
@@ -196,12 +197,18 @@ export async function writeDiscordRemoteAttachment(
       privateDirectory: true,
       strict: true,
     };
-    await runWithRemoteSshLimit(() =>
-      writeRemoteFileBytes(remote, { ...base, filePath: posix.join(dir, '.gitignore'), bytes: Buffer.from('*\n') })
-    );
-    await runWithRemoteSshLimit(() =>
-      writeRemoteFileBytes(remote, { ...base, filePath: path, bytes: Buffer.from(bytes) })
-    );
+    await runWithRemoteSshLimit(() => {
+      if (!current()) throw new DiscordFileProblem('Attachment scope changed');
+      return writeRemoteFileBytes(remote, {
+        ...base,
+        filePath: posix.join(dir, '.gitignore'),
+        bytes: Buffer.from('*\n'),
+      });
+    });
+    await runWithRemoteSshLimit(() => {
+      if (!current()) throw new DiscordFileProblem('Attachment scope changed');
+      return writeRemoteFileBytes(remote, { ...base, filePath: path, bytes: Buffer.from(bytes) });
+    });
     // Verify the path and bytes before they are ever passed to the native CLI.
     const actual = await readDiscordSessionFile(
       { workingDir: root.realPath, remote: { ...remote, remotePath: root.realPath } },

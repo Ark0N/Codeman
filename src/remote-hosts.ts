@@ -211,17 +211,17 @@ function expandIdentityPath(identityFile: string): string {
  *    operator already set ConnectTimeout via extraSshOptions, so their value wins.
  */
 export function buildSshConnectionArgs(remote: RemoteSshOptions & Pick<RemoteHost, 'port'>): string[] {
-  const parts: string[] = ['ssh', '-o BatchMode=yes'];
-  const hasConnectTimeout = (remote.extraSshOptions ?? []).some((opt) => /^ConnectTimeout=/i.test(opt));
-  if (!hasConnectTimeout) parts.push('-o ConnectTimeout=10');
-  if (remote.port) parts.push(`-p ${remote.port}`);
-  if (remote.identityFile) parts.push(`-i ${shellescape(expandIdentityPath(remote.identityFile))}`);
-  if (remote.jumpHost) parts.push(`-J ${shellescape(remote.jumpHost)}`);
-  if (remote.socksProxy) {
-    parts.push(`-o ${shellescape(`ProxyCommand=nc -X 5 -x ${remote.socksProxy} %h %p`)}`);
-  }
-  for (const opt of remote.extraSshOptions ?? []) {
-    parts.push(`-o ${shellescape(opt)}`);
+  const args = buildSshConnectionArgv(remote);
+  const parts = ['ssh'];
+  for (let i = 0; i < args.length; i += 2) {
+    const value = args[i + 1];
+    const literal =
+      (args[i] === '-p' && /^\d+$/.test(value)) ||
+      (args[i] === '-o' &&
+        (value === 'BatchMode=yes' ||
+          (value === 'ConnectTimeout=10' &&
+            !(remote.extraSshOptions ?? []).some((opt) => /^ConnectTimeout=/i.test(opt)))));
+    parts.push(`${args[i]} ${literal ? value : shellescape(value)}`);
   }
   return parts;
 }
@@ -380,11 +380,11 @@ export async function probeRemoteCliVersion(
  * can reach — same port/identity/proxy/jump-host as `buildRemoteLaunchCommand`.
  */
 export function buildRemoteSessionAliveCommand(
-  host: Pick<RemoteHost, 'username' | 'host' | 'port'> & RemoteSshOptions,
+  host: Pick<RemoteHost, 'username' | 'host' | 'port'> & RemoteSshOptions & { owned?: boolean },
   remoteSessionName: string
 ): string {
   const [ssh, ...connectionArgs] = buildSshConnectionArgs(host);
-  const remoteCmd = `tmux -L codeman-remote has-session -t ${shellescape(remoteSessionName)} 2>/dev/null`;
+  const remoteCmd = `tmux -L ${host.owned === false ? 'codeman' : 'codeman-remote'} has-session -t ${shellescape(remoteSessionName)} 2>/dev/null`;
   return [ssh, ...connectionArgs, remoteSshTarget(host), shellescape(withRemoteTmuxPath(remoteCmd))].join(' ');
 }
 
@@ -407,7 +407,7 @@ export function buildRemoteSessionAliveCommand(
  * command construction is covered by `buildRemoteSessionAliveCommand`.
  */
 export async function remoteTmuxSessionAlive(
-  remote: Pick<RemoteHost, 'username' | 'host' | 'port'> & RemoteSshOptions,
+  remote: Pick<RemoteHost, 'username' | 'host' | 'port'> & RemoteSshOptions & { owned?: boolean },
   remoteSessionName: string
 ): Promise<boolean | undefined> {
   if (process.env.VITEST) return true;

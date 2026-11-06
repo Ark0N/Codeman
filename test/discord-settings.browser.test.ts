@@ -1,13 +1,15 @@
 /** Real API and Chromium Settings verification; bridge stays disabled, no real Discord traffic. */
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdir } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type Page } from 'playwright';
 import { WebServer } from '../src/web/server.js';
 
 const exec = promisify(execFile);
-const screenshots = '/tmp/codeman-discord-case-thread-screenshots';
+let screenshots: string;
 
 describe('Discord interface mode Settings', () => {
   let server: WebServer;
@@ -23,12 +25,13 @@ describe('Discord interface mode Settings', () => {
     browser = await chromium.launch({ headless: true });
     page = await browser.newPage({ viewport: { width: 1440, height: 1100 } });
     page.on('pageerror', (e) => errors.push(e.message));
-    await mkdir(screenshots, { recursive: true });
+    screenshots = await mkdtemp(join(tmpdir(), 'codeman-discord-settings-'));
   }, 90000);
 
   afterAll(async () => {
     await browser?.close();
     await server?.stop();
+    if (screenshots) await rm(screenshots, { recursive: true, force: true });
   }, 60000);
 
   async function openSettings() {
@@ -101,7 +104,6 @@ describe('Discord interface mode Settings', () => {
       mode: 'full',
       threadCreation: 'lazy',
       categoryId: '666666666666666666',
-      onChannelDelete: 'keep',
     });
     await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => (window as any).app?.terminal);

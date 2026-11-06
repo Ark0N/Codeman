@@ -138,7 +138,7 @@ Case channels and thread IDs are saved privately in instance-scoped `discord-cas
 
 **Migrating from the earlier per-session-channel preview:** save Full mode and use **Sync sessions**. New case channels/threads are created and bounded historical context is loaded there. Old `discord-channels.json` resources and legacy notification threads/history are preserved, but old destinations do not accept input in Full mode. No Discord messages are moved or deleted. Automatic category ownership is stored privately in `discord-case-categories.json`. Interrupted creation is reconciled from a unique temporary setup name and exact permission overwrites; similarly named unowned categories are never adopted. A permissions refusal leaves the previous configuration intact and can be retried after the bot role is updated.
 
-The old `onChannelDelete` setting is retained for configuration compatibility and does not delete shared case channels. Switching back to Notifications resumes its original maps/preferences. The Notifications stale-thread sweep never runs in Full mode.
+Shared case channels are never deleted with one session; there is no `onChannelDelete` setting. Switching back to Notifications resumes its original maps/preferences. The Notifications stale-thread sweep never runs in Full mode.
 
 ## Telling the CLIs
 
@@ -238,3 +238,7 @@ Lifecycle management is available in single-user mode. It remains disabled in mu
 Full mode covers native conversation output, bounded history, files and supported controls; it is not a pixel/terminal mirror. Unverified provider approval dialogs, Docker history and ambiguous native recovery still require the web UI. Test in a dedicated category before enabling it for live sessions.
 
 For a restored SSH Codex tab without a saved conversation ID, history can recover an exact `codex resume <UUID>` invocation from the attached tmux pane’s sole interactive Codex process. It verifies that exact transcript before recording the ID. Multiple agents, missing resume arguments, missing transcripts and other ambiguity remain unavailable; workspace names and the newest transcript are never used as identity evidence.
+
+### Review clarifications
+
+Notifications remains the default. Activity titles, typing, file commands and SSH attachment uploads are Full-only. Both modes durably deduplicate inbound events and retain confirmed outbound part fingerprints: HTTP 5xx alerts remain retryable in Notifications, while an ambiguous network response is not automatically replayed. Full native streaming skips an uncertain turn, posts a catch-up notice pointing to `!codeman history`, and continues with later turns; a cursor evicted from the bounded tail reanchors once. Streaming preferences survive `/clear`. Local history uses bounded Node reads; Python 3 is required only on remote hosts for the SSH history/file helpers. Reconnect is confirmed and refuses a missing or unverified remote agent. Interrupt sends bare Escape. Rename failures do not block alerts, honor Discord's retry duration and use a two-per-ten-minute cosmetic request budget. Live preferences do not expire just because a session is idle; abandoned conversation and finished thread metadata age out after seven days.

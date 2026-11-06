@@ -1,9 +1,12 @@
-/** Durable metadata-only native history boundaries shared by backfill and live observation. */
+/** @fileoverview Durable metadata-only native history boundaries shared by backfill and live observation. */
 import fs from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 export interface DiscordConversationProgress {
   conversationId: string;
+  sessionId?: string;
+  updatedAt?: number;
+  finishedAt?: number;
   seed: string[];
   seedIndex: number;
   seeded: boolean;
@@ -18,7 +21,10 @@ export class DiscordConversationProgressStore {
   private entries = new Map<string, DiscordConversationProgress>();
   private loaded?: Promise<void>;
   private chain: Promise<unknown> = Promise.resolve();
-  constructor(private readonly dir: string) {}
+  constructor(
+    private readonly dir: string,
+    private readonly now: () => number = Date.now
+  ) {}
   private load(): Promise<void> {
     return (this.loaded ??= (async () => {
       const path = join(this.dir, 'discord-conversations.json');
@@ -44,6 +50,9 @@ export class DiscordConversationProgressStore {
             p.seedIndex < 0 ||
             p.seedIndex > p.seed.length ||
             typeof p.seeded !== 'boolean' ||
+            (p.sessionId !== undefined && (typeof p.sessionId !== 'string' || p.sessionId.length > 100)) ||
+            (p.finishedAt !== undefined && (!Number.isFinite(p.finishedAt) || p.finishedAt < 0)) ||
+            (p.updatedAt !== undefined && (!Number.isFinite(p.updatedAt) || p.updatedAt < 0)) ||
             (p.cursor !== undefined && !validCursor(p.cursor)) ||
             (p.statusMessageId !== undefined &&
               (typeof p.statusMessageId !== 'string' || !/^\d{15,25}$/.test(p.statusMessageId))) ||
@@ -55,6 +64,9 @@ export class DiscordConversationProgressStore {
             throw new Error('Invalid conversation boundary');
           this.entries.set(key, {
             conversationId: p.conversationId,
+            sessionId: p.sessionId,
+            finishedAt: p.finishedAt,
+            updatedAt: p.updatedAt ?? this.now(),
             seed: p.seed,
             seedIndex: p.seedIndex,
             seeded: p.seeded,
@@ -77,12 +89,48 @@ export class DiscordConversationProgressStore {
     const p = this.entries.get(key);
     return p ? structuredClone(p) : undefined;
   }
+  reconcile(activeKeys: Set<string>): Promise<void> {
+    return this.mutate((next) => {
+      for (const [key, value] of next) {
+        if (activeKeys.has(key)) {
+          if (value.finishedAt !== undefined) next.set(key, { ...value, finishedAt: undefined });
+        } else if (value.finishedAt === undefined) next.set(key, { ...value, finishedAt: this.now() });
+      }
+    }, activeKeys);
+  }
+  delete(key: string): Promise<void> {
+    return this.mutate((next) => {
+      next.delete(key);
+    });
+  }
+  deleteSession(sessionId: string): Promise<void> {
+    return this.mutate((next) => {
+      for (const [key, value] of next) if (value.sessionId === sessionId) next.delete(key);
+    });
+  }
   set(key: string, value: DiscordConversationProgress): Promise<void> {
+    return this.mutate((next) => {
+      if (!next.has(key) && next.size >= 1024) {
+        const oldestFinished = [...next]
+          .filter(([, value]) => value.finishedAt !== undefined)
+          .sort((a, b) => a[1].finishedAt! - b[1].finishedAt!)[0];
+        if (oldestFinished) next.delete(oldestFinished[0]);
+      }
+      if (!next.has(key) && next.size >= 1024) throw new Error('Conversation boundary limit reached');
+      next.set(key, { ...structuredClone(value), updatedAt: this.now() });
+    });
+  }
+  private mutate(
+    edit: (next: Map<string, DiscordConversationProgress>) => void,
+    protectedKeys?: Set<string>
+  ): Promise<void> {
     const run = this.chain.then(async () => {
       await this.load();
-      if (!this.entries.has(key) && this.entries.size >= 1024) throw new Error('Conversation boundary limit reached');
       const next = new Map(this.entries);
-      next.set(key, structuredClone(value));
+      for (const [key, value] of next)
+        if (!protectedKeys?.has(key) && value.finishedAt !== undefined && value.finishedAt < this.now() - 7 * 86400000)
+          next.delete(key);
+      edit(next);
       await fs.mkdir(this.dir, { recursive: true });
       const path = join(this.dir, 'discord-conversations.json');
       const temp = path + '.' + randomUUID() + '.tmp';

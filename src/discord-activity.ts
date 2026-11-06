@@ -1,4 +1,4 @@
-/** Cosmetic Discord activity, derived from live session state without reading terminal output. */
+/** @fileoverview Cosmetic Discord activity, derived from live session state without reading terminal output. */
 export interface DiscordActivitySession {
   id: string;
   name?: string;
@@ -7,6 +7,15 @@ export interface DiscordActivitySession {
   exited?: boolean;
 }
 
+/** Shared channel-name normalization; markdown escaping belongs to message rendering. */
+export function discordThreadName(name: string): string {
+  return (
+    name
+      .replace(/[\r\n<>`*_]/g, ' ')
+      .trim()
+      .slice(0, 100) || 'session'
+  );
+}
 export function discordActivityName(session: DiscordActivitySession): string {
   const label = session.exited
     ? '⚫ Offline'
@@ -15,8 +24,8 @@ export function discordActivityName(session: DiscordActivitySession): string {
       : session.working
         ? '🟡 Working'
         : '🟢 Idle';
-  const name = (session.name ?? session.id.slice(0, 8)).replace(/[\r\n]/g, ' ').trim();
-  return `${label} · ${name || session.id.slice(0, 8)}`.slice(0, 100);
+  const name = discordThreadName(session.name?.trim() ? session.name : session.id.slice(0, 8));
+  return discordThreadName(`${label} · ${name}`);
 }
 
 interface ActivityDeps {

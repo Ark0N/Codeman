@@ -47,27 +47,6 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 describe('owned session channels', () => {
-  it('finishes explicit deletion safely when creation was still in flight', async () => {
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const create = api.create;
-    api.create = vi.fn(async (...args) => {
-      const result = await create(...args);
-      await gate;
-      return result;
-    });
-    const m = new DiscordSessionChannels(dir, api);
-    const creating = m.forSession(scope, 's1');
-    const outcome = expect(creating).rejects.toThrow(/deleted/);
-    await vi.waitFor(() => expect(api.create).toHaveBeenCalledTimes(1));
-    await m.deleted('s1', 'delete', scope.guildId);
-    release();
-    await outcome;
-    expect(api.remove).toHaveBeenCalledTimes(1);
-    expect(m.channelForSession(scope, 's1')).toBeUndefined();
-  });
   it('creates once under concurrent requests and reuses after restart', async () => {
     const m = new DiscordSessionChannels(dir, api);
     const [a, b] = await Promise.all([m.forSession(scope, 's1', 'Brain'), m.forSession(scope, 's1', 'Brain')]);
@@ -140,47 +119,7 @@ describe('owned session channels', () => {
     const a = await m.forSession(scope, 's1');
     channels.get(a)!.topic = 'someone else';
     await expect(m.rename(scope, 's1', 'changed')).rejects.toThrow(/ownership/);
-    await expect(m.deleted('s1', 'delete', scope.guildId)).rejects.toThrow(/ownership/);
     expect(api.remove).not.toHaveBeenCalled();
-  });
-  it('keeps history without routing after explicit deletion', async () => {
-    const m = new DiscordSessionChannels(dir, api);
-    const a = await m.forSession(scope, 's1');
-    await m.deleted('s1', 'keep', scope.guildId);
-    expect(channels.has(a)).toBe(true);
-    expect(m.sessionForChannel(scope, a)).toBeUndefined();
-    await expect(m.forSession(scope, 's1')).rejects.toThrow(/deleted/);
-  });
-  it('deletes only its recorded channel after explicit deletion', async () => {
-    const m = new DiscordSessionChannels(dir, api);
-    const a = await m.forSession(scope, 's1');
-    await m.deleted('s1', 'delete', scope.guildId);
-    expect(api.remove).toHaveBeenCalledExactlyOnceWith(a);
-    expect(channels.has(scope.categoryId)).toBe(true);
-  });
-  it('locks write permissions for retained history and never falls back to deletion', async () => {
-    const m = new DiscordSessionChannels(dir, api);
-    const a = await m.forSession(scope, 's1');
-    channels.get(a)!.permission_overwrites = [{ id: '777777777777777777', type: 1, allow: '2048', deny: '0' }];
-    await m.deleted('s1', 'retain', scope.guildId);
-    expect(channels.get(a)?.name).toMatch(/^archived-/);
-    for (const o of channels.get(a)!.permission_overwrites!) expect(BigInt(o.allow) & 2048n).toBe(0n);
-    expect(api.remove).not.toHaveBeenCalled();
-  });
-  it('retries a failed explicit cleanup after restart without routing the deleted session', async () => {
-    const m = new DiscordSessionChannels(dir, api);
-    const a = await m.forSession(scope, 's1');
-    const remove = api.remove;
-    api.remove = vi
-      .fn()
-      .mockRejectedValueOnce(Object.assign(new Error('denied'), { status: 403 }))
-      .mockImplementation(remove);
-    await expect(m.deleted('s1', 'delete', scope.guildId)).rejects.toThrow();
-    const restored = new DiscordSessionChannels(dir, api);
-    await restored.load();
-    expect(restored.sessionForChannel(scope, a)).toBeUndefined();
-    await restored.flushRetirements(scope.guildId);
-    expect(channels.has(a)).toBe(false);
   });
   it('does not create or delete anything for a corrupted ownership file', async () => {
     await writeFile(join(dir, 'discord-channels.json'), 'bad JSON');
