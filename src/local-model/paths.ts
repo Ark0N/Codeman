@@ -76,6 +76,19 @@ export function localModelPaths(version: string): LocalModelPaths {
 }
 
 /**
+ * The binary of another unpacked runtime version beside the pinned one: `<runtimeRoot>/
+ * ollama-<version>/ollama`. For an installed model whose runtime was unpacked by an earlier
+ * build with another pin: it keeps running the version it was installed with. Throws on a
+ * version that is not digits and dots, like `localModelPaths()`. Pure.
+ */
+export function runtimeBinaryForVersion(paths: LocalModelPaths, version: string): string {
+  if (!VERSION_PATTERN.test(version)) {
+    throw new Error(`Not a runtime version: ${JSON.stringify(version)}`);
+  }
+  return join(paths.runtimeRoot, `ollama-${version}`, 'ollama');
+}
+
+/**
  * Whether `path` is the local model folder itself or lies inside it, judged on the resolved
  * text (no filesystem access, so a symlink is not followed: a caller that deletes checks the
  * real path first). `..` segments are resolved before the comparison.

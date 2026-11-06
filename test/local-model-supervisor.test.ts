@@ -25,7 +25,7 @@ import { rm } from 'node:fs/promises';
 import { createServer, type Server } from 'node:net';
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { localModelPaths, type LocalModelPaths } from '../src/local-model/paths.js';
+import { localModelPaths, runtimeBinaryForVersion, type LocalModelPaths } from '../src/local-model/paths.js';
 import {
   createRuntimeSupervisor,
   RUNTIME_MAX_RESTARTS,
@@ -792,5 +792,114 @@ describe('stop', () => {
     expect(process.listeners('exit')).not.toContain(added);
     await supervisor.stop();
     expect(process.listenerCount('exit')).toBe(before);
+  });
+});
+
+// ---------- A runtime an earlier server left behind, and the pid that names it ----------
+
+describe('the pid is told the moment the child is spawned', () => {
+  it('reports it before the child answers, so a server killed during the start leaves a pid', async () => {
+    // The child never answers: the start waits, and is told to stop.
+    const fake = fakeRuntime({ spawn: { neverListens: true } });
+    const { supervisor, changes } = supervise(fake, {
+      startTimeoutMs: 60_000,
+      sleep: () => new Promise((resolve) => setTimeout(resolve, 5)),
+    });
+    const starting = supervisor.start({ port, contextLength: CONTEXT });
+    await until(() => children(fake).length === 1, 'the child to be spawned');
+    await until(() => changes.some((status) => status.pid === children(fake)[0].pid), 'the pid to be reported');
+    const early = changes.find((status) => status.pid === children(fake)[0].pid);
+    // Not running yet: it has not answered.
+    expect(early).toMatchObject({ running: false, pid: children(fake)[0].pid });
+    await supervisor.stop();
+    await starting;
+    // A start that failed leaves no pid behind.
+    expect(supervisor.status()).toEqual({ running: false, restarts: 0, gaveUp: false });
+  });
+});
+
+describe('stop with the pid the state file kept', () => {
+  it('ends a runtime of ours that this process never started', async () => {
+    let gone = false;
+    const fake = fakeRuntime();
+    const { supervisor, kills } = supervise(fake, {
+      commandOfPid: async (pid) => (pid === ORPHAN_PID && !gone ? ownCommand() : undefined),
+      kill: (pid, signal) => {
+        kills.push([pid, signal]);
+        gone = true;
+      },
+    });
+    await supervisor.stop({ previousPid: ORPHAN_PID });
+    expect(kills).toEqual([[ORPHAN_PID, 'SIGTERM']]);
+    // Nothing was spawned to do it.
+    expect(children(fake)).toHaveLength(0);
+  });
+
+  it('ends one that runs another version of ours: the folder decides, not the version', async () => {
+    let gone = false;
+    const fake = fakeRuntime();
+    const { supervisor, kills } = supervise(fake, {
+      commandOfPid: async (pid) =>
+        pid === ORPHAN_PID && !gone ? `${runtimeBinaryForVersion(paths, '0.39.2')} serve` : undefined,
+      kill: (pid, signal) => {
+        kills.push([pid, signal]);
+        gone = true;
+      },
+    });
+    await supervisor.stop({ previousPid: ORPHAN_PID });
+    expect(kills).toEqual([[ORPHAN_PID, 'SIGTERM']]);
+  });
+
+  it('never signals a pid that runs something else now, nor one that is gone', async () => {
+    const fake = fakeRuntime();
+    const { supervisor, kills } = supervise(fake, {
+      commandOfPid: async (pid) => (pid === ORPHAN_PID ? '/usr/local/bin/ollama serve' : undefined),
+    });
+    await supervisor.stop({ previousPid: ORPHAN_PID });
+    await supervisor.stop({ previousPid: ORPHAN_PID + 1 });
+    await supervisor.stop({ previousPid: 1 });
+    await supervisor.stop({ previousPid: Number.NaN });
+    expect(kills).toEqual([]);
+  });
+
+  it('stops its own child first, and the stored pid only when it is somebody else', async () => {
+    const fake = fakeRuntime();
+    const { supervisor, kills } = supervise(fake);
+    const started = await supervisor.start({ port, contextLength: CONTEXT });
+    expect(started.ok).toBe(true);
+    await supervisor.stop({ previousPid: children(fake)[0].pid });
+    expect(children(fake)[0].signals).toEqual(['SIGTERM']);
+    // The child is gone by then: its pid names nothing of ours any more.
+    expect(kills).toEqual([]);
+  });
+});
+
+describe('start with the version an installed model was installed with', () => {
+  it('runs that version from its own folder and expects it to answer as that version', async () => {
+    const fake = fakeRuntime({ version: '0.39.2' });
+    const { supervisor } = supervise(fake, { pin: { ...fake.pin(), version: '0.40.15' } });
+    const result = await supervisor.start({ port, contextLength: CONTEXT, version: '0.39.2' });
+    expect(result).toMatchObject({ ok: true });
+    expect(children(fake)[0].command).toBe(runtimeBinaryForVersion(paths, '0.39.2'));
+    // Asked again the same way: the child is kept. Asked for the pinned version: replaced.
+    await supervisor.start({ port, contextLength: CONTEXT, version: '0.39.2' });
+    expect(children(fake)).toHaveLength(1);
+  });
+
+  it('a restart after a crash starts the same version again', async () => {
+    const fake = fakeRuntime({ version: '0.39.2' });
+    const { supervisor } = supervise(fake, { pin: { ...fake.pin(), version: '0.40.15' } });
+    await supervisor.start({ port, contextLength: CONTEXT, version: '0.39.2' });
+    children(fake)[0].crash();
+    await until(() => children(fake).length === 2 && supervisor.status().running, 'the restart');
+    expect(children(fake)[1].command).toBe(runtimeBinaryForVersion(paths, '0.39.2'));
+  });
+
+  it('refuses a version that is no version before anything is spawned', async () => {
+    const fake = fakeRuntime();
+    const { supervisor } = supervise(fake);
+    const result = await supervisor.start({ port, contextLength: CONTEXT, version: '../../bin' });
+    expect(result).toMatchObject({ ok: false, code: 'runtime-start-failed' });
+    expect(children(fake)).toHaveLength(0);
   });
 });

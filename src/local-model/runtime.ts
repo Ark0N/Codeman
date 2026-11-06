@@ -29,12 +29,20 @@
  *    loses nothing and gives back what an orphan cannot: its log, so the measured budget, and
  *    its exit. A child that exits by itself is restarted, at most `RUNTIME_MAX_RESTARTS` times
  *    since the last `start()`; `stop()` sends SIGTERM. The supervisor does not write the state
- *    file: it reports through `onChange`, and its caller stores the pid and the port.
+ *    file: it reports through `onChange`, and its caller stores the pid and the port. The pid
+ *    is reported the moment the child is SPAWNED, before it answers, so a server that is
+ *    killed during a start still leaves a pid that names the runtime as ours. `stop()` takes
+ *    that stored pid too (`previousPid`): a runtime an earlier server left behind is ended the
+ *    same way, when its command line is a binary under our runtime folder. `start()` runs the
+ *    pinned version, or with `version` another one that is unpacked beside it (the version an
+ *    installed model was installed with).
  *  - BUDGET (`parseInferenceComputeTotal()`, pure). Right after it starts, the runtime prints
  *    the device total in its log line "inference compute" (`total="37.4 GiB"`). The supervisor
  *    reads the child's output for it and reports it as `measuredTotalBytes`.
  *  - REMOVAL (`removeLocalModelFiles()`). Deletes the runtime, the private home and, when
- *    asked, the models. Only inside `LocalModelPaths.root`.
+ *    asked, the models. Only inside `LocalModelPaths.root`, and never through a `root` that
+ *    is itself a symbolic link. `removePartialModelBlobs()` deletes what an interrupted
+ *    download left in the model store.
  *
  * Under vitest nothing spawns and nothing is fetched unless a test injects it: the default
  * `spawn` and `fetch` of the dependency objects refuse there, the default `commandOfPid`
@@ -44,12 +52,12 @@
 import { execFile, spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
 import { createHash, type Hash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { lstat, mkdir, open, realpath, rename, rm, rmdir, stat, unlink } from 'node:fs/promises';
+import { lstat, mkdir, open, readdir, realpath, rename, rm, rmdir, stat, unlink } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { join, resolve as resolvePath } from 'node:path';
 import type { LocalModelErrorCode, LocalModelRuntimePin } from '../types.js';
 import { getRuntimeVersion, listRunning } from './ollama-client.js';
-import { isInsideLocalModelRoot, localModelPaths, type LocalModelPaths } from './paths.js';
+import { isInsideLocalModelRoot, localModelPaths, runtimeBinaryForVersion, type LocalModelPaths } from './paths.js';
 
 // ---------- The pin and the constants ----------
 
@@ -674,14 +682,36 @@ async function planRemoval(target: string, root: string): Promise<RemovalStep> {
 }
 
 /**
+ * Whether `root` may be deleted in: it is absent (nothing to do) or a real folder. A `root`
+ * that is itself a symbolic link is REFUSED: every check below compares against the real
+ * path of the root, so a link in its place would make whatever it points at pass as ours.
+ */
+async function rootIsDeletable(root: string): Promise<'absent' | 'folder'> {
+  let info;
+  try {
+    info = await lstat(root);
+  } catch (err) {
+    if (errnoOf(err) === 'ENOENT') return 'absent';
+    throw err;
+  }
+  if (info.isSymbolicLink()) {
+    throw new Error(`Refusing to delete in ${root}: it is a symbolic link, not the folder Codeman made`);
+  }
+  if (!info.isDirectory()) throw new Error(`Refusing to delete in ${root}: it is not a folder`);
+  return 'folder';
+}
+
+/**
  * Deletes what this feature put on disk: every runtime folder and archive, the private home
  * and, when asked, the models. Refuses any path that is not inside `LocalModelPaths.root`,
- * follows no symlink out of it, and removes `root` itself only when it is empty afterwards.
- * Every folder is judged BEFORE the first one is deleted, so a refusal deletes nothing.
- * The state file and the coding agent are not its business.
+ * refuses a `root` that is a symbolic link, follows no symlink out of it, and removes `root`
+ * itself only when it is empty afterwards. Every folder is judged BEFORE the first one is
+ * deleted, so a refusal deletes nothing. The state file and the coding agent are not its
+ * business.
  */
 export async function removeLocalModelFiles(options: RemoveLocalModelFilesOptions): Promise<void> {
   const paths = options.paths ?? localModelPaths(OLLAMA_RUNTIME_PIN.version);
+  if ((await rootIsDeletable(paths.root)) === 'absent') return;
   const targets = [paths.runtimeRoot, paths.homeDir, ...(options.models ? [paths.modelsDir] : [])];
   const plan: RemovalStep[] = [];
   for (const target of targets) plan.push(await planRemoval(target, paths.root));
@@ -692,6 +722,48 @@ export async function removeLocalModelFiles(options: RemoveLocalModelFilesOption
   }
   // Empty now (the models went too, or there never were any): the folder itself goes.
   await rmdir(paths.root).catch(() => undefined);
+}
+
+/** The marker the runtime puts into the name of a blob it has not finished downloading. */
+const PARTIAL_BLOB_MARK = '-partial';
+
+/**
+ * Deletes what an interrupted download left in the model store: the files directly in
+ * `<models>/blobs` whose name carries the runtime's partial marker (`sha256-<hex>-partial`
+ * and its numbered parts). A model the runtime has no manifest for cannot be deleted through
+ * the runtime (it answers "not found" and touches no blob), so its partial blobs are removed
+ * here. Call it only while NO download is in flight: every partial file is then a dead one.
+ *
+ * Only regular files, only that one folder, only inside `LocalModelPaths.root`; a `root`, a
+ * model store or a blob folder that is a symbolic link is left alone. Resolves with the bytes
+ * that were freed. Never throws: a file that cannot be deleted stays for Remove.
+ */
+export async function removePartialModelBlobs(paths?: LocalModelPaths): Promise<number> {
+  let freed = 0;
+  try {
+    const resolved = paths ?? localModelPaths(OLLAMA_RUNTIME_PIN.version);
+    const blobs = join(resolved.modelsDir, 'blobs');
+    if (!isInsideLocalModelRoot(blobs, resolved.root)) return 0;
+    for (const folder of [resolved.root, resolved.modelsDir, blobs]) {
+      const info = await lstat(folder);
+      if (info.isSymbolicLink() || !info.isDirectory()) return 0;
+    }
+    for (const name of await readdir(blobs)) {
+      if (!name.includes(PARTIAL_BLOB_MARK)) continue;
+      const file = join(blobs, name);
+      try {
+        const info = await lstat(file);
+        if (!info.isFile()) continue;
+        await unlink(file);
+        freed += info.size;
+      } catch {
+        // Gone already, or not ours to delete: Remove with the models takes the rest.
+      }
+    }
+  } catch {
+    // No model store yet: nothing was left behind.
+  }
+  return freed;
 }
 
 // ---------- Port ----------
@@ -743,6 +815,11 @@ export async function chooseRuntimePort(options: ChooseRuntimePortOptions = {}):
 export interface RuntimeStatus {
   /** The child Codeman started (or adopted) is alive and answered `/api/version`. */
   running: boolean;
+  /**
+   * The pid of the child. Present from the moment it is SPAWNED, so also while `running` is
+   * still false: the caller stores it at once, and a server killed during a start leaves a
+   * pid that names the runtime as ours.
+   */
   pid?: number;
   port?: number;
   /** The context length the running child was started with. */
@@ -761,6 +838,22 @@ export interface RuntimeStartOptions {
   /** The context length in tokens (`OLLAMA_CONTEXT_LENGTH`). A running child with another value is replaced. */
   contextLength: number;
   /** The pid the state file holds from an earlier server: decides whether a listener on `port` is our own orphan. */
+  previousPid?: number;
+  /**
+   * Another unpacked runtime version than the pinned one: the version an installed model was
+   * installed with. Its binary is `runtimeBinaryForVersion()`, and it must answer this
+   * version. Absent: the pinned version.
+   */
+  version?: string;
+}
+
+/** What `stop()` may be told. */
+export interface RuntimeStopOptions {
+  /**
+   * The pid the state file holds. When no child of this process runs under it and its command
+   * line is a binary under our runtime folder, it is a runtime an earlier server left behind,
+   * and it is ended like our own child (SIGTERM, then SIGKILL). Any other pid is left alone.
+   */
   previousPid?: number;
 }
 
@@ -819,8 +912,12 @@ export interface RuntimeSupervisor {
    * and the budget line was read (or a few seconds passed without it). Never throws.
    */
   start(options: RuntimeStartOptions): Promise<RuntimeStartResult>;
-  /** SIGTERM to the child, SIGKILL after a grace period. Resolves once it is gone. Safe to call when nothing runs. */
-  stop(): Promise<void>;
+  /**
+   * SIGTERM to the child, SIGKILL after a grace period. Resolves once it is gone. Safe to call
+   * when nothing runs. With `previousPid` it also ends a runtime an earlier server left behind
+   * (see `RuntimeStopOptions`), so no caller deletes the runtime folder under a live process.
+   */
+  stop(options?: RuntimeStopOptions): Promise<void>;
   status(): RuntimeStatus;
 }
 
@@ -884,7 +981,9 @@ export function createRuntimeSupervisor(overrides: Partial<RuntimeSupervisorDeps
   let adoptedPid: number | undefined;
   let orphanTimer: NodeJS.Timeout | undefined;
   /** What the last `start()` asked for: what a restart starts again. */
-  let wanted: { port: number; contextLength: number } | undefined;
+  let wanted: { port: number; contextLength: number; version: string } | undefined;
+  /** The version the running child was started as. */
+  let runningVersion: string | undefined;
   /** Bumped by every `start()` and `stop()`: work of an older generation stops when it notices. */
   let generation = 0;
   /** The restart loop that is running, if one is. */
@@ -984,7 +1083,7 @@ export function createRuntimeSupervisor(overrides: Partial<RuntimeSupervisorDeps
         setState({ restarts: state.restarts + 1 });
         await deps.sleep(RESTART_DELAY_MS);
         if (gen !== generation || !wanted) return;
-        const launched = await launch(wanted.port, wanted.contextLength, gen);
+        const launched = await launch(wanted.port, wanted.contextLength, wanted.version, gen);
         // Running again: a later exit comes back here through the child's exit handler.
         if (launched.ok) return;
       }
@@ -997,15 +1096,17 @@ export function createRuntimeSupervisor(overrides: Partial<RuntimeSupervisorDeps
   }
 
   /** Spawns the runtime and waits until it answers. The child becomes `child` only then. */
-  async function launch(port: number, contextLength: number, gen: number): Promise<LaunchResult> {
+  async function launch(port: number, contextLength: number, version: string, gen: number): Promise<LaunchResult> {
     const folders = paths();
     let spawned: ChildProcess;
     try {
+      // The pinned build, or the one an installed model was installed with.
+      const binary = version === pin.version ? folders.binary : runtimeBinaryForVersion(folders, version);
       await mkdir(folders.homeDir, { recursive: true, mode: 0o700 });
       await mkdir(folders.modelsDir, { recursive: true, mode: 0o700 });
       // Asked to stop in the meantime: nothing is started only to be stopped again.
       if (gen !== generation) return { ok: false, detail: 'The start was replaced by a newer request' };
-      spawned = deps.spawn(folders.binary, ['serve'], {
+      spawned = deps.spawn(binary, ['serve'], {
         env: runtimeEnv({
           source: deps.env,
           home: folders.homeDir,
@@ -1022,6 +1123,9 @@ export function createRuntimeSupervisor(overrides: Partial<RuntimeSupervisorDeps
       return { ok: false, detail: errorText(err) };
     }
     starting = spawned;
+    // Said at once, before the child answers: the caller stores the pid, so a server that is
+    // killed during this start still leaves a pid that names the runtime as ours.
+    if (spawned.pid !== undefined) setState({ pid: spawned.pid });
 
     // The child's output: the budget line, and the last lines for the detail of a failure.
     // It is read for as long as the child lives, so a full pipe never blocks it.
@@ -1095,6 +1199,8 @@ export function createRuntimeSupervisor(overrides: Partial<RuntimeSupervisorDeps
     const fail = async (reason: string): Promise<LaunchResult> => {
       if (starting === spawned) starting = undefined;
       await stopChild(spawned);
+      // The pid that was announced at the spawn is no runtime any more.
+      if (state.pid === spawned.pid && child !== spawned) setState({ pid: undefined });
       const log = tail.join('\n');
       return { ok: false, detail: clip(log === '' ? reason : `${reason}\n${log}`) };
     };
@@ -1104,10 +1210,10 @@ export function createRuntimeSupervisor(overrides: Partial<RuntimeSupervisorDeps
     for (;;) {
       if (ended !== undefined) return fail(ended);
       if (gen !== generation) return fail('The start was replaced by a newer request');
-      const version = await getRuntimeVersion(target);
+      const answered = await getRuntimeVersion(target);
       if (ended !== undefined) return fail(ended);
-      if (version !== undefined) {
-        if (version !== pin.version) return fail(`The runtime answers as version ${version}, not ${pin.version}`);
+      if (answered !== undefined) {
+        if (answered !== version) return fail(`The runtime answers as version ${answered}, not ${version}`);
         break;
       }
       if (Date.now() >= deadline) {
@@ -1123,6 +1229,7 @@ export function createRuntimeSupervisor(overrides: Partial<RuntimeSupervisorDeps
 
     starting = undefined;
     child = spawned;
+    runningVersion = version;
     const pid = spawned.pid ?? 0;
     setState({
       running: true,
@@ -1136,8 +1243,9 @@ export function createRuntimeSupervisor(overrides: Partial<RuntimeSupervisorDeps
   }
 
   /** Keeps an orphan of an earlier server: it is watched by pid, because its exit is no event of ours. */
-  function adopt(pid: number, port: number, contextLength: number): void {
+  function adopt(pid: number, port: number, contextLength: number, version: string): void {
     adoptedPid = pid;
+    runningVersion = version;
     setState({ running: true, pid, port, contextLength, measuredTotalBytes: undefined, gaveUp: false });
     let looking = false;
     orphanTimer = setInterval(() => {
@@ -1181,6 +1289,7 @@ export function createRuntimeSupervisor(overrides: Partial<RuntimeSupervisorDeps
 
   async function doStart(options: RuntimeStartOptions): Promise<RuntimeStartResult> {
     const { port, contextLength, previousPid } = options;
+    const version = options.version ?? pin.version;
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
       return { ok: false, code: 'runtime-start-failed', detail: `Not a port: ${String(port)}` };
     }
@@ -1189,7 +1298,13 @@ export function createRuntimeSupervisor(overrides: Partial<RuntimeSupervisorDeps
     }
     // Already running as asked: nothing to do.
     const alive = (child !== undefined && !hasExited(child)) || adoptedPid !== undefined;
-    if (alive && state.running && state.port === port && state.contextLength === contextLength) {
+    if (
+      alive &&
+      state.running &&
+      state.port === port &&
+      state.contextLength === contextLength &&
+      runningVersion === version
+    ) {
       return {
         ok: true,
         pid: state.pid ?? 0,
@@ -1203,7 +1318,8 @@ export function createRuntimeSupervisor(overrides: Partial<RuntimeSupervisorDeps
     const gen = generation;
     await restarting;
     await stopCurrent();
-    wanted = { port, contextLength };
+    wanted = { port, contextLength, version };
+    runningVersion = undefined;
     setState({
       running: false,
       pid: undefined,
@@ -1222,27 +1338,27 @@ export function createRuntimeSupervisor(overrides: Partial<RuntimeSupervisorDeps
       isOwn(await deps.commandOfPid(previousPid).catch(() => undefined))
         ? previousPid
         : undefined;
-    const version = await getRuntimeVersion(target);
+    const answering = await getRuntimeVersion(target);
     let orphan: 'none' | 'adopted' | 'replaced' = 'none';
     if (ownOrphan !== undefined) {
-      if (version === pin.version && (await worthAdopting(target, contextLength))) {
-        adopt(ownOrphan, port, contextLength);
+      if (answering === version && (await worthAdopting(target, contextLength))) {
+        adopt(ownOrphan, port, contextLength, version);
         return { ok: true, pid: ownOrphan, port, orphan: 'adopted' };
       }
       await stopOrphan(ownOrphan);
       orphan = 'replaced';
-    } else if (version !== undefined) {
+    } else if (answering !== undefined) {
       return {
         ok: false,
         code: 'port-in-use',
-        detail: `A model runtime that Codeman did not start answers on port ${port} (version ${version})`,
+        detail: `A model runtime that Codeman did not start answers on port ${port} (version ${answering})`,
       };
     }
     if (!(await portFreeWithin(port, orphan === 'replaced' ? STOP_GRACE_MS : 0))) {
       return { ok: false, code: 'port-in-use', detail: `Another program holds port ${port}` };
     }
 
-    const launched = await launch(port, contextLength, gen);
+    const launched = await launch(port, contextLength, version, gen);
     if (!launched.ok) return { ok: false, code: 'runtime-start-failed', detail: launched.detail };
     return {
       ok: true,
@@ -1253,11 +1369,18 @@ export function createRuntimeSupervisor(overrides: Partial<RuntimeSupervisorDeps
     };
   }
 
-  async function doStop(): Promise<void> {
+  async function doStop(options: RuntimeStopOptions = {}): Promise<void> {
     generation += 1;
     wanted = undefined;
     await restarting;
     await stopCurrent();
+    runningVersion = undefined;
+    // A runtime an earlier server left behind: not a child of this process, known only by the
+    // pid the state file kept. Ended when (and only when) its command line is our own binary.
+    const { previousPid } = options;
+    if (previousPid !== undefined && Number.isInteger(previousPid) && previousPid > 1) {
+      if (isOwn(await deps.commandOfPid(previousPid).catch(() => undefined))) await stopOrphan(previousPid);
+    }
     setState({
       running: false,
       pid: undefined,
@@ -1274,10 +1397,10 @@ export function createRuntimeSupervisor(overrides: Partial<RuntimeSupervisorDeps
       serialize(() => doStart(options)).catch(
         (err): RuntimeStartResult => ({ ok: false, code: 'runtime-start-failed', detail: errorText(err) })
       ),
-    stop: () => {
+    stop: (options) => {
       // At once, not when its turn comes: a start that is still waiting for the runtime gives up.
       generation += 1;
-      return serialize(doStop).catch(() => undefined);
+      return serialize(() => doStop(options)).catch(() => undefined);
     },
     status: () => ({ ...state }),
   };

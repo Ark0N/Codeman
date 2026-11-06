@@ -37,6 +37,7 @@ import {
   OLLAMA_RUNTIME_PIN,
   parseInferenceComputeTotal,
   removeLocalModelFiles,
+  removePartialModelBlobs,
   RUNTIME_DOWNLOAD_RETRIES,
   RUNTIME_KEEP_ALIVE,
   RUNTIME_MAX_RESTARTS,
@@ -935,6 +936,42 @@ describe('removeLocalModelFiles', () => {
     expect(await readFile(join(outside, 'precious.gguf'), 'utf8')).toBe('the only copy');
   });
 
+  it('refuses a local model folder that is itself a symlink, and deletes nothing behind it', async () => {
+    // <data dir>/local-model is a link to a folder somewhere else that happens to hold the
+    // three names this feature deletes.
+    const elsewhere = await outsideDir();
+    await mkdir(join(elsewhere, 'home'), { recursive: true });
+    await writeFile(join(elsewhere, 'home', 'thesis.txt'), 'the only copy');
+    await mkdir(join(elsewhere, 'runtime'), { recursive: true });
+    await mkdir(join(elsewhere, 'models', 'blobs'), { recursive: true });
+    await writeFile(join(elsewhere, 'models', 'blobs', 'sha256-abc'), 'weights');
+    await mkdir(join(paths.root, '..'), { recursive: true });
+    await symlink(elsewhere, paths.root);
+    try {
+      await expect(removeLocalModelFiles({ models: true, paths })).rejects.toThrow(/symbolic link/);
+      expect(await readFile(join(elsewhere, 'home', 'thesis.txt'), 'utf8')).toBe('the only copy');
+      expect(await readFile(join(elsewhere, 'models', 'blobs', 'sha256-abc'), 'utf8')).toBe('weights');
+      expect(existsSync(join(elsewhere, 'runtime'))).toBe(true);
+      // The partial blobs are not deleted through the link either.
+      await writeFile(join(elsewhere, 'models', 'blobs', 'sha256-def-partial'), 'half');
+      expect(await removePartialModelBlobs(paths)).toBe(0);
+      expect(existsSync(join(elsewhere, 'models', 'blobs', 'sha256-def-partial'))).toBe(true);
+    } finally {
+      // The link itself, never what it points at.
+      await rm(paths.root, { force: true });
+    }
+  });
+
+  it('refuses a local model folder that is a file', async () => {
+    await mkdir(join(paths.root, '..'), { recursive: true });
+    await writeFile(paths.root, 'not a folder');
+    try {
+      await expect(removeLocalModelFiles({ models: true, paths })).rejects.toThrow(/not a folder/);
+    } finally {
+      await rm(paths.root, { force: true });
+    }
+  });
+
   it('removes a symlink it meets inside a folder, not the tree behind it', async () => {
     const outside = await outsideDir();
     await writeFile(join(outside, 'keep.txt'), 'keep');
@@ -978,5 +1015,56 @@ describe('removeLocalModelFiles', () => {
     const twisted: LocalModelPaths = { ...paths, runtimeRoot: join(paths.root, 'nested', 'runtime') };
     await expect(removeLocalModelFiles({ models: false, paths: twisted })).rejects.toThrow(/Refusing/);
     expect(await readFile(join(outside, 'runtime', 'keep.txt'), 'utf8')).toBe('keep');
+  });
+});
+
+describe('removePartialModelBlobs', () => {
+  const blob = (name: string): string => join(paths.modelsDir, 'blobs', name);
+
+  it('deletes what an interrupted download left, and keeps every finished blob and the manifests', async () => {
+    await mkdir(join(paths.modelsDir, 'blobs'), { recursive: true });
+    await mkdir(join(paths.modelsDir, 'manifests', 'registry.ollama.ai'), { recursive: true });
+    await writeFile(blob('sha256-aaa'), 'finished weights');
+    await writeFile(blob('sha256-bbb-partial'), '12345');
+    await writeFile(blob('sha256-bbb-partial-0'), '678');
+    await writeFile(blob('sha256-bbb-partial-1'), '9');
+    await writeFile(join(paths.modelsDir, 'manifests', 'registry.ollama.ai', 'latest'), '{}');
+
+    // The bytes that were freed: 5 + 3 + 1.
+    expect(await removePartialModelBlobs(paths)).toBe(9);
+    expect(existsSync(blob('sha256-bbb-partial'))).toBe(false);
+    expect(existsSync(blob('sha256-bbb-partial-0'))).toBe(false);
+    expect(existsSync(blob('sha256-bbb-partial-1'))).toBe(false);
+    expect(await readFile(blob('sha256-aaa'), 'utf8')).toBe('finished weights');
+    expect(existsSync(join(paths.modelsDir, 'manifests', 'registry.ollama.ai', 'latest'))).toBe(true);
+  });
+
+  it('is fine without a model store, and deletes nothing a second time', async () => {
+    expect(await removePartialModelBlobs(paths)).toBe(0);
+    await mkdir(join(paths.modelsDir, 'blobs'), { recursive: true });
+    await writeFile(blob('sha256-ccc-partial'), 'xx');
+    expect(await removePartialModelBlobs(paths)).toBe(2);
+    expect(await removePartialModelBlobs(paths)).toBe(0);
+  });
+
+  it('touches only regular files directly in the blob folder', async () => {
+    const outside = await outsideDir();
+    await writeFile(join(outside, 'keep-partial'), 'keep');
+    await mkdir(join(paths.modelsDir, 'blobs', 'a-partial-folder'), { recursive: true });
+    await writeFile(join(paths.modelsDir, 'blobs', 'a-partial-folder', 'inside-partial'), 'keep');
+    // A link whose name carries the marker: the link stays, and so does what it points at.
+    await symlink(join(outside, 'keep-partial'), blob('sha256-ddd-partial'));
+    expect(await removePartialModelBlobs(paths)).toBe(0);
+    expect(await readFile(join(outside, 'keep-partial'), 'utf8')).toBe('keep');
+    expect(existsSync(join(paths.modelsDir, 'blobs', 'a-partial-folder', 'inside-partial'))).toBe(true);
+  });
+
+  it('leaves a blob folder alone that is a symlink to somewhere else', async () => {
+    const outside = await outsideDir();
+    await writeFile(join(outside, 'sha256-eee-partial'), "half of somebody else's model");
+    await mkdir(paths.modelsDir, { recursive: true });
+    await symlink(outside, join(paths.modelsDir, 'blobs'));
+    expect(await removePartialModelBlobs(paths)).toBe(0);
+    expect(existsSync(join(outside, 'sha256-eee-partial'))).toBe(true);
   });
 });
