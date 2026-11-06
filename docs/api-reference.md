@@ -1676,6 +1676,39 @@ Only replies from `allowedUserIds`, in `guildId`, inside a thread the bridge cre
 
 `GET /api/doctor[?category=core|office|other]` returns the `codeman doctor --json` report (`platform`, `summary`, `tools[]` with `status` `ok` \| `missing` \| `outdated` \| `skipped` \| `error`, `version`, `path`, `installHint`). The probe engine is synchronous, so it runs in a child process of the same entry script, never on the server's event loop (30 s timeout). It names install paths and versions, so it is admin only in multi-user mode (`403`). `400` for an unknown category, `500` if the child produces no report.
 
+## Local model recommendation
+
+`GET /api/local-model` looks at the machine the server runs on and says which local coding model fits it, and with which agent CLI. It covers Apple silicon macOS only; anywhere else the answer is still a `200`, with verdict `none`. **Read-only:** the route downloads nothing, installs nothing, writes no file and reads or changes no setting (setting a model up from Codeman is a later step and is not built yet). It names the host's hardware, so it is admin only in multi-user mode (`403`, answered before anything is probed). The models, their sizes and the agent CLIs it considers are a catalogue compiled into the release; there is no override file.
+
+| Method | Path               | Body | Notes                                                                                                                                                                                                    |
+| ------ | ------------------ | ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET`  | `/api/local-model` | none | `200` with `{ hardware, recommendation, catalogUpdated }`. `403 FORBIDDEN` for a non-admin in multi-user mode. `500 INTERNAL_ERROR` only when the recommendation itself fails, never for a failed probe. |
+
+A probe that fails is an answer, not an error: a server that is not on macOS, or a Mac whose `sysctl` call failed or timed out, still gets a `200`, and `hardware.source` says what was read.
+
+`data`:
+
+- `hardware`: what the server sees of the machine it runs on.
+  - `platform`, `arch`: `process.platform` and `os.arch()` of the server process. `arm64: true` means the machine is Apple silicon whatever `arch` says; `translated: true` means the server process runs under Rosetta.
+  - `memBytes`, `memGb` (decimal GB text) and `memClassGb` (the memory size the Mac is sold as: 16, 32, 48).
+  - `chip`, `model`, `macosVersion`, `macosMajor`, `wiredLimitMb` (`0` means not set), `freeDiskBytes` and `freeDiskGb` (free space on the filesystem of Codeman's data directory). Each is absent when it could not be read.
+  - `source`: `sysctl` (the one bounded `sysctl` call answered), `os-fallback` (macOS, but that call failed, so only memory, architecture and the chip name are known) or `not-probed` (not macOS, nothing was run).
+- `recommendation`:
+  - `verdict`: `ok`, `limited` (the best model that fits has fewer than 12 billion parameters: it handles small edits and questions and does not replace a cloud model) or `none`.
+  - `reason`, present only with `none`: `not-macos`, `intel`, `memory`, `disk`, `macos` (too old) or `no-harness` (no agent CLI that can be connected to a local model is installed or installable).
+  - `headline` and `notes[]`: `{ text, vars? }`. `text` is an English sentence that may hold `{placeholder}` slots, and `vars` carries the slot values as text.
+  - `pick` (absent with `none`) and `alternatives[]` (at most four, best first; empty with `none`), each one model at one context length with one agent CLI:
+    - `modelId` (`name:tag`), `modelLabel`, `license`, `paramsB` (parameters in billions), `context` (tokens);
+    - `cli`, `cliLabel`, `cliInstalled` (`false`: the CLI is not on this machine yet but can be installed without administrator rights), `slowFirstTurn?`;
+    - `needBytes` and `needGb` (memory the model needs at that context), `downloadBytes` and `downloadGb`, `budgetShare` (need divided by `budgetBytes`, rounded to three decimals);
+    - `fit`: `good` (up to 0.85 of the budget) or `tight` (up to 0.98), with its label `fitLabel`;
+    - `speed`: `ok`, `slow` or `unknown`, with `speedLabel` (absent for `ok`) and `tokensPerSecond` (absent for `unknown`). `unknown` means the chip is in no row of the catalogue's chip table, or the catalogue has no speed figure for the model: a speed is never guessed;
+    - `tested`: we ran this model with this CLI on a Mac like this one. No catalogue row has such an entry yet, so it is `false` today.
+  - `budgetBytes` and `budgetGb`: the memory a model may use on this Mac (`0` for `not-macos` and `intel`, where none is computed). `budgetSource` is `wired-limit` (taken from `iogpu.wired_limit_mb`) or `estimated` (computed from the installed memory).
+- `catalogUpdated`: ISO date on which the catalogue's rows were last checked.
+
+Every size a person reads travels twice: as bytes, and as decimal GB text without the unit (`"needGb": "29.6"`). Show the text and add the unit; do not divide the bytes yourself, so one request never shows two different roundings.
+
 ## Voice dictation
 
 Browser dictation transcribed through this server's Claude Code login, i.e. the
