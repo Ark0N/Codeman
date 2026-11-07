@@ -12,6 +12,10 @@ const MAX_BYTES = 2 * 1024 * 1024;
 export class DiscordDeliveryError extends Error {}
 const STATES = [
   'received',
+  'awaiting_choice',
+  'queued',
+  'cancelled',
+  'submitted',
   'files_transferred',
   'submitting',
   'input_accepted',
@@ -51,6 +55,21 @@ export interface DiscordDelivery {
     | 'rate_limited'
     | 'input_too_large'
     | 'invalid_command';
+}
+
+/** Offset ordering is meaningful only inside the same exact native transcript. */
+function nativeOffset(cursor: string | undefined, conversationId: string): number | undefined {
+  if (!cursor || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(conversationId)) return undefined;
+  const parts = cursor.split(':');
+  if (
+    parts.length !== 3 ||
+    parts[0] !== conversationId ||
+    !/^(?:0|[1-9][0-9]{0,15})$/.test(parts[1]) ||
+    !/^[a-f0-9]{16}$/.test(parts[2])
+  )
+    return undefined;
+  const offset = Number(parts[1]);
+  return Number.isSafeInteger(offset) ? offset : undefined;
 }
 
 export class DiscordDeliveryJournal {
@@ -147,7 +166,7 @@ export class DiscordDeliveryJournal {
           userCursor: r.native.userCursor,
         };
       }
-      if (['received', 'files_transferred', 'submitting'].includes(record.state)) {
+      if (['received', 'files_transferred', 'awaiting_choice', 'submitting'].includes(record.state)) {
         record.reason = record.state === 'submitting' ? 'restart_during_submit' : 'restart_before_submit';
         record.state = record.reason === 'restart_during_submit' ? 'uncertain' : 'failed';
         record.updatedAt = this.now();
@@ -233,7 +252,24 @@ export class DiscordDeliveryJournal {
       }
     });
   }
-  async reconcileNative(sessionId: string, history: import('./discord-history.js').DiscordHistory): Promise<void> {
+  private reconciliation: Promise<void> = Promise.resolve();
+  reconcileNative(
+    sessionId: string,
+    history: import('./discord-history.js').DiscordHistory,
+    readAfter?: (cursor: string) => Promise<import('./discord-history.js').DiscordHistory>
+  ): Promise<boolean> {
+    const run = this.reconciliation.then(() => this.reconcile(sessionId, history, readAfter));
+    this.reconciliation = run.then(
+      () => undefined,
+      () => undefined
+    );
+    return run;
+  }
+  private async reconcile(
+    sessionId: string,
+    history: import('./discord-history.js').DiscordHistory,
+    readAfter?: (cursor: string) => Promise<import('./discord-history.js').DiscordHistory>
+  ): Promise<boolean> {
     await this.load();
     const records = [...this.records.values()]
       .filter(
@@ -241,28 +277,110 @@ export class DiscordDeliveryJournal {
           r.direction === 'inbound' &&
           r.sessionId === sessionId &&
           r.native?.conversationId === history.conversationId &&
-          ['input_accepted', 'uncertain', 'running'].includes(r.state)
+          ['submitting', 'input_accepted', 'submitted', 'uncertain', 'running'].includes(r.state)
       )
       .sort((a, b) => a.createdAt - b.createdAt);
     const claimed = new Set(
       [...this.records.values()].flatMap((r) => (r.native?.userCursor ? [r.native.userCursor] : []))
     );
+    const recovery = new Map<string, DiscordDelivery>();
     for (const record of records) {
       const meta = record.native!;
       const baseline = meta.afterCursor ? history.turns.findIndex((t) => t.cursor === meta.afterCursor) : -1;
-      if (meta.afterCursor && baseline < 0) continue;
-      const execution = history.executions?.find((e) =>
-        meta.userCursor
-          ? e.userCursor === meta.userCursor
-          : e.promptHash === meta.promptHash &&
-            !claimed.has(e.userCursor) &&
-            history.turns.findIndex((t) => t.cursor === e.userCursor) > baseline
-      );
+      const execution = history.executions?.find((e) => {
+        if (meta.userCursor) return e.userCursor === meta.userCursor;
+        if (e.promptHash !== meta.promptHash || claimed.has(e.userCursor)) return false;
+        const user = history.turns.findIndex((t) => t.cursor === e.userCursor && t.role === 'user');
+        if (user < 0) return false;
+        if (!meta.afterCursor || baseline >= 0) return user > baseline;
+        // Paged reads exclude the verified anchor itself. Raw metadata may also
+        // move the live checkpoint beyond the submission's last visible turn.
+        if (history.verifiedAfter === meta.afterCursor) return true;
+        const sentAfter = nativeOffset(meta.afterCursor, history.conversationId);
+        const verified = nativeOffset(history.verifiedAfter, history.conversationId);
+        const submitted = nativeOffset(e.userCursor, history.conversationId);
+        if (
+          readAfter &&
+          sentAfter !== undefined &&
+          verified !== undefined &&
+          submitted !== undefined &&
+          sentAfter < verified &&
+          verified < submitted
+        )
+          recovery.set(record.id, record);
+        return false;
+      });
       if (!execution) continue;
+      // Native history can appear before the terminal write returns. Do not advance the
+      // live checkpoint until its transport outcome is known, or claim an external draft.
+      if (record.state === 'submitting') return false;
       claimed.add(execution.userCursor);
       await this.annotate(record.id, { native: { ...meta, userCursor: execution.userCursor } });
-      if (execution.state !== 'submitted') await this.update(record.id, execution.state);
+      if (record.state !== execution.state) await this.update(record.id, execution.state);
     }
+    if (readAfter) {
+      let reads = 0;
+      for (const record of [...recovery.values()].sort((a, b) => b.createdAt - a.createdAt)) {
+        if (reads >= 4) break;
+        if (this.records.get(record.id)?.native?.userCursor) continue;
+        reads++;
+        const anchor = record.native!.afterCursor!;
+        const verified = await readAfter(anchor).catch(() => undefined);
+        if (verified?.conversationId === history.conversationId && verified.verifiedAfter === anchor)
+          if (!(await this.reconcile(sessionId, verified))) return false;
+      }
+    }
+    return true;
+  }
+  /** Exact native turns already submitted through this Discord destination, including queued input. */
+  async submittedUserCursors(sessionId: string, channelId: string, conversationId: string): Promise<Set<string>> {
+    await this.load();
+    await this.chain;
+    return new Set(
+      [...this.records.values()].flatMap((r) =>
+        r.direction === 'inbound' &&
+        r.sessionId === sessionId &&
+        r.channelId === channelId &&
+        r.native?.conversationId === conversationId &&
+        r.native.userCursor
+          ? [r.native.userCursor]
+          : []
+      )
+    );
+  }
+
+  /** Exact confirmed outbound lookup; inbound receipts must never stand in for response delivery. */
+  async deliveredMessage(
+    id: string,
+    scope: { sessionId: string; guildId: string; channelId: string }
+  ): Promise<string | undefined> {
+    await this.load();
+    await this.chain;
+    const record = this.records.get(id);
+    return record?.direction === 'outbound' &&
+      record.state === 'delivered' &&
+      record.sessionId === scope.sessionId &&
+      record.guildId === scope.guildId &&
+      record.channelId === scope.channelId &&
+      record.createdAt > this.now() - RETENTION_MS &&
+      /^\d{15,25}$/.test(record.messageId ?? '')
+      ? record.messageId
+      : undefined;
+  }
+  async recentForSession(sessionId: string): Promise<DiscordDelivery[]> {
+    await this.load();
+    await this.chain;
+    return [...this.records.values()]
+      .filter(
+        (r) =>
+          r.direction === 'inbound' &&
+          r.sessionId === sessionId &&
+          r.state !== 'delivered' &&
+          r.createdAt > this.now() - RETENTION_MS
+      )
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .slice(0, 10)
+      .map((r) => ({ ...r }));
   }
   async recent(): Promise<DiscordDelivery[]> {
     await this.load();

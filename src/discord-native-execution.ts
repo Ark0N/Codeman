@@ -2,11 +2,14 @@
 import { createHash } from 'node:crypto';
 import type { DiscordHistoryTurn } from './discord-history.js';
 export interface DiscordNativeExecution {
+  timestamp?: string;
+  cursor?: string;
   userCursor: string;
   promptHash: string;
   state: 'submitted' | 'running' | 'completed' | 'interrupted' | 'execution_error';
 }
 interface Row {
+  timestamp?: string;
   type?: string;
   uuid?: string;
   parentUuid?: string;
@@ -50,6 +53,10 @@ export function nativeExecutions(
       if (e.type === 'event_msg' && e.payload?.turn_id) {
         const execution = byNativeTurn.get(e.payload.turn_id);
         if (!execution) continue;
+        if (['task_complete', 'turn_aborted', 'task_failed'].includes(e.payload.type ?? '')) {
+          execution.timestamp = e.timestamp;
+          execution.cursor = row.cursor;
+        }
         if (e.payload.type === 'task_complete') execution.state = 'completed';
         if (e.payload.type === 'turn_aborted') execution.state = 'interrupted';
         if (e.payload.type === 'task_failed') execution.state = 'execution_error';
@@ -66,11 +73,14 @@ export function nativeExecutions(
         if (e.uuid) ancestry.set(e.uuid, execution);
       } else if (parent) {
         if (e.uuid) ancestry.set(e.uuid, parent);
-        if (e.type === 'assistant')
+        if (e.type === 'assistant') {
+          parent.timestamp = e.timestamp;
+          parent.cursor = row.cursor;
           parent.state =
             e.message?.stop_reason === 'end_turn' || e.message?.stop_reason === 'stop_sequence'
               ? 'completed'
               : 'running';
+        }
       }
     }
   }

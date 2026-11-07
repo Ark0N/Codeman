@@ -249,6 +249,7 @@ const CLAUDE: CliEntry = {
     allowedKeys: ['CLAUDE_CONFIG_DIR'],
   },
   capabilities: {
+    nativeSettingsProfile: 'claude-tui',
     external: false,
     // Claude indents its transcript body two columns and puts its own ●/✻/❯ markers
     // in them, so a copy can drop two and paste flush. Claude and codex are the only
@@ -718,6 +719,7 @@ const CODEX: CliEntry = {
     allowedKeys: [],
   },
   capabilities: {
+    nativeSettingsProfile: 'codex-tui',
     ...agentDefaults(),
     ...AGENTS_DIR_SKILL,
     // Codex draws `› Ask Codex to do anything` on its composer row and

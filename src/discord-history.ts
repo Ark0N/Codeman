@@ -1,6 +1,10 @@
 /** @fileoverview discord history helpers for the Discord bridge. */
 import { discordDisplayText } from './discord-display-text.js';
-import { probeRemoteDiscordConversation } from './discord-remote-conversation.js';
+import {
+  probeRemoteDiscordConversation,
+  probeRemoteDiscordRuntime,
+  type RemoteDiscordRuntime,
+} from './discord-remote-conversation.js';
 import { getCli } from './config/cli-registry/registry.js';
 import { nativeExecutions, type DiscordNativeExecution } from './discord-native-execution.js';
 /** Read-only, exact-conversation history. No cwd guesses, model turns, tool results or reasoning. */
@@ -22,7 +26,7 @@ interface NativeHistoryRow {
   isSidechain?: boolean;
   isMeta?: boolean;
   isCompactSummary?: boolean;
-  message?: { content?: unknown };
+  message?: { content?: unknown; stop_reason?: string };
   payload?: {
     type?: string;
     output?: unknown;
@@ -72,6 +76,7 @@ export interface DiscordHistoryTurn {
   role: 'user' | 'assistant' | 'tool';
   timestamp: string;
   text: string;
+  phase?: 'commentary' | 'final_answer';
 }
 export interface DiscordHistory {
   conversationId: string;
@@ -79,6 +84,9 @@ export interface DiscordHistory {
   partial: boolean;
   executions?: DiscordNativeExecution[];
   notice?: string;
+  verifiedAfter?: string;
+  scannedCursor?: string;
+  hasMore?: boolean;
 }
 export interface DiscordHistorySource {
   mode: string;
@@ -88,12 +96,38 @@ export interface DiscordHistorySource {
   includeTools?: boolean;
   /** Already attributed by the bounded Codex resolver; local only. */
   exactPath?: string;
+  after?: string;
+}
+export class DiscordHistoryReadError extends Error {
+  constructor(readonly code: string) {
+    super(
+      code === 'cursor_missing'
+        ? 'Saved history position is beyond the transcript; reconnect requires review'
+        : code === 'cursor_changed'
+          ? 'Saved history record changed; live replay paused for safety'
+          : code === 'record_too_large'
+            ? 'A transcript record exceeds the bounded recovery size'
+            : code === 'profile_unverified'
+              ? 'Remote Codex profile could not be verified; check its launch profile'
+              : code === 'profile_changed'
+                ? 'Remote Codex profile or process changed during history read; retry after reconnecting'
+                : 'History recovery is unavailable'
+    );
+  }
+}
+export function discordHistoryFailureReason(error: unknown): string {
+  if (error instanceof DiscordHistoryReadError) return error.message;
+  if (error instanceof Error && error.message === 'Exact Claude/Codex conversation identity is unavailable')
+    return 'Native conversation identity is not verified';
+  return 'Transcript read or delivery failed';
 }
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** Bounded inventory and bounded tail. Exact UUID only; ambiguous copies are unavailable. */
 const HISTORY_SCRIPT = String.raw`
-import os,sys,json,stat,base64
+import os,sys,json,stat,base64,hashlib
 s=json.loads(sys.argv[1]);mode=s['format'];ident=s['id'];limit=2*1024*1024
+def fail(code):
+ print(json.dumps({'error':code}));sys.exit(0)
 root=os.path.expanduser(s.get('home') or os.environ.get('CLAUDE_CONFIG_DIR' if mode=='claude-jsonl' else 'CODEX_HOME') or ('~/.claude' if mode=='claude-jsonl' else '~/.codex'))
 root=os.path.join(root,'projects' if mode=='claude-jsonl' else 'sessions');found=[];count=0
 for parent,dirs,files in os.walk(root,followlinks=False):
@@ -117,14 +151,48 @@ try:
  if mode=='codex-rollout':
   meta=json.loads(head)
   if meta.get('type')!='session_meta' or meta.get('payload',{}).get('id')!=ident: raise Exception('identity mismatch')
- offset=max(0,info.st_size-limit);os.lseek(f,offset,0);data=os.read(f,limit)
- if offset:
-  end=data.find(b'\n')
-  if end<0: raise Exception('oversize row')
-  offset+=end+1;data=data[end+1:]
- # Ignore an incomplete final row; it will be included on the next read.
- end=data.rfind(b'\n');data=data[:end+1] if end>=0 else b''
- print(json.dumps({'offset':offset,'data':base64.b64encode(data).decode(),'partial':offset>0}))
+ after=s.get('after');scanned=None
+ if after:
+  parts=after.split(':');offset=int(parts[1])
+  if offset>=info.st_size:fail('cursor_missing')
+  def ignored_large(line):
+   try:v=json.loads(line)
+   except Exception:return False
+   # Only native metadata that the visible-message parser never exports may be skipped.
+   return mode=='codex-rollout' and isinstance(v,dict) and v.get('type') in ('compacted','turn_context')
+  with os.fdopen(os.dup(f),'rb') as stream:
+   stream.seek(offset);anchor=stream.readline(16*1024*1024+1)
+   if len(anchor)>16*1024*1024:fail('record_too_large')
+   if not anchor.endswith(b'\n') or hashlib.sha256(anchor[:-1]).hexdigest()[:16]!=parts[2]:fail('cursor_changed')
+   if len(anchor)>limit:
+    if not ignored_large(anchor):fail('record_too_large')
+    offset+=len(anchor)
+   stream.seek(offset);chunks=[];size=0;budget=limit+(len(anchor) if len(anchor)<=limit else 0)
+   scanned=after;skipped_end=None
+   while True:
+    at=stream.tell();line=stream.readline(16*1024*1024+1)
+    if len(line)>16*1024*1024:fail('record_too_large')
+    if not line or not line.endswith(b'\n'):break
+    cursor=ident+':'+str(at)+':'+hashlib.sha256(line[:-1]).hexdigest()[:16]
+    if len(line)>limit:
+     if not ignored_large(line):fail('record_too_large')
+     scanned=cursor;skipped_end=at+len(line)
+     break
+    if size+len(line)>budget:break
+    chunks.append(line);size+=len(line);scanned=cursor
+   data=b''.join(chunks)
+   # A skipped metadata row is itself the next verified anchor, never a guessed offset.
+   read_end=skipped_end if skipped_end is not None else offset+len(data)
+   more=read_end<info.st_size
+ else:
+  offset=max(0,info.st_size-limit);os.lseek(f,offset,0);data=os.read(f,limit)
+  if offset:
+   end=data.find(b'\n')
+   if end<0:fail('record_too_large')
+   offset+=end+1;data=data[end+1:]
+  end=data.rfind(b'\n');data=data[:end+1] if end>=0 else b''
+  more=offset+len(data)<info.st_size
+ print(json.dumps({'offset':offset,'data':base64.b64encode(data).decode(),'partial':offset>0,'verifiedAfter':after,'hasMore':more,'scannedCursor':scanned}))
 finally: os.close(f)
 `;
 export function discordHistoryCommand(source: DiscordHistorySource): string {
@@ -135,23 +203,45 @@ export function discordHistoryCommand(source: DiscordHistorySource): string {
     !['claude-jsonl', 'codex-rollout'].includes(format ?? '')
   )
     throw new Error('Exact Claude/Codex conversation identity is unavailable');
+  if (source.after && !new RegExp(`^${source.conversationId}:[0-9]{1,16}:[a-f0-9]{16}$`).test(source.after))
+    throw new Error('Invalid history recovery cursor');
+  if (source.after && !Number.isSafeInteger(Number(source.after.split(':')[1])))
+    throw new Error('Invalid history recovery offset');
   return withRemotePathBootstrap(
     'python3 -c ' +
       shellescape(HISTORY_SCRIPT) +
       ' ' +
-      shellescape(JSON.stringify({ format, id: source.conversationId, home: source.configHome }))
+      shellescape(JSON.stringify({ format, id: source.conversationId, home: source.configHome, after: source.after }))
   );
 }
 export function parseDiscordHistory(source: DiscordHistorySource, raw: string): DiscordHistory {
   const format = getCli(source.mode)?.capabilities.transcript;
-  const packet = JSON.parse(raw) as { offset: number; data: string; partial: boolean };
+  const packet = JSON.parse(raw) as {
+    offset: number;
+    data: string;
+    partial: boolean;
+    error?: string;
+    verifiedAfter?: string;
+    hasMore?: boolean;
+    scannedCursor?: string;
+  };
+  if (packet.error) throw new DiscordHistoryReadError(packet.error);
+  if (source.after && packet.verifiedAfter !== source.after) throw new DiscordHistoryReadError('cursor_changed');
   if (
     !Number.isSafeInteger(packet.offset) ||
     packet.offset < 0 ||
     typeof packet.data !== 'string' ||
-    packet.data.length > 3 * 1024 * 1024
+    packet.data.length > 6 * 1024 * 1024
   )
     throw new Error('Invalid history packet');
+  if (
+    packet.scannedCursor &&
+    (!source.after ||
+      !new RegExp(`^${source.conversationId}:[0-9]{1,16}:[a-f0-9]{16}$`).test(packet.scannedCursor) ||
+      !Number.isSafeInteger(Number(packet.scannedCursor.split(':')[1])) ||
+      Number(packet.scannedCursor.split(':')[1]) < Number(source.after.split(':')[1]))
+  )
+    throw new DiscordHistoryReadError('cursor_changed');
   const content = Buffer.from(packet.data, 'base64');
   let offset = packet.offset;
   const rows: Array<{ value: NativeHistoryRow; offset: number; raw: string }> = [];
@@ -171,6 +261,7 @@ export function parseDiscordHistory(source: DiscordHistorySource, raw: string): 
   for (const { value: e, offset, raw } of rows) {
     let role: 'user' | 'assistant' | 'tool' | undefined,
       text = '',
+      phase: DiscordHistoryTurn['phase'],
       timestamp = typeof e.timestamp === 'string' ? e.timestamp : '';
     if (source.includeTools) {
       let output = '';
@@ -217,6 +308,7 @@ export function parseDiscordHistory(source: DiscordHistorySource, raw: string): 
       if (!msg || (msg.injectionProne && isCodexInjectedContext(msg.text))) continue;
       role = msg.role;
       text = msg.text;
+      if (role === 'assistant' && (msg.phase === 'commentary' || msg.phase === 'final_answer')) phase = msg.phase;
     } else {
       if (e.isSidechain || e.isMeta || e.isCompactSummary || (e.sessionId && e.sessionId !== source.conversationId))
         continue;
@@ -232,6 +324,11 @@ export function parseDiscordHistory(source: DiscordHistorySource, raw: string): 
         timestamp = e.attachment.timestamp || timestamp;
       } else if (e.type === 'user' || e.type === 'assistant') role = e.type;
       if (!role) continue;
+      if (role === 'assistant') {
+        if (e.message?.stop_reason === 'tool_use') phase = 'commentary';
+        else if (e.message?.stop_reason === 'end_turn' || e.message?.stop_reason === 'stop_sequence')
+          phase = 'final_answer';
+      }
       text =
         typeof body === 'string'
           ? body
@@ -251,10 +348,19 @@ export function parseDiscordHistory(source: DiscordHistorySource, raw: string): 
     }
     if (!role || !text.trim()) continue;
     const prev = turns.at(-1);
-    if (prev?.role === role && prev.text === text) continue;
+    if (prev?.role === role && prev.text === text) {
+      if (prev.phase === phase || phase === undefined) continue;
+      // Native mirror rows may omit phase. Keep their stable cursor while applying explicit metadata.
+      if (prev.phase === undefined) {
+        prev.phase = phase;
+        continue;
+      }
+      // An explicit final answer can repeat commentary verbatim; it still needs its own delivery.
+    }
     turns.push({
       role,
       text,
+      ...(phase ? { phase } : {}),
       timestamp,
       cursor: `${source.conversationId}:${offset}:${createHash('sha256').update(raw).digest('hex').slice(0, 16)}`,
     });
@@ -268,7 +374,24 @@ export function parseDiscordHistory(source: DiscordHistorySource, raw: string): 
     })),
     turns
   );
-  return { conversationId: source.conversationId!, turns, partial: packet.partial === true, executions };
+  const last = rows.at(-1);
+  return {
+    conversationId: source.conversationId!,
+    turns,
+    partial: packet.partial === true,
+    executions,
+    ...(source.after
+      ? {
+          verifiedAfter: packet.verifiedAfter,
+          hasMore: packet.hasMore === true,
+          scannedCursor:
+            packet.scannedCursor ??
+            (last
+              ? `${source.conversationId}:${last.offset}:${createHash('sha256').update(last.raw).digest('hex').slice(0, 16)}`
+              : undefined),
+        }
+      : {}),
+  };
 }
 const claudePaths = new Map<
   string,
@@ -347,6 +470,80 @@ async function localHistoryPacket(source: DiscordHistorySource): Promise<string>
       const meta = JSON.parse(head.subarray(0, bytesRead).toString('utf8').split('\n')[0]);
       if (meta.type !== 'session_meta' || meta.payload?.id !== id) throw new Error('Transcript identity changed');
     }
+    const limit = 2 * 1024 * 1024;
+    const recordLimit = 16 * 1024 * 1024;
+    const readLine = async (at: number): Promise<Buffer> => {
+      const chunks: Buffer[] = [];
+      let total = 0;
+      while (at + total < info.size && total <= recordLimit) {
+        const buf = Buffer.alloc(Math.min(65536, info.size - at - total, recordLimit + 1 - total));
+        const { bytesRead } = await file.read(buf, 0, buf.length, at + total);
+        if (!bytesRead) break;
+        const part = buf.subarray(0, bytesRead),
+          end = part.indexOf(10);
+        const kept = end < 0 ? part : part.subarray(0, end + 1);
+        chunks.push(kept);
+        total += kept.length;
+        if (end >= 0) break;
+      }
+      if (total > recordLimit) throw new DiscordHistoryReadError('record_too_large');
+      return Buffer.concat(chunks);
+    };
+    const ignoredLarge = (line: Buffer): boolean => {
+      try {
+        const row = JSON.parse(line.toString('utf8'));
+        return format === 'codex-rollout' && ['compacted', 'turn_context'].includes(row.type);
+      } catch {
+        return false;
+      }
+    };
+    if (source.after) {
+      if (!new RegExp(`^${id}:[0-9]{1,16}:[a-f0-9]{16}$`).test(source.after))
+        throw new Error('Invalid history recovery cursor');
+      const [, rawOffset, expected] = source.after.split(':');
+      let offset = Number(rawOffset);
+      if (!Number.isSafeInteger(offset)) throw new Error('Invalid history recovery offset');
+      if (offset >= info.size) throw new DiscordHistoryReadError('cursor_missing');
+      const anchor = await readLine(offset);
+      if (
+        anchor.at(-1) !== 10 ||
+        createHash('sha256').update(anchor.subarray(0, -1)).digest('hex').slice(0, 16) !== expected
+      )
+        throw new DiscordHistoryReadError('cursor_changed');
+      if (anchor.length > limit) {
+        if (!ignoredLarge(anchor)) throw new DiscordHistoryReadError('record_too_large');
+        offset += anchor.length;
+      }
+      let at = offset,
+        size = 0,
+        scannedCursor = source.after;
+      const chunks: Buffer[] = [],
+        budget = limit + (anchor.length <= limit ? anchor.length : 0);
+      while (at < info.size) {
+        const line = await readLine(at);
+        if (!line.length || line.at(-1) !== 10) break;
+        const cursor = `${id}:${at}:${createHash('sha256').update(line.subarray(0, -1)).digest('hex').slice(0, 16)}`;
+        if (line.length > limit) {
+          if (!ignoredLarge(line)) throw new DiscordHistoryReadError('record_too_large');
+          scannedCursor = cursor;
+          at += line.length;
+          break;
+        }
+        if (size + line.length > budget) break;
+        chunks.push(line);
+        size += line.length;
+        at += line.length;
+        scannedCursor = cursor;
+      }
+      return JSON.stringify({
+        offset,
+        data: Buffer.concat(chunks).toString('base64'),
+        partial: offset > 0,
+        verifiedAfter: source.after,
+        scannedCursor,
+        hasMore: at < info.size,
+      });
+    }
     let offset = Math.max(0, info.size - 2 * 1024 * 1024);
     const buffer = Buffer.alloc(Math.min(info.size, 2 * 1024 * 1024));
     const { bytesRead } = await file.read(buffer, 0, buffer.length, offset);
@@ -380,24 +577,45 @@ export function historyPage(
   return { turns: history.turns.slice(start, end), older: start > 0 ? history.turns[start].cursor : undefined };
 }
 
-const adoptedNativeIds = new WeakMap<object, string>();
-type DiscordHistorySession = import('./session.js').Session & {
-  nativeResumeId?: string;
-  setNativeResumeId?: (id: string) => void;
-};
+const remoteRuntimeHomes = new WeakMap<
+  import('./session.js').Session,
+  { scope: string; runtime: RemoteDiscordRuntime }
+>();
+function remoteHistoryScope(
+  session: import('./session.js').Session,
+  resumeId: string | null = session.nativeResumeId
+): string {
+  const remote = session.remote;
+  return JSON.stringify([
+    session.mode,
+    remote?.hostId,
+    remote?.host,
+    remote?.username,
+    remote?.port,
+    remote?.remotePath,
+    remote?.commands?.codex,
+    resumeId,
+    session.codexConfig?.resumeSessionId,
+    session.envOverrideValue('CODEX_HOME'),
+    session.nativeModelSettingsRevision,
+  ]);
+}
 
 /** Adapts live Session metadata; never guesses by shared directory or falls back to terminal redraws. */
 export async function readDiscordSessionHistory(
-  session: DiscordHistorySession,
-  options?: { includeTools?: boolean }
+  session: import('./session.js').Session,
+  options?: { includeTools?: boolean; after?: string },
+  recoveredId?: string
 ): Promise<DiscordHistory> {
+  if (session.docker || session.isAdopted)
+    throw new Error('Container/adopted history is not available through this reader');
   const format = getCli(session.mode)?.capabilities.transcript;
   let id =
     format === 'claude-jsonl'
       ? (session.claudeSessionChain?.at(-1) ??
         (session.claudeSessionIdIsFirstHand ? session.claudeSessionId : undefined) ??
         session.id)
-      : (session.nativeResumeId ?? adoptedNativeIds.get(session) ?? session.codexConfig?.resumeSessionId);
+      : (session.nativeResumeId ?? session.codexConfig?.resumeSessionId);
   const key = format === 'claude-jsonl' ? 'CLAUDE_CONFIG_DIR' : 'CODEX_HOME';
   let configHome = session.envOverrideValue(key) ?? (!session.remote ? process.env[key] : undefined);
   if (!session.remote && configHome?.startsWith('~/')) configHome = join(homedir(), configHome.slice(2));
@@ -407,6 +625,11 @@ export async function readDiscordSessionHistory(
         ? configHome
         : posix.resolve(session.remote.remotePath, configHome)
       : resolve(session.workingDir, configHome);
+  if (recoveredId && !session.remote) {
+    if (format !== 'codex-rollout' || session.docker || session.isAdopted || (id && id !== recoveredId))
+      throw new DiscordHistoryReadError('profile_changed');
+    id = recoveredId;
+  }
   let exactPath: string | undefined;
   if (format === 'codex-rollout' && !session.remote) {
     const attributed = await findExactCodexConversation({
@@ -419,29 +642,67 @@ export async function readDiscordSessionHistory(
     id = attributed.id;
     exactPath = attributed.path;
   }
-  if (session.docker) throw new Error('Container history is not available through this reader');
   const remote = session.remote;
-  const discovered =
-    format === 'codex-rollout' && remote && !id
-      ? await probeRemoteDiscordConversation(remote, session.id).catch(() => undefined)
-      : undefined;
-  id ??= discovered;
-  const history = await readDiscordHistory({
-    mode: session.mode,
-    conversationId: id,
-    remote: session.remote,
-    configHome,
-    includeTools: options?.includeTools,
-    exactPath,
-  });
-  // Publish only after the exact transcript header was verified, and never overwrite a concurrent adoption.
-  if (discovered && (session.remote !== remote || (session.nativeResumeId && session.nativeResumeId !== discovered)))
-    throw new Error('Native conversation changed during history discovery');
-  if (discovered && !session.nativeResumeId) {
-    adoptedNativeIds.set(session, discovered);
-    session.setNativeResumeId?.(discovered);
+  const resumeIdBefore = session.nativeResumeId;
+  const scope = remoteHistoryScope(session);
+  if (recoveredId && remote) {
+    if (!remote || format !== 'codex-rollout' || (id && id !== recoveredId))
+      throw new DiscordHistoryReadError('profile_changed');
+    id = recoveredId;
   }
-  return history;
+  let runtime: RemoteDiscordRuntime | undefined;
+  let discovered: string | undefined;
+  try {
+    if (format === 'codex-rollout' && remote && !configHome) {
+      const cached = remoteRuntimeHomes.get(session);
+      runtime =
+        cached?.scope === scope
+          ? cached.runtime
+          : await probeRemoteDiscordRuntime(remote, session.id).catch(() => undefined);
+      if (!runtime && !(session.paneExit && id)) throw new DiscordHistoryReadError('profile_unverified');
+      if (runtime?.id && id && runtime.id !== id) throw new DiscordHistoryReadError('profile_changed');
+      if (runtime) {
+        configHome = runtime.configHome;
+        if (!id) discovered = runtime.id;
+      }
+    } else if (format === 'codex-rollout' && remote && !id) {
+      discovered = await probeRemoteDiscordConversation(remote, session.id).catch(() => undefined);
+    }
+    id ??= discovered;
+    if (!remote && !recoveredId && id && !session.nativeResumeId) discovered = id;
+    const history = await readDiscordHistory({
+      mode: session.mode,
+      conversationId: id,
+      remote,
+      configHome,
+      includeTools: options?.includeTools,
+      after: options?.after,
+      exactPath,
+    });
+    if (remote) {
+      if (runtime) {
+        const fresh = await probeRemoteDiscordRuntime(remote, session.id).catch(() => undefined);
+        if (
+          !(session.paneExit && !fresh) &&
+          (!fresh ||
+            fresh.fingerprint !== runtime.fingerprint ||
+            fresh.configHome !== runtime.configHome ||
+            fresh.id !== runtime.id)
+        )
+          throw new DiscordHistoryReadError('profile_changed');
+      }
+      const compatibleAdoption = session.nativeResumeId === id && remoteHistoryScope(session, resumeIdBefore) === scope;
+      if (session.remote !== remote || (remoteHistoryScope(session) !== scope && !compatibleAdoption))
+        throw new DiscordHistoryReadError('profile_changed');
+    }
+    // The exact native file/header and current owned runtime must both confirm the binding first.
+    if (discovered && !session.nativeResumeId) session.setNativeResumeId?.(discovered);
+    if (runtime) remoteRuntimeHomes.set(session, { scope: remoteHistoryScope(session), runtime });
+    return history;
+  } catch (error) {
+    remoteRuntimeHomes.delete(session);
+    throw error;
+  }
 }
 export function renderHistory(turns: DiscordHistoryTurn[], options: { includeTimestamps?: boolean } = {}): string {
   return turns

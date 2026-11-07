@@ -4582,6 +4582,21 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     }
   }
 
+  /** Bounded async visible-frame capture for guarded Discord native controls. */
+  async capturePaneTextAsync(muxName: string, opts?: { signal?: AbortSignal; ansi?: boolean }): Promise<string | null> {
+    if (IS_TEST_MODE || !resolveTmuxPaneTarget(muxName)) return null;
+    try {
+      const { stdout } = await promisify(execFile)(
+        'tmux',
+        ['-L', this.tmuxSocket, 'capture-pane', '-p', ...(opts?.ansi ? ['-e'] : []), '-t', muxName],
+        { encoding: 'utf8', timeout: 5000, maxBuffer: 128 * 1024, signal: opts?.signal }
+      );
+      return stdout;
+    } catch {
+      return null;
+    }
+  }
+
   capturePaneBuffer(muxName: string, paneTarget?: string, opts?: PaneCaptureOptions): string | null {
     const exec = this.captureRunner();
     if (!exec) return '';

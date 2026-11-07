@@ -46,6 +46,29 @@ function server(): Internals {
 beforeEach(() => sendNotification.mockClear());
 
 describe('bridge deps', () => {
+  it('routes model/effort commands and bound setting buttons through the native settings service', async () => {
+    const s = new WebServer(0, false, true, '127.0.0.1', 'box') as unknown as {
+      discordBridge: {
+        deps: {
+          control: (id: string, command: string) => Promise<unknown>;
+          controlCurrent: (id: string, validity: string) => boolean;
+        };
+      };
+      discordModelControls: { control: ReturnType<typeof vi.fn>; current: ReturnType<typeof vi.fn> };
+      sessions: Map<string, unknown>;
+    };
+    const reply = { text: 'Verified native setting' };
+    s.discordModelControls = { control: vi.fn(async () => reply), current: vi.fn(() => true) };
+    expect(await s.discordBridge.deps.control('s1', 'model')).toEqual(reply);
+    expect(await s.discordBridge.deps.control('s1', 'effort high')).toEqual(reply);
+    expect(s.discordModelControls.control.mock.calls).toEqual([
+      ['s1', 'model'],
+      ['s1', 'effort high'],
+    ]);
+    expect(s.discordBridge.deps.controlCurrent('s1', 'model-setting:token')).toBe(true);
+    expect(s.discordModelControls.current).toHaveBeenCalledWith('s1', 'model-setting:token');
+  });
+
   it('agentExited is true only for a session whose pane exit was observed', () => {
     const s = new WebServer(0, false, true, '127.0.0.1', 'box') as unknown as Internals & {
       discordBridge: { deps: { agentExited: (id: string) => boolean } };

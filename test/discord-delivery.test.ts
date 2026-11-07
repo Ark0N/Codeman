@@ -110,6 +110,325 @@ describe('delivery journal', () => {
     const restored = new DiscordDeliveryJournal(dir, () => now);
     expect((await restored.recent())[0].native?.userCursor).toBe(user);
   });
+  it.each(['input_accepted', 'submitting'] as const)(
+    'recovers an unbound %s input from its verified boundary before a later page can echo it',
+    async (state) => {
+      const journal = new DiscordDeliveryJournal(dir, () => now);
+      await journal.claim(meta);
+      await journal.annotate(meta.id, {
+        native: {
+          conversationId: '12345678-1234-1234-1234-123456789abc',
+          promptHash: 'a'.repeat(64),
+          afterCursor: '12345678-1234-1234-1234-123456789abc:10:aaaaaaaaaaaaaaaa',
+        },
+      });
+      await journal.update(meta.id, state);
+      const history = {
+        conversationId: '12345678-1234-1234-1234-123456789abc',
+        partial: true,
+        verifiedAfter: '12345678-1234-1234-1234-123456789abc:20:aaaaaaaaaaaaaaaa',
+        turns: [
+          {
+            cursor: '12345678-1234-1234-1234-123456789abc:30:aaaaaaaaaaaaaaaa',
+            role: 'user' as const,
+            text: 'Prompt with [attached: /tmp/image.png]',
+            timestamp: '',
+          },
+        ],
+        executions: [
+          {
+            userCursor: '12345678-1234-1234-1234-123456789abc:30:aaaaaaaaaaaaaaaa',
+            promptHash: 'a'.repeat(64),
+            state: 'running' as const,
+          },
+        ],
+      };
+      const readAfter = vi.fn(async () => ({
+        ...history,
+        verifiedAfter: '12345678-1234-1234-1234-123456789abc:10:aaaaaaaaaaaaaaaa',
+      }));
+      if (state === 'submitting') {
+        expect(await journal.reconcileNative('s1', history, readAfter)).toBe(false);
+        expect((await journal.submittedUserCursors('s1', THREAD, '12345678-1234-1234-1234-123456789abc')).size).toBe(0);
+        await journal.update(meta.id, 'input_accepted');
+      }
+      expect(await journal.reconcileNative('s1', history, readAfter)).toBe(true);
+      expect(readAfter).toHaveBeenCalledWith('12345678-1234-1234-1234-123456789abc:10:aaaaaaaaaaaaaaaa');
+      expect(await journal.submittedUserCursors('s1', THREAD, '12345678-1234-1234-1234-123456789abc')).toEqual(
+        new Set(['12345678-1234-1234-1234-123456789abc:30:aaaaaaaaaaaaaaaa'])
+      );
+      const restored = new DiscordDeliveryJournal(dir, () => now);
+      await restored.reconcileNative('s1', {
+        ...history,
+        executions: [{ ...history.executions[0], state: 'completed' }],
+      });
+      expect((await restored.recent())[0].state).toBe('completed');
+    }
+  );
+  it('does not accept an unverified boundary or steal an identical externally typed prompt', async () => {
+    const journal = new DiscordDeliveryJournal(dir, () => now);
+    await journal.claim(meta);
+    await journal.annotate(meta.id, {
+      native: {
+        conversationId: '12345678-1234-1234-1234-123456789abc',
+        promptHash: 'a'.repeat(64),
+        afterCursor: '12345678-1234-1234-1234-123456789abc:10:aaaaaaaaaaaaaaaa',
+      },
+    });
+    await journal.update(meta.id, 'input_accepted');
+    const external = {
+      conversationId: '12345678-1234-1234-1234-123456789abc',
+      partial: true,
+      verifiedAfter: '12345678-1234-1234-1234-123456789abc:20:aaaaaaaaaaaaaaaa',
+      turns: [
+        {
+          cursor: '12345678-1234-1234-1234-123456789abc:40:aaaaaaaaaaaaaaaa',
+          role: 'user' as const,
+          text: 'same',
+          timestamp: '',
+        },
+      ],
+      executions: [
+        {
+          userCursor: '12345678-1234-1234-1234-123456789abc:40:aaaaaaaaaaaaaaaa',
+          promptHash: 'a'.repeat(64),
+          state: 'running' as const,
+        },
+      ],
+    };
+    await journal.reconcileNative('s1', external, async () => external);
+    expect((await journal.submittedUserCursors('s1', THREAD, '12345678-1234-1234-1234-123456789abc')).size).toBe(0);
+    await journal.reconcileNative('s1', external, async () => ({
+      ...external,
+      verifiedAfter: '12345678-1234-1234-1234-123456789abc:10:aaaaaaaaaaaaaaaa',
+      turns: [
+        {
+          cursor: '12345678-1234-1234-1234-123456789abc:30:aaaaaaaaaaaaaaaa',
+          role: 'user' as const,
+          text: 'same',
+          timestamp: '',
+        },
+        ...external.turns,
+      ],
+      executions: [
+        {
+          userCursor: '12345678-1234-1234-1234-123456789abc:30:aaaaaaaaaaaaaaaa',
+          promptHash: 'a'.repeat(64),
+          state: 'completed',
+        },
+        ...external.executions,
+      ],
+    }));
+    expect(await journal.submittedUserCursors('s1', THREAD, '12345678-1234-1234-1234-123456789abc')).toEqual(
+      new Set(['12345678-1234-1234-1234-123456789abc:30:aaaaaaaaaaaaaaaa'])
+    );
+  });
+  it('serializes concurrent native reads so identical pending inputs cannot claim one execution twice', async () => {
+    const journal = new DiscordDeliveryJournal(dir, () => now);
+    for (const id of ['first', 'second']) {
+      await journal.claim({ ...meta, id });
+      await journal.annotate(id, {
+        native: {
+          conversationId: '12345678-1234-1234-1234-123456789abc',
+          promptHash: 'a'.repeat(64),
+          afterCursor: '12345678-1234-1234-1234-123456789abc:10:aaaaaaaaaaaaaaaa',
+        },
+      });
+      await journal.update(id, 'input_accepted');
+    }
+    const h = {
+      conversationId: '12345678-1234-1234-1234-123456789abc',
+      partial: true,
+      verifiedAfter: '12345678-1234-1234-1234-123456789abc:10:aaaaaaaaaaaaaaaa',
+      turns: [
+        {
+          cursor: '12345678-1234-1234-1234-123456789abc:30:aaaaaaaaaaaaaaaa',
+          role: 'user' as const,
+          text: 'same',
+          timestamp: '',
+        },
+      ],
+      executions: [
+        {
+          userCursor: '12345678-1234-1234-1234-123456789abc:30:aaaaaaaaaaaaaaaa',
+          promptHash: 'a'.repeat(64),
+          state: 'running' as const,
+        },
+      ],
+    };
+    await Promise.all([journal.reconcileNative('s1', h), journal.reconcileNative('s1', h)]);
+    expect(
+      (await journal.recent()).filter(
+        (r) => r.native?.userCursor === '12345678-1234-1234-1234-123456789abc:30:aaaaaaaaaaaaaaaa'
+      )
+    ).toHaveLength(1);
+  });
+  it.each(['anchor', 'metadata'] as const)(
+    'binds Discord provenance when a verified page omits its %s boundary',
+    async (kind) => {
+      const journal = new DiscordDeliveryJournal(dir, () => now);
+      const conv = '12345678-1234-1234-1234-123456789abc';
+      const baseline = conv + ':100:aaaaaaaaaaaaaaaa',
+        verified = kind === 'anchor' ? baseline : conv + ':150:bbbbbbbbbbbbbbbb',
+        user = conv + ':200:cccccccccccccccc';
+      await journal.claim(meta);
+      await journal.update(meta.id, 'input_accepted');
+      await journal.annotate(meta.id, {
+        native: { conversationId: conv, promptHash: 'a'.repeat(64), afterCursor: baseline },
+      });
+      const h = {
+        conversationId: conv,
+        partial: true,
+        verifiedAfter: verified,
+        turns: [{ role: 'user' as const, cursor: user, text: 'Same prompt', timestamp: '' }],
+        executions: [{ userCursor: user, promptHash: 'a'.repeat(64), state: 'running' as const }],
+      };
+      await journal.reconcileNative('s1', h, async (after) => ({ ...h, verifiedAfter: after }));
+      expect(await journal.submittedUserCursors('s1', THREAD, conv)).toEqual(new Set([user]));
+      const restored = new DiscordDeliveryJournal(dir, () => now);
+      expect((await restored.recent())[0].native?.userCursor).toBe(user);
+    }
+  );
+
+  it.each([
+    'unverified',
+    'changed anchor',
+    'foreign anchor',
+    'older page',
+    'unsafe offset',
+    'foreign user',
+    'old user',
+    'wrong hash',
+  ])('does not guess Discord provenance from a paged prompt with %s', async (kind) => {
+    const journal = new DiscordDeliveryJournal(dir, () => now),
+      conv = '12345678-1234-1234-1234-123456789abc';
+    const baseline = conv + ':100:aaaaaaaaaaaaaaaa';
+    let verified: string | undefined = conv + ':150:bbbbbbbbbbbbbbbb',
+      user = conv + ':200:cccccccccccccccc';
+    if (kind === 'unverified') verified = undefined;
+    if (kind === 'changed anchor') verified = conv + ':100:dddddddddddddddd';
+    if (kind === 'foreign anchor') verified = 'abcdef12-1234-1234-1234-123456789abc:150:bbbbbbbbbbbbbbbb';
+    if (kind === 'older page') verified = conv + ':50:bbbbbbbbbbbbbbbb';
+    if (kind === 'unsafe offset') verified = conv + ':9007199254740992:bbbbbbbbbbbbbbbb';
+    if (kind === 'foreign user') user = 'abcdef12-1234-1234-1234-123456789abc:200:cccccccccccccccc';
+    if (kind === 'old user') user = conv + ':120:cccccccccccccccc';
+    await journal.claim(meta);
+    await journal.update(meta.id, 'input_accepted');
+    await journal.annotate(meta.id, {
+      native: { conversationId: conv, promptHash: 'a'.repeat(64), afterCursor: baseline },
+    });
+    await journal.reconcileNative('s1', {
+      conversationId: conv,
+      partial: true,
+      verifiedAfter: verified,
+      turns: [{ role: 'user', cursor: user, text: 'Prompt', timestamp: '' }],
+      executions: [{ userCursor: user, promptHash: (kind === 'wrong hash' ? 'b' : 'a').repeat(64), state: 'running' }],
+    });
+    expect(await journal.submittedUserCursors('s1', THREAD, conv)).toEqual(new Set());
+  });
+
+  it('verifies the original submission page instead of attributing later identical external text to an old record', async () => {
+    const journal = new DiscordDeliveryJournal(dir, () => now),
+      conv = '12345678-1234-1234-1234-123456789abc';
+    const baseline = conv + ':100:aaaaaaaaaaaaaaaa',
+      original = conv + ':200:cccccccccccccccc',
+      boundary = conv + ':500:bbbbbbbbbbbbbbbb',
+      external = conv + ':600:dddddddddddddddd';
+    await journal.claim(meta);
+    await journal.update(meta.id, 'input_accepted');
+    await journal.annotate(meta.id, {
+      native: { conversationId: conv, promptHash: 'a'.repeat(64), afterCursor: baseline },
+    });
+    const read = vi.fn(async (after: string) => ({
+      conversationId: conv,
+      partial: true,
+      verifiedAfter: after,
+      turns: [{ cursor: original, role: 'user' as const, text: 'Same text', timestamp: '' }],
+      executions: [{ userCursor: original, promptHash: 'a'.repeat(64), state: 'completed' as const }],
+    }));
+    await journal.reconcileNative(
+      's1',
+      {
+        conversationId: conv,
+        partial: true,
+        verifiedAfter: boundary,
+        turns: [{ cursor: external, role: 'user', text: 'Same text', timestamp: '' }],
+        executions: [{ userCursor: external, promptHash: 'a'.repeat(64), state: 'running' }],
+      },
+      read
+    );
+    expect(read).toHaveBeenCalledWith(baseline);
+    expect(await journal.submittedUserCursors('s1', THREAD, conv)).toEqual(new Set([original]));
+  });
+
+  it.each(['wrong anchor', 'wrong conversation', 'read failure'])(
+    'refuses an unverified fallback page: %s',
+    async (kind) => {
+      const journal = new DiscordDeliveryJournal(dir, () => now),
+        conv = '12345678-1234-1234-1234-123456789abc';
+      const baseline = conv + ':100:aaaaaaaaaaaaaaaa',
+        boundary = conv + ':150:bbbbbbbbbbbbbbbb',
+        user = conv + ':200:cccccccccccccccc';
+      await journal.claim(meta);
+      await journal.update(meta.id, 'input_accepted');
+      await journal.annotate(meta.id, {
+        native: { conversationId: conv, promptHash: 'a'.repeat(64), afterCursor: baseline },
+      });
+      const h = {
+        conversationId: conv,
+        partial: true,
+        verifiedAfter: boundary,
+        turns: [{ cursor: user, role: 'user' as const, text: 'Prompt', timestamp: '' }],
+        executions: [{ userCursor: user, promptHash: 'a'.repeat(64), state: 'running' as const }],
+      };
+      await journal.reconcileNative('s1', h, async () => {
+        if (kind === 'read failure') throw Error('unavailable');
+        return {
+          ...h,
+          verifiedAfter: kind === 'wrong anchor' ? boundary : baseline,
+          conversationId: kind === 'wrong conversation' ? 'foreign' : conv,
+        };
+      });
+      expect(await journal.submittedUserCursors('s1', THREAD, conv)).toEqual(new Set());
+    }
+  );
+
+  it('continues an already bound native execution even when its original baseline is outside the page', async () => {
+    const journal = new DiscordDeliveryJournal(dir, () => now);
+    await journal.claim(meta);
+    await journal.update(meta.id, 'running');
+    await journal.annotate(meta.id, {
+      native: { conversationId: 'native', promptHash: 'a'.repeat(64), afterCursor: 'older', userCursor: 'exact-user' },
+    });
+    await journal.reconcileNative('s1', {
+      conversationId: 'native',
+      partial: true,
+      turns: [],
+      executions: [{ userCursor: 'exact-user', promptHash: 'a'.repeat(64), state: 'completed' }],
+    });
+    expect((await journal.recent())[0].state).toBe('completed');
+  });
+  it('finds exact Discord-origin native cursors across the full durable ledger and scoped destination', async () => {
+    const journal = new DiscordDeliveryJournal(dir, () => now);
+    for (let i = 0; i < 15; i++) {
+      await journal.claim({ ...meta, id: 'input:' + i });
+      await journal.annotate('input:' + i, {
+        native: { conversationId: 'native', promptHash: 'a'.repeat(64), userCursor: 'user:' + i },
+      });
+    }
+    await journal.claim({ ...meta, id: 'hash-only' });
+    await journal.annotate('hash-only', { native: { conversationId: 'native', promptHash: 'a'.repeat(64) } });
+    await journal.claim({ ...meta, id: 'out', direction: 'outbound' });
+    await journal.annotate('out', {
+      native: { conversationId: 'native', promptHash: 'a'.repeat(64), userCursor: 'foreign' },
+    });
+    expect((await journal.submittedUserCursors('s1', THREAD, 'native')).size).toBe(15);
+    expect(await journal.submittedUserCursors('other', THREAD, 'native')).toEqual(new Set());
+    expect(await journal.submittedUserCursors('s1', PARENT, 'native')).toEqual(new Set());
+    expect(await journal.submittedUserCursors('s1', THREAD, 'other-conversation')).toEqual(new Set());
+    const restored = new DiscordDeliveryJournal(dir, () => now);
+    expect(await restored.submittedUserCursors('s1', THREAD, 'native')).toContain('user:0');
+  });
   it('fails closed on corruption, oversized metadata and symlinks', async () => {
     const path = join(dir, 'discord-delivery.json');
     for (const contents of ['not JSON', '{}', 'x'.repeat(2 * 1024 * 1024 + 1)]) {
@@ -430,4 +749,53 @@ it('shares a two-per-ten-minute budget across Full-mode cosmetic rename paths', 
   now += 600003;
   await api.rename(THREAD, 'three', () => true);
   expect(fetch).toHaveBeenCalledTimes(3);
+});
+it('fingerprints embed text and color so a changed card cannot replay an existing delivery plan', async () => {
+  const { b } = await ready();
+  const post = {
+    content: '',
+    embeds: [{ description: 'first rendering', color: 0x58a6ff }],
+    allowed_mentions: { parse: [], users: [] },
+  };
+  type ResponsePost = typeof post;
+  const send = (
+    b as unknown as {
+      deliverPost: (
+        channel: string,
+        post: ResponsePost,
+        file: undefined,
+        session: string,
+        key: string
+      ) => Promise<unknown>;
+    }
+  ).deliverPost.bind(b);
+  await send(THREAD, post, undefined, 's1', 'response-card');
+  await expect(
+    send(
+      THREAD,
+      { ...post, embeds: [{ description: 'different rendering', color: 0xed6b6b }] },
+      undefined,
+      's1',
+      'response-card'
+    )
+  ).rejects.toThrow('formatting changed');
+});
+
+it('resolves only the exact confirmed outbound response within its session and destination', async () => {
+  const j = new DiscordDeliveryJournal(dir, () => now),
+    scope = { sessionId: 's1', guildId: GUILD, channelId: THREAD };
+  await j.claim({ ...scope, id: 'answer', direction: 'outbound' });
+  await j.annotate('answer', { messageId: MESSAGE });
+  expect(await j.deliveredMessage('answer', scope)).toBeUndefined();
+  await j.update('answer', 'delivered');
+  expect(await j.deliveredMessage('answer', scope)).toBe(MESSAGE);
+  expect(await j.recentForSession('s1')).toEqual([]);
+  for (const altered of [{ sessionId: 'other' }, { guildId: 'other' }, { channelId: 'other' }])
+    expect(await j.deliveredMessage('answer', { ...scope, ...altered })).toBeUndefined();
+  await j.claim({ ...scope, id: 'input', direction: 'inbound' });
+  await j.annotate('input', { messageId: MESSAGE });
+  await j.update('input', 'delivered');
+  expect(await j.deliveredMessage('input', scope)).toBeUndefined();
+  now += 8 * 86400000;
+  expect(await j.deliveredMessage('answer', scope)).toBeUndefined();
 });

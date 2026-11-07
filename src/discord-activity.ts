@@ -3,6 +3,8 @@ export interface DiscordActivitySession {
   id: string;
   name?: string;
   working?: boolean;
+  watching?: string | null;
+  activityStatus?: string;
   waiting?: boolean;
   exited?: boolean;
 }
@@ -16,14 +18,25 @@ export function discordThreadName(name: string): string {
       .slice(0, 100) || 'session'
   );
 }
+/** All observed work shares one Discord state, avoiding rename notices between work types. */
+export function discordActivityWorking(session: DiscordActivitySession): boolean {
+  return !!(
+    session.working ||
+    session.watching?.trim() ||
+    session.activityStatus === 'waiting_agents' ||
+    session.activityStatus === 'checking_agents'
+  );
+}
+
+function activityLabel(session: DiscordActivitySession): string {
+  if (session.exited) return '⚫ Offline';
+  if (session.waiting) return '🔴 Needs input';
+  if (discordActivityWorking(session)) return '🟡 Working';
+  return '⚫ Idle';
+}
+
 export function discordActivityName(session: DiscordActivitySession): string {
-  const label = session.exited
-    ? '⚫ Offline'
-    : session.waiting
-      ? '🔴 Needs input'
-      : session.working
-        ? '🟡 Working'
-        : '🟢 Idle';
+  const label = activityLabel(session);
   const name = discordThreadName(session.name?.trim() ? session.name : session.id.slice(0, 8));
   return discordThreadName(`${label} · ${name}`);
 }
@@ -119,25 +132,31 @@ export class DiscordActivity {
       this.progress.set(id, progress);
     }
     const now = this.deps.now();
-    if (session.working || session.waiting || session.exited) progress.idleSince = undefined;
+    if (discordActivityWorking(session) || session.waiting || session.exited) progress.idleSince = undefined;
     else progress.idleSince ??= now;
     if ((progress.verifyRetryAt ?? 0) > now) return;
     const needsRename = () => {
       const s = current();
       if (!s || (progress.renameRetryAt ?? 0) > now || progress.name === discordActivityName(s)) return false;
-      const active = s.working || s.waiting || s.exited;
+      const active = activityLabel(s) !== '⚫ Idle';
       const stateChanged = !progress.name?.startsWith(activityPrefix(s) + ' · ');
       // Show a new active state promptly; only settling back to Idle is delayed. Short
       // gaps between turns must not spend the rename budget or hide the next short turn.
       if (active && stateChanged) return progress.renamedAt === undefined || now - progress.renamedAt >= 1_000;
-      if (!active && /^(🟡 Working|🔴 Needs input|⚫ Offline) · /.test(progress.name ?? ''))
+      if (
+        !active &&
+        /^(🟡 (?:Working|Background work|Waiting for agents|Checking agents)|🔴 Needs input|⚫ Offline) · /.test(
+          progress.name ?? ''
+        )
+      )
         return now - (progress.idleSince ?? now) >= 30_000;
       return progress.renamedAt === undefined || now - progress.renamedAt >= 30_000;
     };
     const needsTyping = () => {
       const s = current();
       return (
-        s?.working &&
+        s &&
+        discordActivityWorking(s) &&
         !s.waiting &&
         !s.exited &&
         (progress.typingRetryAt ?? 0) <= now &&
@@ -163,7 +182,7 @@ export class DiscordActivity {
       try {
         await this.deps.typing(destination, () => {
           const s = current();
-          return !!s?.working && !s.waiting && !s.exited;
+          return !!s && discordActivityWorking(s) && !s.waiting && !s.exited;
         });
       } catch (error) {
         progress.typingRetryAt = this.deps.now() + retryAfter(error);

@@ -1,8 +1,13 @@
 /** Full-interface discovery uses fake Discord only; never attaches to or submits work to a session. */
 import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { hashDiscordPrompt } from '../src/discord-native-execution.js';
+import { readDiscordSessionFile } from '../src/discord-file-transfers.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { discordUiNodes } from '../src/discord-native-ui.js';
+import { DISCORD_SUPPRESS_NOTIFICATIONS } from '../src/discord-response-format.js';
+import { DiscordHistoryReadError } from '../src/discord-history.js';
 import {
   DEFAULT_DISCORD_CONFIG,
   DiscordBridge,
@@ -24,7 +29,7 @@ const cfg = {
   allowedUserIds: ['333333333333333333'],
 };
 let dir: string;
-let sessions: Array<{ id: string; name?: string; remote?: boolean; working?: boolean }>;
+let sessions: Array<import('../src/discord-activity.js').DiscordActivitySession & { remote?: boolean }>;
 let bridges: DiscordBridge[];
 let posts: Array<{ path: string; method: string; body?: any }>;
 let sendInput: ReturnType<typeof vi.fn>;
@@ -34,7 +39,24 @@ let remoteMessages: Map<string, any>;
 let statusEditRefused: boolean;
 let activityRenameRetryAfter: number | undefined;
 let uncertainText: string | undefined;
+let artifactPostRefused: boolean;
+
 let uploaded: Array<{ name: string; text: string }>;
+/** Assert what a reader sees, across plain text and native response cards. */
+const visibleText = (body: any): string | undefined =>
+  body?.embeds?.map((embed: any) => embed.description).join('\n') ||
+  body?.components
+    ?.flatMap((c: any) =>
+      c.type === 17
+        ? (c.components ?? []).filter(
+            (n: any, i: number) => i !== 0 || !/^\*\*[^\n*]+\*\*(?:\n-# [^\n]*)?$/.test(n.content ?? '')
+          )
+        : [c]
+    )
+    .filter((c: any) => c.type === 10)
+    .map((c: any) => c.content?.replace(/^-# /, ''))
+    .join('\n') ||
+  body?.content;
 const BOT = '888888888888888888';
 
 function makeBridge(
@@ -53,17 +75,24 @@ function makeBridge(
         ? JSON.parse(init.body instanceof FormData ? String(init.body.get('payload_json')) : String(init.body))
         : undefined;
       if (init.body instanceof FormData) {
-        const file = init.body.get('files[0]');
-        if (file instanceof Blob)
-          uploaded.push({ name: String((file as { name?: string }).name), text: await file.text() });
+        for (const [key, file] of init.body.entries())
+          if (key.startsWith('files[') && file instanceof Blob)
+            uploaded.push({ name: String((file as { name?: string }).name), text: await file.text() });
       }
       posts.push({ path, method, body } as any);
+      if (artifactPostRefused && method === 'POST' && init.body instanceof FormData)
+        return Response.json({}, { status: 403 });
+      if (/\/applications\/.*\/commands$/.test(path)) {
+        if (method === 'GET') return Response.json([]);
+        return Response.json({ ...body, id: body.name === 'codex' ? '777777777777777771' : '777777777777777772' });
+      }
       if (method === 'GET' && path.endsWith('/users/@me')) return Response.json({ id: BOT });
       if (method === 'GET' && path.endsWith('/channels'))
         return Response.json([...remoteChannels.values()].filter((c) => c.type === 0));
       const messageMatch = /\/channels\/(\d+)\/messages(?:\/(\d+))?$/.exec(path);
       if (method === 'PATCH' && messageMatch?.[2]) {
-        if (statusEditRefused && body?.content) return Response.json({}, { status: 403 });
+        if (statusEditRefused && (body?.content || (body?.flags & 32768) !== 0))
+          return Response.json({}, { status: 403 });
         const m = remoteMessages.get(messageMatch[2]);
         if (!m) return Response.json({}, { status: 404 });
         Object.assign(m, body);
@@ -93,7 +122,7 @@ function makeBridge(
         return Response.json(c);
       }
       if (method === 'POST' && messageMatch && !messageMatch[2]) {
-        if (uncertainText && body?.content?.includes(uncertainText)) throw new TypeError('lost response');
+        if (uncertainText && visibleText(body)?.includes(uncertainText)) throw new TypeError('lost response');
         const existing = body.nonce
           ? [...remoteMessages.values()].find((m) => m.nonce === body.nonce && m.channel_id === messageMatch[1])
           : undefined;
@@ -164,6 +193,8 @@ beforeEach(async () => {
   uncertainText = undefined;
   statusEditRefused = false;
   activityRenameRetryAfter = undefined;
+  artifactPostRefused = false;
+  activityRenameRetryAfter = undefined;
   uploaded = [];
   sendInput = vi.fn(async () => true);
   await writeDiscordConfig(dir, cfg);
@@ -208,7 +239,7 @@ describe('Discord interface mode', () => {
     activityRenameRetryAfter = 120;
     now += 4_000;
     await b.pollActivity();
-    expect(remoteChannels.get(thread).name).toBe('🟢 Idle · hs-lab');
+    expect(remoteChannels.get(thread).name).toBe('⚫ Idle · hs-lab');
     expect(typing()).toHaveLength(1);
     expect(titleEdits()).toHaveLength(1);
     now += 8_000;
@@ -231,7 +262,750 @@ describe('Discord interface mode', () => {
     await b.syncSessions();
     const thread = (await readFullMap(dir)).s1;
     await b.pollActivity();
-    remoteChannels.get(thread).name = '🟢 Idle · hs-lab';
+    remoteChannels.get(thread).name = '⚫ Idle · hs-lab';
+    now += 8_000;
+    await b.pollActivity();
+    expect(remoteChannels.get(thread).name).toBe('🟡 Working · hs-lab');
+    expect(sendInput).not.toHaveBeenCalled();
+  });
+
+  it('keeps unresolved history warnings through journal pruning/restart and edits them after recovery', async () => {
+    let readable = false;
+    let now = 100000;
+    const history = async (_id: string, options?: { after?: string }) => {
+      if (!readable) throw new Error('unbound');
+      return {
+        conversationId: 'native1',
+        partial: false,
+        verifiedAfter: options?.after,
+        turns: [{ cursor: 'native1:answer', role: 'assistant' as const, text: 'Recovered result', timestamp: '' }],
+      };
+    };
+    sessions = [{ id: 's1', name: 'one' }];
+    const b = makeBridge(undefined, { history, now: () => now });
+    await b.reload();
+    await b.syncSessions();
+    const warnings = () =>
+      posts.filter((p) => p.method === 'POST' && p.body?.content?.startsWith('History is unavailable'));
+    expect(warnings()).toHaveLength(1);
+    b.stop();
+    const ledger = JSON.parse(await readFile(join(dir, 'discord-delivery.json'), 'utf8'));
+    await writeFile(
+      join(dir, 'discord-delivery.json'),
+      JSON.stringify(ledger.filter((r: { direction: string }) => r.direction === 'inbound'))
+    );
+    const again = makeBridge(undefined, { history, now: () => now });
+    await again.reload();
+    await again.syncSessions();
+    expect(warnings()).toHaveLength(1);
+    readable = true;
+    now += 20000;
+    await again.syncSessions();
+    await again.pollConversations();
+    expect(
+      [...remoteMessages.values()].some((m) => m.content === 'History reconnected. Live replies are synchronized.')
+    ).toBe(true);
+    expect(JSON.parse(await readFile(join(dir, 'discord-history-warnings.json'), 'utf8'))).toEqual([]);
+    readable = false;
+    now += 20000;
+    await again.notify({
+      sessionId: 's1',
+      event: 'hook:idle_prompt',
+      title: 'Waiting for Input',
+      body: 'idle',
+      urgency: 'warning',
+      fullText: async () => {
+        throw new Error('temporary read failure');
+      },
+    });
+    expect(
+      [...remoteMessages.values()].some((m) =>
+        JSON.stringify(m.components ?? []).includes('**Reconnecting to this conversation**')
+      )
+    ).toBe(true);
+    readable = true;
+    now += 20000;
+    await again.syncSessions();
+    await again.pollConversations();
+    expect(
+      [...remoteMessages.values()].some((m) =>
+        JSON.stringify(m.components ?? []).includes('**Reconnecting to this conversation**')
+      )
+    ).toBe(false);
+    expect(JSON.parse(await readFile(join(dir, 'discord-history-warnings.json'), 'utf8'))).toEqual([]);
+  });
+
+  it('recovers a saved boundary outside the tail through a tool-only page, restart and warning cleanup', async () => {
+    let now = 100000;
+    let appended = false;
+    sessions = [{ id: 's1', name: 'one' }];
+    const history = vi.fn(async (_id: string, options?: { after?: string }) => {
+      if (!options?.after)
+        return {
+          conversationId: 'native1',
+          partial: appended,
+          turns: [
+            {
+              cursor: appended ? 'native1:answer' : 'native1:old',
+              role: 'assistant' as const,
+              text: appended ? 'Recovered answer' : 'Already delivered',
+              timestamp: '',
+            },
+          ],
+        };
+      if (options.after === 'native1:old')
+        return {
+          conversationId: 'native1',
+          partial: true,
+          turns: [],
+          verifiedAfter: options.after,
+          scannedCursor: 'native1:tool',
+          hasMore: true,
+        };
+      if (options.after === 'native1:tool')
+        return {
+          conversationId: 'native1',
+          partial: true,
+          turns: [{ cursor: 'native1:answer', role: 'assistant' as const, text: 'Recovered answer', timestamp: '' }],
+          verifiedAfter: options.after,
+          scannedCursor: 'native1:end',
+          hasMore: false,
+        };
+      return {
+        conversationId: 'native1',
+        partial: true,
+        turns: [],
+        verifiedAfter: options.after,
+        scannedCursor: options.after,
+        hasMore: false,
+      };
+    });
+    const b = makeBridge(undefined, { history, now: () => now });
+    await b.reload();
+    await b.syncSessions();
+    const thread = (await readFullMap(dir)).s1;
+    const warning =
+      'History is unavailable or partial. Use !codeman history to retry; this session channel remains available.';
+    const botWarning = '988888888888888881',
+      userWarning = '988888888888888882';
+    remoteMessages.set(botWarning, { id: botWarning, channel_id: thread, content: warning, author: { id: BOT } });
+    remoteMessages.set(userWarning, {
+      id: userWarning,
+      channel_id: thread,
+      content: warning,
+      author: { id: cfg.allowedUserIds[0] },
+    });
+    const reconnect = '988888888888888883';
+    remoteMessages.set(reconnect, {
+      id: reconnect,
+      channel_id: thread,
+      author: { id: BOT },
+      components: [
+        { type: 17, components: [{ type: 10, content: '**Reconnecting to this conversation**' }] },
+        {
+          type: 10,
+          content: 'Your response is available in Codeman. I’m restoring the connection so replies can appear here.',
+        },
+      ],
+    });
+    appended = true;
+    await b.pollConversations();
+    expect(history).toHaveBeenCalledWith('s1', expect.objectContaining({ after: 'native1:old' }));
+    const stored = JSON.parse(await readFile(join(dir, 'discord-conversations.json'), 'utf8'));
+    expect(stored.some(([, p]: any) => p.cursor === 'native1:tool')).toBe(true);
+    expect(remoteMessages.get(botWarning).content).toBe(warning);
+    b.stop();
+    const again = makeBridge(undefined, { history, now: () => now });
+    await again.reload();
+    await again.syncSessions();
+    await again.pollConversations();
+    expect(history).toHaveBeenCalledWith('s1', expect.objectContaining({ after: 'native1:tool' }));
+    const responses = () =>
+      posts.filter((p) => visibleText(p.body)?.includes('Recovered answer') && p.method === 'POST');
+    expect(responses()).toHaveLength(1);
+    expect(remoteMessages.get(botWarning).content).toBe('History reconnected. Live replies are synchronized.');
+    expect(remoteMessages.get(userWarning).content).toBe(warning);
+    expect(remoteMessages.get(reconnect).components[0].components[0].content).toBe('**Conversation reconnected**');
+    now += 20000;
+    await again.pollConversations();
+    expect(responses()).toHaveLength(1);
+    expect(sendInput).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('keeps background work under Working over sync and restart (remote=%s)', async (remote) => {
+    let now = 100000;
+    sessions = [
+      { id: 's1', name: 'w29-buildmesh', remote, working: false, watching: '1 shell', activityStatus: 'idle' },
+    ];
+    const b = makeBridge(undefined, { now: () => now });
+    await b.reload();
+    await b.syncSessions();
+    const thread = (await readFullMap(dir)).s1;
+    expect(remoteChannels.get(thread).name).toBe('🟡 Working · w29-buildmesh');
+    await b.pollActivity();
+    const typing = () => posts.filter((p) => p.path.endsWith('/typing'));
+    expect(typing()).toHaveLength(1);
+    await b.syncSessions();
+    expect(remoteChannels.get(thread).name).toBe('🟡 Working · w29-buildmesh');
+    b.stop();
+    const restarted = makeBridge(undefined, { now: () => now });
+    await restarted.reload();
+    await restarted.syncSessions();
+    await restarted.pollActivity();
+    expect(remoteChannels.get(thread).name).toBe('🟡 Working · w29-buildmesh');
+    sessions[0].watching = null;
+    now += 4000;
+    await restarted.pollActivity();
+    expect(remoteChannels.get(thread).name).toBe('🟡 Working · w29-buildmesh');
+    now += 30000;
+    await restarted.pollActivity();
+    expect(remoteChannels.get(thread).name).toBe('⚫ Idle · w29-buildmesh');
+    expect(typing()).toHaveLength(2);
+    expect(sendInput).not.toHaveBeenCalled();
+  });
+
+  it('groups explicit output files beneath a new response and does not repeat uploads after replay/restart', async () => {
+    let now = 100000;
+    let turns: import('../src/discord-history.js').DiscordHistoryTurn[] = [];
+    sessions = [{ id: 's1', name: 'one' }];
+    await writeFile(join(dir, 'mockup.png'), 'image-bytes');
+    await writeFile(join(dir, 'report.pdf'), 'pdf-bytes');
+    const history = async () => ({ conversationId: 'native1', partial: false, turns });
+    const getAttachment = vi.fn(async (_id: string, path: string, relative?: boolean) => {
+      expect(relative).toBe(true);
+      return readDiscordSessionFile({ workingDir: dir }, resolve(dir, path));
+    });
+    const b = makeBridge(undefined, { history, getAttachment, now: () => now });
+    await b.reload();
+    await b.syncSessions();
+    turns = [
+      { cursor: 'native1:1', role: 'user', text: 'Make the files', timestamp: '' },
+      {
+        cursor: 'native1:2',
+        role: 'assistant',
+        text: 'Done.\n![Mockup](./mockup.png)\n[Report](./report.pdf)\n[source](./app.ts)',
+        timestamp: '',
+      },
+    ];
+    await b.pollConversations();
+    expect(uploaded).toEqual([
+      { name: 'mockup.png', text: 'image-bytes' },
+      { name: 'report.pdf', text: 'pdf-bytes' },
+    ]);
+    const attachments = posts.filter((p) => p.body?.content === 'Files from this response');
+    expect(attachments).toHaveLength(1);
+    expect(attachments[0].body?.allowed_mentions).toEqual({ parse: [], users: [] });
+    expect(getAttachment).toHaveBeenCalledTimes(2);
+    const before = posts.findIndex((p) => p === attachments[0]);
+    expect(posts.slice(0, before).some((p) => visibleText(p.body)?.includes('Done.'))).toBe(true);
+    // Simulate a crash after upload but before the cursor checkpoint reached disk.
+    const saved = JSON.parse(await readFile(join(dir, 'discord-conversations.json'), 'utf8'));
+    saved[0][1].cursor = 'native1:1';
+    await writeFile(join(dir, 'discord-conversations.json'), JSON.stringify(saved));
+    b.stop();
+    now += 60001;
+    const restarted = makeBridge(undefined, { history, getAttachment, now: () => now });
+    await restarted.reload();
+    await restarted.syncSessions();
+    await restarted.pollConversations();
+    expect(uploaded).toHaveLength(2);
+    expect(sendInput).not.toHaveBeenCalled();
+  });
+
+  it('uses workspace guards for missing, secret and escaped paths without losing this or later text', async () => {
+    let now = 100000;
+    let turns: import('../src/discord-history.js').DiscordHistoryTurn[] = [];
+    sessions = [{ id: 's1', name: 'one' }];
+    await writeFile(join(dir, '.env'), 'NOT-A-REAL-SECRET');
+    const history = async () => ({ conversationId: 'native1', partial: false, turns });
+    const getAttachment = vi.fn(async (_id: string, path: string) =>
+      readDiscordSessionFile({ workingDir: dir }, resolve(dir, path))
+    );
+    const b = makeBridge(undefined, { history, getAttachment, now: () => now });
+    await b.reload();
+    await b.syncSessions();
+    turns = [
+      {
+        cursor: 'native1:1',
+        role: 'assistant',
+        text: 'Here are outputs.\n[artifact: .env]\n[Missing](missing.pdf)\n[artifact: ../outside.txt]',
+        timestamp: '',
+      },
+    ];
+    await b.pollConversations();
+    expect(uploaded).toEqual([]);
+    expect(posts.some((p) => visibleText(p.body)?.includes('Here are outputs.'))).toBe(true);
+    expect(posts.filter((p) => p.body?.content?.startsWith('Some linked output files'))).toHaveLength(1);
+    expect(posts.some((p) => p.body?.content?.includes('NOT-A-REAL-SECRET'))).toBe(false);
+    turns.push({ cursor: 'native1:2', role: 'assistant', text: 'The next response still arrives.', timestamp: '' });
+    now += 60001;
+    await b.pollConversations();
+    expect(posts.some((p) => visibleText(p.body)?.includes('The next response still arrives.'))).toBe(true);
+  });
+
+  it('caps automatic file count and combined bytes and includes one concise notice', async () => {
+    let turns: import('../src/discord-history.js').DiscordHistoryTurn[] = [];
+    sessions = [{ id: 's1', name: 'one' }];
+    const getAttachment = vi.fn(async (_id: string, path: string) => ({
+      name: path,
+      data: Buffer.alloc(5 * 1024 * 1024),
+    }));
+    const b = makeBridge(undefined, {
+      getAttachment,
+      history: async () => ({ conversationId: 'native1', partial: false, turns }),
+    });
+    await b.reload();
+    await b.syncSessions();
+    turns = [
+      {
+        cursor: 'native1:1',
+        role: 'assistant',
+        text: Array.from({ length: 8 }, (_, i) => `[File](output${i}.pdf)`).join('\n'),
+        timestamp: '',
+      },
+    ];
+    await b.pollConversations();
+    expect(getAttachment).toHaveBeenCalledTimes(4);
+    expect(uploaded).toHaveLength(1);
+    expect(
+      posts.filter((p) => p.body?.content?.startsWith('Files from this response\nSome linked output files'))
+    ).toHaveLength(1);
+  });
+
+  it('reports a refused artifact upload once while advancing live text delivery', async () => {
+    let now = 100000;
+    let turns: import('../src/discord-history.js').DiscordHistoryTurn[] = [];
+    sessions = [{ id: 's1', name: 'one' }];
+    const b = makeBridge(undefined, {
+      getAttachment: async () => ({ name: 'pic.png', data: Buffer.from('image') }),
+      history: async () => ({ conversationId: 'native1', partial: false, turns }),
+      now: () => now,
+    });
+    await b.reload();
+    await b.syncSessions();
+    artifactPostRefused = true;
+    turns = [{ cursor: 'native1:1', role: 'assistant', text: 'Here is the picture. ![Image](pic.png)', timestamp: '' }];
+    await b.pollConversations();
+    expect(posts.filter((p) => p.body?.content === 'Files from this response')).toHaveLength(1);
+    expect(
+      posts.filter((p) => p.body?.content?.startsWith('Output file delivery could not be confirmed'))
+    ).toHaveLength(1);
+    now += 60001;
+    await b.pollConversations();
+    expect(posts.filter((p) => p.body?.content === 'Files from this response')).toHaveLength(1);
+    turns.push({ cursor: 'native1:2', role: 'assistant', text: 'Later response.', timestamp: '' });
+    now += 60001;
+    await b.pollConversations();
+    expect(posts.some((p) => visibleText(p.body)?.includes('Later response.'))).toBe(true);
+  });
+
+  it('never auto-uploads historical responses, tool results or stream-off output', async () => {
+    let now = 100000;
+    let turns: import('../src/discord-history.js').DiscordHistoryTurn[] = [
+      { cursor: 'native1:1', role: 'assistant', text: '[Old report](old.pdf)', timestamp: '' },
+    ];
+    sessions = [{ id: 's1', name: 'one' }];
+    const getAttachment = vi.fn(async () => ({ name: 'unused.pdf', data: Buffer.from('unused') }));
+    const b = makeBridge(undefined, {
+      getAttachment,
+      history: async () => ({ conversationId: 'native1', partial: false, turns }),
+      now: () => now,
+    });
+    await b.reload();
+    await b.syncSessions();
+    await b.pollConversations();
+    expect(getAttachment).not.toHaveBeenCalled();
+    turns.push({ cursor: 'native1:2', role: 'tool', text: '[Tool file](tool.pdf)', timestamp: '' });
+    now += 60001;
+    await b.pollConversations();
+    expect(getAttachment).not.toHaveBeenCalled();
+    const thread = (await readFullMap(dir)).s1;
+    await b.onGatewayMessage({
+      id: '900000000000000001',
+      guild_id: cfg.guildId,
+      channel_id: thread,
+      author: { id: cfg.allowedUserIds[0] },
+      content: '!codeman stream off',
+    });
+    turns.push({ cursor: 'native1:3', role: 'assistant', text: '[Paused](paused.pdf)', timestamp: '' });
+    now += 60001;
+    await b.pollConversations();
+    expect(getAttachment).not.toHaveBeenCalled();
+  });
+
+  it('abandons automatic attachment delivery when routing stops during a file read', async () => {
+    let turns: import('../src/discord-history.js').DiscordHistoryTurn[] = [];
+    sessions = [{ id: 's1', name: 'one', remote: true }];
+    const getAttachment = vi.fn(async () => {
+      b.stop();
+      return { name: 'picture.png', data: Buffer.from('image') };
+    });
+    const b = makeBridge(undefined, {
+      getAttachment,
+      history: async () => ({ conversationId: 'native1', partial: false, turns }),
+    });
+    await b.reload();
+    await b.syncSessions();
+    turns = [{ cursor: 'native1:1', role: 'assistant', text: '![Image](/remote/work/picture.png)', timestamp: '' }];
+    await b.pollConversations();
+    expect(getAttachment).toHaveBeenCalledWith('s1', '/remote/work/picture.png', true);
+    expect(uploaded).toHaveLength(0);
+  });
+
+  it.each([false, true])(
+    'mirrors newly submitted native prompts before answers (remote=%s) without pings or input',
+    async (remote) => {
+      let now = 100000;
+      let turns: import('../src/discord-history.js').DiscordHistoryTurn[] = [];
+      sessions = [{ id: 's1', name: 'one', remote }];
+      const getAttachment = vi.fn();
+      const history = async () => ({ conversationId: 'native1', partial: false, turns });
+      const b = makeBridge(undefined, { history, getAttachment, now: () => now });
+      await b.reload();
+      await b.syncSessions();
+      await b.pollConversations();
+      expect(posts.some((p) => JSON.stringify(p.body ?? {}).includes('User prompt'))).toBe(false);
+      turns = [
+        {
+          cursor: 'native1:1',
+          role: 'user',
+          text: 'Explain this.\n```ts\nconst x = 1;\n```\n[My input](input.pdf)',
+          timestamp: '',
+        },
+        { cursor: 'native1:2', role: 'assistant', text: 'Here is the explanation.', timestamp: '' },
+      ];
+      now += 60001;
+      await b.pollConversations();
+      const prompt = posts.find((p) => p.method === 'POST' && JSON.stringify(p.body ?? {}).includes('User prompt'))!;
+      expect(prompt).toBeDefined();
+      expect(visibleText(prompt.body)).toContain('const x = 1;');
+      expect(prompt.body.allowed_mentions).toEqual({ parse: [], users: [] });
+      const answer = posts.find(
+        (p) => p.method === 'POST' && visibleText(p.body)?.includes('Here is the explanation.')
+      )!;
+      expect(posts.indexOf(prompt)).toBeLessThan(posts.indexOf(answer));
+      expect(getAttachment).not.toHaveBeenCalled();
+      expect(sendInput).not.toHaveBeenCalled();
+      b.stop();
+      const restarted = makeBridge(undefined, { history, now: () => now });
+      await restarted.reload();
+      await restarted.syncSessions();
+      now += 60001;
+      await restarted.pollConversations();
+      expect(
+        posts.filter((p) => p.method === 'POST' && JSON.stringify(p.body ?? {}).includes('User prompt'))
+      ).toHaveLength(1);
+    }
+  );
+
+  it('suppresses a Discord prompt after metadata advances the verified live cursor beyond its send boundary', async () => {
+    let now = 100000;
+    const conv = '12345678-1234-1234-1234-123456789abc';
+    const baseline = conv + ':100:aaaaaaaaaaaaaaaa',
+      scanned = conv + ':150:bbbbbbbbbbbbbbbb',
+      submitted = conv + ':200:cccccccccccccccc',
+      external = conv + ':300:dddddddddddddddd';
+    const old = { cursor: baseline, role: 'assistant' as const, text: 'Previous response', timestamp: '' };
+    let page: import('../src/discord-history.js').DiscordHistory = {
+      conversationId: conv,
+      partial: true,
+      verifiedAfter: baseline,
+      scannedCursor: scanned,
+      hasMore: false,
+      turns: [],
+    };
+    const history = async (_id: string, options?: { after?: string }) => {
+      if (!options?.after) return { conversationId: conv, partial: false, turns: [old] };
+      if (options.after === baseline && page.verifiedAfter !== baseline)
+        return {
+          conversationId: conv,
+          partial: true,
+          verifiedAfter: baseline,
+          turns: [
+            {
+              cursor: submitted,
+              role: 'user' as const,
+              text: 'Do a manual refresh now and check again',
+              timestamp: '',
+            },
+          ],
+          executions: [
+            {
+              userCursor: submitted,
+              promptHash: hashDiscordPrompt('Do a manual refresh now and check again'),
+              state: 'running' as const,
+            },
+          ],
+        };
+      return page;
+    };
+    sessions = [{ id: 's1', name: 'one' }];
+    const b = makeBridge(undefined, { history, now: () => now });
+    await b.reload();
+    await b.syncSessions();
+    await b.pollConversations();
+    const thread = (await readFullMap(dir)).s1,
+      text = 'Do a manual refresh now and check again';
+    await b.onGatewayMessage({
+      id: '900000000000000001',
+      guild_id: cfg.guildId,
+      channel_id: thread,
+      author: { id: cfg.allowedUserIds[0] },
+      content: text,
+    });
+    page = {
+      conversationId: conv,
+      partial: true,
+      verifiedAfter: scanned,
+      turns: [{ cursor: submitted, role: 'user', text, timestamp: '' }],
+      executions: [{ userCursor: submitted, promptHash: hashDiscordPrompt(text), state: 'running' }],
+    };
+    now += 60001;
+    await b.pollConversations();
+    const prompts = () =>
+      posts.filter((p) => p.method === 'POST' && JSON.stringify(p.body ?? {}).includes('User prompt'));
+    expect(prompts()).toHaveLength(0);
+    page = {
+      conversationId: conv,
+      partial: true,
+      verifiedAfter: submitted,
+      turns: [{ cursor: external, role: 'user', text, timestamp: '' }],
+      executions: [{ userCursor: external, promptHash: hashDiscordPrompt(text), state: 'running' }],
+    };
+    now += 60001;
+    await b.pollConversations();
+    expect(prompts()).toHaveLength(1);
+    expect(sendInput).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not echo an attributed Discord prompt but mirrors later identical text from outside Discord', async () => {
+    let now = 100000;
+    let turns: import('../src/discord-history.js').DiscordHistoryTurn[] = [];
+    let executions: import('../src/discord-native-execution.js').DiscordNativeExecution[] = [];
+    sessions = [{ id: 's1', name: 'one' }];
+    const history = async () => ({ conversationId: 'native1', partial: false, turns, executions });
+    const b = makeBridge(undefined, { history, now: () => now });
+    await b.reload();
+    await b.syncSessions();
+    const thread = (await readFullMap(dir)).s1;
+    const text = 'Review this change';
+    await b.onGatewayMessage({
+      id: '900000000000000001',
+      guild_id: cfg.guildId,
+      channel_id: thread,
+      author: { id: cfg.allowedUserIds[0] },
+      content: text,
+    });
+    expect(sendInput).toHaveBeenCalledTimes(1);
+    turns = [{ cursor: 'native1:1', role: 'user', text, timestamp: '' }];
+    executions = [{ userCursor: 'native1:1', promptHash: hashDiscordPrompt(text), state: 'completed' }];
+    await b.pollConversations();
+    const prompts = () =>
+      posts.filter((p) => p.method === 'POST' && JSON.stringify(p.body ?? {}).includes('User prompt'));
+    expect(prompts()).toHaveLength(0);
+    turns.push({ cursor: 'native1:2', role: 'user', text, timestamp: '' });
+    executions.push({ userCursor: 'native1:2', promptHash: hashDiscordPrompt(text), state: 'running' });
+    now += 60001;
+    await b.pollConversations();
+    expect(prompts()).toHaveLength(1);
+    expect(visibleText(prompts()[0].body)).toContain(text);
+    expect(sendInput).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([false, true])(
+    'does not echo Discord attachment prompts past their saved boundary (inflight=%s)',
+    async (inflight) => {
+      let now = 100000;
+      const text = 'Review this [attached: /tmp/example.png]';
+      const baseline = {
+        cursor: '12345678-1234-1234-1234-123456789abc:10:aaaaaaaaaaaaaaaa',
+        role: 'assistant' as const,
+        text: 'Previous response',
+        timestamp: '',
+      };
+      const intermediate = {
+        cursor: '12345678-1234-1234-1234-123456789abc:20:aaaaaaaaaaaaaaaa',
+        role: 'assistant' as const,
+        text: 'An update',
+        timestamp: '',
+      };
+      const input = {
+        cursor: '12345678-1234-1234-1234-123456789abc:30:aaaaaaaaaaaaaaaa',
+        role: 'user' as const,
+        text,
+        timestamp: '',
+      };
+      let sent = false,
+        advanced = false;
+      const history = vi.fn(async (_id: string, options?: { after?: string }) => {
+        if (!sent)
+          return {
+            conversationId: '12345678-1234-1234-1234-123456789abc',
+            partial: false,
+            turns: advanced ? [baseline, intermediate] : [baseline],
+          };
+        return {
+          conversationId: '12345678-1234-1234-1234-123456789abc',
+          partial: true,
+          verifiedAfter: options?.after,
+          turns: options?.after === intermediate.cursor ? [intermediate, input] : [baseline, intermediate, input],
+          executions: [{ userCursor: input.cursor, promptHash: hashDiscordPrompt(text), state: 'running' as const }],
+        };
+      });
+      sessions = [{ id: 's1', name: 'one' }];
+      const b = makeBridge(undefined, { history, now: () => now });
+      await b.reload();
+      await b.syncSessions();
+      const thread = (await readFullMap(dir)).s1;
+      sendInput.mockImplementationOnce(async () => {
+        advanced = true;
+        await b.pollConversations();
+        sent = true;
+        if (inflight) {
+          now += 20000;
+          await b.pollConversations();
+        }
+        return true;
+      });
+      await b.onGatewayMessage({
+        id: '900000000000000011',
+        guild_id: cfg.guildId,
+        channel_id: thread,
+        author: { id: cfg.allowedUserIds[0] },
+        content: text,
+      });
+      now += 20000;
+      await b.pollConversations();
+      expect(history).toHaveBeenCalledWith('s1', { includeTools: false, after: baseline.cursor });
+      expect(
+        posts.filter((p) => p.method === 'POST' && JSON.stringify(p.body ?? {}).includes('User prompt'))
+      ).toHaveLength(0);
+      expect(sendInput).toHaveBeenCalledTimes(1);
+      b.stop();
+      const restarted = makeBridge(undefined, { history, now: () => now });
+      await restarted.reload();
+      await restarted.syncSessions();
+      await restarted.pollConversations();
+      expect(
+        posts.filter((p) => p.method === 'POST' && JSON.stringify(p.body ?? {}).includes('User prompt'))
+      ).toHaveLength(0);
+      expect(sendInput).toHaveBeenCalledTimes(1);
+    }
+  );
+  it('preserves historical and stream-off boundaries for user prompt mirroring', async () => {
+    let now = 100000;
+    const turns: import('../src/discord-history.js').DiscordHistoryTurn[] = [
+      { cursor: 'native1:1', role: 'user', text: 'Historical prompt', timestamp: '' },
+    ];
+    sessions = [{ id: 's1', name: 'one' }];
+    const b = makeBridge(undefined, {
+      history: async () => ({ conversationId: 'native1', partial: false, turns }),
+      now: () => now,
+    });
+    await b.reload();
+    await b.syncSessions();
+    await b.pollConversations();
+    expect(posts.some((p) => JSON.stringify(p.body ?? {}).includes('User prompt'))).toBe(false);
+    await b.onGatewayMessage({
+      id: '900000000000000001',
+      guild_id: cfg.guildId,
+      channel_id: (await readFullMap(dir)).s1,
+      author: { id: cfg.allowedUserIds[0] },
+      content: '!codeman stream off',
+    });
+    turns.push({ cursor: 'native1:2', role: 'user', text: 'Submitted while streaming off', timestamp: '' });
+    now += 60001;
+    await b.pollConversations();
+    expect(posts.some((p) => JSON.stringify(p.body ?? {}).includes('User prompt'))).toBe(false);
+    expect(sendInput).not.toHaveBeenCalled();
+  });
+
+  it('exports a full long prompt once and deduplicates a replay after a lost cursor checkpoint', async () => {
+    let now = 100000;
+    let turns: import('../src/discord-history.js').DiscordHistoryTurn[] = [];
+    sessions = [{ id: 's1', name: 'one' }];
+    const history = async () => ({ conversationId: 'native1', partial: false, turns });
+    const b = makeBridge(undefined, { history, now: () => now });
+    await b.reload();
+    await b.syncSessions();
+    const text = 'Long user input. '.repeat(900);
+    turns = [{ cursor: 'native1:1', role: 'user', text, timestamp: '' }];
+    await b.pollConversations();
+    expect(uploaded).toEqual([{ name: 'prompt.txt', text }]);
+    const before = posts.length;
+    const saved = JSON.parse(await readFile(join(dir, 'discord-conversations.json'), 'utf8'));
+    delete saved[0][1].cursor;
+    await writeFile(join(dir, 'discord-conversations.json'), JSON.stringify(saved));
+    b.stop();
+    const restarted = makeBridge(undefined, { history, now: () => now });
+    await restarted.reload();
+    await restarted.syncSessions();
+    now += 60001;
+    await restarted.pollConversations();
+    expect(uploaded).toHaveLength(1);
+    expect(
+      posts.slice(before).some((p) => p.method === 'POST' && JSON.stringify(p.body ?? {}).includes('User prompt'))
+    ).toBe(false);
+  });
+
+  it('reacts to a native session update even when the thread name did not change', async () => {
+    let now = 1_000;
+    sessions = [{ id: 's1', name: 'hs-lab', working: false }];
+    const b = makeBridge(undefined, { now: () => now });
+    await b.reload();
+    await b.syncSessions();
+    const thread = (await readFullMap(dir)).s1;
+    await b.sessionRenamed('s1', 'hs-lab');
+    await b.pollActivity();
+    sessions[0].working = true;
+    now += 100;
+    await b.sessionRenamed('s1', 'hs-lab');
+    await b.pollActivity();
+    expect(remoteChannels.get(thread).name).toBe('🟡 Working · hs-lab');
+    expect(posts.some((p) => p.path.endsWith('/typing'))).toBe(true);
+    expect(sendInput).not.toHaveBeenCalled();
+  });
+
+  it('keeps typing when an existing Idle thread cannot be renamed yet, without inline retries', async () => {
+    let now = 1_000;
+    sessions = [{ id: 's1', name: 'hs-lab', working: false }];
+    const b = makeBridge(undefined, { now: () => now });
+    await b.reload();
+    await b.syncSessions();
+    const thread = (await readFullMap(dir)).s1;
+    const titleEdits = () => posts.filter((p) => p.method === 'PATCH' && p.path.endsWith('/' + thread) && p.body?.name);
+    const typing = () => posts.filter((p) => p.method === 'POST' && p.path.endsWith('/typing'));
+    await b.pollActivity();
+    expect(titleEdits()).toHaveLength(0);
+    expect(typing()).toHaveLength(0);
+    sessions[0].working = true;
+    activityRenameRetryAfter = 120;
+    now += 4_000;
+    await b.pollActivity();
+    expect(remoteChannels.get(thread).name).toBe('⚫ Idle · hs-lab');
+    expect(typing()).toHaveLength(1);
+    expect(titleEdits()).toHaveLength(1);
+    now += 8_000;
+    await b.pollActivity();
+    expect(typing()).toHaveLength(2);
+    expect(titleEdits()).toHaveLength(1);
+    activityRenameRetryAfter = undefined;
+    now += 120_000;
+    await b.pollActivity();
+    expect(remoteChannels.get(thread).name).toBe('🟡 Working · hs-lab');
+    expect(titleEdits()).toHaveLength(2);
+    expect(sendInput).not.toHaveBeenCalled();
+  });
+
+  it('repairs a stale Idle title after a concurrent request overwrites its published Working title', async () => {
+    let now = 1_000;
+    sessions = [{ id: 's1', name: 'hs-lab', working: true }];
+    const b = makeBridge(undefined, { now: () => now });
+    await b.reload();
+    await b.syncSessions();
+    const thread = (await readFullMap(dir)).s1;
+    await b.pollActivity();
+    remoteChannels.get(thread).name = '⚫ Idle · hs-lab';
     now += 8_000;
     await b.pollActivity();
     expect(remoteChannels.get(thread).name).toBe('🟡 Working · hs-lab');
@@ -302,7 +1076,7 @@ describe('Discord interface mode', () => {
     };
     await b.onGatewayMessage(m);
     expect(sendInput).not.toHaveBeenCalled();
-    const selection = posts.find((p) => p.body?.content?.includes('Nothing was submitted'))!;
+    const selection = posts.find((p) => visibleText(p.body)?.includes('Nothing was submitted'))!;
     expect(selection.path).toContain(parent.id);
     expect(selection.body.content).toContain('<#' + map.s1 + '>');
     expect(selection.body.content).toContain('<#' + map.s2 + '>');
@@ -311,7 +1085,7 @@ describe('Discord interface mode', () => {
     await b.onGatewayMessage({ ...m, id: '900000000000000005', content: '!codeman stream verbose' });
     await b.onGatewayMessage({ ...m, id: '900000000000000006', content: '!codeman file /work/file.txt' });
     expect(control).toHaveBeenCalledTimes(1);
-    expect(posts.some((p) => p.body?.content?.includes('Open a session thread for task'))).toBe(true);
+    expect(posts.some((p) => visibleText(p.body)?.includes('Open a session thread for task'))).toBe(true);
 
     await b.onGatewayMessage({ ...m, id: '900000000000000003', channel_id: map.s1, content: 'first' });
     await b.onGatewayMessage({ ...m, id: '900000000000000004', channel_id: map.s2, content: 'second' });
@@ -342,8 +1116,8 @@ describe('Discord interface mode', () => {
     fresh = true;
     await b.pollConversations();
     for (const id of ['s1', 's2']) {
-      const historyPost = posts.find((p) => p.body?.content?.includes('historical-' + id));
-      const livePost = posts.find((p) => p.body?.content?.includes('live-' + id));
+      const historyPost = posts.find((p) => visibleText(p.body)?.includes('historical-' + id));
+      const livePost = posts.find((p) => visibleText(p.body)?.includes('live-' + id));
       expect(historyPost?.path).toContain('/' + map[id] + '/messages');
       expect(livePost?.path).toContain('/' + map[id] + '/messages');
     }
@@ -417,7 +1191,7 @@ describe('Discord interface mode', () => {
     expect(afterHistory).toBe(true);
     expect(waiting).toBe(true);
     expect(sendInput).not.toHaveBeenCalled();
-    expect(posts.some((p) => p.body?.content?.includes('dialog appeared while preparing this reply'))).toBe(true);
+    expect(posts.some((p) => visibleText(p.body)?.includes('dialog appeared while preparing this reply'))).toBe(true);
     const deliveries = await b.recentDeliveries();
     expect(deliveries.find((d) => d.id === `in:${cfg.guildId}:555555555555555555`)?.state).toBe('failed');
   });
@@ -469,7 +1243,7 @@ describe('Discord interface mode', () => {
     await b.onGatewayMessage({ ...message, id: '555555555555555556', author: { id: '999999999999999999' } });
     expect(control).toHaveBeenCalledExactlyOnceWith('s1', 'status');
     expect(sendInput).not.toHaveBeenCalled();
-    expect(posts.some((p) => p.body?.content === 'Working')).toBe(true);
+    expect(posts.some((p) => visibleText(p.body) === 'Working')).toBe(true);
   });
   it('backfills bounded historical turns once across synchronization and process restart', async () => {
     const history = vi.fn(async () => ({
@@ -485,7 +1259,12 @@ describe('Discord interface mode', () => {
     const b = makeBridge(undefined, { history });
     await b.reload();
     await b.syncSessions();
-    const historical = () => posts.filter((p) => p.body?.content?.startsWith('**Historical context**'));
+    const historical = () =>
+      posts.filter(
+        (p) =>
+          visibleText(p.body)?.startsWith('**Historical context**') ||
+          p.body?.components?.[0]?.components?.[0]?.content === '**Latest response**'
+      );
     expect(historical()).toHaveLength(12);
     expect(historical()[0].body?.content).toContain('historic 14');
     expect(historical().every((p) => p.body?.allowed_mentions?.parse.length === 0)).toBe(true);
@@ -496,6 +1275,38 @@ describe('Discord interface mode', () => {
     await again.reload();
     await again.syncSessions();
     expect(historical()).toHaveLength(12);
+    expect(sendInput).not.toHaveBeenCalled();
+  });
+  it('backfills the complete latest reply across multiple cards without duplicating it on restart', async () => {
+    const text = 'Full original answer.\n\n' + 'Details preserved.\n'.repeat(300) + '\nLast row preserved.';
+    const history = async () => ({
+      conversationId: 'native1',
+      partial: false,
+      turns: [{ cursor: 'native1:1', role: 'assistant' as const, text, timestamp: '' }],
+    });
+    sessions = [{ id: 's1', name: 'one' }];
+    const b = makeBridge(undefined, { history });
+    await b.reload();
+    await b.syncSessions();
+    const cards = posts.filter(
+      (p) => (p.body?.flags & 32768) !== 0 && p.body?.components?.some((c: any) => c.type === 17)
+    );
+    expect(cards.length).toBeGreaterThan(1);
+    expect(cards.map((p) => visibleText(p.body)).join('\n')).toContain('Last row preserved.');
+    expect(
+      cards
+        .map((p) => visibleText(p.body))
+        .join('\n')
+        .match(/Details preserved\./g)
+    ).toHaveLength(300);
+    const count = cards.length;
+    b.stop();
+    const again = makeBridge(undefined, { history });
+    await again.reload();
+    await again.syncSessions();
+    expect(
+      posts.filter((p) => (p.body?.flags & 32768) !== 0 && p.body?.components?.some((c: any) => c.type === 17))
+    ).toHaveLength(count);
     expect(sendInput).not.toHaveBeenCalled();
   });
   it('keeps other session channels available when one transcript is unavailable and retries without recreating destinations', async () => {
@@ -533,14 +1344,14 @@ describe('Discord interface mode', () => {
       { cursor: 'native1:2:abc', role: 'assistant', text: 'fresh answer', timestamp: 't' },
     ];
     await b.pollConversations();
-    const answers = () => posts.filter((p) => p.body?.content?.includes('fresh answer'));
+    const answers = () => posts.filter((p) => visibleText(p.body)?.includes('fresh answer'));
     expect(answers()).toHaveLength(1);
-    expect(posts.some((p) => p.body?.content === '⏳ Working…')).toBe(true);
+    expect(posts.some((p) => visibleText(p.body) === '⏳ Working…')).toBe(true);
     now += 60001;
     state = 'completed';
     await b.pollConversations();
     expect(answers()).toHaveLength(1);
-    expect(posts.some((p) => p.method === 'PATCH' && p.body?.content === '✅ Done')).toBe(true);
+    expect(posts.some((p) => p.method === 'PATCH' && visibleText(p.body) === '✅ Done')).toBe(true);
     b.stop();
     const again = makeBridge(undefined, { history, now: () => now });
     await again.reload();
@@ -574,10 +1385,14 @@ describe('Discord interface mode', () => {
     await Promise.all([b.notify(msg), b.pollConversations()]);
     now += 60001;
     await b.notify({ ...msg, event: 'hook:stop', urgency: 'info' });
-    expect(posts.filter((p) => p.body?.content?.includes('**Answer**'))).toHaveLength(1);
-    expect(posts.find((p) => p.body?.content?.includes('**Answer**'))?.body.content).toBe('**Answer**\n- One\n- Two');
+    expect(posts.filter((p) => visibleText(p.body)?.includes('**Answer**'))).toHaveLength(1);
+    expect(visibleText(posts.find((p) => visibleText(p.body)?.includes('**Answer**'))?.body)).toBe(
+      '**Answer**\n- One\n- Two'
+    );
     expect(
-      posts.some((p) => p.body?.content?.includes('Waiting for Input') || p.body?.content?.includes('2026-11-06T'))
+      posts.some(
+        (p) => visibleText(p.body)?.includes('Waiting for Input') || visibleText(p.body)?.includes('2026-11-06T')
+      )
     ).toBe(false);
     expect(fullText).not.toHaveBeenCalled();
     b.stop();
@@ -585,7 +1400,7 @@ describe('Discord interface mode', () => {
     await again.reload();
     await again.syncSessions();
     await again.notify(msg);
-    expect(posts.filter((p) => p.body?.content?.includes('**Answer**'))).toHaveLength(1);
+    expect(posts.filter((p) => visibleText(p.body)?.includes('**Answer**'))).toHaveLength(1);
     expect(sendInput).not.toHaveBeenCalled();
   });
 
@@ -625,7 +1440,9 @@ describe('Discord interface mode', () => {
       expect(r?.ok).toBe(true);
       expect(
         posts.some(
-          (p) => p.body?.content?.includes('Waiting for Input') && p.body?.content?.includes('fallback answer')
+          (p) =>
+            p.body?.components?.[0]?.components?.[0]?.content === '**Response**' &&
+            visibleText(p.body)?.includes('fallback answer')
         )
       ).toBe(true);
     }
@@ -650,7 +1467,7 @@ describe('Discord interface mode', () => {
       { deliberate: true }
     );
     for (const label of ['hook:elicitation_dialog', 'hook:permission_prompt', 'session:error', 'Explicit message'])
-      expect(posts.some((p) => p.body?.content?.includes(label))).toBe(true);
+      expect(posts.some((p) => visibleText(p.body)?.includes(label))).toBe(true);
   });
 
   it('reuses one editable status across tasks and recreates only a deleted status message', async () => {
@@ -669,27 +1486,27 @@ describe('Discord interface mode', () => {
     await b.syncSessions();
     turns = [{ cursor: 'native1:1', role: 'user', text: 'first', timestamp: '' }];
     await b.pollConversations();
-    const statusPost = posts.find((p) => p.method === 'POST' && p.body?.content === '⏳ Working…')!;
-    const message = [...remoteMessages.values()].find((m) => m.content === '⏳ Working…')!;
+    const statusPost = posts.find((p) => p.method === 'POST' && visibleText(p.body) === '⏳ Working…')!;
+    const message = [...remoteMessages.values()].find((m) => visibleText(m) === '⏳ Working…')!;
     now += 60001;
     state = 'completed';
     await b.pollConversations();
     expect(
-      posts.filter((p) => p.method === 'POST' && ['⏳ Working…', '✅ Done'].includes(p.body?.content))
+      posts.filter((p) => p.method === 'POST' && ['⏳ Working…', '✅ Done'].includes(visibleText(p.body)))
     ).toHaveLength(1);
     expect(
-      posts.some((p) => p.method === 'PATCH' && p.path.endsWith('/' + message.id) && p.body?.content === '✅ Done')
+      posts.some((p) => p.method === 'PATCH' && p.path.endsWith('/' + message.id) && visibleText(p.body) === '✅ Done')
     ).toBe(true);
     now += 60001;
     state = 'running';
     turns.push({ cursor: 'native1:2', role: 'user', text: 'second', timestamp: '' });
     await b.pollConversations();
-    expect(posts.filter((p) => p.method === 'POST' && p.body?.content === '⏳ Working…')).toHaveLength(1);
+    expect(posts.filter((p) => p.method === 'POST' && visibleText(p.body) === '⏳ Working…')).toHaveLength(1);
     remoteMessages.delete(message.id);
     now += 60001;
     state = 'completed';
     await b.pollConversations();
-    expect(posts.filter((p) => p.method === 'POST' && p.body?.content === '✅ Done')).toHaveLength(1);
+    expect(posts.filter((p) => p.method === 'POST' && visibleText(p.body) === '✅ Done')).toHaveLength(1);
     expect(statusPost.path).toContain('/messages');
   });
 
@@ -721,14 +1538,13 @@ describe('Discord interface mode', () => {
       urgency: 'warning',
       fullText: async () => ({ text: 'Delivered once' }),
     });
-    expect(posts.filter((p) => p.method === 'POST' && p.body?.content?.includes('Delivered once'))).toHaveLength(1);
-    expect(posts.some((p) => p.body?.content?.includes('Waiting for Input'))).toBe(false);
-    uncertainText = undefined;
+    expect(posts.filter((p) => p.method === 'POST' && visibleText(p.body)?.includes('Delivered once'))).toHaveLength(1);
+    expect(posts.some((p) => visibleText(p.body)?.includes('Waiting for Input'))).toBe(false);
     statusEditRefused = false;
     now += 60001;
     await b.pollConversations();
-    expect(posts.some((p) => p.method === 'PATCH' && p.body?.content === '✅ Done')).toBe(true);
-    expect(posts.filter((p) => p.method === 'POST' && p.body?.content?.includes('Delivered once'))).toHaveLength(1);
+    expect(posts.some((p) => p.method === 'PATCH' && visibleText(p.body) === '✅ Done')).toBe(true);
+    expect(posts.filter((p) => p.method === 'POST' && visibleText(p.body)?.includes('Delivered once'))).toHaveLength(1);
   });
 
   it('filters internal citations before live splitting and consumes metadata-only cursors without empty posts', async () => {
@@ -746,21 +1562,21 @@ describe('Discord interface mode', () => {
       { cursor: 'native1:2', role: 'assistant', text: metadata, timestamp: '' },
     ];
     await b.pollConversations();
-    expect(posts.filter((p) => p.body?.content === 'Clean answer')).toHaveLength(1);
-    expect(posts.some((p) => p.body?.content?.includes('MEMORY.md') || p.body?.content?.includes('<oai-mem'))).toBe(
-      false
-    );
+    expect(posts.filter((p) => visibleText(p.body) === 'Clean answer')).toHaveLength(1);
+    expect(
+      posts.some((p) => visibleText(p.body)?.includes('MEMORY.md') || visibleText(p.body)?.includes('<oai-mem'))
+    ).toBe(false);
     now += 60001;
     turns.push({ cursor: 'native1:3', role: 'assistant', text: 'Next answer', timestamp: '' });
     await b.pollConversations();
-    expect(posts.filter((p) => p.body?.content === 'Next answer')).toHaveLength(1);
-    expect(posts.filter((p) => p.body?.content === 'Clean answer')).toHaveLength(1);
+    expect(posts.filter((p) => visibleText(p.body) === 'Next answer')).toHaveLength(1);
+    expect(posts.filter((p) => visibleText(p.body) === 'Clean answer')).toHaveLength(1);
     b.stop();
     const again = makeBridge(undefined, { history, now: () => now });
     await again.reload();
     await again.syncSessions();
     await again.pollConversations();
-    expect(posts.filter((p) => p.body?.content === 'Clean answer')).toHaveLength(1);
+    expect(posts.filter((p) => visibleText(p.body) === 'Clean answer')).toHaveLength(1);
   });
 
   it('omits metadata-only historical turns while retaining visible historical context', async () => {
@@ -777,10 +1593,10 @@ describe('Discord interface mode', () => {
     const b = makeBridge(undefined, { history });
     await b.reload();
     await b.syncSessions();
-    const contexts = posts.filter((p) => p.body?.content?.includes('**Historical context**'));
+    const contexts = posts.filter((p) => p.body?.components?.[0]?.components?.[0]?.content === '**Latest response**');
     expect(contexts).toHaveLength(1);
-    expect(contexts[0].body.content).toContain('History answer');
-    expect(contexts[0].body.content).not.toContain('oai-mem');
+    expect(visibleText(contexts[0].body)).toContain('History answer');
+    expect(visibleText(contexts[0].body)).not.toContain('oai-mem');
   });
 
   it('filters internal metadata from full-text alert fallback when native history is unavailable', async () => {
@@ -802,9 +1618,9 @@ describe('Discord interface mode', () => {
       fullText: async () => ({ text: 'Visible fallback answer\n' + metadata }),
     });
     expect(result?.ok).toBe(true);
-    expect(posts.some((p) => p.body?.content?.includes('Visible fallback answer'))).toBe(true);
+    expect(posts.some((p) => visibleText(p.body)?.includes('Visible fallback answer'))).toBe(true);
     expect(
-      posts.some((p) => p.body?.content?.includes('private-footer') || p.body?.content?.includes('<oai-mem'))
+      posts.some((p) => visibleText(p.body)?.includes('private-footer') || visibleText(p.body)?.includes('<oai-mem'))
     ).toBe(false);
   });
 
@@ -821,15 +1637,15 @@ describe('Discord interface mode', () => {
     const b = makeBridge(undefined, { history, control: async () => ({ text: table('Requested history') }) });
     await b.reload();
     await b.syncSessions();
-    const past = posts.find((p) => p.body?.content?.includes('**Historical context**'));
-    expect(past?.body.content).toContain('**Item:** Historical');
-    expect(past?.body.content).toContain('**Status:** Long status');
-    expect(past?.body.content).not.toContain('```');
+    const past = posts.find((p) => p.body?.components?.[0]?.components?.[0]?.content === '**Latest response**');
+    expect(visibleText(past?.body)).toContain('**Item:** Historical');
+    expect(visibleText(past?.body)).toContain('**Status:** Long status');
+    expect(visibleText(past?.body)).not.toContain('```');
     turns.push({ cursor: 'native1:2', role: 'assistant', text: table('Live'), timestamp: '' });
     await b.pollConversations();
-    const live = posts.find((p) => p.body?.content?.includes('**Item:** Live'));
-    expect(live?.body.content).toContain('[details](https://example.test)');
-    expect(live?.body.content).not.toContain('|---');
+    const live = posts.find((p) => visibleText(p.body)?.includes('**Item:** Live'));
+    expect(visibleText(live?.body)).toContain('[details](https://example.test)');
+    expect(visibleText(live?.body)).not.toContain('|---');
     await b.onGatewayMessage({
       id: '900000000000000001',
       guild_id: cfg.guildId,
@@ -837,7 +1653,7 @@ describe('Discord interface mode', () => {
       author: { id: cfg.allowedUserIds[0] },
       content: '!codeman history',
     });
-    expect(posts.some((p) => p.body?.content?.includes('**Item:** Requested history'))).toBe(true);
+    expect(posts.some((p) => visibleText(p.body)?.includes('**Item:** Requested history'))).toBe(true);
     expect(sendInput).not.toHaveBeenCalled();
   });
 
@@ -922,8 +1738,9 @@ describe('Discord interface mode', () => {
         body: 'Choose',
         urgency: 'critical',
       });
-      const prompt = posts.find((p) => p.body?.components?.length && p.body?.content?.endsWith('Which option?'));
+      const prompt = posts.find((p) => p.body?.components?.length && visibleText(p.body)?.endsWith('Which option?'));
       expect(prompt).toBeDefined();
+      expect((prompt!.body!.flags ?? 0) & DISCORD_SUPPRESS_NOTIFICATIONS).toBe(0);
       expect(prompt!.body!.allowed_mentions.users).toEqual(pingMode === 'critical' ? cfg.allowedUserIds : []);
       await b.onGatewayMessage({
         id: '555555555555555555',
@@ -933,7 +1750,7 @@ describe('Discord interface mode', () => {
         content: '1',
       });
       expect(sendInput).not.toHaveBeenCalled();
-      expect(posts.some((p) => p.body?.content?.includes('prompt-bound answer'))).toBe(true);
+      expect(posts.some((p) => visibleText(p.body)?.includes('prompt-bound answer'))).toBe(true);
     }
   );
   it('accepts management commands only in the configured control channel when no sessions exist', async () => {
@@ -988,7 +1805,7 @@ describe('Discord interface mode', () => {
     slow = true;
     const poll = b.pollConversations();
     try {
-      await vi.waitFor(() => expect(posts.some((p) => p.body?.content?.includes('local live answer'))).toBe(true));
+      await vi.waitFor(() => expect(posts.some((p) => visibleText(p.body)?.includes('local live answer'))).toBe(true));
       expect(remoteReads).toBe(2);
     } finally {
       release();
@@ -1166,6 +1983,73 @@ describe('Discord interface mode', () => {
     expect(Object.keys(await readFullMap(dir))).toEqual(['s1', 's2']);
   });
 });
+it('renders routine fallback answers as readable cards without repeating alert metadata or unfurling body links', async () => {
+  sessions = [{ id: 's1', name: 'w5-demo' }];
+  const b = makeBridge();
+  await b.reload();
+  await b.syncSessions();
+  const result = await b.notify({
+    sessionId: 's1',
+    sessionName: 'w5-demo',
+    event: 'hook:idle_prompt',
+    title: 'Waiting for Input',
+    host: 'codeman:example',
+    body: '[w5-demo]',
+    urgency: 'warning',
+    fullText: async () => ({
+      text: 'The revised flow needs:\n1. Spread: details\n2. Shared: details\n\nhttps://example.test/demo',
+    }),
+  });
+  expect(result?.ok).toBe(true);
+  const post = posts.find((p) => visibleText(p.body)?.includes('**Spread:**'))!.body;
+  expect(post.components[0].components[0].content).toBe('**Response**');
+  expect(post.embeds).toBeUndefined();
+  expect(post.flags).toBe(32772);
+  expect(visibleText(post)).toContain('\n\n2. **Shared:**');
+  expect(visibleText(post)).toContain('https://example.test/demo');
+  expect(JSON.stringify(post)).not.toContain('Waiting for Input');
+  expect(JSON.stringify(post)).not.toContain('codeman:example');
+  expect(JSON.stringify(post)).not.toContain('[w5-demo]');
+});
+it('keeps critical alert context and an allowlisted ping when the attached response is styled', async () => {
+  const b = makeBridge();
+  await b.reload();
+  await b.syncSessions();
+  const result = await b.notify({
+    sessionId: 's1',
+    event: 'session:error',
+    title: 'Task failed',
+    body: 'The build command failed.',
+    urgency: 'critical',
+    fullText: async () => ({ text: 'Detailed failure explanation.' }),
+  });
+  expect(result?.ok).toBe(true);
+  const post = posts.find((p) => p.body?.components?.[0]?.components?.[0]?.content === '**Task failed**')!.body;
+  expect(post.flags).toBe(32772);
+  expect(post.embeds).toBeUndefined();
+  expect(post.components[0].accent_color).toBe(0xed6b6b);
+  expect(visibleText(post)).toContain('The build command failed.');
+  expect(visibleText(post)).toContain('Detailed failure explanation.');
+  expect(post.allowed_mentions.parse).toEqual([]);
+  expect(post.allowed_mentions.users).toEqual(cfg.allowedUserIds);
+});
+it('does not add a bare Waiting for Input wrapper after the same fallback answer was already delivered', async () => {
+  const b = makeBridge();
+  await b.reload();
+  await b.syncSessions();
+  const msg = {
+    sessionId: 's1',
+    event: 'hook:idle_prompt',
+    title: 'Waiting for Input',
+    body: '[s1]',
+    urgency: 'warning' as const,
+    fullText: async () => ({ text: 'A completed answer.' }),
+  };
+  expect((await b.notify(msg))?.ok).toBe(true);
+  expect((await b.notify({ ...msg, event: 'hook:stop' }))?.deduped).toBe(true);
+  expect(posts.filter((p) => visibleText(p.body) === 'A completed answer.')).toHaveLength(1);
+  expect(posts.some((p) => p.body?.content?.includes('Waiting for Input'))).toBe(false);
+});
 
 it('skips an uncertain native turn with a catch-up notice and delivers later turns', async () => {
   let now = 100000;
@@ -1180,23 +2064,24 @@ it('skips an uncertain native turn with a catch-up notice and delivers later tur
   turns = [{ cursor: 'native1:1:abc', role: 'assistant', text: 'ambiguous response', timestamp: 't' }];
   uncertainText = 'ambiguous response';
   await b.pollConversations();
-  const attempts = posts.filter((p) => p.body?.content === 'ambiguous response').length;
+  const attempts = posts.filter((p) => visibleText(p.body) === 'ambiguous response').length;
   expect(attempts).toBeGreaterThan(0);
   expect(posts.some((p) => p.body?.content?.includes('!codeman history or !codeman transcript'))).toBe(true);
   uncertainText = undefined;
   turns.push({ cursor: 'native1:2:abc', role: 'assistant', text: 'later response', timestamp: 't' });
   now += 60001;
   await b.pollConversations();
-  expect(posts.filter((p) => p.body?.content === 'ambiguous response')).toHaveLength(attempts);
-  expect(posts.filter((p) => p.body?.content === 'later response')).toHaveLength(1);
+  expect(posts.filter((p) => visibleText(p.body) === 'ambiguous response')).toHaveLength(attempts);
+  expect(posts.filter((p) => visibleText(p.body) === 'later response')).toHaveLength(1);
 });
 it('keeps a tool cursor available after switching from verbose to responses', async () => {
   let now = 100000;
   let turns: import('../src/discord-history.js').DiscordHistoryTurn[] = [];
   sessions = [{ id: 's1', name: 'one' }];
-  const history = vi.fn(async (_id: string, options?: { includeTools?: boolean }) => ({
+  const history = vi.fn(async (_id: string, options?: { includeTools?: boolean; after?: string }) => ({
     conversationId: 'native1',
     partial: false,
+    verifiedAfter: options?.after,
     turns: options?.includeTools ? turns : turns.filter((t) => t.role !== 'tool'),
   }));
   const b = makeBridge(undefined, { history, now: () => now });
@@ -1218,7 +2103,7 @@ it('keeps a tool cursor available after switching from verbose to responses', as
   turns.push({ cursor: 'native1:2:abc', role: 'assistant', text: 'answer after tool', timestamp: 't' });
   now += 60001;
   await b.pollConversations();
-  expect(posts.filter((p) => p.body?.content === 'answer after tool')).toHaveLength(1);
+  expect(posts.filter((p) => visibleText(p.body) === 'answer after tool')).toHaveLength(1);
 });
 it('reanchors a lost tail cursor once and continues delivering new turns', async () => {
   let now = 100000;
@@ -1238,7 +2123,7 @@ it('reanchors a lost tail cursor once and continues delivering new turns', async
   turns.push({ cursor: 'native1:10:abc', role: 'assistant', text: 'new after gap', timestamp: 't' });
   now += 60001;
   await b.pollConversations();
-  expect(posts.filter((p) => p.body?.content === 'new after gap')).toHaveLength(1);
+  expect(posts.filter((p) => visibleText(p.body) === 'new after gap')).toHaveLength(1);
 });
 it('preserves stream off across conversation reset without posting replacement historical turns', async () => {
   sessions = [{ id: 's1', name: 'one' }];
@@ -1293,8 +2178,8 @@ it('treats a fast first response as live even while initial synchronization is a
   await b.syncSessions();
   expect(posts.some((p) => p.body?.content?.startsWith('**Historical context**'))).toBe(false);
   const response = posts
-    .filter((p) => p.body?.content?.includes('full fast response'))
-    .map((p) => p.body.content)
+    .filter((p) => visibleText(p.body)?.includes('full fast response'))
+    .map((p) => visibleText(p.body))
     .join('');
   expect(response.length).toBeGreaterThan(2000);
 });
@@ -1365,4 +2250,385 @@ it('does not treat intentionally unsupported history adapters as session synchro
   expect(b.sessionSync.state).toBe('complete');
   expect(b.sessionSync.failed).toBe(0);
   expect(history).not.toHaveBeenCalled();
+});
+it('streams explicit commentary as conversation cards and delivers the native final once', async () => {
+  sessions = [{ id: 's1', name: 'one' }];
+  let now = 100000;
+  let turns: import('../src/discord-history.js').DiscordHistoryTurn[] = [];
+  let state: 'running' | 'completed' = 'running';
+  const history = async () => ({
+    conversationId: 'native1',
+    partial: false,
+    turns,
+    executions: [{ userCursor: 'native1:user', promptHash: 'proof', state }],
+  });
+  const b = makeBridge(undefined, { history, now: () => now });
+  await b.reload();
+  await b.syncSessions();
+  posts = [];
+  turns = [
+    { role: 'user', cursor: 'native1:user', text: 'Build', timestamp: 't' },
+    {
+      role: 'assistant',
+      cursor: 'native1:p1',
+      text: 'Checks passed; still compiling',
+      timestamp: 't',
+      phase: 'commentary',
+    },
+  ];
+  await b.pollConversations();
+  expect(posts.filter((p) => p.method === 'POST' && visibleText(p.body)?.includes('Checks passed'))).toHaveLength(1);
+  expect(
+    posts
+      .find((p) => p.method === 'POST' && visibleText(p.body)?.includes('Checks passed'))!
+      .body.components.some((c: any) => c.type === 17)
+  ).toBe(true);
+  turns.push({
+    role: 'assistant',
+    cursor: 'native1:p2',
+    text: 'Exporting artifact',
+    timestamp: 't',
+    phase: 'commentary',
+  });
+  now += 60001;
+  await b.pollConversations();
+  expect(posts.filter((p) => p.method === 'POST' && visibleText(p.body)?.includes('Exporting artifact'))).toHaveLength(
+    1
+  );
+  expect(posts.filter((p) => p.method === 'PATCH' && visibleText(p.body)?.includes('Exporting artifact'))).toHaveLength(
+    0
+  );
+  turns.push({
+    role: 'assistant',
+    cursor: 'native1:final',
+    text: 'The artifact is ready.',
+    timestamp: 't',
+    phase: 'final_answer',
+  });
+  state = 'completed';
+  now += 60001;
+  await b.pollConversations();
+  const final = posts.filter((p) => p.method === 'POST' && visibleText(p.body) === 'The artifact is ready.');
+  expect(final).toHaveLength(1);
+  expect(final[0].body.components[0].accent_color).toBe(0x59ca92);
+  expect(final[0].body.flags & DISCORD_SUPPRESS_NOTIFICATIONS).toBe(0);
+  const updates = posts.filter(
+    (p) => p.method === 'POST' && /Checks passed|Exporting artifact/.test(visibleText(p.body) ?? '')
+  );
+  expect(updates).toHaveLength(2);
+  expect(updates.every((p) => !!(p.body.flags & DISCORD_SUPPRESS_NOTIFICATIONS))).toBe(true);
+  const progress = posts.filter(
+    (p) => p.method === 'POST' && /Working|Done/.test(p.body?.components?.[0]?.content ?? '')
+  );
+  expect(progress.length).toBeGreaterThan(0);
+  expect(progress.every((p) => !!(p.body.flags & DISCORD_SUPPRESS_NOTIFICATIONS))).toBe(true);
+
+  expect(final[0].body.content).toBeUndefined();
+  expect(final[0].body.embeds).toBeUndefined();
+  b.stop();
+  const restarted = makeBridge(undefined, { history, now: () => now });
+  await restarted.reload();
+  await restarted.syncSessions();
+  await restarted.pollConversations();
+  expect(posts.filter((p) => p.method === 'POST' && visibleText(p.body) === 'The artifact is ready.')).toHaveLength(1);
+  expect(sendInput).not.toHaveBeenCalled();
+});
+it('keeps an attached file visible when an alert also contains a native V2 response', async () => {
+  const b = makeBridge();
+  await b.reload();
+  await b.syncSessions();
+  const result = await b.notify(
+    {
+      sessionId: 's1',
+      event: 'explicit',
+      title: 'Review output',
+      body: 'Results attached.',
+      urgency: 'critical',
+      file: { name: 'results.txt', data: Buffer.from('test results') },
+      fullText: async () => ({ text: 'The answer.' }),
+    },
+    { deliberate: true }
+  );
+  expect(result?.ok).toBe(true);
+  const post = posts.find((p) => (p.body?.flags & 32768) !== 0 && visibleText(p.body)?.includes('The answer.'))!.body;
+  expect(post.components).toHaveLength(1);
+  expect(post.components[0].components).toContainEqual({ type: 13, file: { url: 'attachment://results.txt' } });
+  expect(uploaded.some((f) => f.name === 'results.txt' && f.text === 'test results')).toBe(true);
+});
+
+it('reports a missing canonical response once instead of sending cursor-painted terminal fragments', async () => {
+  let now = 10000;
+  const b = makeBridge(undefined, {
+    now: () => now,
+    history: async () => {
+      throw new Error('No exact identity');
+    },
+  });
+  await b.reload();
+  await b.syncSessions();
+  const msg = {
+    sessionId: 's1',
+    event: 'hook:idle_prompt',
+    title: 'Waiting for Input',
+    body: 'fallback',
+    urgency: 'warning' as const,
+    tail: 'happen between these recorded\n\nviews\n8–9 Shared placement\nThe three chat workloads now\nutilization',
+    fullText: async () => {
+      throw new Error('Original transcript unavailable');
+    },
+  };
+  await b.notify(msg);
+  now += 10000;
+  await b.notify(msg);
+  const notices = [...remoteMessages.values()].filter(
+    (m) => m.components?.[0]?.components?.[0]?.content === '**Reconnecting to this conversation**'
+  );
+  expect(notices).toHaveLength(1);
+  expect(posts.some((p) => JSON.stringify(p.body ?? {}).includes('happen between these recorded'))).toBe(false);
+  expect(sendInput).not.toHaveBeenCalled();
+});
+
+it('does not show a reconnect notice for a connected session with no assistant response yet', async () => {
+  const b = makeBridge(undefined, { history: async () => ({ conversationId: 'native1', turns: [], partial: false }) });
+  await b.reload();
+  await b.syncSessions();
+  await b.notify({
+    sessionId: 's1',
+    event: 'hook:idle_prompt',
+    title: 'Waiting for Input',
+    body: 'empty',
+    urgency: 'warning',
+    fullText: async () => undefined,
+    tail: 'Ask Codex to do anything',
+  });
+  expect(
+    posts.some((p) => p.body?.components?.[0]?.components?.[0]?.content === '**Reconnecting to this conversation**')
+  ).toBe(false);
+  expect(posts.some((p) => JSON.stringify(p.body ?? {}).includes('Ask Codex to do anything'))).toBe(false);
+});
+
+it('reports an unverified profile as actionable history attention instead of promising automatic reconnection', async () => {
+  const error = new DiscordHistoryReadError('profile_unverified');
+  const b = makeBridge(undefined, {
+    history: async () => {
+      throw error;
+    },
+  });
+  await b.reload();
+  await b.syncSessions();
+  await b.notify({
+    sessionId: 's1',
+    event: 'hook:idle_prompt',
+    title: 'Waiting for Input',
+    body: 'idle',
+    urgency: 'warning',
+    fullText: async () => {
+      throw error;
+    },
+  });
+  const bodies = [...posts.map((p) => p.body), ...remoteMessages.values()]
+    .map((p) => JSON.stringify(p ?? {}))
+    .join('\n');
+  expect(bodies).toContain('Reply history needs attention');
+  expect(bodies).toContain('CODEX_HOME');
+  expect(bodies).not.toContain('I’m restoring the connection');
+  expect(sendInput).not.toHaveBeenCalled();
+});
+
+it('groups adjacent commentary by default, preserves final order and supports Quiet and Tools', async () => {
+  sessions = [{ id: 's1', name: 'one' }];
+  let turns: import('../src/discord-history.js').DiscordHistoryTurn[] = [];
+  const history = async () => ({ conversationId: 'native1', partial: false, turns });
+  let now = 100000;
+  const b = makeBridge(undefined, { history, now: () => now });
+  await b.reload();
+  await b.syncSessions();
+  posts = [];
+  turns = [
+    { cursor: 'native1:u', role: 'user', text: 'Task', timestamp: '' },
+    { cursor: 'native1:p1', role: 'assistant', phase: 'commentary', text: 'First progress', timestamp: '' },
+    { cursor: 'native1:p2', role: 'assistant', phase: 'commentary', text: 'Second progress', timestamp: '' },
+    { cursor: 'native1:r', role: 'assistant', phase: 'final_answer', text: 'Final answer', timestamp: '' },
+  ];
+  now += 60001;
+  await b.pollConversations();
+  const cards = posts.filter((p) => p.method === 'POST');
+  const update = cards.find((p) => visibleText(p.body)?.includes('First progress'))!;
+  expect(visibleText(update.body)).toContain('Second progress');
+  expect(update.body.flags & DISCORD_SUPPRESS_NOTIFICATIONS).toBeTruthy();
+  expect(cards.indexOf(update)).toBeLessThan(cards.findIndex((p) => visibleText(p.body)?.includes('Final answer')));
+  now += 60001;
+  await b.pollConversations();
+  expect(posts.filter((p) => p.method === 'POST' && visibleText(p.body)?.includes('First progress'))).toHaveLength(1);
+  const map = await readFullMap(dir);
+  const msg = {
+    id: '900000000000000098',
+    channel_id: map.s1,
+    guild_id: cfg.guildId,
+    author: { id: cfg.allowedUserIds[0] },
+    content: '!codeman stream quiet',
+  };
+  await b.onGatewayMessage(msg);
+  turns.push({ cursor: 'native1:p3', role: 'assistant', phase: 'commentary', text: 'Quiet hidden', timestamp: '' });
+  now += 60001;
+  await b.pollConversations();
+  expect(posts.some((p) => visibleText(p.body)?.includes('Quiet hidden'))).toBe(false);
+  await b.onGatewayMessage({ ...msg, id: '900000000000000099', content: '!codeman stream tools' });
+  turns.push({ cursor: 'native1:t', role: 'tool', text: 'Tool visible', timestamp: '' });
+  now += 60001;
+  await b.pollConversations();
+  expect(posts.some((p) => visibleText(p.body)?.includes('Tool visible'))).toBe(true);
+  expect(
+    posts.find((p) => visibleText(p.body)?.includes('Tool visible'))!.body.flags & DISCORD_SUPPRESS_NOTIFICATIONS
+  ).toBeTruthy();
+  expect(sendInput).not.toHaveBeenCalled();
+});
+it('replays a reserved update group without changing its payload when more progress arrives', async () => {
+  sessions = [{ id: 's1', name: 'one' }];
+  let now = 100000;
+  let turns: import('../src/discord-history.js').DiscordHistoryTurn[] = [];
+  const history = async () => ({ conversationId: 'native1', partial: false, turns });
+  const b = makeBridge(undefined, { history, now: () => now });
+  await b.reload();
+  await b.syncSessions();
+  posts = [];
+  turns = [
+    { cursor: 'native1:u', role: 'user', text: 'Task', timestamp: '' },
+    { cursor: 'native1:p1', role: 'assistant', phase: 'commentary', text: 'Reserved first', timestamp: '' },
+    { cursor: 'native1:p2', role: 'assistant', phase: 'commentary', text: 'Reserved second', timestamp: '' },
+  ];
+  await b.pollConversations();
+  const path = join(dir, 'discord-conversations.json');
+  const saved = JSON.parse(await readFile(path, 'utf8'));
+  saved[0][1].cursor = 'native1:u';
+  saved[0][1].pendingUpdates = ['native1:p1', 'native1:p2'];
+  await writeFile(path, JSON.stringify(saved));
+  b.stop();
+  now += 60001;
+  turns.push({
+    cursor: 'native1:p3',
+    role: 'assistant',
+    phase: 'commentary',
+    text: 'New separate progress',
+    timestamp: '',
+  });
+  const restarted = makeBridge(undefined, { history, now: () => now });
+  await restarted.reload();
+  await restarted.syncSessions();
+  await restarted.pollConversations();
+  expect(posts.filter((p) => p.method === 'POST' && visibleText(p.body)?.includes('Reserved first'))).toHaveLength(1);
+  expect(
+    posts.filter((p) => p.method === 'POST' && visibleText(p.body)?.includes('New separate progress'))
+  ).toHaveLength(1);
+  expect(sendInput).not.toHaveBeenCalled();
+});
+
+it('keeps long streamed updates and files silent with just one notification-eligible final chunk', async () => {
+  sessions = [{ id: 's1', name: 'one' }];
+  let turns: import('../src/discord-history.js').DiscordHistoryTurn[] = [];
+  const history = async () => ({
+    conversationId: 'native1',
+    partial: false,
+    turns,
+    executions: [{ userCursor: 'native1:u', promptHash: 'proof', state: 'completed' as const }],
+  });
+  const b = makeBridge(undefined, {
+    history,
+    getAttachment: async () => ({ name: 'report.txt', data: Buffer.from('report') }),
+  });
+  await b.reload();
+  await b.syncSessions();
+  posts = [];
+  turns = [
+    { cursor: 'native1:u', role: 'user', text: 'Build report', timestamp: '' },
+    {
+      cursor: 'native1:p',
+      role: 'assistant',
+      phase: 'commentary',
+      text: 'Progress detail.\n'.repeat(900) + '\n[Download report](/tmp/report.txt)',
+      timestamp: '',
+    },
+    {
+      cursor: 'native1:r',
+      role: 'assistant',
+      phase: 'final_answer',
+      text: 'Final detail.\n'.repeat(1100),
+      timestamp: '',
+    },
+  ];
+  await b.pollConversations();
+  const messages = posts.filter((p) => p.method === 'POST' && /\/messages$/.test(p.path));
+  const audible = messages.filter((p) => !(p.body.flags & DISCORD_SUPPRESS_NOTIFICATIONS));
+  expect(audible).toHaveLength(1);
+  expect(audible[0].body.components[0].components[0].content).toBe('**✓ Turn finished**\n-# one');
+  expect(uploaded.map((f) => f.name)).toEqual(expect.arrayContaining(['updates.txt', 'response.txt', 'report.txt']));
+  expect(messages.filter((p) => visibleText(p.body)?.includes('Progress detail')).length).toBeGreaterThan(1);
+  expect(messages.filter((p) => visibleText(p.body)?.includes('Final detail')).length).toBeGreaterThan(1);
+  expect(sendInput).not.toHaveBeenCalled();
+});
+
+it('links the live Activity row to the final message actually delivered by the bridge', async () => {
+  sessions = [{ id: 's1', name: 'one' }];
+  let now = 100000;
+  let turns: import('../src/discord-history.js').DiscordHistoryTurn[] = [];
+  const history = async () => ({
+    conversationId: 'native1',
+    partial: false,
+    turns,
+    executions: [{ userCursor: 'u', promptHash: 'proof', state: 'completed' as const }],
+  });
+  const b = makeBridge(undefined, {
+    history,
+    now: () => now,
+    nativeUi: {
+      enabled: () => true,
+      sessions: async () => [
+        {
+          id: 's1',
+          name: 'one',
+          host: 'test',
+          caseName: 'Test',
+          mode: 'codex',
+          conversation: 'native1',
+          working: false,
+          ready: true,
+          pending: false,
+          exited: false,
+        },
+      ],
+      cases: async () => [],
+      defaults: async () => ({ model: '', effort: '', approval: 'ask' }),
+      saveDefaults: async () => {},
+      question: () => undefined,
+      answer: async () => '',
+      workspace: async () => ({ summary: '', diff: '' }),
+      submitQueued: async () => 'blocked',
+    },
+  });
+  await b.reload();
+  await b.syncSessions();
+  await b.pollConversations();
+  turns = [
+    { role: 'user', cursor: 'u', timestamp: new Date(1000).toISOString(), text: 'Task' },
+    {
+      role: 'assistant',
+      cursor: 'answer',
+      phase: 'final_answer',
+      timestamp: new Date(2000).toISOString(),
+      text: 'Exact delivered final.',
+    },
+  ];
+  now += 21000;
+  await b.pollConversations();
+  const sent = [...remoteMessages.values()].find((m) => visibleText(m) === 'Exact delivered final.');
+  expect(sent).toBeDefined();
+  now += 21000;
+  await b.pollConversations();
+  const dashboard = [...remoteMessages.values()].find((m) =>
+    discordUiNodes(m.components).some((c) => String(c.content ?? '').includes('## Activity'))
+  );
+  expect(dashboard).toBeDefined();
+  const link = discordUiNodes(dashboard.components).find((c) => c.label === 'View reply');
+  expect(link?.url).toBe(`https://discord.com/channels/${cfg.guildId}/${sent.channel_id}/${sent.id}`);
+  expect(sendInput).not.toHaveBeenCalled();
 });

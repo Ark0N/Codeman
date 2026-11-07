@@ -1,4 +1,5 @@
 /** @fileoverview Explicit session lifecycle choices using shared web/backend services. No blank recovery or task replay. */
+import { configuredDiscordCaseKey } from './discord-case-identity.js';
 import { randomUUID, createHash } from 'node:crypto';
 import type { CaseInfo, SessionMode } from './types.js';
 /** Connector-facing recovery metadata; hosts without a saved recovery queue expose none. */
@@ -78,6 +79,20 @@ export class DiscordSessionManagement {
       text: text + `\nText fallback: !codeman confirm ${token}`,
       actions: [{ label: 'Confirm', command: 'confirm ' + token, validity: token }],
     };
+  }
+  /** Resolve an owned channel's root, never a display-name prefix or arbitrary supplied path. */
+  async launch(scope: string, caseKey: string, mode: string): Promise<DiscordControlReply> {
+    if (!this.deps.allowed() || !this.deps.modes().includes(mode))
+      return { text: 'This CLI launch is unavailable. No session was created.' };
+    const cases = await this.deps.cases();
+    const matches = cases.filter((c) => configuredDiscordCaseKey(c) === caseKey && !c.unreachable);
+    // The shared create endpoint selects by name. Reject aliases/collisions rather than risk another host.
+    if (matches.length !== 1 || cases.filter((c) => c.name === matches[0].name).length !== 1)
+      return {
+        text: 'This channel has no unique available configured case. Link it in the web UI first. No session was created.',
+      };
+    const c = matches[0];
+    return (await this.control(scope, `create ${c.name} ${c.remote?.hostId || 'local'} ${mode} default`))!;
   }
   async control(scope: string, command: string): Promise<DiscordControlReply | undefined> {
     if (!/^(sessions|open|cases|groups|recoveries|create|recover|reconnect|confirm|help)(?:\s|$)/.test(command))
@@ -270,7 +285,7 @@ export class DiscordSessionManagement {
       );
     }
     return {
-      text: 'Commands: sessions [offset] · open <session-id> · cases · groups · create <case> <host-id|local> <CLI> <group-id|default> · recoveries · recover <record-id> <reconnect|resume> · reconnect <session-id> · status · history · transcript · pending · interrupt. Prefix commands with !codeman.',
+      text: 'Commands: sessions [offset] · open <session-id> · cases · groups · create <case> <host-id|local> <CLI> <group-id|default> · recoveries · recover <record-id> <reconnect|resume> · reconnect <session-id> · model [model-id] · effort [level] · status · history · transcript · pending · interrupt. Prefix commands with !codeman.',
     };
   }
 }

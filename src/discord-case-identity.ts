@@ -53,3 +53,13 @@ export function resolveDiscordCase(session: DiscordCaseSession, cases: CaseInfo[
   const name = match?.c.name ?? ((remote ? posix.basename(root) : basename(root)) || 'workspace');
   return { key: key([owner, ...host, root]), name };
 }
+
+/** Exact configured root identity for launching from a case channel, including empty cases. */
+export function configuredDiscordCaseKey(c: CaseInfo): string | undefined {
+  if (c.docker) return undefined; // Container launch has a separate lifecycle; never fall back to the host.
+  if (c.remote) {
+    if (!posix.isAbsolute(c.remote.path)) return undefined;
+    return key(['@single', 'ssh', c.remote.hostId, c.remote.username, posix.normalize(c.remote.path)]);
+  }
+  return isAbsolute(c.path) ? key(['@single', 'local', resolve(c.path)]) : undefined;
+}

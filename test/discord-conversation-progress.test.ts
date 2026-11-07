@@ -13,6 +13,9 @@ it('persists private bounded metadata and serializes concurrent destination upda
       seedIndex: 0,
       seeded: false,
       cursor: 'native1:1:abc',
+      activeUser: 'native1:0:abc',
+      view: 'quiet' as const,
+      pendingUpdates: ['native1:2:abc', 'native1:3:abc'],
     };
     await Promise.all([store.set('a'.repeat(64), value), store.set('b'.repeat(64), value)]);
     const restored = new DiscordConversationProgressStore(dir);

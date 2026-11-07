@@ -144,6 +144,22 @@ export function composerIsEmpty(screen: string, glyph: string): boolean | undefi
   return compact(typed[at].slice(glyph.length) + typed.slice(at + 1, end).join('')).length === 0;
 }
 
+/** Claude's native ghost prompt only: never typed drafts, transcript text or footer hints. */
+export function claudePromptSuggestion(screen: string): string | undefined {
+  if (composerIsEmpty(screen, '❯') !== true) return undefined;
+  const lines = plainFrame(screen).split('\n');
+  let start = lines.length - 1;
+  while (start >= 0 && !lines[start].startsWith('❯')) start--;
+  const end = lines.findIndex((line, i) => i > start && line.startsWith('─'));
+  if (start < 0 || end < 0) return undefined;
+  const text = [lines[start].slice(1), ...lines.slice(start + 1, end)]
+    .map((line) => line.trim())
+    .join(' ')
+    .trim();
+  if (!text || text.length > 1000 || /^(?:Try ["“]|Type \/|Press (?:Tab|Enter))/i.test(text)) return undefined;
+  return text;
+}
+
 export interface SubmitVerifierDeps {
   /** The rendered pane, or null when there is none to read. */
   capture: () => string | null | undefined;

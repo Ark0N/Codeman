@@ -1012,6 +1012,30 @@ describe('files', () => {
     expect(sanitiseReply('x'.repeat(5000), ['/w/a'])!.endsWith('[attached: /w/a]\r')).toBe(true);
   });
 
+  it('preserves native V2 file components for every file in a guarded multipart batch', async () => {
+    const fetch = vi.fn(async (_u: URL, _init: RequestInit) => jsonRes({ id: 'message' }));
+    const api = new DiscordApi(() => TOKEN, fetch);
+    const post = {
+      content: 'Internal fallback',
+      flags: 32768,
+      components: [{ type: 10, content: 'Outputs' }],
+      allowed_mentions: { parse: [], users: [] },
+    };
+    const files = [
+      { name: 'first.pdf', data: Buffer.from('one') },
+      { name: 'second.png', data: Buffer.from('two') },
+    ];
+    await api.postWithFiles(PARENT, post, files, () => true);
+    const body = fetch.mock.calls[0][1].body as FormData;
+    const wire = JSON.parse(String(body.get('payload_json')));
+    expect(wire.content).toBeUndefined();
+    expect(wire.components).toContainEqual({ type: 13, file: { url: 'attachment://first.pdf' } });
+    expect(wire.components).toContainEqual({ type: 13, file: { url: 'attachment://second.png' } });
+    expect(await (body.get('files[1]') as File).text()).toBe('two');
+    await api.postWithFiles(PARENT, post, files, () => false);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
   it('postWithFile sends multipart with a safe filename and no JSON content type', async () => {
     let seen: { init: RequestInit } | null = null;
     const api = new DiscordApi(

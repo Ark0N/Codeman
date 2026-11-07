@@ -98,3 +98,7 @@ export function isKnownLauncherProfile(name: string): name is LauncherProfileNam
 export function isKnownSetenvProfile(name: string): name is SetenvProfileName {
   return (SETENV_PROFILE_NAMES as readonly string[]).includes(name);
 }
+
+/** Verified native settings/input protocols. Implementations live in discord-model-controls and native-composer-ready. */
+export const NATIVE_SETTINGS_PROFILES = ['codex-tui', 'claude-tui'] as const;
+export type NativeSettingsProfileName = (typeof NATIVE_SETTINGS_PROFILES)[number];

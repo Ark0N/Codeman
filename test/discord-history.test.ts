@@ -3,7 +3,13 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, it, expect } from 'vitest';
-import { readDiscordHistory, historyPage, parseDiscordHistory, discordHistoryCommand } from '../src/discord-history.js';
+import {
+  readDiscordHistory,
+  readDiscordSessionHistory,
+  historyPage,
+  parseDiscordHistory,
+  discordHistoryCommand,
+} from '../src/discord-history.js';
 const id = '12345678-1234-1234-1234-123456789abc';
 const other = '12345678-1234-1234-1234-123456789def';
 const packet = (rows: unknown[]) =>
@@ -46,6 +52,39 @@ describe('Discord native history', () => {
       ])
     );
     expect(got.turns.map((t) => t.text)).toEqual(['answer']);
+  });
+  it('preserves only explicit native commentary/final metadata without guessing from text', () => {
+    const h = parseDiscordHistory(
+      { mode: 'codex', conversationId: id },
+      packet([
+        {
+          type: 'event_msg',
+          payload: { type: 'agent_message', phase: 'commentary', message: 'Checks passed; still compiling' },
+        },
+        { type: 'event_msg', payload: { type: 'agent_message', phase: 'final_answer', message: 'Result' } },
+        { type: 'event_msg', payload: { type: 'agent_message', message: 'Working on it' } },
+      ])
+    );
+    expect(h.turns.map((t) => t.phase)).toEqual(['commentary', 'final_answer', undefined]);
+    const c = parseDiscordHistory(
+      { mode: 'claude', conversationId: id },
+      packet([
+        { type: 'assistant', message: { stop_reason: 'tool_use', content: 'Before tool' } },
+        { type: 'assistant', message: { stop_reason: 'end_turn', content: 'After tool' } },
+      ])
+    );
+    expect(c.turns.map((t) => t.phase)).toEqual(['commentary', 'final_answer']);
+  });
+  it('does not lose a final answer repeated verbatim after commentary or duplicate a phaseless mirror', () => {
+    const h = parseDiscordHistory(
+      { mode: 'codex', conversationId: id },
+      packet([
+        { type: 'event_msg', payload: { type: 'agent_message', phase: 'commentary', message: 'Done' } },
+        { type: 'event_msg', payload: { type: 'agent_message', phase: 'final_answer', message: 'Done' } },
+        { type: 'event_msg', payload: { type: 'agent_message', message: 'Done' } },
+      ])
+    );
+    expect(h.turns.map((t) => t.phase)).toEqual(['commentary', 'final_answer']);
   });
   it('paginates with stable conversation/row cursors and rejects stale or foreign cursors', () => {
     const history = parseDiscordHistory(
@@ -134,4 +173,38 @@ describe('Discord native history', () => {
     expect(() => discordHistoryCommand({ mode: 'shell', conversationId: id })).toThrow();
     expect(() => discordHistoryCommand({ mode: 'claude', conversationId: '../../etc/passwd' })).toThrow();
   });
+});
+
+it('reads a status-confirmed local resumed conversation from its custom home despite an older originator', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'local-status-history-'));
+  try {
+    await mkdir(join(dir, 'sessions'), { recursive: true });
+    await writeFile(
+      join(dir, 'sessions', 'rollout-' + id + '.jsonl'),
+      [
+        { type: 'session_meta', payload: { id, originator: 'codeman_older-owner', cwd: dir } },
+        { type: 'response_item', payload: { role: 'user', content: [{ type: 'input_text', text: 'Own prompt' }] } },
+        {
+          type: 'response_item',
+          payload: { role: 'assistant', content: [{ type: 'output_text', text: 'Verified profile response' }] },
+        },
+      ]
+        .map((r) => JSON.stringify(r))
+        .join('\n') + '\n'
+    );
+    const session = {
+      id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+      mode: 'codex',
+      workingDir: dir,
+      nativeResumeId: null,
+      envOverrideValue: (key: string) => (key === 'CODEX_HOME' ? dir : undefined),
+    } as unknown as import('../src/session.js').Session;
+    const history = await readDiscordSessionHistory(session, {}, id);
+    expect(history.conversationId).toBe(id);
+    expect(history.turns.at(-1)?.text).toBe('Verified profile response');
+    Object.assign(session, { nativeResumeId: other });
+    await expect(readDiscordSessionHistory(session, {}, id)).rejects.toThrow('profile');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });

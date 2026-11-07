@@ -80,6 +80,8 @@ export interface SessionWriteOptions {
   fromUser?: boolean;
   /** Internal writeViaMux option: preserve structured-message whitespace and newline bytes. */
   preserveWhitespace?: boolean;
+  /** Internal, leased native model controls are commands, not submitted model turns. Never accepted from HTTP. */
+  nativeModelSettings?: boolean;
 }
 
 export type RemoteCommandMode = Extract<

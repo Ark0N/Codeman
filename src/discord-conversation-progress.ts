@@ -13,6 +13,9 @@ export interface DiscordConversationProgress {
   cursor?: string;
   statusMessageId?: string;
   statusHash?: string;
+  view?: 'conversation' | 'quiet' | 'tools';
+  activeUser?: string;
+  pendingUpdates?: string[];
   verbose?: boolean;
   streamOff?: boolean;
 }
@@ -58,6 +61,13 @@ export class DiscordConversationProgressStore {
               (typeof p.statusMessageId !== 'string' || !/^\d{15,25}$/.test(p.statusMessageId))) ||
             (p.statusHash !== undefined &&
               (typeof p.statusHash !== 'string' || !/^[a-f0-9]{64}$/.test(p.statusHash))) ||
+            (p.view !== undefined && !['conversation', 'quiet', 'tools'].includes(p.view)) ||
+            (p.activeUser !== undefined && !validCursor(p.activeUser)) ||
+            (p.pendingUpdates !== undefined &&
+              (!Array.isArray(p.pendingUpdates) ||
+                !p.pendingUpdates.length ||
+                p.pendingUpdates.length > 20 ||
+                !p.pendingUpdates.every(validCursor))) ||
             (p.verbose !== undefined && typeof p.verbose !== 'boolean') ||
             (p.streamOff !== undefined && typeof p.streamOff !== 'boolean')
           )
@@ -73,6 +83,9 @@ export class DiscordConversationProgressStore {
             cursor: p.cursor,
             statusMessageId: p.statusMessageId,
             statusHash: p.statusHash,
+            view: p.view,
+            activeUser: p.activeUser,
+            pendingUpdates: p.pendingUpdates,
             verbose: p.verbose,
             streamOff: p.streamOff,
           });

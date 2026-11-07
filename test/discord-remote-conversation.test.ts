@@ -46,3 +46,25 @@ describe('exact remote pane resume identity', () => {
     await expect(probe(`200 1 codex resume ${id}`)).rejects.toThrow();
   });
 });
+
+it.each(['app-server', 'mcp-server', 'exec-server', 'exec', 'e', 'review'])(
+  'ignores owned auxiliary %s without losing the real interactive identity',
+  async (command) => {
+    expect(await probe(`100 1 /bin/sh\n101 100 codex resume ${id}\n102 101 codex -c model=helper ${command}`)).toBe(id);
+  }
+);
+it.each([`--config resume resume ${id}`, `--model app-server resume ${id}`, `--config=x=y resume ${id}`])(
+  'parses global option values before the command: %s',
+  async (args) => {
+    expect(await probe(`100 1 codex ${args}`)).toBe(id);
+  }
+);
+it.each([
+  '-- app-server',
+  '--unknown app-server',
+  '--config app-server',
+  '"write an exec summary"',
+  '-- "resume ' + id + '"',
+])('does not exclude interactive processes because of prompt or option text: %s', async (args) => {
+  expect(await probe(`100 1 /bin/sh\n101 100 codex resume ${id}\n102 100 codex ${args}`)).toBeNull();
+});

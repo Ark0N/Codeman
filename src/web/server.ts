@@ -26,12 +26,19 @@
  *
  * @module web/server
  */
+import { posix, resolve } from 'node:path';
+import { networkInterfaces } from 'node:os';
+import { createDiscordNativeUiServices } from './discord-native-ui-services.js';
+import { DiscordModelControls } from '../discord-model-controls.js';
+import { readDiscordModelCatalog } from '../discord-model-catalog.js';
+import { applyDiscordLaunchDefaults } from './discord-launch-defaults.js';
+import { readDiscordCanonicalHistory } from '../discord-history-recovery.js';
 import { remoteTmuxSessionAlive } from '../remote-hosts.js';
 import { remoteTmuxSessionName } from '../tmux-manager.js';
 import { resolveDiscordCase } from '../discord-case-identity.js';
 import { DiscordSessionManagement } from '../discord-session-management.js';
 import { discordTaskControl, discordControlCurrent } from '../discord-task-controls.js';
-import { discordHistoryControl, readDiscordSessionHistory } from '../discord-history.js';
+import { discordHistoryControl } from '../discord-history.js';
 import { readDiscordSessionFile, writeDiscordRemoteAttachment } from '../discord-file-transfers.js';
 import Fastify, { FastifyInstance } from 'fastify';
 import fastifyCompress from '@fastify/compress';
@@ -613,7 +620,45 @@ export class WebServer extends EventEmitter {
       return this.handleRemoteSessionDropped(id);
     },
   });
+  private discordModelControls: DiscordModelControls = new DiscordModelControls({
+    scope: () => (isMultiUserMode() ? undefined : this.discordBridge.controlScope),
+    target: (id) => {
+      const session = this.sessions.get(id);
+      return session && !session.isAdopted
+        ? {
+            mode: session.mode,
+            generation: session.nativeModelSettingsRevision,
+            working: session.isWorking,
+            watching: session.watching,
+            pending: approvalInbox.listPending().some((item) => item.sessionId === id && item.kind !== 'idle'),
+            exited: !!session.paneExit,
+            reportedModel: session.displayModel?.model,
+            operate: (operation, allowed) => session.withNativeModelSettings(operation, allowed),
+            catalog: () => readDiscordModelCatalog(session),
+          }
+        : undefined;
+    },
+  });
   private discordBridge: DiscordBridge = new DiscordBridge({
+    nativeUi: createDiscordNativeUiServices({
+      capture: (id) => {
+        const s = this.sessions.get(id);
+        return s?.muxName ? this.mux.capturePaneTextAsync?.(s.muxName, { ansi: true }) : null;
+      },
+      sessions: () => this.sessions,
+      observed: (id) => this.discordModelControls.observed(id),
+      cases: async () => this.discordCases?.() ?? [],
+      allowed: () => !isMultiUserMode() && this.discordBridge.acceptsControls,
+      url: () => {
+        const tunnel = this.tunnelManager.getUrl();
+        if (tunnel) return tunnel + this.basePath;
+        if (this.host === '127.0.0.1' || this.host === '::1') return undefined;
+        const lan = Object.values(networkInterfaces())
+          .flat()
+          .find((a) => a && a.family === 'IPv4' && !a.internal && /^192\.168\./.test(a.address));
+        return lan ? `${this.https ? 'https' : 'http'}://${lan.address}:${this.port}${this.basePath}` : undefined;
+      },
+    }),
     configDir: getDataDir(),
     fetchImpl: webviewFetch,
     sendInput: async (sessionId, text) => {
@@ -641,22 +686,28 @@ export class WebServer extends EventEmitter {
         name: session.name,
         remote: !!session.remote,
         working: session.isWorking,
+        watching: session.watching,
         historyAvailable:
           !session.docker &&
+          !session.isAdopted &&
           ['claude-jsonl', 'codex-rollout'].includes(getCli(session.mode)?.capabilities.transcript ?? ''),
       })),
     history: async (id, options) => {
       const session = this.sessions.get(id);
       if (!session) throw new Error('Session unavailable');
-      return readDiscordSessionHistory(session, options);
+      return this.discordCanonicalHistory(session, options);
     },
     controlCurrent: (id, validity) => {
       const session = this.sessions.get(id);
       return (
-        this.discordSessionManager.current(id, validity) || (!!session && discordControlCurrent(session, validity))
+        this.discordModelControls.current(id, validity) ||
+        this.discordSessionManager.current(id, validity) ||
+        (!!session && discordControlCurrent(session, validity))
       );
     },
     control: async (id, command) => {
+      const settings = await this.discordModelControls.control(id, command);
+      if (settings) return settings;
       const managed = await this.discordSessionManager.control(id, command);
       if (managed) return managed;
       const session = this.sessions.get(id);
@@ -666,9 +717,13 @@ export class WebServer extends EventEmitter {
         };
       return (await discordTaskControl(session, command)) ?? discordHistoryControl(session, command);
     },
-    getAttachment: async (id, path) => {
+    launchModes: () => enabledClis().map((c) => c.id),
+    launch: (scope, key, mode) => this.discordSessionManager.launch(scope, key, mode),
+    getAttachment: async (id, path, relativeToWorkspace) => {
       const session = this.sessions.get(id);
-      if (!session) throw new Error('Session unavailable');
+      if (!session || session.isAdopted) throw new Error('Session unavailable');
+      if (relativeToWorkspace)
+        path = session.remote ? posix.resolve(session.remote.remotePath, path) : resolve(session.workingDir, path);
       return readDiscordSessionFile({ workingDir: session.workingDir, remote: session.remote }, path);
     },
     saveRemoteAttachment: async (id, name, bytes, current) => {
@@ -1517,7 +1572,10 @@ export class WebServer extends EventEmitter {
           const used = new Set([...this.sessions.values()].map((session) => session.name));
           let number = 1;
           while (used.has(`${prefix}${number}-${input.caseName}`)) number++;
-          const requestBody = { ...input, sessionName: `${prefix}${number}-${input.caseName}` };
+          const requestBody = await applyDiscordLaunchDefaults({
+            ...input,
+            sessionName: `${prefix}${number}-${input.caseName}`,
+          });
           const scope = this.discordBridge.controlScope;
           const current = () =>
             !isMultiUserMode() && this.discordBridge.acceptsControls && this.discordBridge.controlScope === scope;
@@ -3403,6 +3461,19 @@ export class WebServer extends EventEmitter {
    * segmented into turns for the CLIs that keep none); undefined for a shell, which has no turns, and the
    * screen tail stands in whenever the reader finds nothing.
    */
+  private async discordCanonicalHistory(session: Session, options?: { includeTools?: boolean; after?: string }) {
+    const history = await readDiscordCanonicalHistory(
+      session,
+      options,
+      () =>
+        !isMultiUserMode() &&
+        this.discordBridge.acceptsControls &&
+        this.sessions.get(session.id) === session &&
+        !approvalInbox.listPending().some((item) => item.sessionId === session.id && item.kind !== 'idle')
+    );
+    return history;
+  }
+
   private async discordFullText(session: Session): Promise<{ text: string; version?: string } | undefined> {
     if (!this.lastResponseFor) return undefined;
     // A CLI with a transcript reader, or whose pane the viewer segments into turns; a shell has neither.
@@ -4770,6 +4841,7 @@ export class WebServer extends EventEmitter {
 
     // Close the Discord gateway socket and its heartbeat, and clear the bridge's per-tab maps.
     this.discordBridge.stop();
+    this.discordModelControls.stop();
 
     // Dispose all managed timers (intervals + resettable timeouts)
     this.cleanup.dispose();
