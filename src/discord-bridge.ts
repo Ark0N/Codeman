@@ -3441,15 +3441,6 @@ export class DiscordBridge {
         );
         return;
       }
-      if (
-        this.cfg.mode === 'full' &&
-        this.nativeUi &&
-        this.deps.sessions?.().find((s) => s.id === sessionId)?.working
-      ) {
-        await this.deliveries.update(id, 'awaiting_choice');
-        await this.nativeUi.offerBusy(sessionId, m.channel_id, m, id);
-        return;
-      }
       this.lastReply.set(sessionId, t);
       if (m.attachments?.length) await this.api.react(m.channel_id, m.id, '📥').catch(() => undefined);
       const saved = await this.saveAttachments(sessionId, m);
