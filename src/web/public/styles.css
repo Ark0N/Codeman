@@ -22329,13 +22329,14 @@ html[data-tile-anim="soft"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.til
 
 /* The feature's own colours. Violet is what the local model is known by, on
    the start screen and in its window; the others carry meaning (green good,
-   amber tight, orange slow, teal the context). All of them are set here, once,
+   amber tight, orange slow, teal the context, rose the brief peaks). All of them are set here, once,
    and the light skins get deeper values so they hold on a pale page. */
 :root {
   --lm-violet: #a78bfa;
   --lm-teal: #2dd4bf;
   --lm-amber: #f5c451;
   --lm-orange: #fb923c;
+  --lm-rose: #f58ba8;
   --lm-good: #4ade80;
   --lm-cta-a: #8567f4;
   --lm-cta-b: #6346e0;
@@ -22351,6 +22352,7 @@ html[data-skin='rose-pine-dawn'] {
   --lm-teal: #0b8378;
   --lm-amber: #a86a00;
   --lm-orange: #c2500f;
+  --lm-rose: #c43a68;
   --lm-good: #16803c;
 }
 
@@ -22633,8 +22635,8 @@ html[data-skin='rose-pine-dawn'] {
 .lm-part-peak {
   background: repeating-linear-gradient(
     -45deg,
-    var(--lm-amber) 0 3px,
-    color-mix(in srgb, var(--lm-amber) 45%, transparent) 3px 6px
+    var(--lm-rose) 0 3px,
+    color-mix(in srgb, var(--lm-rose) 62%, transparent) 3px 6px
   );
 }
 
