@@ -1,16 +1,17 @@
 # Discord bridge
 
-Codeman can post to a private Discord server when a session needs you, give every tab its own thread, and type your thread reply into that tab. It only makes outbound connections, so Codeman is not exposed to the internet and it works when you are away from your network.
+Codeman can post to a private Discord server when a session needs you, group sessions into case channels and session threads, and paste your reply into that session. It only makes outbound connections, so Codeman is not exposed to the internet and it works when you are away from your network.
 
 > [!WARNING]
 > A reply from an allowed Discord account is typed into agents that can run shell commands. Treat that Discord account like a login to the machine: turn on 2FA and use a strong, unique password.
 
 ## What it does
 
+- Shows **Codeman is typing…** in a session thread while its agent is working. Thread names show **🟡 Working**, **🔴 Needs input**, **🟢 Idle** or **⚫ Offline** before the session name, so activity is visible in the thread list. This works in both bridge modes and for local and SSH sessions. Typing stops when work stops, input is needed, the agent exits, or the bridge is disabled; Discord clears the indicator within about ten seconds. Active states update on the next activity check; settling back to Idle is delayed 30 seconds to coalesce short gaps between turns. Discord's own rename limits can delay a title change further: its retry delay is honored, while typing continues independently. Current titles are reconciled so a stale concurrent rename cannot leave a working thread permanently labeled Idle. Activity never creates a thread or reopens an archived one, and sends no messages or pings.
 - Posts when a session asks for permission, asks a question, goes idle or errors. Which of these a CLI can raise depends on the hooks it has: Claude Code sends a turn end (`stop`, an `info` event that posts only when **Which events** is set to Everything, and `idle_prompt`, which posts by default after the turn has waited a minute). DeepSeek Harness sends only `stop`. Codex, OMP, OpenCode, Gemini, Antigravity, Pi, Grok and Copilot send no turn end, so they reach Discord through an error, a blocked respawn, a stopped crash loop or their own `codeman notify`; Codex's permission and question dialogs are also read off its screen.
-- Posts a finished turn, and an error or blocked alert, as the CLI's whole last message, with its bold, lists and numbered questions kept (a Markdown table, which Discord cannot draw, becomes an aligned code block), split over several posts if it is long. It reads the CLI's transcript where it keeps one (Claude Code, Codex, DeepSeek Harness, OMP) and otherwise splits the screen into turns (OpenCode, Gemini, Antigravity, Pi, Grok, Copilot), which can start mid-message when a long answer has scrolled off. A shell, and a permission or question dialog, show the last lines of the screen instead, without the prompt row and status lines under them.
-- Creates one thread per tab in a single parent channel, so a reply always reaches exactly one session.
-- Types your reply into that session as a single line followed by Enter. A single digit sent while a permission or question is waiting goes as the key alone, without Enter, because the dialog acts on the keypress.
+- Posts a finished turn, and an error or blocked alert, as the CLI's whole last message, with its bold, lists and numbered questions kept (a Markdown table becomes stacked labeled records that wrap naturally on mobile), split over several posts if it is long. It reads the CLI's transcript where it keeps one (Claude Code, Codex, DeepSeek Harness, OMP) and otherwise splits the screen into turns (OpenCode, Gemini, Antigravity, Pi, Grok, Copilot), which can start mid-message when a long answer has scrolled off. A shell, and a permission or question dialog, show the last lines of the screen instead, without the prompt row and status lines under them.
+- Notifications mode creates one thread per tab in a parent channel. Full interface mode creates one channel per case in your configured category, with one thread per session. For example, `#saif` contains `w1-saif` and `w2-saif`. Replies reach that exact session.
+- Pastes your reply into that session as one prompt, preserving Markdown, indentation and line breaks, then sends Enter separately. A single digit sent while a permission or question is waiting goes as the key alone, without Enter, because the dialog acts on the keypress.
 - Lets a CLI post a deliberate message (for example "press the reset button on the case") with the `codeman notify` command, which calls `POST /api/sessions/:id/discord-notify`. Each tab may post 6 a minute; past that the command says "too many messages", so a looping agent cannot ping your phone without end.
 - Saves files you attach in a thread into that tab's working folder and tells the CLI the path. A CLI can send a file back with `codeman notify "message" --file <path>`.
 - Tells each CLI about `codeman notify` (see [Telling the CLIs](#telling-the-clis)).
@@ -73,7 +74,7 @@ Only needed for `onSessionDelete: delete`. Give the bot role **Manage Threads** 
 
 ### 7. Never grant
 
-Administrator, Manage Channels, Manage Roles, Manage Messages, Mention Everyone, or any voice permission.
+Administrator, server-wide Manage Roles, Manage Messages, Mention Everyone, or voice permissions. Full interface mode additionally needs Manage Channels, Create Public Threads, Send Messages in Threads and Manage Threads on the private case category.
 
 ### 8. Configure Codeman
 
@@ -89,14 +90,55 @@ In the Discord mobile app set the server to **All Messages**. Discord's own push
 
 ## Options
 
+### Notifications or Full interface
+
+Settings → Notifications → Discord has a **Discord mode** selector, independent of the enable switch:
+
+The modal’s main **Save** and **Apply** buttons save edited Discord settings too. The group’s own **Save** remains available. Full mode automatically creates a private **Codeman** category when **Case category ID** is blank; you can enter an existing category ID instead. A rejected save keeps Settings open and brings the error into view. The bot needs **Manage Channels** and **Manage Threads**, as well as the message/thread permissions listed below.
+
+- **Notifications** (`mode: "notifications"`, the default) preserves the existing alerts and thread replies. Threads are created on the first alert, or for new tabs when **Create threads** is set to **For every new tab**.
+- **Full interface (preview)** (`mode: "full"`) creates a case channel and one thread per session for every existing session when enabled, after restart/restoration, and for each new session immediately, inside the configured case category. This overrides lazy thread creation without changing the saved Notifications preference. It does not submit a prompt or start an agent.
+
+Full interface mode includes channel synchronization, bounded native history/backfill, live responses, local/SSH files and the supported controls below. Provider-specific limitations remain; it does not mirror a terminal screen.
+
+Use **Sync sessions** to check discovery, retry failed cleanup and provision missing session destinations. The Settings API returns `sessionSync` with `state`, `total`, `ready` and `failed`; `POST /api/discord/sync` joins or starts a discovery pass (admin only in multi-user mode). Saves schedule discovery in the background so a slow Discord connection does not block Settings. Successful mappings are reused after retry and restart.
+
+Changing back to Notifications preserves existing threads and their history. Disable the bridge with its enable switch. Only explicit session deletion uses the existing deletion policy; a dead agent or disconnected SSH host is not deletion. Full mode seeds each destination with at most six recent user-visible turns, clearly labeled Historical context. It persists exact native cursor boundaries before posting and confirmed per-turn progress afterward, so retry/restart does not duplicate catch-up. Use history/transcript commands for older or complete bounded context. Unavailable history leaves the session thread usable and can be retried by synchronization. No historical posts ping users.
+
 | Option            | Values                      | Default     | Effect                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | ----------------- | --------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mode` | `notifications`, `full` | `notifications` | Legacy notification behavior or proactive session discovery in the full-interface preview. |
 | `threadCreation`  | `lazy`, `onSessionStart`    | `lazy`      | `lazy` makes a thread on the first notification. `onSessionStart` makes one per new tab                                                                                                                                                                                                                                                                                                                                                           |
 | `onSessionDelete` | `keep`, `archive`, `delete` | `archive`   | What happens to the thread when its tab is deleted. `delete` needs Manage Threads                                                                                                                                                                                                                                                                                                                                                                 |
 | `staleThreads`    | `keep`, `archive`, `delete` | `keep`      | What happens to threads this bot made that no tab uses any more, checked after startup and then daily. A deleted tab's thread leaves the map, so this also archives or deletes threads that `onSessionDelete` kept or archived. Skips threads under an hour old, other people's threads and other channels, does nothing while the thread map is empty, and closes at most 25 per run. `delete` needs Manage Threads. Use one channel per Codeman |
 | `pingMode`        | `off`, `critical`, `all`    | `critical`  | `critical` pings you for permission prompts, questions, errors and urgent posts                                                                                                                                                                                                                                                                                                                                                                   |
 | `scope`           | `attention`, `all`          | `attention` | `attention` skips the quiet "response complete" event. `all` sends it too                                                                                                                                                                                                                                                                                                                                                                         |
 | `startupHint`     | on, off                     | on          | Tell Claude about `codeman notify` in its system prompt at launch                                                                                                                                                                                                                                                                                                                                                                                 |
+
+### Case channels and session threads (Full mode)
+
+Leave **Case category ID** blank and save enabled Full mode to create a private **Codeman** category automatically. It denies View Channel to @everyone and grants access to the bot and your configured allowed users; Discord administrators retain their usual access. Or create a **private category** yourself and copy its ID into this optional field. Grant the bot **Manage Channels**, **Create Public Threads**, **Send Messages in Threads** and **Manage Threads**, plus the message permissions above, scoped to that category. New case channels copy its permission overwrites. A public thread inside a private case channel inherits that channel's visibility; it is not public to the server.
+
+```text
+Codeman (private category)
+  #saif
+    w1-saif   → its existing Codex session
+    w2-saif   → its existing Claude session
+  #home
+    w1-home   → its existing SSH session
+```
+
+Grouping uses configured case roots, initial workspaces, transport/host and owner metadata. Tab names such as `w1-saif` do not determine membership. Same-name cases on different hosts or roots stay separate. An unlinked shell groups only with sessions in its exact workspace on the same host and owner. This does not restart agents, change cwd, reset shell variables or copy environments. Each thread still targets one exact native session.
+
+Send prompts, replies, files and task/history commands **inside the session thread**. A plain message in the case channel returns session-thread links and submits nothing, including when only one session exists. Management commands work there and in the configured Parent / control channel; `!codeman open <session-id>` finds an exact session. There is no implicit default session.
+
+**When a session is deleted** keeps, archives (default), or deletes only that session's thread. The shared case channel and siblings remain. Empty case channels are retained for review; cleanup never deletes a case channel automatically. A crash, disconnected host or recoverable missing session is not deletion. Unlocked auto-archived active threads reopen on use; a manually locked thread requires an explicit Discord unlock. Cleanup failures remain pending for retry.
+
+Case channels and thread IDs are saved privately in instance-scoped `discord-case-channels.json` and `discord-case-threads.json`. Parent channels require the exact recorded guild, category and per-intent topic marker. Session threads require the exact starter-message ID, parent and bot owner. Creation is durably recorded before HTTP; a thread created from a message has that message's ID, allowing reconciliation after a lost response without adopting a similarly named thread. Uncertain starter posts use a stable nonce; aged uncertainty is reconciled from up to 100 recent messages, otherwise provisioning pauses for manual review. Do not delete ownership files to retry.
+
+**Migrating from the earlier per-session-channel preview:** save Full mode and use **Sync sessions**. New case channels/threads are created and bounded historical context is loaded there. Old `discord-channels.json` resources and legacy notification threads/history are preserved, but old destinations do not accept input in Full mode. No Discord messages are moved or deleted. Automatic category ownership is stored privately in `discord-case-categories.json`. Interrupted creation is reconciled from a unique temporary setup name and exact permission overwrites; similarly named unowned categories are never adopted. A permissions refusal leaves the previous configuration intact and can be retried after the bot role is updated.
+
+Shared case channels are never deleted with one session; there is no `onChannelDelete` setting. Switching back to Notifications resumes its original maps/preferences. The Notifications stale-thread sweep never runs in Full mode.
 
 ## Telling the CLIs
 
@@ -109,14 +151,30 @@ The text explains `codeman notify "message" --urgent`. `codeman` is on the PATH 
 
 ## Files
 
-- **Received:** files you attach to a reply from an allowed user are saved as `<working folder>/.codeman-discord/<message id>-<name>` (mode 0600) and the one-line reply the CLI sees ends with `[attached: <paths>]`. At most 5 files of 8 MB each; names are reduced to letters, digits, `.`, `_` and `-`; only Discord's own HTTPS addresses are fetched. Anything skipped is named in the thread. The folder ignores itself (it holds a `.gitignore` of `*`), so nothing in it is committed. Remote (ssh) tabs have no local folder, so no file is saved for them.
-- **Sent:** `codeman notify "message" --file <path>` uploads a regular file of at most 8 MB. The real path (symlinks followed) must be inside the tab's working folder, and a file on the attachment blocklist (`.env`, keys under `.ssh`, Codeman's own state) is refused even there, which stops an upload of something sensitive by mistake. The agent runs as your user, so this is a guard against accidents, not a sandbox. Remote tabs cannot send files.
+- **Received:** files you attach to a reply from an allowed user are saved as `<working folder>/.codeman-discord/<message id>-<name>` (mode 0600) and the formatted reply the CLI sees ends with `[attached: <paths>]`. At most 5 files of 8 MB each; names are reduced to letters, digits, `.`, `_` and `-`; only Discord's own HTTPS addresses are fetched. Anything skipped is named in the thread. The folder ignores itself (it holds a `.gitignore` of `*`), so nothing in it is committed. SSH sessions receive verified uploads in the remote workspace, using the existing host key, user, port and SSH options. Python 3 is required on the remote host. Uploads use a private directory and file permissions; failures prevent prompt submission.
+- **Sent:** `codeman notify "message" --file <path>` uploads a regular file of at most 8 MB. The real path (symlinks followed) must be inside the tab's working folder, and a file on the attachment blocklist (`.env`, keys under `.ssh`, Codeman's own state) is refused even there, which stops an upload of something sensitive by mistake. The agent runs as your user, so this is a guard against accidents, not a sandbox. For local or SSH sessions, send `!codeman file /absolute/path` in the mapped destination. The bridge reads only a bounded regular file inside that exact workspace; symlink traversal and sensitive paths are refused. Transfers show progress reactions and never execute a model turn.
 - A downloaded file is untrusted content: only allowed users can send one, but a CLI that opens it is exposed to anything written inside it.
 
 ## Security model
 
+### Delivery and retries
+
+Formatted replies preserve logical line breaks, tabs and leading/trailing blank lines in one bracketed paste, followed by one Enter. An internal whitespace-preservation option uses tmux's raw-newline paste mode instead of changing ordinary keyboard input. A direct PTY without the bracketed-paste transport refuses structured multiline input instead of submitting separate lines. Terminal control sequences are removed; Markdown remains literal text for the agent.
+
+Response chunks retain code-block language hints, close/reopen code fences and avoid splitting Unicode surrogate pairs. An outbound payload fingerprint prevents automatic multipart retries from skipping changed content after a formatter upgrade. If an existing pending response has different or legacy formatting metadata, review it before resending; the bridge refuses to guess.
+
+Inbound message IDs are durably claimed before any terminal write, including file-only replies. Duplicate gateway events reuse that claim across restart and never type the same message again. An interrupted transfer or attachment refusal prevents the prompt from being typed. A reply rejected by the one-second rate limit is explicitly reported; send a new message to retry it.
+
+The ✅ reaction means **terminal transport accepted the input**, not that the agent started or completed the task. A false/throwing terminal write, or a restart during submission, is **uncertain**. Check the native session before sending anything again. The bridge never retries the entire prompt after an ambiguous write and never silently replays pending input on startup. Correlation with native running/completed turns will be added with live conversation observation.
+
+Outbound posts use a stable Discord nonce for bounded retries (at most three requests) after a network error or server failure. Rate-limit delays are honored; waits over 30 seconds are surfaced instead of retried early. Notification-thread creation is not retried after an ambiguous network/server failure. Full-mode session threads use the durable starter-message reconciliation described above. Multi-part responses are serialized per session, record completed parts, and report failure if any part fails. A later retry can skip delivered parts; an uncertain post is not blindly replayed after restart.
+
+Delivery metadata lives in instance-scoped `discord-delivery.json`, mode 0600, written atomically with file sync. It contains IDs, timestamps and delivery states, **not prompt text, message bodies, file bytes or bot tokens**. Retention is seven days with a 2,048-record cap; only the latest 256 completed outbound records are retained. Saturation or corrupt/unreadable tracking pauses new input rather than losing deduplication. Do not delete this file to retry a task: doing so discards the protection against replay.
+
+Admins can inspect the latest 50 records through `GET /api/discord/deliveries`. States distinguish received input, transferred files, submission in progress, transport acceptance, delivered Discord posts, failure and uncertainty. This metadata is not a durable message-body outbox: uncertain output after a long outage requires review rather than a guaranteed automatic resend. Discord's nonce deduplication only covers recent messages.
+
 - Only messages from IDs in `allowedUserIds`, in the configured guild, inside a thread Codeman created, are acted on. Everything else is dropped.
-- A reply is reduced to one line, stripped of control characters and capped in length before it is typed.
+- Replies retain line breaks and indentation; terminal escape/control sequences are removed. Replies over 20,000 characters are refused explicitly instead of being silently truncated.
 - Replies are rate limited per session.
 - A Discord outage or a bad token never affects sessions. The bridge backs off, and the last error shows in Settings.
 
@@ -135,3 +193,75 @@ The text explains `codeman notify "message" --urgent`. `codeman` is on the PATH 
 | Posts arrive but replies do nothing | Message Content Intent is off, or your user ID is not in the allowlist   |
 | Thread is not deleted               | The bot lacks Manage Threads on the parent channel                       |
 | Nothing arrives on the phone        | Check the Discord app's notification setting for the server              |
+
+
+## Read-only conversation commands (Full mode)
+
+Send `!codeman status` for the exact mapped session status. `!codeman history` shows recent role-separated, timestamped turns, with a cursor command to load older turns. `!codeman transcript` downloads the bounded user-visible transcript. These commands never type a prompt or consume a model turn.
+
+Claude and Codex readers use an exact native UUID, including SSH sessions. Local history uses bounded Node reads; Python 3 is required only on SSH hosts. Custom CLAUDE_CONFIG_DIR/CODEX_HOME overrides are honored. Missing or ambiguous identity/transcripts, unsupported CLIs and containers report history unavailable, without guessing from a shared working directory or terminal redraws. Recent history is bounded to a 2 MB tail. Live/task readers verify the saved row identity and continue through bounded pages rather than resetting merely because the cursor moved outside the tail. Partial history is explicitly labeled. Only user/assistant text is exported: reasoning, tool calls/results, synthetic/system context and sidechains are excluded. Cursors are bound to conversation and row identity; after conversation replacement, request history again.
+
+
+## Live native responses (Full mode)
+
+Full mode follows exact Claude/Codex transcript events, including visible assistant progress and final responses. It does not treat terminal redraws, reasoning or tool arguments as chat. Native Components V2 cards provide color, spacing, Markdown and response controls. Tables wrap into labeled records; code fences and ordinary links remain intact. Large responses include full text attachments.
+
+Conversation is the default stream view: adjacent progress updates are grouped into gray Update cards; final answers receive separate response cards. Progress, mirrored prompts, historical context, tool text and linked artifacts suppress Discord notifications. Finals retain normal notification behavior; permission prompts, questions and errors remain visible. Native completion is required for a green Turn finished label. A response without that evidence is neutral; completion labels do not verify claims made in the response text.
+
+- `!codeman stream conversation`: assistant progress and final answers.
+- `!codeman stream quiet`: final answers only (`responses` is the legacy alias).
+- `!codeman stream tools`: conversation plus bounded tool result text (`verbose` is the legacy alias).
+- `!codeman stream off`: pause output for this destination.
+
+The compact status message is edited in place. Delivery acknowledgements stay in message reactions and the journal rather than separate per-prompt cards. Exact native user prompts entered through the web UI or another interface are mirrored into the corresponding Discord thread. Discord-origin prompts are attributed to their acknowledged native cursor and suppressed from that mirror, including across paged catch-up and delayed input acknowledgements; identical text alone is never enough to suppress a later external prompt.
+
+Show updates opens full-text task progress in a private panel. Previous/Next browse pages, Load more continues bounded reads, Refresh rereads the original task, and Download updates exports its complete available progress. Reads start at the original user cursor and stop at the next user prompt. Exports are limited to 8 MB; larger tasks require the web transcript. Metadata-only response references retain up to 1,024 entries for 30 days so old read-only buttons can recover after restart or transcript-window movement. Download response retrieves the exact answer; Results & files shows the latest answer, explicitly linked named artifacts and an on-demand workspace diff. Changed files are labeled as a shared workspace snapshot, not claimed as one session's output. Buttons never revive expired state-changing approvals or queued submissions.
+
+Assistant responses can attach explicitly linked workspace images, PDFs, office files, CSVs, archives and media. Up to four files and 8 MB total are sent through existing local/SSH workspace and sensitive-path guards. Relative paths, workspace-local absolute/file/sandbox paths and explicit artifact links are supported. There is no directory scan or upload based on an unlinked prose path. Missing/refused files produce a concise note while later text continues. Uploads use durable delivery tracking and never blindly repeat an uncertain transfer.
+
+Polling is bounded and round-robin (up to eight sessions per pass), with longer intervals for idle/SSH sessions. It is response-event streaming, not keystroke/token-level terminal mirroring. Unsupported/missing native histories pause output with actionable feedback; the bridge does not replay scrollback. Mode changes, tab switches and process restart preserve native boundaries.
+
+Delivery records can move from input accepted to running/completed/interrupted/execution error only after matching the exact conversation, a new native user-message cursor and the submitted prompt fingerprint. Codex completion needs a native turn ID; Claude completion needs linked message ancestry and an end-turn marker. Unverifiable execution stays unconfirmed. A queued prompt cannot steal a previous task's completion. No task is resubmitted to recover a response. After an ambiguous long outage, use history/transcript to retrieve the answer explicitly rather than blindly resending the task.
+
+
+## Questions, permissions and interruption (Full mode)
+
+Question/permission alerts offer buttons when the existing web-UI answer adapter can verify the native dialog. Use `!codeman pending` to refresh the choices, or use the exact `!codeman answer ...` fallback shown below the prompt. Choices retain their original CLI labels; the bridge never turns an allow-once action into an allow-always action. A question/permission dialog blocks ordinary prompt replies in Full mode, preventing a stale digit from becoming unrelated terminal input.
+
+Controls bind the exact session, channel, message, prompt ID, revision and allowed Discord user. Duplicate clicks, changed questions, expired controls and web/terminal resolutions are rejected; resolved controls are removed on the next refresh. Buttons expire after ten minutes and after a server restart; request pending again. Gateway components require no slash-command registration, public interaction URL or new bot intents. Use a bot with Interactions Endpoint URL unset so Discord delivers interactions over the Gateway ([Discord interaction delivery](https://github.com/discord/discord-api-docs/blob/main/developers/interactions/overview.mdx)). Message Content intent remains required.
+
+`!codeman interrupt` offers a confirmation for the current task. It sends Ctrl+C through the existing session input path and leaves the session open. A changed/finished task invalidates the confirmation; interruption is requested, not assumed complete. No destructive session deletion control is exposed.
+
+Claude's verified dialogs work through the shared approval service for local/SSH sessions. Codex and other screen-only dialogs flagged by Codeman as terminal-only remain terminal-only: it cannot safely infer their approval keystrokes. Free-text/multipart prompts that the native adapter cannot verify must be completed in the terminal. Discord shows that limitation rather than pretending approval succeeded.
+
+## Session management (Full mode)
+
+Use these commands in a session thread, its case channel, or in the configured **Parent / control channel** when no sessions exist:
+
+- `!codeman sessions [offset]` lists session ID, host, case, group, CLI and status. `!codeman open <session-id>` returns its exact session-thread link.
+- `!codeman cases` lists configured cases and their host IDs; `!codeman groups` lists group IDs; `!codeman help` lists commands.
+- `!codeman create <case> <host-id|local> <CLI> <group-id|default>` shows a review and a Confirm button. Choose the exact configured case/host and CLI. `default` inherits the existing case group policy. Confirmations expire after one minute and are single-use. Configuration changes invalidate them. The shared creation path starts the selected CLI with no submitted task.
+- `!codeman recoveries` and `!codeman recover <record-id> <reconnect|resume>` are connector hooks for hosts with a saved recovery queue. This build exposes no saved recovery records; recovery remains unavailable through Discord. It never selects a conversation by working directory, creates a blank recovery conversation, or replays an interrupted task. Use the web UI for available recovery actions.
+- `!codeman reconnect <session-id>` checks an existing remote transport and attaches only when its local SSH pane is confirmed dead. It shares the automatic reconnect fence and does not restart a healthy agent. A dead remote agent requires a saved recovery record.
+
+Creation and recovery use the same case/group/CLI validation and recovery service as the web UI, including a shared API/connector concurrency fence and cancellation after dismissal. Recovery preserves saved name/group through the shared service; the resulting session thread is linked in the result. A launch returning is not proof of native readiness: check status and the native response stream. A failure or lost acknowledgement is never retried by resubmitting a task.
+
+Lifecycle management is available in single-user mode. It remains disabled in multi-user mode until Discord IDs have explicit Codeman-user mappings, avoiding an implicit administrator identity for lifecycle operations. The existing administrator-configured Discord allowlist still governs all bridge messages. A control-channel message without the `!codeman` prefix is ignored. Notifications mode keeps its original threads and reply behavior.
+
+Full mode covers native conversation output, bounded history, files and supported controls; it is not a pixel/terminal mirror. Unverified provider approval dialogs, Docker history and ambiguous native recovery still require the web UI. Test in a dedicated category before enabling it for live sessions.
+
+For a restored SSH Codex tab without a saved conversation ID, history can recover an exact `codex resume <UUID>` invocation from the attached tmux pane’s sole interactive Codex process. It verifies that exact transcript before recording the ID. Multiple agents, missing resume arguments, missing transcripts and other ambiguity remain unavailable; workspace names and the newest transcript are never used as identity evidence.
+
+### Review clarifications
+
+Notifications remains the default. Activity titles, typing, file commands and SSH attachment uploads are Full-only. Both modes durably deduplicate inbound events and retain confirmed outbound part fingerprints: HTTP 5xx alerts remain retryable in Notifications, while an ambiguous network response is not automatically replayed. Full native streaming skips an uncertain turn, posts a catch-up notice pointing to `!codeman history`, and continues with later turns; a verified cursor outside the tail continues through bounded pages; an unavailable lost cursor receives an explicit catch-up notice before reanchoring. Streaming preferences survive `/clear`. Local history uses bounded Node reads; Python 3 is required only on remote hosts for the SSH history/file helpers. Reconnect is confirmed and refuses a missing or unverified remote agent. Interrupt sends bare Escape. Rename failures do not block alerts, honor Discord's retry duration and use a two-per-ten-minute cosmetic request budget. Live preferences do not expire just because a session is idle; abandoned conversation and finished thread metadata age out after seven days.
+
+## Native session controls and Activity (Full mode)
+
+The session card provides contextual prompt/approval answers, model and effort menus, settings, history, results, files and queued follow-ups. Native model changes use an exclusive, cancellable terminal-input lease, verify an empty composer and reread the same native conversation; they do not restart the agent or claim a setting changed from an unverified screen. Available model/effort choices come from the supported CLI protocol and public catalog fields. Unsupported/provider dialogs direct users to the web terminal. Launch defaults affect future sessions and are distinct from current native settings.
+
+Normal messages go directly to the session, including while the agent is working, and can steer the current task. There is no automatic send/queue timing chooser. Follow-ups can still be queued explicitly (10 per session, 50 overall, 24-hour expiry). Dispatch requires the same conversation, input revision, current authorization and a fresh empty-composer capture; drafts, pending questions, lifecycle changes and ambiguous submissions pause it. Claude ghost-text suggestions are offered as reviewable choices only when native idle/composer evidence permits; accepting one is an explicit user action.
+
+Guild-scoped slash commands launch supported CLIs from an owned case channel or session thread through the same confirmed, case-aware quick-start path. Native message context menus locate sessions and open their controls. Registration preserves commands owned by other integrations; channel ownership, actor, configuration and case identity are rechecked before actions.
+
+The control-channel Activity card replaces the static dashboard with Recent, Working, Finished and Needs you views. Meaningful native events determine recency; cosmetic polling and card refreshes do not. Session names link to threads, response links target confirmed outbound messages when available, and stale/foreign destinations fail closed. Titles use plain session names. Typing and coalesced thread-state names reflect observed foreground/background work without repeated status messages. Ownership checks, retry-after handling and the shared cosmetic rename budget still apply.

@@ -3295,12 +3295,12 @@
                 </div>
               </div>
               <div class="set-group" id="discordGroup" style="display:none">
-                <div class="set-group-head"><h4>Discord (two-way, one thread per tab)</h4><span class="set-scope">server</span></div>
+                <div class="set-group-head"><h4>Discord sessions</h4><span class="set-scope">server</span></div>
                 <div class="set-group-body">
                   <div class="set-row" data-search="discord bot thread reply phone notification blocked">
                     <div class="set-row-text">
                       <span class="set-row-label">Talk to your sessions from Discord</span>
-                      <span class="set-row-desc">Posts alerts into a thread per tab and types your reply in that thread into the tab. Only the user IDs listed below can reply. Setup (bot, least-privilege permissions) is in docs/discord-bridge.md. This group has its own Save button.</span>
+                      <span class="set-row-desc">Notifications uses a thread per tab; Full interface creates a channel per case with a thread per session. Replies reach that session. Only the user IDs listed below can reply. Setup (bot, least-privilege permissions) is in docs/discord-bridge.md. Settings Save also saves this group.</span>
                     </div>
                     <label class="switch switch-sm"><input type="checkbox" id="discordEnabled"><span class="slider"></span></label>
                   </div>
@@ -3316,7 +3316,7 @@
                     <input type="text" id="discordGuildId" class="set-input" autocomplete="off" spellcheck="false" inputmode="numeric">
                   </div>
                   <div class="set-row has-field">
-                    <div class="set-row-text"><span class="set-row-label">Parent channel ID</span><span class="set-row-desc">Threads are created inside this channel.</span></div>
+                    <div class="set-row-text"><span class="set-row-label">Parent / control channel ID</span><span class="set-row-desc">Notification threads live here; Full mode accepts !codeman management commands here, even with no active sessions.</span></div>
                     <input type="text" id="discordParentChannelId" class="set-input" autocomplete="off" spellcheck="false" inputmode="numeric">
                   </div>
                   <div class="set-row has-field">
@@ -3324,6 +3324,27 @@
                     <input type="text" id="discordAllowedUserIds" class="set-input" autocomplete="off" spellcheck="false">
                   </div>
                   <div class="set-row has-field">
+                    <div class="set-row-text">
+                      <label class="set-row-label" for="discordMode">Discord mode</label>
+                      <span class="set-row-desc" id="discordModeHint">Notifications keeps the current alerts and thread replies.</span>
+                    </div>
+                    <select id="discordMode" class="set-select" aria-describedby="discordModeHint" onchange="app.updateDiscordMode()">
+                      <option value="notifications">Notifications</option>
+                      <option value="full">Full interface (preview)</option>
+                    </select>
+                  </div>
+                  <div class="set-row" id="discordSyncRow" style="display:none">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Existing sessions</span>
+                      <span class="set-row-desc" id="discordSyncStatus" role="status" aria-live="polite">Save to sync existing sessions.</span>
+                    </div>
+                    <button class="btn-toolbar btn-sm" id="discordSyncBtn" onclick="app.syncDiscordSessions()">Sync sessions</button>
+                  </div>
+                  <div class="set-row has-field" id="discordCategoryRow" style="display:none">
+                    <div class="set-row-text"><label class="set-row-label" for="discordCategoryId">Case category ID (optional)</label><span class="set-row-desc">Leave blank to create a private Codeman category automatically when saving Full mode. Or enter an existing category ID. The bot needs Manage Channels and Manage Threads. Case channels contain session threads.</span></div>
+                    <input id="discordCategoryId" class="set-input" placeholder="Created automatically when you save" type="text" inputmode="numeric" autocomplete="off">
+                  </div>
+                  <div class="set-row has-field" id="discordThreadCreationRow">
                     <div class="set-row-text"><span class="set-row-label">Create threads</span></div>
                     <select id="discordThreadCreation" class="set-select">
                       <option value="lazy">On the first alert</option>
@@ -3331,15 +3352,15 @@
                     </select>
                   </div>
                   <div class="set-row has-field">
-                    <div class="set-row-text"><span class="set-row-label">When a tab is deleted</span><span class="set-row-desc">Deleting a thread needs the Manage Threads permission on the channel.</span></div>
+                    <div class="set-row-text"><span class="set-row-label">When a session is deleted</span><span class="set-row-desc">Deleting a thread needs the Manage Threads permission on the channel.</span></div>
                     <select id="discordOnSessionDelete" class="set-select">
                       <option value="keep">Keep the thread</option>
                       <option value="archive">Archive the thread</option>
                       <option value="delete">Delete the thread</option>
                     </select>
                   </div>
-                  <div class="set-row has-field">
-                    <div class="set-row-text"><span class="set-row-label">Stale threads</span><span class="set-row-desc">Threads this bot made that no tab uses any more, checked after startup and then daily. This includes threads that &quot;When a tab is deleted&quot; kept or archived. Threads under an hour old are skipped. Use one channel per Codeman.</span></div>
+                  <div class="set-row has-field" id="discordStaleThreadsRow">
+                    <div class="set-row-text"><span class="set-row-label">Stale notification threads</span><span class="set-row-desc">Threads this bot made that no tab uses any more, checked after startup and then daily. This includes threads that &quot;When a tab is deleted&quot; kept or archived. Threads under an hour old are skipped. Use one channel per Codeman.</span></div>
                     <select id="discordStaleThreads" class="set-select">
                       <option value="keep">Leave them</option>
                       <option value="archive">Archive them</option>
@@ -3374,7 +3395,7 @@
                   <div class="set-row">
                     <div class="set-row-text">
                       <span class="set-row-label">Save and test</span>
-                      <span class="set-row-desc">Send test saves first, then posts to the parent channel.</span>
+                      <span class="set-row-desc">Settings Save and Apply save this group too. Full interface creates a private category if the ID is blank. Send test saves first, then posts to the parent channel.</span>
                     </div>
                     <span>
                       <button class="btn-toolbar btn-sm btn-primary" id="discordSaveBtn" onclick="app.saveDiscord()">Save</button>

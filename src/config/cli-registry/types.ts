@@ -10,6 +10,7 @@
  * @module config/cli-registry/types
  */
 
+import type { NativeSettingsProfileName } from './profiles.js';
 import type { TokenPattern } from './patterns.js';
 
 /**
@@ -696,6 +697,8 @@ export interface CliCapabilities {
    * Absent = no launch defaults.
    */
   launchDefaults?: Record<string, LaunchDefaultSettingKey>;
+  /** A verified native settings/composer protocol; absent means unsupported, never guessed from the CLI ID. */
+  nativeSettingsProfile?: NativeSettingsProfileName;
   /**
    * Params a non-granted multi-user owner may not set freely, and what they are forced to.
    * Data-driven so a CUSTOM CLI's bypass flag is clampable exactly like codex's.

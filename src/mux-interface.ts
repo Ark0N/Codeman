@@ -329,7 +329,11 @@ export interface TerminalMultiplexer extends EventEmitter {
    * Send input to a session via tmux send-keys. The optional internal Enter-only
    * guard runs synchronously immediately before transport dispatch.
    */
-  sendInput(sessionId: string, input: string, options?: { beforeDispatch?: () => boolean }): Promise<boolean>;
+  sendInput(
+    sessionId: string,
+    input: string,
+    options?: { beforeDispatch?: () => boolean; preserveWhitespace?: boolean }
+  ): Promise<boolean>;
 
   // ========== Metadata ==========
 
@@ -459,5 +463,6 @@ export interface TerminalMultiplexer extends EventEmitter {
    * currently rendering, never to replay it into an xterm. Returns null when the
    * pane cannot be read.
    */
+  capturePaneTextAsync?(muxName: string, opts?: { signal?: AbortSignal; ansi?: boolean }): Promise<string | null>;
   capturePaneText?(muxName: string, paneTarget?: string, opts?: { styles?: boolean }): string | null;
 }

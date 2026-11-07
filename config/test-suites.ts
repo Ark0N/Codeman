@@ -47,6 +47,7 @@ export const BROWSER_TEST_GLOBS = [
   'test/shift-enter-keypress.browser.test.ts',
   'test/key-tester.browser.test.ts',
   'test/webhook-settings.browser.test.ts',
+  'test/discord-settings.browser.test.ts',
   'test/case-custom-path.browser.test.ts',
   'test/doctor-settings.browser.test.ts',
   'test/git-status.browser.test.ts',

@@ -19,13 +19,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DiscordConfig } from '../src/types/discord.js';
 import {
   buildPost,
+  MAX_REPLY_CHARS,
   DISCORD_STARTUP_HINT,
   ensureReceivedDir,
   isDiscordCdnUrl,
   safeAttachmentName,
   screenTail,
   splitForDiscord,
-  tablesToCodeBlocks,
+  formatDiscordTables,
   DEFAULT_DISCORD_CONFIG,
   DiscordApi,
   DiscordBridge,
@@ -79,12 +80,13 @@ describe('pure rules', () => {
     expect(DISCORD_STARTUP_HINT).toContain('codeman notify');
   });
 
-  it('sanitiseReply makes one printable line plus Enter', () => {
+  it('sanitiseReply preserves line breaks and strips terminal controls', () => {
     expect(sanitiseReply('yes')).toBe('yes\r');
-    expect(sanitiseReply('line one\nline two\r\nthree')).toBe('line one line two three\r');
-    expect(sanitiseReply('a\u001b[31mb\u0000c')).toBe('a[31mbc\r');
+    expect(sanitiseReply('line one\nline two\r\nthree')).toBe('line one\nline two\nthree\r');
+    expect(sanitiseReply('a\u001b[31mb\u0000c')).toBe('abc\r');
     expect(sanitiseReply('   \n\t ')).toBeNull();
-    expect(sanitiseReply('x'.repeat(5000))!.length).toBe(1001);
+    expect(sanitiseReply('x'.repeat(5000))!.length).toBe(5001);
+    expect(sanitiseReply('x'.repeat(MAX_REPLY_CHARS + 1))).toBeNull();
   });
 
   it('threadNameFor falls back to the id and clips to 100 characters', () => {
@@ -471,12 +473,12 @@ describe('DiscordBridge', () => {
       b.stop();
     });
 
-    it('turns a multi-line reply into one line and rate limits a burst', async () => {
+    it('preserves a multi-line reply and rate limits a burst', async () => {
       const b = await ready();
       await b.onGatewayMessage(reply({ content: 'a\nb' }));
-      await b.onGatewayMessage(reply({ content: 'again' }));
+      await b.onGatewayMessage(reply({ id: 'm2', content: 'again' }));
       expect(sendInput).toHaveBeenCalledTimes(1);
-      expect(sendInput).toHaveBeenCalledWith('s1', 'a b\r');
+      expect(sendInput).toHaveBeenCalledWith('s1', 'a\nb\r');
       // The second reply was not typed, and the person is told so instead of it vanishing.
       expect(posts.some((p) => p.method === 'PUT' && p.path.includes(encodeURIComponent('⏳')))).toBe(true);
       b.stop();
@@ -539,8 +541,11 @@ describe('DiscordBridge', () => {
   it('drops a thread whose creation finished after the parent channel changed', async () => {
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
+    let entered!: () => void;
+    const creating = new Promise<void>((resolve) => (entered = resolve));
     const b = bridge({}, async (url, init) => {
       if (String(url).endsWith(`/channels/${PARENT}/threads`)) {
+        entered();
         await gate;
         return jsonRes({ id: THREAD });
       }
@@ -552,7 +557,7 @@ describe('DiscordBridge', () => {
       return jsonRes({ id: 'msg' });
     });
     const first = b.notify(MSG);
-    await new Promise((r) => setTimeout(r, 10));
+    await creating;
     await writeDiscordConfig(dir, { ...CFG, parentChannelId: '777777777777777777' });
     await b.reload();
     release();
@@ -584,7 +589,7 @@ describe('DiscordBridge', () => {
       b.stop();
     });
 
-    it('posts a Markdown table as an aligned code block, since Discord does not render tables', async () => {
+    it('posts a Markdown table as wrapping labeled records', async () => {
       const b = bridge();
       const table = [
         '| Variant | Decode (tokens/s) |',
@@ -597,7 +602,8 @@ describe('DiscordBridge', () => {
         .filter((p) => p.path.endsWith('/messages'))
         .map((p) => String(p.body?.content))
         .join('\n');
-      expect(posted).toContain('```\nVariant     Decode (tokens/s)\n');
+      expect(posted).toContain('**Variant:** kv-f16\n**Decode (tokens/s):** 557.0');
+      expect(posted).not.toContain('```');
       expect(posted).not.toContain('|---');
       b.stop();
     });
@@ -641,9 +647,11 @@ describe('DiscordBridge', () => {
     it('converts only what can be posted, so one very wide table cell cannot stall the server', async () => {
       const b = bridge();
       const wide = ['| a |', '|---|', `| ${'x'.repeat(1024 * 1024)} |`, ...Array(190).fill('| y |')].join('\n');
-      const t0 = Date.now();
+      const cpuBefore = process.cpuUsage();
       await b.notify({ ...MSG, event: 'hook:idle_prompt', fullText: async () => ({ text: wide, version: 'turn-1' }) });
-      expect(Date.now() - t0).toBeLessThan(500);
+      // Bound conversion CPU, not the journal's awaited durable disk I/O on a busy host.
+      const cpu = process.cpuUsage(cpuBefore);
+      expect((cpu.user + cpu.system) / 1000).toBeLessThan(500);
       const said = posts.filter((p) => p.path.endsWith('/messages')).map((p) => String(p.body?.content));
       expect(said.length).toBeLessThanOrEqual(9); // the title post plus at most 8 parts
       expect(said.at(-1)).toContain('continues in the tab');
@@ -1004,6 +1012,30 @@ describe('files', () => {
     expect(sanitiseReply('x'.repeat(5000), ['/w/a'])!.endsWith('[attached: /w/a]\r')).toBe(true);
   });
 
+  it('preserves native V2 file components for every file in a guarded multipart batch', async () => {
+    const fetch = vi.fn(async (_u: URL, _init: RequestInit) => jsonRes({ id: 'message' }));
+    const api = new DiscordApi(() => TOKEN, fetch);
+    const post = {
+      content: 'Internal fallback',
+      flags: 32768,
+      components: [{ type: 10, content: 'Outputs' }],
+      allowed_mentions: { parse: [], users: [] },
+    };
+    const files = [
+      { name: 'first.pdf', data: Buffer.from('one') },
+      { name: 'second.png', data: Buffer.from('two') },
+    ];
+    await api.postWithFiles(PARENT, post, files, () => true);
+    const body = fetch.mock.calls[0][1].body as FormData;
+    const wire = JSON.parse(String(body.get('payload_json')));
+    expect(wire.content).toBeUndefined();
+    expect(wire.components).toContainEqual({ type: 13, file: { url: 'attachment://first.pdf' } });
+    expect(wire.components).toContainEqual({ type: 13, file: { url: 'attachment://second.png' } });
+    expect(await (body.get('files[1]') as File).text()).toBe('two');
+    await api.postWithFiles(PARENT, post, files, () => false);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
   it('postWithFile sends multipart with a safe filename and no JSON content type', async () => {
     let seen: { init: RequestInit } | null = null;
     const api = new DiscordApi(
@@ -1047,7 +1079,8 @@ describe('DiscordBridge files and startup hint', () => {
     cfg: Partial<DiscordConfig> = {},
     dirFor: (id: string) => string | undefined = () => work,
     awaitingChoice?: (id: string) => boolean,
-    agentExited?: (id: string) => boolean
+    agentExited?: (id: string) => boolean,
+    transfers: Partial<import('../src/discord-bridge.js').DiscordBridgeDeps> = {}
   ) {
     const b = new DiscordBridge({
       configDir: dir,
@@ -1062,6 +1095,7 @@ describe('DiscordBridge files and startup hint', () => {
         return path.endsWith('/threads') ? jsonRes({ id: THREAD }) : jsonRes({ id: 'msg' });
       },
       sendInput: async (id, text) => (sent.push([id, text]), true),
+      ...transfers,
       sessionDir: dirFor,
       awaitingChoice,
       agentExited,
@@ -1086,6 +1120,38 @@ describe('DiscordBridge files and startup hint', () => {
   });
   afterEach(() => rmSync(work, { recursive: true, force: true }));
 
+  it('does not write remote attachments in Notifications mode', async () => {
+    const upload = vi.fn(async () => '/workspace/.codeman-discord/verified.png');
+    const b = await make({}, () => undefined, undefined, undefined, { saveRemoteAttachment: upload });
+    await b.onGatewayMessage(reply());
+    expect(upload).not.toHaveBeenCalled();
+    expect(sent).toEqual([]);
+    b.stop();
+  });
+  it('does not submit any prompt when SSH upload fails', async () => {
+    const b = await make({}, () => undefined, undefined, undefined, {
+      saveRemoteAttachment: async () => {
+        throw new Error('offline');
+      },
+    });
+    await b.onGatewayMessage(reply({ content: 'read this' }));
+    expect(sent).toEqual([]);
+    b.stop();
+  });
+  it('does not expose Full-mode file controls in Notifications mode', async () => {
+    const get = vi.fn(async () => ({ name: 'answer.txt', data: new Uint8Array([1]) }));
+    const b = await make(
+      {},
+      () => work,
+      undefined,
+      () => true,
+      { getAttachment: get }
+    );
+    await b.onGatewayMessage(reply({ content: '!codeman file /workspace/a b.txt', attachments: [] }));
+    expect(get).not.toHaveBeenCalled();
+    expect(sent).toEqual([]);
+    b.stop();
+  });
   it('saves an attachment under .codeman-discord and types its path, even with no text', async () => {
     const b = await make();
     await b.onGatewayMessage(reply());
@@ -1127,7 +1193,7 @@ describe('DiscordBridge files and startup hint', () => {
     const b = await make({}, () => undefined);
     await b.onGatewayMessage(reply());
     expect(sent).toHaveLength(0);
-    expect(String(posted.at(-1)?.body?.content)).toMatch(/no local folder/);
+    expect(String(posted.at(-1)?.body?.content)).toMatch(/no available folder/);
     b.stop();
   });
 
@@ -1143,7 +1209,7 @@ describe('DiscordBridge files and startup hint', () => {
   it('types a reply that waits on a download before a later text reply', async () => {
     const b = await make();
     const slow = b.onGatewayMessage(reply({ content: 'first' }));
-    await new Promise((r) => setTimeout(r, 0)); // the first reply is under way (gate passed) before the clock moves
+    await vi.waitFor(() => expect(downloads).toHaveLength(1)); // durable claim and the first input gate have completed
     t += 5_000;
     const fast = b.onGatewayMessage(reply({ id: '555555555555555556', content: 'second', attachments: [] }));
     await Promise.all([slow, fast]);
@@ -1157,11 +1223,11 @@ describe('DiscordBridge files and startup hint', () => {
     await b.onGatewayMessage(reply({ content: '2', attachments: [] }));
     expect(sent.at(-1)?.[1]).toBe('2');
     t += 5_000;
-    await b.onGatewayMessage(reply({ content: 'yes', attachments: [] }));
+    await b.onGatewayMessage(reply({ id: '555555555555555556', content: 'yes', attachments: [] }));
     expect(sent.at(-1)?.[1]).toBe('yes\r');
     t += 5_000;
     waiting = false;
-    await b.onGatewayMessage(reply({ content: '2', attachments: [] }));
+    await b.onGatewayMessage(reply({ id: '555555555555555557', content: '2', attachments: [] }));
     expect(sent.at(-1)?.[1]).toBe('2\r');
     b.stop();
   });
@@ -1176,8 +1242,8 @@ describe('DiscordBridge files and startup hint', () => {
   });
 });
 
-describe('tablesToCodeBlocks', () => {
-  it('turns a Markdown table into an aligned code block, dropping bold and code marks', () => {
+describe('formatDiscordTables', () => {
+  it('turns a Markdown table into labeled records while retaining inline formatting', () => {
     const md = [
       'Results:',
       '',
@@ -1189,17 +1255,18 @@ describe('tablesToCodeBlocks', () => {
       '',
       'Done.',
     ].join('\n');
-    expect(tablesToCodeBlocks(md)).toBe(
+    expect(formatDiscordTables(md)).toBe(
       [
         'Results:',
         '',
-        '```',
-        'Variant        Decode (tokens/s)',
-        '-------------  -----------------',
-        'kv-f16                     557.0',
-        'n-gram simple              554.5',
-        'n-gram mod                 550.2',
-        '```',
+        '**Variant:** `kv-f16`',
+        '**Decode (tokens/s):** 557.0',
+        '',
+        '**Variant:** **n-gram simple**',
+        '**Decode (tokens/s):** 554.5',
+        '',
+        '**Variant:** n-gram mod',
+        '**Decode (tokens/s):** 550.2',
         '',
         'Done.',
       ].join('\n')
@@ -1208,42 +1275,42 @@ describe('tablesToCodeBlocks', () => {
 
   it('leaves a table inside a code fence, prose with pipes and a table-less message alone', () => {
     const fenced = ['```', '| a | b |', '|---|---|', '| 1 | 2 |', '```'].join('\n');
-    expect(tablesToCodeBlocks(fenced)).toBe(fenced);
+    expect(formatDiscordTables(fenced)).toBe(fenced);
     const prose = 'Use a | b to pipe.\nThen c | d.';
-    expect(tablesToCodeBlocks(prose)).toBe(prose);
+    expect(formatDiscordTables(prose)).toBe(prose);
   });
 
   it('converts a hostile separator row of 100,000 spaces in well under a second', () => {
     const rows = ['| a | b |', `|---${' '.repeat(100_000)}x`, '| 1 | 2 |'].join('\n');
     const t0 = Date.now();
-    expect(tablesToCodeBlocks(rows)).toBe(rows);
+    expect(formatDiscordTables(rows)).toBe(rows);
     expect(Date.now() - t0).toBeLessThan(500);
     const real = ['| a | b |', `| --- ${' '.repeat(50_000)}| --- |`, '| 1 | 2 |'].join('\n');
     const t1 = Date.now();
-    expect(tablesToCodeBlocks(real)).toContain('```');
+    expect(formatDiscordTables(real)).toContain('**a:** 1');
     expect(Date.now() - t1).toBeLessThan(500);
   });
 
   it('leaves a wide or long table as written, quickly: 3000 columns over 3000 one-pipe rows', () => {
     const wide = [`|${' a |'.repeat(3000)}`, '|---|', ...Array.from({ length: 3000 }, () => '| x |')].join('\n');
     const t0 = Date.now();
-    expect(tablesToCodeBlocks(wide)).toBe(wide);
+    expect(formatDiscordTables(wide)).toBe(wide);
     expect(Date.now() - t0).toBeLessThan(500);
     const tall = ['| a | b |', '|---|---|', ...Array.from({ length: 300 }, (_, i) => `| ${i} | y |`)].join('\n');
-    expect(tablesToCodeBlocks(tall)).toBe(tall);
+    expect(formatDiscordTables(tall)).toBe(tall);
     const big = ['| a |', '|---|', ...Array.from({ length: 200_000 }, () => '| x |')].join('\n');
     const t1 = Date.now();
-    expect(() => tablesToCodeBlocks(big)).not.toThrow(); // no spread of 200,000 rows into Math.max
+    expect(() => formatDiscordTables(big)).not.toThrow(); // no spread of 200,000 rows into Math.max
     expect(Date.now() - t1).toBeLessThan(1000);
   });
 
   it('keeps a sentence with a pipe under a table out of the code block', () => {
-    const out = tablesToCodeBlocks(['| a | b |', '|---|---|', '| 1 | 2 |', 'Use x | y to pipe.'].join('\n'));
-    expect(out).toBe(['```', 'a  b', '-  -', '1  2', '```', 'Use x | y to pipe.'].join('\n'));
+    const out = formatDiscordTables(['| a | b |', '|---|---|', '| 1 | 2 |', 'Use x | y to pipe.'].join('\n'));
+    expect(out).toBe(['**a:** 1', '**b:** 2', 'Use x | y to pipe.'].join('\n'));
   });
 
-  it('pads a short row and keeps an escaped pipe in a cell', () => {
-    const out = tablesToCodeBlocks(['| a | b |', '|---|---|', '| x \\| y |', '| p | q |'].join('\n'));
+  it('labels missing cells and keeps an escaped pipe in a cell', () => {
+    const out = formatDiscordTables(['| a | b |', '|---|---|', '| x \\| y |', '| p | q |'].join('\n'));
     expect(out).toContain('x | y');
     expect(out.split('\n').every((l) => !/\s$/.test(l))).toBe(true);
   });

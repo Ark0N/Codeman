@@ -15,8 +15,8 @@ and it works when you are away from your network.
 - **Alerts** for permission prompts, questions, idle sessions, errors and a stopped crash loop. A
   question or permission prompt shows what is on the tab's screen right now, so you can see what is
   being asked; a finished turn or an error carries the CLI's whole last message.
-- **One thread per tab** in a parent channel, so a reply always reaches exactly one session.
-- **Replies** from an allowed user are typed into that tab as one line plus Enter (a single digit answering a waiting permission or question goes as the key alone, without Enter).
+- **One thread per tab**: under a parent channel in Notifications, or under its private case channel in Full. Replies always reach exactly one session.
+- **Replies** from an allowed user preserve printable multiline text as one paste plus Enter (a single digit answering a waiting permission or question goes as the key alone, without Enter).
 - **Files** you attach are saved in the tab's folder and the agent is given the path. An agent can
   send a file back.
 - **Agents can ask for you.** `codeman notify "Press the reset button on the case" --urgent`
@@ -87,9 +87,26 @@ Discord for them; only the agent-initiated `codeman notify` habit is missing.
 
 - Only user IDs on the allowlist, in your server, inside a thread Codeman made, are acted on.
   Everything else is dropped.
-- A reply is cut to one printable line (1000 characters) and limited to one per second per tab.
+- Replies preserve printable multiline text as one paste, with a 20,000-character cap and one-per-second session limit. Pending dialog answers use verified key-only controls.
 - Posts can ping only the allowlisted users, so agent output cannot ping the whole server.
 - A Discord outage or a bad token never affects a session; it backs off, and the last error shows in Settings.
+
+## Full mode
+
+Notifications is the default. Choose **Full** in Settings to provision one private case channel and one session thread per tab. Use `!codeman help`, `sessions`, `cases`, `groups`, `status`, `history`, `transcript`, `pending` and `stream conversation|quiet|tools|off` (legacy `responses`/`verbose` aliases remain supported). Creation uses the same case-aware quick-start as the web UI. Reconnect asks for confirmation and requires the original remote agent to exist; interrupt sends Escape.
+
+Full adds native Claude/Codex live responses, file controls, activity titles and typing. Local history needs no Python; remote history/file helpers need Python 3 on that host. Remote uploads save only explicit incoming attachments in the session workspace's `.codeman-discord/` folder. Shell and Docker tabs can have destinations without native history. An uncertain post or an expired history cursor produces a catch-up notice; later responses continue. `stream off` survives `/clear` and other conversation changes.
+
+Names may lag under Discord's rename limits; typing is independent. Shared case channels survive session deletion. Conversation cursors are deleted with the session, and finished metadata ages out after seven days.
+
+
+Full mode includes native session controls for supported model/effort settings, exact question/approval answers, launch defaults, history, results/files and explicit queued follow-ups. Guild CLI commands launch through confirmed case-aware quick-start. Controls recheck the user, destination, conversation and input revision; unsupported/provider dialogs use the web terminal.
+
+Conversation is the default stream view: adjacent assistant progress updates are grouped, followed by a separate final response. Quiet shows finals only; Tools adds bounded tool result text. Progress, mirrored external prompts, history and auto-linked artifacts are silent. Discord-origin prompts are suppressed from the mirror using exact native provenance. Completion labels need native evidence.
+
+Show updates opens the original task's full progress with pages, Load more, Refresh and Download updates (8 MB export limit), stopping at the next prompt. Read-only response buttons can recover after restart; state-changing controls cannot. Results shows the answer and named artifacts; workspace diffs are explicitly shared snapshots. Explicitly linked generated workspace files can be uploaded automatically (four files, 8 MB total), through the existing secret/symlink/workspace guards.
+
+The Activity card offers Recent, Working, Finished and Needs you views. Native events determine recency; refreshing the card does not. Session titles link to threads, and verified response links jump to the delivered answer. The bridge preserves bounded cursor catch-up, prompt deduplication, rename retry budgets, state cleanup and uncertain-send safeguards.
 
 ## Troubleshooting
 

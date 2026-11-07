@@ -149,6 +149,7 @@ describe('Settings Apply button', () => {
       app._handleTunnelEnableRefusal = vi.fn(async () => false);
       app.saveModelConfigFromSettings = vi.fn(async () => {});
       app._webhookPending = () => false;
+      app._discordPending = () => false;
       app.showToast = vi.fn();
       app.closeAppSettings = vi.fn();
       app._refreshSettingsAfterApply = vi.fn();

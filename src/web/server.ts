@@ -26,7 +26,20 @@
  *
  * @module web/server
  */
-
+import { posix, resolve } from 'node:path';
+import { networkInterfaces } from 'node:os';
+import { createDiscordNativeUiServices } from './discord-native-ui-services.js';
+import { DiscordModelControls } from '../discord-model-controls.js';
+import { readDiscordModelCatalog } from '../discord-model-catalog.js';
+import { applyDiscordLaunchDefaults } from './discord-launch-defaults.js';
+import { readDiscordCanonicalHistory } from '../discord-history-recovery.js';
+import { remoteTmuxSessionAlive } from '../remote-hosts.js';
+import { remoteTmuxSessionName } from '../tmux-manager.js';
+import { resolveDiscordCase } from '../discord-case-identity.js';
+import { DiscordSessionManagement } from '../discord-session-management.js';
+import { discordTaskControl, discordControlCurrent } from '../discord-task-controls.js';
+import { discordHistoryControl } from '../discord-history.js';
+import { readDiscordSessionFile, writeDiscordRemoteAttachment } from '../discord-file-transfers.js';
 import Fastify, { FastifyInstance } from 'fastify';
 import fastifyCompress from '@fastify/compress';
 import fastifyCookie from '@fastify/cookie';
@@ -556,18 +569,178 @@ export class WebServer extends EventEmitter {
   /** Two-way Discord bridge (thread per tab); config in discord.json (0600). Idle until enabled in Settings. */
   /** Set by the session routes when they register (see SessionPort). */
   lastResponseFor?: (session: Session, context?: string) => Promise<{ text: string; timestamp?: string }>;
-  private discordBridge = new DiscordBridge({
+  private discordCases?: () => Promise<import('../types.js').CaseInfo[]>;
+  private discordCreate?: (body: unknown) => Promise<string>;
+  private discordSessionManager: DiscordSessionManagement = new DiscordSessionManagement({
+    allowed: () => !isMultiUserMode() && this.discordBridge.acceptsControls,
+    cases: async () => this.discordCases?.() ?? [],
+    groups: async () =>
+      (await this.tabLayouts.get(ownerLayoutKey(undefined))).groups.map((g) => ({
+        id: g.id,
+        name: g.name,
+      })),
+    modes: () => enabledClis().map((c) => c.id),
+    sessions: async () => {
+      const cases = (await this.discordCases?.()) ?? [];
+      const layout = await this.tabLayouts.get(ownerLayoutKey(undefined));
+      return [...this.sessions.values()].map((s) => ({
+        id: s.id,
+        name: s.name,
+        host: s.remote?.label || 'local',
+        mode: s.mode,
+        group:
+          layout.groups.find((g) => g.refs.some((r) => r.kind === 'session' && r.id === s.id))?.name || 'Ungrouped',
+        caseName:
+          cases.find((c) =>
+            s.remote
+              ? c.remote?.hostId === s.remote.hostId && c.remote.path === s.remote.remotePath
+              : c.path === s.workingDir
+          )?.name || s.workingDir,
+        state: s.paneExit ? 'agent exited' : s.isWorking ? 'working' : 'idle',
+      }));
+    },
+    create: async (body) => {
+      if (!this.discordCreate) throw new Error('Session routes unavailable');
+      return this.discordCreate(body);
+    },
+    reconnect: async (id) => {
+      const session = this.sessions.get(id);
+      if (!session?.remote || !session.muxName) return false;
+      const remote = session.remote;
+      const scope = this.discordBridge.controlScope;
+      if ((await remoteTmuxSessionAlive(remote, remote.remoteSessionName ?? remoteTmuxSessionName(id))) !== true)
+        return false;
+      if (
+        this.sessions.get(id) !== session ||
+        session.remote !== remote ||
+        !this.discordBridge.acceptsControls ||
+        this.discordBridge.controlScope !== scope
+      )
+        return false;
+      return this.handleRemoteSessionDropped(id);
+    },
+  });
+  private discordModelControls: DiscordModelControls = new DiscordModelControls({
+    scope: () => (isMultiUserMode() ? undefined : this.discordBridge.controlScope),
+    target: (id) => {
+      const session = this.sessions.get(id);
+      return session && !session.isAdopted
+        ? {
+            mode: session.mode,
+            generation: session.nativeModelSettingsRevision,
+            working: session.isWorking,
+            watching: session.watching,
+            pending: approvalInbox.listPending().some((item) => item.sessionId === id && item.kind !== 'idle'),
+            exited: !!session.paneExit,
+            reportedModel: session.displayModel?.model,
+            operate: (operation, allowed) => session.withNativeModelSettings(operation, allowed),
+            catalog: () => readDiscordModelCatalog(session),
+          }
+        : undefined;
+    },
+  });
+  private discordBridge: DiscordBridge = new DiscordBridge({
+    nativeUi: createDiscordNativeUiServices({
+      capture: (id) => {
+        const s = this.sessions.get(id);
+        return s?.muxName ? this.mux.capturePaneTextAsync?.(s.muxName, { ansi: true }) : null;
+      },
+      sessions: () => this.sessions,
+      observed: (id) => this.discordModelControls.observed(id),
+      cases: async () => this.discordCases?.() ?? [],
+      allowed: () => !isMultiUserMode() && this.discordBridge.acceptsControls,
+      url: () => {
+        const tunnel = this.tunnelManager.getUrl();
+        if (tunnel) return tunnel + this.basePath;
+        if (this.host === '127.0.0.1' || this.host === '::1') return undefined;
+        const lan = Object.values(networkInterfaces())
+          .flat()
+          .find((a) => a && a.family === 'IPv4' && !a.internal && /^192\.168\./.test(a.address));
+        return lan ? `${this.https ? 'https' : 'http'}://${lan.address}:${this.port}${this.basePath}` : undefined;
+      },
+    }),
     configDir: getDataDir(),
     fetchImpl: webviewFetch,
     sendInput: async (sessionId, text) => {
       const session = this.sessions.get(sessionId);
       if (!session) return false;
       // A Discord reply is a person's own input, so it names the tab like any other prompt.
-      if (await session.writeViaMux(text, { fromUser: true }).catch(() => false)) return true;
-      return session.write(text, { fromUser: true });
+      // writeViaMux already handles PTY fallback. Retrying the entire write can duplicate a partial paste.
+      return session.writeViaMux(text, { fromUser: true, preserveWhitespace: true });
     },
     agentExited: (id) => !!this.sessions.get(id)?.paneExit,
     awaitingChoice: (id) => approvalInbox.listPending().some((item) => item.sessionId === id && item.kind !== 'idle'),
+    caseForSession: async (id) => {
+      const session = this.sessions.get(id);
+      if (!session) return undefined;
+      const cases = isMultiUserMode() ? [] : ((await this.discordCases?.()) ?? []);
+      if (this.sessions.get(id) !== session) return undefined;
+      return resolveDiscordCase(
+        { id, workingDir: session.workingDir, owner: session.owner, remote: session.remote, docker: session.docker },
+        cases
+      );
+    },
+    sessions: () =>
+      Array.from(this.sessions.values(), (session) => ({
+        id: session.id,
+        name: session.name,
+        remote: !!session.remote,
+        working: session.isWorking,
+        watching: session.watching,
+        historyAvailable:
+          !session.docker &&
+          !session.isAdopted &&
+          ['claude-jsonl', 'codex-rollout'].includes(getCli(session.mode)?.capabilities.transcript ?? ''),
+      })),
+    history: async (id, options) => {
+      const session = this.sessions.get(id);
+      if (!session) throw new Error('Session unavailable');
+      return this.discordCanonicalHistory(session, options);
+    },
+    controlCurrent: (id, validity) => {
+      const session = this.sessions.get(id);
+      return (
+        this.discordModelControls.current(id, validity) ||
+        this.discordSessionManager.current(id, validity) ||
+        (!!session && discordControlCurrent(session, validity))
+      );
+    },
+    control: async (id, command) => {
+      const settings = await this.discordModelControls.control(id, command);
+      if (settings) return settings;
+      const managed = await this.discordSessionManager.control(id, command);
+      if (managed) return managed;
+      const session = this.sessions.get(id);
+      if (!session)
+        return {
+          text: 'Use a session thread for task/history commands; !codeman help lists management commands.',
+        };
+      return (await discordTaskControl(session, command)) ?? discordHistoryControl(session, command);
+    },
+    launchModes: () => enabledClis().map((c) => c.id),
+    launch: (scope, key, mode) => this.discordSessionManager.launch(scope, key, mode),
+    getAttachment: async (id, path, relativeToWorkspace) => {
+      const session = this.sessions.get(id);
+      if (!session || session.isAdopted) throw new Error('Session unavailable');
+      if (relativeToWorkspace)
+        path = session.remote ? posix.resolve(session.remote.remotePath, path) : resolve(session.workingDir, path);
+      return readDiscordSessionFile({ workingDir: session.workingDir, remote: session.remote }, path);
+    },
+    saveRemoteAttachment: async (id, name, bytes, current) => {
+      const session = this.sessions.get(id);
+      const remote = session?.remote;
+      if (!remote) throw new Error('Remote session unavailable');
+      return writeDiscordRemoteAttachment(
+        remote,
+        name,
+        bytes,
+        () =>
+          current() &&
+          this.discordBridge.acceptsControls &&
+          this.sessions.get(id) === session &&
+          session.remote === remote
+      );
+    },
     // Remote (ssh) sessions keep their folder on another host, so received files have nowhere local to go.
     // An adopted session's folder is the neutral wrapper folder, which its agent need not be able to read.
     sessionDir: (sessionId) => {
@@ -1378,11 +1551,46 @@ export class WebServer extends EventEmitter {
     }
     registerStatusTelemetryRoutes(this.app, ctx);
     registerSystemRoutes(this.app, ctx);
-    registerCaseRoutes(this.app, ctx);
+    registerCaseRoutes(this.app, ctx, {
+      onListReady: (reader) => {
+        this.discordCases = () => {
+          if (isMultiUserMode()) throw new Error('Identity mapping required');
+          return reader({ headers: {} } as import('fastify').FastifyRequest);
+        };
+      },
+    });
     registerWorktreeRoutes(this.app, ctx);
     // The registry's lifetime is the server's: it drops per-session wake state on every
     // cleanup path and resolves in-flight wakes on shutdown.
-    this.remoteWake = registerSessionRoutes(this.app, ctx);
+    this.remoteWake = registerSessionRoutes(this.app, ctx, {
+      onQuickStartReady: (create) => {
+        this.discordCreate = async (body) => {
+          if (isMultiUserMode() || !this.discordBridge.acceptsControls)
+            throw new Error('Discord lifecycle unavailable');
+          const input = body as { caseName: string; mode?: string };
+          const prefix = getCli(input.mode ?? 'claude')?.capabilities.startMode === 'shell' ? 's' : 'w';
+          const used = new Set([...this.sessions.values()].map((session) => session.name));
+          let number = 1;
+          while (used.has(`${prefix}${number}-${input.caseName}`)) number++;
+          const requestBody = await applyDiscordLaunchDefaults({
+            ...input,
+            sessionName: `${prefix}${number}-${input.caseName}`,
+          });
+          const scope = this.discordBridge.controlScope;
+          const current = () =>
+            !isMultiUserMode() && this.discordBridge.acceptsControls && this.discordBridge.controlScope === scope;
+          const result = (await create(
+            { body: requestBody, headers: {} } as import('fastify').FastifyRequest,
+            current
+          )) as {
+            sessionId?: string;
+          };
+          const session = result.sessionId ? this.sessions.get(result.sessionId) : undefined;
+          if (!session) throw new Error('Session creation refused');
+          return session.id;
+        };
+      },
+    });
     // The routes' ctx is a separate object: take the last-response reader they registered on it (Discord alerts).
     this.lastResponseFor = (ctx as { lastResponseFor?: WebServer['lastResponseFor'] }).lastResponseFor;
     registerAgentSessionRoutes(this.app, ctx);
@@ -2849,8 +3057,7 @@ export class WebServer extends EventEmitter {
     return result;
   }
 
-  // ========== SSE Delegates (SseStreamManager) ==========
-
+  // ========== SSE Delegates (SseStreamManager) ===
   private broadcast(event: string, data: unknown): void {
     // Invalidate caches on structural changes (creation/deletion)
     if (event === SseEvent.SessionCreated || event === SseEvent.SessionDeleted) {
@@ -3082,8 +3289,7 @@ export class WebServer extends EventEmitter {
     }
   }
 
-  // ========== Web Push ==========
-
+  // ========== Web Push ===
   /** Map SSE event names to push notification payloads */
   private static readonly PUSH_EVENT_MAP: Record<
     string,
@@ -3255,6 +3461,19 @@ export class WebServer extends EventEmitter {
    * segmented into turns for the CLIs that keep none); undefined for a shell, which has no turns, and the
    * screen tail stands in whenever the reader finds nothing.
    */
+  private async discordCanonicalHistory(session: Session, options?: { includeTools?: boolean; after?: string }) {
+    const history = await readDiscordCanonicalHistory(
+      session,
+      options,
+      () =>
+        !isMultiUserMode() &&
+        this.discordBridge.acceptsControls &&
+        this.sessions.get(session.id) === session &&
+        !approvalInbox.listPending().some((item) => item.sessionId === session.id && item.kind !== 'idle')
+    );
+    return history;
+  }
+
   private async discordFullText(session: Session): Promise<{ text: string; version?: string } | undefined> {
     if (!this.lastResponseFor) return undefined;
     // A CLI with a transcript reader, or whose pane the viewer segments into turns; a shell has neither.
@@ -4474,13 +4693,37 @@ export class WebServer extends EventEmitter {
    * can reset/advance its backoff. Re-running the idempotent remote command
    * REATTACHES the durable remote tmux session (does NOT recreate it).
    */
-  private async handleRemoteSessionDropped(sessionId: string): Promise<void> {
+  private readonly remoteReconnectRuns = new Map<string, Promise<boolean>>();
+  private handleRemoteSessionDropped(sessionId: string): Promise<boolean> {
+    const pending = this.remoteReconnectRuns.get(sessionId);
+    if (pending) return pending;
+    const run = this.performRemoteSessionDropped(sessionId).finally(() => {
+      if (this.remoteReconnectRuns.get(sessionId) === run) this.remoteReconnectRuns.delete(sessionId);
+    });
+    this.remoteReconnectRuns.set(sessionId, run);
+    return run;
+  }
+  private async performRemoteSessionDropped(sessionId: string): Promise<boolean> {
     const session = this.sessions.get(sessionId);
     // No live Session object (e.g. detached/restored-but-not-attached) — nothing
     // to drive the reattach; report failure so the watcher backs off and retries.
     if (!session) {
       this.noteRemoteReconnect(sessionId, false);
-      return;
+      return false;
+    }
+    try {
+      if (session.muxName && !(await this.mux.isPaneDead(session.muxName))) {
+        // A false result also covers tmux query errors: clear in-flight, retaining retry backoff.
+        this.noteRemoteReconnect(sessionId, false);
+        return false;
+      }
+    } catch {
+      this.noteRemoteReconnect(sessionId, false);
+      return false;
+    }
+    if (this.sessions.get(sessionId) !== session) {
+      this.noteRemoteReconnect(sessionId, false);
+      return false;
     }
     let ok = false;
     try {
@@ -4494,6 +4737,7 @@ export class WebServer extends EventEmitter {
       this.persistSessionState(session);
       this.broadcast(SseEvent.RemoteSessionReconnected, { sessionId });
     }
+    return ok;
   }
 
   /** Forward a reattach outcome to the TmuxManager watcher (resets/clears backoff). */
@@ -4597,6 +4841,7 @@ export class WebServer extends EventEmitter {
 
     // Close the Discord gateway socket and its heartbeat, and clear the bridge's per-tab maps.
     this.discordBridge.stop();
+    this.discordModelControls.stop();
 
     // Dispose all managed timers (intervals + resettable timeouts)
     this.cleanup.dispose();

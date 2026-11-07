@@ -1086,7 +1086,10 @@ export function registerSessionRoutes(
   app: FastifyInstance,
   ctx: SessionPort & EventPort & ConfigPort & InfraPort & AuthPort & TabLayoutPort & KeepWarmPort,
   /** Test seam: inject a registry with fake IO instead of the real TCP/WoL probes. */
-  options: { remoteWake?: RemoteWakeRegistry } = {}
+  options: {
+    remoteWake?: RemoteWakeRegistry;
+    onQuickStartReady?: (create: (request: FastifyRequest, current?: () => boolean) => Promise<unknown>) => void;
+  } = {}
 ): RemoteWakeRegistry {
   // Wake-on-LAN for sleeping remote hosts (see remote-wake.ts). One registry per
   // route registration (= one web server) — the same shape as the process-wide
@@ -1177,7 +1180,7 @@ export function registerSessionRoutes(
 
   // ========== Session Creation ==========
 
-  app.post('/api/sessions', async (req) => {
+  const createSessionForRequest = async (req: FastifyRequest) => {
     const owner = ownerFor(req);
     // Global + per-user session cap.
     const capMsg = sessionCapacityMessage(ctx.sessions, owner);
@@ -1505,7 +1508,8 @@ export function registerSessionRoutes(
       session: lightState,
       ...(body.tabGroupId || landedInGroup(tabLayout, session.id) ? { tabLayout } : {}),
     };
-  });
+  };
+  app.post('/api/sessions', createSessionForRequest);
 
   // ========== Adopt a foreign tmux session ==========
 
@@ -4225,7 +4229,8 @@ export function registerSessionRoutes(
 
   // ========== Quick Start ==========
 
-  app.post('/api/quick-start', async (req) => {
+  const quickStartForRequest = async (req: FastifyRequest, current: () => boolean = () => true) => {
+    if (!current()) return createErrorResponse(ApiErrorCode.FORBIDDEN, 'Session creation authorization changed');
     const owner = ownerFor(req);
     const capMsg = sessionCapacityMessage(ctx.sessions, owner);
     if (capMsg) return createErrorResponse(ApiErrorCode.SESSION_BUSY, capMsg);
@@ -4937,6 +4942,10 @@ export function registerSessionRoutes(
       }
     }
 
+    if (!current()) {
+      await ctx.cleanupSession(session.id, true, 'quick_start_cancelled');
+      return createErrorResponse(ApiErrorCode.FORBIDDEN, 'Session creation authorization changed');
+    }
     const tabLayout = await ctx.addSession(session, { caseName, ...(tabGroupId ? { tabGroupId } : {}) });
     ctx.store.incrementSessionsCreated();
     ctx.persistSessionState(session);
@@ -4959,6 +4968,7 @@ export function registerSessionRoutes(
 
     // Start in the appropriate mode
     try {
+      if (!current()) throw new Error('Session creation authorization changed before launch');
       if (getCli(mode)?.capabilities.startMode === 'shell') {
         await session.startShell();
         getLifecycleLog().log({
@@ -5022,7 +5032,9 @@ export function registerSessionRoutes(
       await ctx.cleanupSession(session.id, true, 'quick_start_error');
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
     }
-  });
+  };
+  app.post('/api/quick-start', (req) => quickStartForRequest(req));
+  options.onQuickStartReady?.(quickStartForRequest);
 
   // ═══════════════════════════════════════════════════════════════
   // History — list past Claude conversations for resume

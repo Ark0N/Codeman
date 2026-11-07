@@ -586,11 +586,16 @@ export function submitsAsKeys(text: string): boolean {
  * A single character is typed instead (submitsAsKeys), so a dialog answer selects.
  * A final `;` is escaped (escapeTmuxTrailingSemicolon).
  */
-export function buildPasteTextCommands(tmux: string, target: string, text: string): PasteTextCommands {
+export function buildPasteTextCommands(
+  tmux: string,
+  target: string,
+  text: string,
+  options?: { preserveNewlines?: boolean }
+): PasteTextCommands {
   const buffer = `codeman-submit-${process.pid}-${++submitBufferSeq}`;
   return {
     set: `${tmux} set-buffer -b ${buffer} -- ${shellescape(escapeTmuxTrailingSemicolon(text))}`,
-    paste: `${tmux} paste-buffer -p -d -b ${buffer} -t ${shellescape(target)}`,
+    paste: `${tmux} paste-buffer -p${options?.preserveNewlines ? ' -r' : ''} -d -b ${buffer} -t ${shellescape(target)}`,
     discard: `${tmux} delete-buffer -b ${buffer}`,
   };
 }
@@ -4264,7 +4269,11 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    * - `Enter` key is sent as a SEPARATE tmux invocation after a small delay
    * - Ink (Claude CLI) needs text and Enter split to avoid treating Enter as a newline
    */
-  async sendInput(sessionId: string, input: string, options?: { beforeDispatch?: () => boolean }): Promise<boolean> {
+  async sendInput(
+    sessionId: string,
+    input: string,
+    options?: { beforeDispatch?: () => boolean; preserveWhitespace?: boolean }
+  ): Promise<boolean> {
     if (options?.beforeDispatch && input !== '\r') return false;
     const session = this.sessions.get(sessionId);
     if (!session) {
@@ -4296,10 +4305,12 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       // `"  \nfix it\r"` pastes an empty first line (nor `"fix it\n\r"` an empty last
       // one). The leading match ends at a line break, so the first real line keeps its
       // indentation.
-      const textPart = input
-        .replace(/\r/g, '')
-        .replace(/^\s*\n/, '')
-        .trimEnd();
+      const textPart = options?.preserveWhitespace
+        ? input.replace(/\r/g, '')
+        : input
+            .replace(/\r/g, '')
+            .replace(/^\s*\n/, '')
+            .trimEnd();
 
       if (textPart && hasCarriageReturn) {
         // Send text first, then Enter as a SEPARATE tmux command after a short delay.
@@ -4315,7 +4326,12 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
             `${this.tmux()} send-keys -t "${session.muxName}" -l -- ${shellescape(escapeTmuxTrailingSemicolon(textPart))}`
           );
         } else {
-          await pasteText(run, buildPasteTextCommands(this.tmux(), session.muxName, textPart));
+          await pasteText(
+            run,
+            buildPasteTextCommands(this.tmux(), session.muxName, textPart, {
+              preserveNewlines: options?.preserveWhitespace,
+            })
+          );
         }
         await new Promise((resolve) => setTimeout(resolve, 50));
         await run(`${this.tmux()} send-keys -t "${session.muxName}" Enter`);
@@ -4325,7 +4341,12 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         // enabled bracketed paste (POSIX sh, macOS /bin/bash 3.2) still gets every line
         // break as a CR, so there every line but the last runs; before line breaks were
         // kept, the joined text was typed and nothing ran.
-        await pasteText(run, buildPasteTextCommands(this.tmux(), session.muxName, textPart));
+        await pasteText(
+          run,
+          buildPasteTextCommands(this.tmux(), session.muxName, textPart, {
+            preserveNewlines: options?.preserveWhitespace,
+          })
+        );
       } else if (textPart) {
         // Text only, no Enter
         await run(
@@ -4557,6 +4578,21 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     } catch {
       // A dead/renamed pane is an ordinary outcome here, not an error worth logging
       // on a timer; the caller treats null as "no evidence either way".
+      return null;
+    }
+  }
+
+  /** Bounded async visible-frame capture for guarded Discord native controls. */
+  async capturePaneTextAsync(muxName: string, opts?: { signal?: AbortSignal; ansi?: boolean }): Promise<string | null> {
+    if (IS_TEST_MODE || !resolveTmuxPaneTarget(muxName)) return null;
+    try {
+      const { stdout } = await promisify(execFile)(
+        'tmux',
+        ['-L', this.tmuxSocket, 'capture-pane', '-p', ...(opts?.ansi ? ['-e'] : []), '-t', muxName],
+        { encoding: 'utf8', timeout: 5000, maxBuffer: 128 * 1024, signal: opts?.signal }
+      );
+      return stdout;
+    } catch {
       return null;
     }
   }
