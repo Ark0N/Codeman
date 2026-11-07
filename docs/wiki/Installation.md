@@ -78,6 +78,8 @@ install.sh uninstall    # remove (offers to undo a rename it performed)
 install.sh tailscale    # retrofit Tailscale access onto an existing install
 install.sh name [<n>]   # rename this machine on your tailnet (default codeman-<hostname>)
 install.sh cloudflared  # install cloudflared for the in-app Cloudflare tunnel
+install.sh preflight    # print what is on this machine as JSON; changes nothing
+install.sh agent <id>   # install one agent CLI and nothing else, also next to a running Codeman
 ```
 
 **Flags** answer the questions from the command line and pipe through `bash -s --`:
@@ -94,13 +96,64 @@ the name, `--service` / `--run` / `--no-start` the last one. `--yes` takes every
 `--port <n>` moves Codeman off 3000; the service file and the serve mapping follow it. On an
 existing install, `--port` and `--password` re-run the setup so the service file picks them up,
 and a re-run with `--lan` or `--tailscale` keeps the password the service already has.
+`--ai-cli <id>` answers the agent menu that appears when no agent CLI is found, with no
+terminal needed (`--ai-cli claude`, `--ai-cli codex`, ...), and `--ai-cli none` skips it.
+To add an agent later, `install.sh agent codex` installs that one and changes nothing else:
+it does not touch Codeman or its service, and an agent that is already there is left alone.
+Codeman Desktop does the same from *Add a coding agent*. A running Codeman can take a few
+minutes to notice the new agent; reload the page if it does not show up.
 
 **Automation and CI**: with no terminal attached, any step that would change the system
 aborts with instructions instead of running silently. Set `CODEMAN_NONINTERACTIVE=1` to
-approve those steps. `CODEMAN_TAILSCALE=1` preselects the Tailscale answer, and never
+approve those steps. With nothing else said, that also installs the first agent CLI of the
+catalogue when none is found; `--ai-cli` (or `CODEMAN_AI_CLI`) says which one, or none.
+`CODEMAN_TAILSCALE=1` preselects the Tailscale answer, and never
 installs Tailscale itself non-interactively; a non-interactive run never renames the
 machine and never starts a service. Everything the unattended steps print goes to
 `~/.codeman/install.log`, and the last lines of it are shown when a step fails.
+
+### Without administrator rights
+
+Codeman itself always lived in your home directory. What used `sudo` (or Homebrew on a
+Mac) were the things it needs first. On an account that has no administrator rights the
+installer says so in its summary (`Admin  not used (...)`) and gets those another way:
+
+| Needed                  | With administrator rights    | Without                                                                                                                             |
+| ----------------------- | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Node.js 22              | system package or Homebrew   | The official tarball from nodejs.org, checked against the `SHASUMS256.txt` published beside it, unpacked to `~/.codeman/runtime/node`. |
+| tmux                    | system package or Homebrew   | The tmux project's own build ([tmux-builds](https://github.com/tmux/tmux-builds)), checked against a SHA-256 pinned in the installer, in `~/.codeman/runtime/bin`. |
+| git                     | system package or Xcode tools | Not installed. Without a working git, the source is downloaded as an archive instead of cloned.                                     |
+| Build toolchain (Linux) | system package               | Cannot be supplied. See below.                                                                                                      |
+
+This route is taken by itself when `sudo` is not installed, when the account is outside the
+`sudo`, `wheel` and `admin` groups and `sudo` will not run without a password, when the
+`sudo` password is refused, and on a Mac for an account that is not an administrator.
+`--no-admin` (or `CODEMAN_NO_ADMIN=1`) forces it on an account that does have the rights;
+`CODEMAN_NO_ADMIN=0` switches the detection off. Nothing on this route runs `sudo`,
+Homebrew or the Xcode tools installer.
+
+What to know about it:
+
+- **Linux needs make, a C++ compiler and python3 to be there already.** node-pty compiles
+  from source on Linux, and a compiler is a system package. The installer checks this
+  before it downloads anything and names what is missing. macOS needs no compiler.
+- **The tmux download needs macOS 15 or newer** (and x86_64 or arm64 on either system).
+  On an older Mac an administrator has to install tmux once (`brew install tmux`); the
+  rest then works without one.
+- **An install without git updates by re-running the install line**, not from App
+  Settings. The re-run builds the new version beside the old one and swaps it in only
+  after the build succeeded, so a failed download or build leaves the install as it was.
+  Once the machine has a working git, the next re-run turns the install into a normal
+  clone and in-app updates work again. On a Mac, "a working git" means the Xcode Command
+  Line Tools are installed: without them `/usr/bin/git` only opens Apple's install dialog,
+  and the installer never runs it.
+- **Tailscale works where it is already installed and your account may configure it.** On
+  Linux, installing it, logging in and granting serve rights each need an administrator
+  (`sudo tailscale set --operator=$USER`, once). Local network and this-machine access
+  need nothing, and `install.sh cloudflared` puts `cloudflared` in `~/.local/bin`.
+- `node`, `npm`, `npx` and `tmux` are linked from `~/.local/bin`, and
+  `~/.codeman/runtime/node/bin` is added to your PATH, so a CLI installed with
+  `npm install -g` is found as well.
 
 ## Route B: npm
 
@@ -194,6 +247,7 @@ If the dashboard loads and **+ New Session** opens, you are done. Continue to
 | Path                    | What                                                                                             |
 | ----------------------- | ------------------------------------------------------------------------------------------------ |
 | `~/.codeman/app`        | The installed code (installer route only).                                                        |
+| `~/.codeman/runtime`    | Node.js and tmux, when the installer downloaded them instead of using system packages ([no administrator rights](#without-administrator-rights)). |
 | `~/.codeman/`           | All state: `state.json`, settings, session history, push keys, TLS certs. See [Core Concepts](Core-Concepts). |
 | `~/codeman-cases/`      | Cases created from scratch. Linked cases stay wherever they already are.                          |
 | `~/.codeman/web.log`    | Log for a detached (`-d`) server.                                                                 |
@@ -217,6 +271,7 @@ Full detail, including logs and the self-updater, is in
 | Install route | How to update                                                     |
 | ------------- | ----------------------------------------------------------------- |
 | Installer     | Re-run the one-liner, or **App Settings → System → Updates** in the UI. |
+| Installer, without git | Re-run the one-liner. The in-app updater says so instead of offering an update. |
 | npm           | `npm update -g aicodeman`                                          |
 | git clone     | `git pull && npm install && npm run build`, then restart.          |
 | Docker Compose | Re-run `Start-Codeman.sh`. The in-app updater works too, and refuses a release that changes the container definition until you re-run the script. |
@@ -232,7 +287,9 @@ install.sh uninstall            # installer route
 npm uninstall -g aicodeman      # npm route
 ```
 
-Neither removes `~/.codeman/` or `~/codeman-cases/`. Delete those by hand if you want the
+The installer route asks before it removes `~/.codeman/runtime` (the Node.js and tmux it
+downloaded, if any), and keeps it by default when you installed CLIs there with
+`npm install -g`. Neither removes `~/.codeman/` or `~/codeman-cases/`. Delete those by hand if you want the
 state and your case folders gone as well, and check `~/codeman-cases/` first: linked cases
 point at directories you already had, but cases created from scratch have their only copy
 there.

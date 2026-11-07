@@ -428,14 +428,20 @@ describe('EditHistorySync', () => {
     host.append('main', editLine('t1', T0, '/w/a.ts'));
     const orig = host.read;
     let first = true;
+    let inRead!: () => void;
+    const reachedRead = new Promise<void>((r) => (inRead = r));
     host.read = async (...a) => {
       if (first) {
         first = false;
+        inRead();
         await gate;
       }
       return orig(...a);
     };
     const slow = sync.sync(local);
+    // Only once s1 holds the gate: the sessions load their stores independently, so a later one
+    // could reach the read first, take the gate and hang the loop below before `release()`.
+    await reachedRead;
     for (let i = 1; i <= MAX_LOADED_STORES + 1; i++) await sync.sync({ ...local, id: `s1-${i}` });
     release();
     expect(await slow).toEqual({ state: 'ok' });
