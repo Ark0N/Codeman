@@ -528,7 +528,7 @@ async function opened(page: Mounted, first: LocalModelStatus, verb?: ApiHandler)
 // ---------- The page ----------
 
 describe('the markup the module fills', () => {
-  it('ships one hidden button among the welcome launchers, and no card', () => {
+  it('ships one hidden button above the welcome launchers, and no card', () => {
     const button = REAL_DOCUMENT.getElementById('welcomeLocalModelBtn')!;
     expect(button.hidden).toBe(true);
     expect(button.tagName).toBe('BUTTON');
@@ -538,8 +538,9 @@ describe('the markup the module fills', () => {
     expect(button.parentElement?.classList.contains('welcome-actions')).toBe(true);
     expect(button.closest('#welcomeCliActions')).toBeNull();
     const order = [...button.parentElement!.children].map((el) => el.id);
-    expect(order.indexOf('welcomeLocalModelBtn')).toBeGreaterThan(order.indexOf('welcomeCliActions'));
-    expect(order.indexOf('welcomeLocalModelBtn')).toBeLessThan(order.indexOf('welcomeTunnelBtn'));
+    // First on the start screen: the owner wants it above Run Claude Code.
+    expect(order.indexOf('welcomeLocalModelBtn')).toBe(0);
+    expect(order.indexOf('welcomeLocalModelBtn')).toBeLessThan(order.indexOf('welcomeCliActions'));
     expect(button.getAttribute('onclick')).toBe('app.openLocalModelWindow()');
     expect(button.hasAttribute('data-i18n-skip')).toBe(true);
     // The read-only card of the first version is gone, with its styles.
@@ -833,10 +834,6 @@ describe('the chooser', () => {
     expect(texts(body, '.lm-hw')).toEqual(['Apple M5 Pro, 48 GB memory, 897 GB free']);
     // An estimate, in whole GB: "about 36 of 38", never "36.0 of 37.6".
     expect(texts(body, '.lm-figure')).toEqual(['About 36 of 38 GB of memory']);
-    expect(texts(body, '.lm-legend span')).toEqual([
-      'The model at its peak, with all 131,072 tokens of context in use',
-      'What stays free',
-    ]);
 
     const group = body.querySelector('[role="radiogroup"]')!;
     const label = page.document.getElementById(group.getAttribute('aria-labelledby')!)!;
@@ -1072,18 +1069,74 @@ describe('the memory bar', () => {
       'The selected model needs 96% of the memory this Mac can give a model'
     );
 
-    const expected: Array<[number, string, string, string]> = [
-      [1, '81', 'About 31 of 38 GB of memory', 'The model at its peak, with all 131,072 tokens of context in use'],
-      [4, '45', 'About 17 of 38 GB of memory', 'The model at its peak, with all 65,536 tokens of context in use'],
-      [0, '96', 'About 36 of 38 GB of memory', 'The model at its peak, with all 131,072 tokens of context in use'],
+    const expected: Array<[number, string, string]> = [
+      [1, '81', 'About 31 of 38 GB of memory'],
+      [4, '45', 'About 17 of 38 GB of memory'],
+      [0, '96', 'About 36 of 38 GB of memory'],
     ];
-    for (const [index, percent, figure, legend] of expected) {
+    for (const [index, percent, figure] of expected) {
       page.body.querySelectorAll<HTMLElement>('[role="radio"]')[index].click();
       expect(meter(page).getAttribute('aria-valuenow')).toBe(percent);
       expect(fill(page).style.width).toBe(`${percent}%`);
       expect(texts(page.body, '.lm-figure')).toEqual([figure]);
-      expect(texts(page.body, '.lm-legend span')[0]).toBe(legend);
     }
+  });
+
+  it('splits the bar into what the model takes, and names each part with its size', async () => {
+    const page = mount();
+    const memory = { modelBytes: 26_105_798_956, contextBytes: 4_849_664_000, peakBytes: 5_000_000_000 };
+    await opened(
+      page,
+      status({
+        pick: candidate({ memory, fit: 'tight', budgetShare: 0.957, context: 131072 }),
+        alternatives: [],
+        budgetBytes: 37_580_963_840,
+      })
+    );
+    const fills = [...page.body.querySelectorAll<HTMLElement>('.lm-bar .lm-bar-fill')];
+    expect(fills.map((el) => el.dataset.kind)).toEqual(['memory-model', 'memory-context', 'memory-peak']);
+    expect(fills.map((el) => el.style.width)).toEqual(['69.5%', '12.9%', '13.3%']);
+    // The meter still says the whole share, for a screen reader.
+    expect(page.body.querySelector('.lm-bar')!.getAttribute('aria-valuenow')).toBe('96');
+    expect(texts(page.body, '.lm-legend-name')).toEqual([
+      'The model',
+      'Context, 131,072 tokens',
+      'Brief peaks',
+      'Stays free',
+    ]);
+    expect(texts(page.body, '.lm-legend-size')).toEqual(['26 GB', '5 GB', '5 GB', '2 GB']);
+    expect(texts(page.body, '.lm-fit')).toEqual(['Tight fit']);
+    expect(page.body.querySelector('.lm-fit')!.classList.contains('lm-fit-tight')).toBe(true);
+  });
+
+  it('gives every row a size tile and a speed gauge scaled to the fastest row', async () => {
+    const page = mount();
+    await opened(
+      page,
+      status({
+        pick: candidate({ paramsB: 35, tokensPerSecond: 80, speed: 'ok' }),
+        alternatives: [
+          candidate({ modelId: 'b:1', modelLabel: 'B', paramsB: 27.8, tokensPerSecond: 8, speed: 'slow' }),
+          candidate({ modelId: 'c:1', modelLabel: 'C', paramsB: 9, tokensPerSecond: undefined, speed: 'unknown' }),
+        ],
+      })
+    );
+    expect(texts(page.body, '.lm-tile')).toEqual(['35B', '27B', '9B']);
+    const tiles = [...page.body.querySelectorAll('.lm-tile')];
+    expect(tiles.map((el) => el.className)).toEqual([
+      'lm-tile lm-tile-large',
+      'lm-tile lm-tile-mid',
+      'lm-tile lm-tile-small',
+    ]);
+    const gauges = [...page.body.querySelectorAll('.lm-gauge')];
+    expect(gauges.map((el) => el.className)).toEqual([
+      'lm-gauge lm-gauge-ok',
+      'lm-gauge lm-gauge-slow',
+      'lm-gauge lm-gauge-unknown',
+    ]);
+    expect(gauges[0].querySelector<HTMLElement>('.lm-gauge-fill')!.style.width).toBe('100%');
+    expect(gauges[1].querySelector<HTMLElement>('.lm-gauge-fill')!.style.width).toBe('10%');
+    expect(gauges[2].querySelector('.lm-gauge-fill')).toBeNull();
   });
 
   it('never runs past its track', async () => {
@@ -1093,11 +1146,11 @@ describe('the memory bar', () => {
     expect(fill(page).style.width).toBe('100%');
   });
 
-  it('is one flat fill on a track, and stands still when motion is not wanted', () => {
+  it('moves on a width transition, without a glow, and stands still when motion is not wanted', () => {
     const bar = STYLES.match(/\.lm-bar-fill \{[^}]*\}/)![0];
-    expect(bar).toContain('background: var(--accent);');
-    expect(bar).not.toMatch(/gradient|box-shadow|animation/);
-    expect(STYLES).toMatch(/\.lm-bar \{[^}]*height: 10px;[^}]*border-radius: 999px;/);
+    expect(bar).toContain('transition: width');
+    expect(bar).not.toMatch(/box-shadow|animation/);
+    expect(STYLES).toMatch(/\.lm-bar \{[^}]*height: 12px;[^}]*border-radius: 999px;/);
     expect(STYLES).toMatch(/@media \(prefers-reduced-motion: reduce\) \{\s*\.lm-bar-fill,[^}]*transition: none;/);
   });
 });

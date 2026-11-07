@@ -481,6 +481,12 @@ export interface Candidate {
   needBytes: number;
   /** `needBytes` as decimal GB text, no unit. */
   needGb: string;
+  /**
+   * What `needBytes` is made of, for the chooser's memory map: the model (`bytes +
+   * overheadBytes`), its context in use (`heldBytesPerToken * context`) and the brief peaks
+   * (`peakExtraBytes`). The three add up to `needBytes`.
+   */
+  memory?: { modelBytes: number; contextBytes: number; peakBytes: number };
   /** The model download in bytes (`LocalModelEntry.bytes`). */
   downloadBytes: number;
   /** `downloadBytes` as decimal GB text, no unit. */

@@ -22312,31 +22312,55 @@ html[data-tile-anim="soft"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.til
    body scrolling between them. A click never moves the next button away.
    ═══════════════════════════════════════════════════════════════ */
 
-/* The welcome button: a second large button under the launchers, in the size
-   of the primary one, so a model on this Mac is offered as a main way in and
-   not as a footnote (the owner asked for it big and in the middle). It keeps
-   the chip's markup and the chip family's rules for everything it does not
-   restate here. */
+/* The feature's own colours. Violet is what the local model is known by, on
+   the start screen and in its window; the others carry meaning (green good,
+   amber tight, orange slow, teal the context). All of them are set here, once,
+   and the light skins get deeper values so they hold on a pale page. */
+:root {
+  --lm-violet: #a78bfa;
+  --lm-teal: #2dd4bf;
+  --lm-amber: #f5c451;
+  --lm-orange: #fb923c;
+  --lm-good: #4ade80;
+  --lm-cta-a: #8567f4;
+  --lm-cta-b: #6346e0;
+  --lm-cta-hover-a: #9479f7;
+  --lm-cta-hover-b: #7054ea;
+}
+
+html[data-skin='paper-gray'],
+html[data-skin='solarized-light'],
+html[data-skin='catppuccin-latte'],
+html[data-skin='rose-pine-dawn'] {
+  --lm-violet: #6d3fd8;
+  --lm-teal: #0b8378;
+  --lm-amber: #a86a00;
+  --lm-orange: #c2500f;
+  --lm-good: #16803c;
+}
+
+/* The welcome button: the first thing on the start screen, above the launchers,
+   in the size of the primary button and in the feature's violet. */
 .welcome-local-model {
-  margin-top: 1.1rem;
+  margin-bottom: 1.1rem;
   height: 46px;
   gap: 0.65rem;
   padding: 0 1.4rem 0 0.45rem;
-  border: 1px solid var(--accent);
+  border: 1px solid var(--lm-cta-a);
   border-radius: 23px;
-  background: var(--control-bg);
-  color: var(--accent);
+  background: linear-gradient(135deg, var(--lm-cta-a), var(--lm-cta-b));
+  color: #fff;
   font-size: 0.95rem;
   font-weight: 700;
   letter-spacing: 0.005em;
-  box-shadow: 0 8px 24px -14px rgba(var(--accent-rgb), 0.5);
+  box-shadow: 0 8px 24px -12px rgba(99, 70, 224, 0.75), inset 0 1px 0 rgba(255, 255, 255, 0.18);
 }
 
 .welcome-local-model:hover,
 .welcome-local-model:focus-visible {
-  background: rgba(var(--accent-rgb), 0.12);
-  color: var(--accent);
-  border-color: var(--accent);
+  border-color: var(--lm-cta-hover-a);
+  background: linear-gradient(135deg, var(--lm-cta-hover-a), var(--lm-cta-hover-b));
+  color: #fff;
 }
 
 /* `.welcome-chip` is inline-flex, so `[hidden]` needs re-asserting or the
@@ -22353,7 +22377,7 @@ html[data-tile-anim="soft"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.til
   padding: 8px;
   box-sizing: border-box;
   border-radius: 50%;
-  background: rgba(var(--accent-rgb), 0.16);
+  background: rgba(255, 255, 255, 0.18);
 }
 
 /* The window: App Settings' chrome (`.modal`, `.modal-header`, the boxed
@@ -22365,7 +22389,7 @@ html[data-tile-anim="soft"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.til
   flex-direction: column;
   width: min(640px, 94vw);
   max-width: min(640px, 94vw);
-  height: min(600px, 88vh);
+  height: min(640px, 88vh);
   max-height: 88vh;
 }
 
@@ -22503,7 +22527,17 @@ html[data-tile-anim="soft"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.til
 .lm-meter {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 0.6rem;
+  padding: 0.8rem 0.9rem 0.75rem;
+  border: 1px solid color-mix(in srgb, var(--lm-violet) 22%, var(--border));
+  border-radius: 12px;
+  background:
+    linear-gradient(
+      120deg,
+      color-mix(in srgb, var(--lm-violet) 11%, transparent),
+      color-mix(in srgb, var(--lm-teal) 6%, transparent) 75%
+    ),
+    var(--bg-input);
 }
 
 .lm-meter-head {
@@ -22514,7 +22548,7 @@ html[data-tile-anim="soft"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.til
 }
 
 .lm-figure {
-  font-size: 1.06rem;
+  font-size: 1.12rem;
   font-weight: 680;
   letter-spacing: -0.012em;
   color: var(--text);
@@ -22532,40 +22566,103 @@ html[data-tile-anim="soft"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.til
   font-variant-numeric: tabular-nums;
 }
 
-.lm-bar {
-  height: 10px;
+/* How the selected model fits, in the colour of its verdict. */
+.lm-fit {
+  align-self: center;
+  margin-inline-start: auto;
+  padding: 0.12rem 0.55rem;
   border-radius: 999px;
-  background: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.lm-fit-good {
+  background: color-mix(in srgb, var(--lm-good) 16%, transparent);
+  color: var(--lm-good);
+}
+
+.lm-fit-tight {
+  background: color-mix(in srgb, var(--lm-amber) 16%, transparent);
+  color: var(--lm-amber);
+}
+
+/* The bar: the track is what this Mac can give a model. The memory map fills it
+   with three parts side by side; a download fills it with one. */
+.lm-bar {
+  display: flex;
+  gap: 2px;
+  height: 12px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-muted) 34%, transparent);
   overflow: hidden;
 }
 
 .lm-bar-fill {
+  flex: none;
   height: 100%;
-  border-radius: 999px;
-  background: var(--accent);
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--lm-violet), var(--lm-teal));
   transition: width 0.32s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.lm-part-model {
+  background: var(--lm-violet);
+}
+
+.lm-part-context {
+  background: var(--lm-teal);
+}
+
+/* The brief peaks are not held all the time, so they are striped. */
+.lm-part-peak {
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--lm-amber) 0 3px,
+    color-mix(in srgb, var(--lm-amber) 45%, transparent) 3px 6px
+  );
+}
+
+.lm-part-free {
+  background: color-mix(in srgb, var(--text-muted) 34%, transparent);
 }
 
 .lm-legend {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
-  gap: 1rem;
-  font-size: 0.7rem;
+  gap: 0.25rem 0.9rem;
+  font-size: 0.72rem;
   line-height: 1.4;
   color: var(--text-dim);
 }
 
-.lm-legend > :last-child {
-  text-align: end;
+.lm-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  white-space: nowrap;
+}
+
+.lm-swatch {
+  flex-shrink: 0;
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+}
+
+.lm-legend-size {
+  font-weight: 620;
+  color: var(--text);
 }
 
 /* ── the models: one grid, so the numbers line up down the list ──── */
-/* Radio, name, tag, speed, download. The tag sits next to the name and takes
-   the room that is left, which pushes the two numbers to the right edge. */
+/* Radio, size tile, name, tag, speed, download. The tag sits next to the name
+   and takes the room that is left, which pushes the two numbers to the right. */
 .lm-list {
   display: grid;
-  grid-template-columns: auto minmax(0, max-content) minmax(0, 1fr) auto auto;
-  column-gap: 0.9rem;
+  grid-template-columns: auto auto minmax(0, max-content) minmax(0, 1fr) auto auto;
+  column-gap: 0.75rem;
   row-gap: 0.1rem;
   /* A row's fill reaches into the window's padding, so what is IN a row lines
      up with every other line of the window on both edges. */
@@ -22598,7 +22695,7 @@ html[data-tile-anim="soft"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.til
 }
 
 .lm-caption-label {
-  grid-column: 1 / span 3;
+  grid-column: 1 / span 4;
 }
 
 /* The server's word for a pick it has run on a Mac like this one stands where
@@ -22615,8 +22712,8 @@ html[data-tile-anim="soft"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.til
 }
 
 .lm-model {
-  min-height: 2.35rem;
-  border-radius: 7px;
+  min-height: 2.6rem;
+  border-radius: 9px;
   cursor: pointer;
   transition: background var(--transition-smooth);
 }
@@ -22626,15 +22723,19 @@ html[data-tile-anim="soft"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.til
 }
 
 .lm-model:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--lm-violet);
   outline-offset: -2px;
 }
 
-/* Selected: the accent on the reading edge and a faint fill. Nothing else. */
+/* Selected: violet on the reading edge and a fill that fades out to the right. */
 .lm-model-on,
 .lm-model-on:hover {
-  border-inline-start-color: var(--accent);
-  background: rgba(var(--accent-rgb), 0.075);
+  border-inline-start-color: var(--lm-violet);
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--lm-violet) 17%, transparent),
+    color-mix(in srgb, var(--lm-violet) 4%, transparent)
+  );
 }
 
 .lm-radio {
@@ -22646,8 +22747,38 @@ html[data-tile-anim="soft"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.til
 }
 
 .lm-model-on .lm-radio {
-  border-color: var(--accent);
-  background: radial-gradient(circle, var(--accent) 0 3px, transparent 3.5px);
+  border-color: var(--lm-violet);
+  background: radial-gradient(circle, var(--lm-violet) 0 3px, transparent 3.5px);
+}
+
+/* The size tile: a model's billions of parameters, coloured by how large it is. */
+.lm-tile {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 34px;
+  height: 25px;
+  border-radius: 7px;
+  font-size: 0.68rem;
+  font-weight: 720;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+
+.lm-tile-large {
+  background: color-mix(in srgb, var(--lm-violet) 20%, transparent);
+  color: var(--lm-violet);
+}
+
+.lm-tile-mid {
+  background: color-mix(in srgb, var(--lm-teal) 18%, transparent);
+  color: var(--lm-teal);
+}
+
+.lm-tile-small {
+  background: color-mix(in srgb, var(--text-muted) 22%, transparent);
+  color: var(--text-dim);
 }
 
 .lm-model-name {
@@ -22663,21 +22794,37 @@ html[data-tile-anim="soft"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.til
   justify-content: flex-start;
 }
 
-/* A tag is text with a hairline, not a coloured pill. The accent is for the
-   pick (and for a row that was run on a Mac like this one). */
+/* A tag says one thing about a row, in the colour of what it says. */
 .lm-tag {
-  padding: 0.05rem 0.42rem;
-  border: 1px solid var(--border-light);
+  padding: 0.08rem 0.45rem;
   border-radius: 5px;
+  background: color-mix(in srgb, var(--text-muted) 16%, transparent);
   font-size: 0.66rem;
+  font-weight: 600;
   line-height: 1.5;
   color: var(--text-dim);
   white-space: nowrap;
 }
 
-.lm-tag-accent {
-  border-color: rgba(var(--accent-rgb), 0.5);
-  color: var(--accent);
+.lm-tag-tested,
+.lm-tag-best {
+  background: color-mix(in srgb, var(--lm-good) 15%, transparent);
+  color: var(--lm-good);
+}
+
+.lm-tag-tested::before {
+  content: '\2713\00a0';
+}
+
+.lm-tag-best-tight,
+.lm-tag-tight {
+  background: color-mix(in srgb, var(--lm-amber) 15%, transparent);
+  color: var(--lm-amber);
+}
+
+.lm-tag-slow {
+  background: color-mix(in srgb, var(--lm-orange) 15%, transparent);
+  color: var(--lm-orange);
 }
 
 .lm-model-speed,
@@ -22688,8 +22835,39 @@ html[data-tile-anim="soft"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.til
 }
 
 .lm-model-speed {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
   font-size: 0.76rem;
   color: var(--text-dim);
+}
+
+/* The speed at a glance: full is the fastest model in the list. */
+.lm-gauge {
+  display: block;
+  width: 64px;
+  height: 3px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-muted) 26%, transparent);
+  overflow: hidden;
+}
+
+.lm-gauge-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--lm-good);
+}
+
+.lm-gauge-slow .lm-gauge-fill {
+  background: var(--lm-orange);
+}
+
+.lm-gauge-unknown {
+  background: none;
+  border-top: 1px dashed color-mix(in srgb, var(--text-muted) 55%, transparent);
+  height: 0;
 }
 
 .lm-model-size {
@@ -22707,8 +22885,8 @@ html[data-tile-anim="soft"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.til
 
   .lm-caption,
   .lm-model {
-    grid-template-columns: 14px 10.5rem minmax(0, 1fr) 8.6rem 4.4rem;
-    column-gap: 0.9rem;
+    grid-template-columns: 14px 34px 9.5rem minmax(0, 1fr) 7rem 4rem;
+    column-gap: 0.75rem;
   }
 
   .lm-model {
@@ -22743,7 +22921,7 @@ html[data-tile-anim="soft"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.til
 }
 
 .lm-select:focus-visible {
-  border-color: var(--accent);
+  border-color: var(--lm-violet);
 }
 
 .lm-runs-hint {
@@ -22880,8 +23058,8 @@ html[data-tile-anim="soft"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.til
 }
 
 .lm-step-done .lm-step-mark {
-  border-color: var(--accent);
-  background: var(--accent);
+  border-color: var(--lm-good);
+  background: var(--lm-good);
 }
 
 /* The check of a finished step, drawn from two borders in the page colour. */
@@ -22892,7 +23070,7 @@ html[data-tile-anim="soft"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.til
   top: 1px;
   width: 3px;
   height: 6px;
-  border: solid var(--accent-ink);
+  border: solid var(--bg-card);
   border-width: 0 1.5px 1.5px 0;
   transform: rotate(45deg);
 }
@@ -22904,8 +23082,8 @@ html[data-tile-anim="soft"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.til
 }
 
 .lm-step-now .lm-step-mark {
-  border-color: var(--accent);
-  background: radial-gradient(circle, var(--accent) 0 3px, transparent 3.5px);
+  border-color: var(--lm-violet);
+  background: radial-gradient(circle, var(--lm-violet) 0 3px, transparent 3.5px);
 }
 
 .lm-step-stopped .lm-step-mark {
@@ -22932,7 +23110,7 @@ html[data-tile-anim="soft"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.til
 }
 
 .lm-dot-on {
-  background: var(--green);
+  background: var(--lm-good);
 }
 
 .lm-state-text {
@@ -23020,7 +23198,7 @@ html[data-tile-anim="soft"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.til
 
 .lm-check input {
   margin: 0;
-  accent-color: var(--accent);
+  accent-color: var(--lm-violet);
 }
 
 /* ── the foot: one promise on the left, the action on the right ──── */
@@ -23066,21 +23244,21 @@ html[data-tile-anim="soft"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.til
   font-weight: 700;
 }
 
-/* OG has no designed --accent-ink: the main action takes the deeper blue and
-   light text of that skin's own Run button, as `.welcome-primary` does. Keep
-   the two in step. */
-html[data-skin='og'] .local-model-window .wt-btn-primary.lm-btn {
-  border-color: rgba(96, 165, 250, 0.5);
-  background: linear-gradient(135deg, #1e4fb8 0%, #2563eb 100%);
+/* The main action is the feature's violet on every skin, like its start screen
+   button: white text on the same gradient, so no skin needs a rule of its own. */
+.local-model-window .wt-btn-primary.lm-btn {
+  border-color: var(--lm-cta-a);
+  background: linear-gradient(135deg, var(--lm-cta-a), var(--lm-cta-b));
   color: #fff;
 }
 
-html[data-skin='og'] .local-model-window .wt-btn-primary.lm-btn:hover:not(:disabled) {
-  background: linear-gradient(135deg, #2454a8 0%, #2d6cf0 100%);
+.local-model-window .wt-btn-primary.lm-btn:hover:not(:disabled) {
+  border-color: var(--lm-cta-hover-a);
+  background: linear-gradient(135deg, var(--lm-cta-hover-a), var(--lm-cta-hover-b));
 }
 
 .local-model-window .wt-btn.lm-btn:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--lm-violet);
   outline-offset: 2px;
 }
 

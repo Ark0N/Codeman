@@ -1442,9 +1442,12 @@
     estimated: '估算',
     'The selected model needs {share}% of the memory this Mac can give a model':
       '所选模型需要此 Mac 可分配给模型的内存的 {share}%',
-    'The model at its peak, with all {context} tokens of context in use':
-      '模型的峰值占用（{context} 个 Token 的上下文全部用满时）',
-    'What stays free': '剩余可用',
+    'The model': '模型',
+    'Context, {context} tokens': '上下文，{context} 个 Token',
+    'Brief peaks': '短时峰值',
+    'Stays free': '剩余可用',
+    'Good fit': '宽裕',
+    'Tight fit': '偏紧',
     'Models that fit this Mac': '此 Mac 装得下的模型',
     Speed: '速度',
     Download: '下载',
