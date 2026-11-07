@@ -13,8 +13,8 @@ Windows and Linux later.
 - **Stack:** Rust with [tao](https://crates.io/crates/tao) (window and event loop),
   [wry](https://crates.io/crates/wry) (the system web view: WKWebView on macOS) and
   [muda](https://crates.io/crates/muda) (native menus), plus [objc2](https://crates.io/crates/objc2)
-  for the two things wry leaves out on macOS (JavaScript dialogs, HTTP Basic login).
-  No bundled browser and no Node in the app.
+  for what wry leaves out on macOS (JavaScript dialogs, HTTP Basic login) and for
+  the lid logo. No bundled browser and no Node in the app.
 - **Server:** unchanged. The app is a client of Codeman's web UI, like a browser tab.
 
 ## Why it is cheap
@@ -40,6 +40,7 @@ cannot do.
 | **Links** | On Codeman's own pages (the dashboard and session windows), a link to another site opens in your default browser, also on `⌘`-click or a middle click. Pages can send at most 3 links to the browser at once, then 1 per second. Inside a rendered HTML preview or a web tab, a plain link to another site does nothing, while one that asks for a new window (`target="_blank"`, `window.open`) opens in your default browser within the same budget (see Known limits). |
 | **Downloads** | Codeman's Download links, and downloads Codeman opens in a new window, save the file to `~/Downloads` whatever its type, and a toast in Codeman names the file. Files the web view cannot display are saved the same way. |
 | **A page that stops** | When the web content process of a window ends (a WebKit crash, or macOS taking the process back under memory pressure), the window loads its page again instead of staying blank. A second time within 30 seconds, the main window goes back to the connect screen and a pop-out closes, so a page that cannot stay up never becomes a reload loop. |
+| **Apple logo** | On a MacBook Pro with a PROLED XDR display, the lit Apple logo on the lid blinks while agents work and stops when they finish, so you can see from across the room that they are still going. *View > Blink Apple Logo While Agents Work* picks how: *Calm*, *Slow*, *Wink* (a short dark moment every few seconds), *Heartbeat* (two quick beats, then a rest) or *Fast*. It is off by default, and the menu does not exist on a Mac without that logo. No password is needed. Shell tabs do not count. The app asks the server every two seconds, and a change has to hold for two seconds before the logo follows it, so an agent between two turns does not flicker it. It keeps working while the window is hidden, and with any Codeman server. A logo you switched off yourself stays off, and if the setting changes while a blink runs, the blink ends and leaves it as it found it. While the app is closed nothing blinks, and macOS keeps the logo dark while the display sleeps or the lid is closed, so the blink pauses then and writes nothing. |
 | **Window** | Size, position and full-screen state are remembered. A saved window that hangs off the screen it opens on (it was last on a larger display that is gone, say) is pulled back on and shrunk to fit; one whose title bar is on no screen at all opens at the default size instead. Clicking the Dock icon brings back a minimized window. |
 
 ## Build (on a Mac)
@@ -187,8 +188,60 @@ instead of being answered. A refusal that lands while you are in another app
 does not bring Codeman forward: the connect screen loads where the window is,
 and the Dock icon bounces.
 
+**The logo blinks from a child process, through CoreBrightness.** Apple documents
+one control for the logo ([support.apple.com/en-us/149248](https://support.apple.com/en-us/149248)):
+`sudo defaults write com.apple.CoreBrightness LEBacklightMode -int 0`. Doing that
+for every blink would need a root helper and an administrator password. The same
+setting is also a property of `BrightnessSystemClient` in the private
+CoreBrightness framework, and a process of the logged-in user can set it there,
+which is what `src/logo.rs` does. Measured on a Mac17,13 with macOS 27.2 from an
+ad-hoc signed binary: `corebrightnessd` logs the logo dark about a millisecond
+after the write, with no fade, and the NVRAM variable `bklb-backlight-enabled`
+keeps its value while the logo is dark.
+
+The setting is system-wide and survives a reboot, so the app must not end with the
+logo dark, and the release profile has `panic = "abort"`, so no cleanup code of the
+app can be relied on. So all of it runs as this same binary with
+`--logo-blink`, for as long as a style is chosen and a server is open, tied to the app
+by nothing but a pipe: when the pipe closes, however the app ended, it puts the logo
+back and exits. Switching it off closes the same pipe, so the path a crash
+takes is the one used every day. A marker file
+(`logo-blink`, next to `desktop.json`) covers what the child cannot survive itself:
+at the next launch the app puts back a logo a blink left dark. The framework is
+loaded at run time and never linked, and `LEBacklightMode` reading nil (a Mac mini
+answers nil) is what hides the option, so a macOS that drops it loses this feature
+and nothing else.
+
+**The agent count is asked for natively, because the page cannot be trusted with it.**
+The first version read the page's own event stream, which needs no second connection
+and no login. On a real Mac it failed in both directions as soon as the window was
+covered, because WebKit stalls the stream of a hidden page: a turn that started while
+it was stalled was never seen and the logo stayed still, and in another run the logo
+kept blinking 39 seconds after the agent finished, until the page's watchdog reopened
+the stream. A hidden window is the normal case for a signal meant to be read from
+across the room, so `src/agents.rs` asks `api/sessions` itself, from the child process,
+every two seconds. That needs care with the login. A request with a good password and
+no session cookie makes Codeman create a login session, it keeps 100 of them, and the
+oldest goes first, so polling with the password alone would log every browser out
+within minutes. The poller therefore sends the cookie of the first answer with every
+request, which Codeman reads first, so one session is created per server start. A
+refused login ends the polling for good, because Codeman counts each refusal against
+the login rate limit. The app and the child share nothing but the pipe the login
+crosses, so the login is never on a command line.
+
 ## Known limits
 
+- **The logo blink rests on a private macOS interface.** Apple documents the
+  setting, not the way the app reaches it, so a macOS update can take it away;
+  the menu then disappears. Every change of the logo writes `LEBacklightMode`,
+  from about once every two seconds (*Slow*, *Wink*) to about three times a
+  second (*Fast*), which `corebrightnessd` keeps in root's preferences. The
+  setting is on or off, so these styles are rhythms of hard changes. After a blink
+  the key stays there rather than being absent as on a fresh Mac. That reads the same to macOS; `sudo defaults delete
+  com.apple.CoreBrightness LEBacklightMode` removes it. After a power cut in a
+  dark phase the logo stays dark until the app next starts. `api/sessions` does
+  not say which turns are Codeman's own, so with prompt-cache keep-warm on, a
+  keep-alive turn blinks too.
 - **Self-signed HTTPS is refused.** A server started with `codeman web --https`
   uses a self-signed certificate, and WKWebView rejects it (wry has no trust
   override). Use `http://127.0.0.1:3000` for a server on this Mac. For another
