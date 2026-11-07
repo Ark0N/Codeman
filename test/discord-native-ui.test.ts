@@ -405,24 +405,6 @@ describe('native Discord UI', () => {
     expect(q.components).toHaveLength(0);
     expect(q.content).toContain('cannot be answered safely');
   });
-  it('requires one explicit send/queue/cancel choice for a busy message', async () => {
-    const f = await fixture();
-    await f.ui.poll();
-    const source: GatewayMessage = {
-      id: snow(),
-      guild_id: guild,
-      channel_id: channel,
-      author: { id: actor },
-      content: 'Review the diff next',
-    };
-    await f.ui.offerBusy('s1', channel, source, 'source-one');
-    const offered = [...f.messages.values()].at(-1)!;
-    await f.click(offered, 'Queue next', undefined, { message: { id: offered.id } });
-    expect((await f.ui.store.snapshot()).queue).toHaveLength(1);
-    expect(f.host.note).toHaveBeenCalledWith('source-one', 'queued');
-    await f.click(offered, 'Send now', undefined, { message: { id: offered.id } });
-    expect(f.host.submit).not.toHaveBeenCalled();
-  });
   it('edits/removes queued work and dispatches only with exact completion and ready state', async () => {
     const f = await fixture();
     await f.ui.poll();
@@ -1260,45 +1242,6 @@ it('never substitutes a newer response when selected historical output is missin
   await f.click({ content: '', components: controls }, 'Results & files');
   expect(f.finishes.at(-1)?.content).toContain('outside the available history');
   expect(f.host.file).not.toHaveBeenCalled();
-});
-
-it.each(['missing identity', 'ownership failure'])(
-  'reports busy-control preparation failure as unsent: %s',
-  async (kind) => {
-    const f = await fixture();
-    if (kind === 'missing identity') f.sessions[0].conversation = undefined;
-    if (kind === 'ownership failure')
-      f.host.verify = vi.fn(async () => {
-        throw Error('Ownership unavailable');
-      });
-    await f.ui.offerBusy(
-      's1',
-      channel,
-      { id: snow(), guild_id: guild, channel_id: channel, author: { id: actor }, content: 'Follow up' },
-      'source-one'
-    );
-    expect(f.host.note).toHaveBeenCalledWith('source-one', 'cancelled');
-    expect([...f.messages.values()].some((m) => (m.content ?? '').includes('This follow-up was not sent.'))).toBe(true);
-    expect(f.host.submit).not.toHaveBeenCalled();
-    expect(f.host.prepare).not.toHaveBeenCalled();
-  }
-);
-
-it('keeps unconfirmed control-card publication ambiguous rather than claiming unsent input', async () => {
-  const f = await fixture();
-  f.host.request = vi.fn(async () => {
-    throw Error('POST outcome unknown');
-  });
-  await expect(
-    f.ui.offerBusy(
-      's1',
-      channel,
-      { id: snow(), guild_id: guild, channel_id: channel, author: { id: actor }, content: 'Follow up' },
-      'source-one'
-    )
-  ).rejects.toThrow('POST outcome unknown');
-  expect(f.host.note).not.toHaveBeenCalled();
-  expect(f.host.submit).not.toHaveBeenCalled();
 });
 
 const activityBody = (payload: DiscordUiPayload) =>

@@ -2705,3 +2705,83 @@ it('suppresses an acknowledged Claude queued human prompt without inferring exec
   expect(posts.filter((p) => p.method === 'POST' && visibleText(p.body) === text)).toHaveLength(1);
   expect(sendInput).toHaveBeenCalledTimes(1);
 });
+
+async function directBusyBridge(mode: string, pending = false) {
+  sessions = [{ id: 's1', name: 'one', working: true }];
+  const nativeUi: NonNullable<import('../src/discord-bridge.js').DiscordBridgeDeps['nativeUi']> = {
+    enabled: () => true,
+    sessions: async () => [
+      {
+        id: 's1',
+        name: 'one',
+        host: 'test',
+        caseName: 'Test',
+        mode,
+        conversation: 'native1',
+        working: true,
+        ready: false,
+        pending,
+        exited: false,
+      },
+    ],
+    cases: async () => [],
+    defaults: async () => ({ model: '', effort: '', approval: 'ask' }),
+    saveDefaults: async () => {},
+    question: () => undefined,
+    answer: async () => '',
+    workspace: async () => ({ summary: '', diff: '' }),
+    submitQueued: async () => 'blocked',
+  };
+  const b = makeBridge(undefined, {
+    nativeUi,
+    awaitingChoice: () => pending,
+    history: async () => ({ conversationId: 'native1', turns: [], partial: false }),
+  });
+  await b.reload();
+  await b.syncSessions();
+  const thread = (await readFullMap(dir)).s1;
+  const message = {
+    id: '900000000000000001',
+    guild_id: cfg.guildId,
+    channel_id: thread,
+    author: { id: cfg.allowedUserIds[0] },
+    content: "What's the status of the 5 agent runs?\nKeep the current work running.",
+  };
+  return { b, message };
+}
+it.each(['claude', 'codex'])(
+  'sends an ordinary busy %s reply directly once, without a timing chooser',
+  async (mode) => {
+    const { b, message } = await directBusyBridge(mode);
+    await b.onGatewayMessage(message);
+    await b.onGatewayMessage(message);
+    expect(sendInput).toHaveBeenCalledExactlyOnceWith('s1', message.content + '\r');
+    const record = JSON.parse(await readFile(join(dir, 'discord-delivery.json'), 'utf8')).find(
+      (r: any) => r.id === 'in:' + cfg.guildId + ':' + message.id
+    );
+    expect(record.state).toBe('input_accepted');
+    expect(record.native.conversationId).toBe('native1');
+    expect(posts.some((p) => (p.body?.content ?? '').includes('When should this follow-up run?'))).toBe(false);
+  }
+);
+it('still blocks busy replies when a native question or permission dialog is pending', async () => {
+  const { b, message } = await directBusyBridge('claude', true);
+  await b.onGatewayMessage(message);
+  expect(sendInput).not.toHaveBeenCalled();
+  expect(posts.some((p) => (p.body?.content ?? '').includes('A question or permission dialog is pending'))).toBe(true);
+});
+it.each(['false', 'throw'])(
+  'keeps an unconfirmed busy send uncertain and never automatically replays it (%s)',
+  async (outcome) => {
+    const { b, message } = await directBusyBridge('claude');
+    if (outcome === 'throw') sendInput.mockRejectedValueOnce(Error('Unconfirmed transport'));
+    else sendInput.mockResolvedValueOnce(false);
+    await b.onGatewayMessage(message);
+    await b.onGatewayMessage(message);
+    expect(sendInput).toHaveBeenCalledOnce();
+    const record = JSON.parse(await readFile(join(dir, 'discord-delivery.json'), 'utf8')).find(
+      (r: any) => r.id === 'in:' + cfg.guildId + ':' + message.id
+    );
+    expect(record.state).toBe('uncertain');
+  }
+);
