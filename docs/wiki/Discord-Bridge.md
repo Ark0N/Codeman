@@ -93,11 +93,20 @@ Discord for them; only the agent-initiated `codeman notify` habit is missing.
 
 ## Full mode
 
-Notifications is the default. Choose **Full** in Settings to provision one private case channel and one session thread per tab. Use `!codeman help`, `sessions`, `cases`, `groups`, `status`, `history`, `transcript`, `pending` and `stream responses|verbose|off`. Creation uses the same case-aware quick-start as the web UI. Reconnect asks for confirmation and requires the original remote agent to exist; interrupt sends Escape.
+Notifications is the default. Choose **Full** in Settings to provision one private case channel and one session thread per tab. Use `!codeman help`, `sessions`, `cases`, `groups`, `status`, `history`, `transcript`, `pending` and `stream conversation|quiet|tools|off` (legacy `responses`/`verbose` aliases remain supported). Creation uses the same case-aware quick-start as the web UI. Reconnect asks for confirmation and requires the original remote agent to exist; interrupt sends Escape.
 
 Full adds native Claude/Codex live responses, file controls, activity titles and typing. Local history needs no Python; remote history/file helpers need Python 3 on that host. Remote uploads save only explicit incoming attachments in the session workspace's `.codeman-discord/` folder. Shell and Docker tabs can have destinations without native history. An uncertain post or an expired history cursor produces a catch-up notice; later responses continue. `stream off` survives `/clear` and other conversation changes.
 
 Names may lag under Discord's rename limits; typing is independent. Shared case channels survive session deletion. Conversation cursors are deleted with the session, and finished metadata ages out after seven days.
+
+
+Full mode includes native session controls for supported model/effort settings, exact question/approval answers, launch defaults, history, results/files and explicit queued follow-ups. Guild CLI commands launch through confirmed case-aware quick-start. Controls recheck the user, destination, conversation and input revision; unsupported/provider dialogs use the web terminal.
+
+Conversation is the default stream view: adjacent assistant progress updates are grouped, followed by a separate final response. Quiet shows finals only; Tools adds bounded tool result text. Progress, mirrored external prompts, history and auto-linked artifacts are silent. Discord-origin prompts are suppressed from the mirror using exact native provenance. Completion labels need native evidence.
+
+Show updates opens the original task's full progress with pages, Load more, Refresh and Download updates (8 MB export limit), stopping at the next prompt. Read-only response buttons can recover after restart; state-changing controls cannot. Results shows the answer and named artifacts; workspace diffs are explicitly shared snapshots. Explicitly linked generated workspace files can be uploaded automatically (four files, 8 MB total), through the existing secret/symlink/workspace guards.
+
+The Activity card offers Recent, Working, Finished and Needs you views. Native events determine recency; refreshing the card does not. Session titles link to threads, and verified response links jump to the delivered answer. The bridge preserves bounded cursor catch-up, prompt deduplication, rename retry budgets, state cleanup and uncertain-send safeguards.
 
 ## Troubleshooting
 
