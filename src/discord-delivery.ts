@@ -2,6 +2,7 @@
  * Private, bounded Discord delivery metadata. No prompt, file bytes, token or message body is stored.
  * A durable claim precedes input; interrupted input is uncertain and is never replayed automatically.
  */
+import { hashDiscordPrompt } from './discord-native-execution.js';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import { join } from 'node:path';
@@ -283,11 +284,24 @@ export class DiscordDeliveryJournal {
     const claimed = new Set(
       [...this.records.values()].flatMap((r) => (r.native?.userCursor ? [r.native.userCursor] : []))
     );
+    // Visible human queue records carry input provenance even before they have an
+    // execution/ancestry record. Attribution must not manufacture execution state.
+    const executions = new Map((history.executions ?? []).map((e) => [e.userCursor, e]));
+    const candidates = history.turns
+      .filter((t) => t.role === 'user')
+      .map((t) => ({
+        userCursor: t.cursor,
+        promptHash: executions.get(t.cursor)?.promptHash ?? hashDiscordPrompt(t.text),
+        execution: executions.get(t.cursor),
+      }));
+    const visible = new Set(candidates.map((c) => c.userCursor));
+    for (const execution of history.executions ?? [])
+      if (!visible.has(execution.userCursor)) candidates.push({ ...execution, execution });
     const recovery = new Map<string, DiscordDelivery>();
     for (const record of records) {
       const meta = record.native!;
       const baseline = meta.afterCursor ? history.turns.findIndex((t) => t.cursor === meta.afterCursor) : -1;
-      const execution = history.executions?.find((e) => {
+      const candidate = candidates.find((e) => {
         if (meta.userCursor) return e.userCursor === meta.userCursor;
         if (e.promptHash !== meta.promptHash || claimed.has(e.userCursor)) return false;
         const user = history.turns.findIndex((t) => t.cursor === e.userCursor && t.role === 'user');
@@ -310,13 +324,14 @@ export class DiscordDeliveryJournal {
           recovery.set(record.id, record);
         return false;
       });
-      if (!execution) continue;
+      if (!candidate) continue;
       // Native history can appear before the terminal write returns. Do not advance the
       // live checkpoint until its transport outcome is known, or claim an external draft.
       if (record.state === 'submitting') return false;
-      claimed.add(execution.userCursor);
-      await this.annotate(record.id, { native: { ...meta, userCursor: execution.userCursor } });
-      if (record.state !== execution.state) await this.update(record.id, execution.state);
+      claimed.add(candidate.userCursor);
+      await this.annotate(record.id, { native: { ...meta, userCursor: candidate.userCursor } });
+      if (candidate.execution && record.state !== candidate.execution.state)
+        await this.update(record.id, candidate.execution.state);
     }
     if (readAfter) {
       let reads = 0;

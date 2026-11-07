@@ -2632,3 +2632,76 @@ it('links the live Activity row to the final message actually delivered by the b
   expect(link?.url).toBe(`https://discord.com/channels/${cfg.guildId}/${sent.channel_id}/${sent.id}`);
   expect(sendInput).not.toHaveBeenCalled();
 });
+it('suppresses an acknowledged Claude queued human prompt without inferring execution or hiding a later external prompt', async () => {
+  const { parseDiscordHistory } = await import('../src/discord-history.js');
+  const conv = '12345678-1234-1234-1234-123456789abc',
+    text = 'Queued multiline\n\nhuman prompt';
+  const rows: unknown[] = [
+    {
+      type: 'assistant',
+      sessionId: conv,
+      uuid: 'old',
+      message: { content: [{ type: 'text', text: 'Old answer' }], stop_reason: 'end_turn' },
+    },
+  ];
+  const history = async () =>
+    parseDiscordHistory(
+      { mode: 'claude', conversationId: conv },
+      JSON.stringify({
+        offset: 0,
+        data: Buffer.from(rows.map((r) => JSON.stringify(r) + '\n').join('')).toString('base64'),
+        partial: false,
+      })
+    );
+  let now = 100000;
+  sessions = [{ id: 's1', name: 'one' }];
+  const b = makeBridge(undefined, { history, now: () => now });
+  await b.reload();
+  await b.syncSessions();
+  posts = [];
+  const channel = (await readFullMap(dir)).s1;
+  await b.onGatewayMessage({
+    id: '900000000000000090',
+    guild_id: cfg.guildId,
+    channel_id: channel,
+    author: { id: cfg.allowedUserIds[0] },
+    content: text,
+  });
+  rows.push({
+    type: 'attachment',
+    sessionId: conv,
+    uuid: 'queued',
+    parentUuid: 'old',
+    attachment: {
+      type: 'queued_command',
+      origin: { kind: 'human' },
+      commandMode: 'prompt',
+      prompt: text,
+      humanTurn: true,
+    },
+  });
+  rows.push({
+    type: 'assistant',
+    sessionId: conv,
+    parentUuid: 'queued',
+    uuid: 'unrelated-final',
+    message: { content: [{ type: 'text', text: 'Other ongoing work finished' }], stop_reason: 'end_turn' },
+  });
+  expect((await history()).executions).toEqual([]);
+  now += 60001;
+  await b.pollConversations();
+  expect(posts.filter((p) => p.method === 'POST' && visibleText(p.body) === text)).toHaveLength(0);
+  const ledger = JSON.parse(await readFile(join(dir, 'discord-delivery.json'), 'utf8'));
+  const receipt = ledger.find((r: any) => r.messageId === '900000000000000090' && r.direction === 'inbound');
+  expect(receipt.native.userCursor).toBe((await history()).turns.find((t) => t.role === 'user')!.cursor);
+  expect(receipt.state).toBe('input_accepted');
+  b.stop();
+  rows.push({ type: 'user', sessionId: conv, uuid: 'external', message: { content: text } });
+  const restarted = makeBridge(undefined, { history, now: () => now });
+  await restarted.reload();
+  await restarted.syncSessions();
+  now += 60001;
+  await restarted.pollConversations();
+  expect(posts.filter((p) => p.method === 'POST' && visibleText(p.body) === text)).toHaveLength(1);
+  expect(sendInput).toHaveBeenCalledTimes(1);
+});

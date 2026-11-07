@@ -799,3 +799,42 @@ it('resolves only the exact confirmed outbound response within its session and d
   now += 8 * 86400000;
   expect(await j.deliveredMessage('answer', scope)).toBeUndefined();
 });
+describe('visible queued-prompt provenance without execution evidence', () => {
+  const conv = '12345678-1234-1234-1234-123456789abc';
+  const anchor = conv + ':10:aaaaaaaaaaaaaaaa',
+    queued = conv + ':20:bbbbbbbbbbbbbbbb';
+  it.each(['input_accepted', 'submitting'] as const)(
+    'attributes %s input only after acknowledgement, across pages and restart',
+    async (state) => {
+      const { hashDiscordPrompt } = await import('../src/discord-native-execution.js');
+      const journal = new DiscordDeliveryJournal(dir, () => now);
+      await journal.claim(meta);
+      await journal.annotate(meta.id, {
+        native: { conversationId: conv, afterCursor: anchor, promptHash: hashDiscordPrompt('Queued human prompt') },
+      });
+      await journal.update(meta.id, state);
+      const h = {
+        conversationId: conv,
+        partial: true,
+        verifiedAfter: conv + ':15:cccccccccccccccc',
+        turns: [{ cursor: queued, role: 'user' as const, text: 'Queued human prompt', timestamp: '' }],
+        executions: [],
+      };
+      const read = vi.fn(async () => ({ ...h, verifiedAfter: anchor }));
+      if (state === 'submitting') {
+        expect(await journal.reconcileNative('s1', h, read)).toBe(false);
+        expect(await journal.submittedUserCursors('s1', THREAD, conv)).toEqual(new Set());
+        await journal.update(meta.id, 'input_accepted');
+      }
+      expect(await journal.reconcileNative('s1', h, read)).toBe(true);
+      expect(read).toHaveBeenCalledWith(anchor);
+      expect(await journal.submittedUserCursors('s1', THREAD, conv)).toEqual(new Set([queued]));
+      expect((await journal.recent()).find((r) => r.id === meta.id)?.state).toBe('input_accepted');
+      const restarted = new DiscordDeliveryJournal(dir, () => now);
+      const later = { ...h, verifiedAfter: queued, turns: [{ ...h.turns[0], cursor: conv + ':30:dddddddddddddddd' }] };
+      await restarted.reconcileNative('s1', later);
+      expect(await restarted.submittedUserCursors('s1', THREAD, conv)).toEqual(new Set([queued]));
+      expect((await restarted.recent()).find((r) => r.id === meta.id)?.state).toBe('input_accepted');
+    }
+  );
+});
