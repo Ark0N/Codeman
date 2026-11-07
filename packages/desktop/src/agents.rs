@@ -1,11 +1,16 @@
-//! How many agents are at work on a server, asked from outside the web view.
+//! What the agents on a server are doing, asked from outside the web view: at
+//! work, finished with nobody having looked yet (a yellow tab), or stopped on a
+//! permission or a question (a red tab).
 //!
 //! The page knows this too, but it cannot be relied on for it: WebKit stalls the
 //! event stream of a hidden page. Measured on macOS 27.2 with the page hidden: a
 //! `session:idle` the server sent never reached it, its own watchdog reopened the
 //! stream 39 seconds later, and in another run a whole turn went unseen. A hidden
 //! window is the normal case for this question, so it is asked natively, of
-//! `api/sessions`, a stable route that works with any Codeman.
+//! `api/sessions`, a stable route that works with any Codeman, and of
+//! `api/approvals`, the list the page itself builds its red and yellow tabs from
+//! when it loads. A server from before that list has no such route, which reads
+//! as no alerts.
 //!
 //! A login has a price here that a single request does not show. A request with
 //! a good password and no session cookie makes Codeman create a login session,
@@ -27,12 +32,23 @@ use url::Url;
 pub const POLL_EVERY: Duration = Duration::from_secs(2);
 const TIMEOUT: Duration = Duration::from_secs(5);
 const SESSIONS_PATH: &str = "api/sessions";
+const APPROVALS_PATH: &str = "api/approvals";
 const COOKIE_NAME: &str = "codeman_session";
+
+/// What the agents on a server are doing. Any number of these can be true.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Activity {
+    /// At least one agent is at work.
+    pub working: bool,
+    /// An agent finished and nobody has looked at it yet: a yellow tab.
+    pub waiting: bool,
+    /// An agent stopped on a permission or a question: a red tab.
+    pub needs_you: bool,
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Poll {
-    /// This many agents are working.
-    Working(u32),
+    Seen(Activity),
     /// No answer this time. Worth asking again.
     Failed,
     /// The server turned the login down. Never ask again.
@@ -63,6 +79,35 @@ fn count_working(body: &str) -> Option<u32> {
     u32::try_from(working.count()).ok()
 }
 
+#[derive(Deserialize)]
+struct Approval {
+    #[serde(default)]
+    kind: String,
+    #[serde(default, rename = "acknowledgedAt")]
+    acknowledged_at: Option<f64>,
+}
+
+#[derive(Deserialize)]
+struct Approvals {
+    approvals: Vec<Approval>,
+}
+
+#[derive(Deserialize)]
+struct ApprovalsAnswer {
+    data: Approvals,
+}
+
+/// The two alerts, by the page's own rules: `permission_prompt` and a question
+/// make a tab red, an idle prompt makes it yellow until someone has looked at it,
+/// and an acknowledged item stays listed but alerts nobody.
+fn read_alerts(body: &str) -> Option<(bool, bool)> {
+    let answer: ApprovalsAnswer = serde_json::from_str(body).ok()?;
+    let items = &answer.data.approvals;
+    let waiting = items.iter().any(|i| i.kind == "idle" && i.acknowledged_at.is_none());
+    let needs_you = items.iter().any(|i| i.kind == "permission" || i.kind == "question");
+    Some((waiting, needs_you))
+}
+
 /// `name=value` out of a `Set-Cookie` header, for Codeman's session cookie.
 fn session_cookie(header: &str) -> Option<&str> {
     let pair = header.split(';').next()?.trim();
@@ -76,7 +121,12 @@ fn answer(status: u16, body: impl FnOnce() -> Option<String>) -> Poll {
         200 => body()
             .as_deref()
             .and_then(count_working)
-            .map_or(Poll::Failed, Poll::Working),
+            .map_or(Poll::Failed, |working| {
+                Poll::Seen(Activity {
+                    working: working > 0,
+                    ..Activity::default()
+                })
+            }),
         401 | 403 | 429 => Poll::Refused,
         _ => Poll::Failed,
     }
@@ -84,32 +134,41 @@ fn answer(status: u16, body: impl FnOnce() -> Option<String>) -> Poll {
 
 pub struct Poller {
     agent: ureq::Agent,
-    url: String,
+    sessions_url: String,
+    /// None when no alert has a style: that request is then never made.
+    approvals_url: Option<String>,
     authorization: Option<String>,
     cookie: Option<String>,
+    /// The last alerts seen, kept through a request that failed.
+    alerts: (bool, bool),
 }
 
 impl Poller {
-    pub fn new(server: &Url, authorization: Option<String>) -> Option<Self> {
+    pub fn new(server: &Url, authorization: Option<String>, alerts: bool) -> Option<Self> {
+        let approvals_url = match alerts {
+            true => Some(server.join(APPROVALS_PATH).ok()?.to_string()),
+            false => None,
+        };
         Some(Poller {
             agent: crate::probe::agent(TIMEOUT),
-            url: server.join(SESSIONS_PATH).ok()?.to_string(),
+            sessions_url: server.join(SESSIONS_PATH).ok()?.to_string(),
+            approvals_url,
             authorization,
             cookie: None,
+            alerts: (false, false),
         })
     }
 
-    pub fn poll(&mut self) -> Poll {
-        let mut request = self.agent.get(&self.url).header("Accept", "application/json");
+    /// One GET with the login, and the status with the body of a 200.
+    fn ask(&mut self, url: &str) -> Option<(u16, Option<String>)> {
+        let mut request = self.agent.get(url).header("Accept", "application/json");
         if let Some(authorization) = &self.authorization {
             request = request.header("Authorization", authorization);
         }
         if let Some(cookie) = &self.cookie {
             request = request.header("Cookie", cookie);
         }
-        let Ok(mut response) = request.call() else {
-            return Poll::Failed;
-        };
+        let mut response = request.call().ok()?;
         let fresh = response
             .headers()
             .get_all("set-cookie")
@@ -121,10 +180,37 @@ impl Poller {
             self.cookie = fresh;
         }
         let status = response.status().as_u16();
-        answer(status, || {
+        let body = (status == 200).then(|| {
             let body = response.body_mut().with_config();
             body.limit(crate::probe::MAX_BODY).read_to_string().ok()
-        })
+        });
+        Some((status, body.flatten()))
+    }
+
+    pub fn poll(&mut self) -> Poll {
+        let url = self.sessions_url.clone();
+        let Some((status, body)) = self.ask(&url) else {
+            return Poll::Failed;
+        };
+        let mut activity = match answer(status, || body) {
+            Poll::Seen(activity) => activity,
+            other => return other,
+        };
+        if let Some(url) = self.approvals_url.clone() {
+            match self.ask(&url) {
+                Some((200, body)) => {
+                    if let Some(alerts) = body.as_deref().and_then(read_alerts) {
+                        self.alerts = alerts;
+                    }
+                }
+                Some((401 | 403 | 429, _)) => return Poll::Refused,
+                // A server from before the list has no alerts to report.
+                Some((404, _)) => self.alerts = (false, false),
+                _ => {}
+            }
+        }
+        (activity.waiting, activity.needs_you) = self.alerts;
+        Poll::Seen(activity)
     }
 }
 
@@ -230,6 +316,97 @@ mod tests {
 
     const EMPTY: &str = r#"{"success":true,"data":[]}"#;
 
+    fn plain(working: bool) -> Poll {
+        Poll::Seen(Activity {
+            working,
+            ..Activity::default()
+        })
+    }
+
+    /// The shape of a real `GET /api/approvals`, with the frame text cut.
+    fn approvals(items: &[&str]) -> String {
+        format!(r#"{{"success":true,"data":{{"approvals":[{}]}}}}"#, items.join(","))
+    }
+    const IDLE: &str = r#"{"id":"s:1","sessionId":"s","sessionName":"w4","kind":"idle","createdAt":1,"context":"x"}"#;
+    const LOOKED_AT: &str = r#"{"id":"s:2","sessionId":"s","kind":"idle","createdAt":1,"acknowledgedAt":2}"#;
+    const PERMISSION: &str = r#"{"id":"s:3","sessionId":"s","kind":"permission","createdAt":1,"toolName":"Bash"}"#;
+    const QUESTION: &str = r#"{"id":"s:4","sessionId":"s","kind":"question","createdAt":1}"#;
+
+    #[test]
+    fn the_alerts_follow_the_pages_rules() {
+        assert_eq!(read_alerts(&approvals(&[])), Some((false, false)));
+        assert_eq!(read_alerts(&approvals(&[IDLE])), Some((true, false)));
+        assert_eq!(read_alerts(&approvals(&[LOOKED_AT])), Some((false, false)), "seen");
+        assert_eq!(read_alerts(&approvals(&[PERMISSION])), Some((false, true)));
+        assert_eq!(read_alerts(&approvals(&[QUESTION])), Some((false, true)));
+        assert_eq!(read_alerts(&approvals(&[IDLE, PERMISSION])), Some((true, true)));
+        assert_eq!(read_alerts("not json"), None);
+        assert_eq!(read_alerts(EMPTY), None);
+    }
+
+    #[test]
+    fn reads_all_three_states_from_one_poll() {
+        let busy = r#"{"success":true,"data":[{"status":"busy","mode":"claude"}]}"#;
+        let (port, seen_requests) = serve(vec![ok("", busy), ok("", &approvals(&[IDLE, PERMISSION]))]);
+        let server = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        let mut poller = Poller::new(&server, None, true).unwrap();
+        let everything = Activity {
+            working: true,
+            waiting: true,
+            needs_you: true,
+        };
+        assert_eq!(poller.poll(), Poll::Seen(everything));
+        assert!(seen_requests.lock().unwrap()[1][0].starts_with("get /api/approvals "));
+    }
+
+    fn status(code: u16) -> String {
+        format!("HTTP/1.1 {code} X\r\nConnection: close\r\nContent-Length: 0\r\n\r\n")
+    }
+
+    #[test]
+    fn a_server_without_the_list_still_shows_work() {
+        let busy = r#"{"data":[{"status":"busy","mode":"claude"}]}"#;
+        let (port, _) = serve(vec![ok("", busy), status(404)]);
+        let server = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        assert_eq!(Poller::new(&server, None, true).unwrap().poll(), plain(true));
+    }
+
+    #[test]
+    fn a_refused_list_ends_the_polling_and_a_failed_one_keeps_the_last_answer() {
+        let (port, _) = serve(vec![ok("", EMPTY), status(401)]);
+        let server = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        assert_eq!(Poller::new(&server, None, true).unwrap().poll(), Poll::Refused);
+
+        let (port, _) = serve(vec![
+            ok("", EMPTY),
+            ok("", &approvals(&[PERMISSION])),
+            ok("", EMPTY),
+            status(500),
+        ]);
+        let server = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        let mut poller = Poller::new(&server, None, true).unwrap();
+        let red = Poll::Seen(Activity {
+            needs_you: true,
+            ..Activity::default()
+        });
+        assert_eq!(poller.poll(), red);
+        assert_eq!(
+            poller.poll(),
+            Poll::Seen(Activity {
+                needs_you: true,
+                ..Activity::default()
+            })
+        );
+    }
+
+    #[test]
+    fn no_alert_with_a_style_means_no_second_request() {
+        let (port, seen_requests) = serve(vec![ok("", EMPTY)]);
+        let server = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        assert_eq!(Poller::new(&server, None, false).unwrap().poll(), plain(false));
+        assert_eq!(seen_requests.lock().unwrap().len(), 1);
+    }
+
     fn ok(extra_headers: &str, body: &str) -> String {
         format!(
             "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: {}\r\n{extra_headers}\r\n{body}",
@@ -247,11 +424,11 @@ mod tests {
             ok("", EMPTY),
         ]);
         let server = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
-        let mut poller = Poller::new(&server, Some("Basic abc".into())).unwrap();
-        assert_eq!(poller.poll(), Poll::Working(1));
-        assert_eq!(poller.poll(), Poll::Working(1));
-        assert_eq!(poller.poll(), Poll::Working(0));
-        assert_eq!(poller.poll(), Poll::Working(0));
+        let mut poller = Poller::new(&server, Some("Basic abc".into()), false).unwrap();
+        assert_eq!(poller.poll(), plain(true));
+        assert_eq!(poller.poll(), plain(true));
+        assert_eq!(poller.poll(), plain(false));
+        assert_eq!(poller.poll(), plain(false));
 
         let seen = seen.lock().unwrap();
         let cookie = |n: usize| seen[n].iter().find(|h| h.starts_with("cookie:")).cloned();
@@ -268,7 +445,7 @@ mod tests {
     fn asks_under_the_servers_base_path() {
         let (port, seen) = serve(vec![ok("", EMPTY)]);
         let server = Url::parse(&format!("http://127.0.0.1:{port}/codeman/")).unwrap();
-        assert_eq!(Poller::new(&server, None).unwrap().poll(), Poll::Working(0));
+        assert_eq!(Poller::new(&server, None, false).unwrap().poll(), plain(false));
         let seen = seen.lock().unwrap();
         assert!(seen[0][0].starts_with("get /codeman/api/sessions "), "{:?}", seen[0][0]);
         assert!(!seen[0].iter().any(|h| h.starts_with("authorization:")));
@@ -280,6 +457,6 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         drop(listener);
         let server = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
-        assert_eq!(Poller::new(&server, None).unwrap().poll(), Poll::Failed);
+        assert_eq!(Poller::new(&server, None, false).unwrap().poll(), Poll::Failed);
     }
 }

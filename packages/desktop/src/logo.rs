@@ -1,7 +1,9 @@
 //! The lit Apple logo on the lid of a MacBook Pro with a PROLED XDR display
-//! blinks while agents work, so you can see across the room that they are
-//! still going. Opt-in (View menu, in the style the user picks), and the menu
-//! exists only on a Mac that has such a logo.
+//! blinks with what the agents are doing, so you can read it across the room: one
+//! rhythm while they work, another for a yellow tab (an agent finished and waits
+//! for you) and a sharper one for a red tab (it needs a permission or an answer).
+//! Opt-in (View menu, a style per state), and the menu exists only on a Mac that
+//! has such a logo.
 //!
 //! Apple documents one control for the logo (support.apple.com/en-us/149248):
 //! `sudo defaults write com.apple.CoreBrightness LEBacklightMode -int 0`. What
@@ -17,7 +19,7 @@
 //! The setting is system-wide and survives a reboot, so the one thing that
 //! must never happen is the app ending while the logo is dark. All of this
 //! therefore runs in a child process (this same binary with `BLINK_ARG`), for as
-//! long as a style is chosen and a server is open. The app hands it the server
+//! long as any style is chosen and a server is open. The app hands it the server
 //! and the login over a pipe (never on its command line, where `ps` shows them)
 //! and keeps the pipe open. When the pipe closes, however the app ended (quit,
 //! crash, `panic = "abort"`, Force Quit), the child puts the logo back and
@@ -26,6 +28,9 @@
 //! (power loss, a SIGKILL of the child itself), a marker file lies next to the
 //! app's settings while a blink runs, and `recover` puts the logo back at the
 //! next launch.
+//!
+//! When several states hold at once the most urgent one with a style is shown:
+//! red, then yellow, then work.
 //!
 //! The child also does the asking (`agents`), so it needs nothing from the app
 //! once started: a hidden window, a stalled page and App Nap cannot hold up the
@@ -36,7 +41,9 @@
 //! wants the setting: the child leaves it as it found it and does not try again
 //! until the agents have finished.
 
+use crate::agents::Activity;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{ChildStdin, Command, Stdio};
@@ -65,7 +72,7 @@ const fn beat(dark_ms: u64, lit_ms: u64) -> Beat {
     }
 }
 
-/// What the logo does while agents work, the user's pick in the View menu. A
+/// A rhythm for the logo, the user's pick in the View menu for each `Signal`. A
 /// style switches `LEBacklightMode`, which is on or off, so it is a rhythm of
 /// hard changes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -79,16 +86,18 @@ pub enum BlinkStyle {
     Wink,
     Heartbeat,
     Fast,
+    Alarm,
 }
 
 impl BlinkStyle {
-    pub const ALL: [BlinkStyle; 6] = [
+    pub const ALL: [BlinkStyle; 7] = [
         BlinkStyle::Off,
         BlinkStyle::Calm,
         BlinkStyle::Slow,
         BlinkStyle::Wink,
         BlinkStyle::Heartbeat,
         BlinkStyle::Fast,
+        BlinkStyle::Alarm,
     ];
 
     pub fn label(self) -> &'static str {
@@ -99,25 +108,22 @@ impl BlinkStyle {
             BlinkStyle::Wink => "Wink",
             BlinkStyle::Heartbeat => "Heartbeat",
             BlinkStyle::Fast => "Fast",
+            BlinkStyle::Alarm => "Alarm",
         }
     }
 
-    pub fn menu_id(self) -> &'static str {
-        match self {
-            BlinkStyle::Off => "logo-blink-off",
-            BlinkStyle::Calm => "logo-blink-calm",
-            BlinkStyle::Slow => "logo-blink-slow",
-            BlinkStyle::Wink => "logo-blink-wink",
-            BlinkStyle::Heartbeat => "logo-blink-heartbeat",
-            BlinkStyle::Fast => "logo-blink-fast",
-        }
+    pub fn menu_id(self, signal: Signal) -> String {
+        format!("logo-blink-{}-{}", signal.key(), self.label().to_ascii_lowercase())
     }
 
-    pub fn from_menu_id(id: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|style| style.menu_id() == id)
+    pub fn from_menu_id(id: &str) -> Option<(Signal, Self)> {
+        Signal::ALL
+            .into_iter()
+            .flat_map(|signal| Self::ALL.map(|style| (signal, style)))
+            .find(|(signal, style)| style.menu_id(*signal) == id)
     }
 
-    /// The rhythm, repeated for as long as agents work.
+    /// The rhythm, repeated for as long as its state holds.
     const fn pattern(self) -> &'static [Beat] {
         match self {
             BlinkStyle::Off => &[],
@@ -126,14 +132,122 @@ impl BlinkStyle {
             BlinkStyle::Wink => WINK,
             BlinkStyle::Heartbeat => HEARTBEAT,
             BlinkStyle::Fast => FAST,
+            BlinkStyle::Alarm => ALARM,
         }
     }
 }
 
+/// What the logo can tell, in the order of the View menu.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Signal {
+    Working,
+    Waiting,
+    NeedsYou,
+}
+
+impl Signal {
+    pub const ALL: [Signal; 3] = [Signal::Working, Signal::Waiting, Signal::NeedsYou];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Signal::Working => "While Working",
+            Signal::Waiting => "Waiting for You (Yellow)",
+            Signal::NeedsYou => "Needs Permission (Red)",
+        }
+    }
+
+    fn key(self) -> &'static str {
+        match self {
+            Signal::Working => "working",
+            Signal::Waiting => "waiting",
+            Signal::NeedsYou => "needs-you",
+        }
+    }
+}
+
+/// The user's style for each `Signal`, `logoBlink` in the settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct BlinkStyles {
+    pub working: BlinkStyle,
+    pub waiting: BlinkStyle,
+    pub needs_you: BlinkStyle,
+}
+
+impl BlinkStyles {
+    /// Reads whatever the file holds. A bad value is off, for its state alone: it
+    /// must not make the file unreadable. A single style is what this setting was
+    /// before it had states: that was the choice for work, and whoever made it
+    /// gets the alerts with it, since they asked for a logo that talks.
+    pub fn read(value: &Value) -> Self {
+        let style = |value: Option<&Value>| {
+            value
+                .and_then(|value| serde_json::from_value(value.clone()).ok())
+                .unwrap_or_default()
+        };
+        match value {
+            Value::Object(styles) => BlinkStyles {
+                working: style(styles.get("working")),
+                waiting: style(styles.get("waiting")),
+                needs_you: style(styles.get("needsYou")),
+            },
+            Value::String(_) => match style(Some(value)) {
+                BlinkStyle::Off => Self::default(),
+                working => BlinkStyles {
+                    working,
+                    waiting: BlinkStyle::Wink,
+                    needs_you: BlinkStyle::Alarm,
+                },
+            },
+            _ => Self::default(),
+        }
+    }
+
+    pub fn get(self, signal: Signal) -> BlinkStyle {
+        match signal {
+            Signal::Working => self.working,
+            Signal::Waiting => self.waiting,
+            Signal::NeedsYou => self.needs_you,
+        }
+    }
+
+    pub fn set(&mut self, signal: Signal, style: BlinkStyle) {
+        match signal {
+            Signal::Working => self.working = style,
+            Signal::Waiting => self.waiting = style,
+            Signal::NeedsYou => self.needs_you = style,
+        }
+    }
+
+    pub fn any(self) -> bool {
+        Signal::ALL.iter().any(|&signal| self.get(signal) != BlinkStyle::Off)
+    }
+
+    /// Whether anything but work has a style, which is what makes the alerts
+    /// worth asking the server for.
+    fn wants_alerts(self) -> bool {
+        self.waiting != BlinkStyle::Off || self.needs_you != BlinkStyle::Off
+    }
+
+    /// What the logo should do: the most urgent state that holds and has a
+    /// style. A state set to off is not a reason for silence, so it falls through.
+    fn pick(self, activity: Activity) -> BlinkStyle {
+        [
+            (activity.needs_you, self.needs_you),
+            (activity.waiting, self.waiting),
+            (activity.working, self.working),
+        ]
+        .into_iter()
+        .find(|&(holds, style)| holds && style != BlinkStyle::Off)
+        .map_or(BlinkStyle::Off, |(_, style)| style)
+    }
+}
+
 // Every change of the logo is a preference write, so these also set how often
-// that happens: from about one every two seconds (Slow, Wink) to about three a
-// second (Fast). No style goes above three flashes in any second, the limit
-// accessibility guidelines set for flashing light.
+// that happens: from about one every two seconds (Slow, Wink) to about four a
+// second (Alarm). No style goes above three flashes in any second, the limit
+// accessibility guidelines set for flashing light, so what makes Alarm urgent
+// is its shape: three hard flashes with a short rest, not a higher rate.
 const CALM: &[Beat] = &[beat(800, 1200)];
 const SLOW: &[Beat] = &[beat(1500, 3000)];
 /// Mostly lit: a short dark moment every few seconds.
@@ -141,13 +255,17 @@ const WINK: &[Beat] = &[beat(250, 3500)];
 /// Two quick beats, then a rest.
 const HEARTBEAT: &[Beat] = &[beat(120, 180), beat(120, 1600)];
 const FAST: &[Beat] = &[beat(300, 300)];
+/// Three sharp flashes and a short rest, over and over: hey, I need something.
+const ALARM: &[Beat] = &[beat(120, 120), beat(120, 120), beat(120, 900)];
 
 /// How often to look again while the logo cannot be seen (the display sleeps,
 /// the lid is closed). Nothing is written in that time.
 const NOT_LIT_RECHECK: Duration = Duration::from_secs(2);
 /// How long a change has to hold before the logo follows it, so a server
-/// restart or an agent between two turns does not flicker it.
-const SETTLE: Duration = Duration::from_secs(2);
+/// restart or an agent between two turns does not flicker it. Not below the 3 s
+/// the server waits before it judges a new dialog: a prompt that was answered
+/// before its hook landed lives that long and should never flash red.
+const SETTLE: Duration = Duration::from_secs(3);
 /// How often the child looks at what the poller found, and at the pipe.
 const LOOK_EVERY: Duration = Duration::from_millis(250);
 
@@ -254,23 +372,23 @@ pub fn recover(logo: &impl Logo, marker: &Marker) {
     }
 }
 
-/// A yes or no that only changes once the new answer has held for `SETTLE`.
-struct Settled {
-    answer: bool,
-    latest: bool,
+/// An answer that only changes once the new one has held for `SETTLE`.
+struct Settled<T> {
+    answer: T,
+    latest: T,
     changed_at: Instant,
 }
 
-impl Settled {
-    fn new(now: Instant) -> Self {
+impl<T: Copy + PartialEq> Settled<T> {
+    fn new(answer: T, now: Instant) -> Self {
         Settled {
-            answer: false,
-            latest: false,
+            answer,
+            latest: answer,
             changed_at: now,
         }
     }
 
-    fn update(&mut self, latest: bool, now: Instant) -> bool {
+    fn update(&mut self, latest: T, now: Instant) -> T {
         if latest != self.latest {
             self.latest = latest;
             self.changed_at = now;
@@ -286,19 +404,22 @@ impl Settled {
 trait Signals {
     /// Sleep this long; true if the app went away, right when it did.
     fn wait(&mut self, time: Duration) -> bool;
-    fn agents_working(&self) -> bool;
+    fn activity(&self) -> Activity;
     fn now(&self) -> Instant;
 }
 
-/// The child's life: blink while agents work, until the app goes away.
-fn watch(logo: &impl Logo, marker: &Marker, pattern: &[Beat], signals: &mut impl Signals) {
-    let mut settled = Settled::new(signals.now());
+/// The child's life: show what the agents are doing, until the app goes away. A
+/// change of state ends the blink that is running, which leaves the logo lit, and
+/// the next look starts the new one.
+fn watch(logo: &impl Logo, marker: &Marker, styles: BlinkStyles, signals: &mut impl Signals) {
+    let mut settled = Settled::new(BlinkStyle::Off, signals.now());
     let mut declined = false;
     loop {
         if signals.wait(LOOK_EVERY) {
             return;
         }
-        if !settled.update(signals.agents_working(), signals.now()) {
+        let style = settled.update(styles.pick(signals.activity()), signals.now());
+        if style == BlinkStyle::Off {
             declined = false;
             continue;
         }
@@ -306,7 +427,7 @@ fn watch(logo: &impl Logo, marker: &Marker, pattern: &[Beat], signals: &mut impl
             continue;
         }
         let mut app_gone = false;
-        let ended = blink(logo, marker, pattern, |time| {
+        let ended = blink(logo, marker, style.pattern(), |time| {
             let deadline = signals.now() + time;
             loop {
                 let left = deadline.saturating_duration_since(signals.now());
@@ -317,7 +438,7 @@ fn watch(logo: &impl Logo, marker: &Marker, pattern: &[Beat], signals: &mut impl
                     app_gone = true;
                     return true;
                 }
-                if !settled.update(signals.agents_working(), signals.now()) {
+                if settled.update(styles.pick(signals.activity()), signals.now()) != style {
                     return true;
                 }
             }
@@ -334,7 +455,7 @@ fn watch(logo: &impl Logo, marker: &Marker, pattern: &[Beat], signals: &mut impl
 struct Connection {
     server: String,
     authorization: Option<String>,
-    style: BlinkStyle,
+    styles: BlinkStyles,
 }
 
 /// The app's side: the pipe to the child, which is all there is to it.
@@ -344,13 +465,13 @@ pub struct Watcher {
 }
 
 impl Watcher {
-    /// Watch this server with this login in this style, or nothing. A child
+    /// Watch this server with this login in these styles, or nothing. A child
     /// for anything else ends first: its pipe closes with the old value. It is
     /// back to lit well before the next child looks, which takes `SETTLE`.
-    pub fn sync(&mut self, want: Option<(&str, Option<&str>, BlinkStyle)>) {
+    pub fn sync(&mut self, want: Option<(&str, Option<&str>, BlinkStyles)>) {
         let same = match (&self.current, want) {
-            (Some((now, _)), Some((server, authorization, style))) => {
-                now.server == server && now.authorization.as_deref() == authorization && now.style == style
+            (Some((now, _)), Some((server, authorization, styles))) => {
+                now.server == server && now.authorization.as_deref() == authorization && now.styles == styles
             }
             (None, None) => true,
             _ => false,
@@ -358,11 +479,11 @@ impl Watcher {
         if same {
             return;
         }
-        self.current = want.and_then(|(server, authorization, style)| {
+        self.current = want.and_then(|(server, authorization, styles)| {
             spawn_child(Connection {
                 server: server.to_owned(),
                 authorization: authorization.map(str::to_owned),
-                style,
+                styles,
             })
         });
     }
@@ -410,15 +531,14 @@ pub fn switched_off() -> bool {
 #[cfg(target_os = "macos")]
 mod system {
     use super::{recover, watch, Connection, Logo, Marker, Signals, MODE_OFF};
-    use crate::agents::{Poll, Poller, POLL_EVERY};
+    use crate::agents::{Activity, Poll, Poller, POLL_EVERY};
     use objc2::rc::{autoreleasepool, Retained};
     use objc2::runtime::{AnyClass, AnyObject};
     use objc2::{msg_send, sel};
     use objc2_foundation::{ns_string, NSBundle, NSDictionary, NSNumber, NSString};
     use std::io::Read;
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
-    use std::sync::{Arc, OnceLock};
+    use std::sync::{Arc, Mutex, OnceLock};
     use std::time::{Duration, Instant};
     use url::Url;
 
@@ -510,7 +630,7 @@ mod system {
 
     struct Live {
         pipe_closed: Receiver<()>,
-        working: Arc<AtomicBool>,
+        activity: Arc<Mutex<Activity>>,
     }
 
     impl Signals for Live {
@@ -518,8 +638,8 @@ mod system {
             !matches!(self.pipe_closed.recv_timeout(time), Err(RecvTimeoutError::Timeout))
         }
 
-        fn agents_working(&self) -> bool {
-            self.working.load(Ordering::Relaxed)
+        fn activity(&self) -> Activity {
+            self.activity.lock().map_or(Activity::default(), |activity| *activity)
         }
 
         fn now(&self) -> Instant {
@@ -528,11 +648,16 @@ mod system {
     }
 
     /// Runs for the life of the child. A server that does not answer counts as
-    /// nothing working, and one that refuses the login is never asked again.
-    fn poll_until_refused(mut poller: Poller, working: &AtomicBool) {
+    /// nothing going on, and one that refuses the login is never asked again.
+    fn poll_until_refused(mut poller: Poller, shared: &Mutex<Activity>) {
         loop {
             let poll = poller.poll();
-            working.store(matches!(poll, Poll::Working(n) if n > 0), Ordering::Relaxed);
+            if let Ok(mut activity) = shared.lock() {
+                *activity = match poll {
+                    Poll::Seen(seen) => seen,
+                    _ => Activity::default(),
+                };
+            }
             if poll == Poll::Refused {
                 return;
             }
@@ -559,14 +684,14 @@ mod system {
         let Some(Connection {
             server,
             authorization,
-            style,
+            styles,
         }) = connection
         else {
             std::process::exit(0);
         };
         let poller = Url::parse(&server)
             .ok()
-            .and_then(|url| Poller::new(&url, authorization));
+            .and_then(|url| Poller::new(&url, authorization, styles.wants_alerts()));
         let (Some(poller), Some(logo)) = (poller, SystemLogo::open()) else {
             std::process::exit(0);
         };
@@ -578,12 +703,12 @@ mod system {
             while matches!(stdin.read(&mut buf), Ok(n) if n > 0) {}
             let _ = closed.send(());
         });
-        let working = Arc::new(AtomicBool::new(false));
-        let found = working.clone();
+        let activity = Arc::new(Mutex::new(Activity::default()));
+        let found = activity.clone();
         std::thread::spawn(move || poll_until_refused(poller, &found));
 
-        let mut signals = Live { pipe_closed, working };
-        watch(&logo, &Marker::default_location(), style.pattern(), &mut signals);
+        let mut signals = Live { pipe_closed, activity };
+        watch(&logo, &Marker::default_location(), styles, &mut signals);
         std::process::exit(0)
     }
 }
@@ -595,6 +720,33 @@ mod tests {
 
     const DARK_FOR: Duration = CALM[0].dark;
     const LIT_FOR: Duration = CALM[0].lit;
+    /// The style most of these tests watch with: work only.
+    const WORK: BlinkStyles = BlinkStyles {
+        working: BlinkStyle::Calm,
+        waiting: BlinkStyle::Off,
+        needs_you: BlinkStyle::Off,
+    };
+
+    fn working() -> Activity {
+        Activity {
+            working: true,
+            ..Activity::default()
+        }
+    }
+
+    fn waiting() -> Activity {
+        Activity {
+            waiting: true,
+            ..Activity::default()
+        }
+    }
+
+    fn needs_you() -> Activity {
+        Activity {
+            needs_you: true,
+            ..Activity::default()
+        }
+    }
 
     /// A logo that records every write.
     struct FakeLogo {
@@ -803,7 +955,7 @@ mod tests {
     #[test]
     fn a_change_counts_once_it_held() {
         let t0 = Instant::now();
-        let mut settled = Settled::new(t0);
+        let mut settled = Settled::new(false, t0);
         assert!(!settled.update(true, t0));
         assert!(!settled.update(true, t0 + SETTLE - Duration::from_millis(1)));
         assert!(settled.update(true, t0 + SETTLE));
@@ -816,22 +968,34 @@ mod tests {
         assert!(!settled.update(false, t1 + Duration::from_secs(10) + SETTLE));
     }
 
-    /// A clock that `wait` moves, and a server that has agents at work in the
-    /// given spans of time. The app goes away at `app_gone_at`.
+    #[test]
+    fn a_new_dialog_is_judged_before_the_logo_would_follow_it() {
+        // The server's check of a new dialog (`STALE_CHECK_DELAY_MS`), which a
+        // prompt answered before its hook landed does not survive.
+        assert!(SETTLE >= Duration::from_secs(3));
+    }
+
+    /// A clock that `wait` moves, and a server that shows the given activity in
+    /// the given spans of time. The app goes away at `app_gone_at`.
     struct Script {
         start: Instant,
         clock: Cell<Instant>,
-        work: Vec<(u64, u64)>,
+        spans: Vec<(u64, u64, Activity)>,
         app_gone_at: u64,
     }
 
     impl Script {
         fn new(work: &[(u64, u64)], app_gone_at: u64) -> Self {
+            let spans: Vec<_> = work.iter().map(|&(from, to)| (from, to, working())).collect();
+            Self::with(&spans, app_gone_at)
+        }
+
+        fn with(spans: &[(u64, u64, Activity)], app_gone_at: u64) -> Self {
             let start = Instant::now();
             Script {
                 start,
                 clock: Cell::new(start),
-                work: work.to_vec(),
+                spans: spans.to_vec(),
                 app_gone_at,
             }
         }
@@ -847,9 +1011,12 @@ mod tests {
             self.elapsed_ms() >= self.app_gone_at
         }
 
-        fn agents_working(&self) -> bool {
+        fn activity(&self) -> Activity {
             let t = self.elapsed_ms();
-            self.work.iter().any(|&(from, to)| t >= from && t < to)
+            self.spans
+                .iter()
+                .find(|&&(from, to, _)| t >= from && t < to)
+                .map_or(Activity::default(), |&(_, _, activity)| activity)
         }
 
         fn now(&self) -> Instant {
@@ -863,7 +1030,7 @@ mod tests {
     fn nothing_is_written_while_no_agent_works() {
         let logo = FakeLogo::new(MODE_AUTO);
         let (marker, _) = temp_marker("watch-quiet");
-        watch(&logo, &marker, CALM, &mut Script::new(&[], 60_000));
+        watch(&logo, &marker, WORK, &mut Script::new(&[], 60_000));
         assert_eq!(logo.writes(), [] as [i64; 0]);
     }
 
@@ -871,7 +1038,7 @@ mod tests {
     fn a_short_flicker_of_work_does_not_blink() {
         let logo = FakeLogo::new(MODE_AUTO);
         let (marker, _) = temp_marker("watch-flicker");
-        watch(&logo, &marker, CALM, &mut Script::new(&[(1_000, 2_500)], 60_000));
+        watch(&logo, &marker, WORK, &mut Script::new(&[(1_000, 2_500)], 60_000));
         assert_eq!(logo.writes(), [] as [i64; 0]);
     }
 
@@ -880,11 +1047,12 @@ mod tests {
         let logo = FakeLogo::new(MODE_AUTO);
         let (marker, path) = temp_marker("watch-turn");
         let mut script = Script::new(&[(1_000, 21_000)], 60_000);
-        watch(&logo, &marker, CALM, &mut script);
+        watch(&logo, &marker, WORK, &mut script);
         let writes = logo.writes();
         let dark_phases = writes.iter().filter(|&&m| m == MODE_OFF).count() as u64;
-        // 20 s of work, less the settling at the start, one dark phase a cycle.
-        let cycles = (20_000 - SETTLE.as_millis() as u64) / CYCLE_MS;
+        // Settling delays the start and the end alike, so the blink lasts as long
+        // as the 20 s of work did, with one dark phase a cycle.
+        let cycles = 20_000 / CYCLE_MS;
         assert!(dark_phases >= cycles, "{dark_phases} dark phases, {cycles} cycles");
         assert!(dark_phases <= cycles + 2, "{dark_phases} dark phases, {cycles} cycles");
         assert_eq!(logo.mode.get(), MODE_AUTO);
@@ -895,12 +1063,15 @@ mod tests {
     fn the_end_of_the_work_stops_a_blink_in_the_middle_of_a_dark_phase() {
         let logo = FakeLogo::new(MODE_AUTO);
         let (marker, _) = temp_marker("watch-stop");
-        // Work has to hold to start and to stop, so the first dark phase is
-        // over by then. Started at about 3.25 s, the second one runs from
-        // about 5.25 s, and work that ends at 3.5 s settles at 5.5 s, inside it.
-        let mut script = Script::new(&[(1_000, 3_500)], 60_000);
-        watch(&logo, &marker, CALM, &mut script);
-        assert_eq!(logo.writes(), [MODE_OFF, MODE_AUTO, MODE_OFF, MODE_AUTO]);
+        // Work has to hold to start and to stop. Started at about 4.25 s, a dark
+        // phase runs from every 2 s after that, and work that ends at 5.5 s
+        // settles at 8.5 s, inside the third one.
+        let mut script = Script::new(&[(1_000, 5_500)], 60_000);
+        watch(&logo, &marker, WORK, &mut script);
+        assert_eq!(
+            logo.writes(),
+            [MODE_OFF, MODE_AUTO, MODE_OFF, MODE_AUTO, MODE_OFF, MODE_AUTO]
+        );
     }
 
     #[test]
@@ -908,7 +1079,7 @@ mod tests {
         let logo = FakeLogo::new(MODE_AUTO);
         let (marker, _) = temp_marker("watch-gap");
         let mut script = Script::new(&[(1_000, 15_000), (16_000, 30_000)], 60_000);
-        watch(&logo, &marker, CALM, &mut script);
+        watch(&logo, &marker, WORK, &mut script);
         let writes = logo.writes();
         let dark_phases = writes.iter().filter(|&&m| m == MODE_OFF).count() as u64;
         assert!(
@@ -922,7 +1093,7 @@ mod tests {
         let logo = FakeLogo::new(MODE_AUTO);
         let (marker, path) = temp_marker("watch-gone");
         // Work from the start; the first dark phase begins once it has settled.
-        watch(&logo, &marker, CALM, &mut Script::new(&[(0, 60_000)], 3_000));
+        watch(&logo, &marker, WORK, &mut Script::new(&[(0, 60_000)], 3_500));
         assert_eq!(logo.writes(), [MODE_OFF, MODE_AUTO]);
         assert!(!path.exists());
     }
@@ -932,7 +1103,7 @@ mod tests {
         let logo = FakeLogo::new(MODE_OFF);
         let (marker, _) = temp_marker("watch-declined");
         let mut script = Script::new(&[(0, 30_000)], 60_000);
-        watch(&logo, &marker, CALM, &mut script);
+        watch(&logo, &marker, WORK, &mut script);
         assert_eq!(logo.writes(), [] as [i64; 0]);
     }
 
@@ -951,14 +1122,14 @@ mod tests {
                 }
                 gone
             }
-            fn agents_working(&self) -> bool {
-                self.0.agents_working()
+            fn activity(&self) -> Activity {
+                self.0.activity()
             }
             fn now(&self) -> Instant {
                 self.0.now()
             }
         }
-        watch(&logo, &marker, CALM, &mut TurnsOn(&mut script, &logo));
+        watch(&logo, &marker, WORK, &mut TurnsOn(&mut script, &logo));
         assert!(logo.writes().contains(&MODE_OFF), "{:?}", logo.writes());
         assert_eq!(logo.mode.get(), MODE_AUTO);
     }
@@ -969,14 +1140,14 @@ mod tests {
             let line = serde_json::to_string(&Connection {
                 server: "http://127.0.0.1:3000/".into(),
                 authorization: authorization.clone(),
-                style: BlinkStyle::Heartbeat,
+                styles: WORK,
             })
             .unwrap();
             assert!(!line.contains('\n'), "one line");
             let back: Connection = serde_json::from_str(&line).unwrap();
             assert_eq!(back.server, "http://127.0.0.1:3000/");
             assert_eq!(back.authorization, authorization);
-            assert_eq!(back.style, BlinkStyle::Heartbeat);
+            assert_eq!(back.styles, WORK);
         }
     }
 
@@ -1025,12 +1196,168 @@ mod tests {
     }
 
     #[test]
-    fn a_menu_id_names_its_style_and_nothing_else() {
-        for style in BlinkStyle::ALL {
-            assert_eq!(BlinkStyle::from_menu_id(style.menu_id()), Some(style));
+    fn a_menu_id_names_its_state_and_style_and_nothing_else() {
+        for signal in Signal::ALL {
+            for style in BlinkStyle::ALL {
+                assert_eq!(BlinkStyle::from_menu_id(&style.menu_id(signal)), Some((signal, style)));
+            }
         }
         assert_eq!(BlinkStyle::from_menu_id("reload"), None);
+        assert_eq!(BlinkStyle::from_menu_id("logo-blink-calm"), None);
         assert_eq!(BlinkStyle::from_menu_id(""), None);
+    }
+
+    const ALL_ON: BlinkStyles = BlinkStyles {
+        working: BlinkStyle::Calm,
+        waiting: BlinkStyle::Wink,
+        needs_you: BlinkStyle::Alarm,
+    };
+
+    #[test]
+    fn the_most_urgent_state_wins() {
+        let everything = Activity {
+            working: true,
+            waiting: true,
+            needs_you: true,
+        };
+        assert_eq!(ALL_ON.pick(everything), BlinkStyle::Alarm);
+        assert_eq!(
+            ALL_ON.pick(Activity {
+                needs_you: false,
+                ..everything
+            }),
+            BlinkStyle::Wink
+        );
+        assert_eq!(ALL_ON.pick(working()), BlinkStyle::Calm);
+        assert_eq!(ALL_ON.pick(Activity::default()), BlinkStyle::Off);
+    }
+
+    #[test]
+    fn a_state_set_to_off_falls_through_to_the_next_one() {
+        let everything = Activity {
+            working: true,
+            waiting: true,
+            needs_you: true,
+        };
+        let mut styles = ALL_ON;
+        styles.needs_you = BlinkStyle::Off;
+        assert_eq!(styles.pick(everything), BlinkStyle::Wink);
+        styles.waiting = BlinkStyle::Off;
+        assert_eq!(styles.pick(everything), BlinkStyle::Calm);
+        styles.working = BlinkStyle::Off;
+        assert_eq!(styles.pick(everything), BlinkStyle::Off);
+    }
+
+    #[test]
+    fn a_state_with_no_style_touches_nothing_not_even_the_marker() {
+        let logo = FakeLogo::new(MODE_AUTO);
+        let (marker, path) = temp_marker("no-style");
+        struct Watching<'a>(Script, &'a PathBuf);
+        impl Signals for Watching<'_> {
+            fn wait(&mut self, time: Duration) -> bool {
+                assert!(!self.1.exists(), "no marker was ever needed");
+                self.0.wait(time)
+            }
+            fn activity(&self) -> Activity {
+                self.0.activity()
+            }
+            fn now(&self) -> Instant {
+                self.0.now()
+            }
+        }
+        let script = Script::with(&[(0, 30_000, waiting())], 40_000);
+        watch(&logo, &marker, WORK, &mut Watching(script, &path));
+        assert_eq!(logo.writes(), [] as [i64; 0]);
+    }
+
+    fn dark_phases(styles: BlinkStyles, spans: &[(u64, u64, Activity)], end: u64) -> usize {
+        let logo = FakeLogo::new(MODE_AUTO);
+        let (marker, path) = temp_marker("phases");
+        watch(&logo, &marker, styles, &mut Script::with(spans, end));
+        assert_eq!(logo.mode.get(), MODE_AUTO, "it ends lit");
+        assert!(!path.exists());
+        logo.writes().iter().filter(|&&mode| mode == MODE_OFF).count()
+    }
+
+    #[test]
+    fn a_change_of_state_moves_to_the_other_rhythm_and_back() {
+        let alone = dark_phases(ALL_ON, &[(0, 60_000, working())], 60_000);
+        let interrupted = dark_phases(
+            ALL_ON,
+            &[
+                (0, 20_000, working()),
+                (20_000, 40_000, needs_you()),
+                (40_000, 60_000, working()),
+            ],
+            60_000,
+        );
+        // About 29 dark phases of Calm alone, and Alarm's 2 a second for a third
+        // of the time. Calm alone again at the end ends the same as it began.
+        assert!((27..=31).contains(&alone), "{alone}");
+        assert!(interrupted >= alone + 20, "{interrupted} against {alone}");
+    }
+
+    #[test]
+    fn red_interrupts_yellow_and_yellow_comes_back() {
+        let yellow_only = dark_phases(ALL_ON, &[(0, 60_000, waiting())], 60_000);
+        let with_red = dark_phases(
+            ALL_ON,
+            &[
+                (0, 20_000, waiting()),
+                (20_000, 40_000, needs_you()),
+                (40_000, 60_000, waiting()),
+            ],
+            60_000,
+        );
+        assert!(with_red > yellow_only * 3, "{with_red} against {yellow_only}");
+    }
+
+    #[test]
+    fn alarm_is_the_sharpest_style_a_second_can_hold() {
+        let flashes = |style: BlinkStyle| {
+            let cycle: Duration = style.pattern().iter().map(|beat| beat.dark + beat.lit).sum();
+            style.pattern().len() as f64 / cycle.as_secs_f64()
+        };
+        assert!(flashes(BlinkStyle::Alarm) > flashes(BlinkStyle::Fast));
+        assert!(flashes(BlinkStyle::Alarm) > flashes(BlinkStyle::Heartbeat) * 2.0);
+    }
+
+    #[test]
+    fn the_setting_reads_every_shape_it_has_had() {
+        let read = |text: &str| BlinkStyles::read(&serde_json::from_str(text).unwrap());
+        // The one style of the first version keeps meaning work, and brings the alerts.
+        assert_eq!(
+            read(r#""heartbeat""#),
+            BlinkStyles {
+                working: BlinkStyle::Heartbeat,
+                waiting: BlinkStyle::Wink,
+                needs_you: BlinkStyle::Alarm,
+            }
+        );
+        assert_eq!(read(r#""off""#), BlinkStyles::default());
+        assert_eq!(read(r#""strobe""#), BlinkStyles::default());
+        assert_eq!(read("3"), BlinkStyles::default());
+        assert_eq!(read("null"), BlinkStyles::default());
+        // A bad style costs its own state, not the others.
+        assert_eq!(
+            read(r#"{"working":"calm","waiting":"strobe","needsYou":"alarm"}"#),
+            BlinkStyles {
+                working: BlinkStyle::Calm,
+                waiting: BlinkStyle::Off,
+                needs_you: BlinkStyle::Alarm,
+            }
+        );
+        let saved = serde_json::to_value(ALL_ON).unwrap();
+        assert_eq!(saved["needsYou"], "alarm");
+        assert_eq!(BlinkStyles::read(&saved), ALL_ON);
+    }
+
+    #[test]
+    fn nothing_but_work_asks_for_no_alerts() {
+        assert!(!WORK.wants_alerts());
+        assert!(ALL_ON.wants_alerts());
+        assert!(!BlinkStyles::default().any());
+        assert!(WORK.any());
     }
 
     #[test]

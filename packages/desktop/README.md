@@ -40,7 +40,7 @@ cannot do.
 | **Links** | On Codeman's own pages (the dashboard and session windows), a link to another site opens in your default browser, also on `⌘`-click or a middle click. Pages can send at most 3 links to the browser at once, then 1 per second. Inside a rendered HTML preview or a web tab, a plain link to another site does nothing, while one that asks for a new window (`target="_blank"`, `window.open`) opens in your default browser within the same budget (see Known limits). |
 | **Downloads** | Codeman's Download links, and downloads Codeman opens in a new window, save the file to `~/Downloads` whatever its type, and a toast in Codeman names the file. Files the web view cannot display are saved the same way. |
 | **A page that stops** | When the web content process of a window ends (a WebKit crash, or macOS taking the process back under memory pressure), the window loads its page again instead of staying blank. A second time within 30 seconds, the main window goes back to the connect screen and a pop-out closes, so a page that cannot stay up never becomes a reload loop. |
-| **Apple logo** | On a MacBook Pro with a PROLED XDR display, the lit Apple logo on the lid blinks while agents work and stops when they finish, so you can see from across the room that they are still going. *View > Blink Apple Logo While Agents Work* picks how: *Calm*, *Slow*, *Wink* (a short dark moment every few seconds), *Heartbeat* (two quick beats, then a rest) or *Fast*. It is off by default, and the menu does not exist on a Mac without that logo. No password is needed. Shell tabs do not count. The app asks the server every two seconds, and a change has to hold for two seconds before the logo follows it, so an agent between two turns does not flicker it. It keeps working while the window is hidden, and with any Codeman server. A logo you switched off yourself stays off, and if the setting changes while a blink runs, the blink ends and leaves it as it found it. While the app is closed nothing blinks, and macOS keeps the logo dark while the display sleeps or the lid is closed, so the blink pauses then and writes nothing. |
+| **Apple logo** | On a MacBook Pro with a PROLED XDR display, the lit Apple logo on the lid says what the agents are doing, with a blink style of your own for each state: **View > Blink Apple Logo > While Working**, **Waiting for You (Yellow)** and **Needs Permission (Red)**. Off, Calm, Slow, Wink, Heartbeat, Fast, or Alarm, three sharp flashes for a state that needs you. All three are off until you choose. When several states hold, the most urgent one with a style shows: red, then yellow, then work. A style chosen in an earlier version stays as the one for work, and yellow and red start as Wink and Alarm. The menu only exists on a Mac with that logo. No password is needed. Shell tabs do not count. The app asks the server every two seconds, and a change has to hold for three seconds before the logo follows it, so an agent between two turns does not flicker it. It keeps working while the window is hidden, and with any Codeman server. A logo you switched off yourself stays off, and if the setting changes while a blink runs, the blink ends and leaves it as it found it. While the app is closed nothing blinks, and macOS keeps the logo dark while the display sleeps or the lid is closed, so the blink pauses then and writes nothing. |
 | **Window** | Size, position and full-screen state are remembered. A saved window that hangs off the screen it opens on (it was last on a larger display that is gone, say) is pulled back on and shrunk to fit; one whose title bar is on no screen at all opens at the default size instead. Clicking the Dock icon brings back a minimized window. |
 
 ## Build (on a Mac)
@@ -202,7 +202,7 @@ keeps its value while the logo is dark.
 The setting is system-wide and survives a reboot, so the app must not end with the
 logo dark, and the release profile has `panic = "abort"`, so no cleanup code of the
 app can be relied on. So all of it runs as this same binary with
-`--logo-blink`, for as long as a style is chosen and a server is open, tied to the app
+`--logo-blink`, for as long as any style is chosen and a server is open, tied to the app
 by nothing but a pipe: when the pipe closes, however the app ended, it puts the logo
 back and exits. Switching it off closes the same pipe, so the path a crash
 takes is the one used every day. A marker file
@@ -211,6 +211,14 @@ at the next launch the app puts back a logo a blink left dark. The framework is
 loaded at run time and never linked, and `LEBacklightMode` reading nil (a Mac mini
 answers nil) is what hides the option, so a macOS that drops it loses this feature
 and nothing else.
+
+**Red and yellow come from the server's approvals list.** `GET /api/approvals` is what the
+page reads to rebuild its red and yellow tabs after a reload, and it follows the same rules:
+`permission` and `question` items are red, an `idle` item is yellow until someone has looked
+at it (`acknowledgedAt`). So the logo stops when the tab's colour goes. The request is skipped
+when neither alert has a style, and a server from before the list reads as no alerts. Each
+poll with a dialog on screen costs that server one tmux capture, because the list re-checks
+the dialog, which also clears red soon after a dialog is answered in the terminal.
 
 **The agent count is asked for natively, because the page cannot be trusted with it.**
 The first version read the page's own event stream, which needs no second connection

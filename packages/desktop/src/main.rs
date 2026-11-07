@@ -8,7 +8,7 @@
 //! windows (Codeman's `window.CodemanHost` bridge), downloads to ~/Downloads,
 //! passwords in the Keychain, on macOS the JavaScript dialogs and HTTP Basic
 //! challenges wry leaves out (`macos`), and on a MacBook Pro with a lit Apple
-//! logo a blink while agents work (`logo`).
+//! logo a blink that says what the agents are doing (`logo`).
 //!
 //! Every URL and message decision is in `policy` (pure, unit-tested); this file
 //! only wires those decisions to windows. The main window moves through
@@ -54,7 +54,7 @@ use wry::{NewWindowResponse, PageLoadEvent, PermissionResponse, WebView, WebView
 
 use config::{Config, Rect, WindowFrame};
 use credentials::Keychain;
-use logo::BlinkStyle;
+use logo::{BlinkStyle, Signal};
 use policy::{ConnectCmd, HostCmd, Ipc, Navigation, NewWindow, OpenBudget, Phase, Recovery, Via};
 use probe::ProbeOutcome;
 
@@ -239,9 +239,9 @@ struct AppMenu {
     window_menu: Submenu,
     help_menu: Submenu,
     start_fullscreen: CheckMenuItem,
-    /// One item per style. Empty on a Mac without a lit logo, which has no
+    /// One item per state and style. Empty on a Mac without a lit logo, which has no
     /// such menu.
-    logo_styles: Vec<(BlinkStyle, CheckMenuItem)>,
+    logo_styles: Vec<(Signal, BlinkStyle, CheckMenuItem)>,
 }
 
 enum Load<'a> {
@@ -479,15 +479,19 @@ fn build_menu(config: &Config) -> muda::Result<AppMenu> {
     // Only a Mac with a lit Apple logo has this menu at all.
     let mut logo_styles = Vec::new();
     if logo::available() {
-        let submenu = Submenu::new("Blink Apple Logo While Agents Work", true);
-        for style in BlinkStyle::ALL {
-            let chosen = style == config.logo_blink;
-            let item = CheckMenuItem::with_id(style.menu_id(), style.label(), true, chosen, None);
-            submenu.append(&item)?;
-            if style == BlinkStyle::Off {
-                submenu.append(&PredefinedMenuItem::separator())?;
+        let submenu = Submenu::new("Blink Apple Logo", true);
+        for signal in Signal::ALL {
+            let group = Submenu::new(signal.label(), true);
+            for style in BlinkStyle::ALL {
+                let chosen = style == config.logo_blink.get(signal);
+                let item = CheckMenuItem::with_id(style.menu_id(signal), style.label(), true, chosen, None);
+                group.append(&item)?;
+                if style == BlinkStyle::Off {
+                    group.append(&PredefinedMenuItem::separator())?;
+                }
+                logo_styles.push((signal, style, item));
             }
-            logo_styles.push((style, item));
+            submenu.append(&group)?;
         }
         // Right under "Always Open in Full Screen", before the separator.
         view.insert(&submenu, 4)?;
@@ -1137,23 +1141,25 @@ impl App {
         }
     }
 
-    /// The logo is watched while a style is chosen and a server is open.
+    /// The logo is watched while any style is chosen and a server is open.
     fn sync_logo_watch(&mut self) {
-        let style = self.config.logo_blink;
+        let styles = self.config.logo_blink;
         let phase = self.phase.borrow();
-        let server = phase.loaded().filter(|_| style != BlinkStyle::Off && logo::available());
+        let server = phase.loaded().filter(|_| styles.any() && logo::available());
         self.logo_watch
-            .sync(server.map(|url| (url.as_str(), self.auth.as_deref(), style)));
+            .sync(server.map(|url| (url.as_str(), self.auth.as_deref(), styles)));
     }
 
-    fn choose_logo_blink(&mut self, style: BlinkStyle) {
+    fn choose_logo_blink(&mut self, signal: Signal, style: BlinkStyle) {
         // A click flips the item it landed on, the chosen one included, so all
-        // of them are set.
-        for (item_style, item) in &self.menu.logo_styles {
-            item.set_checked(*item_style == style);
+        // of that state's are set.
+        for (item_signal, item_style, item) in &self.menu.logo_styles {
+            if *item_signal == signal {
+                item.set_checked(*item_style == style);
+            }
         }
-        let was_off = self.config.logo_blink == BlinkStyle::Off;
-        self.config.logo_blink = style;
+        let was_off = !self.config.logo_blink.any();
+        self.config.logo_blink.set(signal, style);
         self.config_dirty = true;
         self.sync_logo_watch();
         // Only from off: with a style running, a dark logo may be our own.
@@ -1167,8 +1173,8 @@ impl App {
     }
 
     fn on_menu(&mut self, id: &str) {
-        if let Some(style) = BlinkStyle::from_menu_id(id) {
-            self.choose_logo_blink(style);
+        if let Some((signal, style)) = BlinkStyle::from_menu_id(id) {
+            self.choose_logo_blink(signal, style);
             return;
         }
         match id {
