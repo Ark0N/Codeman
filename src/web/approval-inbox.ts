@@ -374,6 +374,21 @@ export class ApprovalInbox {
   }
 
   /**
+   * The list route's sweep: `verifyStillAnswerable`, but never before the delay
+   * `notePrompt` waits out. A frame that shows no dialog proves nothing about a
+   * dialog Ink has not painted yet, and the working line still on screen then
+   * would resolve a live prompt, clearing its red alert on every device. The
+   * list used to run once per page load, which made that rare; a client that
+   * polls it (the macOS app's logo) would hit it on every new dialog. Each
+   * call on an older dialog costs one synchronous pane capture.
+   */
+  sweepForList(id: string): boolean {
+    const item = this.getById(id);
+    if (item && Date.now() - item.createdAt < STALE_CHECK_DELAY_MS) return true;
+    return this.verifyStillAnswerable(id);
+  }
+
+  /**
    * "This session's pane started moving again": re-verify its pending DIALOG
    * item against the screen and resolve it if the dialog is gone.
    *
