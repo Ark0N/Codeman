@@ -149,7 +149,7 @@ shared nor seeded.
 ## Remote SSH cases
 
 `omp` mode is routed through an interactive login shell
-(`exec "$SHELL" -i -l -c 'omp'`), because sshd's remote-command PATH does not
+(`remoteLoginShellCommand('omp')`), because sshd's remote-command PATH does not
 include `~/.local/bin`. Per-session config and `envOverrides` do not cross ssh and are
 rejected rather than silently ignored; use the per-host command override instead.
 

@@ -102,7 +102,7 @@ describe('isMuxAltScreenOnlyStripMode', () => {
       expect(isMuxAltScreenOnlyStripMode(mode, false)).toBe(false);
     }
     // The full strip and the mouse strip already own their modes; never double-gate.
-    for (const mode of ['claude', 'codex', 'gemini', 'opencode', 'copilot'] as const) {
+    for (const mode of ['claude', 'codex', 'gemini', 'opencode', 'copilot', 'pi'] as const) {
       expect(isMuxAltScreenOnlyStripMode(mode, true)).toBe(false);
     }
   });
@@ -372,6 +372,44 @@ describe('strip decision table: live stream = replay, for every stock CLI', () =
  * on itself. Left in, xterm reports a plain drag to the TUI instead of selecting, so Auto Copy and
  * copy-on-select did nothing (only Shift+drag selected). Same strip, same reason.
  */
+describe('pi: alt-screen + mouse DECSETs stripped, 3J kept (#758)', () => {
+  // What fullscreen pi really emits on entering its TUI, read off a pane on 1.1.0, 1.4.0 and 1.5.0.
+  // Tracking comes on once, here, so a replay that drops it leaves the wheel dead unless the
+  // server remembers it. ?1004h (focus reporting) is not a mouse mode and stays.
+  const ENTER = '\x1b[?1049h\x1b[?7l\x1b[?1000h\x1b[?1002h\x1b[?1004h\x1b[?1006h';
+
+  it('is a mouse-strip mode under tmux, and only there', () => {
+    expect(isMuxMouseStripMode('pi', true)).toBe(true);
+    expect(isMuxMouseStripMode('pi', false)).toBe(false);
+  });
+
+  it('drops the alt-screen and mouse enables, and keeps focus reporting and 3J', () => {
+    const session = new Session({ workingDir: '/tmp', mode: 'pi' as never, useMux: true });
+    handleOutput(session, `${ENTER}\x1b[3JTUI`);
+    expect(session.terminalBuffer).toBe('\x1b[?7l\x1b[?1004h\x1b[3JTUI');
+  });
+
+  it('publishes cliMouseTracking so the wheel survives a replay', () => {
+    const session = new Session({ workingDir: '/tmp', mode: 'pi' as never, useMux: true });
+    handleOutput(session, `${ENTER}TUI`);
+    expect(session.toState().cliMouseTracking).toBe(true);
+    handleOutput(session, '\x1b[?1006l\x1b[?1004l\x1b[?1003l\x1b[?1002l\x1b[?1000l');
+    expect(session.toState().cliMouseTracking).toBeFalsy();
+  });
+
+  it('never sets the flag for an inline pi, which emits no mouse enable', () => {
+    const session = new Session({ workingDir: '/tmp', mode: 'pi' as never, useMux: true });
+    handleOutput(session, '\x1b[?2004hpi');
+    expect(session.toState().cliMouseTracking).toBeFalsy();
+  });
+
+  it('leaves a direct-PTY pi pane untouched', () => {
+    const session = new Session({ workingDir: '/tmp', mode: 'pi' as never, useMux: false });
+    handleOutput(session, '\x1b[?1049h\x1b[?1002hTUI');
+    expect(session.terminalBuffer).toBe('\x1b[?1049h\x1b[?1002hTUI');
+  });
+});
+
 describe('copilot: alt-screen + mouse DECSETs stripped, 3J kept', () => {
   it('is a mouse-strip mode under tmux, and only there', () => {
     expect(isMuxMouseStripMode('copilot', true)).toBe(true);

@@ -31,11 +31,15 @@
  * OLDER. "Load older" reads a full budget block of up to {@link MAX_OLDER_SOURCES} sources
  * with older lines per click; with more sources they take turns.
  *
- * WHICH SESSIONS. Local claude sessions. Remote, Docker and non-claude sessions answer
- * `unsupported` and are never read.
+ * WHICH SESSIONS. Claude sessions, local and remote. Docker and non-claude sessions answer
+ * `unsupported` and are never read. The deps get the session and read a remote one over ssh
+ * (`remote-files.ts`): one round trip to find its transcript, one per read (more for a
+ * conversation with hundreds of subagents). A remote read never wakes its host; a sleeping one
+ * is a connect timeout (`unavailable`, stored entries kept).
  *
  * IMAGES. A Bash candidate counts only when the file's mtime lies in the call's window
- * (start − 2 s … end + 2 s), so `ls *.png` lists nothing.
+ * (start − 2 s … end + 2 s), so `ls *.png` lists nothing. Transcript times and mtimes come
+ * from the same host, so a remote host's clock skew to this server does not matter.
  *
  * Tests: `test/edit-history-sync.test.ts`.
  *
@@ -75,21 +79,30 @@ export interface EditHistorySession {
   mode: string;
   remote: SessionRemote | undefined;
   docker?: unknown;
+  /** Set on a wrapper around a foreign tmux session: Codeman holds no transcript id for what runs there. */
+  adopt?: unknown;
   claudeSessionId: string | null;
   /** The session's own `CLAUDE_CONFIG_DIR` (Codeman env override), if it has one. */
   claudeConfigDir?: string;
 }
 
 export interface EditHistorySyncDeps {
-  /** The session's main transcript path, or null when it has none yet. */
-  transcriptPath(session: EditHistorySession): Promise<string | null>;
+  /**
+   * The session's main transcript path, or null when it has none yet. `storedTranscriptId` is
+   * the conversation the stored history holds (null before the first read); see
+   * {@link remoteTranscriptIds}.
+   */
+  transcriptPath(session: EditHistorySession, storedTranscriptId: string | null): Promise<string | null>;
+  /** The session's transcripts (a remote session's on its host). */
   readSources(
+    session: EditHistorySession,
     mainPath: string,
     requests: readonly EditSourceRequest[],
     budget: number,
     opts?: EditSourceReadOptions
   ): Promise<EditSources | null>;
-  probe(paths: readonly string[]): Promise<Array<PathProbe | null>>;
+  /** Bash image candidates of the session, on the host it runs on. */
+  probe(session: EditHistorySession, paths: readonly string[]): Promise<Array<PathProbe | null>>;
   loadStore(sessionId: string): Promise<EditHistoryStore>;
   /** Delete a session's stored history without loading it. */
   deleteStore(sessionId: string): Promise<void>;
@@ -102,10 +115,23 @@ export interface SyncOptions {
   older?: boolean;
 }
 
+/**
+ * The conversation ids a REMOTE session's transcript lookup considers when its claude writes
+ * none now; the most recently written of them wins (`buildRemoteClaudeTranscriptLocateCommand`).
+ * The stored history's conversation must be among them: no hook tells Codeman of a remote
+ * `/clear`, so `claudeSessionId` stays the launch id, and without the stored one the panel
+ * would flip back to the cleared conversation as soon as the remote claude exits.
+ */
+export function remoteTranscriptIds(session: EditHistorySession, storedTranscriptId: string | null): string[] {
+  return [...new Set([storedTranscriptId, session.claudeSessionId || session.id, session.id])].filter(
+    (id): id is string => !!id
+  );
+}
+
 /** Why a session has no edit history, or undefined when it can have one. */
 export function unsupportedReason(session: EditHistorySession): string | undefined {
-  if (session.remote) return 'remote';
   if (session.docker) return 'docker';
+  if (session.adopt) return 'adopted';
   if (getCli(session.mode)?.capabilities.transcript !== 'claude-jsonl') return 'mode';
   return undefined;
 }
@@ -324,16 +350,16 @@ export class EditHistorySync {
     try {
       // This slot's store: a run still in flight after `remove()` cannot reach a later one.
       const store = await this.storeOf(session.id, slot);
-      const path = slot.gone ? null : await this.deps.transcriptPath(session);
+      const path = slot.gone ? null : await this.deps.transcriptPath(session, store.getTranscriptId());
       let found: boolean;
       if (!path) {
         found = false;
       } else if (older) {
-        found = await this.readOlder(path, store, slot);
+        found = await this.readOlder(session, path, store, slot);
       } else {
         found = true;
         for (let pass = 0; pass < MAX_FORWARD_PASSES && found && !slot.gone; pass++) {
-          const r = await this.readForward(path, store);
+          const r = await this.readForward(session, path, store);
           found = r.found;
           if (!r.more) break;
         }
@@ -359,13 +385,17 @@ export class EditHistorySync {
    * short by the shared budget and left for the next pass. A transcript other than the stored
    * one (`/clear`, resume) is read like a first read, once the stored one is read to its end.
    */
-  private async readForward(path: string, store: EditHistoryStore): Promise<{ found: boolean; more: boolean }> {
+  private async readForward(
+    session: EditHistorySession,
+    path: string,
+    store: EditHistoryStore
+  ): Promise<{ found: boolean; more: boolean }> {
     const own = this.storedTranscript(path, store);
     if (own !== path && store.knownSources().length > 0) {
-      const previous = await this.readFrom(own, store, this.forwardRequests(store));
+      const previous = await this.readFrom(session, own, store, this.forwardRequests(store));
       if (previous.more) return { found: true, more: true };
     }
-    return this.readFrom(path, store, own === path ? this.forwardRequests(store) : []);
+    return this.readFrom(session, path, store, own === path ? this.forwardRequests(store) : []);
   }
 
   /**
@@ -378,11 +408,12 @@ export class EditHistorySync {
   }
 
   private async readFrom(
+    session: EditHistorySession,
     path: string,
     store: EditHistoryStore,
     requests: EditSourceRequest[]
   ): Promise<{ found: boolean; more: boolean }> {
-    const res = await this.deps.readSources(path, requests, this.budget);
+    const res = await this.deps.readSources(session, path, requests, this.budget);
     if (!res) return { found: false, more: false };
     this.dropMissing(store, requests, res);
     for (const [agentId, text] of Object.entries(res.metas)) {
@@ -413,11 +444,16 @@ export class EditHistorySync {
       candidates.push(...r.candidates);
       if (f.startOffset + f.chunk.length < f.size) more = true;
     }
-    await this.addImages(store, candidates);
+    await this.addImages(session, store, candidates);
     return { found: true, more };
   }
 
-  private async readOlder(path: string, store: EditHistoryStore, slot: SessionSlot): Promise<boolean> {
+  private async readOlder(
+    session: EditHistorySession,
+    path: string,
+    store: EditHistoryStore,
+    slot: SessionSlot
+  ): Promise<boolean> {
     if (!store.backfillTruncated) return true;
     // Older lines belong to the stored conversation, even before a forward read moved on.
     path = this.storedTranscript(path, store);
@@ -440,7 +476,9 @@ export class EditHistorySync {
     }
     if (requests.length === 0) return true;
     slot.olderAfter = picked[picked.length - 1];
-    const res = await this.deps.readSources(path, requests, this.budget * requests.length, { onlyRequested: true });
+    const res = await this.deps.readSources(session, path, requests, this.budget * requests.length, {
+      onlyRequested: true,
+    });
     if (!res) return false;
     if (res.transcriptId !== store.getTranscriptId()) return true;
     this.dropMissing(store, requests, res);
@@ -462,7 +500,7 @@ export class EditHistorySync {
       });
       candidates.push(...r.candidates);
     }
-    await this.addImages(store, candidates);
+    await this.addImages(session, store, candidates);
     return true;
   }
 
@@ -472,13 +510,17 @@ export class EditHistorySync {
     for (const r of requests) if (!listed.has(r.relPath)) store.dropSource(r.relPath);
   }
 
-  private async addImages(store: EditHistoryStore, candidates: readonly ImageCandidate[]): Promise<void> {
+  private async addImages(
+    session: EditHistorySession,
+    store: EditHistoryStore,
+    candidates: readonly ImageCandidate[]
+  ): Promise<void> {
     const paths = [...new Set(candidates.flatMap((c) => c.paths))];
     // A removed store keeps nothing: do not probe agent-printed paths for it.
     if (paths.length === 0 || store.isRemoved()) return;
     let probes: Array<PathProbe | null>;
     try {
-      probes = await this.deps.probe(paths);
+      probes = await this.deps.probe(session, paths);
     } catch {
       // The edits of this read are in; only its images are lost. The read itself succeeded.
       return;

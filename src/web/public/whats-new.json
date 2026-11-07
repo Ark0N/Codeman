@@ -1,13 +1,13 @@
 {
-  "version": "1.48.0",
+  "version": "1.49.0",
   "highlights": [
-    "Talk to your agents from Discord (#741)",
-    "Edit history panel (#693)",
-    "Custom endpoints go further (#752, #755, #757)",
-    "Clone into a custom folder, and make a folder from the picker (#744, #745)",
-    "Relative links follow your `cd` (#740)",
-    "File links keep the whole name (#735)",
-    "A failed settings save says so (#736)",
-    "Phone keys show a press (#737)"
+    "Open the tmux sessions you started yourself (#510)",
+    "Install without administrator rights (#768)",
+    "Docker Compose starts in two commands (#573)",
+    "Codex sessions can drive other sessions (#753)",
+    "Persian, Arabic and Hebrew read right to left (#715)",
+    "Edit history for remote sessions (#766)",
+    "The Files panel follows the agent into a git worktree (#772, #765)",
+    "One big folder no longer hides the rest (#614)"
   ]
 }

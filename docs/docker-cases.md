@@ -121,6 +121,13 @@ curl -X POST localhost:3000/api/quick-start -d '{"caseName":"sandbox","mode":"cl
 
 ## Attach to a container you already run
 
+⚠️ Two different things are called "adopted". This section is about a CONTAINER
+(`DockerCase.owned === false`). A tmux SESSION a human started inside a container is
+listed by `GET /api/mux/foreign?docker=1` and wrapped by `POST /api/sessions/adopt`, for
+which the container needs a Docker case but no adoption of its own. That one is
+`Session.isAdopted`, with the connection on `Session.adopt.docker` and `session.docker`
+undefined. See `docs/architecture-invariants.md#adopted-foreign-tmux-sessions`.
+
 The tab's **Attach to an existing container** toggle points a case at a container **you**
 built and run. Codeman only ever `docker exec`s into it: it never creates, starts, stops,
 restarts or removes it, and it seeds no credentials into it, so the CLIs inside must already
@@ -202,7 +209,7 @@ The host-gateway mapping, `CODEMAN_API_URL` derivation, host-guard allowlist, an
 ## Notes & limits
 
 - Requires Docker (or Podman) with a reachable daemon; tmux must be present in the base image (a hard prerequisite, probed at link time).
-- Per-session `envOverrides` / `effort` / per-CLI config are rejected for docker cases (they do not cross into the container); configure the container via the docker host's per-mode command override instead.
+- Per-session `envOverrides` / `effort` / per-CLI config are rejected for docker cases (they do not cross into the container); configure the container via the docker host's per-mode command override instead. A `$` in that override expands inside the container, never on this host, and a bare `$VAR` in `extraCreateArgs`/`extraExecArgs` reaches `docker` as those literal characters, so write the value out.
 - macOS Docker Desktop takes a dedicated uid path (the baked image uid; memory caps are subject to the VM ceiling).
 
 Design + rationale: [`docker-cases-plan.md`](./docker-cases-plan.md).

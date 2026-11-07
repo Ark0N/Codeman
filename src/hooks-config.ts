@@ -1433,7 +1433,8 @@ export async function installAgentSkillInto(skillDir: string): Promise<AgentSkil
  * the skill (`agentSkillDir()` non-null, any CLI: the preamble is bash + curl + jq, nothing
  * claude-specific; a remote or in-container HOME is not this filesystem) and treat it as
  * best-effort: the skill's §0 fallback block self-heals a missing or stale file. Codex
- * caveat: codex 0.162 runs tool commands in a shared app-server daemon whose
+ * caveat: a local codex started without `--no-daemon` (older than 0.162, or its version
+ * probe failed) can run tool commands in a shared app-server daemon whose
  * `CODEMAN_SESSION_ID` is the starting session's, so its loader looks for that session's
  * file and its self id is wrong; the skill tells the agent how to notice.
  */

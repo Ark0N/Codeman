@@ -31,8 +31,11 @@ export type SupervisorKind = 'systemd' | 'launchd' | 'launchd-daemon' | 'docker-
  * How Codeman was installed. `git` and `docker-compose` can self-update in
  * place; `docker-compose` is a git checkout bind-mounted into the container, so
  * the pull/build happen on the host filesystem and survive container recreation.
+ * `archive` is what `install.sh` leaves on a machine with no working git (its
+ * no-admin route): the source unpacked from an archive, with nothing for the
+ * in-app updater to pull into, so it updates by re-running the installer.
  */
-export type InstallKind = 'git' | 'docker-compose' | 'npm' | 'unknown';
+export type InstallKind = 'git' | 'docker-compose' | 'npm' | 'archive' | 'unknown';
 
 /**
  * Why an in-place container update is refused. Each is derived mechanically from

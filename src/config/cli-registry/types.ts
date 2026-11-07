@@ -112,7 +112,7 @@ export type ModelConfigResolverName = 'deepseek-route';
  * arbitrary setting onto a command line; each name must also be a `SettingsUpdateSchema`
  * key, which the resolver's typing enforces.
  */
-export type LaunchDefaultSettingKey = 'codexModel' | 'codexReasoningEffort';
+export type LaunchDefaultSettingKey = 'codexModel' | 'codexReasoningEffort' | 'codexNetworkAccess';
 
 /** The MCP config dialects `src/mcp-sync.ts` has an adapter for. */
 export type McpConfigFormat =
@@ -546,7 +546,7 @@ export interface CliCapabilities {
    * `strip-full` is `isAltScreenStripMode`; `strip-mux-and-mouse` is `isMuxMouseStripMode`;
    * every other value takes `isMuxAltScreenOnlyStripMode`, so at runtime `preserve` and
    * `strip-mux-only` are the same row — `preserve` only says what such a CLI's pane
-   * holds (terminal-owned scrollback: a shell, pi), not a different strip.
+   * holds (terminal-owned scrollback: a shell), not a different strip.
    *
    * - alt-screen: the tmux CLIENT emits `smcup` as its first bytes at attach, parking
    *   xterm in the scrollback-less alternate buffer; a pane program's own toggles never
@@ -560,8 +560,8 @@ export interface CliCapabilities {
    *   own mouse support must work in the pane (htop/vim in a shell).
    *
    * Stock CLIs: `strip-full` = claude, codex, gemini (Ink TUIs); `strip-mux-and-mouse` =
-   * opencode and copilot (full-screen TUIs that enable tracking themselves); `strip-mux-only` =
-   * antigravity, grok, deepseek, omp; `preserve` = shell, pi.
+   * opencode, copilot and pi (full-screen TUIs that enable tracking themselves); `strip-mux-only` =
+   * antigravity, grok, deepseek, omp; `preserve` = shell.
    *
    * A fourth combination is the point to split this into flags; three is still cheaper
    * as an enum.

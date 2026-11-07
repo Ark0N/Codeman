@@ -151,6 +151,61 @@ jobs:
             RECONFIGURE=0; parse_flags --port 4001; [[ "$RECONFIGURE" == "1" ]]
             echo "bash $BASH_VERSION: question phase (flags, launch default, occupied :443, rename opt-in, kept password, start line) ok"
           '
+          # No-admin route: the helpers that decide what gets downloaded and whether it is
+          # trusted (the Node.js checksum pick, the tmux digest table, the verify step), the
+          # stop-before-download check, and an archive install plus its replacement, all
+          # in bash 3.2. This image is Alpine, so it is also the one place the musl branch
+          # runs for real: a machine the route cannot serve must stop BEFORE a download.
+          docker run --rm -v "$PWD":/w -w /w -e CODEMAN_INSTALL_SH_LIB=1 -e HOME=/tmp/h bash:3.2 bash -c '
+            set -euo pipefail
+            mkdir -p /tmp/h /tmp/src/Codeman-1/src
+            . /w/install.sh
+            sha=$(printf "%064d" 7)
+            sums=$(printf "%s  node-v22.1.0-linux-x64.tar.gz\nnothex  node-v22.1.0-linux-arm64.tar.gz\n" "$sha")
+            [[ "$(printf "%s\n" "$sums" | pick_node_tarball linux-x64)" == "$sha node-v22.1.0-linux-x64.tar.gz" ]]
+            if printf "%s\n" "$sums" | pick_node_tarball linux-arm64 >/dev/null; then
+              echo "accepted a checksum that is not 64 hex digits" >&2; exit 1
+            fi
+            for p in linux-x86_64 linux-arm64 macos-arm64 macos-x86_64; do
+              d=$(tmux_build_sha256 "$p"); [[ ${#d} -eq 64 ]]
+            done
+            printf codeman > /tmp/f; good=$(sha256_file /tmp/f); [[ ${#good} -eq 64 ]]
+            verify_sha256 /tmp/f "$good"
+            if verify_sha256 /tmp/f "${good%?}x" || verify_sha256 /tmp/f ""; then
+              echo "accepted a wrong or empty checksum" >&2; exit 1
+            fi
+            is_musl_libc
+            NO_ADMIN=1; NONINTERACTIVE=1
+            download() { echo DOWNLOADED; }; download_to_stdout() { echo DOWNLOADED; }
+            check_node() { return 1; }; check_tmux() { return 1; }; check_git() { return 1; }
+            check_build_tools() { return 0; }
+            if out=$( (ask_dependencies_no_admin linux) 2>&1 ); then
+              echo "did not stop on a musl system" >&2; exit 1
+            fi
+            case "$out" in
+              *DOWNLOADED*) echo "downloaded before stopping: $out" >&2; exit 1 ;;
+              *musl*) ;;
+              *) echo "stopped for the wrong reason: $out" >&2; exit 1 ;;
+            esac
+            # An archive install, then its replacement beside it (busybox tar, bash 3.2).
+            printf "{ \"version\": \"1.0.0\" }\n" > /tmp/src/Codeman-1/package.json
+            tar -czf /tmp/one.tar.gz -C /tmp/src Codeman-1
+            printf "{ \"version\": \"2.0.0\" }\n" > /tmp/src/Codeman-1/package.json
+            tar -czf /tmp/two.tar.gz -C /tmp/src Codeman-1
+            INSTALL_DIR=/tmp/h/app; LOG_FILE=/dev/null
+            download() { cp "${1#file://}" "$2"; }; run_step() { shift; "$@"; }
+            CODEMAN_TARBALL_URL=file:///tmp/one.tar.gz; install_or_update_repo >/dev/null 2>&1; finish_source_swap
+            [[ -f "$INSTALL_DIR/$SOURCE_MARKER" && -z "$SOURCE_STAGING" ]]
+            grep -q 1.0.0 "$INSTALL_DIR/package.json"
+            touch "$INSTALL_DIR/from-the-old-build"
+            CODEMAN_TARBALL_URL=file:///tmp/two.tar.gz; install_or_update_repo >/dev/null 2>&1
+            [[ "$SOURCE_STAGING" == "$INSTALL_DIR.new" ]] && grep -q 1.0.0 "$INSTALL_DIR/package.json"
+            finish_source_swap
+            grep -q 2.0.0 "$INSTALL_DIR/package.json"
+            [[ ! -e "$INSTALL_DIR/from-the-old-build" && ! -e "$INSTALL_DIR.new" && ! -e "$INSTALL_DIR.old" ]]
+            NO_ADMIN=""; resolve_admin_mode; [[ "$NO_ADMIN" == "0" ]]
+            echo "bash $BASH_VERSION: no-admin route (checksums, stop before download, archive install and swap) ok"
+          '
 
       - name: CLI catalogue artifacts are in sync with stock.ts
         run: npm run generate:cli-catalog -- --check

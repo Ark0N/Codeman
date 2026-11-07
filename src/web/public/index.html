@@ -583,6 +583,12 @@
             </div>
             <div class="history-list" id="historyList"></div>
           </div>
+          <!-- Sessions a human started outside Codeman (foreign-sessions.js).
+               Hidden until a scan finds one; never rendered empty on a fresh
+               install, where an empty block reads as a broken feature. -->
+          <div class="welcome-foreign">
+            <div class="foreign-sessions" id="foreignSessions" hidden></div>
+          </div>
           <p class="welcome-hint">Or click Run to start</p>
           <button class="welcome-ralph-link" onclick="app.showRalphWizard()">Start Ralph Loop &rarr;</button>
         </div>
@@ -616,6 +622,11 @@
           <button class="btn-icon-sm" onclick="app.toggleFileBrowserExpand()" title="Expand/Collapse All" id="fileBrowserExpandBtn">&#x229E;</button>
           <button class="btn-icon-sm" onclick="app.closeFileBrowserPanel()" title="Close">&times;</button>
         </div>
+      </div>
+      <div class="file-browser-root" id="fileBrowserRoot" hidden>
+        <span class="file-browser-root-label" id="fileBrowserRootLabel"></span>
+        <span class="file-browser-root-name" id="fileBrowserRootName" data-i18n-skip></span>
+        <button type="button" class="file-browser-root-switch" id="fileBrowserRootSwitch" onclick="app.toggleFileBrowserRoot()">Session folder</button>
       </div>
       <div class="file-browser-search">
         <input type="text" id="fileBrowserSearch" placeholder="Filter files..." oninput="app.filterFileBrowser(this.value)">
@@ -1829,11 +1840,11 @@
           <p class="modal-session-name" id="closeConfirmSessionName"></p>
         </div>
         <div class="close-options">
-          <button class="close-option" onclick="app.confirmCloseSession(false)">
-            <span class="close-option-title">Remove Tab</span>
-            <span class="close-option-desc">Tmux session keeps running in background</span>
+          <button class="close-option" onclick="app.confirmCloseSession(false)" id="closeConfirmKeepBtn">
+            <span class="close-option-title" id="closeConfirmKeepTitle">Remove Tab</span>
+            <span class="close-option-desc" id="closeConfirmKeepDesc">Tmux session keeps running in background</span>
           </button>
-          <button class="close-option close-option-danger" onclick="app.confirmCloseSession(true)">
+          <button class="close-option close-option-danger" onclick="app.confirmCloseSession(true)" id="closeConfirmKillBtn">
             <span class="close-option-title" id="closeConfirmKillTitle">Kill Tmux & Claude Code</span>
             <span class="close-option-desc">Terminate the session completely</span>
           </button>
@@ -3045,6 +3056,13 @@
                     </div>
                     <label class="switch switch-sm"><input type="checkbox" id="appSettingsCodexDangerouslyBypassApprovals"><span class="slider"></span></label>
                   </div>
+                  <div class="set-row" data-search="codex network access sandbox loopback codeman skill orchestrate spawn">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Allow network access</span>
+                      <span class="set-row-desc">Lets commands in Codex's workspace-write sandbox use the network, which the Codeman skill needs to reach this server. Those commands can then call Codeman's API, which can start a session outside the sandbox with no approval prompt, even when a password is set. So with this on, Codex's sandbox does not contain a prompt-injected command: treat it as close to Bypass. Applies to every new local Codex session, not scheduled jobs. It does not change Codex's sandbox mode: a folder Codex runs read-only (one it does not trust) keeps the network closed and asks per command.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsCodexNetworkAccess"><span class="slider"></span></label>
+                  </div>
                   <div class="set-row" data-search="codex animations status effects">
                     <div class="set-row-text">
                       <span class="set-row-label">Animated status effects</span>
@@ -3812,15 +3830,15 @@
             </div>
             <div class="form-row" id="cloneCustomPathToggleRow">
               <label class="checkbox-row"><input type="checkbox" id="cloneCustomPathToggle" onchange="app.toggleCloneCustomPath()"> 📁 Clone into a custom folder</label>
-              <span class="form-hint">By default the clone goes under ~/codeman-cases. Choose a folder and the repository is cloned into that folder itself (an empty folder, or one that does not exist yet); it is listed like any other case, and deleting the case only unlinks it (your files stay).</span>
+              <span class="form-hint">By default the clone goes under ~/codeman-cases. Choose a folder instead and the repository is cloned into a subfolder of it named after the case, the same way it goes under ~/codeman-cases; it is listed like any other case, and deleting the case only unlinks it (your files stay).</span>
             </div>
             <div class="form-row" id="cloneCustomPathRow" style="display:none">
-              <label>Folder</label>
+              <label>Parent Folder</label>
               <div class="path-input-group">
                 <input type="text" id="cloneCasePath" placeholder="~/projects" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" oninput="app.updateCloneCasePathPreview()">
                 <button type="button" class="btn path-input-browse" onclick="app.openCloneCasePathPicker()">Browse&hellip;</button>
               </div>
-              <span class="form-hint" id="cloneCasePathPreview">Pick an empty folder, or one that does not exist yet, to clone into.</span>
+              <span class="form-hint" id="cloneCasePathPreview">Pick the folder the repository should be cloned inside. It goes into a subfolder named after the case.</span>
             </div>
             <div class="form-row">
               <label>Branch or Tag (optional)</label>
@@ -4685,6 +4703,7 @@
   <script defer src="webview-tabs.js"></script>
   <script defer src="mobile-overview.js"></script>
   <script defer src="home-sessions.js"></script>
+  <script defer src="foreign-sessions.js"></script>
   <script defer src="git-status-ui.js"></script>
   <script defer src="edit-history-ui.js"></script>
   <script defer src="entrance-animations.js"></script>

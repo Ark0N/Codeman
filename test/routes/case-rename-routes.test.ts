@@ -6,7 +6,6 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -26,6 +25,7 @@ import { SETTINGS_PATH, resolveCasesDir } from '../../src/web/route-helpers.js';
 import { caseSessionSettled, claudeProjectDirName } from '../../src/case-rename.js';
 import { Session } from '../../src/session.js';
 import { safeRmHomeTree } from '../mocks/index.js';
+import { mutateLinkedCases } from '../../src/web/linked-cases-writer.js';
 import { mutateSettingsFile } from '../../src/web/settings-writer.js';
 
 const LINKED = () => dataPath('linked-cases.json');
@@ -36,6 +36,32 @@ let claudeCfg = '';
 const made: string[] = [];
 
 const linked = (): Record<string, string> => (existsSync(LINKED()) ? JSON.parse(readFileSync(LINKED(), 'utf8')) : {});
+/**
+ * The registry is replaced by renaming a temp file over it, which a read-only file does not stop, so a
+ * failed registry write is injected at that rename. `before` runs first (another writer landing then).
+ */
+const failRegistryWrite = (before?: () => Promise<unknown>, alsoFail?: (from: string) => boolean) => {
+  const realRename = fs.rename;
+  return vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+    if (to === LINKED()) {
+      if (before) await before();
+      throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+    }
+    if (alsoFail?.(String(from))) throw Object.assign(new Error('resource busy'), { code: 'EBUSY' });
+    return realRename(from, to);
+  });
+};
+/**
+ * Runs `during` right after `folder` moved: past every check the route makes before it writes the
+ * registry, and before that write starts. Every other rename goes through untouched.
+ */
+const afterFolderMove = (folder: string, during: () => Promise<unknown>) => {
+  const realRename = fs.rename;
+  return vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+    await realRename(from, to);
+    if (from === folder) await during();
+  });
+};
 const settings = (): Record<string, unknown> => JSON.parse(readFileSync(SETTINGS_PATH, 'utf8'));
 const rename = (app: Awaited<ReturnType<typeof createRouteTestHarness>>['app'], name: string, payload: object) =>
   app.inject({ method: 'POST', url: `/api/cases/${name}/rename`, payload });
@@ -278,8 +304,13 @@ describe('POST /api/cases/:name/rename (a linked case)', () => {
     writeFileSync(LINKED(), JSON.stringify({ proj: real }));
     writeFileSync(SETTINGS_PATH, JSON.stringify({ caseOrder: ['a', 'proj', 'b'], lastUsedCase: 'proj' }));
     // the registry reads fine but cannot be written: the rename must undo the folder move
-    chmodSync(LINKED(), 0o444);
-    const res = await rename(app, 'proj', { newName: 'renamed', renameFolder: true });
+    const spy = failRegistryWrite();
+    let res;
+    try {
+      res = await rename(app, 'proj', { newName: 'renamed', renameFolder: true });
+    } finally {
+      spy.mockRestore();
+    }
     expect(res.statusCode).toBe(500);
     expect(existsSync(real)).toBe(true);
     expect(linked()).toEqual({ proj: real });
@@ -294,14 +325,9 @@ describe('POST /api/cases/:name/rename (a linked case)', () => {
     mkdirSync(real);
     writeFileSync(LINKED(), JSON.stringify({ proj: real }));
     writeFileSync(SETTINGS_PATH, JSON.stringify({ caseOrder: ['a', 'proj', 'b'], lastUsedCase: 'proj' }));
-    chmodSync(LINKED(), 0o444);
     // Another writer (a settings save) lands after the rename wrote settings.json and before the
     // registry write fails.
-    const realWriteFile = fs.writeFile;
-    const spy = vi.spyOn(fs, 'writeFile').mockImplementation(async (file, data, options) => {
-      if (file === LINKED()) await mutateSettingsFile((current) => ({ ...current, agentSkillEnabled: true }));
-      return realWriteFile(file, data, options);
-    });
+    const spy = failRegistryWrite(() => mutateSettingsFile((current) => ({ ...current, agentSkillEnabled: true })));
     try {
       const res = await rename(app, 'proj', { newName: 'renamed', renameFolder: true });
       expect(res.statusCode).toBe(500);
@@ -309,6 +335,74 @@ describe('POST /api/cases/:name/rename (a linked case)', () => {
       spy.mockRestore();
     }
     expect(settings()).toEqual({ caseOrder: ['a', 'proj', 'b'], lastUsedCase: 'proj', agentSkillEnabled: true });
+  });
+
+  describe('when the registry changes after the first check', () => {
+    let real = '';
+    type App = Awaited<ReturnType<typeof createRouteTestHarness>>['app'];
+    const renameRacing = async (app: App, during: () => Promise<unknown>) => {
+      const spy = afterFolderMove(real, during);
+      try {
+        return await rename(app, 'proj', { newName: 'renamed', renameFolder: true });
+      } finally {
+        spy.mockRestore();
+      }
+    };
+    const expectFolderAndSettingsBack = () => {
+      expect(existsSync(real)).toBe(true);
+      expect(existsSync(join(work, 'renamed'))).toBe(false);
+      expect(settings()).toEqual({ caseOrder: ['a', 'proj', 'b'], lastUsedCase: 'proj' });
+    };
+    beforeEach(() => {
+      real = join(work, 'my-project');
+      mkdirSync(real);
+      writeFileSync(LINKED(), JSON.stringify({ proj: real }));
+      writeFileSync(SETTINGS_PATH, JSON.stringify({ caseOrder: ['a', 'proj', 'b'], lastUsedCase: 'proj' }));
+    });
+
+    it('a name linked meanwhile is 409 EXISTS: the link stands and the rename is undone', async () => {
+      const { app } = await createRouteTestHarness(registerCaseRoutes);
+      const other = join(work, 'other');
+      mkdirSync(other);
+      const res = await renameRacing(app, () =>
+        app.inject({ method: 'POST', url: '/api/cases/link', payload: { name: 'renamed', path: other } })
+      );
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({ errorCode: 'ALREADY_EXISTS', renameCode: 'EXISTS', stoppedSessions: 0 });
+      expect(linked()).toEqual({ proj: real, renamed: other });
+      expectFolderAndSettingsBack();
+    });
+
+    it('an old entry unlinked meanwhile is 409 BUSY: the rename does not bring it back', async () => {
+      const { app } = await createRouteTestHarness(registerCaseRoutes);
+      const res = await renameRacing(app, () => app.inject({ method: 'DELETE', url: '/api/cases/proj' }));
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({ errorCode: 'CONFLICT', renameCode: 'BUSY', stoppedSessions: 0 });
+      expect(linked()).toEqual({});
+      expectFolderAndSettingsBack();
+    });
+
+    it('an old entry pointed at another folder meanwhile is 409 BUSY: that entry is kept', async () => {
+      const { app } = await createRouteTestHarness(registerCaseRoutes);
+      const other = join(work, 'other');
+      const res = await renameRacing(app, () => mutateLinkedCases((current) => ({ ...current, proj: other })));
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({ errorCode: 'CONFLICT', renameCode: 'BUSY' });
+      expect(linked()).toEqual({ proj: other });
+      expectFolderAndSettingsBack();
+    });
+
+    it('a registry that stopped parsing is refused 409 CONFLICT and left byte for byte', async () => {
+      const { app } = await createRouteTestHarness(registerCaseRoutes);
+      const torn = `{ "proj": "${real}" }tail"`;
+      const res = await renameRacing(app, async () => writeFileSync(LINKED(), torn));
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({ errorCode: 'CONFLICT', stoppedSessions: 0 });
+      expect(res.json().error).toContain('is not a valid JSON object');
+      expect(res.json()).not.toHaveProperty('renameCode');
+      expect(readFileSync(LINKED(), 'utf8')).toBe(torn);
+      expectFolderAndSettingsBack();
+    });
   });
 
   it('refuses to rename while settings.json is not a JSON object, leaving the folder and the file alone', async () => {
@@ -351,13 +445,8 @@ describe('POST /api/cases/:name/rename (a linked case)', () => {
     const real = join(work, 'my-project');
     mkdirSync(real);
     writeFileSync(LINKED(), JSON.stringify({ proj: real }));
-    chmodSync(LINKED(), 0o444);
     const moved = join(work, 'renamed');
-    const realRename = fs.rename;
-    const spy = vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
-      if (from === moved) throw Object.assign(new Error('resource busy'), { code: 'EBUSY' });
-      return realRename(from, to);
-    });
+    const spy = failRegistryWrite(undefined, (from) => from === moved);
     try {
       const res = await rename(app, 'proj', { newName: 'renamed', renameFolder: true });
       expect(res.statusCode).toBe(500);
@@ -373,9 +462,14 @@ describe('POST /api/cases/:name/rename (a linked case)', () => {
     const real = join(work, 'my-project');
     mkdirSync(real);
     writeFileSync(LINKED(), JSON.stringify({ proj: real }));
-    chmodSync(LINKED(), 0o444);
     (ctx.sessions as Map<string, unknown>).set('s1', { id: 's1', name: 'w1', workingDir: real });
-    const res = await rename(app, 'proj', { newName: 'renamed', renameFolder: true, stopSessions: true });
+    const spy = failRegistryWrite();
+    let res;
+    try {
+      res = await rename(app, 'proj', { newName: 'renamed', renameFolder: true, stopSessions: true });
+    } finally {
+      spy.mockRestore();
+    }
     expect(res.statusCode).toBe(500);
     expect(res.json().stoppedSessions).toBe(1);
     expect(ctx.cleanupSession).toHaveBeenCalledWith('s1', true, 'case_rename');

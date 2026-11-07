@@ -81,6 +81,8 @@ export function registerGitStatusRoutes(
     const session = findSessionOrFail(ctx, id, req);
     if (session.remote) return { success: true, data: emptyOverview('unsupported', { reason: 'remote' }) };
     if (session.docker) return { success: true, data: emptyOverview('unsupported', { reason: 'docker' }) };
+    // An adopted wrapper's folder is the neutral `/tmp`, so a scan would run git on whatever sits there.
+    if (session.isAdopted) return { success: true, data: emptyOverview('unsupported', { reason: 'adopted' }) };
     return {
       success: true,
       data: await getGitWorkspaceOverview(session.workingDir, {
@@ -103,9 +105,12 @@ export function registerGitStatusRoutes(
     const { repo, path, kind } = query;
     const limits = limitsFrom(query);
     const session = findSessionOrFail(ctx, id, req);
-    if (session.remote || session.docker) {
+    if (session.remote || session.docker || session.isAdopted) {
       reply.code(400);
-      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Git is not available for remote or Docker sessions');
+      return createErrorResponse(
+        ApiErrorCode.INVALID_INPUT,
+        'Git is not available for remote, Docker or adopted sessions'
+      );
     }
     const repoRoot = repo
       ? await findWorkspaceRepo(session.workingDir, repo, {
@@ -159,6 +164,7 @@ export function registerGitStatusRoutes(
     const session = findSessionOrFail(ctx, id, req);
     if (session.remote) return { success: true, data: emptyReport('unsupported', { reason: 'remote' }) };
     if (session.docker) return { success: true, data: emptyReport('unsupported', { reason: 'docker' }) };
+    if (session.isAdopted) return { success: true, data: emptyReport('unsupported', { reason: 'adopted' }) };
     // Fail CLOSED on a Docker case list that cannot be read: a fetch runs the repository's hooks, so it never
     // runs without knowing which folders a container can write to. Answered as a failed run (`state: 'error'`),
     // published like one, so the Session Options Git row shows it.

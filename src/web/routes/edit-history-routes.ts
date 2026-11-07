@@ -7,8 +7,8 @@
  *   POST /api/sessions/:id/edits/older      read the next older block, then list
  *
  * Read-only, and reads only on these requests (the panel drives it; nothing syncs in the
- * background). Remote, Docker and non-claude sessions answer `state: 'unsupported'`
- * without being read. Ownership goes through `findSessionOrFail` with `req`, like every
+ * background). A remote session is read over ssh and never woken; Docker and non-claude
+ * sessions answer `state: 'unsupported'` without being read. Ownership goes through `findSessionOrFail` with `req`, like every
  * session-scoped route. No route here serves a file: an image entry is shown through the
  * existing file routes (workspace `file-raw`, or the attachment routes outside it).
  */
@@ -86,7 +86,7 @@ function listOf(
   return list;
 }
 
-/** The answer for a session that is never read (remote, Docker, non-claude): no store involved. */
+/** The answer for a session that is never read (Docker, non-claude): no store involved. */
 function unsupportedList(reason: string): EditHistoryList {
   return { state: 'unsupported', reason, backfillTruncated: false, agents: {}, entries: [] };
 }
@@ -99,6 +99,7 @@ export function registerEditHistoryRoutes(app: FastifyInstance, ctx: SessionPort
       mode: session.mode,
       remote: session.remote,
       docker: session.docker,
+      adopt: session.adopt,
       claudeSessionId: session.claudeSessionId,
       claudeConfigDir: session.claudeConfigDir(),
     };

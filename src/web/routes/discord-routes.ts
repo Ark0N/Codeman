@@ -204,7 +204,9 @@ export function registerDiscordRoutes(app: FastifyInstance, deps: DiscordRouteDe
     }
     let upload: { name: string; data: Uint8Array } | undefined;
     if (file !== undefined) {
-      const problem = await fileProblem(session.workingDir, session.remote, file);
+      const problem = session.isAdopted
+        ? 'Adopted sessions do not expose a trusted attachment workspace'
+        : await fileProblem(session.workingDir, session.remote, file);
       if (typeof problem === 'string') {
         refundNotifyToken(session.id);
         reply.code(400);

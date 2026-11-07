@@ -95,7 +95,7 @@ export interface GitWorkspaceStatus {
    * `unsupported`: a remote or Docker session (never inspected). `error`: git failed; see `error`.
    */
   state: 'ok' | 'not-a-repo' | 'unsupported' | 'error';
-  reason?: 'remote' | 'docker';
+  reason?: 'remote' | 'docker' | 'adopted';
   error?: string;
   repoRoot?: string;
   /** Null when HEAD is detached. */
@@ -482,7 +482,7 @@ export interface GitRepoEntry {
 export interface GitWorkspaceOverview {
   /** `ok` when at least one repository was found; the other states are as in `GitWorkspaceStatus`. */
   state: 'ok' | 'not-a-repo' | 'unsupported' | 'error';
-  reason?: 'remote' | 'docker';
+  reason?: 'remote' | 'docker' | 'adopted';
   error?: string;
   repos: GitRepoEntry[];
   /** More than `repoLimit` repositories were found; only the first are reported. */

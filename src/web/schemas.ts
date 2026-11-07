@@ -371,6 +371,7 @@ const CodexConfigSchema = z
       .regex(/^[a-zA-Z0-9_-]+$/)
       .optional(),
     dangerouslyBypassApprovals: z.boolean().optional(),
+    networkAccess: z.boolean().optional(),
     animations: z.boolean().optional(),
     renderMode: z
       .enum(['scrollback', 'hybrid'])
@@ -867,6 +868,8 @@ const RemoteCommandOverridesSchema = z
     pi: z.string().min(1).max(300).optional(),
     grok: z.string().min(1).max(300).optional(),
     deepseek: z.string().min(1).max(300).optional(),
+    omp: z.string().min(1).max(300).optional(),
+    copilot: z.string().min(1).max(300).optional(),
   })
   .strict()
   .optional();
@@ -878,11 +881,11 @@ const RemoteCommandOverridesSchema = z
 const NO_SHELL_INJECTION = /^[^\n\r\0`]*$/;
 const noCommandSubstitution = (s: string) => !s.includes('$(');
 
-// `remotePath`/`identityFile` are shell-escaped, then the whole launch command is
-// embedded via `JSON.stringify(...)` inside `bash -c "..."` (tmux-manager). That
-// outer DOUBLE-quote layer re-exposes `$(...)`, backticks, and `$VAR` even though
-// the inner value is single-quoted — so a `$(cmd)` in the path would run LOCALLY at
-// launch. Reject `$` and backtick (and newline/CR/NUL) entirely at the boundary.
+// `remotePath`/`identityFile` are shell-escaped, and a remote launch reaches `bash -c`
+// single-quoted (`bashCArg()` in tmux-manager). They are also pasted into strings the
+// far end's shells parse, and hosts stored before a launch-quoting change are read with
+// no schema, so `$` and backtick (and newline/CR/NUL) stay rejected at the boundary as
+// defense in depth, whatever the current quoting does with them.
 const NO_SHELL_META = /^[^\n\r\0`$]*$/;
 
 export const RemoteHostSchema = z.object({
@@ -982,10 +985,10 @@ export const RemoteCaseLinkSchema = z.object({
 //
 // Docker mode is a location overlay on cases (see docs/docker-cases-plan.md),
 // the analog of the remote-SSH schemas above. `image`, `hostWorkspacePath`,
-// `containerWorkdir`, and `container` all reach the outer `bash -c "..."` launch
-// layer, so they carry NO_SHELL_META (rejects `$`/backtick that survive the
-// double-quote layer) exactly like remotePath/identityFile. `--privileged` and
-// any docker-socket mount are structurally unrepresentable (never accepted).
+// `containerWorkdir`, and `container` all reach the `bash -c` launch layer, so they
+// carry NO_SHELL_META (rejects `$`/backtick) exactly like remotePath/identityFile.
+// `--privileged` and any docker-socket mount are structurally unrepresentable
+// (never accepted).
 
 const DockerResourceLimitsSchema = z
   .object({
@@ -1721,6 +1724,7 @@ export const SettingsUpdateSchema = z
       .optional(),
     codexReasoningEffort: z.enum(['', ...CODEX_REASONING_EFFORTS]).optional(),
     codexDangerouslyBypassApprovals: z.boolean().optional(),
+    codexNetworkAccess: z.boolean().optional(),
     codexAnimationsEnabled: z.boolean().optional(),
     // Terminal history and retention
     terminalScrollbackLines: z
@@ -2521,6 +2525,27 @@ export const CustomModelSelectionSchema = z.union([
   }),
   z.object({ clear: z.literal(true) }),
 ]);
+/**
+ * Adopt a FOREIGN tmux session (one a human started outside Codeman).
+ *
+ * ⚠️ The body carries ONLY the opaque candidate id from `GET /api/mux/foreign`.
+ * The socket path, session name and host are re-resolved server-side by re-running
+ * discovery, so a browser can never hand the launch chain a path or a session name
+ * to interpolate. That is the same discipline that keeps the docker-adopt and
+ * remote-attach paths free of caller-supplied command fragments.
+ */
+export const AdoptForeignSessionSchema = z
+  .object({
+    id: z.string().min(1).max(64),
+    /** Optional tab name; defaults to the foreign session's own name. */
+    name: z.string().max(128).optional(),
+    /** Include docker locations in the re-resolve (must match the listing call). */
+    docker: z.boolean().optional(),
+    /** Include remote locations in the re-resolve. */
+    remote: z.boolean().optional(),
+    parentSessionId: z.string().max(64).optional(),
+  })
+  .strict();
 
 /** Agent inspection bounds are bytes of evidence, independent of the JSON envelope. */
 export const AgentInspectQuerySchema = z

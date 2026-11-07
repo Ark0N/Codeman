@@ -135,22 +135,30 @@ function realClaudeConfigDir(): string {
 }
 
 /**
- * Symlinks `<isolatedDir>/projects` back to the real, shared `~/.claude/projects`, so an
- * isolated `CLAUDE_CONFIG_DIR` (used to keep an injected API key away from a stored OAuth
- * session — see `configDirVar` on customModelInjection) doesn't also blind the response
- * viewer, subagent windows, and Read My Mind for that session (docs/wiki/Agent-CLIs.md).
- * Best-effort: a platform that refuses symlinks (unprivileged Windows without a junction
- * fallback working, e.g.) just keeps the pre-existing documented side effect instead of
- * failing the whole custom-model apply over a nice-to-have.
+ * Symlinks `<isolatedDir>/projects` back to the session's own config dir when it set one,
+ * else the real, shared `~/.claude/projects`, so an isolated `CLAUDE_CONFIG_DIR` (used to
+ * keep an injected API key away from a stored OAuth session, see `configDirVar` on
+ * customModelInjection) doesn't also blind the response viewer, subagent windows, and Read
+ * My Mind for that session (docs/wiki/Agent-CLIs.md). Best-effort: a platform that refuses
+ * symlinks (unprivileged Windows without a junction fallback working, e.g.) just keeps the
+ * pre-existing documented side effect instead of failing the whole custom-model apply over
+ * a nice-to-have.
+ *
+ * The own dir matters beyond that: the resume pin looks in `<isolatedDir>/projects`, so the
+ * server's tree would hide the conversation on apply and keep the endpoint's transcript out
+ * of the own dir's sight on clear. Same absolute-only and no-self-link rules as
+ * `linkRealHomeEntries()`, and a relative value of the server's own gets no link, since
+ * joining it would create `projects` under the server's working directory.
+ *
+ * ⚠️ The link target is a user-chosen path and `linkRealHomeEntry()` probes and creates it
+ * synchronously: every caller of `applyCustomModelInjection` passes a lookup that went
+ * through `guardSessionConfigDirHome()` first (rule #516).
  */
-function linkSharedProjectsDir(isolatedDir: string): void {
-  const link = join(isolatedDir, 'projects');
-  if (existsSync(link)) return; // already linked (idempotent re-apply) or real dir wrote one
-  try {
-    symlinkSync(join(realClaudeConfigDir(), 'projects'), link, platform() === 'win32' ? 'junction' : 'dir');
-  } catch {
-    // best-effort only — response viewer/subagent windows go blind for this session instead
-  }
+function linkSharedProjectsDir(isolatedDir: string, sessionConfigDir?: string): void {
+  const own = sessionConfigDir?.trim();
+  const configDir = own && own !== isolatedDir && isAbsolute(own) ? own : realClaudeConfigDir();
+  if (!isAbsolute(configDir)) return;
+  linkRealHomeEntry(join(configDir, 'projects'), join(isolatedDir, 'projects'), true);
 }
 
 /**
@@ -301,6 +309,8 @@ export interface AppliedCustomModel {
   envKeys: string[];
   configDir?: string;
   launchModel?: string;
+  /** The env key among `envKeys` that moves the CLI's home, see `CustomModelBookkeeping`. */
+  homeEnvVar?: string;
 }
 
 /**
@@ -327,8 +337,8 @@ export function applyCustomModelInjection(
   workingDir?: string,
   /**
    * Reads one env var from the SESSION's own env overrides (single-key on purpose: the
-   * map carries credentials). Only the `configDir` kind uses it, to resolve the CLI's real
-   * home for `linkFromRealHome` from the session's value before the server's.
+   * map carries credentials). Resolves the CLI's real home from the session's value before
+   * the server's: `linkFromRealHome` for the `configDir` kind, `projects` for `configDirVar`.
    */
   sessionEnvLookup?: (envVar: string) => string | undefined
 ): AppliedCustomModel | undefined {
@@ -345,7 +355,7 @@ export function applyCustomModelInjection(
     if (injection.configDirVar) {
       configDir = customModelConfigDir(sessionId);
       mkdirSync(configDir, { recursive: true, mode: 0o700 });
-      linkSharedProjectsDir(configDir);
+      linkSharedProjectsDir(configDir, sessionEnvLookup?.(injection.configDirVar));
       if (injection.apiKeyTrustFile && injection.apiKey) {
         seedApiKeyTrustFile(configDir, injection.apiKeyTrustFile, injection.apiKey);
       }
@@ -360,9 +370,16 @@ export function applyCustomModelInjection(
       envKeys: Object.keys(envOverrides),
       configDir,
       launchModel: injection.launchModel,
+      homeEnvVar: injection.configDirVar,
     };
   }
   const configDir = customModelConfigDir(sessionId);
   const envOverrides = applyConfigDirInjection(configDir, injection, sessionEnvLookup?.(injection.dirEnvVar));
-  return { envOverrides, envKeys: Object.keys(envOverrides), configDir, launchModel: injection.launchModel };
+  return {
+    envOverrides,
+    envKeys: Object.keys(envOverrides),
+    configDir,
+    launchModel: injection.launchModel,
+    homeEnvVar: injection.dirEnvVar,
+  };
 }

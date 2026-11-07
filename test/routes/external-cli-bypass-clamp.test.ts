@@ -99,7 +99,7 @@ describe('clampExternalCliBypassForOwner — multi-user mode', () => {
       undefined,
       { alwaysApprove: true, model: 'grok-4.5' }
     );
-    expect(out.codexConfig).toEqual({ dangerouslyBypassApprovals: false, model: 'gpt-5' });
+    expect(out.codexConfig).toEqual({ dangerouslyBypassApprovals: false, networkAccess: false, model: 'gpt-5' });
     expect(out.antigravityConfig).toEqual({ dangerouslySkipPermissions: false, model: 'gemini-3-pro' });
     expect(out.grokConfig).toEqual({ alwaysApprove: false, model: 'grok-4.5' });
   });
@@ -134,7 +134,26 @@ describe('clampExternalCliBypassForOwner — multi-user mode', () => {
       undefined,
       undefined
     );
-    expect(out.codexConfig).toEqual({ dangerouslyBypassApprovals: false, reasoningEffort: 'xhigh' });
+    expect(out.codexConfig).toEqual({
+      dangerouslyBypassApprovals: false,
+      networkAccess: false,
+      reasoningEffort: 'xhigh',
+    });
+  });
+
+  it("forces a non-granted owner's codex network access off, as when the launch default filled it", async () => {
+    // applyLaunchDefaults runs BEFORE this clamp, so App Settings → Allow network access
+    // arrives here as an ordinary `networkAccess: true` in a sent config. It widens the
+    // sandbox to every host, so a non-granted owner must not get it.
+    const out = await _clampExternalCliBypassForOwner(
+      'peon',
+      { networkAccess: true },
+      undefined,
+      undefined,
+      undefined,
+      undefined
+    );
+    expect(out.codexConfig).toEqual({ dangerouslyBypassApprovals: false, networkAccess: false });
   });
 
   it('leaves codex/antigravity/grok absent when nothing was sent (they already spawn safe)', async () => {

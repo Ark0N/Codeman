@@ -140,8 +140,24 @@ Explicit `codexConfig.model` / `codexConfig.reasoningEffort` values take precede
 Custom model endpoints, Docker containers and remote host command overrides keep their own settings.
 Changing a default affects new sessions and does not edit Codex configuration files.
 
-Two behaviours that are deliberate and worth knowing:
+**Allow network access** reaches the same local launches. It opens the network only where
+Codex runs the folder in its workspace-write sandbox and does not change Codex's sandbox
+mode: a folder Codex runs read-only keeps the network closed, and Codex asks per command.
+With it on, commands in the sandbox can call Codeman's API, which can start a session
+outside the sandbox with no approval prompt, even when a password is set. See
+[The Codeman Skill](Codeman-Skill#when-the-agent-is-codex) and
+[Security](Security#what-codeman-does-not-protect-against).
 
+Behaviours that are deliberate and worth knowing:
+
+- **Each local session runs its own app server.** Codex 0.162 and later otherwise hands
+  every client's commands to one shared background server, which runs them with the
+  environment of whichever session started it, and a server left by another Codex version
+  stops every launch on a dialog. So Codeman starts a local Codex 0.162 or later with
+  `--no-daemon`. The trade-off, going by Codex's own help text: `codex agents` browses the
+  sessions on that shared server and `codex remote-control` manages it, so do not expect
+  either to see a session started this way. Remote and Docker launches do not get the
+  flag, and neither does a local launch whose Codex version Codeman could not read.
 - **Predictive echo instead of buffered echo.** Codex's composer reacts to every keystroke,
   a `/` opens a live-filtering picker, arrows edit server-side state. Buffering keystrokes
   until Enter starved it, so Codex paints each keystroke at the predicted cell while the

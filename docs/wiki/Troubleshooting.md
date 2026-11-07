@@ -221,6 +221,17 @@ Things to try:
 Codex with mouse tracking on gets the wheel forwarded like fullscreen Claude; otherwise
 it pages its transcript or scrolls locally, while `Shift+Wheel` always uses local scrollback.
 
+### The wheel does nothing in a pi session
+
+Fullscreen pi, the default since pi 1.0.0, scrolls its own transcript, so the wheel is
+forwarded to it while it has mouse tracking on. If the wheel does nothing, turn off
+**Wheel Scrolls Local History**: that setting keeps the wheel on a local buffer pi leaves
+empty, and pi has no paging fallback. `PageUp` and `PageDown` on a keyboard still reach pi.
+
+Codeman strips pi's mouse enables, so a drag selects text in the browser rather than using
+pi's own selection or scrollbar drag. With `tuiMode: regular` pi is inline and the wheel
+scrolls local history.
+
 ### Selected text is invisible on a light skin
 
 Update. Every skin named its selection colour under a key xterm renamed in v5, so the four
@@ -245,6 +256,20 @@ on screen has not necessarily reached the agent yet. Press Enter, or the phone t
 If you are sending input over the API instead, your payload must end with `\r` or no Enter
 is ever sent. The request still succeeds and the text sits unsubmitted in the composer. See
 [Driving Codeman From An Agent](Driving-Codeman-From-An-Agent).
+
+### Persian, Arabic or Hebrew looks wrong in the terminal
+
+The terminal is xterm.js, which does not support right-to-left text yet
+([xtermjs/xterm.js#701](https://github.com/xtermjs/xterm.js/issues/701)). It puts each
+character in its own cell from left to right, so a sentence comes out reversed, and the
+default WebGL renderer also draws the letters unjoined. Codeman cannot fix that without
+replacing the terminal.
+
+Read the answer in **Last Response** instead, where it lays out right to left, or open a
+Markdown file in the [File Viewer](Working-With-Files). On desktop, turning off **WebGL
+Renderer** in **App Settings → Terminal & Input** and reloading joins the letters, so each
+word reads correctly, but the words of a sentence still run left to right. Phones already
+use that renderer.
 
 ## Mobile
 
@@ -329,6 +354,21 @@ Start the stack with `bash docker/Start-Codeman.sh` rather than a plain `docker 
 and update: since 1.29.0 the entrypoint corrects a root-owned bind mount before dropping
 privileges. See [Running As A Service](Running-As-A-Service).
 
+### Compose: `CODEMAN_PASSWORD is still the example value "changeme"`
+
+`Start-Codeman.sh` and `Update-Codeman.sh` refuse that password before they build or stop
+anything, because the container publishes its port on every interface and holds the Docker
+socket, so whoever signs in controls Docker on the host. Set a real password in `docker/.env`
+and run the script again.
+
+### Compose: `Codeman did not come up`, or no answer after 180 seconds
+
+`Start-Codeman.sh` waits for the server after `up -d`. `did not come up` means the container
+exited, restarted or went unhealthy, and the script prints its last log lines. `has not
+answered after 180 seconds` means it is still running but silent, so on a slow host it may
+just need longer: follow it with `docker compose logs -f codeman` from `docker/`. Either way
+the script exits 1, and `--no-wait` skips the wait for scripts that check on their own.
+
 ### A remote SSH session dropped and did not come back
 
 A bounded-backoff watcher reattaches dropped sessions, and it is on by default. Intentional
@@ -353,7 +393,7 @@ On an HTTPS install, add `-k` to the curl commands and use the `https://` URL.
 Open an [issue](https://github.com/Ark0N/Codeman/issues) with:
 
 - OS and version.
-- Install method: installer, npm, or git clone.
+- Install method: installer (with or without git), npm, or git clone.
 - `codeman --version`.
 - Browser and version, if the problem is in the UI.
 - Which CLI the session was running, and its version.

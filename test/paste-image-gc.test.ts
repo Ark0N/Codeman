@@ -30,6 +30,16 @@ describe('sweepPasteImagesOnce', () => {
     for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
   });
 
+  it('lists nothing for an adopted session, whose folder is the /tmp others may work in', async () => {
+    // The delete path removes what this lists, recursively: closing an adopted tab
+    // must not take the uploads of a real session sitting in that same folder.
+    const workingDir = mkdtempSync(join(tmpdir(), 'codeman-gc-'));
+    dirs.push(workingDir);
+    mkdirSync(join(workingDir, UPLOADS_DIR));
+    expect(await uploadDirs({ workingDir })).toHaveLength(1);
+    expect(await uploadDirs({ workingDir, adopt: { location: 'local' } })).toEqual([]);
+  });
+
   it('ages paste-* files out of both the current and the legacy upload dir', async () => {
     const workingDir = mkdtempSync(join(tmpdir(), 'codeman-gc-'));
     dirs.push(workingDir);

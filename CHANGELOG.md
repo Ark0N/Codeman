@@ -1,5 +1,46 @@
 # aicodeman
 
+## 1.49.0
+
+### Minor Changes
+
+- 12024cc: ### Thanks
+  - @dignfei for letting Codeman open the tmux sessions you started by hand, on this machine, in a container or over ssh (#510).
+  - @Randalix for the remote launch fix (#770) and the pi wheel fix (#771), both from their own reports (#760, #758), and for Edit history on remote sessions (#766).
+  - @opticon454 for the New folder button in Create New's picker (#761) and for Clone Repo's parent folder (#774).
+  - @shenlvkang-collab for a Files panel scan that no longer lets one folder use up the limit (#614).
+  - @irisitymichaelgrundberg for reporting that the Files panel stayed on the main checkout (#765), and for catching a `.git` open race in the fix.
+  - @maminmsh for reporting right-to-left text in the Response Viewer (#715).
+
+  **Open the tmux sessions you started yourself (#510).** Tmux sessions you started by hand now show up on the home screen under Opened outside Codeman, and one click opens one as a tab, on this machine, in a container or over ssh. Closing the tab only detaches, so the session keeps running. Codeman did not start it, so respawn, Ralph, auto-clear, one-shot prompts and prompt uploads are refused for it, and when the session ends the tab lets go of it. Adoption is admin-only in multi-user mode. The scan runs only while the home screen is in a visible tab. Close adopted tabs before going back to 1.48.0 or older: an older server does not know a tab is adopted and drops all of those guards.
+
+  **Install without administrator rights (#768).** The installer can now finish on an account without admin rights: Node.js and tmux go in your home folder, the source comes as an archive when no working git is available, and `--no-admin` forces this route. An install without git updates by re-running the install line, and Linux still needs make, a C++ compiler and python3.
+
+  **Docker Compose starts in two commands (#573).** `bash docker/Start-Codeman.sh` asks three questions, writes `docker/.env`, starts the container and prints the URL once Codeman answers. It now waits for the server and exits 1 if it does not come up (`--no-wait` skips that). Behaviour change: `Start-Codeman.sh` and `Update-Codeman.sh` refuse to run while `CODEMAN_PASSWORD` is still the example value `changeme`, so a deployment on that value has to set a real password before its next restart.
+
+  **Codex sessions can drive other sessions (#753).** A new opt-in setting, **Allow network access** (App Settings, Codex, off by default), starts new local Codex sessions with `sandbox_workspace_write.network_access=true`, so the Codeman skill's calls reach this server. It has a real cost: commands in Codex's sandbox can then call Codeman's API, which can start a session outside the sandbox with no approval prompt, even with a password set, so the sandbox no longer contains a prompt-injected command. It is forced off without the privileged-commands grant in multi-user mode, scheduled jobs do not use it, and it does not change Codex's sandbox mode. A local Codex 0.162 or later also starts with `--no-daemon`, so a shared background server no longer stops a launch on an "incompatible feature settings" dialog, and commands inside Codex see their own session's `CODEMAN_*` variables. Version gates in the CLI registry are now measured against each CLI's own version.
+
+  **Persian, Arabic and Hebrew read right to left (#715).** In the Response Viewer and the File Viewer's markdown view, each paragraph, heading, list, quote and table takes its direction from its own first letter, so a right-to-left answer lines up on the right while an English paragraph beside it stays left to right. Code blocks, inline code and the file paths the viewer links on its own stay left to right and no longer decide a sentence's direction. The phone's Compose dialog does the same. The terminal pane is unchanged: xterm.js has no right-to-left support yet (xtermjs/xterm.js#701).
+
+  **Edit history for remote sessions (#766).** The Edit history panel now works for remote (SSH) Claude sessions. It reads transcripts over ssh only while the panel is open, keeps the diffs in the same private local store and never wakes a sleeping host. An unreachable host shows the saved edits with the ssh error, and images preview on click rather than as thumbnails.
+
+  **The Files panel follows the agent into a git worktree (#772, #765).** When an agent moves into a worktree part way through a session, the panel lists that worktree, follows the agent back out and shows a strip that names it, with a button to switch to the session's folder. Only a worktree inside the session's folder is followed, and file access stays confined to that folder.
+
+  **One big folder no longer hides the rest (#614).** The Files panel and its search now walk folders in a per-directory round-robin, so one large folder no longer uses up the 5,000-entry limit, and search results come back shallow-first. One listing stops opening folders after reading 250,000 entries. A folder the scan stopped short of, or one that did not answer, no longer looks empty: `GET /api/sessions/:id/files` marks it `incomplete: true` (additive), sets `truncated`, and the panel shows a dim "Not fully scanned" row.
+
+  **Fixes.**
+  - **Remote sessions start when the remote home differs (#770, #760).** New sessions no longer die with `tmux: command not found` (exit 127). The launch line reached the local shell in double quotes, so `$HOME` and `$PATH` expanded on the Codeman host before ssh ran. Launches now reach the far end verbatim, and a remote session starts in the remote user's own shell. Behaviour changes: in a per-host `commands.*` override, `$` now expands on the far end; a bare `$VAR` in a Docker `extraCreateArgs`/`extraExecArgs` value or a remote host's `extraSshOptions` is passed literally, so write the value out. `commands.omp` and `commands.copilot` are accepted now, like every other mode. A csh or tcsh login shell starts without `-i -l`, which tcsh refuses, so it reads `.tcshrc` and not `.login`.
+  - **Remote file reads work on fish, csh and tcsh hosts.** The Files panel, previews and Edit history failed on those login shells, because their reads were parsed by the login shell before `sh` saw them. Every remote file read now crosses it as one word of text. This also ends a case where a file name holding shell syntax ran as a command on those hosts, as the same ssh user the agent runs as.
+  - **The pi mouse wheel survives a tab switch or reload (#771, #758).** pi now takes the same path as Copilot: the server strips the mouse enables and remembers them, and the wheel is forwarded from that record, on the primary pane, tiles, split Pane B and phones. A drag in fullscreen pi now selects text in the browser instead of using pi's own selection, and with Wheel Scrolls Local History on the wheel does nothing there. A pi in `tuiMode: regular` is unaffected.
+  - **Clone Repo's custom folder is a parent now (#774).** The repository lands in `<folder>/<case name>`, as it does with Create New, and the preview shows the joined path. Behaviour change: 1.48.0 cloned straight into the folder you picked, so a name the case-name rule refuses, such as `/mnt/my.repo`, can no longer be reached from the tab. `path` on `POST /api/cases/clone` stays the exact target for scripts and mount points.
+  - **New folder in the Create New and Clone Repo pickers (#761).** You can make the parent folder without leaving the dialog. Asking for one directly in the cases folder is refused, and the refusal points at the right tab.
+  - **Linked cases hold up under concurrent writes (#764).** Every write to `linked-cases.json` is serialized, so two requests can no longer claim one name or lose each other's entry, and a damaged file is refused with a clear error instead of being overwritten, which used to unlink every other case. A local case's rename racing a new link is not covered.
+  - **A session keeps its own home and account variables (#767).** A session that set `CLAUDE_CONFIG_DIR`, `DSH_HOME` or the like keeps it when a custom endpoint selection is cleared or switched, also after a Codeman restart. With its own `CLAUDE_CONFIG_DIR` it keeps both its conversation and its account.
+
+  **Fixes applied while landing.** An adopted session never falls back to a direct terminal when its wrapper cannot start, which would have run a local agent in `/tmp` (#510). Output from a foreign pane, container or ssh host is parsed in linear time, so it cannot stall the server (#510). A `.git` swapped for a FIFO or a symlink is refused at open (#772). A folder listing that does not answer is flagged instead of shown as empty (#614).
+
+  **Docs and tests.** Adoption, the no-admin install, the Compose first run and the new remote shell rows in the guides, wiki and READMEs, new zh-CN strings for the Allow network access warning, and the Playwright bump to 1.64.1 with the browser suite unpinned.
+
 ## 1.48.0
 
 ### Minor Changes

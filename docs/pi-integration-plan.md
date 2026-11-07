@@ -2,6 +2,12 @@
 
 Tracking issue: [#206 "Plans to support pi.dev?"](https://github.com/Ark0N/Codeman/issues/206)
 
+**SUPERSEDED in part (PR #771, 2026-11):** what this record says about pi's default screen and
+the strips no longer holds. Fullscreen became pi's default in 1.0.0, and pi now takes the mouse
+strip (`altScreen: 'strip-mux-and-mouse'`). Each affected passage carries a SUPERSEDED note;
+current behaviour is in `docs/pi-integration.md` and the "Pi is the same shape" paragraph of
+`docs/architecture-invariants.md`.
+
 Status: **IMPLEMENTED 2026-08-13** (see `docs/pi-integration.md` for the user-facing
 guide). Everything below is the design record; the open questions were resolved
 empirically against pi 0.84.1 and the answers are recorded inline as **RESULT**
@@ -29,7 +35,7 @@ against the upstream docs in `packages/coding-agent/docs/`.
 | Config dir       | `~/.pi/agent` (override: `PI_CODING_AGENT_DIR`). Holds `auth.json`, `trust.json`, `settings.json`, `models.json` (user-defined providers), `models-store.json` (cached catalogs), `keybindings.json`, `extensions/`, `skills/`, `prompts/`, `themes/`, `AGENTS.md`, `SYSTEM.md`, and the package trees `npm/` + `git/` |
 | Sessions         | `~/.pi/agent/sessions/--<cwd with / replaced by ->--/<timestamp>_<uuid>.jsonl`, tree-structured (`id`/`parentId`), format v3. Overrides: `PI_CODING_AGENT_SESSION_DIR`, `--session-dir` |
 | Credentials      | `~/.pi/agent/auth.json` (OAuth subscriptions + API keys, auto-refresh), plus ~34 provider env vars with **no common prefix**. 0.84.1 adds `pi auth check` (auth preflight with optional credential output) |
-| TUI              | Default: **main screen with terminal-owned scrollback**. Since **0.84.0** an experimental fullscreen mode exists, selectable via `--tui-mode fullscreen` **or at runtime through `/settings`**; the default remains the main-screen mode |
+| TUI              | Default: **main screen with terminal-owned scrollback**. Since **0.84.0** an experimental fullscreen mode exists, selectable via `--tui-mode fullscreen` **or at runtime through `/settings`**; the default remains the main-screen mode. **SUPERSEDED (PR #771, 2026-11):** fullscreen is the default since pi 1.0.0, and `tuiMode: regular` keeps the main screen |
 | Providers        | 15+ (Anthropic, OpenAI, Google, Azure, Bedrock, Mistral, Groq, xAI, OpenRouter, Copilot, Baseten since 0.84.0, ...). OAuth subscription login via `/login` for six: ChatGPT Plus/Pro, Claude Pro/Max, GitHub Copilot, xAI, OpenRouter, Radius |
 | Permission model | **No permission prompts at all.** No built-in sandbox, no MCP (none planned), no sub-agents, no plan mode, no to-dos, no background bash. Tools run with the user's own permissions |
 | Trust model      | "Project trust" gates **loading** of project-local `.pi/` config/extensions/skills and **installing missing project packages**, not tool execution. Triggered only when the cwd (or an ancestor) contains `.pi/settings.json`, `.pi/extensions\|skills\|prompts\|themes`, `.pi/SYSTEM.md`/`.pi/APPEND_SYSTEM.md`, or `.agents/skills`; a bare `.pi/` directory does NOT prompt. Global `defaultProjectTrust`: `ask` (default) / `always` / `never` |
@@ -87,6 +93,12 @@ the strip list would corrupt fullscreen sessions. Three mirrors must stay consis
 for pi, i.e. pi appears in none of them): the replay-side strip in `session-routes.ts:2275`, the
 live-stream twin in `session.ts`, and the frontend `_sessionUsesServerMouseStrip()` in
 `terminal-ui.js` (usages `:3432`, `:3697`).
+
+**SUPERSEDED (PR #771, 2026-11):** pi still stays out of `isAltScreenStripMode()`, but it is no
+longer outside every strip: it takes the mouse strip (`isMuxMouseStripMode()`), which removes the
+alt-screen toggles and the mouse enables and keeps `3J`. Fullscreen is its default since 1.0.0, the
+enables are recorded as `cliMouseTracking`, and the wheel is forwarded from that flag, so it survives
+a tab switch or reload. A `/settings` flip of `tuiMode` is followed in both directions.
 
 ### 2.3 tmux required, no direct-PTY fallback, no per-mode configurator
 
@@ -340,6 +352,7 @@ because the result lands in a `bash -c "..."` string):
 - `--tui-mode` (released in 0.84.0): never passed by Codeman. The main-screen default is the
   friendly case for the browser terminal, and fullscreen remains the user's own runtime choice via
   `/settings` (§2.2 is designed for that). `--use-theme` (still unreleased) likewise.
+  **SUPERSEDED (PR #771, 2026-11):** still never passed, but fullscreen is the default since pi 1.0.0.
 - `--name <name>` (`-n`): nice for `/resume` readability, but names contain spaces and would be the
   first user-controlled value needing real shell quoting in `buildSpawnCommand`. Defer.
 - `--no-session`: ephemeral mode fights respawn/resume. Defer.
@@ -671,7 +684,7 @@ follow-up surfaces in from the start (login-shell routing in Phase 1, availabili
 | ------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
 | `pi` resolves to an unrelated binary                                | `pi --version` + semver-shape check in the resolver (§2.6); path and version shown in `/api/pi/status` |
 | Pi's TUI repaints in a way the browser terminal handles badly       | Test scrollback and repaint early (step 3 of §7); pi's default is main-screen with terminal-owned scrollback, which is the friendly case |
-| Fullscreen TUI mode (shipped 0.84.0, runtime-switchable)            | Already designed for: pi stays OUT of the strip list, so a user flipping `/settings` to fullscreen gets opencode-like alt-screen behavior, not corruption. §7 step 7 tests the flip explicitly |
+| Fullscreen TUI mode (shipped 0.84.0, runtime-switchable)            | Already designed for: pi stays OUT of the strip list, so a user flipping `/settings` to fullscreen gets opencode-like alt-screen behavior, not corruption. §7 step 7 tests the flip explicitly. **SUPERSEDED (PR #771, 2026-11):** fullscreen is the default since pi 1.0.0 and pi now takes the mouse strip, see §2.2 |
 | The buffer local-echo overlay fights pi's live composer             | §2.10: explicit E2E gate (§7 step 4) with the one-line `'off'` fallback; predictive echo for pi is a tracked follow-up, not a v1 blocker |
 | Pi moves fast (pre-1.0; 9 releases in the 7 weeks before 0.84.1)    | Keep the flag surface small; every flag validated and droppable; nothing pinned in the Dockerfile beyond the `--no-cache` rebuild cadence. Live example of the hazard: `--tui-mode` went from main-only docs to released between the two drafts of this plan |
 | Docker image grows                                                  | Pi is an npm package; the layer is modest next to the ~190MB `agy` binary      |

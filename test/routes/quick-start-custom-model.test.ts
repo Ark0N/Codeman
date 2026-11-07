@@ -92,6 +92,35 @@ describe('POST /api/quick-start: customModel (one-shot custom-model launch)', ()
     safeRmHomeTree(CASES_DIR);
   });
 
+  it("learns the caller's own value under an injected key, so a clear can put it back", async () => {
+    const own = join(getDataDir(), 'client-claude');
+    const res = await quickStart({
+      caseName: 'cm-own-home',
+      mode: 'claude',
+      envOverrides: { CLAUDE_CONFIG_DIR: own },
+      customModel: { endpointId: 'ep1', modelId: 'qwen3' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const { sessionId } = res.json();
+    const session = ctx.sessions.get(sessionId) as unknown as Session;
+    const isolatedDir = customModelConfigDir(sessionId);
+    // It launches on the isolated directory, with the caller's value set aside rather
+    // than recorded as the injected one.
+    expect(session.envOverrideValue('CLAUDE_CONFIG_DIR')).toBe(isolatedDir);
+    expect(session.getCustomModelForPersist()?.ownEnv).toEqual({ CLAUDE_CONFIG_DIR: own });
+
+    const clear = await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${sessionId}/custom-model`,
+      payload: { clear: true },
+    });
+    expect(clear.statusCode).toBe(200);
+    expect(session.customModel).toBeUndefined();
+    expect(session.envOverrideValue('CLAUDE_CONFIG_DIR')).toBe(own);
+    expect(existsSync(isolatedDir)).toBe(false);
+  });
+
   it('launches a claude session already pointed at the endpoint — no restart at all', async () => {
     const res = await quickStart({
       caseName: 'cm-claude',
@@ -173,6 +202,34 @@ describe('POST /api/quick-start: customModel (one-shot custom-model launch)', ()
     const session = ctx.sessions.get(sessionId) as unknown as Session;
     expect(session.getCustomModelForPersist()?.launchModel).toBe('custom/qwen3');
     expect(restartSpy).not.toHaveBeenCalled();
+  });
+
+  it("leaves the caller's own model in the stored config, which is what a later clear falls back to", async () => {
+    const res = await quickStart({
+      caseName: 'cm-pi-own-model',
+      mode: 'pi',
+      piConfig: { model: 'anthropic/claude-x' },
+      customModel: { endpointId: 'ep1', modelId: 'qwen3' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const { sessionId } = res.json();
+    const session = ctx.sessions.get(sessionId) as unknown as Session;
+    expect(session.getCustomModelForPersist()?.launchModel).toBe('custom/qwen3');
+    expect(session.toState().piConfig?.model).toBe('anthropic/claude-x');
+  });
+
+  it('stores no model at all for a caller that chose none', async () => {
+    const res = await quickStart({
+      caseName: 'cm-codex-no-model',
+      mode: 'codex',
+      customModel: { endpointId: 'ep1', modelId: 'qwen3' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const session = ctx.sessions.get(res.json().sessionId) as unknown as Session;
+    expect(session.getCustomModelForPersist()?.launchModel).toBe('qwen3');
+    expect(session.toState().codexConfig?.model).toBeUndefined();
   });
 
   it('404s for an unknown endpoint id', async () => {

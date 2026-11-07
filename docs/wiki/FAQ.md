@@ -179,12 +179,13 @@ the defaults discovers and attaches your live sessions.
 | Install route | Update with                                                                 |
 | ------------- | --------------------------------------------------------------------------- |
 | Installer     | Re-run the install one-liner, or **App Settings → System → Updates**.         |
+| Installer, without git | Re-run the install one-liner. The in-app updater says so instead of offering an update. |
 | npm           | `npm update -g aicodeman`                                                     |
 | git clone     | `git pull && npm install && npm run build`, then restart the service.         |
 
 The in-app updater covers git-clone installs supervised by systemd or launchd. It stashes a
 dirty tree rather than discarding it, and streams progress across the restart. npm installs
-report as non-updatable.
+and installs without git report as non-updatable.
 
 ### Will updating kill my running sessions?
 

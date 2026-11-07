@@ -462,12 +462,26 @@ export function isRunningInContainer(): boolean {
   return process.env.CODEMAN_IN_CONTAINER === '1' || existsSync('/.dockerenv');
 }
 
-function detectInstallKind(dir: string): InstallKind {
+/**
+ * Marker `install.sh` writes into an install directory whose source came from an
+ * archive instead of a git clone (`SOURCE_MARKER` there; the two names are pinned
+ * to each other by `test/install-sh-invariants.test.ts`).
+ */
+export const ARCHIVE_INSTALL_MARKER = '.install-source';
+
+/** How an `archive` install updates: the installer replaces it with a fresh build. */
+export const ARCHIVE_UPDATE_HINT =
+  'This install has no git checkout, so it cannot update in place. Re-run the installer to update: ' +
+  'curl -fsSL https://getcodeman.com/install | bash';
+
+export function detectInstallKind(dir: string): InstallKind {
   // A container whose code is a bind-mounted checkout updates in place (the pull
   // and build land on the host filesystem and survive container recreation). A
   // container WITHOUT that mount runs a baked image copy — a pull there would go
   // to the writable layer and vanish on the next `up`, so it is not updatable.
   if (existsSync(join(dir, '.git'))) return isRunningInContainer() ? 'docker-compose' : 'git';
+  // install.sh on a machine with no working git: the source from an archive.
+  if (existsSync(join(dir, ARCHIVE_INSTALL_MARKER))) return 'archive';
   // Global npm install ships only dist/ (no src/, no .git).
   if (!existsSync(join(dir, 'src'))) return 'npm';
   return 'unknown';
@@ -705,7 +719,9 @@ export async function checkForUpdate(): Promise<UpdateCheckResult> {
       error:
         info.installKind === 'unknown' && isRunningInContainer()
           ? 'This container runs a baked image copy with no repository mounted — self-update is unavailable. See docs/docker-self-update.md.'
-          : 'Not a git install — self-update is unavailable.',
+          : info.installKind === 'archive'
+            ? ARCHIVE_UPDATE_HINT
+            : 'Not a git install — self-update is unavailable.',
     };
   }
 
@@ -829,7 +845,9 @@ export async function startUpdate(): Promise<StartUpdateResult> {
       code: 'not-git',
       message: isRunningInContainer()
         ? 'This container has no repository mounted. Update from the host with docker/Start-Codeman.sh.'
-        : 'This is not a git install. Update with: npm i -g aicodeman@latest',
+        : info.installKind === 'archive'
+          ? ARCHIVE_UPDATE_HINT
+          : 'This is not a git install. Update with: npm i -g aicodeman@latest',
     };
   }
   const existing = readCurrentUpdateStatus();
