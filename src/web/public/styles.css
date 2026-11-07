@@ -22312,37 +22312,51 @@ html[data-tile-anim="soft"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.til
    body scrolling between them. A click never moves the next button away.
    ═══════════════════════════════════════════════════════════════ */
 
-/* The feature's own colours. Violet is what the local model is known by, on
-   the start screen and in its window; the others carry meaning (green good,
-   amber tight, orange slow, teal the context, rose the brief peaks). All of them are set here, once,
-   and the light skins get deeper values so they hold on a pale page. */
+/* The feature's own colours. White is what the local model is known by, on the
+   start screen and in its window: it stands apart from the app's blue instead of
+   fighting it, and on a pale page the same idea turns to dark ink. The others
+   carry meaning (blue the context, green good, amber tight, orange slow, rose the
+   brief peaks). All of them are set here, once. */
 :root {
-  --lm-violet: #a78bfa;
-  --lm-teal: #2dd4bf;
+  --lm-brand: #e6edf5;
+  --lm-context: #38b6f0;
   --lm-amber: #f5c451;
   --lm-orange: #fb923c;
   --lm-rose: #f58ba8;
   --lm-good: #4ade80;
-  --lm-cta-a: #8567f4;
-  --lm-cta-b: #6346e0;
-  --lm-cta-hover-a: #9479f7;
-  --lm-cta-hover-b: #7054ea;
+  --lm-cta-a: #ffffff;
+  --lm-cta-b: #dfe7f0;
+  --lm-cta-hover-a: #ffffff;
+  --lm-cta-hover-b: #eef3f8;
+  --lm-cta-ink: #11151c;
+  --lm-cta-disc: #11151c;
+  --lm-cta-glyph: #ffffff;
+  --lm-cta-glow: rgba(223, 231, 240, 0.45);
 }
 
+/* A white button is gone on a pale page, so the light skins turn it over. */
 html[data-skin='paper-gray'],
 html[data-skin='solarized-light'],
 html[data-skin='catppuccin-latte'],
 html[data-skin='rose-pine-dawn'] {
-  --lm-violet: #6d3fd8;
-  --lm-teal: #0b8378;
+  --lm-brand: #2a3140;
+  --lm-context: #1c6fb8;
   --lm-amber: #a86a00;
   --lm-orange: #c2500f;
   --lm-rose: #c43a68;
   --lm-good: #16803c;
+  --lm-cta-a: #333b4a;
+  --lm-cta-b: #11151c;
+  --lm-cta-hover-a: #434c5c;
+  --lm-cta-hover-b: #1f2530;
+  --lm-cta-ink: #ffffff;
+  --lm-cta-disc: #ffffff;
+  --lm-cta-glyph: #11151c;
+  --lm-cta-glow: rgba(17, 21, 28, 0.4);
 }
 
 /* The welcome button: the first thing on the start screen, above the launchers,
-   in the size of the primary button and in the feature's violet. */
+   built like the primary button (dark ink, a solid disc) in the feature's colour. */
 .welcome-local-model {
   margin-bottom: 1.1rem;
   height: 46px;
@@ -22351,18 +22365,18 @@ html[data-skin='rose-pine-dawn'] {
   border: 1px solid var(--lm-cta-a);
   border-radius: 23px;
   background: linear-gradient(135deg, var(--lm-cta-a), var(--lm-cta-b));
-  color: #fff;
+  color: var(--lm-cta-ink);
   font-size: 0.95rem;
   font-weight: 700;
   letter-spacing: 0.005em;
-  box-shadow: 0 8px 24px -12px rgba(99, 70, 224, 0.75), inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  box-shadow: 0 8px 24px -12px var(--lm-cta-glow), inset 0 1px 0 rgba(255, 255, 255, 0.22);
 }
 
 .welcome-local-model:hover,
 .welcome-local-model:focus-visible {
   border-color: var(--lm-cta-hover-a);
   background: linear-gradient(135deg, var(--lm-cta-hover-a), var(--lm-cta-hover-b));
-  color: #fff;
+  color: var(--lm-cta-ink);
 }
 
 /* `.welcome-chip` is inline-flex, so `[hidden]` needs re-asserting or the
@@ -22379,7 +22393,8 @@ html[data-skin='rose-pine-dawn'] {
   padding: 8px;
   box-sizing: border-box;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.18);
+  background: var(--lm-cta-disc);
+  color: var(--lm-cta-glyph);
 }
 
 /* The window: App Settings' chrome (`.modal`, `.modal-header`, the boxed
@@ -22531,13 +22546,13 @@ html[data-skin='rose-pine-dawn'] {
   flex-direction: column;
   gap: 0.6rem;
   padding: 0.8rem 0.9rem 0.75rem;
-  border: 1px solid color-mix(in srgb, var(--lm-violet) 22%, var(--border));
+  border: 1px solid color-mix(in srgb, var(--lm-brand) 22%, var(--border));
   border-radius: 12px;
   background:
     linear-gradient(
       120deg,
-      color-mix(in srgb, var(--lm-violet) 11%, transparent),
-      color-mix(in srgb, var(--lm-teal) 6%, transparent) 75%
+      color-mix(in srgb, var(--lm-brand) 11%, transparent),
+      color-mix(in srgb, var(--lm-context) 6%, transparent) 75%
     ),
     var(--bg-input);
 }
@@ -22604,16 +22619,16 @@ html[data-skin='rose-pine-dawn'] {
   flex: none;
   height: 100%;
   border-radius: 2px;
-  background: linear-gradient(90deg, var(--lm-violet), var(--lm-teal));
+  background: linear-gradient(90deg, var(--lm-brand), var(--lm-context));
   transition: width 0.32s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .lm-part-model {
-  background: var(--lm-violet);
+  background: var(--lm-brand);
 }
 
 .lm-part-context {
-  background: var(--lm-teal);
+  background: var(--lm-context);
 }
 
 /* The brief peaks are not held all the time, so they are striped. */
@@ -22725,18 +22740,18 @@ html[data-skin='rose-pine-dawn'] {
 }
 
 .lm-model:focus-visible {
-  outline: 2px solid var(--lm-violet);
+  outline: 2px solid var(--lm-brand);
   outline-offset: -2px;
 }
 
-/* Selected: violet on the reading edge and a fill that fades out to the right. */
+/* Selected: the feature's colour on the reading edge and a fill that fades out to the right. */
 .lm-model-on,
 .lm-model-on:hover {
-  border-inline-start-color: var(--lm-violet);
+  border-inline-start-color: var(--lm-brand);
   background: linear-gradient(
     90deg,
-    color-mix(in srgb, var(--lm-violet) 17%, transparent),
-    color-mix(in srgb, var(--lm-violet) 4%, transparent)
+    color-mix(in srgb, var(--lm-brand) 17%, transparent),
+    color-mix(in srgb, var(--lm-brand) 4%, transparent)
   );
 }
 
@@ -22749,8 +22764,8 @@ html[data-skin='rose-pine-dawn'] {
 }
 
 .lm-model-on .lm-radio {
-  border-color: var(--lm-violet);
-  background: radial-gradient(circle, var(--lm-violet) 0 3px, transparent 3.5px);
+  border-color: var(--lm-brand);
+  background: radial-gradient(circle, var(--lm-brand) 0 3px, transparent 3.5px);
 }
 
 /* The size tile: a model's billions of parameters, coloured by how large it is. */
@@ -22769,13 +22784,13 @@ html[data-skin='rose-pine-dawn'] {
 }
 
 .lm-tile-large {
-  background: color-mix(in srgb, var(--lm-violet) 20%, transparent);
-  color: var(--lm-violet);
+  background: color-mix(in srgb, var(--lm-brand) 20%, transparent);
+  color: var(--lm-brand);
 }
 
 .lm-tile-mid {
-  background: color-mix(in srgb, var(--lm-teal) 18%, transparent);
-  color: var(--lm-teal);
+  background: color-mix(in srgb, var(--lm-context) 18%, transparent);
+  color: var(--lm-context);
 }
 
 .lm-tile-small {
@@ -22923,7 +22938,7 @@ html[data-skin='rose-pine-dawn'] {
 }
 
 .lm-select:focus-visible {
-  border-color: var(--lm-violet);
+  border-color: var(--lm-brand);
 }
 
 .lm-runs-hint {
@@ -23084,8 +23099,8 @@ html[data-skin='rose-pine-dawn'] {
 }
 
 .lm-step-now .lm-step-mark {
-  border-color: var(--lm-violet);
-  background: radial-gradient(circle, var(--lm-violet) 0 3px, transparent 3.5px);
+  border-color: var(--lm-brand);
+  background: radial-gradient(circle, var(--lm-brand) 0 3px, transparent 3.5px);
 }
 
 .lm-step-stopped .lm-step-mark {
@@ -23200,7 +23215,7 @@ html[data-skin='rose-pine-dawn'] {
 
 .lm-check input {
   margin: 0;
-  accent-color: var(--lm-violet);
+  accent-color: var(--lm-brand);
 }
 
 /* ── the foot: one promise on the left, the action on the right ──── */
@@ -23246,21 +23261,22 @@ html[data-skin='rose-pine-dawn'] {
   font-weight: 700;
 }
 
-/* The main action is the feature's violet on every skin, like its start screen
-   button: white text on the same gradient, so no skin needs a rule of its own. */
+/* The main action wears the same gradient and ink as the start screen button,
+   so no skin needs a rule of its own. */
 .local-model-window .wt-btn-primary.lm-btn {
   border-color: var(--lm-cta-a);
   background: linear-gradient(135deg, var(--lm-cta-a), var(--lm-cta-b));
-  color: #fff;
+  color: var(--lm-cta-ink);
 }
 
 .local-model-window .wt-btn-primary.lm-btn:hover:not(:disabled) {
   border-color: var(--lm-cta-hover-a);
   background: linear-gradient(135deg, var(--lm-cta-hover-a), var(--lm-cta-hover-b));
+  color: var(--lm-cta-ink);
 }
 
 .local-model-window .wt-btn.lm-btn:focus-visible {
-  outline: 2px solid var(--lm-violet);
+  outline: 2px solid var(--lm-brand);
   outline-offset: 2px;
 }
 
