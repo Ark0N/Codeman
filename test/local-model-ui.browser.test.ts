@@ -7,9 +7,9 @@
  *    same edge, under their captions, and every tag starts on the same edge;
  *  - a row is one line on a desktop and two lines under 560px, where nothing runs off the
  *    side and the buttons take the full width;
- *  - the memory bar is 10px high and filled to the selected model's share of its track, and
+ *  - the memory bar is 12px high and filled to the selected model's share of its track, and
  *    the fill follows the selection;
- *  - the selected row carries the accent on its reading edge;
+ *  - the selected row carries the feature's colour on its reading edge;
  *  - the welcome button is really gone while it is `hidden`, and the window paints above App
  *    Settings.
  *
@@ -218,8 +218,8 @@ describe('the local model window (real Chromium)', () => {
     await load(1440);
     const [button] = await boxes('#welcomeLocalModelBtn');
     expect(button.width).toBeGreaterThan(100);
-    // One more chip of the launcher family: the same height as the chips above it would have.
-    expect(Math.round(button.height)).toBe(30);
+    // The first thing on the start screen, in the size of the primary launcher below it.
+    expect(Math.round(button.height)).toBe(46);
     expect(await p.textContent('#welcomeLocalModelLabel')).toBe('Run a local model');
   });
 
@@ -250,12 +250,14 @@ describe('the local model window (real Chromium)', () => {
       expect(names[i].right).toBeLessThanOrEqual(tags[i].left + 0.6);
       expect(speeds[i].right).toBeLessThanOrEqual(sizes[i].left + 0.6);
     }
-    // What is in a row lines up with the rest of the window on both edges.
+    // The memory panel lines up with the rows on both edges, and the bar with its figure.
     const [figure] = await boxes('.lm-figure');
     const [radio] = await boxes('.lm-radio');
     const [bar] = await boxes('.lm-bar');
-    expect(same([figure.left, radio.left, bar.left])).toBe(true);
-    expect(same([bar.right, sizes[0].right])).toBe(true);
+    const [meter] = await boxes('.lm-meter');
+    expect(same([figure.left, bar.left])).toBe(true);
+    expect(same([meter.left, radio.left])).toBe(true);
+    expect(same([meter.right, sizes[0].right])).toBe(true);
   });
 
   it('fills the bar to the selected model, and the fill follows the selection', async () => {
@@ -264,8 +266,8 @@ describe('the local model window (real Chromium)', () => {
     const share = async () => {
       const [track] = await boxes('.lm-bar');
       const [fill] = await boxes('.lm-bar-fill');
-      expect(Math.round(track.height)).toBe(10);
-      expect(Math.round(fill.height)).toBe(10);
+      expect(Math.round(track.height)).toBe(12);
+      expect(Math.round(fill.height)).toBe(12);
       expect(same([track.left, fill.left])).toBe(true);
       return fill.width / track.width;
     };
@@ -287,9 +289,14 @@ describe('the local model window (real Chromium)', () => {
     // The track is not the window's own colour, or the free part could not be seen.
     const paint = await p.evaluate(() => {
       const css = (sel: string, prop: string) => getComputedStyle(document.querySelector(sel)!).getPropertyValue(prop);
+      // The feature's colour as the browser paints it: a custom property reads back unresolved.
+      const probe = document.body.appendChild(document.createElement('i'));
+      probe.style.color = 'var(--lm-brand)';
+      const brand = getComputedStyle(probe).color;
+      probe.remove();
       return {
+        brand,
         track: css('.lm-bar', 'background-color'),
-        fill: css('.lm-bar-fill', 'background-color'),
         fillImage: css('.lm-bar-fill', 'background-image'),
         window: css('.local-model-window', 'background-color'),
         edge: css('.lm-model-on', 'border-left-color'),
@@ -297,11 +304,12 @@ describe('the local model window (real Chromium)', () => {
       };
     });
     expect(paint.track).not.toBe(paint.window);
-    expect(paint.track).not.toBe(paint.fill);
-    expect(paint.fillImage).toBe('none');
-    // The selected row carries the accent (the fill's colour) on its reading edge.
-    expect(paint.edge).toBe(paint.fill);
-    expect(paint.idleEdge).not.toBe(paint.fill);
+    expect(paint.track).not.toBe(paint.brand);
+    // Without a memory map the one fill runs from the feature's colour to the context's.
+    expect(paint.fillImage).toContain('linear-gradient');
+    // The selected row carries the feature's colour on its reading edge.
+    expect(paint.edge).toBe(paint.brand);
+    expect(paint.idleEdge).not.toBe(paint.brand);
   });
 
   it('stacks two lines a row under 560px, with nothing running off the side', async () => {
@@ -323,10 +331,10 @@ describe('the local model window (real Chromium)', () => {
     const [win] = await boxes('.local-model-window');
     expect(Math.round(win.width)).toBe(390);
     expect(Math.round(win.height)).toBe(844);
-    const [bar] = await boxes('.lm-bar');
+    const [meter] = await boxes('.lm-meter');
     const [button] = await boxes('.lm-buttons button');
-    expect(same([bar.left, button.left])).toBe(true);
-    expect(same([bar.right, button.right])).toBe(true);
+    expect(same([meter.left, button.left])).toBe(true);
+    expect(same([meter.right, button.right])).toBe(true);
     expect(button.height).toBeGreaterThanOrEqual(44);
     const overflow = await p.evaluate(() => {
       const body = document.getElementById('localModelWindowBody')!;
