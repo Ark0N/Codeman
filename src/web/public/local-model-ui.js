@@ -14,7 +14,7 @@
  *
  * ## Three surfaces, one window
  *
- *  - Welcome screen: ONE button (`#welcomeLocalModelBtn`) under the launchers, in the chip
+ *  - Welcome screen: ONE large button (`#welcomeLocalModelBtn`) above the launchers, on the chip
  *    family. "Run a local model", or "Local model" once one is installed. Ships `hidden` and
  *    shows only once the server has answered for a Mac.
  *  - App Settings > Models: one row (`#localModelSettings`), the state in a few words, and a
@@ -322,6 +322,72 @@ function localModelBar({ share, role, label, kind, from }) {
   fill.style.width = `${Number.isFinite(from) ? from : percent}%`;
   bar.appendChild(fill);
   return bar;
+}
+
+/**
+ * The memory map: one bar for what this Mac can give a model, split into what the selected
+ * model takes of it. The track that stays is what stays free. A candidate without its parts
+ * (`memory`) gets one plain fill.
+ */
+function localModelMemoryBar(candidate, budgetBytes, last, label) {
+  const percent = (bytes) => (budgetBytes > 0 ? Math.max(0, (bytes / budgetBytes) * 100) : 0);
+  const parts = candidate.memory;
+  const bar = localModelBar({ share: candidate.budgetShare, role: 'meter', kind: 'memory', from: last.memory, label });
+  if (!parts) return bar;
+  const fills = [
+    ['model', parts.modelBytes],
+    ['context', parts.contextBytes],
+    ['peak', parts.peakBytes],
+  ];
+  bar.replaceChildren(
+    ...fills.map(([name, bytes]) => {
+      const to = Math.min(100, Math.round(percent(bytes) * 10) / 10);
+      const fill = localModelEl('div', `lm-bar-fill lm-part-${name}`);
+      fill.dataset.kind = `memory-${name}`;
+      fill.dataset.to = String(to);
+      const from = last[fill.dataset.kind];
+      fill.style.width = `${Number.isFinite(from) ? from : to}%`;
+      return fill;
+    })
+  );
+  return bar;
+}
+
+/** The legend under the memory map: a swatch, what it stands for and its size in whole GB. */
+function localModelMemoryParts(candidate, budgetBytes) {
+  const parts = candidate.memory;
+  if (!parts) return null;
+  const gb = (bytes) => localModelGb(String(Math.round(Math.max(0, bytes) / 1e9)));
+  const free = budgetBytes - parts.modelBytes - parts.contextBytes - parts.peakBytes;
+  const rows = [
+    ['model', localModelT('The model'), parts.modelBytes],
+    [
+      'context',
+      localModelT('Context, {context} tokens', { context: localModelCount(candidate.context) }),
+      parts.contextBytes,
+    ],
+    ['peak', localModelT('Brief peaks'), parts.peakBytes],
+    ['free', localModelT('Stays free'), free],
+  ];
+  const legend = localModelEl('div', 'lm-legend');
+  for (const [name, text, bytes] of rows) {
+    const item = localModelEl('span', 'lm-legend-item');
+    item.appendChild(localModelEl('span', `lm-swatch lm-part-${name}`));
+    item.appendChild(localModelEl('span', 'lm-legend-name', text));
+    item.appendChild(localModelEl('span', 'lm-legend-size', gb(bytes)));
+    legend.appendChild(item);
+  }
+  return legend;
+}
+
+/** The size tile of a model row: its billions of parameters, coloured by how large it is. */
+function localModelTile(candidate) {
+  const size = Number(candidate.paramsB);
+  if (!Number.isFinite(size) || size <= 0) return localModelEl('span', 'lm-tile');
+  const tone = size >= 30 ? 'large' : size >= 15 ? 'mid' : 'small';
+  const tile = localModelEl('span', `lm-tile lm-tile-${tone}`, `${Math.floor(size)}B`);
+  tile.setAttribute('aria-hidden', 'true');
+  return tile;
 }
 
 /**
@@ -944,8 +1010,8 @@ Object.assign(CodemanApp.prototype, {
     );
   },
 
-  /** One model row of the chooser: a radio with the name, the tag, the speed and the download. */
-  _localModelRow(candidate, { checked, tabStop }) {
+  /** One model row of the chooser: radio, size tile, name, tag, speed with its gauge, download. */
+  _localModelRow(candidate, { checked, tabStop, topSpeed }) {
     const row = localModelEl('div', 'lm-model');
     row.setAttribute('role', 'radio');
     row.setAttribute('aria-checked', checked ? 'true' : 'false');
@@ -954,6 +1020,7 @@ Object.assign(CodemanApp.prototype, {
     row.dataset.modelId = candidate.modelId;
     row.appendChild(localModelEl('span', 'lm-radio'));
     if (checked) row.classList.add('lm-model-on');
+    row.appendChild(localModelTile(candidate));
     row.appendChild(localModelEl('span', 'lm-model-name', String(candidate.modelLabel || candidate.modelId)));
     const tagSlot = localModelEl('span', 'lm-model-tag');
     const label = candidate.tag && typeof candidate.tag.label === 'string' ? candidate.tag.label : '';
@@ -961,10 +1028,23 @@ Object.assign(CodemanApp.prototype, {
       const tag = localModelEl('span', 'lm-tag', localModelT(label));
       // The tags of the row the window opens on take the accent. Every other tag is quiet.
       if (LOCAL_MODEL_ACCENT_TAGS.includes(candidate.tag.kind)) tag.classList.add('lm-tag-accent');
+      tag.classList.add(`lm-tag-${candidate.tag.kind}`);
       tagSlot.appendChild(tag);
     }
     row.appendChild(tagSlot);
-    row.appendChild(localModelEl('span', 'lm-model-speed', localModelSpeedText(candidate)));
+    const speed = localModelEl('span', 'lm-model-speed', localModelSpeedText(candidate));
+    const gauge = localModelEl(
+      'span',
+      `lm-gauge lm-gauge-${candidate.speed === 'slow' ? 'slow' : candidate.speed === 'ok' ? 'ok' : 'unknown'}`
+    );
+    const fast = Number(candidate.tokensPerSecond);
+    if (Number.isFinite(fast) && topSpeed > 0) {
+      const needle = localModelEl('span', 'lm-gauge-fill');
+      needle.style.width = `${Math.max(6, Math.round((fast / topSpeed) * 100))}%`;
+      gauge.appendChild(needle);
+    }
+    speed.appendChild(gauge);
+    row.appendChild(speed);
     row.appendChild(localModelEl('span', 'lm-model-size', localModelGb(candidate.downloadGb)));
     return row;
   },
@@ -989,29 +1069,22 @@ Object.assign(CodemanApp.prototype, {
     if (recommendation.budgetSource === 'estimated') {
       head.appendChild(localModelEl('span', 'lm-figure-aside', localModelT('estimated')));
     }
+    const fitWord =
+      candidate.fit === 'tight' ? localModelT('Tight fit') : candidate.fit === 'good' ? localModelT('Good fit') : '';
+    if (fitWord) head.appendChild(localModelEl('span', `lm-fit lm-fit-${candidate.fit}`, fitWord));
     meter.appendChild(head);
     const share = String(Math.round((Number.isFinite(candidate.budgetShare) ? candidate.budgetShare : 0) * 100));
+    // The bar is the model at its PEAK, split into what makes that peak.
     meter.appendChild(
-      localModelBar({
-        share: candidate.budgetShare,
-        role: 'meter',
-        kind: 'memory',
-        from: last.memory,
-        label: localModelT('The selected model needs {share}% of the memory this Mac can give a model', { share }),
-      })
-    );
-    const legend = localModelEl('div', 'lm-legend');
-    const context = localModelCount(candidate.context);
-    // The fill is the model at its PEAK. The installed line uses the same words for it.
-    legend.appendChild(
-      localModelEl(
-        'span',
-        '',
-        localModelT('The model at its peak, with all {context} tokens of context in use', { context })
+      localModelMemoryBar(
+        candidate,
+        Number(recommendation.budgetBytes),
+        last,
+        localModelT('The selected model needs {share}% of the memory this Mac can give a model', { share })
       )
     );
-    legend.appendChild(localModelEl('span', '', localModelT('What stays free')));
-    meter.appendChild(legend);
+    const legend = localModelMemoryParts(candidate, Number(recommendation.budgetBytes));
+    if (legend) meter.appendChild(legend);
     parts.push(meter);
 
     // The server's headline: its word for a pick it has run on a Mac like this one labels the
@@ -1035,9 +1108,10 @@ Object.assign(CodemanApp.prototype, {
     const group = localModelEl('div', 'lm-models');
     group.setAttribute('role', 'radiogroup');
     group.setAttribute('aria-labelledby', 'localModelListLabel');
+    const topSpeed = Math.max(0, ...candidates.map((row) => Number(row.tokensPerSecond) || 0));
     for (const row of candidates) {
       const checked = row === candidate;
-      const el = this._localModelRow(row, { checked, tabStop: checked });
+      const el = this._localModelRow(row, { checked, tabStop: checked, topSpeed });
       el.addEventListener('click', () => this.selectLocalModel(row.modelId));
       group.appendChild(el);
     }

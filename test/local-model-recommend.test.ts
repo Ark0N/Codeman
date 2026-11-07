@@ -516,6 +516,7 @@ describe('the MacBook Pro (Mac17,13: Apple M5 Pro, 48 GB)', () => {
       // 23,105,798,956 + 37,000 x 131,072 + 3,000,000,000 + 5,000,000,000.
       needBytes: 35_955_462_956,
       needGb: '36.0',
+      memory: { modelBytes: 26_105_798_956, contextBytes: 4_849_664_000, peakBytes: 5_000_000_000 },
       // What a Mac really downloads (the MLX build), not the 22.6 GB of the registry manifest.
       downloadBytes: 23_105_798_956,
       downloadGb: '23.1',
@@ -2059,6 +2060,7 @@ describe('the shape of the answer', () => {
       'installBytes',
       'installGb',
       'license',
+      'memory',
       'modelId',
       'modelLabel',
       'needBytes',

@@ -295,6 +295,11 @@ function buildCandidate(
     ...(harness.row.slowFirstTurn ? { slowFirstTurn: true } : {}),
     needBytes: need,
     needGb: formatGb(need),
+    memory: {
+      modelBytes: model.bytes + model.overheadBytes,
+      contextBytes: model.heldBytesPerToken * ctx,
+      peakBytes: model.peakExtraBytes,
+    },
     downloadBytes: model.bytes,
     downloadGb: formatGb(model.bytes),
     budgetShare: round(need / budgetBytes, 3),

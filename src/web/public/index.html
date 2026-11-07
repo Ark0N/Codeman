@@ -510,10 +510,9 @@
                it sits under them as a quiet link; settings-ui.js rewrites its
                contents on every state change and owns its inline display. -->
           <div class="welcome-actions">
-            <div class="welcome-cli-actions" id="welcomeCliActions"></div>
             <!-- A model that runs on the Mac the server runs on (local-model-ui.js).
-                 One button in the chip family, a sibling of the launcher slot and
-                 never inside it (renderWelcomeCliActions empties that slot on every
+                 The first thing on the start screen, above the launchers, in the size of
+                 the primary button. A sibling of the launcher slot and never inside it (renderWelcomeCliActions empties that slot on every
                  state change). Ships `hidden`: only that module reveals it, once the
                  server has answered for a Mac. It opens the chooser window
                  (#localModelModal) and the module writes its label through its own
@@ -522,6 +521,7 @@
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9.5 2.5v3.5M14.5 2.5v3.5M9.5 18v3.5M14.5 18v3.5M2.5 9.5H6M2.5 14.5H6M18 9.5h3.5M18 14.5h3.5"/></svg>
               <span class="welcome-label" id="welcomeLocalModelLabel">Run a local model</span>
             </button>
+            <div class="welcome-cli-actions" id="welcomeCliActions"></div>
             <button type="button" class="welcome-tunnel-link" id="welcomeTunnelBtn" style="display: none;" onclick="app.toggleTunnelFromWelcome()">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
               Cloudflare Tunnel
