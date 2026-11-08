@@ -358,6 +358,72 @@ or `python3`.
 - **The model stays in memory for ten minutes** after the last request, then the runtime
   unloads it.
 
+## Keeping the catalogue current
+
+The catalogue (`src/config/local-model-catalog.ts`) and the runtime pin are compiled into
+Codeman on purpose: no file or download decides what is recommended or run. What the
+registry serves can still move away from them: a tag is pushed again or removed, the build
+a Mac downloads changes size, Ollama ships a new version. The workflow
+`.github/workflows/local-model-catalog.yml` looks for that every Monday at 06:00 UTC. It
+runs `scripts/check-local-model-catalog.mjs`, which also runs locally:
+`npm run check:local-model-catalog` prints the report and exits 0 (clean), 1 (drift) or 2
+(the check itself failed).
+
+For every model row it checks:
+
+- **The tag still exists** in the registry.
+- **The size of what a Mac downloads** is within 0.1% of the row's `bytes`. A tag can be a
+  manifest list with one build per runner, and Ollama on Apple silicon takes the `mlx` build
+  when there is one, else `llamacpp`, else `ggml`. So the check asks for the tag the way
+  Ollama asks, picks the build a Mac picks and sizes it the way a pull counts it (every layer
+  plus the config). The plain manifest other tools get for the same tag is the `llamacpp`
+  build, which is not what a Mac downloads.
+- **The runner of that build**, once a row names its `runner`: a Mac still pulls an `mlx`
+  build for an `mlx` row and a GGUF build (`llamacpp`, or a manifest that names no runner)
+  for a `llamacpp` row. A row's memory figures follow its runner, so a tag that gains or
+  loses an mlx build is drift even at about the same size.
+- **The build a Mac pulls runs on the pinned runtime**: its config declares no newer
+  Ollama (`requires`) than `OLLAMA_RUNTIME_PIN`.
+- **The pinned digest**, once a row carries one: a Mac would still pull that manifest. The
+  field is `digest` and its value is what `/api/tags` reports after the pull. The catalogue
+  schema does not have it yet: `LocalModelEntrySchema` must gain an optional `digest` under
+  exactly that name, or the check never compares it. Until then the report lists today's
+  digests, rows with measured figures first, because without a digest a rebuild of about the
+  same size goes unnoticed (a switch between the mlx and the gguf build does not: their sizes
+  differ by 2% or more). Pinning digests is a decision, not a quick fix: today the catalogue
+  holds no digest on purpose, and `test/local-model-catalog.test.ts` ("holds no download
+  data") refuses a `sha256` anywhere in it, so that rule changes with it.
+
+For the runtime pin it checks whether a newer Ollama release exists, and whether the pinned
+`ollama-darwin.tgz` is still on GitHub with the pinned size and sha256.
+
+It reads manifests and configs only, never a model layer. It does not check the memory
+figures, the speeds or whether a coding agent works with a model: no manifest says anything
+about those, and they change only when somebody measures on a Mac.
+
+**The issue.** Drift opens one issue, "Local model catalogue: weekly check", or, while that
+issue is open, replaces its description with the new report and adds a comment. A clean week
+comments on the open issue and does nothing when there is none. A check that failed (the
+network, a rate limit, an answer that did not parse) fails the run and leaves the issue
+alone; what it found is in the run's summary. The schedule runs the copy of the workflow on
+`master`, and so does `gh workflow run local-model-catalog.yml`.
+
+**What a maintainer does with it**, in a pull request each time:
+
+- **Size drift or a changed digest**: correct the row. When the build itself changed (another
+  runner or quantization), its memory figures and speed no longer describe it: mark the row
+  `estimated` until somebody measures it again.
+- **A tag that is gone, or a build that needs a newer runtime**: replace or drop the row, or
+  move the runtime pin first.
+- **A newer Ollama**: read its release notes, then move `OLLAMA_RUNTIME_PIN` (version, URL,
+  size and sha256, checked against the release's `sha256sum.txt`) and run an install on a
+  Mac before merging.
+- **A pinned archive that changed**: a security question first. Every install refuses it at
+  the hash compare, so nobody gets it, but find out why before moving the pin.
+
+Close the issue once the fix is merged. A catalogue or pin change reaches users only in a
+release: an installed Codeman keeps the catalogue it was built with until it is updated.
+
 ## Source
 
 | What                                           | Where                                                                                              |
@@ -373,3 +439,4 @@ or `python3`.
 | Routes                                         | `src/web/routes/local-model-routes.ts`                                                             |
 | Shared CLI install runner                      | `src/cli-install-runner.ts`                                                                        |
 | Serialized writer of the endpoint store        | `src/custom-model-hosts-writer.ts`                                                                 |
+| Weekly catalogue check                         | `scripts/check-local-model-catalog.mjs`, `.github/workflows/local-model-catalog.yml`               |
