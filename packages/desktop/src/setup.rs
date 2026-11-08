@@ -182,10 +182,7 @@ pub fn parse_env_file(text: &str) -> HashMap<String, String> {
         let Some((name, value)) = line.split_once('=') else {
             continue;
         };
-        let mut chars = name.chars();
-        let portable = chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-            && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
-        if !portable {
+        if !local_server::is_env_name(name) {
             continue;
         }
         let mut value = value.trim();
@@ -335,12 +332,17 @@ pub fn is_codeman_server(command: &str) -> bool {
     server_args(command).is_some()
 }
 
+/// The last path component of a command-line word.
+fn basename(word: &str) -> &str {
+    word.rsplit('/').next().unwrap_or(word)
+}
+
 /// What follows `web` on a Codeman server's command line, or None for any
 /// other command.
 fn server_args(command: &str) -> Option<Vec<&str>> {
     let words: Vec<&str> = command.split_whitespace().collect();
     let is_entry = |w: &str| {
-        let name = w.rsplit('/').next().unwrap_or(w);
+        let name = basename(w);
         w.ends_with("dist/index.js") || w.ends_with("src/index.ts") || name == "codeman" || name == "aicodeman"
     };
     // Any entry word that `web` follows: an earlier word may only look like
@@ -359,14 +361,14 @@ fn server_args(command: &str) -> Option<Vec<&str>> {
 /// the port it asked for once the installer runs.
 pub fn install_in_progress(command: &str) -> Option<Option<u16>> {
     let words: Vec<&str> = command.split_whitespace().collect();
-    let name = |w: &&str| w.rsplit('/').next().unwrap_or(w).to_string();
+    let script = format!("{LOCAL_SCRIPT_NAME}-");
     if words.iter().any(|w| {
-        let n = name(w);
-        n.starts_with(&format!("{LOCAL_SCRIPT_NAME}-")) && n.ends_with(".command")
+        let n = basename(w);
+        n.starts_with(&script) && n.ends_with(".command")
     }) {
         return Some(None);
     }
-    if words.iter().any(|w| name(w).starts_with("codeman-install.")) || gui_install::Run::Codeman.matches(command) {
+    if words.iter().any(|w| basename(w).starts_with("codeman-install.")) || gui_install::Run::Codeman.matches(command) {
         let port = words
             .iter()
             .position(|w| *w == "--port")
@@ -539,10 +541,7 @@ fn found_server(url: &Url, answer: &ProbeOutcome, default: &Url) -> FoundServer 
     };
     FoundServer {
         url: url.to_string(),
-        version: match answer {
-            ProbeOutcome::Ok { version } => Some(version.clone()),
-            _ => None,
-        },
+        version: answer.version(),
         state,
         is_default: url == default,
     }
@@ -702,11 +701,10 @@ pub fn inspect(depth: Depth) -> LocalStatus {
     };
     let answer = probe::probe(&default, auth.as_deref());
 
-    // Every address one of this user's Codeman servers listens at. The one at
-    // the default address has just answered; the others are asked now, once
-    // each. With nothing at the default address, the first of them that
-    // answers is what the tab opens, as it always was, so each gets the
-    // probe's usual time; otherwise they are only listed, and get less.
+    // The other addresses this user's Codeman servers listen at, asked once
+    // each. With nothing at the default address, the first that answers is
+    // what the tab opens (`shown`), so each gets the probe's usual time;
+    // otherwise they are only listed, and get less.
     let patience = if answer == ProbeOutcome::Refused {
         probe::TIMEOUT
     } else {
@@ -742,10 +740,7 @@ pub fn inspect(depth: Depth) -> LocalStatus {
             Depth::Interactive => local_server::installed(true),
         };
     let state = local_state(&outcome, !servers.is_empty(), !listening.is_empty(), installed);
-    let version = match &outcome {
-        ProbeOutcome::Ok { version } => Some(version.clone()),
-        _ => None,
-    };
+    let version = outcome.version();
     LocalStatus {
         url: url.to_string(),
         state,

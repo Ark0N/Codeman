@@ -100,8 +100,8 @@ impl Run {
     /// not one: it has no `--progress`.
     pub fn matches(self, command: &str) -> bool {
         let suffix = format!("/{}/{SCRIPT_FILE}", self.folder());
-        let mut words = command.split_whitespace();
-        words.any(|w| w.ends_with(&suffix)) && command.split_whitespace().any(|w| w == "--progress")
+        command.split_whitespace().any(|w| w.ends_with(&suffix))
+            && command.split_whitespace().any(|w| w == "--progress")
     }
 
     /// A process of this run, if it is running.
@@ -269,11 +269,12 @@ fn download_installer(script: &Path) -> Result<(), String> {
     if out.code == Some(0) && script.is_file() {
         return Ok(());
     }
+    const FAILED: &str = "Could not download the installer. Check the internet connection, then try again.";
     let said = out.stderr.trim();
     Err(if said.is_empty() {
-        "Could not download the installer. Check the internet connection, then try again.".to_string()
+        FAILED.to_string()
     } else {
-        format!("Could not download the installer. Check the internet connection, then try again.\n{said}")
+        format!("{FAILED}\n{said}")
     })
 }
 
@@ -571,9 +572,8 @@ pub fn follow(run: Run, stale: impl Fn() -> bool, send: impl Fn(Value)) {
             return;
         }
         let running = run.process().is_some();
-        let log = progress.feed(&read_more(&mut file, &path, &mut offset));
+        let mut log = progress.feed(&read_more(&mut file, &path, &mut offset));
         if !running || progress.done {
-            let mut log = log;
             log.extend(progress.finish());
             let cancelled = CANCELLED.load(Ordering::SeqCst);
             if progress.done {

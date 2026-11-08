@@ -1,4 +1,7 @@
 //! "Start Codeman on this Mac": `codeman web -d` through the user's login shell.
+//! The same login-shell machinery answers whether Codeman is installed
+//! (`installed`) and hands its environment to the graphical install
+//! (`login_environment`); `exec_bounded` is the crate's bounded process runner.
 //!
 //! A double-clicked app gets launchd's bare PATH (`/usr/bin:/bin:...`), which
 //! finds neither `codeman` nor `node`, and the server inherits whatever
@@ -143,7 +146,8 @@ fn pump<R: Read + Send + 'static>(pipe: Option<R>, stream: usize, tx: mpsc::Send
     });
 }
 
-/// `exec_bounded` for a start.
+/// `exec_bounded` with the start's timeout message. The installed check and
+/// `login_environment` run through it too, and drop its error.
 fn exec(cmd: Command, deadline: Instant) -> Result<Output, String> {
     exec_bounded(
         cmd,
@@ -248,13 +252,16 @@ fn parse_env(output: &str) -> Option<Vec<(String, String)>> {
     None
 }
 
+/// A portable variable name: a letter or `_`, then letters, digits or `_`.
+pub fn is_env_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
 fn env_entry(line: &str) -> Option<(&str, &str)> {
     let (name, value) = line.split_once('=')?;
-    let mut chars = name.chars();
-    let first = chars.next()?;
-    let portable =
-        (first.is_ascii_alphabetic() || first == '_') && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
-    portable.then_some((name, value))
+    is_env_name(name).then_some((name, value))
 }
 
 /// Ask `shell` for its environment with `flags`. The outer error ends the
@@ -339,16 +346,13 @@ fn run_in_shell(
 /// 127 means "no codeman here" and moves on to the next way of asking; the
 /// interactive profile is asked only when `interactive` allows it.
 fn launch(script: &str, shell: &Path, args: &[String], deadline: Instant, interactive: bool) -> Result<Run, String> {
-    let attempts = match flavor(shell) {
-        Flavor::Posix => {
-            let result = run_in_shell(script, shell, false, args, deadline)?;
-            if result.code != Some(127) || !interactive {
-                return Ok(result);
-            }
-            // Not on the login PATH; try the interactive profile too.
-            return run_in_shell(script, shell, true, args, deadline);
+    let Flavor::Capture(attempts) = flavor(shell) else {
+        let result = run_in_shell(script, shell, false, args, deadline)?;
+        if result.code != Some(127) || !interactive {
+            return Ok(result);
         }
-        Flavor::Capture(attempts) => attempts,
+        // Not on the login PATH; try the interactive profile too.
+        return run_in_shell(script, shell, true, args, deadline);
     };
     let mut last_run = None;
     let mut capture_error = None;
@@ -386,8 +390,8 @@ const FIND_SCRIPT: &str = r#"if command -v codeman >/dev/null 2>&1; then exit 0;
 if [ -f "$HOME/.codeman/app/dist/index.js" ] && command -v node >/dev/null 2>&1; then exit 0; fi
 exit 127"#;
 
-/// How long the This Mac tab waits for the login shell to answer whether
-/// Codeman is installed.
+/// How long one look at the login shell may take: whether Codeman is
+/// installed (the This Mac tab), or its environment for the graphical install.
 const FIND_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// `installed` with the shell given, so tests need not touch `$SHELL`.
@@ -453,7 +457,7 @@ mod tests {
             })
             .output
         };
-        // stdout that ended without a newline used to be glued to stderr.
+        // stdout that ends without a newline: stderr still starts a line of its own.
         assert_eq!(
             said("Starting Codeman", "Error: port 3000 is in use\n"),
             "Starting Codeman\nError: port 3000 is in use"

@@ -115,19 +115,22 @@ fn session_cookie(header: &str) -> Option<&str> {
     (name == COOKIE_NAME && !value.is_empty()).then_some(pair)
 }
 
+/// A refused login: Codeman counts each against the login rate limit, so the
+/// polling ends.
+fn refused(status: u16) -> bool {
+    matches!(status, 401 | 403 | 429)
+}
+
 /// What a status code says about asking again.
-fn answer(status: u16, body: impl FnOnce() -> Option<String>) -> Poll {
+fn answer(status: u16, body: Option<&str>) -> Poll {
     match status {
-        200 => body()
-            .as_deref()
-            .and_then(count_working)
-            .map_or(Poll::Failed, |working| {
-                Poll::Seen(Activity {
-                    working: working > 0,
-                    ..Activity::default()
-                })
-            }),
-        401 | 403 | 429 => Poll::Refused,
+        200 => body.and_then(count_working).map_or(Poll::Failed, |working| {
+            Poll::Seen(Activity {
+                working: working > 0,
+                ..Activity::default()
+            })
+        }),
+        s if refused(s) => Poll::Refused,
         _ => Poll::Failed,
     }
 }
@@ -192,7 +195,7 @@ impl Poller {
         let Some((status, body)) = self.ask(&url) else {
             return Poll::Failed;
         };
-        let mut activity = match answer(status, || body) {
+        let mut activity = match answer(status, body.as_deref()) {
             Poll::Seen(activity) => activity,
             other => return other,
         };
@@ -203,7 +206,7 @@ impl Poller {
                         self.alerts = alerts;
                     }
                 }
-                Some((401 | 403 | 429, _)) => return Poll::Refused,
+                Some((s, _)) if refused(s) => return Poll::Refused,
                 // A server from before the list has no alerts to report.
                 Some((404, _)) => self.alerts = (false, false),
                 _ => {}
@@ -264,17 +267,17 @@ mod tests {
     fn a_body_that_is_not_the_list_is_no_answer() {
         assert_eq!(count_working("<html>"), None);
         assert_eq!(count_working(r#"{"success":false,"error":"nope"}"#), None);
-        assert_eq!(answer(200, || Some("<html>".into())), Poll::Failed);
-        assert_eq!(answer(200, || None), Poll::Failed);
+        assert_eq!(answer(200, Some("<html>")), Poll::Failed);
+        assert_eq!(answer(200, None), Poll::Failed);
     }
 
     #[test]
     fn only_a_login_refusal_ends_the_polling() {
         for status in [401, 403, 429] {
-            assert_eq!(answer(status, || None), Poll::Refused, "{status}");
+            assert_eq!(answer(status, None), Poll::Refused, "{status}");
         }
         for status in [301, 404, 500, 502, 503] {
-            assert_eq!(answer(status, || None), Poll::Failed, "{status}");
+            assert_eq!(answer(status, None), Poll::Failed, "{status}");
         }
     }
 
