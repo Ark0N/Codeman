@@ -1,7 +1,8 @@
 # A model that runs on this Mac
 
-Codeman can set up a coding model that runs on the Mac the server runs on: no account, no
-API key, nothing leaves the machine. One button on the welcome screen opens a window that
+Codeman can set up a coding model that runs on the Mac the server runs on: no account and
+no API key, and the session's prompts and files go to a model on this Mac rather than a
+cloud provider (the coding agent itself may still check for updates). One button on the welcome screen opens a window that
 shows what fits this Mac, installs the choice and ends on a coding agent session that
 runs on it.
 

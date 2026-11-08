@@ -54,9 +54,7 @@ Pick one route. The skill only acts inside a Codeman session, so a global instal
 | Web UI             | **App Settings → Agents & CLIs → All agent CLIs → Codeman Agent Skill**         | Injects it into each case when a session is created, where that session's CLI looks: `.claude/skills/` for Claude Code, `.agents/skills/` for Codex, Gemini CLI, OpenCode, Antigravity, Grok, DeepSeek and OMP. Off by default. |
 
 Use the plugin **or** `codeman skill install`, not both: a Claude Code with both lists the
-skill twice (`codeman` and `codeman:codeman`). The per-case copy the Codeman Agent Skill
-setting writes (on by default) does the same beside the plugin, so turn that setting off
-if you use the plugin.
+skill twice (`codeman` and `codeman:codeman`).
 
 The web UI route skips pi, because a project skill makes pi ask to trust the folder at
 startup. A pi or plain shell session uses the [`codeman agent`
