@@ -1471,11 +1471,13 @@ export const SettingsUpdateSchema = z
     ultracodeFloatingWindows: z.boolean().optional(),
     imageWatcherEnabled: z.boolean().optional(),
     /**
-     * Inject the Codeman agent skill (`skills/codeman`) into `<case>/.claude/skills/`
-     * on Claude session create, so an agent inside the session can drive the API
-     * (see docs/agent-control-plan.md §2). SYNCED, default OFF: every skill's
-     * name+description costs context on every turn, so it is opt-in. Injection is
-     * add-only at create; a marker keeps user-authored copies untouched.
+     * Inject the Codeman agent skill (`skills/codeman`) into each new session's case, in
+     * the directory its CLI scans for skills (`capabilities.agentSkillDir`), so an agent
+     * inside the session can drive the API (see docs/agent-control-plan.md §2). SYNCED,
+     * default ON since 1.50.0: an absent key is on, only an explicit false is off, and a
+     * false stored by 1.49.0 or earlier is switched on once at the first 1.50.0 start
+     * (agent-skill-default-migration.ts). Injection is add-only at create; a marker keeps
+     * user-authored copies untouched.
      */
     agentSkillEnabled: z.boolean().optional(),
     /**
