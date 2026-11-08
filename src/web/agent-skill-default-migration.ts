@@ -26,17 +26,20 @@
  *    `SettingsUpdateSchema` never sees it;
  *  - a PUT or any other settings.json writer cannot erase it, which would re-arm the migration and
  *    switch a deliberate later off back on;
- *  - it is not in `CONFIG_BACKUP_FILES` (like `config-backup-id`), so a restore leaves it alone: a
- *    restored settings.json, even one from before 1.50.0 holding `false`, is what the user asked
- *    for and stays as restored.
+ *  - it is not in `CONFIG_BACKUP_FILES` (like `config-backup-id`), so a restore leaves it alone:
+ *    once the migration has run, a restored settings.json, even one from before 1.50.0 holding
+ *    `false`, is what the user asked for and stays as restored.
  * A data dir is one instance, and settings.json is one file for the whole server, so in
  * multi-user mode this runs once for the server, never per user.
  *
  * Order: the marker is checked first (present: nothing is read), the settings change goes through
  * `mutateSettingsFile()` (serialized, atomic, refuses a file that does not parse), and the marker
  * is written only after that resolves. A refused or failed settings write writes no marker, so the
- * migration runs again at the next start (after the user fixed the file). A crash between the two
- * writes is harmless: the next start finds `true` (nothing to change) and writes the marker.
+ * migration runs again at the next start (after the user fixed the file). Until then it has not
+ * run, so an off saved after the fix and before that start is switched on with the rest: the same
+ * "cannot tell" trade as above, in a window that needs an unparseable settings.json at the first
+ * 1.50.0 start. A crash between the two writes is harmless: the next start finds `true` (nothing
+ * to change) and writes the marker.
  *
  * Called once from `WebServer.start()`, before the first settings read and before the server
  * listens, so no request path can see the old value.
