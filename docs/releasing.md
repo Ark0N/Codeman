@@ -70,7 +70,7 @@ curl -sIL -o /dev/null -w '%{http_code}\n' https://github.com/Ark0N/Codeman/rele
 
 **Dry run.** `gh workflow run desktop-dmg.yml` builds, signs and notarizes master and attaches nothing; `gh workflow run desktop-dmg.yml --ref <branch>` does the same for a branch that carries the workflow (GitHub starts a manual run only for a workflow file that is also on master). The signed DMG is the run's `codeman-dmg` artifact (`gh run download <run-id> -n codeman-dmg`). For a first-launch test, download it on a Mac through the browser from the run page instead, so the copy is quarantined like one from a release.
 
-**Rebuild a release's DMG.** `gh workflow run desktop-dmg.yml -f tag=codeman@<x.y.z>`, started from master (the only ref allowed to attach), builds that tag and replaces its `Codeman.dmg`. It works for any release that carries `packages/desktop/scripts/sign-macos.sh`. A failed job is also retried in place with `gh run rerun <run-id> --failed`.
+**Rebuild a release's DMG.** `gh workflow run desktop-dmg.yml -f tag=codeman@<x.y.z>`, started from master (the only ref allowed to attach), builds that tag and replaces its `Codeman.dmg`. It works for any release that carries `packages/desktop/scripts/sign-macos.sh`. The tag must be a Codeman release tag (`codeman@x.y.z`, or the `aicodeman@x.y.z` a failed rename leaves) whose commit is on master's history: `build` and `sign` both refuse anything else before they run its scripts, since `sign` runs them with the signing key unlocked. A failed job is also retried in place with `gh run rerun <run-id> --failed`.
 
 **If notarization fails.** The `Sign and notarize` job's log names the submission and prints Apple's log for it (`xcrun notarytool log <id>` with the same login shows it again).
 

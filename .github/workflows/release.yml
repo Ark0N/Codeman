@@ -145,8 +145,12 @@ jobs:
     name: macOS app
     needs: release
     if: needs.release.outputs.codeman_version != ''
+    # The ceiling for the called jobs; only its attach job asks for write. A job in
+    # desktop-dmg.yml that asks for a permission not granted here (id-token or
+    # attestations for a provenance attestation, say) makes GitHub refuse this
+    # whole Release run at startup, npm publish included: widen both together.
     permissions:
-      contents: write # the ceiling for the called jobs; only its attach job asks for write
+      contents: write
     uses: ./.github/workflows/desktop-dmg.yml
     with:
       tag: codeman@${{ needs.release.outputs.codeman_version }}
