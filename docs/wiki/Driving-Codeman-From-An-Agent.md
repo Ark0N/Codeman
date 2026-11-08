@@ -14,6 +14,10 @@ A skill in the `SKILL.md` format that Claude Code, Codex, Gemini CLI, OpenCode, 
 and most other agent CLIs read. It teaches the agent the whole API, so you ask in plain
 English instead of pasting endpoint documentation into prompts:
 
+Since 1.50.0 Codeman puts it into every new session's folder by default (App Settings →
+Agents & CLIs → **Codeman Agent Skill**), so an agent inside Codeman usually has it already.
+For pi, or a copy that does not depend on that setting:
+
 ```bash
 codeman skill install    # or: npx skills add Ark0N/Codeman --skill codeman -g
 ```

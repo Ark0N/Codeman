@@ -197,6 +197,7 @@ import { resolveTerminalHistoryConfig } from '../config/terminal-history.js';
 import { SseEvent } from './sse-events.js';
 import { MAX_ROUTE_PARAM_LENGTH } from './route-helpers.js';
 import { mutateSettingsFile } from './settings-writer.js';
+import { migrateAgentSkillDefault } from './agent-skill-default-migration.js';
 import { getLatestPlanUsage, setLatestCodexPlanUsage, setLatestCopilotPlanUsage } from './plan-usage-latest.js';
 import { telemetrySignature } from '../usage-telemetry.js';
 import { readCodexPlanUsage, resolveCodexBinaryPath } from '../utils/codex-cli-resolver.js';
@@ -2465,11 +2466,15 @@ export class WebServer extends EventEmitter {
     return resolveTerminalHistoryConfig(settings);
   }
 
-  // Whether the Codeman agent skill is injected into cases on Claude session create
-  // (synced `agentSkillEnabled` setting, default OFF; docs/agent-control-plan.md §2).
+  // Whether the Codeman agent skill is injected into a session's workspace on create
+  // (synced `agentSkillEnabled` setting; docs/agent-control-plan.md §2). Default ON
+  // since 1.50.0, like `workspaceHooksEnabled` below: an absent key means a user who
+  // has never touched the switch, and only an explicit false turns it off. The copy
+  // ignores itself in git (`.gitignore` of `*`, see installAgentSkillInto), so the
+  // default leaves a user's `git status` clean.
   private async getAgentSkillEnabled(): Promise<boolean> {
     const settings = await this.readSettings();
-    return settings.agentSkillEnabled === true;
+    return settings.agentSkillEnabled !== false;
   }
 
   // Whether pending agent-inbox mail is snapshotted to disk (synced
@@ -3444,6 +3449,14 @@ export class WebServer extends EventEmitter {
     // version we actually booted). No-op on a normal boot. See web/self-update.ts.
     if (!this.testMode) {
       reconcileUpdateOnBoot();
+    }
+
+    // One-time, once per data dir: a stored `agentSkillEnabled: false` written by the switch's
+    // old default (up to 1.49.0) becomes true, so the 1.50.0 default reaches installs that ever
+    // saved App Settings (agent-skill-default-migration.ts). Before the restore below reads
+    // settings (2 s cache) and before listen, so no session create can see the old value.
+    if (!this.testMode && (await migrateAgentSkillDefault()) === 'switched-on') {
+      this._settingsCache = null;
     }
 
     // Restore mux sessions BEFORE accepting connections

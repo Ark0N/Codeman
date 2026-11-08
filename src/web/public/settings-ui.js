@@ -711,7 +711,9 @@ Object.assign(CodemanApp.prototype, {
     this._applyCodexSettingsVisibility();
     // Claude Permissions settings
     document.getElementById('appSettingsAgentTeams').checked = settings.agentTeamsEnabled ?? false;
-    document.getElementById('appSettingsAgentSkill').checked = settings.agentSkillEnabled ?? false;
+    // Default ON (since 1.50.0), like the workspace hooks below: the server reads an
+    // absent key as on, so the switch must too, or the next Save would write false.
+    document.getElementById('appSettingsAgentSkill').checked = settings.agentSkillEnabled !== false;
     // Default ON: an absent key is a user who has never seen this setting, and OFF
     // for them means no tab alerts in any workspace Codeman did not scaffold.
     document.getElementById('appSettingsWorkspaceHooks').checked = settings.workspaceHooksEnabled !== false;
@@ -5270,6 +5272,13 @@ Object.assign(CodemanApp.prototype, {
             merged[key] = value;
           }
         }
+        // The agent skill is a synced key that is ON when absent (since 1.50.0). A server
+        // without the key means that default, so this device's own copy goes rather than
+        // standing in for it: up to 1.49.0 the switch loaded an absent key as off, so a
+        // device whose save never reached the server still holds `false`, and its next
+        // Save would write it back. The server's one-time boot migration stores `true` for
+        // installs that had saved `false` (agent-skill-default-migration.ts).
+        if (!('agentSkillEnabled' in appSettings)) delete merged.agentSkillEnabled;
         this.saveAppSettingsToStorage(merged);
 
         // Apply notification prefs from server if present (only if localStorage has none)

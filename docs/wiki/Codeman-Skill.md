@@ -43,7 +43,11 @@ DeepSeek Harness worker on a local qwen model and a Claude Code worker power on 
 
 ## Install it
 
-Pick one route. The skill only acts inside a Codeman session, so a global install is safe.
+Usually you do not have to: since 1.50.0 Codeman puts the skill into every new session's
+folder by default (the Web UI row below), where that session's CLI looks for skills. The copy
+ignores itself in git, so your repository never lists it as a new file.
+
+Otherwise pick one route. The skill only acts inside a Codeman session, so a global install is safe.
 
 | How                | Command                                                                         | Scope |
 | ------------------ | ------------------------------------------------------------------------------- | ----- |
@@ -51,10 +55,13 @@ Pick one route. The skill only acts inside a Codeman session, so a global instal
 | Claude Code plugin | `/plugin marketplace add Ark0N/Codeman`, then `/plugin install codeman@codeman` | Global, through Claude Code's plugin manager. `/plugin update codeman` follows releases. |
 | Bundled CLI        | `codeman skill install`                                                         | Global, at `~/.claude/skills/codeman`. |
 | Bundled CLI        | `codeman skill install --case <name> [--mode <mode>]`                           | One case. `--mode codex` (or any other run mode) writes it where that CLI looks for skills. |
-| Web UI             | **App Settings → Agents & CLIs → All agent CLIs → Codeman Agent Skill**         | Injects it into each case when a session is created, where that session's CLI looks: `.claude/skills/` for Claude Code, `.agents/skills/` for Codex, Gemini CLI, OpenCode, Antigravity, Grok, DeepSeek and OMP. Off by default. |
+| Web UI             | **App Settings → Agents & CLIs → All agent CLIs → Codeman Agent Skill**         | Injects it into each case when a session is created, where that session's CLI looks: `.claude/skills/` for Claude Code, `.agents/skills/` for Codex, Gemini CLI, OpenCode, Antigravity, Grok, DeepSeek and OMP. On by default since 1.50.0. |
 
 Use the plugin **or** `codeman skill install`, not both: a Claude Code with both lists the
-skill twice (`codeman` and `codeman:codeman`).
+skill twice (`codeman` and `codeman:codeman`). The Web UI copy counts too, and it is on by
+default: with the plugin installed, Claude Code sessions in Codeman list the skill twice.
+Both work. Turn **Codeman Agent Skill** off if the duplicate bothers you (other CLIs then
+lose their copy too), or use the Web UI copy instead of the plugin.
 
 The web UI route skips pi, because a project skill makes pi ask to trust the folder at
 startup. A pi or plain shell session uses the [`codeman agent`
@@ -67,9 +74,16 @@ same verbs as shell commands.
 Codeman-managed copy in that case, whichever CLI's directory it sits in). It never touches a
 `skills/codeman` you wrote yourself.
 
-Turning the web UI setting back off **does not remove copies it already injected**, because
+To stop the Web UI copy, turn **App Settings → Agents & CLIs → All agent CLIs → Codeman Agent
+Skill** off. It is on by default since 1.50.0: a settings file without the setting means on,
+and only switching it off turns it off. Existing installs that stored off are switched on
+once at the first 1.50.0 start (every App Settings save on an earlier version stored the old
+default, off, whether or not you touched this switch); turning it off afterwards sticks.
+
+Turning the web UI setting off **does not remove copies it already injected**, because
 a sweep at session start would pull the skill out from under other live sessions sharing
-that directory. Remove them per case with `codeman skill uninstall --case <name>`.
+that directory. Remove them per case with `codeman skill uninstall --case <name>`, which
+also removes the copy's `.gitignore`.
 
 ## Then just ask
 

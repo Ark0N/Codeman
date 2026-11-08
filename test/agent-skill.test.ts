@@ -7,12 +7,14 @@
  * publish without them would be caught here before the `files` entry silently
  * ignores the missing directory.
  *
- * Pure filesystem tests in a per-test temp dir. Port: N/A.
+ * Filesystem tests in a per-test temp dir; the self-ignoring block also runs real
+ * `git` there (no global or system config). Port: N/A.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile, symlink, readdir, stat, utimes } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import {
@@ -92,6 +94,8 @@ describe('installAgentSkillInto / applyAgentSkill(enabled)', () => {
     expect(await applyAgentSkill(casePath, true)).toBe('foreign');
     expect(await readFile(join(skillDir(), 'SKILL.md'), 'utf-8')).toContain('my own skill');
     expect(existsSync(join(skillDir(), 'reference'))).toBe(false);
+    // Not even the ignore file: a foreign copy is the user's to track or not.
+    expect(existsSync(join(skillDir(), '.gitignore'))).toBe(false);
   });
 
   it('refuses to write through a symlinked skill dir (dogfooding layout)', async () => {
@@ -107,9 +111,61 @@ describe('installAgentSkillInto / applyAgentSkill(enabled)', () => {
     expect(await installAgentSkillInto(skillDir())).toBe('symlink');
     expect(await readdir(join(casePath, 'real-skills'))).toEqual([]);
   });
+
+  // A cloned repository can commit `reference` as a link, and a Docker case's container
+  // can plant one in the bind-mounted workspace the host injects into (on by default).
+  it('refuses a symlinked reference/ folder inside the copy, so nothing is written where it points', async () => {
+    const outside = join(casePath, 'outside');
+    await mkdir(outside, { recursive: true });
+    await writeFile(join(outside, 'history.md'), 'my notes\n');
+    await mkdir(skillDir(), { recursive: true });
+    await symlink(outside, join(skillDir(), 'reference'));
+
+    expect(await applyAgentSkill(casePath, true)).toBe('symlink');
+    expect(await readdir(outside)).toEqual(['history.md']);
+    expect(await readFile(join(outside, 'history.md'), 'utf-8')).toBe('my notes\n');
+    // Refused before the first write: no SKILL.md, no ignore file.
+    expect(await readdir(skillDir())).toEqual(['reference']);
+  });
+
+  it('refuses a symlinked reference/ folder planted beside an existing Codeman copy', async () => {
+    await applyAgentSkill(casePath, true);
+    const outside = join(casePath, 'outside');
+    await mkdir(outside, { recursive: true });
+    await writeFile(join(outside, 'recipes.md'), 'my recipes\n');
+    await rm(join(skillDir(), 'reference'), { recursive: true });
+    await symlink(outside, join(skillDir(), 'reference'));
+    const skillMd = await readFile(join(skillDir(), 'SKILL.md'), 'utf-8');
+    await writeFile(join(skillDir(), 'SKILL.md'), `stale\n${MARKER_PREFIX}: old -->\n`);
+
+    expect(await applyAgentSkill(casePath, true)).toBe('symlink');
+    expect(await readdir(outside)).toEqual(['recipes.md']);
+    expect(await readFile(join(outside, 'recipes.md'), 'utf-8')).toBe('my recipes\n');
+    // The stale copy is left as found, not refreshed through the link.
+    expect(await readFile(join(skillDir(), 'SKILL.md'), 'utf-8')).not.toBe(skillMd);
+  });
 });
 
 describe('removeAgentSkillFrom / applyAgentSkill(disabled)', () => {
+  it('refuses to delete through a symlinked reference/ folder inside the copy', async () => {
+    await applyAgentSkill(casePath, true);
+    const outside = join(casePath, 'outside');
+    await mkdir(outside, { recursive: true });
+    // Files named like the packaged reference files: an unlink through the link would take them.
+    for (const name of await readdir(join(skillDir(), 'reference'))) {
+      await writeFile(join(outside, name), 'not yours\n');
+    }
+    const names = (await readdir(outside)).sort();
+    expect(names.length).toBeGreaterThan(0);
+    await rm(join(skillDir(), 'reference'), { recursive: true });
+    await symlink(outside, join(skillDir(), 'reference'));
+
+    expect(await applyAgentSkill(casePath, false)).toBe('symlink');
+    expect((await readdir(outside)).sort()).toEqual(names);
+    for (const name of names) expect(await readFile(join(outside, name), 'utf-8')).toBe('not yours\n');
+    expect(existsSync(join(skillDir(), 'SKILL.md'))).toBe(true);
+  });
+
   it('removes our copy and prunes the emptied directories', async () => {
     await applyAgentSkill(casePath, true);
     expect(await applyAgentSkill(casePath, false)).toBe('removed');
@@ -139,6 +195,117 @@ describe('removeAgentSkillFrom / applyAgentSkill(disabled)', () => {
     expect(existsSync(join(skillDir(), 'reference', 'endpoints.md'))).toBe(false);
     // The user's file and the directories holding it survive.
     expect(await readFile(join(skillDir(), 'reference', 'my-notes.md'), 'utf-8')).toBe('mine\n');
+    // And so does the ignore file, so their notes stay out of `git status` as before.
+    expect(await readFile(join(skillDir(), '.gitignore'), 'utf-8')).toBe('*\n');
+  });
+});
+
+describe('the injected copy ignores itself in git', () => {
+  const ENV = {
+    ...process.env,
+    LC_ALL: 'C',
+    GIT_AUTHOR_NAME: 'T',
+    GIT_AUTHOR_EMAIL: 't@example.com',
+    GIT_COMMITTER_NAME: 'T',
+    GIT_COMMITTER_EMAIL: 't@example.com',
+    GIT_CONFIG_GLOBAL: '/dev/null',
+    GIT_CONFIG_NOSYSTEM: '1',
+  };
+  const git = (...args: string[]) =>
+    execFileSync('git', args, { cwd: casePath, env: ENV, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
+  /** Exit status of `git check-ignore -q -- <path>`: 0 ignored, 1 not ignored. */
+  const checkIgnore = (path: string): number => {
+    try {
+      git('check-ignore', '-q', '--', path);
+      return 0;
+    } catch (err) {
+      return (err as { status: number }).status;
+    }
+  };
+  /** A repository with one commit and a tracked `.gitignore` of its own. */
+  const initRepo = async () => {
+    git('init', '-q', '-b', 'main');
+    await writeFile(join(casePath, 'README.md'), 'hello\n');
+    await writeFile(join(casePath, '.gitignore'), 'node_modules/\n');
+    git('add', 'README.md', '.gitignore');
+    git('-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'init');
+  };
+
+  it('writes a .gitignore of `*` into the copy on install', async () => {
+    expect(await applyAgentSkill(casePath, true)).toBe('installed');
+    expect(await readFile(join(skillDir(), '.gitignore'), 'utf-8')).toBe('*\n');
+    // Never part of the skill content: a second run has nothing to do.
+    expect(await applyAgentSkill(casePath, true)).toBe('unchanged');
+  });
+
+  it('keeps `git status` of the user repository clean, and leaves its own ignore file alone', async () => {
+    await initRepo();
+    await applyAgentSkill(casePath, true);
+    await applyAgentSkill(casePath, true, '.agents/skills');
+
+    expect(git('status', '--porcelain', '--untracked-files=all')).toBe('');
+    expect(await readFile(join(casePath, '.gitignore'), 'utf-8')).toBe('node_modules/\n');
+    // Nor the repository's local exclude file (git's template may or may not create one).
+    const exclude = join(casePath, '.git', 'info', 'exclude');
+    if (existsSync(exclude)) expect(await readFile(exclude, 'utf-8')).not.toContain('codeman');
+  });
+
+  it('ignores the copy contents, never the folder above it (Claude Code checks only those)', async () => {
+    // Claude Code 2.1.319 skips a nested skills folder when `git check-ignore` says its
+    // project directory is ignored; it never checks a skill folder or its SKILL.md.
+    await initRepo();
+    await applyAgentSkill(casePath, true);
+    expect(checkIgnore('.claude/skills/codeman/SKILL.md')).toBe(0);
+    expect(checkIgnore('.claude/skills/codeman')).toBe(1);
+    expect(checkIgnore('.claude/skills')).toBe(1);
+    expect(checkIgnore('.claude')).toBe(1);
+  });
+
+  it('never overwrites a .gitignore that is already in the folder', async () => {
+    await applyAgentSkill(casePath, true);
+    await writeFile(join(skillDir(), '.gitignore'), '# mine\nSKILL.md\n');
+    // A stale copy: the refresh rewrites the skill but not the ignore file.
+    await writeFile(join(skillDir(), 'SKILL.md'), `stale\n${MARKER_PREFIX}: old -->\n`);
+    expect(await applyAgentSkill(casePath, true)).toBe('refreshed');
+    expect(await readFile(join(skillDir(), '.gitignore'), 'utf-8')).toBe('# mine\nSKILL.md\n');
+  });
+
+  it('a copy injected before the ignore file existed gains it on the next install', async () => {
+    await applyAgentSkill(casePath, true);
+    await rm(join(skillDir(), '.gitignore'));
+    // Every skill file is current, so only the ignore file is new: still a refresh.
+    expect(await applyAgentSkill(casePath, true)).toBe('refreshed');
+    expect(await readFile(join(skillDir(), '.gitignore'), 'utf-8')).toBe('*\n');
+  });
+
+  it('does not write through a symlink planted at the ignore file name', async () => {
+    await mkdir(skillDir(), { recursive: true });
+    const outside = join(casePath, 'outside.txt');
+    await writeFile(outside, 'untouched\n');
+    await symlink(outside, join(skillDir(), '.gitignore'));
+    expect(await applyAgentSkill(casePath, true)).toBe('installed');
+    expect(await readFile(outside, 'utf-8')).toBe('untouched\n');
+  });
+
+  it('uninstall removes the ignore file with the copy, so no folder is left behind', async () => {
+    await initRepo();
+    await applyAgentSkill(casePath, true);
+    expect(await applyAgentSkill(casePath, false)).toBe('removed');
+    expect(existsSync(skillDir())).toBe(false);
+    expect(existsSync(join(casePath, '.claude', 'skills'))).toBe(false);
+    expect(git('status', '--porcelain', '--untracked-files=all')).toBe('');
+  });
+
+  it("uninstall keeps an ignore file that is not Codeman's", async () => {
+    await applyAgentSkill(casePath, true);
+    await writeFile(join(skillDir(), '.gitignore'), 'SKILL.md\n');
+    expect(await applyAgentSkill(casePath, false)).toBe('removed');
+    expect(await readFile(join(skillDir(), '.gitignore'), 'utf-8')).toBe('SKILL.md\n');
+  });
+
+  it('the packaged source carries no ignore file (the plugin mirror pins its file set)', () => {
+    expect(existsSync(join(process.cwd(), 'skills', 'codeman', '.gitignore'))).toBe(false);
+    expect(existsSync(join(process.cwd(), 'plugins', 'codeman', 'skills', 'codeman', '.gitignore'))).toBe(false);
   });
 });
 

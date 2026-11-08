@@ -1,15 +1,20 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
-import { mkdirSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { WebServer } from '../src/web/server.js';
 
 describe('Interactive Session Lifecycle', () => {
   let server: WebServer;
   let baseUrl: string;
+  let customDir: string;
 
   beforeAll(async () => {
-    // The 'custom working directory' test creates a session in /tmp/test; workingDir
-    // validation requires the dir to exist, so ensure it does (idempotent, CI-safe).
-    mkdirSync('/tmp/test', { recursive: true });
+    // The 'custom working directory' test creates a session in a folder of its own
+    // (workingDir validation requires it to exist), never a fixed path in the machine's
+    // real `/tmp`: a create writes the workspace hooks and the agent skill (on by
+    // default) into its working dir, and those would outlive the run there.
+    customDir = mkdtempSync(join(tmpdir(), 'codeman-session-test-'));
     server = new WebServer(0, false, true);
     await server.start();
     baseUrl = `http://localhost:${server.boundPort}`;
@@ -17,6 +22,7 @@ describe('Interactive Session Lifecycle', () => {
 
   afterAll(async () => {
     await server.stop();
+    rmSync(customDir, { recursive: true, force: true });
   }, 60000); // Extended timeout for cleanup
 
   describe('Session Creation', () => {
@@ -39,13 +45,13 @@ describe('Interactive Session Lifecycle', () => {
       const response = await fetch(`${baseUrl}/api/sessions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workingDir: '/tmp/test' }),
+        body: JSON.stringify({ workingDir: customDir }),
       });
 
       const data = await response.json();
 
       expect(data.success).toBe(true);
-      expect(data.data.session.workingDir).toBe('/tmp/test');
+      expect(data.data.session.workingDir).toBe(customDir);
     });
   });
 

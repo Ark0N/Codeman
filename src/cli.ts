@@ -250,7 +250,7 @@ function describeSkillResult(result: AgentSkillApplyResult, target: string): { o
     },
     symlink: {
       ok: false,
-      text: `${target} (or its parent) is a symlink, refusing to write through it.`,
+      text: `${target}, its parent or its reference folder is a symlink, refusing to write through it.`,
     },
   };
   return messages[result];
@@ -320,7 +320,11 @@ skillCmd
         if (result === 'symlink') {
           // A shared-skills layout (`.agents/skills -> ../.claude/skills`) is deliberate:
           // skip it rather than fail the whole sweep.
-          console.log(palette.warn(`- Skipped ${target}: it (or its parent) is a symlink, so it was not touched`));
+          console.log(
+            palette.warn(
+              `- Skipped ${target}: it, its parent or its reference folder is a symlink, so it was not touched`
+            )
+          );
           continue;
         }
         removedAny = true;

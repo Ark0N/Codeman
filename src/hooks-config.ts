@@ -1358,6 +1358,87 @@ async function isSymlink(path: string): Promise<boolean> {
   }
 }
 
+/**
+ * Whether a folder INSIDE the copy that holds skill files (today only `reference/`) is a
+ * symlink. The checks on the copy and its parent stop at the copy itself, and a write or
+ * unlink of `reference/<name>.md` follows a linked `reference/` wherever it points:
+ * measured, `reference -> <elsewhere>` made install overwrite a `history.md` there and
+ * uninstall delete it. A cloned repository can commit that link, and a Docker case's
+ * container can plant it in the bind-mounted workspace that the host injects into, so
+ * both are refused like a linked copy. Checked once before the first write or unlink; a
+ * link swapped in after the check (a race against the container) is not covered.
+ */
+async function agentSkillSubdirIsSymlink(skillDir: string, files: AgentSkillFile[]): Promise<boolean> {
+  const subdirs = new Set<string>(['reference']);
+  for (const file of files) {
+    // Every folder on the way to the file, outermost first: `a/b/x.md` checks `a`, then `a/b`.
+    const parts = dirname(file.relPath)
+      .split(/[\\/]/)
+      .filter((part) => part !== '' && part !== '.');
+    for (let i = 1; i <= parts.length; i++) subdirs.add(join(...parts.slice(0, i)));
+  }
+  for (const subdir of subdirs) {
+    if (await isSymlink(join(skillDir, subdir))) return true;
+  }
+  return false;
+}
+
+/**
+ * The ignore file every Codeman-managed skill copy carries, and what it holds: `*`
+ * matches everything in the copy's own folder (the ignore file included), so a user's
+ * repository never lists `.claude/skills/codeman/` (or `.agents/skills/codeman/`) as
+ * untracked, without Codeman touching the repository's own `.gitignore` or
+ * `info/exclude`. Same idea as the prompt-uploads folder (`ensureUploadDir`).
+ *
+ * Deliberately NOT part of `readAgentSkillSource()`: it is written once with O_EXCL and
+ * never compared or rewritten, so a file the user put there (or edited) is theirs.
+ *
+ * Measured against Claude Code 2.1.319, whose skill discovery runs `git check-ignore`
+ * only on directories at or above `.claude/skills` (the nested-skills walk), never on a
+ * skill folder or its SKILL.md: a `*` inside `codeman/` ignores the folder's CONTENTS,
+ * not the folder, so the skill still loads. Codex 0.162 does no gitignore check on skills.
+ */
+const AGENT_SKILL_GITIGNORE = '.gitignore';
+const AGENT_SKILL_GITIGNORE_CONTENT = '*\n';
+
+/**
+ * Write the copy's `.gitignore` if none is there. Returns whether it wrote one.
+ * 'wx' (O_CREAT|O_EXCL) never replaces an existing file and refuses a symlink at the
+ * name. A create that succeeded before the write failed (ENOSPC) would leave an empty
+ * file that reads as the user's next time, so it is taken back; that cleanup's own
+ * failure must not replace the cause.
+ */
+async function ensureAgentSkillGitignore(skillDir: string): Promise<boolean> {
+  const ignoreFile = join(skillDir, AGENT_SKILL_GITIGNORE);
+  try {
+    await writeFile(ignoreFile, AGENT_SKILL_GITIGNORE_CONTENT, { flag: 'wx' });
+    return true;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'EEXIST') return false;
+    await unlink(ignoreFile).catch(() => {});
+    throw err;
+  }
+}
+
+/**
+ * Remove the copy's `.gitignore` only when it is the LAST thing in the folder and holds
+ * exactly what Codeman writes. Anything else in the folder (a user's own notes) keeps
+ * the ignore file, so those files stay out of `git status` as they were, and a
+ * `.gitignore` with other content is the user's.
+ */
+async function removeAgentSkillGitignoreIfLast(skillDir: string): Promise<void> {
+  const ignoreFile = join(skillDir, AGENT_SKILL_GITIGNORE);
+  try {
+    const entries = await readdir(skillDir);
+    if (entries.length !== 1 || entries[0] !== AGENT_SKILL_GITIGNORE) return;
+    if (!(await lstat(ignoreFile)).isFile()) return;
+    if ((await readFile(ignoreFile, 'utf-8')) !== AGENT_SKILL_GITIGNORE_CONTENT) return;
+    await unlink(ignoreFile);
+  } catch {
+    // best-effort: a folder that stays behind holds only an ignore file
+  }
+}
+
 /** What an install/remove actually did, so callers (CLI, logs) can say so. */
 export type AgentSkillApplyResult =
   | 'installed' // fresh copy written
@@ -1366,22 +1447,30 @@ export type AgentSkillApplyResult =
   | 'removed' // our copy deleted
   | 'absent' // nothing there to remove
   | 'foreign' // a copy exists but is not ours; left untouched
-  | 'symlink'; // the skill dir (or its parent) is a symlink; left untouched
+  | 'symlink'; // the skill dir, its parent or a folder inside it is a symlink; left untouched
 
 /**
  * Install or refresh the Codeman agent skill into `skillDir` (a `.../codeman`
  * directory, e.g. `<case>/.claude/skills/codeman`, `~/.claude/skills/codeman` or
  * `<case>/.agents/skills/codeman`).
  *
- * Refuses two shapes rather than writing through them:
+ * Refuses these shapes rather than writing through them:
  * - a SYMLINK at the skill dir or its `skills/` parent: this repo's own dogfooding
  *   layout (`.claude/skills/codeman -> ../../skills/codeman`) would otherwise have
  *   the injector overwrite the repo source through the link;
+ * - a SYMLINK at a folder inside the copy (`reference/`), which would carry the skill's
+ *   files to wherever it points (`agentSkillSubdirIsSymlink`);
  * - a FOREIGN copy (SKILL.md present without our marker): that is the user's own
  *   skill, and per the statusLine rule we never clobber what we did not write.
  *
  * Idempotent and cheap: unchanged files are not rewritten, so calling on every
  * session create causes no mtime churn.
+ *
+ * The copy ignores itself in git: a `.gitignore` of `*` is written FIRST, before any
+ * skill file, so a `git status` that runs mid-install never lists the folder either
+ * (`ensureAgentSkillGitignore`). It is written once and never rewritten; a copy made
+ * before this existed gains it on its next install or refresh, which then reports
+ * 'refreshed'.
  *
  * Serialized on the skill dir through the same lock the settings writers use: two
  * sessions created at once in one repo both inject this skill, and interleaving their
@@ -1402,7 +1491,9 @@ export async function installAgentSkillInto(skillDir: string): Promise<AgentSkil
     if (existing !== null && !existing.includes(AGENT_SKILL_MARKER_PREFIX)) return 'foreign';
 
     const files = await readAgentSkillSource();
-    let changed = false;
+    if (await agentSkillSubdirIsSymlink(skillDir, files)) return 'symlink';
+    await mkdir(skillDir, { recursive: true });
+    let changed = await ensureAgentSkillGitignore(skillDir);
     for (const file of files) {
       const target = join(skillDir, file.relPath);
       let current: string | null = null;
@@ -1544,7 +1635,8 @@ export async function refreshUserAgentSkill(): Promise<AgentSkillApplyResult | '
  * Remove a Codeman-managed skill copy from `skillDir`. Same ownership and symlink
  * refusals as the install path. Deletes only files the packaged source would have
  * written (never `rm -rf`, so a user's extra files in the directory survive), then
- * prunes the directories bottom-up if they emptied.
+ * the copy's own `.gitignore` when nothing else is left beside it, then prunes the
+ * directories bottom-up if they emptied.
  *
  * Shares the install path's per-dir lock so an uninstall can't run between an install's
  * ownership read and its writes, which would leave half the skill back on disk.
@@ -1564,10 +1656,13 @@ export async function removeAgentSkillFrom(skillDir: string): Promise<AgentSkill
     // Manifest-based, with SKILL.md as the fallback when the packaged source is
     // unreadable: removal must still work on an install whose skills/ dir went missing.
     const files = await readAgentSkillSource().catch((): AgentSkillFile[] => [{ relPath: 'SKILL.md', content: '' }]);
+    // An unlink through a linked `reference/` deletes files wherever it points.
+    if (await agentSkillSubdirIsSymlink(skillDir, files)) return 'symlink';
     for (const file of files) {
       await unlink(join(skillDir, file.relPath)).catch(() => {});
     }
     await rmdir(join(skillDir, 'reference')).catch(() => {}); // fails when non-empty, fine
+    await removeAgentSkillGitignoreIfLast(skillDir);
     await rmdir(skillDir).catch(() => {});
     await rmdir(dirname(skillDir)).catch(() => {}); // prune `.claude/skills` (or the CLI's own dir) if now empty
     return 'removed';
@@ -1601,7 +1696,10 @@ export function agentSkillDirFor(casePath: string, dir: AgentSkillDir): string {
  * Add or remove the Codeman agent skill in `<case>/<dir>/codeman`, where `dir` is the
  * skills directory the session's CLI scans (default: Claude Code's `.claude/skills`;
  * callers resolve it with `agentSkillDir()`), mirroring `applyStatusLineConfig`'s
- * shape. Gated by the synced `agentSkillEnabled` app setting (default OFF).
+ * shape. Gated by the synced `agentSkillEnabled` app setting: default ON since 1.50.0
+ * (an absent key is on, only an explicit false is off; `getAgentSkillEnabled()` in
+ * server.ts), which is safe for a user's repository because the copy ignores itself
+ * in git (`ensureAgentSkillGitignore`).
  *
  * Call-site policy is ADD-ONLY on session create (callers pass `enabled: true` or
  * skip the call), for the statusLine reason: sessions in a repo share one workspace,

@@ -17,7 +17,7 @@ lists mark a session that runs in one with a `⑂ <name>` pill.
 
 The main checkout does not show the worktrees as untracked: Codeman adds `/.claude/worktrees/`
 (and `/.claude/settings.local.json`, the hooks file it writes for every Claude session, plus the
-`codeman` folder it writes when **Codeman Agent Skill** is on) to the repository's local
+`codeman` folder it writes while **Codeman Agent Skill** is on, the default) to the repository's local
 `.git/info/exclude` when git does not ignore them already. Without that, those files would make
 every worktree look modified and git would refuse to remove it. Your tracked `.gitignore` is
 never touched.
