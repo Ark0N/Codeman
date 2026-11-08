@@ -106,7 +106,7 @@ later call opens with, and your first REAL call performs them anyway:
 
 ```bash
 . "${XDG_CACHE_HOME:-$HOME/.cache}/codeman-agent-$CODEMAN_SESSION_ID.sh" 2>/dev/null
-[ "${CODEMAN_PREAMBLE:-}" = 1.44.0 ] || { echo "preamble missing or stale; run the full §0 block"; exit 1; }
+[ "${CODEMAN_PREAMBLE:-}" = 1.50.0 ] || { echo "preamble missing or stale; run the full §0 block"; exit 1; }
 ```
 
 ⚠️ **Never spend a Bash call on this check alone.** §1's block opens with this same
@@ -134,8 +134,8 @@ PRE="${XDG_CACHE_HOME:-$HOME/.cache}/codeman-agent-$CODEMAN_SESSION_ID.sh"
 mkdir -p "$(dirname "$PRE")"
 # Rewrite unless the file already ends with THIS version's stamp, so a stale or a
 # half-written file self-heals here instead of costing you a round trip to rm it.
-grep -qs '^CODEMAN_PREAMBLE=1.44.0$' "$PRE" || (umask 077; cat > "$PRE" <<'PREAMBLE'
-# ---- Codeman agent preamble 1.44.0 (seeded by Codeman at session spawn; the SKILL.md §0 bootstrap rewrites it when missing or stale) ----
+grep -qs '^CODEMAN_PREAMBLE=1.50.0$' "$PRE" || (umask 077; cat > "$PRE" <<'PREAMBLE'
+# ---- Codeman agent preamble 1.50.0 (seeded by Codeman at session spawn; the SKILL.md §0 bootstrap rewrites it when missing or stale) ----
 # Positional parameters are always written with braces, ${1} and never a bare dollar-digit: Claude Code
 # replaces a bare one in a skill body with the matching word of the skill's arguments, and §0 is pasted
 # from that body (test/agent-skill.test.ts pins it).
@@ -186,11 +186,15 @@ _composer_up() {   # <sid> <timeoutMs> -> "true"/"false". `shift+tab` is the one
     --data-urlencode 'match=shift+tab' --data-urlencode 'from=buffer' \
     --data-urlencode "timeout=${2}" | jq -r '.data.wait.matched // false'
 }
+_mark_up() {       # <sid> <mark> <timeoutMs> -> "true"/"false": a literal, space-free token
+  # in the pane's output, read from the buffer so a composer drawn before the wait counts.
+  "${CURL[@]}" -G "$API/api/v1/sessions/${1}/wait-output" \
+    --data-urlencode "match=${2}" --data-urlencode 'from=buffer' \
+    --data-urlencode "timeout=${3}" | jq -r '.data.wait.matched // false'
+}
 _dsh_up() {        # <sid> <timeoutMs> -> "true"/"false". The DeepSeek Harness TUI's
   # composer glyph. Override with DSH_READY_MARK for a profile that draws another one.
-  "${CURL[@]}" -G "$API/api/v1/sessions/${1}/wait-output" \
-    --data-urlencode "match=${DSH_READY_MARK:-❯}" --data-urlencode 'from=buffer' \
-    --data-urlencode "timeout=${2}" | jq -r '.data.wait.matched // false'
+  _mark_up "${1}" "${DSH_READY_MARK:-❯}" "${2}"
 }
 # ---- the workspace-trust dialog: READ the screen, never press Enter blind ----
 # Claude Code 2.1.252 dropped the option numbers, REVERSED them, and highlights
@@ -250,21 +254,123 @@ _accept_trust() {  # <sid> -> 0 once it has answered the dialog, 1 if it could n
   done
   return 1
 }
+# ---- the local model: the model Codeman installed on this Mac, as a worker ----
+# local_model -> ONE compact JSON object on stdout. rc 0 only when a `local` worker can be
+# spawned now (`running:true`) or once spawn_worker has started the runtime (`running:false`):
+#   {"spawnable":true,"state":"installed","running":true,"cli":"opencode","cliLabel":"OpenCode",
+#    "endpointId":"local-ollama","modelId":"<id>","modelLabel":"<label>"}
+# Otherwise rc 1 and {"spawnable":false,"reason":"<reason>","message":"<why>",...}, the reason
+# one of: not-mac, not-installed, install-unfinished, blocked (installed, but the server
+# refuses a session now: the model changed on disk, another program holds the port, the
+# runtime does not start), admin-only (multi-user mode, 403), unsupported (a Codeman without
+# local models, 404), unauthorized (401, §6), unreachable, error.
+# One GET of an EXPERIMENTAL route. It downloads, installs and starts nothing: installing is
+# a person's decision, made in Codeman's "Run a local model" window.
+local_model() {
+  local r code body out
+  r=$("${CURL[@]}" -w '\n%{http_code}' "$API/api/v1/local-model")
+  code=${r##*$'\n'}; body=${r%$'\n'*}
+  case "$code" in
+    200) out=$(jq -c '
+      def say: (.text // "") as $t
+        | reduce ((.vars // {}) | to_entries[]) as $e ($t; gsub("\\{" + $e.key + "\\}"; $e.value));
+      .data as $d | ($d.install // {}) as $i | ($i.actions // []) as $a
+      | {state:$i.state, running:($i.running == true), cli:$i.cli, cliLabel:$i.cliLabel,
+         endpointId:$i.endpointId, modelId:$i.model.id, modelLabel:$i.model.label} as $base
+      | if ($d | type) != "object" then {spawnable:false, reason:"error", message:"no data in the answer"}
+        elif $i.state == "installed" then
+          # `start` alone over-promises: it is offered too while another program holds the
+          # port. Only an error-free start is a runtime spawn_worker can bring up.
+          if ($i.cli and $i.endpointId and $i.model.id)
+             and (($a | index("start-session")) != null or (($a | index("start")) != null and $i.error == null))
+          then {spawnable:true} + $base
+          else {spawnable:false, reason:"blocked", errorCode:$i.error.code,
+                message:(if $i.error then ($i.error.message | say)
+                         else "The model is installed, but the server offers no session on it right now." end)} + $base
+          end
+        elif $d.recommendation.reason == "not-macos" then
+          {spawnable:false, reason:"not-mac",
+           message:("Local models need a Mac with Apple silicon, and this Codeman runs on " + ($d.hardware.platform // "another system") + ".")}
+        elif $i.state == "idle" then
+          {spawnable:false, reason:"not-installed",
+           message:("No local model is installed. " + (if $d.recommendation.verdict == "none" then ($d.recommendation.headline | say)
+             else "A person installs one with Run a local model on the Codeman welcome screen." end))}
+        else
+          {spawnable:false, reason:"install-unfinished", step:$i.step, errorCode:$i.error.code,
+           message:("The install is " + ($i.state // "unfinished") + (if $i.step then " at its " + $i.step + " step" else "" end)
+             + (if $i.error then ": " + ($i.error.message | say) else "." end)
+             + " Only the Run a local model window continues it.")} + $base
+        end
+      | with_entries(select(.value != null))' <<<"$body" 2>/dev/null) ;;
+    000) out=$(jq -nc --arg a "$API" '{spawnable:false,reason:"unreachable",message:("No answer from Codeman at " + $a + ".")}') ;;
+    401) out='{"spawnable":false,"reason":"unauthorized","message":"Codeman refused the credentials (401): see the codeman skill, section 6."}' ;;
+    403) jq -e '.errorCode == "FORBIDDEN"' <<<"$body" >/dev/null 2>&1 &&
+           out='{"spawnable":false,"reason":"admin-only","message":"In multi-user mode the local model is for admins only: ask an admin of this Codeman."}' ;;
+    404) out='{"spawnable":false,"reason":"unsupported","message":"This Codeman has no local model support: it predates it."}' ;;
+  esac
+  [ -n "${out:-}" ] || out=$(jq -nc --arg c "$code" --arg t "$body" \
+    '{spawnable:false,reason:"error",status:$c,message:((($t | fromjson? | .error?) // $t)[0:300])}')
+  printf '%s\n' "$out"
+  [ "$(jq -r .spawnable <<<"$out")" = true ]
+}
+# _local_ready_model -> local_model's JSON once a `local` worker can start, rc 1 with the
+# reason on stderr otherwise. An installed model whose runtime is stopped is started first,
+# with exactly what the local model window's Start button sends, and read again until it
+# runs (bounded, about 30 s). ⚠️ That start also undoes a Stop the person made: the runtime
+# starts with Codeman again from then on. Concurrent spawns may both send it; the server
+# runs one runtime verb at a time and a second start keeps the runtime that runs.
+_local_ready_model() {
+  local lm r i=0
+  lm=$(local_model) || { jq -r '"no local model to spawn on (" + .reason + "): " + .message' <<<"$lm" >&2; return 1; }
+  [ "$(jq -r .running <<<"$lm")" = true ] && { printf '%s\n' "$lm"; return 0; }
+  r=$("${CURL[@]}" -X POST "$API/api/v1/local-model/runtime" -H 'Content-Type: application/json' -d '{"action":"start"}')
+  jq -e '.success == true' <<<"$r" >/dev/null 2>&1 || {
+    echo "could not start the local model runtime: $(jq -r '.error // empty' <<<"$r" 2>/dev/null || printf '%s' "$r" | head -c 300)" >&2
+    return 1; }
+  while :; do
+    lm=$(local_model) || { jq -r '"the local model runtime was started, but (" + .reason + "): " + .message' <<<"$lm" >&2; return 1; }
+    [ "$(jq -r .running <<<"$lm")" = true ] && { printf '%s\n' "$lm"; return 0; }
+    i=$((i+1)); [ "$i" -lt 15 ] || { echo "the local model runtime did not report running within 30 s" >&2; return 1; }
+    sleep 2
+  done
+}
 # spawn_worker <caseName> [mode] -> session id on stdout, diagnostics on stderr.
 # quick-start AND readiness in one call, with a strict contract: NON-EMPTY stdout means
 # a READY worker whose end-of-turn signal can be trusted -- a claude worker in a
-# hook-carrying case, or a `deepseek` worker whose harness TUI drew its composer.
+# hook-carrying case, or a `deepseek` worker whose harness TUI drew its composer -- or a
+# `local` worker (below) whose composer drew, which takes a prompt but has NO end-of-turn
+# signal unless its harness is claude: drive that one with sendmark.
 # Anything less is rc 1 with EMPTY stdout, and the half-spawned session is deleted here
 # rather than handed back, because a worker that never drew its composer would eat the
 # task prompt with its trust dialog. There is deliberately no pid poll: wait-output
 # already blocks until the composer draws, and pid!=null proved startup, never readiness.
+# mode `local` is the model Codeman installed on this Mac (local_model), run by the coding
+# agent it was installed with. The worker's mode becomes that agent, and the endpoint and
+# model ride the quick-start as `customModel`: the launch the window's "Start a session"
+# makes. A stopped runtime is started first. Any answer that wants a person to confirm
+# something (a context below the agent's safe floor, a model swap) fails the spawn: this
+# never confirms on anyone's behalf.
 # CODEMAN_WORKER_ADVISOR=opus (or fable / sonnet) gives every CLAUDE worker spawned while
 # it is set Claude Code's advisor tool: a stronger model the worker consults before
 # committing to an approach, on a recurring error and before declaring the task done.
 # Other modes ignore it. A value the server refuses fails the spawn (INVALID_INPUT); an
 # advisor that ranks below the worker's model is accepted but never attached by claude.
 spawn_worker() {
-  local name="${1:?spawn_worker needs a case name}" mode="${2:-claude}" q sid cp r
+  local name="${1:?spawn_worker needs a case name}" mode="${2:-claude}" q sid cp r lm cm='' mark=''
+  if [ "$mode" = local ]; then
+    lm=$(_local_ready_model) || return 1
+    mode=$(jq -r .cli <<<"$lm")
+    cm=$(jq -c '{endpointId, modelId}' <<<"$lm")
+    # Readiness is a token the agent's composer draws. The registry's composer data never
+    # reaches the API, so it is named per agent here: opencode draws `┃` at the start of
+    # every composer row (its `workDetect.promptGlyph`); claude takes the claude path
+    # below. Any other agent needs LOCAL_READY_MARK rather than a worker handed back on a guess.
+    [ "$mode" = opencode ] && mark='┃'
+    mark=${LOCAL_READY_MARK:-$mark}
+    [ "$mode" = claude ] || [ -n "$mark" ] || {
+      echo "the local model runs through $mode, and this skill knows no composer mark for it: set LOCAL_READY_MARK to a space-free token its composer draws" >&2
+      return 1; }
+  fi
   # parentSessionId doubles the CURL header, so a spawn_worker copied off the shared
   # curl (or a body someone rebuilt from this recipe) still carries its lineage.
   # deepseek: ask for the same permission posture the Run button sends, because the
@@ -272,20 +378,35 @@ spawn_worker() {
   # an approval row is a worker no fan-out can finish. It is not an escalation --
   # claude workers already spawn with permissions skipped, and in multi-user mode the
   # server clamps this back to `workspace-write` for an owner without the grant.
-  # Spawn by hand (§5.1) when you want a worker that asks.
+  # Spawn by hand (§5.1) when you want a worker that asks. The advisor is a cloud model,
+  # so a claude worker on the local model never gets one.
   q=$("${CURL[@]}" -X POST "$API/api/v1/quick-start" -H 'Content-Type: application/json' \
-      -d "$(jq -nc --arg n "$name" --arg m "$mode" --arg p "$SELF" --arg a "${CODEMAN_WORKER_ADVISOR:-}" \
+      -d "$(jq -nc --arg n "$name" --arg m "$mode" --arg p "$SELF" --arg a "${CODEMAN_WORKER_ADVISOR:-}" --arg cm "$cm" \
         '{caseName:$n,mode:$m,parentSessionId:$p}
          + (if $m == "deepseek" then {deepSeekConfig:{permissionMode:"danger-full-access"}} else {} end)
-         + (if $m == "claude" and $a != "" then {advisorModel:$a} else {} end)')")
+         + (if $m == "claude" and $a != "" and $cm == "" then {advisorModel:$a} else {} end)
+         + (if $cm != "" then {customModel:($cm | fromjson)} else {} end)')")
+  # The answers that want a PERSON to decide come back as success with no session id.
+  if jq -e '(.data // .) | (.requiresContextWarning or .requiresConfirmation)' <<<"$q" >/dev/null 2>&1; then
+    jq -r '"quick-start wants a person to confirm something, so no worker was started: " + ((.data // .) | tojson)' <<<"$q" >&2
+    return 1
+  fi
   sid=$(jq -r 'if .success then .data.sessionId else empty end' <<<"$q")
   # NOT retryable in a loop: every quick-start failure code is terminal (§5.1).
   [ -n "$sid" ] || { jq -c '{error,errorCode}' <<<"$q" >&2; return 1; }
   # A server without advisor support DROPS the field instead of refusing it, so read it
   # back: a worker silently missing the advisor it was asked for is worth one line.
-  if [ "$mode" = claude ] && [ -n "${CODEMAN_WORKER_ADVISOR:-}" ] &&
+  if [ "$mode" = claude ] && [ -z "$cm" ] && [ -n "${CODEMAN_WORKER_ADVISOR:-}" ] &&
      [ "$("${CURL[@]}" "$API/api/v1/sessions/$sid" | jq -r '.data.advisorModel // empty')" != "$CODEMAN_WORKER_ADVISOR" ]; then
     echo "worker $sid: this Codeman server ignored CODEMAN_WORKER_ADVISOR (no advisor support); it runs without one" >&2
+  fi
+  if [ -n "$cm" ] && [ "$mode" != claude ]; then
+    # No trust dialog and no hook file to vet: the agent has no hooks, which is exactly
+    # why sendwait refuses it (400) and sendmark drives it.
+    r=$(_mark_up "$sid" "$mark" 45000)
+    [ "$r" = true ] || { echo "local worker $sid ($mode) never drew '$mark' within 45 s; deleted it. Look at GET /api/v1/local-model and the pane of a hand-made session before retrying" >&2
+      delete_session "$sid" >/dev/null; return 1; }
+    printf '%s\n' "$sid"; return 0
   fi
   if [ "$mode" = deepseek ]; then
     # The one non-claude mode with REAL end-of-turn signals: its TUI reports
@@ -332,10 +453,10 @@ spawn_worker() {
 # order; the sessionId column is EMPTY for a spawn that failed (stderr has why).
 # CONCURRENT: N workers cost about what one costs. Spawning them one Bash call at a time
 # is the single biggest avoidable delay in this skill. A bare name is a claude worker;
-# `beta:deepseek` makes that one a DeepSeek Harness worker, and a mixed fleet is one
-# call. Case names must be UNIQUE: two workers in one case directory co-edit the same
-# tree (§4), so a repeat is an error here, not a race (the mode never disambiguates two
-# workers, since they would still share the directory).
+# `beta:deepseek` makes that one a DeepSeek Harness worker, `summ:local` a worker on the
+# local model, and a mixed fleet is one call. Case names must be UNIQUE: two workers in
+# one case directory co-edit the same tree (§4), so a repeat is an error here, not a race
+# (the mode never disambiguates two workers, since they would still share the directory).
 spawn_workers() {
   local d spec n m i=0
   [ "$#" -gt 0 ] || { echo "spawn_workers: no case names given" >&2; return 1; }
@@ -369,7 +490,7 @@ spawn_workers() {
 # wait that was open the whole time is what reports the turn's end. Trustworthy for a worker
 # spawn_worker handed back -- claude (hooks vetted) or deepseek (status bridge) --
 # and for those only. Hook-less workspaces and the other modes resolve on flapping
-# idle: markers instead (§5.5). ⚠️ A dsh worker running a profile that does not
+# idle: markers instead (§5.5, sendmark below). ⚠️ A dsh worker running a profile that does not
 # implement the status contract is the one case that LOOKS like claude but is not:
 # it accepts the send and then burns both waits. One timeout on a dsh worker whose
 # pane clearly finished means that profile, so switch that worker to markers.
@@ -434,6 +555,91 @@ sendwait() {
   fi
   printf '%s\n' "$r"
 }
+# sendmark <sid> <prompt> [timeoutSec] -> one JSON line, for an AGENT worker with no
+# end-of-turn signal: a `local` worker whose agent is not claude, and opencode, gemini, pi,
+# grok, omp, copilot or a hook-less claude (a shell worker takes §5.5's echo form instead):
+#   {"token":…,"delivered":true,"matched":true,"answerFile":"<path>","answer":"<text>",…}
+# rc 0: the marker printed and the answer file was read. 2: no marker within the timeout
+# (default 600 s; the worker may still be working, so nothing is deleted). 3: the worker's
+# pane ended. 4: the marker printed, but no answer file turned up within SENDMARK_FILE_WAIT
+# seconds of it (default 120). 1: the send or a wait failed (`detail` says why).
+# It adds ONE sentence to your prompt (joined onto one line, as sendwait does): write the
+# complete answer to codeman-answer-<token>.md in the working directory, and only then end
+# the reply with the word DONE immediately followed by _<token>. The marker is split in what
+# is typed, so the prompt echoing into the pane never matches it, and the token is new for
+# every call (§5.5). The send is sendwait's exactly-once body (per-worker clientId,
+# epoch-second seq) with a one-second `exit` wait, so `delivered` says the pane took it.
+# ⚠️ A marker proves that the model printed the token. Not that it did the work, not that
+# it did it right, not even that the turn is over: a reasoning model can restate the
+# instruction while it plans. That is why the answer FILE is the second gate. It is read
+# from this machine's disk once the marker is out, only when it is a regular file (a
+# symlink is refused), at most 256 KB of it. It stays in the worker's folder (§5.14).
+# SENDMARK_ANSWER_FILE=0 asks for the marker alone, for a worker that cannot write where it
+# runs (codex in a folder it runs read-only, an agent that asks before it writes a file, a
+# worker on another host): rc 0 then means only "the marker printed", and the answer is
+# yours to read (last_text for codex, §5.4).
+sendmark() {
+  local sid="${1:?}" p="${2:?}" t="${3:-600}" tok mark file='' wd r w='' rem end start got=0 ended=0 matched=false i=0 rc=2
+  case "$p" in *$'\n'*|*$'\r'*)
+    p=$(printf '%s\n' "$p" | tr '\r' '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^$/d' | paste -sd ' ' -) ;;
+  esac
+  [ -n "$p" ] || { echo "sendmark: empty prompt" >&2; return 1; }
+  tok=$(printf 'm%x%04x' "$(date +%s)" "$RANDOM"); mark="DONE_$tok"
+  if [ "${SENDMARK_ANSWER_FILE:-1}" != 0 ]; then
+    wd=$("${CURL[@]}" "$API/api/v1/sessions/$sid" | jq -r '.data.workingDir // empty' 2>/dev/null)
+    [ -n "$wd" ] || { echo "sendmark: could not read the working directory of worker $sid" >&2; return 1; }
+    file="$wd/codeman-answer-$tok.md"
+    p="$p (When you are done: write your complete answer to the file codeman-answer-$tok.md in your current working directory, and only after that file is written, end your reply with the word DONE immediately followed by _$tok with no space in between.)"
+  else
+    p="$p (When you are done, end your reply with the word DONE immediately followed by _$tok with no space in between.)"
+  fi
+  r=$("${CURL[@]}" -X POST "$API/api/v1/sessions/$sid/input" -H 'Content-Type: application/json' \
+      --data-binary "$(jq -nc --arg p "$p" --arg c "$CID-$sid" --argjson s "$(date +%s)" \
+        '{input:($p+"\r"),useMux:true,clientId:$c,seq:$s,wait:"exit",waitTimeout:1000}')")
+  if ! jq -e '.success and .data.delivered' <<<"$r" >/dev/null 2>&1; then
+    jq -e '.data.wait.ended or .data.wait.signal == "exit"' <<<"$r" >/dev/null 2>&1 && rc=3 || rc=1
+    jq -nc --arg t "$tok" --arg r "$r" '{token:$t,delivered:false,matched:false,answerFile:null,answer:null,detail:($r | fromjson? // $r)}'
+    return "$rc"
+  fi
+  start=$(date +%s); end=$((start + t))
+  while :; do   # bounded waits of at most 60 s each, the server's default, until the timeout
+    rem=$((end - $(date +%s))); [ "$rem" -ge 1 ] || break
+    [ "$rem" -le 60 ] || rem=60
+    w=$("${CURL[@]}" -G "$API/api/v1/sessions/$sid/wait-output" --data-urlencode "match=$mark" \
+        --data-urlencode 'from=buffer' --data-urlencode "timeout=$((rem * 1000))")
+    jq -e '.data.wait.matched' <<<"$w" >/dev/null 2>&1 && { matched=true; break; }
+    jq -e '.data.wait.ended' <<<"$w" >/dev/null 2>&1 && { ended=1; break; }
+    jq -e '.success' <<<"$w" >/dev/null 2>&1 || {
+      jq -nc --arg t "$tok" --arg w "$w" '{token:$t,delivered:true,matched:false,answerFile:null,answer:null,detail:($w | fromjson? // $w)}'
+      return 1; }
+  done
+  if [ "$matched" = true ] && [ -n "$file" ]; then
+    while :; do
+      [ -L "$file" ] && { echo "sendmark: $file is a symlink, not read" >&2; break; }
+      [ -f "$file" ] && { got=1; break; }
+      [ "$i" -lt "${SENDMARK_FILE_WAIT:-120}" ] || break
+      # Two seconds of waiting that also notices a worker that died: an exit wait answers at once then.
+      "${CURL[@]}" -G "$API/api/v1/sessions/$sid/wait" --data-urlencode 'until=exit' --data-urlencode 'timeout=2000' \
+        | jq -e '.data.wait.signal == "exit"' >/dev/null 2>&1 && { ended=1; break; }
+      i=$((i + 2))
+    done
+  fi
+  if [ "$got" = 1 ]; then
+    head -c 262144 "$file" | jq -Rsc --arg t "$tok" --arg f "$file" --argjson s "$(($(date +%s) - start))" \
+      --argjson c "$(($(wc -c < "$file")))" \
+      '{token:$t,delivered:true,matched:true,answerFile:$f,answer:.,truncated:($c > 262144),waitedSec:$s}'
+    return 0
+  fi
+  jq -nc --arg t "$tok" --arg f "$file" --argjson m "$matched" --argjson e "$ended" --argjson s "$(($(date +%s) - start))" \
+    '{token:$t,delivered:true,matched:$m,answerFile:(if $f == "" then null else $f end),answer:null,ended:($e == 1),waitedSec:$s}'
+  if [ "$matched" = true ]; then
+    [ -z "$file" ] && return 0
+    [ "$ended" = 1 ] && return 3
+    return 4
+  fi
+  [ "$ended" = 1 ] && return 3
+  return 2
+}
 # last_text <sid> [prev] -> that worker's last assistant message (claude, codex and
 # deepseek write a real transcript; the other modes have none, so read the terminal
 # instead -- §5.4). Polled, because the transcript write LAGS the stop signal, and
@@ -456,10 +662,10 @@ last_text() {
 # The stamp is the LAST line on purpose (a truncated write leaves it unset) and is kept
 # bare on purpose: the write condition above anchors on it with $, so an inline comment
 # here would fail that match and rewrite this file on every single bootstrap.
-CODEMAN_PREAMBLE=1.44.0
+CODEMAN_PREAMBLE=1.50.0
 PREAMBLE
 )
-. "$PRE"; [ "${CODEMAN_PREAMBLE:-}" = 1.44.0 ] || { echo "preamble at $PRE is stale or truncated: rm it and re-run this block"; exit 1; }
+. "$PRE"; [ "${CODEMAN_PREAMBLE:-}" = 1.50.0 ] || { echo "preamble at $PRE is stale or truncated: rm it and re-run this block"; exit 1; }
 ```
 
 Every later Bash call that touches the API starts with the same two loader lines from
@@ -510,7 +716,7 @@ and no per-call body to hand-build.
 
 ```bash
 . "${XDG_CACHE_HOME:-$HOME/.cache}/codeman-agent-$CODEMAN_SESSION_ID.sh" 2>/dev/null   # §0 loader
-[ "${CODEMAN_PREAMBLE:-}" = 1.44.0 ] || { echo "preamble missing or stale; run the full §0 block"; exit 1; }
+[ "${CODEMAN_PREAMBLE:-}" = 1.50.0 ] || { echo "preamble missing or stale; run the full §0 block"; exit 1; }
 N=(alpha beta)                    # INVENT one fresh case name per worker; never list cases first
                                   # (a name may carry a mode: `beta:deepseek`, see below)
 T=('reply with one line: the absolute path of your working directory'
