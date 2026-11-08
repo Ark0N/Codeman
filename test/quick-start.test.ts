@@ -174,10 +174,13 @@ describe('Session Management', () => {
 
   describe('POST /api/sessions', () => {
     it('should create a new session', async () => {
+      // Under the test HOME, never the machine's real `/tmp`: a create writes the workspace
+      // hooks and the agent skill (on by default) into its working dir.
+      const workingDir = mkdtempSync(join(TEST_HOME, 'work-'));
       const response = await fetch(`${baseUrl}/api/sessions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workingDir: '/tmp' }),
+        body: JSON.stringify({ workingDir }),
       });
 
       const data = await response.json();
@@ -185,7 +188,7 @@ describe('Session Management', () => {
       expect(data.success).toBe(true);
       expect(data.data.session).toBeDefined();
       expect(data.data.session.id).toBeDefined();
-      expect(data.data.session.workingDir).toBe('/tmp');
+      expect(data.data.session.workingDir).toBe(workingDir);
       expect(data.data.session.status).toBe('idle');
     });
   });

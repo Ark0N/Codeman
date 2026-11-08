@@ -1,10 +1,16 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import { WebServer } from '../src/web/server.js';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { safeRmHomeTree } from './mocks/index.js';
 
 const CASES_DIR = join(homedir(), 'codeman-cases');
+// A folder of this file's own for the sessions below, never the machine's real `/tmp`:
+// a create writes the workspace hooks and the agent skill (on by default) into its
+// working dir, and those would outlive the run there.
+const WORK_DIR = mkdtempSync(join(tmpdir(), 'codeman-edge-cases-'));
+afterAll(() => rmSync(WORK_DIR, { recursive: true, force: true }));
 
 describe('Edge Cases and Error Handling', () => {
   let server: WebServer;
@@ -279,7 +285,7 @@ describe('Concurrent Session Handling', () => {
         fetch(`${baseUrl}/api/sessions`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ workingDir: '/tmp' }),
+          body: JSON.stringify({ workingDir: WORK_DIR }),
         }).then((r) => r.json())
       );
 
@@ -312,7 +318,7 @@ describe('Concurrent Session Handling', () => {
       const createRes = await fetch(`${baseUrl}/api/sessions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workingDir: '/tmp' }),
+        body: JSON.stringify({ workingDir: WORK_DIR }),
       });
       const createData = await createRes.json();
       expect(createData.success).toBe(true);
