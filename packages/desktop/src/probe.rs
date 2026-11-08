@@ -2,9 +2,9 @@
 //!
 //! One `GET <server>/api/status`, five seconds at most, run off the UI thread.
 //! The answer is classified into something the connect page can explain. It is
-//! asked on a user action, or by one of the This Mac tab's short waits (for an
-//! install to bring Codeman up, for a server that is starting) that end at the
-//! first answer, never as a standing poll: Codeman counts a request without
+//! asked on a user action, or by one of the This Mac tab's waits (for an
+//! install to bring Codeman up, for a server that is starting), which end at
+//! the first answer, never as a standing poll: Codeman counts a request without
 //! valid credentials against the login rate limit (10 per IP).
 
 use serde::Serialize;
