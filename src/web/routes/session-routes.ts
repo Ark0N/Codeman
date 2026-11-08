@@ -1003,7 +1003,7 @@ async function injectAgentSkill(casePath: string, dir: AgentSkillDir): Promise<v
       );
     } else if (result === 'symlink') {
       console.warn(
-        `[agent-skill] not injected: ${skillDir} (or its parent) is a symlink, refusing to write through it. Replace it with a real directory to let Codeman install the skill.`
+        `[agent-skill] not injected: ${skillDir}, its parent or its reference folder is a symlink, refusing to write through it. Replace it with a real directory to let Codeman install the skill.`
       );
     }
   } catch (err: unknown) {

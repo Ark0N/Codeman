@@ -1359,6 +1359,31 @@ async function isSymlink(path: string): Promise<boolean> {
 }
 
 /**
+ * Whether a folder INSIDE the copy that holds skill files (today only `reference/`) is a
+ * symlink. The checks on the copy and its parent stop at the copy itself, and a write or
+ * unlink of `reference/<name>.md` follows a linked `reference/` wherever it points:
+ * measured, `reference -> <elsewhere>` made install overwrite a `history.md` there and
+ * uninstall delete it. A cloned repository can commit that link, and a Docker case's
+ * container can plant it in the bind-mounted workspace that the host injects into, so
+ * both are refused like a linked copy. Checked once before the first write or unlink; a
+ * link swapped in after the check (a race against the container) is not covered.
+ */
+async function agentSkillSubdirIsSymlink(skillDir: string, files: AgentSkillFile[]): Promise<boolean> {
+  const subdirs = new Set<string>(['reference']);
+  for (const file of files) {
+    // Every folder on the way to the file, outermost first: `a/b/x.md` checks `a`, then `a/b`.
+    const parts = dirname(file.relPath)
+      .split(/[\\/]/)
+      .filter((part) => part !== '' && part !== '.');
+    for (let i = 1; i <= parts.length; i++) subdirs.add(join(...parts.slice(0, i)));
+  }
+  for (const subdir of subdirs) {
+    if (await isSymlink(join(skillDir, subdir))) return true;
+  }
+  return false;
+}
+
+/**
  * The ignore file every Codeman-managed skill copy carries, and what it holds: `*`
  * matches everything in the copy's own folder (the ignore file included), so a user's
  * repository never lists `.claude/skills/codeman/` (or `.agents/skills/codeman/`) as
@@ -1422,17 +1447,19 @@ export type AgentSkillApplyResult =
   | 'removed' // our copy deleted
   | 'absent' // nothing there to remove
   | 'foreign' // a copy exists but is not ours; left untouched
-  | 'symlink'; // the skill dir (or its parent) is a symlink; left untouched
+  | 'symlink'; // the skill dir, its parent or a folder inside it is a symlink; left untouched
 
 /**
  * Install or refresh the Codeman agent skill into `skillDir` (a `.../codeman`
  * directory, e.g. `<case>/.claude/skills/codeman`, `~/.claude/skills/codeman` or
  * `<case>/.agents/skills/codeman`).
  *
- * Refuses two shapes rather than writing through them:
+ * Refuses these shapes rather than writing through them:
  * - a SYMLINK at the skill dir or its `skills/` parent: this repo's own dogfooding
  *   layout (`.claude/skills/codeman -> ../../skills/codeman`) would otherwise have
  *   the injector overwrite the repo source through the link;
+ * - a SYMLINK at a folder inside the copy (`reference/`), which would carry the skill's
+ *   files to wherever it points (`agentSkillSubdirIsSymlink`);
  * - a FOREIGN copy (SKILL.md present without our marker): that is the user's own
  *   skill, and per the statusLine rule we never clobber what we did not write.
  *
@@ -1464,6 +1491,7 @@ export async function installAgentSkillInto(skillDir: string): Promise<AgentSkil
     if (existing !== null && !existing.includes(AGENT_SKILL_MARKER_PREFIX)) return 'foreign';
 
     const files = await readAgentSkillSource();
+    if (await agentSkillSubdirIsSymlink(skillDir, files)) return 'symlink';
     await mkdir(skillDir, { recursive: true });
     let changed = await ensureAgentSkillGitignore(skillDir);
     for (const file of files) {
@@ -1628,6 +1656,8 @@ export async function removeAgentSkillFrom(skillDir: string): Promise<AgentSkill
     // Manifest-based, with SKILL.md as the fallback when the packaged source is
     // unreadable: removal must still work on an install whose skills/ dir went missing.
     const files = await readAgentSkillSource().catch((): AgentSkillFile[] => [{ relPath: 'SKILL.md', content: '' }]);
+    // An unlink through a linked `reference/` deletes files wherever it points.
+    if (await agentSkillSubdirIsSymlink(skillDir, files)) return 'symlink';
     for (const file of files) {
       await unlink(join(skillDir, file.relPath)).catch(() => {});
     }

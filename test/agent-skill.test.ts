@@ -111,9 +111,61 @@ describe('installAgentSkillInto / applyAgentSkill(enabled)', () => {
     expect(await installAgentSkillInto(skillDir())).toBe('symlink');
     expect(await readdir(join(casePath, 'real-skills'))).toEqual([]);
   });
+
+  // A cloned repository can commit `reference` as a link, and a Docker case's container
+  // can plant one in the bind-mounted workspace the host injects into (on by default).
+  it('refuses a symlinked reference/ folder inside the copy, so nothing is written where it points', async () => {
+    const outside = join(casePath, 'outside');
+    await mkdir(outside, { recursive: true });
+    await writeFile(join(outside, 'history.md'), 'my notes\n');
+    await mkdir(skillDir(), { recursive: true });
+    await symlink(outside, join(skillDir(), 'reference'));
+
+    expect(await applyAgentSkill(casePath, true)).toBe('symlink');
+    expect(await readdir(outside)).toEqual(['history.md']);
+    expect(await readFile(join(outside, 'history.md'), 'utf-8')).toBe('my notes\n');
+    // Refused before the first write: no SKILL.md, no ignore file.
+    expect(await readdir(skillDir())).toEqual(['reference']);
+  });
+
+  it('refuses a symlinked reference/ folder planted beside an existing Codeman copy', async () => {
+    await applyAgentSkill(casePath, true);
+    const outside = join(casePath, 'outside');
+    await mkdir(outside, { recursive: true });
+    await writeFile(join(outside, 'recipes.md'), 'my recipes\n');
+    await rm(join(skillDir(), 'reference'), { recursive: true });
+    await symlink(outside, join(skillDir(), 'reference'));
+    const skillMd = await readFile(join(skillDir(), 'SKILL.md'), 'utf-8');
+    await writeFile(join(skillDir(), 'SKILL.md'), `stale\n${MARKER_PREFIX}: old -->\n`);
+
+    expect(await applyAgentSkill(casePath, true)).toBe('symlink');
+    expect(await readdir(outside)).toEqual(['recipes.md']);
+    expect(await readFile(join(outside, 'recipes.md'), 'utf-8')).toBe('my recipes\n');
+    // The stale copy is left as found, not refreshed through the link.
+    expect(await readFile(join(skillDir(), 'SKILL.md'), 'utf-8')).not.toBe(skillMd);
+  });
 });
 
 describe('removeAgentSkillFrom / applyAgentSkill(disabled)', () => {
+  it('refuses to delete through a symlinked reference/ folder inside the copy', async () => {
+    await applyAgentSkill(casePath, true);
+    const outside = join(casePath, 'outside');
+    await mkdir(outside, { recursive: true });
+    // Files named like the packaged reference files: an unlink through the link would take them.
+    for (const name of await readdir(join(skillDir(), 'reference'))) {
+      await writeFile(join(outside, name), 'not yours\n');
+    }
+    const names = (await readdir(outside)).sort();
+    expect(names.length).toBeGreaterThan(0);
+    await rm(join(skillDir(), 'reference'), { recursive: true });
+    await symlink(outside, join(skillDir(), 'reference'));
+
+    expect(await applyAgentSkill(casePath, false)).toBe('symlink');
+    expect((await readdir(outside)).sort()).toEqual(names);
+    for (const name of names) expect(await readFile(join(outside, name), 'utf-8')).toBe('not yours\n');
+    expect(existsSync(join(skillDir(), 'SKILL.md'))).toBe(true);
+  });
+
   it('removes our copy and prunes the emptied directories', async () => {
     await applyAgentSkill(casePath, true);
     expect(await applyAgentSkill(casePath, false)).toBe('removed');
