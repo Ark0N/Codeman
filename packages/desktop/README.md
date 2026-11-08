@@ -395,9 +395,10 @@ crosses, so the login is never on a command line.
 - **Who can reach it stops at the local network.** Tailscale needs its own
   login and setup, which the installer does at a terminal. Choose *Install in
   Terminal instead*, or run `install.sh tailscale` later.
-- **The agent is chosen during the install.** With Codeman already installed,
-  or after *Skip for now*, an agent is added by hand: its commands are in the
-  installer's closing notes and in [Installing an agent CLI](../../docs/wiki/Installation.md#installing-an-agent-cli).
+- **An agent is chosen during the install, or added later.** With Codeman
+  already installed, or after *Skip for now*, *Add a coding agent* on the This
+  Mac tab (*Add a Coding Agent to This Mac…* in the app menu) installs one. The
+  commands are also in [Installing an agent CLI](../../docs/wiki/Installation.md#installing-an-agent-cli).
 - **An agent only your interactive profile finds counts as missing.** The app
   reads the login shell's environment, without `.zshrc`, so a CLI on an nvm
   PATH set up there is offered again as if it were not installed. Installing
