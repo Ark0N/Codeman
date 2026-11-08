@@ -247,10 +247,10 @@ A small native app that opens Codeman in its own window. Its first screen has tw
   the password in the Keychain. *Codeman is not installed there yet?* opens Terminal and
   runs the installer on that machine over SSH.
 
-On a MacBook Pro whose Apple logo lights up, **View > Blink Apple Logo** blinks the logo by
-what your agents are doing, with a style of your own for working, for waiting for you and
-for needing permission. All three are off until you choose, and the menu only exists on a
-Mac with that logo.
+On a MacBook Pro with a PROLED XDR display, whose lid logo lights up,
+**View > Blink Apple Logo** blinks the logo by what your agents are doing, with a style of
+your own for working, for waiting for you and for needing permission. All three are off
+until you choose, and the menu only exists on such a Mac.
 
 ### First launch
 
