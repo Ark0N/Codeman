@@ -282,7 +282,9 @@ For every model row it checks:
   exactly that name, or the check never compares it. Until then the report lists today's
   digests, rows with measured figures first, because without a digest a rebuild of about the
   same size goes unnoticed (a switch between the mlx and the gguf build does not: their sizes
-  differ by 2% or more).
+  differ by 2% or more). Pinning digests is a decision, not a quick fix: today the catalogue
+  holds no digest on purpose, and `test/local-model-catalog.test.ts` ("holds no download
+  data") refuses a `sha256` anywhere in it, so that rule changes with it.
 
 For the runtime pin it checks whether a newer Ollama release exists, and whether the pinned
 `ollama-darwin.tgz` is still on GitHub with the pinned size and sha256.

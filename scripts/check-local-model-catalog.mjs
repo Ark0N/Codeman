@@ -44,9 +44,12 @@
  * manifest a Mac pulls, which is the value `/api/tags` reports after the pull (`sha256:<hex>` or
  * the bare hex). The catalogue schema does not have that field yet: `LocalModelEntrySchema` is
  * strict, so it must gain an optional `digest` before a row can carry one, under exactly that
- * name, or this check never compares it. Until then the report lists the digests to pin, and
- * a rebuild of about the same size goes unnoticed (a change of build, mlx against gguf, never
- * does: every pair seen so far differs by 2% or more, far past the size tolerance).
+ * name, or this check never compares it. The catalogue keeps no digest today on purpose
+ * (test/local-model-catalog.test.ts, "holds no download data", refuses a `sha256` in it), so
+ * pinning digests changes that rule too: a decision for the catalogue, not for this script.
+ * Until then the report lists the digests to pin, and a rebuild of about the same size goes
+ * unnoticed (a change of build, mlx against gguf, never does: every pair seen so far differs
+ * by 2% or more, far past the size tolerance, and a row that names its runner is held to it).
  *
  * Everything that reaches the report from the network is validated first (digests, sizes,
  * runner and format names, version tags), because the workflow puts the report in an issue.
