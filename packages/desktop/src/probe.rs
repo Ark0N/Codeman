@@ -10,7 +10,7 @@ use std::time::Duration;
 use url::Url;
 
 const TIMEOUT: Duration = Duration::from_secs(5);
-const MAX_BODY: u64 = 8 * 1024 * 1024;
+pub const MAX_BODY: u64 = 8 * 1024 * 1024;
 
 /// The path the probe asks for, relative to the server's base URL.
 const STATUS_PATH: &str = "api/status";
@@ -231,16 +231,13 @@ pub fn probe(server: &Url, authorization: Option<&str>) -> ProbeOutcome {
     probe_within(server, authorization, TIMEOUT)
 }
 
-/// `probe` with the time the whole exchange may take.
-fn probe_within(server: &Url, authorization: Option<&str>, timeout: Duration) -> ProbeOutcome {
-    let status_url = match server.join(STATUS_PATH) {
-        Ok(u) => u,
-        Err(e) => return ProbeOutcome::Failed { detail: e.to_string() },
-    };
+/// The app's one way of asking a server something: the OS's certificate trust,
+/// a bound on the whole exchange, and status codes as answers.
+pub fn agent(timeout: Duration) -> ureq::Agent {
     let tls = ureq::tls::TlsConfig::builder()
         .root_certs(ureq::tls::RootCerts::PlatformVerifier)
         .build();
-    let agent: ureq::Agent = ureq::Agent::config_builder()
+    ureq::Agent::config_builder()
         .timeout_global(Some(timeout))
         .http_status_as_error(false)
         // Never follow: a 3xx comes back as an answer and is explained.
@@ -248,8 +245,18 @@ fn probe_within(server: &Url, authorization: Option<&str>, timeout: Duration) ->
         .tls_config(tls)
         .user_agent(concat!("CodemanDesktop/", env!("CARGO_PKG_VERSION")))
         .build()
-        .into();
-    let mut req = agent.get(status_url.as_str()).header("Accept", "application/json");
+        .into()
+}
+
+/// `probe` with the time the whole exchange may take.
+fn probe_within(server: &Url, authorization: Option<&str>, timeout: Duration) -> ProbeOutcome {
+    let status_url = match server.join(STATUS_PATH) {
+        Ok(u) => u,
+        Err(e) => return ProbeOutcome::Failed { detail: e.to_string() },
+    };
+    let mut req = agent(timeout)
+        .get(status_url.as_str())
+        .header("Accept", "application/json");
     if let Some(auth) = authorization {
         req = req.header("Authorization", auth);
     }
