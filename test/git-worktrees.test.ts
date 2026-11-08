@@ -209,8 +209,10 @@ describe('git worktrees on a real repository', () => {
     // The code under test runs git with the real process env. git reads the global ignore file
     // from $XDG_CONFIG_HOME/git/ignore, which GIT_CONFIG_GLOBAL does not cover: a user who
     // ignores `.claude/settings.local.json` globally would see that line silently not appended.
+    // A core.excludesFile in the system gitconfig does the same, hence GIT_CONFIG_NOSYSTEM.
     vi.stubEnv('XDG_CONFIG_HOME', join(dir, 'xdg'));
     vi.stubEnv('GIT_CONFIG_GLOBAL', '/dev/null');
+    vi.stubEnv('GIT_CONFIG_NOSYSTEM', '1');
     repoDir = join(dir, 'repo');
     mkdirSync(repoDir);
     git(repoDir, 'init', '-q', '-b', 'main');
