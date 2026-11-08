@@ -65,7 +65,7 @@ export type AgentSkillDefaultMigration = 'switched-on' | 'nothing-to-change' | '
 
 /** The log line of a migration that switched the skill on. */
 export const AGENT_SKILL_DEFAULT_MIGRATED_LOG =
-  '[agent-skill] cleared the stored off from before 1.50.0 so the new default applies (turn it off again under App Settings, Agents & CLIs, Codeman Agent Skill; that choice is kept)';
+  '[agent-skill] switched on the off stored before 1.50.0, so the new default applies (turn it off again under App Settings, Agents & CLIs, Codeman Agent Skill; that choice is kept)';
 
 export async function migrateAgentSkillDefault(
   markerPath: string = dataPath(AGENT_SKILL_DEFAULT_MARKER)
