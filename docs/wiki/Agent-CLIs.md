@@ -79,7 +79,7 @@ output. The other CLIs expose no equivalent.
 | Subagent and team windows                         | Yes    | No                                                   |
 | Model, effort, advisor, and ultracode controls    | Yes    | No                                                   |
 | `stop` and `blocked` wait signals                 | Yes    | DeepSeek yes; Codex `blocked` only; elsewhere 400 if you ask for them explicitly |
-| The bundled agent skill                           | Yes    | No                                                   |
+| The bundled agent skill                           | Yes    | Every CLI except Pi and Copilot, in `.agents/skills/` |
 
 Everything that makes a session a session works everywhere. What is Claude-only is mostly
 the machinery that needs to know *what* the agent is doing rather than *that* it is doing
