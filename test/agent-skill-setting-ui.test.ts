@@ -11,6 +11,10 @@
  *    device's blob or the server's settings.json, merged as a synced key).
  *  - saveAppSettings() sends the switch in the settings PUT, and the body passes the
  *    .strict() SettingsUpdateSchema (an undeclared key 400s every save).
+ *  - A device that saved on 1.49.0 or earlier keeps `false` in its own blob. After the
+ *    server's one-time boot migration (stored true) its switch shows on and a Save keeps it
+ *    on; on a server without the key the device's copy is dropped for the default; a later
+ *    explicit off on the server stays off. The Save body never carries the migration marker.
  *  - The row says it is on by default, that the copy stays out of git, and how to
  *    remove copies already written (turning it off sweeps nothing).
  *
@@ -170,6 +174,54 @@ describe('Save', () => {
     checkbox().checked = false;
     await app.saveAppSettings();
     expect(putBody().agentSkillEnabled).toBe(false);
+  });
+});
+
+// Every device that saved App Settings on 1.49.0 or earlier holds `agentSkillEnabled: false` in
+// its own blob (the switch loaded an absent key as off). The server's boot migration
+// (src/web/agent-skill-default-migration.ts) switches a stored false on by storing TRUE, because
+// the merge only overwrites a synced key the server has: a key it deleted would leave the
+// device's false in place, and the next Save would write it back.
+describe('a device that saved before 1.50.0', () => {
+  const OLD_BLOB = { agentSkillEnabled: false, autoNameSessions: false };
+
+  it("after the server's migration (stored true) the switch shows on, and a Save keeps it on and passes the schema", async () => {
+    const { app, checkbox, putBody } = await boot(OLD_BLOB);
+    await app.loadAppSettingsFromServer(Promise.resolve({ agentSkillEnabled: true, lastUsedCase: 'demo' }));
+    app.openAppSettings();
+    expect(checkbox().checked).toBe(true);
+    await app.saveAppSettings();
+    const body = putBody();
+    expect(body.agentSkillEnabled).toBe(true);
+    // The migration's marker is a file of its own, never a setting: the Save can neither send it
+    // back nor be refused for it by the .strict() schema.
+    expect(Object.keys(body).filter((key) => /migrat/i.test(key))).toEqual([]);
+    expect(SettingsUpdateSchema.safeParse(body).error?.issues ?? []).toEqual([]);
+  });
+
+  it('on a server without the key (a save that never reached it) the switch shows the default, on', async () => {
+    const { app, checkbox, putBody } = await boot(OLD_BLOB);
+    await app.loadAppSettingsFromServer(Promise.resolve({ lastUsedCase: 'demo' }));
+    app.openAppSettings();
+    expect(checkbox().checked).toBe(true);
+    await app.saveAppSettings();
+    expect(putBody().agentSkillEnabled).toBe(true);
+  });
+
+  it('an off the user saved after the migration stays off on every device', async () => {
+    const { app, checkbox, putBody } = await boot({ agentSkillEnabled: true });
+    await app.loadAppSettingsFromServer(Promise.resolve({ agentSkillEnabled: false }));
+    app.openAppSettings();
+    expect(checkbox().checked).toBe(false);
+    await app.saveAppSettings();
+    expect(putBody().agentSkillEnabled).toBe(false);
+  });
+
+  it('without a server answer the device keeps what it has', async () => {
+    const { app, checkbox } = await boot(OLD_BLOB);
+    await app.loadAppSettingsFromServer(Promise.resolve(null as unknown as Settings));
+    app.openAppSettings();
+    expect(checkbox().checked).toBe(false);
   });
 });
 

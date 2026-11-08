@@ -5268,6 +5268,13 @@ Object.assign(CodemanApp.prototype, {
             merged[key] = value;
           }
         }
+        // The agent skill is a synced key that is ON when absent (since 1.50.0). A server
+        // without the key means that default, so this device's own copy goes rather than
+        // standing in for it: up to 1.49.0 the switch loaded an absent key as off, so a
+        // device whose save never reached the server still holds `false`, and its next
+        // Save would write it back. The server's one-time boot migration stores `true` for
+        // installs that had saved `false` (agent-skill-default-migration.ts).
+        if (!('agentSkillEnabled' in appSettings)) delete merged.agentSkillEnabled;
         this.saveAppSettingsToStorage(merged);
 
         // Apply notification prefs from server if present (only if localStorage has none)
