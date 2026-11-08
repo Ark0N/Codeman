@@ -76,8 +76,9 @@ Codeman-managed copy in that case, whichever CLI's directory it sits in). It nev
 
 To stop the Web UI copy, turn **App Settings → Agents & CLIs → All agent CLIs → Codeman Agent
 Skill** off. It is on by default since 1.50.0: a settings file without the setting means on,
-and only switching it off turns it off. An install whose App Settings were saved on an
-earlier version stored the old default (off), so there it stays off until you switch it on.
+and only switching it off turns it off. Existing installs that stored off are switched on
+once at the first 1.50.0 start (every App Settings save on an earlier version stored the old
+default, off, whether or not you touched this switch); turning it off afterwards sticks.
 
 Turning the web UI setting off **does not remove copies it already injected**, because
 a sweep at session start would pull the skill out from under other live sessions sharing

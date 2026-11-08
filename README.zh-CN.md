@@ -850,7 +850,7 @@ deleted 9f2d8e5f, aff9c691, be9f1f15    标签消失
 - **它会自我门禁。** 它在 Codeman 管理的会话里工作。不在这样的会话里（`CODEMAN_MUX` 未设置）时，它只会离线读取已保存的 Codex 对话（`codeman history read`），其他一律拒绝，也从不去猜 API 地址，所以全局安装对无关的 Claude Code 会话没有任何代价。
 - **它刻意保守。** 未经提示，它只会拉起会话、给它们发提示，并删除**它在同一段对话里自己创建的**会话（按精确 id，经由一个拒绝删除智能体自身会话的失败即关闭守卫）。删除 case（会抹掉一个真实的代码目录）、批量杀会话、改动 respawn/ralph/cron/orchestrator 以及写设置，都需要你开口并指名目标。
 
-⚠️ 从 1.50.0 起，Web UI 注入**默认开启**。`settings.json` 里没有 `agentSkillEnabled` 这个键就表示开启；如果你在更早的版本里保存过 App Settings，当时存下的是旧默认值（`false`），它会保持关闭，直到你手动打开。把它关掉**不会删掉已经注入的副本**（在创建时做清扫，会把技能从共用同一个工作区的其他活动会话脚下抽走）。要删就按 case 删：`codeman skill uninstall --case <name>`。
+⚠️ 从 1.50.0 起，Web UI 注入**默认开启**。`settings.json` 里没有 `agentSkillEnabled` 这个键就表示开启。已经存了关闭的旧安装，会在第一次启动 1.50.0 时被打开一次（1.49.0 及更早版本每次保存 App Settings 都会写入旧默认值 `false`，不管你有没有动过这个开关）；之后你再把它关掉，就会一直保持关闭。把它关掉**不会删掉已经注入的副本**（在创建时做清扫，会把技能从共用同一个工作区的其他活动会话脚下抽走）。要删就按 case 删：`codeman skill uninstall --case <name>`。
 
 ---
 
