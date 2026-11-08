@@ -100,8 +100,8 @@ and a re-run with `--lan` or `--tailscale` keeps the password the service alread
 terminal needed (`--ai-cli claude`, `--ai-cli codex`, ...), and `--ai-cli none` skips it.
 To add an agent later, `install.sh agent codex` installs that one and changes nothing else:
 it does not touch Codeman or its service, and an agent that is already there is left alone.
-Codeman Desktop does the same from *Add a coding agent*. A running Codeman can take a few
-minutes to notice the new agent; reload the page if it does not show up.
+Codeman Desktop does the same from *Add a coding agent*. A running Codeman notices the new
+agent at once; reload an open page to see it.
 
 **Automation and CI**: with no terminal attached, any step that would change the system
 aborts with instructions instead of running silently. Set `CODEMAN_NONINTERACTIVE=1` to

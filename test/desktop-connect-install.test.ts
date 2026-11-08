@@ -552,8 +552,7 @@ describe('adding a coding agent to a Mac that has Codeman', () => {
     const t = installing();
     t.native({ type: 'installFinished', ok: true, cancelled: false, error: null, log: [] });
     expect(t.$('wiz-title').textContent).toBe('Codex is installed');
-    expect(t.$('wiz-lead').textContent).toContain('within a few minutes');
-    expect(t.$('wiz-lead').textContent).toContain('reload');
+    expect(t.$('wiz-lead').textContent).toContain('reload it, or give it a few minutes');
     expect(t.rail()).toEqual([['Installing Codex', 'done']]);
     expect(t.sentOf('localStatus').length).toBeGreaterThan(0);
     expect(t.sentOf('connect')).toHaveLength(0);

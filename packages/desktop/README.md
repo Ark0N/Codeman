@@ -280,12 +280,13 @@ crosses, so the login is never on a command line.
 
 ## Known limits
 
-- **A new agent can take a few minutes to show up in a running Codeman.** The
-  server remembers that a CLI is missing, for up to 5 minutes after it last looked
+- **A new agent can take a few minutes to show up in an older Codeman.** The server
+  remembers that a CLI is missing, for up to 5 minutes after it last looked
   (`cliResolveRetryDelayMs`), so that a status poll never spawns a login shell. The
-  app cannot clear that from outside, so the screen after *Add a coding agent* says
-  so. An open Codeman page also needs a reload, because the list of installed
-  agents is part of the page.
+  installer's `cli-installed` marker ends that at once, but only for a server that
+  knows the marker, so the screen after *Add a coding agent* still mentions it. An
+  open Codeman page always needs a reload, because the list of installed agents is
+  part of the page.
 - **Agents the app can add are the ones `--no-admin` can install.** OMP's macOS
   install is Homebrew, so it is not offered, also on a Mac that has Homebrew.
 - **Agents that install with npm use whichever Node.js the login shell finds.**
