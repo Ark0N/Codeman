@@ -31,9 +31,12 @@
  * `workingDir`.
  *
  * For an outside worktree {@link findOutsideWorktree} IS the confinement decision for the second
- * root. Its vouching, home, Docker and `allowRoot` rules run only when the pane moves. The routes
- * re-check on each request only that the folder still realpaths to the recorded path
- * (`outsideWorktreeRootFor()`, `canWalkOutsideWorktree()`).
+ * root. Its vouching, home and Docker rules, and the multi-user half of `allowRoot`, run only when
+ * the pane moves. The routes re-check two things on each request: that the folder still realpaths
+ * to the recorded path (`outsideWorktreeRootFor()`, `canWalkOutsideWorktree()`), and the attachment
+ * guard half of `allowRoot` (workspace confinement, blocked and sensitive trees:
+ * `isOutsideWorktreeRootRefused()` through `withGuardedOutsideWorktree()` in file-routes.ts), so a
+ * guard setting changed later applies at once.
  *
  * Probes are bounded (#516). The folder can sit on a mount that stopped answering, and an
  * `unknown` answer stops the walk rather than being read as "no `.git` here".

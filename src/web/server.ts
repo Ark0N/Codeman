@@ -3054,12 +3054,14 @@ export class WebServer extends EventEmitter {
    *
    * Codeman judges these rules when the pane moves. The file routes judge the two guard rules
    * again on every request (`isOutsideWorktreeRootRefused()`), so a setting changed later applies
-   * at once. The Docker and multi-user rules are judged only when the pane moves. Undefined for a remote or Docker session,
-   * whose pane directory is not a path the agent works in on this host (it has no `paneCwd`
-   * either, so this is belt and braces).
+   * at once. The Docker and multi-user rules are judged only when the pane moves. Undefined for a remote, Docker or
+   * adopted session, whose pane directory is not a path the agent works in on this host (an
+   * adopted session's pane runs our tmux attach client). None of the three gets a `paneCwd`
+   * either (`paneExitApplies`), so this is belt and braces; an adopted session needs its own
+   * test because `session.remote` and `session.docker` are undefined on one.
    */
   private outsideWorktreeOptions(session: Session): OutsideWorktreeOptions | undefined {
-    if (session.remote || session.docker) return undefined;
+    if (session.remote || session.docker || session.isAdopted) return undefined;
     return {
       dockerWorkspaces: defaultDockerWorkspaces,
       allowRoot: async (root: string): Promise<boolean> => {
