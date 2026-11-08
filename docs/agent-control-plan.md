@@ -542,9 +542,7 @@ without the wait endpoints, so the wait work goes first.
 
 1. ✅ `skills/` at the repo root: accepted (built that way; the install one-liner depends on it).
 2. ✅ `agentSkillEnabled` default: **OFF** for the first release, per §2.2's rationale (skills
-   cost context on every turn; measure before defaulting on). Flipped to **ON** in 1.50.0 on the
-   owner's call, so a session can find the skill (and the local model it can drive) without a
-   setting first: the reader treats an absent key as ON, an explicit `false` stays OFF.
+   cost context on every turn; measure before defaulting on). Flip later if dogfooding earns it.
 3. ✅ Both: global install via `npx skills add` / `codeman skill install`, AND per-case
    auto-injection behind the (default-off) setting. Injection is add-only at session create and
    marker-guarded, so a user-authored copy is never touched.
@@ -683,7 +681,7 @@ Built to the §2.6 file list, mirroring the statusLine mechanism throughout:
 | ----- | ----- |
 | `applyAgentSkill(casePath, enabled)` + `installAgentSkillInto` / `removeAgentSkillFrom` | `src/hooks-config.ts` |
 | `codeman skill install` / `skill uninstall` (`--global` default, `--case <name>`) | `src/cli.ts` |
-| `agentSkillEnabled` (SYNCED, default ON since 1.50.0) | `schemas.ts` (`SettingsUpdateSchema`), `getAgentSkillEnabled()` on `ConfigPort`/`server.ts`, checkbox in `index.html` + `settings-ui.js` |
+| `agentSkillEnabled` (SYNCED, default OFF) | `schemas.ts` (`SettingsUpdateSchema`), `getAgentSkillEnabled()` on `ConfigPort`/`server.ts`, checkbox in `index.html` + `settings-ui.js` |
 | Injection call sites (Claude mode only) | `POST /api/sessions` next to `refreshStaleCodemanHooks`; `POST /api/quick-start` after the case-create/self-heal blocks (local + docker cases; remote skipped, its path lives on another host) |
 | Tests | `test/agent-skill.test.ts` (10 unit), `test/quick-start.test.ts` (real server: default-off, PUT accepts key, injection on create, shell-mode skipped) |
 

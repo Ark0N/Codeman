@@ -51,7 +51,7 @@ Pick one route. The skill only acts inside a Codeman session, so a global instal
 | Claude Code plugin | `/plugin marketplace add Ark0N/Codeman`, then `/plugin install codeman@codeman` | Global, through Claude Code's plugin manager. `/plugin update codeman` follows releases. |
 | Bundled CLI        | `codeman skill install`                                                         | Global, at `~/.claude/skills/codeman`. |
 | Bundled CLI        | `codeman skill install --case <name> [--mode <mode>]`                           | One case. `--mode codex` (or any other run mode) writes it where that CLI looks for skills. |
-| Web UI             | **App Settings → Agents & CLIs → All agent CLIs → Codeman Agent Skill**         | Injects it into each case when a session is created, where that session's CLI looks: `.claude/skills/` for Claude Code, `.agents/skills/` for Codex, Gemini CLI, OpenCode, Antigravity, Grok, DeepSeek and OMP. On by default since 1.50.0. |
+| Web UI             | **App Settings → Agents & CLIs → All agent CLIs → Codeman Agent Skill**         | Injects it into each case when a session is created, where that session's CLI looks: `.claude/skills/` for Claude Code, `.agents/skills/` for Codex, Gemini CLI, OpenCode, Antigravity, Grok, DeepSeek and OMP. Off by default. |
 
 Use the plugin **or** `codeman skill install`, not both: a Claude Code with both lists the
 skill twice (`codeman` and `codeman:codeman`). The per-case copy the Codeman Agent Skill

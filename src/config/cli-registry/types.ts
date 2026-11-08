@@ -633,7 +633,7 @@ export interface CliCapabilities {
   /**
    * Codeman may write its agent skill (`skills/codeman`) into this CLI's workspace and
    * seed its per-session preamble (behind the synced `agentSkillEnabled` setting,
-   * default ON, add-only, marker-owned). Where it lands comes from `agentSkillDir` below.
+   * add-only, marker-owned). Where it lands comes from `agentSkillDir` below.
    */
   agentSkillInjection: boolean;
   /**

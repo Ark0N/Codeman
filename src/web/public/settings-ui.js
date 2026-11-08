@@ -711,8 +711,7 @@ Object.assign(CodemanApp.prototype, {
     this._applyCodexSettingsVisibility();
     // Claude Permissions settings
     document.getElementById('appSettingsAgentTeams').checked = settings.agentTeamsEnabled ?? false;
-    // Default ON, like the server's reader: only an explicit false turns the skill off.
-    document.getElementById('appSettingsAgentSkill').checked = settings.agentSkillEnabled !== false;
+    document.getElementById('appSettingsAgentSkill').checked = settings.agentSkillEnabled ?? false;
     // Default ON: an absent key is a user who has never seen this setting, and OFF
     // for them means no tab alerts in any workspace Codeman did not scaffold.
     document.getElementById('appSettingsWorkspaceHooks').checked = settings.workspaceHooksEnabled !== false;

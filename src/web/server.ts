@@ -2464,12 +2464,11 @@ export class WebServer extends EventEmitter {
     return resolveTerminalHistoryConfig(settings);
   }
 
-  // Whether the Codeman agent skill is injected into a new session's workspace (synced
-  // `agentSkillEnabled` setting, default ON; docs/agent-control-plan.md §2). An absent key
-  // is ON, like `workspaceHooksEnabled`: only an explicit `false` turns it off.
+  // Whether the Codeman agent skill is injected into cases on Claude session create
+  // (synced `agentSkillEnabled` setting, default OFF; docs/agent-control-plan.md §2).
   private async getAgentSkillEnabled(): Promise<boolean> {
     const settings = await this.readSettings();
-    return settings.agentSkillEnabled !== false;
+    return settings.agentSkillEnabled === true;
   }
 
   // Whether pending agent-inbox mail is snapshotted to disk (synced

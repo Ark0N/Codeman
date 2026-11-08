@@ -353,21 +353,32 @@ describe('Agent skill injection (agentSkillEnabled)', () => {
     }
   });
 
-  it('does not inject for shell-mode quick-start even when enabled', async () => {
-    const shellCase = 'test-skill-shell-' + Date.now();
-    createdCases.push(shellCase);
-    const response = await fetch(`${baseUrl}/api/quick-start`, {
+  it('does not inject by default, accepts the setting via PUT, then injects on quick-start', async () => {
+    // 1. Default OFF: a claude quick-start creates the case without the skill.
+    const offCase = 'test-skill-off-' + Date.now();
+    createdCases.push(offCase);
+    const offResponse = await fetch(`${baseUrl}/api/quick-start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ caseName: shellCase, mode: 'shell' }),
+      body: JSON.stringify({ caseName: offCase }),
     });
-    const data = await response.json();
-    expect(data.success).toBe(true);
-    expect(existsSync(join(CASES_DIR, shellCase, '.claude', 'skills', 'codeman'))).toBe(false);
-  });
+    const offData = await offResponse.json();
+    expect(offData.success).toBe(true);
+    expect(existsSync(join(CASES_DIR, offCase, '.claude', 'skills', 'codeman'))).toBe(false);
 
-  it('injects by default, accepts the setting via PUT, then stops injecting on quick-start', async () => {
-    // 1. Default ON: a claude quick-start writes the marker-carrying skill into the new case.
+    // 2. The `.strict()` settings schema accepts the new synced key.
+    const putResponse = await fetch(`${baseUrl}/api/settings`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agentSkillEnabled: true }),
+    });
+    const putData = await putResponse.json();
+    expect(putData.success).toBe(true);
+
+    // 3. The server's settings read is cached ~2s; outwait it so the create sees the toggle.
+    await new Promise((resolve) => setTimeout(resolve, 2100));
+
+    // 4. Quick-start now injects the marker-carrying skill into the new case.
     const onCase = 'test-skill-on-' + Date.now();
     createdCases.push(onCase);
     const onResponse = await fetch(`${baseUrl}/api/quick-start`, {
@@ -385,29 +396,18 @@ describe('Agent skill injection (agentSkillEnabled)', () => {
     expect(skillMd).toContain('<!-- codeman-managed-agent-skill');
     expect(existsSync(join(skillDir, 'reference', 'endpoints.md'))).toBe(true);
     expect(existsSync(join(skillDir, 'reference', 'recipes.md'))).toBe(true);
+  }, 30000);
 
-    // 2. The `.strict()` settings schema accepts the synced key, and an explicit false is OFF.
-    const putResponse = await fetch(`${baseUrl}/api/settings`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agentSkillEnabled: false }),
-    });
-    const putData = await putResponse.json();
-    expect(putData.success).toBe(true);
-
-    // 3. The server's settings read is cached ~2s; outwait it so the create sees the toggle.
-    await new Promise((resolve) => setTimeout(resolve, 2100));
-
-    // 4. Quick-start now creates the case without the skill.
-    const offCase = 'test-skill-off-' + Date.now();
-    createdCases.push(offCase);
-    const offResponse = await fetch(`${baseUrl}/api/quick-start`, {
+  it('does not inject for shell-mode quick-start even when enabled', async () => {
+    const shellCase = 'test-skill-shell-' + Date.now();
+    createdCases.push(shellCase);
+    const response = await fetch(`${baseUrl}/api/quick-start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ caseName: offCase }),
+      body: JSON.stringify({ caseName: shellCase, mode: 'shell' }),
     });
-    const offData = await offResponse.json();
-    expect(offData.success).toBe(true);
-    expect(existsSync(join(CASES_DIR, offCase, '.claude', 'skills', 'codeman'))).toBe(false);
-  }, 30000);
+    const data = await response.json();
+    expect(data.success).toBe(true);
+    expect(existsSync(join(CASES_DIR, shellCase, '.claude', 'skills', 'codeman'))).toBe(false);
+  });
 });
