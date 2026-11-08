@@ -126,9 +126,15 @@ export async function loadAttachmentGuardConfig(): Promise<AttachmentGuardConfig
  *
  * NOTE: this is intentionally a SUPERSET of `isSensitivePath` so `/api/download`
  * behavior is NOT changed — only attachment registration/serving uses this.
+ * `opts` passes through to `isSensitivePath` (the File Viewer editor's
+ * `allowDotenv`).
  */
-export function isBlockedAttachmentPath(absPath: string, blockedTrees: readonly string[]): boolean {
-  if (isSensitivePath(absPath)) return true;
+export function isBlockedAttachmentPath(
+  absPath: string,
+  blockedTrees: readonly string[],
+  opts: { allowDotenv?: boolean } = {}
+): boolean {
+  if (isSensitivePath(absPath, opts)) return true;
   return blockedTrees.some((tree) => isUnderTree(absPath, tree));
 }
 

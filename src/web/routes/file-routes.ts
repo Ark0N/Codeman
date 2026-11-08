@@ -1197,10 +1197,14 @@ function throwRouteError(statusCode: number, code: ApiErrorCode, message: string
  * Gate a resolved workspace file for edit-mode read/write. Throws a structured
  * error when the file may not be edited; returns void when it may. Order
  * matters for the message a user sees: confinement (the caller's 404) →
- * sensitive/blocked (403) → .git (403) → extension allowlist (400).
+ * sensitive/blocked (403) → .git (403) → extension allowlist (400). Dotenv is
+ * the one sensitive family the editor may open (`allowDotenv`): the plain
+ * preview already serves it to the same user. Keep this and the `editable`
+ * advertisement in the read route in step.
  */
 function assertEditableTarget(resolvedPath: string, relativePath: string, blockedTrees: readonly string[]): void {
-  if (isSensitivePath(resolvedPath) || isBlockedAttachmentPath(resolvedPath, blockedTrees)) {
+  // isBlockedAttachmentPath includes the sensitive-path check.
+  if (isBlockedAttachmentPath(resolvedPath, blockedTrees, { allowDotenv: true })) {
     throwFileEditError(403, ApiErrorCode.FORBIDDEN, 'Editing this file is blocked');
   }
   if (isDeniedEditRelativePath(relativePath)) {
@@ -2232,8 +2236,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
         editable =
           isEditableFileName(pathBasename(target.resolvedPath)) &&
           !isDeniedEditRelativePath(relativePath) &&
-          !isSensitivePath(target.resolvedPath) &&
-          !isBlockedAttachmentPath(target.resolvedPath, guard.blockedTrees) &&
+          !isBlockedAttachmentPath(target.resolvedPath, guard.blockedTrees, { allowDotenv: true }) &&
           stat.size <= MAX_EDITABLE_BYTES &&
           Buffer.from(content, 'utf8').equals(buf);
       }
