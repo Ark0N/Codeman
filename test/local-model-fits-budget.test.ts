@@ -51,7 +51,7 @@ describe('modelFitsBudget', () => {
   const catalog = getLocalModelCatalog();
 
   it('agrees with the recommendation on every model and context of the catalogue', () => {
-    for (const gb of [8, 16, 24, 32, 48, 64, 128]) {
+    for (const gb of [8, 16, 18, 24, 32, 36, 48, 64, 96, 128, 192, 256, 512]) {
       const hw = mac(gb);
       const offered = recommend(hw, catalog, harnessFacts());
       const rows = [offered.pick, ...offered.alternatives].filter((row) => row !== undefined);
@@ -85,7 +85,7 @@ describe('modelFitsBudget', () => {
   });
 
   it('rules out a model that is too large, and one the catalogue does not have', () => {
-    expect(modelFitsBudget(mac(48), catalog, 'qwen3.5:122b-a10b', 131072)).toBe(false);
+    expect(modelFitsBudget(mac(48), catalog, 'ornith-1.5:122b', 131072)).toBe(false);
     expect(modelFitsBudget(mac(48), catalog, 'no-such:1b', 65536)).toBe(false);
     expect(modelFitsBudget(mac(48), catalog, 'qwen3.6:35b-a3b', 131072)).toBe(true);
   });
@@ -96,14 +96,16 @@ describe('modelFitsBudget', () => {
     expect(modelFitsBudget(mac(48), catalog, id, 131072, { measuredTotalBytes: 40_157_944_217 })).toBe(true);
     // A runtime that reports less than the estimate rules out what the estimate allowed.
     expect(modelFitsBudget(mac(48), catalog, id, 131072, { measuredTotalBytes: 33 * 1024 ** 3 })).toBe(false);
-    // And one that reports more admits what the estimate ruled out: the 27B on a 36 GB Mac.
-    expect(modelFitsBudget(mac(36), catalog, 'qwen3.8:27b', 65536)).toBe(false);
-    expect(modelFitsBudget(mac(36), catalog, 'qwen3.8:27b', 65536, { measuredTotalBytes: 27 * 1024 ** 3 })).toBe(true);
+    // And one that reports more admits what the estimate ruled out: on a 36 GB Mac the GGUF
+    // 35B-A3B at its full window needs 28.8 GB, 1.032 of the 27.9 GB estimate and 0.958 of 28 GiB.
+    const moeGguf = 'qwen3.6:35b-a3b-mtp-q4_k_m';
+    expect(modelFitsBudget(mac(36), catalog, moeGguf, 262144)).toBe(false);
+    expect(modelFitsBudget(mac(36), catalog, moeGguf, 262144, { measuredTotalBytes: 28 * 1024 ** 3 })).toBe(true);
     // The reserve still bounds it: 100 GiB "measured" on a 48 GB Mac is 40 GiB (42.9 GB) of
-    // budget, so the Q8 27B with its 42.8 GB stays out (0.997) although 100 GiB would hold it.
+    // budget, so the 122B with its 97.4 GB stays out although 100 GiB would hold it.
     const huge = { measuredTotalBytes: 100 * 1024 ** 3 };
-    expect(modelFitsBudget(mac(48), catalog, 'qwen3.8:27b-q8_0', 131072, huge)).toBe(false);
-    expect(modelFitsBudget(mac(128), catalog, 'qwen3.8:27b-q8_0', 131072, huge)).toBe(true);
+    expect(modelFitsBudget(mac(48), catalog, 'ornith-1.5:122b', 131072, huge)).toBe(false);
+    expect(modelFitsBudget(mac(128), catalog, 'ornith-1.5:122b', 131072, huge)).toBe(true);
   });
 
   it('agrees with the recommendation under a measured budget too', () => {
@@ -130,7 +132,7 @@ describe('modelFitsBudget', () => {
 
   it('is false for a context that is no token count', () => {
     for (const context of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
-      expect(modelFitsBudget(mac(128), catalog, 'qwen3.5:9b', context), String(context)).toBe(false);
+      expect(modelFitsBudget(mac(128), catalog, 'qwen3.5:9b-q4_k_m', context), String(context)).toBe(false);
     }
   });
 });

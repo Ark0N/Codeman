@@ -12,8 +12,9 @@
  *  - `needBytes()`: the PEAK, `bytes + heldBytesPerToken * ctx + overheadBytes +
  *    peakExtraBytes` of the catalogue row: the weights, what stays held per token of context,
  *    what the runner holds beside both, and what it takes for a moment while a long prompt is
- *    processed. Measured for one model on one Mac (see the catalogue header); every other row
- *    carries the same figures and says `estimated`.
+ *    processed. Measured for one model on one Mac; every other row's figures are computed from
+ *    its own model's architecture for its runner and say `estimated` (see the catalogue
+ *    header, MEMORY).
  *  - Fit: need over budget up to 0.85 is good, up to 0.98 is tight, above is out. The grade
  *    decides whether a model is offered at all and what its row says. It does NOT sort: the
  *    need is the worst moment at the full context, so a tight fit is a model that runs, and a

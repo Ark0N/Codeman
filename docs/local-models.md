@@ -14,6 +14,92 @@ This page is the reference for how it works. The HTTP contract is in
 [api-reference.md](api-reference.md) ("Local model"). The rules that must not be broken are
 in [architecture-invariants.md](architecture-invariants.md#local-model-install).
 
+## Which model fits which Mac
+
+The window offers the best model of the catalogue (`src/config/local-model-catalog.ts`) that
+fits this Mac's memory at a context a coding agent can work with, and up to four more. What
+the catalogue answers today, before the runtime measured anything (the budget is then an
+estimate: 2/3 of the memory below 36 GB, 3/4 from 36 GB, less 1 GiB, and never more than the
+memory less 6, 8 or 12 GiB for macOS, Codeman, a browser and the agent):
+
+| Memory           | Budget  | What it gets                                                                                                                                                                                                                                                                                                                                       |
+| ---------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 8 GB             | 2.1 GB  | Nothing. The smallest model a coding agent can work with needs 10.2 GB at 65,536 tokens                                                                                                                                                                                                                                                            |
+| 16 GB            | 10.4 GB | Nothing. MiMo V2.6 9B at 65,536 tokens needs 10.2 GB, 98.7% of the budget, just past the 98% a tight fit may reach (it is 95% of the 10.7 GB a 16 GB Mac mini measured). On the edge either way: only a run on such a Mac settles it                                                                                                               |
+| 18 GB            | 11.8 GB | A small model (`limited`): MiMo V2.6 9B at 131,072 tokens, 11.4 GB, tight. Its base, Qwen3.5 9B, is the one alternative                                                                                                                                                                                                                            |
+| 24 GB            | 16.1 GB | The same, with room. On a base M2 or M3 (100 GB/s) it computes to 9.3 tokens per second: slow                                                                                                                                                                                                                                                      |
+| 32 GB            | 21.8 GB | The same. North Mini Code 1.0 needs 23.2 GB at 65,536 tokens; once the runtime measures about 3/4 of the memory, as it did on a 16 and a 48 GB Mac, the Mac gets it at 131,072 tokens, or Qwen3.8 27B at 65,536 tokens on a Max chip                                                                                                               |
+| 36 GB            | 27.9 GB | Qwen3.8 27B at 131,072 tokens on an M4 or M5 Max (27.0 GB, 97%); on a slower chip, where the dense 27B computes to under 10 tokens per second, Qwen3.6 35B-A3B as a GGUF build (27.1 GB, 97%). Both tight                                                                                                                                          |
+| 48 GB            | 37.6 GB | Qwen3.6 35B-A3B (MLX) at 131,072 tokens: the pair we tested, "Recommended" on an Apple M5 Pro with 48 GB. On a Max chip Qwen3.8 27B at 262,144 tokens (32.1 GB, tight). The test was a short task: in a long session MLX may keep up to 8 GiB more, which brings this pair to the edge of the budget, and past it while a long prompt is processed |
+| 64 GB            | 50.5 GB | Qwen3.8 27B at 262,144 tokens on a Max chip; Qwen3.6 35B-A3B (MLX) on a Pro chip                                                                                                                                                                                                                                                                   |
+| 96 GB            | 76.2 GB | Qwen3.8 27B at 262,144 tokens; on an M3 Max, Qwen3.6 35B-A3B (MLX)                                                                                                                                                                                                                                                                                 |
+| 128 GB           | 102 GB  | Ornith 1.5 122B-A10B (MLX) at 131,072 tokens, 97.4 GB, tight                                                                                                                                                                                                                                                                                       |
+| 192, 256, 512 GB | 154 GB+ | Ornith 1.5 122B-A10B at 262,144 tokens                                                                                                                                                                                                                                                                                                             |
+
+"Tight" means the need is between 85% and 98% of the budget; above 98% a model is not
+offered. A model that computes to under 10 tokens per second on the chip is "slow" and ranks
+after the fast ones, which is why the chip changes the pick at 36 to 96 GB. Every model is
+offered at the largest context it fits at, and never below 65,536 tokens: OpenCode's own
+prompt is 8,000 to 10,000 tokens, and at 32,768 it would compact after less than one default
+file read. `test/local-model-recommend.test.ts` ("every memory size") pins this table.
+
+### How much memory a model needs
+
+The need of a model is its peak: the weights, what stays held per token of context, what the
+runner holds beside both, and what it takes for a moment while a long prompt is processed. The
+runtime runs a model with one of two runners, which spend memory differently, so every row
+names its runner (`runner`) and its figures follow that runner's rule:
+
+- **llama.cpp** (GGUF builds, on Metal) allocates the K/V cache for the whole context when the
+  model loads and does not grow after that. The runtime is started with
+  `OLLAMA_KV_CACHE_TYPE=q8_0` (the cache in 8 bits, 17/32 of the default f16; the runtime's
+  own documentation calls the loss very small), `OLLAMA_FLASH_ATTENTION=1` (an 8-bit cache
+  needs it), `LLAMA_ARG_CACHE_RAM=1024` (llama-server keeps copies of earlier prompts, and
+  this bounds them to 1 GiB) and `LLAMA_ARG_CTX_CHECKPOINTS=8` (llama-server keeps copies of
+  the state it cannot roll back, two or three per request, up to 32 by default: 5 GB for the
+  27B; 8 keeps the last few requests, which is what an agent's next request restores from). A
+  row's figures are computed from its model's `config.json`: the K/V cache of its attention
+  layers, its recurrent or sliding-window state, live and in each of the 8 checkpoints, 1.0
+  GB for the runner and the 1 GiB prompt cache. A build with a multi-token-prediction layer
+  (the two `-mtp` tags and `qwen3.8:27b-q8_0`) costs more: the runtime turns prediction on,
+  so llama-server keeps that layer's cache in f16 and one more copy of the recurrent state for
+  rollback per drafted token (the tag's `draft_num_predict`: 2 for the 35B-A3B, 4 for the
+  27B). No peak: the buffers are allocated at load. The checkpoints and the
+  prediction costs were read in the llama.cpp source the runtime bundles (b12111), not
+  measured.
+- **MLX** grows its cache with the tokens actually used, keeps snapshots of the recurrent
+  state, and may keep up to 8 GiB of snapshots of earlier prompts, which no setting bounds. A
+  Mac always takes the MLX build of a tag that has one. Below 48 GB that 8 GiB does not fit
+  beside a useful model, so the catalogue lists GGUF builds there.
+
+Where every figure comes from:
+
+| Model                        | Runner    | Memory figures                                                                      | Speed (tokens per second per 100 GB/s)                    |
+| ---------------------------- | --------- | ----------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| `qwen3.5:9b-q4_k_m`          | llama.cpp | computed from the Qwen3.5-9B config                                                 | 9.3: a published run on an M1 Max                         |
+| `mimo-v2.6:9b-q4_k_m`        | llama.cpp | the same (a fine-tune of Qwen3.5-9B)                                                | 9.3: the same architecture and size                       |
+| `north-mini-code-1.0:q4_k_m` | llama.cpp | computed from its config                                                            | 13.6: the 35B-A3B's, the same 3 billion active parameters |
+| `qwen3.6:35b-a3b-mtp-q4_k_m` | llama.cpp | computed from the Qwen3.6-35B-A3B config, prediction layer included                 | 13.6: a published run on an M1 Max                        |
+| `qwen3.6:35b-a3b`            | MLX       | **measured** on an Apple M5 Pro with 48 GB                                          | 16.9: a published run; 67.7 measured on the tested Mac    |
+| `qwen3.8:27b-q8_0`           | llama.cpp | computed from the Qwen3.8-27B config, prediction layer included                     | 1.7: the row below scaled by file size                    |
+| `qwen3.8:27b-mtp-q4_k_m`     | llama.cpp | computed from the Qwen3.8-27B config, prediction layer included                     | 2.95: a published run without prediction (a floor)        |
+| `ornith-1.5:122b`            | MLX       | computed from the Qwen3.5-122B-A10B config, scaled by the measured MLX row, + 8 GiB | 5.0: the 35B-A3B's, x 3/10 active parameters              |
+
+Sizes are what the registry serves a Mac for each tag (every layer plus the config), read on
+2026-11-08. Only one row was ever run on a Mac, so every other answer in the table above is a
+calculation. For a llama.cpp build the check after the download catches a load that was
+judged too kindly, but not what grows after it in host memory (the checkpoints and the prompt
+cache, which are counted, not checked); for an MLX build it catches neither (see "The check"
+below). The measured row's figures come from single long prompts, not a session of many
+requests, in which MLX may keep up to 8 GiB more. The catalogue header lists the models left out on
+purpose (no evidence of working tool calls, a restrictive licence, a known bug) and why.
+
+A new row needs its model's architecture (attention layers, K/V heads, head size, and its
+linear-attention or sliding-window layers, from its `config.json`) in the table of
+`test/local-model-catalog.test.ts`, which recomputes every computed figure from it and fails
+for a row it does not know. Its answer for each memory size is then pinned in
+`test/local-model-recommend.test.ts`.
+
 ## What an install does, in order
 
 The person picks a model, presses "Install on this Mac" and confirms the sizes once. The
@@ -49,8 +135,10 @@ Every step can be repeated: Resume and "Try again" enter the step the job stoppe
   copied from the server. `HOME` is a private folder. Exactly these are set:
   `OLLAMA_HOST=127.0.0.1:<port>`, `OLLAMA_MODELS`, `OLLAMA_CONTEXT_LENGTH`,
   `OLLAMA_NO_CLOUD=1`, `OLLAMA_KEEP_ALIVE=10m`, `OLLAMA_NUM_PARALLEL=1`,
-  `OLLAMA_MAX_LOADED_MODELS=1`. No `CODEMAN_*` variable and none of the user's own
-  `OLLAMA_*` settings reach it.
+  `OLLAMA_MAX_LOADED_MODELS=1`, and four memory settings of the llama.cpp runner:
+  `OLLAMA_KV_CACHE_TYPE=q8_0`, `OLLAMA_FLASH_ATTENTION=1`, `LLAMA_ARG_CACHE_RAM=1024` and
+  `LLAMA_ARG_CTX_CHECKPOINTS=8` (see "How much memory a model needs" above). No `CODEMAN_*`
+  variable and none of the user's own `OLLAMA_*` or `LLAMA_ARG_*` settings reach it.
 - **The port is chosen once**, by binding, from 11435 across 20 ports, and stored. 11434 is
   left alone: it is the default of a runtime the user may run themselves, which is never
   touched.
@@ -69,8 +157,7 @@ judges the chosen model against it before a byte of the model is downloaded. A m
 longer fits ends the job there with "does not fit" and the next model to try. From then on
 the window shows the measured budget and the word "estimated" is gone.
 
-The need of a model is its peak: the weights, what stays held per token of context, what the
-runner holds beside both, and what it takes for a moment while a long prompt is processed.
+The need of a model is its peak (see "How much memory a model needs" above).
 
 ### The model download
 
@@ -86,7 +173,10 @@ After the pull, in this order:
 
 1. One tiny chat with `reasoning_effort: "none"`. It loads the model.
 2. `GET /api/ps` must show the whole model on the GPU (`size_vram` equal to `size`) at the
-   chosen context length.
+   chosen context length. For a llama.cpp build both figures are the buffers llama-server
+   reports allocating (weights, K/V cache, compute), so this proves the whole load is on the
+   GPU. For an MLX build it proves only the weights: the runtime books an MLX model at its
+   weights (runtime issue 19417), so for those rows the catalogue's figures are all there is.
 3. One tool probe on `/v1/chat/completions` (a `tools` array, `reasoning_effort: "none"`,
    `max_tokens` 1024). It passes on a tool call whose arguments parse.
 
@@ -261,8 +351,78 @@ or `python3`.
   a session uses the model: close those sessions first.
 - **The runtime does not enforce the context length.** A prompt longer than the context was
   accepted in testing. Do not rely on the runtime to stop one.
+- **Most memory figures are calculated, not measured.** One model was run on one Mac; the
+  others are computed from their architecture, and the runtime settings they assume (an 8-bit
+  K/V cache, flash attention, a 1 GiB prompt cache) were read in its source, not yet observed
+  on a Mac. "Recommended" appears only for the pair we ran, on the Mac we ran it on.
 - **The model stays in memory for ten minutes** after the last request, then the runtime
   unloads it.
+
+## Keeping the catalogue current
+
+The catalogue (`src/config/local-model-catalog.ts`) and the runtime pin are compiled into
+Codeman on purpose: no file or download decides what is recommended or run. What the
+registry serves can still move away from them: a tag is pushed again or removed, the build
+a Mac downloads changes size, Ollama ships a new version. The workflow
+`.github/workflows/local-model-catalog.yml` looks for that every Monday at 06:00 UTC. It
+runs `scripts/check-local-model-catalog.mjs`, which also runs locally:
+`npm run check:local-model-catalog` prints the report and exits 0 (clean), 1 (drift) or 2
+(the check itself failed).
+
+For every model row it checks:
+
+- **The tag still exists** in the registry.
+- **The size of what a Mac downloads** is within 0.1% of the row's `bytes`. A tag can be a
+  manifest list with one build per runner, and Ollama on Apple silicon takes the `mlx` build
+  when there is one, else `llamacpp`, else `ggml`. So the check asks for the tag the way
+  Ollama asks, picks the build a Mac picks and sizes it the way a pull counts it (every layer
+  plus the config). The plain manifest other tools get for the same tag is the `llamacpp`
+  build, which is not what a Mac downloads.
+- **The runner of that build**, once a row names its `runner`: a Mac still pulls an `mlx`
+  build for an `mlx` row and a GGUF build (`llamacpp`, or a manifest that names no runner)
+  for a `llamacpp` row. A row's memory figures follow its runner, so a tag that gains or
+  loses an mlx build is drift even at about the same size.
+- **The build a Mac pulls runs on the pinned runtime**: its config declares no newer
+  Ollama (`requires`) than `OLLAMA_RUNTIME_PIN`.
+- **The pinned digest**, once a row carries one: a Mac would still pull that manifest. The
+  field is `digest` and its value is what `/api/tags` reports after the pull. The catalogue
+  schema does not have it yet: `LocalModelEntrySchema` must gain an optional `digest` under
+  exactly that name, or the check never compares it. Until then the report lists today's
+  digests, rows with measured figures first, because without a digest a rebuild of about the
+  same size goes unnoticed (a switch between the mlx and the gguf build does not: their sizes
+  differ by 2% or more). Pinning digests is a decision, not a quick fix: today the catalogue
+  holds no digest on purpose, and `test/local-model-catalog.test.ts` ("holds no download
+  data") refuses a `sha256` anywhere in it, so that rule changes with it.
+
+For the runtime pin it checks whether a newer Ollama release exists, and whether the pinned
+`ollama-darwin.tgz` is still on GitHub with the pinned size and sha256.
+
+It reads manifests and configs only, never a model layer. It does not check the memory
+figures, the speeds or whether a coding agent works with a model: no manifest says anything
+about those, and they change only when somebody measures on a Mac.
+
+**The issue.** Drift opens one issue, "Local model catalogue: weekly check", or, while that
+issue is open, replaces its description with the new report and adds a comment. A clean week
+comments on the open issue and does nothing when there is none. A check that failed (the
+network, a rate limit, an answer that did not parse) fails the run and leaves the issue
+alone; what it found is in the run's summary. The schedule runs the copy of the workflow on
+`master`, and so does `gh workflow run local-model-catalog.yml`.
+
+**What a maintainer does with it**, in a pull request each time:
+
+- **Size drift or a changed digest**: correct the row. When the build itself changed (another
+  runner or quantization), its memory figures and speed no longer describe it: mark the row
+  `estimated` until somebody measures it again.
+- **A tag that is gone, or a build that needs a newer runtime**: replace or drop the row, or
+  move the runtime pin first.
+- **A newer Ollama**: read its release notes, then move `OLLAMA_RUNTIME_PIN` (version, URL,
+  size and sha256, checked against the release's `sha256sum.txt`) and run an install on a
+  Mac before merging.
+- **A pinned archive that changed**: a security question first. Every install refuses it at
+  the hash compare, so nobody gets it, but find out why before moving the pin.
+
+Close the issue once the fix is merged. A catalogue or pin change reaches users only in a
+release: an installed Codeman keeps the catalogue it was built with until it is updated.
 
 ## Source
 
@@ -279,3 +439,4 @@ or `python3`.
 | Routes                                         | `src/web/routes/local-model-routes.ts`                                                             |
 | Shared CLI install runner                      | `src/cli-install-runner.ts`                                                                        |
 | Serialized writer of the endpoint store        | `src/custom-model-hosts-writer.ts`                                                                 |
+| Weekly catalogue check                         | `scripts/check-local-model-catalog.mjs`, `.github/workflows/local-model-catalog.yml`               |

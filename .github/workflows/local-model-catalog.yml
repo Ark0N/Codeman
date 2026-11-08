@@ -1,0 +1,128 @@
+name: Local model catalogue
+
+# Checks every Monday that the local model catalogue (src/config/local-model-catalog.ts) and
+# the pinned model runtime (OLLAMA_RUNTIME_PIN in src/local-model/runtime.ts) still match what
+# the registry and Ollama's releases serve: a tag can be pushed again or removed, the build a
+# Mac downloads can change size, and Ollama ships new versions. The catalogue is compiled into
+# Codeman on purpose, so this job only reports; a change ships in a release like any other.
+# What it checks, and what a maintainer does with its issue: docs/local-models.md, "Keeping
+# the catalogue current".
+#
+# By hand: gh workflow run local-model-catalog.yml (the file must be on master for that,
+# and the schedule only ever runs master's copy). Locally: npm run check:local-model-catalog
+#
+# Two jobs, so the token that can write issues never sits next to `npm ci`:
+# - check installs the dependencies and runs scripts/check-local-model-catalog.mjs with a
+#   read-only token. Exit 0 clean, 1 drift, 2 the check failed. On 2 the job fails and the
+#   issue is not touched: an incomplete report must not open or update it.
+# - issue runs no code from the repository, only gh. On drift it opens the one issue titled
+#   "Local model catalogue: weekly check", or puts this week's report into it when it is
+#   already open. On a clean week it comments on that issue only when one is open.
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A run by hand while the scheduled one is going must not open a second issue.
+concurrency: ${{ github.workflow }}
+
+jobs:
+  check:
+    name: Check the catalogue and the runtime pin
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      status: ${{ steps.check.outputs.status }}
+      report: ${{ steps.check.outputs.report }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      # The check needs tsx and zod, both plain JavaScript, so no install script runs here
+      # (node-pty's build and the repository's postinstall included).
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Run the check
+        id: check
+        env:
+          # Read-only here. Sent to api.github.com only, so the release lookups are not rate limited.
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          npx tsx scripts/check-local-model-catalog.mjs > "$RUNNER_TEMP/report.md"
+          code=$?
+          set -e
+          cat "$RUNNER_TEMP/report.md" >> "$GITHUB_STEP_SUMMARY"
+          case "$code" in
+            0) echo "status=clean" >> "$GITHUB_OUTPUT" ;;
+            1) echo "status=drift" >> "$GITHUB_OUTPUT" ;;
+            *)
+              echo "::error::The check itself failed (exit $code), so the issue is left alone. The summary holds what it found."
+              exit 1
+              ;;
+          esac
+          # One line of base64, so nothing in the report can end the output early. An issue
+          # body holds at most 65,536 characters; the report is a few KB.
+          echo "report=$(head -c 60000 "$RUNNER_TEMP/report.md" | base64 -w0)" >> "$GITHUB_OUTPUT"
+
+  issue:
+    name: Keep the weekly issue current
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      ISSUE_TITLE: 'Local model catalogue: weekly check'
+      STATUS: ${{ needs.check.outputs.status }}
+      REPORT_B64: ${{ needs.check.outputs.report }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Open, update or comment on the issue
+        run: |
+          set -euo pipefail
+          # The issues API, not the search index, so an issue opened a minute ago is found too,
+          # and an exact title match, so a similar title never counts. The oldest open one wins.
+          number=$(gh issue list --state open --limit 1000 --json number,title \
+            | jq -r --arg title "$ISSUE_TITLE" '[.[] | select(.title == $title)] | sort_by(.number) | first | .number // empty')
+          today=$(date -u +%Y-%m-%d)
+          case "$STATUS" in
+            drift)
+              printf '%s' "$REPORT_B64" | base64 -d > "$RUNNER_TEMP/report.md"
+              printf '\n---\n\nWritten by the [weekly check](%s). Fix the catalogue or the pin in a pull request and close this issue once that is merged; the next drift opens it again.\n' \
+                "$RUN_URL" >> "$RUNNER_TEMP/report.md"
+              if [ -n "$number" ]; then
+                gh issue edit "$number" --body-file "$RUNNER_TEMP/report.md"
+                gh issue comment "$number" --body "Week of $today: drift found again. The description now holds this week's report ([run]($RUN_URL))."
+              else
+                gh issue create --title "$ISSUE_TITLE" --body-file "$RUNNER_TEMP/report.md"
+              fi
+              ;;
+            clean)
+              if [ -n "$number" ]; then
+                gh issue comment "$number" --body "Week of $today: the check was clean ([run]($RUN_URL))."
+              else
+                echo "Clean, and no issue is open: nothing to do."
+              fi
+              ;;
+            *)
+              echo "::error::The check job reported no status ('$STATUS')."
+              exit 1
+              ;;
+          esac

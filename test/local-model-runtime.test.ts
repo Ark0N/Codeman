@@ -38,8 +38,11 @@ import {
   parseInferenceComputeTotal,
   removeLocalModelFiles,
   removePartialModelBlobs,
+  RUNTIME_CTX_CHECKPOINTS,
   RUNTIME_DOWNLOAD_RETRIES,
+  RUNTIME_HOST_PROMPT_CACHE_MIB,
   RUNTIME_KEEP_ALIVE,
+  RUNTIME_KV_CACHE_TYPE,
   RUNTIME_MAX_RESTARTS,
   RUNTIME_PORT_FIRST,
   RUNTIME_PORT_SPAN,
@@ -260,6 +263,7 @@ describe('runtimeEnv', () => {
     OLLAMA_REMOTES: 'evil.example',
     OLLAMA_AUTH: '1',
     LLAMA_ARG_CACHE_RAM: '0',
+    LLAMA_ARG_CTX_CHECKPOINTS: '64',
     // Other secrets a server environment carries.
     ANTHROPIC_API_KEY: 'sk-ant-secret',
     OPENAI_API_KEY: 'sk-secret',
@@ -273,7 +277,7 @@ describe('runtimeEnv', () => {
     DYLD_INSERT_LIBRARIES: '/tmp/evil.dylib',
   };
 
-  it('holds exactly the allowlist: what is copied, the private HOME, and seven settings', () => {
+  it('holds exactly the allowlist: what is copied, the private HOME, and eleven settings', () => {
     expect(runtimeEnv(input(SERVER_ENV))).toEqual({
       PATH: '/usr/local/bin:/usr/bin:/bin',
       TMPDIR: '/var/folders/xy/T/',
@@ -292,7 +296,31 @@ describe('runtimeEnv', () => {
       OLLAMA_KEEP_ALIVE: '10m',
       OLLAMA_NUM_PARALLEL: '1',
       OLLAMA_MAX_LOADED_MODELS: '1',
+      // The memory settings the catalogue's llamacpp rows are computed for.
+      OLLAMA_KV_CACHE_TYPE: 'q8_0',
+      OLLAMA_FLASH_ATTENTION: '1',
+      LLAMA_ARG_CACHE_RAM: '1024',
+      LLAMA_ARG_CTX_CHECKPOINTS: '8',
     });
+  });
+
+  it('sets the llama.cpp memory settings from the exported constants, never from the server', () => {
+    expect(RUNTIME_KV_CACHE_TYPE).toBe('q8_0');
+    expect(RUNTIME_HOST_PROMPT_CACHE_MIB).toBe(1024);
+    expect(RUNTIME_CTX_CHECKPOINTS).toBe(8);
+    const env = runtimeEnv(input(SERVER_ENV));
+    expect(env.OLLAMA_KV_CACHE_TYPE).toBe(RUNTIME_KV_CACHE_TYPE);
+    expect(env.LLAMA_ARG_CACHE_RAM).toBe(String(RUNTIME_HOST_PROMPT_CACHE_MIB));
+    expect(env.LLAMA_ARG_CTX_CHECKPOINTS).toBe(String(RUNTIME_CTX_CHECKPOINTS));
+    // The server's own `LLAMA_ARG_CACHE_RAM=0` and `LLAMA_ARG_CTX_CHECKPOINTS=64`, and a user's
+    // q4_0 cache, lose against ours.
+    const env2 = runtimeEnv(input({ ...SERVER_ENV, OLLAMA_KV_CACHE_TYPE: 'q4_0', OLLAMA_FLASH_ATTENTION: '0' }));
+    expect([
+      env2.OLLAMA_KV_CACHE_TYPE,
+      env2.OLLAMA_FLASH_ATTENTION,
+      env2.LLAMA_ARG_CACHE_RAM,
+      env2.LLAMA_ARG_CTX_CHECKPOINTS,
+    ]).toEqual(['q8_0', '1', '1024', '8']);
   });
 
   it('lets no CODEMAN_ variable through, the password least of all', () => {
@@ -309,8 +337,10 @@ describe('runtimeEnv', () => {
         .sort()
     ).toEqual([
       'OLLAMA_CONTEXT_LENGTH',
+      'OLLAMA_FLASH_ATTENTION',
       'OLLAMA_HOST',
       'OLLAMA_KEEP_ALIVE',
+      'OLLAMA_KV_CACHE_TYPE',
       'OLLAMA_MAX_LOADED_MODELS',
       'OLLAMA_MODELS',
       'OLLAMA_NO_CLOUD',
@@ -329,7 +359,8 @@ describe('runtimeEnv', () => {
     ]) {
       expect(env, name).not.toHaveProperty(name);
     }
-    expect(env).not.toHaveProperty('LLAMA_ARG_CACHE_RAM');
+    // The server's `LLAMA_ARG_CACHE_RAM=0` is not copied: the value is ours.
+    expect(env.LLAMA_ARG_CACHE_RAM).toBe('1024');
   });
 
   it('carries no secret and no value of the server that is not on the list', () => {
@@ -365,9 +396,13 @@ describe('runtimeEnv', () => {
   it('leaves out what the server does not have, and sets the rest all the same', () => {
     expect(Object.keys(runtimeEnv(input({}))).sort()).toEqual([
       'HOME',
+      'LLAMA_ARG_CACHE_RAM',
+      'LLAMA_ARG_CTX_CHECKPOINTS',
       'OLLAMA_CONTEXT_LENGTH',
+      'OLLAMA_FLASH_ATTENTION',
       'OLLAMA_HOST',
       'OLLAMA_KEEP_ALIVE',
+      'OLLAMA_KV_CACHE_TYPE',
       'OLLAMA_MAX_LOADED_MODELS',
       'OLLAMA_MODELS',
       'OLLAMA_NO_CLOUD',
