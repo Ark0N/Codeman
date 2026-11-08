@@ -9,7 +9,7 @@ macOS first: the app runs on 11.3 or later, and Codeman's own page needs the
 WebKit of Safari 16.4 (see Known limits). The same code is meant to build for
 Windows and Linux later.
 
-- **Size:** 4.6 MB for the universal `Codeman.app` (Apple Silicon + Intel), 3 MB as a `.dmg` (measured on the first build).
+- **Size:** 5.3 MB for the universal `Codeman.app` (Apple Silicon + Intel), 3.5 MB as a `.dmg` (measured 2026-11-09).
 - **Stack:** Rust with [tao](https://crates.io/crates/tao) (window and event loop),
   [wry](https://crates.io/crates/wry) (the system web view: WKWebView on macOS) and
   [muda](https://crates.io/crates/muda) (native menus), plus [objc2](https://crates.io/crates/objc2)
