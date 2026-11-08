@@ -4,6 +4,8 @@
 #   packages/desktop/scripts/bundle-macos.sh            # this Mac's architecture
 #   packages/desktop/scripts/bundle-macos.sh --universal --dmg
 #   SIGN_IDENTITY="Developer ID Application: ..." packages/desktop/scripts/bundle-macos.sh --dmg
+#   SIGN_IDENTITY="Developer ID Application: ..." NOTARY_PROFILE=<profile> \
+#     packages/desktop/scripts/bundle-macos.sh --universal --notarize
 #
 # Without SIGN_IDENTITY the app is signed ad hoc: it runs on the Mac that built
 # it, and a copy downloaded on another Mac is stopped by Gatekeeper. On macOS 15
@@ -11,6 +13,15 @@
 # Privacy & Security; on macOS 14 and earlier, right-click it and choose Open.
 # Or run `xattr -dr com.apple.quarantine /Applications/Codeman.app` on the copy
 # in /Applications. A Developer ID signature + notarization avoids all of this.
+#
+# --dmg writes dist/Codeman-<version>.dmg, signed with SIGN_IDENTITY when it is
+# set. --notarize hands the built app to scripts/sign-macos.sh, which signs it
+# with SIGN_IDENTITY, has Apple notarize it, staples the ticket to it and does
+# the same for dist/Codeman.dmg, the DMG built around it (so --dmg is implied).
+# sign-macos.sh's header lists what it needs: SIGN_IDENTITY, and NOTARY_PROFILE
+# or APPLE_ID, APPLE_APP_PASSWORD and APPLE_TEAM_ID. The release workflow
+# (.github/workflows/desktop-dmg.yml) runs this script ad hoc in one job and
+# sign-macos.sh in another, so the job that runs cargo holds no secret.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -18,13 +29,20 @@ cd "$(dirname "$0")/.."
 
 UNIVERSAL=0
 DMG=0
+NOTARIZE=0
 for arg in "$@"; do
   case "$arg" in
     --universal) UNIVERSAL=1 ;;
     --dmg) DMG=1 ;;
+    --notarize) NOTARIZE=1 ;;
     *) echo "unknown option: $arg" >&2; exit 2 ;;
   esac
 done
+
+if [ "$NOTARIZE" = 1 ]; then
+  # Checked before the build, so a missing secret costs seconds, not a build.
+  ./scripts/sign-macos.sh --check
+fi
 
 VERSION=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
 [ -n "$VERSION" ] || { echo "could not read the version from Cargo.toml" >&2; exit 1; }
@@ -98,13 +116,13 @@ codesign --verify --strict "$APP"
 
 echo "Built $(pwd)/$APP ($(du -sh "$APP" | cut -f1), version $VERSION, macOS $MACOSX_DEPLOYMENT_TARGET or later)"
 
-if [ "$DMG" = 1 ]; then
-  STAGE="$WORK/dmg"
-  mkdir -p "$STAGE"
-  cp -R "$APP" "$STAGE/"
-  ln -s /Applications "$STAGE/Applications"
+if [ "$NOTARIZE" = 1 ]; then
+  ./scripts/sign-macos.sh "$APP" dist
+elif [ "$DMG" = 1 ]; then
   DMG_PATH="dist/Codeman-$VERSION.dmg"
-  rm -f "$DMG_PATH"
-  hdiutil create -quiet -volname "Codeman" -srcfolder "$STAGE" -ov -format UDZO "$DMG_PATH"
+  ./scripts/make-dmg.sh "$APP" "$DMG_PATH"
+  if [ -n "${SIGN_IDENTITY:-}" ]; then
+    codesign --force --timestamp --sign "$SIGN_IDENTITY" "$DMG_PATH"
+  fi
   echo "Built $(pwd)/$DMG_PATH ($(du -sh "$DMG_PATH" | cut -f1))"
 fi

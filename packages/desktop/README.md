@@ -213,10 +213,12 @@ and the Dock icon bounces.
   Anyway* in System Settings > Privacy & Security (it asks for an administrator
   password). On macOS 14 and earlier, right-click it and choose *Open* once.
   Either way, `xattr -dr com.apple.quarantine /Applications/Codeman.app` on the
-  copy in Applications works too. Shipping it to other people needs a Developer
-  ID signature and notarization:
-  `SIGN_IDENTITY="Developer ID Application: ..." ./scripts/bundle-macos.sh --dmg`,
-  then `xcrun notarytool submit` and `xcrun stapler staple`.
+  copy in Applications works too. The `Codeman.dmg` on each GitHub release is
+  signed with a Developer ID and notarized by CI
+  (`.github/workflows/desktop-dmg.yml`), so it skips all of this. To do the
+  same by hand:
+  `SIGN_IDENTITY="Developer ID Application: ..." NOTARY_PROFILE=<profile> ./scripts/bundle-macos.sh --universal --notarize`,
+  where `scripts/sign-macos.sh` lists what it needs.
 - **Local Network permission (macOS 15 and later).** The first connection to an
   address on the local network (a LAN IP, a `.local` name) makes macOS ask
   whether Codeman may use the local network, and that first attempt can fail
@@ -278,4 +280,4 @@ and the Dock icon bounces.
 - Trusting a self-signed server certificate by its fingerprint.
 - Asking before a download that a rendered HTML file or a web tab starts.
 - A way out of a page that keeps opening dialogs (a "block further dialogs" option).
-- Windows and Linux builds, a CI job that builds the `.dmg`, notarization, auto-update.
+- Windows and Linux builds, auto-update.
