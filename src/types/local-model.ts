@@ -121,6 +121,9 @@ export interface TestedOn {
 }
 
 /** One model of the catalogue. */
+/** The runner of the model runtime that runs a model on a Mac, by the registry's name for it. See `LocalModelEntry.runner`. */
+export type LocalModelRunner = 'mlx' | 'llamacpp';
+
 export interface LocalModelEntry {
   /** `name:tag` exactly as the model registry lists it. Lowercase, one colon, no slash (`LOCAL_MODEL_ID_PATTERN`). */
   id: string;
@@ -131,34 +134,54 @@ export interface LocalModelEntry {
   /** Parameter count in billions. When no model that fits has 12 or more, the verdict is `limited`, never `ok`. */
   paramsB: number;
   /**
+   * The runner the runtime uses for this tag ON A MAC, as the registry names it: `mlx` (a
+   * safetensors build, or a manifest list with an MLX child, which a Mac always takes) or
+   * `llamacpp` (a GGUF build, run by llama-server on Metal). The two spend memory in different
+   * ways, so a row's memory figures are only meaningful together with its runner: llama.cpp
+   * allocates the whole K/V cache for the context when the model loads (in the runtime's
+   * `OLLAMA_KV_CACHE_TYPE`), MLX grows it with the tokens actually used and keeps snapshots of
+   * it besides.
+   */
+  runner: LocalModelRunner;
+  /**
    * Size of the weights in bytes: both the download and what they take in memory.
    *
-   * It is the size of the build the runtime really downloads ON A MAC. That is not always
-   * the sum of the registry manifest: `qwen3.6:35b-a3b` is an MLX build of 23,105,798,956 bytes
-   * on Apple silicon, 2% more than the manifest's 22,621,314,161. A row whose Mac size nobody
-   * measured keeps the manifest sum and says so in `figures`.
+   * It is the size of the build the runtime really downloads ON A MAC: the build of `runner`,
+   * every layer of its manifest plus its config, which is the `total` a real pull reports.
+   * That is not always the first manifest the registry answers with: `qwen3.6:35b-a3b` is an
+   * MLX build of 23,105,798,956 bytes on Apple silicon, 2% more than its GGUF build of
+   * 22,621,314,381.
    */
   bytes: number;
   /**
-   * Bytes that stay HELD in memory per token of context once the token was processed (measured
-   * on the MLX runner: 36,000 to 38,000, so about 37,000). A figure computed from a model's
-   * config alone came out too low by almost half, so a row that was not measured carries the
-   * measured row's figure and says so in `figures`.
+   * Bytes that stay HELD in memory per token of context. For a `llamacpp` row: the K/V cache
+   * of its attention layers in the runtime's cache type, which llama.cpp allocates for the
+   * whole context at load. For an `mlx` row: the K/V cache in bf16 plus the snapshots of the
+   * recurrent state the runner keeps every 8,192 tokens, which it grows with use. Measured
+   * on one row (36,000 to 38,000 on the MLX runner, so about 37,000); computed from the
+   * model's config for the others, see `figures` and the catalogue header.
    */
   heldBytesPerToken: number;
-  /** What the runner holds beside the weights and the context (measured: about 3 GB). */
+  /**
+   * What the runner holds beside the weights and the context, whatever the context: its own
+   * buffers, the live recurrent or sliding-window caches, and the caches it keeps of earlier
+   * prompts (for `llamacpp` the 1024 MiB host prompt cache `LLAMA_ARG_CACHE_RAM` allows, for
+   * an estimated `mlx` row the 8 GiB of prefix snapshots the runner may keep). Measured on
+   * one row (about 3 GB); see the catalogue header for the others.
+   */
   overheadBytes: number;
   /**
    * The TRANSIENT extra the runner takes while it processes a long prompt, on top of
-   * what stays held (measured: about 5 GB). The fit is judged on the peak:
+   * what stays held (measured on the MLX runner: about 5 GB; 0 for `llamacpp`, which
+   * allocates its buffers at load). The fit is judged on the peak:
    * `bytes + heldBytesPerToken * context + overheadBytes + peakExtraBytes`. For
    * `qwen3.6:35b-a3b` at 131072 tokens that is about 36 GB, which is tight on a 48 GB Mac.
    */
   peakExtraBytes: number;
   /**
-   * Where `bytes` and the three memory figures above come from: `measured` on a Mac by
-   * us, or `estimated` (the manifest size, and the per-token, overhead and peak figures of the
-   * measured row applied to this one).
+   * Where the three memory figures above come from: `measured` on a Mac by us, or
+   * `estimated` (computed from the model's architecture for its runner, see the catalogue
+   * header). `bytes` is the registry's size of the build a Mac pulls in both cases.
    */
   figures: 'measured' | 'estimated';
   /** Context lengths (tokens) the model may be run at, largest first. */
