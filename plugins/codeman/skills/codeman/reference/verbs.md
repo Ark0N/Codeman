@@ -485,7 +485,7 @@ snippet carries the exit code back to you.
 For a **claude** worker with no hooks, ask for the marker in halves in the prompt
 itself ("print the word WORKDONE immediately followed by `_<token>`") for the same
 reason, and match the joined token. For any **agent** worker without `stop` (a hook-less
-claude, opencode, gemini, pi, grok, omp, copilot, a worker on the local model), the
+claude, a worker on the local model, every external agent mode but deepseek), the
 preamble's `sendmark <sid> "<prompt>"` is exactly that in one call, and also asks for the
 answer in a file it reads back: [§5.16](#516-a-worker-on-the-local-model). ⚠️ Against a TUI, match a single space-free token:
 a full-screen TUI positions text with cursor movements rather than literal spaces, so

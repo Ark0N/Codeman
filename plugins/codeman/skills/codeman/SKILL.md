@@ -557,8 +557,8 @@ sendwait() {
   printf '%s\n' "$r"
 }
 # sendmark <sid> <prompt> [timeoutSec] -> one JSON line, for an AGENT worker with no
-# end-of-turn signal: a `local` worker whose agent is not claude, and opencode, gemini, pi,
-# grok, omp, copilot or a hook-less claude (a shell worker takes §5.5's echo form instead):
+# end-of-turn signal: a `local` worker whose agent is not claude, a hook-less claude, and
+# every external agent mode but deepseek (a shell worker takes §5.5's echo form instead):
 #   {"token":…,"delivered":true,"matched":true,"answerFile":"<path>","answer":"<text>",…}
 # rc 0: the marker printed and the answer file was read. 2: no marker within the timeout
 # (default 600 s; the worker may still be working, so nothing is deleted). 3: the worker's
