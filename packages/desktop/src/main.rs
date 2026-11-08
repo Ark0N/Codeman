@@ -2,13 +2,15 @@
 //!
 //! Codeman is a web app, so the app is a thin shell: the OS web view (WKWebView
 //! on macOS) shows the server's own page, and the native side adds what a
-//! browser tab cannot: a connect screen that remembers servers, runs or
-//! installs Codeman on this machine (`setup`, `local_server`) and installs it
-//! on another one over SSH, real full screen, native menus, pop-outs as app
-//! windows (Codeman's `window.CodemanHost` bridge), downloads to ~/Downloads,
-//! passwords in the Keychain, on macOS the JavaScript dialogs and HTTP Basic
-//! challenges wry leaves out (`macos`), and on a MacBook Pro with a lit Apple
-//! logo a blink that says what the agents are doing (`logo`).
+//! browser tab cannot: a connect screen that remembers servers (`config`,
+//! `login`), runs or installs Codeman on this machine (`setup`,
+//! `local_server`, `gui_install`) and installs it on another one over SSH
+//! (`terminal_install`), real full screen, native menus (`menu`), pop-outs as
+//! app windows (Codeman's `window.CodemanHost` bridge), downloads to
+//! ~/Downloads, passwords in the Keychain (`credentials`), on macOS the
+//! JavaScript dialogs and HTTP Basic challenges wry leaves out (`macos`), and
+//! on a MacBook Pro with a lit Apple logo a blink that says what the agents
+//! are doing (`logo`, `agents`).
 //!
 //! Every URL and message decision is in `policy` (pure, unit-tested); this file
 //! only wires those decisions to windows. The main window moves through
@@ -38,7 +40,7 @@ mod terminal_install;
 
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -47,7 +49,8 @@ use std::time::{Duration, Instant};
 
 use muda::MenuEvent;
 use serde_json::json;
-use tao::dpi::{LogicalPosition, LogicalSize};
+use tao::dpi::{LogicalPosition, LogicalSize, PhysicalPosition};
+use tao::error::NotSupportedError;
 use tao::event::{Event, StartCause, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy, EventLoopWindowTarget};
 use tao::window::{Fullscreen, Theme, UserAttentionType, Window, WindowBuilder, WindowId};
@@ -68,7 +71,7 @@ const APP_NAME: &str = "Codeman";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_SIZE: (f64, f64) = (1280.0, 820.0);
 const POPOUT_SIZE: (f64, f64) = (960.0, 680.0);
-const MIN_SIZE: (f64, f64) = (480.0, 360.0);
+const MIN_SIZE: (f64, f64) = (config::MIN_WIDTH, config::MIN_HEIGHT);
 const MAX_POPOUTS: usize = 24;
 /// How far a pop-out opens down and to the right of the window in use, per
 /// pop-out already open (it starts over after eight).
@@ -107,6 +110,8 @@ enter it again (a single-user Codeman accepts the right password at once), or wa
 const KEYCHAIN_UNREADABLE: &str = "The saved password could not be read from the Keychain. Enter it again.";
 const PAGE_KEEPS_STOPPING: &str = "Codeman's page stopped twice in a row, so it was closed. Connect again.";
 const LOGO_SWITCHED_OFF: &str = "The Apple logo is switched off on this Mac, so it cannot blink.";
+/// What a download's toast calls a file whose name is not known.
+const UNNAMED_FILE: &str = "the file";
 const START_REFUSED: &str = "Codeman can only be started here for an http://127.0.0.1 or http://localhost address.";
 
 enum UserEvent {
@@ -183,11 +188,9 @@ struct ProbeDone {
     generation: u64,
     url: Url,
     result: ProbeResult,
-    /// The Authorization header the probe used (None: no credentials).
-    auth: Option<String>,
-    /// The username behind `auth`.
+    /// The username the probe sent, when it sent a password.
     username: Option<String>,
-    /// The password behind `auth`: typed, from the Keychain, or the local
+    /// The password the probe sent: typed, from the Keychain, or the local
     /// Codeman's own login.
     password: Option<String>,
     /// Whether the Keychain holds `password` for `username` now, after the
@@ -231,8 +234,32 @@ struct AppWindow {
     content_process_gone_at: Option<Instant>,
 }
 
+impl AppWindow {
+    fn new(webview: WebView, window: Window, kind: Kind) -> Self {
+        AppWindow {
+            webview,
+            window,
+            kind,
+            committed: None,
+            session_reload_at: None,
+            content_process_gone_at: None,
+        }
+    }
+
+    /// A pop-out hidden because it only fetched a file (DownloadStarted).
+    fn hidden_for_download(&self) -> bool {
+        matches!(
+            self.kind,
+            Kind::Popout {
+                hidden_for_download: true,
+                ..
+            }
+        )
+    }
+}
+
 enum Load<'a> {
-    ConnectPage { manual: bool },
+    ConnectPage,
     Server { url: &'a str, auth: Option<&'a str> },
 }
 
@@ -336,24 +363,12 @@ fn main() {
 
     let (window, wants_fullscreen) =
         create_main_window(&event_loop, &config).unwrap_or_else(|e| fatal(&format!("Could not open a window: {e}")));
-    let webview = build_webview(&window, true, true, Load::ConnectPage { manual: false }, &proxy, &phase)
+    let webview = build_webview(&window, true, true, Load::ConnectPage, &proxy, &phase)
         .unwrap_or_else(|e| fatal(&format!("Could not create the web view: {e}")));
-    #[cfg(target_os = "macos")]
-    macos::install(&webview);
     let main_id = window.id();
 
     let mut windows = HashMap::new();
-    windows.insert(
-        main_id,
-        AppWindow {
-            webview,
-            window,
-            kind: Kind::Main,
-            committed: None,
-            session_reload_at: None,
-            content_process_gone_at: None,
-        },
-    );
+    windows.insert(main_id, AppWindow::new(webview, window, Kind::Main));
 
     let mut app = App {
         proxy,
@@ -409,16 +424,32 @@ fn monitors(target: &EventLoopWindowTarget<UserEvent>) -> Vec<Rect> {
     target.available_monitors().map(|m| display_rect(&m)).collect()
 }
 
+/// What every app window starts from.
+fn window_builder() -> WindowBuilder {
+    WindowBuilder::new()
+        .with_title(APP_NAME)
+        .with_theme(Some(Theme::Dark))
+        .with_min_inner_size(LogicalSize::new(MIN_SIZE.0, MIN_SIZE.1))
+}
+
+/// The corner of `window` that tao's `with_position` places: on macOS the
+/// CONTENT area's top-left, elsewhere the outer one. So it is the corner that
+/// is saved, and the one a pop-out steps off from.
+fn placed_position(window: &Window) -> Result<PhysicalPosition<i32>, NotSupportedError> {
+    if cfg!(target_os = "macos") {
+        window.inner_position()
+    } else {
+        window.outer_position()
+    }
+}
+
 /// The main window, and whether it was asked into full screen (App's
 /// `fullscreen_retry` then makes sure it gets there).
 fn create_main_window(
     target: &EventLoopWindowTarget<UserEvent>,
     config: &Config,
 ) -> Result<(Window, bool), tao::error::OsError> {
-    let mut builder = WindowBuilder::new()
-        .with_title(APP_NAME)
-        .with_theme(Some(Theme::Dark))
-        .with_min_inner_size(LogicalSize::new(MIN_SIZE.0, MIN_SIZE.1));
+    let mut builder = window_builder();
     let screens = monitors(target);
     match config.window.and_then(|f| f.fitted_to(&screens, MIN_SIZE)) {
         Some(f) => {
@@ -448,12 +479,36 @@ fn create_main_window(
     Ok((window, fullscreen))
 }
 
+/// The Authorization header for a login, when there is a password.
+fn basic_auth(username: Option<&str>, password: Option<&str>) -> Option<String> {
+    username.zip(password).map(|(u, p)| policy::basic_auth_header(u, p))
+}
+
+/// A download's file name, for its toast.
+fn file_name_of(path: &Path) -> Option<String> {
+    path.file_name().map(|n| n.to_string_lossy().into_owned())
+}
+
 fn auth_headers(auth: &str) -> HeaderMap {
     let mut headers = HeaderMap::new();
     if let Ok(v) = HeaderValue::from_str(auth) {
         headers.insert(AUTHORIZATION, v);
     }
     headers
+}
+
+/// The connect page's answer to a prepare: the installer's plan, or why not.
+fn plan_message(prepared: Result<gui_install::Preflight, String>) -> serde_json::Value {
+    match prepared {
+        Ok(plan) => json!({ "type": "installPlan", "plan": plan }),
+        Err(message) => json!({ "type": "installPrepareFailed", "message": message }),
+    }
+}
+
+/// The connect page's answer to an install on another machine (or a copy of
+/// its command) that did not get going.
+fn remote_install_failed(message: String) -> serde_json::Value {
+    json!({ "type": "installFailed", "remote": true, "message": message })
 }
 
 /// Hand an http(s) URL to the default browser.
@@ -608,7 +663,7 @@ fn build_webview(
     builder = builder.with_download_started_handler(move |url, destination| {
         // wry already picked ~/Downloads/<suggested name>, de-duplicated; it
         // stays as it is. Only its name is passed on, for the toast.
-        let file_name = destination.file_name().map(|n| n.to_string_lossy().into_owned());
+        let file_name = file_name_of(destination);
         let _ = dl_proxy.send_event(UserEvent::DownloadStarted {
             window: id,
             url,
@@ -638,12 +693,14 @@ fn build_webview(
     }
 
     builder = match load {
-        Load::ConnectPage { manual: false } => builder.with_url(policy::CONNECT_PAGE),
-        Load::ConnectPage { manual: true } => builder.with_url(format!("{}?manual=1", policy::CONNECT_PAGE)),
+        Load::ConnectPage => builder.with_url(policy::CONNECT_PAGE),
         Load::Server { url, auth: Some(auth) } => builder.with_url_and_headers(url, auth_headers(auth)),
         Load::Server { url, auth: None } => builder.with_url(url),
     };
-    builder.build(window)
+    let webview = builder.build(window)?;
+    #[cfg(target_os = "macos")]
+    macos::install(&webview);
+    Ok(webview)
 }
 
 impl App {
@@ -760,7 +817,7 @@ impl App {
             },
             UserEvent::ProbeDone(done) => self.on_probe_done(*done),
             UserEvent::ToConnectPage(msg) => {
-                if matches!(*self.phase.borrow(), Phase::Connect) {
+                if self.choosing() {
                     self.to_connect_page(msg);
                 }
             }
@@ -773,10 +830,8 @@ impl App {
                 if generation != self.start_generation {
                     return; // cancelled
                 }
-                let (ok, output) = match result {
-                    Ok(o) => (true, o),
-                    Err(e) => (false, e),
-                };
+                let ok = result.is_ok();
+                let output = result.unwrap_or_else(|e| e);
                 self.to_connect_page(json!({
                     "type": "serverStartResult",
                     "ok": ok,
@@ -843,7 +898,7 @@ impl App {
                     self.downloads
                         .entry((window, url))
                         .or_default()
-                        .push_back(file_name.unwrap_or_else(|| "the file".into()));
+                        .push_back(file_name.unwrap_or_else(|| UNNAMED_FILE.into()));
                 }
             }
             UserEvent::DownloadDone { window, url, path, ok } => {
@@ -853,12 +908,8 @@ impl App {
                     self.downloads.remove(&key);
                 }
                 let name = started
-                    .or_else(|| {
-                        path.as_ref()
-                            .and_then(|p| p.file_name())
-                            .map(|n| n.to_string_lossy().into_owned())
-                    })
-                    .unwrap_or_else(|| "the file".into());
+                    .or_else(|| path.as_deref().and_then(file_name_of))
+                    .unwrap_or_else(|| UNNAMED_FILE.into());
                 let server = self.phase.borrow().loaded().cloned();
                 // The toast goes where the download was started when that
                 // window still shows Codeman's own app (a session pop-out has
@@ -866,16 +917,10 @@ impl App {
                 // pop-out below is dropped.
                 let toast_in = server.as_ref().map(|server| {
                     let shows_app = self.windows.get(&window).is_some_and(|w| {
-                        !matches!(
-                            w.kind,
-                            Kind::Popout {
-                                hidden_for_download: true,
-                                ..
-                            }
-                        ) && w
-                            .committed
-                            .as_ref()
-                            .is_some_and(|url| policy::trusted_frame(url, server))
+                        !w.hidden_for_download()
+                            && w.committed
+                                .as_ref()
+                                .is_some_and(|url| policy::trusted_frame(url, server))
                     });
                     if shows_app {
                         window
@@ -883,13 +928,7 @@ impl App {
                         self.main_id
                     }
                 });
-                if matches!(
-                    self.windows.get(&window).map(|w| &w.kind),
-                    Some(Kind::Popout {
-                        hidden_for_download: true,
-                        ..
-                    })
-                ) {
+                if self.windows.get(&window).is_some_and(AppWindow::hidden_for_download) {
                     self.remove_window(window);
                 }
                 if let Some(w) = toast_in.and_then(|id| self.windows.get(&id)) {
@@ -911,13 +950,7 @@ impl App {
         };
         // A pop-out hidden for its download shows no page, and the download
         // does not run in that process: loading again would fetch it twice.
-        if matches!(
-            w.kind,
-            Kind::Popout {
-                hidden_for_download: true,
-                ..
-            }
-        ) {
+        if w.hidden_for_download() {
             return;
         }
         let again = w
@@ -1049,10 +1082,8 @@ impl App {
                 }
             }
             // The Help items are the user's own click, so they skip the budget.
-            menu_id::HELP_DOCS => {
-                open_external(&Url::parse("https://github.com/Ark0N/Codeman/wiki").expect("static url"))
-            }
-            menu_id::HELP_GITHUB => open_external(&Url::parse("https://github.com/Ark0N/Codeman").expect("static url")),
+            menu_id::HELP_DOCS => open_external(&Url::parse(menu::DOCS_URL).expect("static url")),
+            menu_id::HELP_GITHUB => open_external(&Url::parse(menu::REPO_URL).expect("static url")),
             _ => {}
         }
     }
@@ -1088,11 +1119,7 @@ impl App {
                     w.window.set_focus();
                 }
             }
-            HostCmd::OpenExternal(raw) => {
-                if let Some(url) = policy::external_url(&raw) {
-                    self.open_external_budgeted(&url);
-                }
-            }
+            HostCmd::OpenExternal(raw) => self.open_external_raw(&raw),
             HostCmd::SessionExpired => self.on_session_expired(window),
         }
     }
@@ -1100,7 +1127,7 @@ impl App {
     fn on_connect_cmd(&mut self, cmd: ConnectCmd) {
         // The connect page is still live while a server loads, but only
         // Cancel and the settings make sense then.
-        let choosing = matches!(*self.phase.borrow(), Phase::Connect);
+        let choosing = self.choosing();
         let loading = matches!(*self.phase.borrow(), Phase::Loading(_));
         match cmd {
             ConnectCmd::Ready => self.send_init(),
@@ -1146,11 +1173,7 @@ impl App {
                 self.menu.start_fullscreen.set_checked(v);
                 self.config_dirty = true;
             }
-            ConnectCmd::OpenExternal(raw) => {
-                if let Some(url) = policy::external_url(&raw) {
-                    self.open_external_budgeted(&url);
-                }
-            }
+            ConnectCmd::OpenExternal(raw) => self.open_external_raw(&raw),
             ConnectCmd::LocalStatus { quick, deep } => {
                 if choosing {
                     let depth = match (quick, deep) {
@@ -1176,10 +1199,7 @@ impl App {
             }
             ConnectCmd::InstallPrepare => {
                 if choosing {
-                    self.in_background(|| match gui_install::prepare() {
-                        Ok(plan) => json!({ "type": "installPlan", "plan": plan }),
-                        Err(message) => json!({ "type": "installPrepareFailed", "message": message }),
-                    });
+                    self.in_background(|| plan_message(gui_install::prepare()));
                 }
             }
             ConnectCmd::InstallStart {
@@ -1187,16 +1207,13 @@ impl App {
                 ai_cli,
             } => {
                 if choosing {
-                    let proxy = self.proxy.clone();
+                    let send = self.page_sender();
                     let stale = self.next_install_reader();
                     std::thread::spawn(move || {
                         let plan = gui_install::Plan {
                             port: setup::pick_install_port(),
                             network_password,
                             ai_cli,
-                        };
-                        let send = |msg| {
-                            let _ = proxy.send_event(UserEvent::ToConnectPage(msg));
                         };
                         match gui_install::start(&plan) {
                             Ok(()) => {
@@ -1218,24 +1235,16 @@ impl App {
             }
             ConnectCmd::AgentPrepare => {
                 if choosing {
-                    self.in_background(|| match gui_install::prepare_agent() {
-                        Ok(plan) => json!({ "type": "installPlan", "plan": plan }),
-                        Err(message) => json!({ "type": "installPrepareFailed", "message": message }),
-                    });
+                    self.in_background(|| plan_message(gui_install::prepare_agent()));
                 }
             }
             ConnectCmd::AgentStart { ai_cli } => {
                 if choosing {
-                    let proxy = self.proxy.clone();
+                    let send = self.page_sender();
                     let stale = self.next_install_reader();
-                    std::thread::spawn(move || {
-                        let send = |msg| {
-                            let _ = proxy.send_event(UserEvent::ToConnectPage(msg));
-                        };
-                        match gui_install::start_agent(&ai_cli) {
-                            Ok(()) => gui_install::follow(gui_install::Run::Agent, stale, send),
-                            Err(message) => send(json!({ "type": "installStartFailed", "message": message })),
-                        }
+                    std::thread::spawn(move || match gui_install::start_agent(&ai_cli) {
+                        Ok(()) => gui_install::follow(gui_install::Run::Agent, stale, send),
+                        Err(message) => send(json!({ "type": "installStartFailed", "message": message })),
                     });
                 }
             }
@@ -1247,11 +1256,7 @@ impl App {
             ConnectCmd::InstallRemote { target } => {
                 if choosing {
                     match terminal_install::SshTarget::parse(&target) {
-                        Err(message) => self.to_connect_page(json!({
-                            "type": "installFailed",
-                            "remote": true,
-                            "message": message,
-                        })),
+                        Err(message) => self.to_connect_page(remote_install_failed(message)),
                         Ok(target) => self.in_background(move || {
                             let script = terminal_install::remote_install_script(&target);
                             match terminal_install::open_in_terminal(terminal_install::REMOTE_SCRIPT_NAME, &script) {
@@ -1260,7 +1265,7 @@ impl App {
                                     "host": target.host,
                                     "url": target.suggested_url(),
                                 }),
-                                Err(message) => json!({ "type": "installFailed", "remote": true, "message": message }),
+                                Err(message) => remote_install_failed(message),
                             }
                         }),
                     }
@@ -1269,29 +1274,23 @@ impl App {
             ConnectCmd::CopyInstallCommand => {
                 self.in_background(|| match terminal_install::copy_to_clipboard(setup::INSTALL_ONE_LINER) {
                     Ok(()) => json!({ "type": "copied" }),
-                    Err(message) => json!({ "type": "installFailed", "remote": true, "message": message }),
+                    Err(message) => remote_install_failed(message),
                 });
             }
         }
     }
 
-    /// A new reader of the install's output replaces the one before it: the
-    /// answer is how that new reader learns it was replaced in turn.
     /// Report a run that is going already to the page, from its first line.
     fn attach_to_run(&self, run: gui_install::Run) {
-        let proxy = self.proxy.clone();
+        let send = self.page_sender();
         let stale = self.next_install_reader();
-        std::thread::spawn(move || {
-            gui_install::follow(run, stale, |msg| {
-                let _ = proxy.send_event(UserEvent::ToConnectPage(msg));
-            });
-        });
+        std::thread::spawn(move || gui_install::follow(run, stale, send));
     }
 
     /// The agent chooser lives on the connect page: from a Codeman page, this
     /// leaves it the way Switch Server does.
     fn add_agent(&mut self) {
-        if matches!(*self.phase.borrow(), Phase::Connect) {
+        if self.choosing() {
             if let Some(main) = self.windows.get(&self.main_id) {
                 main.window.set_visible(true);
                 main.window.set_focus();
@@ -1303,6 +1302,8 @@ impl App {
         }
     }
 
+    /// A new reader of the install's output replaces the one before it: the
+    /// answer is how that new reader learns it was replaced in turn.
     fn next_install_reader(&self) -> impl Fn() -> bool + Send + 'static {
         let generation = self.install_reader.clone();
         let mine = generation.fetch_add(1, Ordering::SeqCst) + 1;
@@ -1312,10 +1313,17 @@ impl App {
     /// Run `work` off the event loop (it may run a login shell, plutil,
     /// Terminal or a probe) and hand what it returns to the connect page.
     fn in_background(&self, work: impl FnOnce() -> serde_json::Value + Send + 'static) {
+        let send = self.page_sender();
+        std::thread::spawn(move || send(work()));
+    }
+
+    /// Hands a message to the connect page from another thread
+    /// (UserEvent::ToConnectPage).
+    fn page_sender(&self) -> impl Fn(serde_json::Value) + Send + 'static {
         let proxy = self.proxy.clone();
-        std::thread::spawn(move || {
-            let _ = proxy.send_event(UserEvent::ToConnectPage(work()));
-        });
+        move |msg| {
+            let _ = proxy.send_event(UserEvent::ToConnectPage(msg));
+        }
     }
 
     fn send_init(&mut self) {
@@ -1331,6 +1339,12 @@ impl App {
             "notice": notice,
             "addAgent": add_agent,
         }));
+    }
+
+    /// Whether the connect page is up with no server chosen: the only time it
+    /// may run anything.
+    fn choosing(&self) -> bool {
+        matches!(*self.phase.borrow(), Phase::Connect)
     }
 
     /// Whether a Start Codeman run is going whose result the page will get.
@@ -1378,11 +1392,8 @@ impl App {
             // Codeman's default username when only a password was given.
             let username = password
                 .as_ref()
-                .map(|_| user.clone().unwrap_or_else(|| "admin".into()));
-            let auth = match (&username, &password) {
-                (Some(u), Some(p)) => Some(policy::basic_auth_header(u, p)),
-                _ => None,
-            };
+                .map(|_| user.clone().unwrap_or_else(|| setup::DEFAULT_USERNAME.into()));
+            let auth = basic_auth(username.as_deref(), password.as_deref());
             let (result, update) = if expect_saved && password.is_none() {
                 (ProbeResult::SavedPasswordUnreadable, KeychainUpdate::default())
             } else {
@@ -1402,7 +1413,6 @@ impl App {
                 generation,
                 url,
                 result,
-                auth,
                 username,
                 password,
                 saved: update.saved,
@@ -1413,8 +1423,7 @@ impl App {
 
     fn on_probe_done(&mut self, done: ProbeDone) {
         let key = done.url.to_string();
-        let choosing = matches!(*self.phase.borrow(), Phase::Connect);
-        if done.generation != self.probe_generation || !choosing {
+        if done.generation != self.probe_generation || !self.choosing() {
             // Cancelled, superseded, or a server is already loading. What the
             // worker did to the Keychain stands all the same, so an entry
             // whose password it deleted stops claiming one.
@@ -1427,21 +1436,21 @@ impl App {
                 // This Mac tab does not have.
                 self.to_connect_page(json!({ "type": "error", "message": KEYCHAIN_UNREADABLE, "needsPassword": true }));
             }
-            ProbeResult::Probed(ProbeOutcome::Ok { version }) => {
-                let orphans = self.config.remember(&key, done.username.as_deref(), done.saved);
+            ProbeResult::Probed(outcome @ (ProbeOutcome::Ok { .. } | ProbeOutcome::PasswordChangeRequired)) => {
+                let (opening, saved) = match outcome {
+                    ProbeOutcome::Ok { version } => (json!({ "type": "opening", "version": version }), done.saved),
+                    // The worker already deleted the one-time password and any
+                    // older one saved for the account (update_keychain).
+                    _ => (
+                        json!({ "type": "opening", "version": null, "passwordChange": true }),
+                        false,
+                    ),
+                };
+                let orphans = self.config.remember(&key, done.username.as_deref(), saved);
                 self.delete_accounts(&orphans);
                 self.config_dirty = true;
-                self.to_connect_page(json!({ "type": "opening", "version": version }));
-                self.begin_loading(done.url, done.auth, done.username, done.password);
-            }
-            ProbeResult::Probed(ProbeOutcome::PasswordChangeRequired) => {
-                // The worker already deleted the one-time password and any
-                // older one saved for the account (update_keychain).
-                let orphans = self.config.remember(&key, done.username.as_deref(), false);
-                self.delete_accounts(&orphans);
-                self.config_dirty = true;
-                self.to_connect_page(json!({ "type": "opening", "version": null, "passwordChange": true }));
-                self.begin_loading(done.url, done.auth, done.username, done.password);
+                self.to_connect_page(opening);
+                self.begin_loading(done.url, done.username, done.password);
             }
             ProbeResult::Probed(outcome) => {
                 let can_start = outcome == ProbeOutcome::Refused && policy::can_start_locally(&done.url);
@@ -1463,10 +1472,10 @@ impl App {
     /// (UserEvent::CookiesCleared). The connect page stays the live document
     /// until the server page commits; on_events_cleared gives up after
     /// LOAD_TIMEOUT, which counts from here, so it covers the clear too.
-    fn begin_loading(&mut self, url: Url, auth: Option<String>, username: Option<String>, password: Option<String>) {
+    fn begin_loading(&mut self, url: Url, username: Option<String>, password: Option<String>) {
+        self.auth = basic_auth(username.as_deref(), password.as_deref());
         // Set before the load: its first response may already be a challenge.
         self.set_login(username.zip(password).map(|(u, p)| (&url, u, p)));
-        self.auth = auth;
         // Before the load: the navigation handler allows the server's origin
         // only once the phase names it.
         *self.phase.borrow_mut() = Phase::Loading(url.clone());
@@ -1664,25 +1673,16 @@ impl App {
         // tao centres a window that is given no position, so every pop-out
         // would open exactly on top of the one before. Each one steps off the
         // window in use instead.
-        let position = self
-            .focused_window_id()
-            .or(Some(self.main_id))
-            .and_then(|id| self.windows.get(&id))
-            .and_then(|w| {
-                // The corner tao's with_position places (see record_main_frame).
-                #[cfg(target_os = "macos")]
-                let corner = w.window.inner_position();
-                #[cfg(not(target_os = "macos"))]
-                let corner = w.window.outer_position();
-                let p = corner.ok()?.to_logical::<f64>(w.window.scale_factor());
-                let step = POPOUT_STEP * (1 + popouts % 8) as f64;
-                Some(LogicalPosition::new(p.x + step, p.y + step))
-            });
-        let mut builder = WindowBuilder::new()
-            .with_title(APP_NAME)
-            .with_theme(Some(Theme::Dark))
+        let anchor = self.focused_window_id().unwrap_or(self.main_id);
+        let position = self.windows.get(&anchor).and_then(|w| {
+            let p = placed_position(&w.window)
+                .ok()?
+                .to_logical::<f64>(w.window.scale_factor());
+            let step = POPOUT_STEP * (1 + popouts % 8) as f64;
+            Some(LogicalPosition::new(p.x + step, p.y + step))
+        });
+        let mut builder = window_builder()
             .with_inner_size(LogicalSize::new(POPOUT_SIZE.0, POPOUT_SIZE.1))
-            .with_min_inner_size(LogicalSize::new(MIN_SIZE.0, MIN_SIZE.1))
             .with_focused(focused);
         if let Some(position) = position {
             builder = builder.with_position(position);
@@ -1712,22 +1712,11 @@ impl App {
                 return false;
             }
         };
-        #[cfg(target_os = "macos")]
-        macos::install(&webview);
-        self.windows.insert(
-            window.id(),
-            AppWindow {
-                webview,
-                window,
-                kind: Kind::Popout {
-                    opened_url,
-                    hidden_for_download: false,
-                },
-                committed: None,
-                session_reload_at: None,
-                content_process_gone_at: None,
-            },
-        );
+        let kind = Kind::Popout {
+            opened_url,
+            hidden_for_download: false,
+        };
+        self.windows.insert(window.id(), AppWindow::new(webview, window, kind));
         true
     }
 
@@ -1755,6 +1744,14 @@ impl App {
         }
         open_external(url);
         true
+    }
+
+    /// A link a page asked to open in the browser, if it is one
+    /// (policy::external_url) and the budget allows.
+    fn open_external_raw(&mut self, raw: &str) {
+        if let Some(url) = policy::external_url(raw) {
+            self.open_external_budgeted(&url);
+        }
     }
 
     /// Close a pop-out (never the main window) and forget its downloads.
@@ -1806,13 +1803,7 @@ impl App {
         // frame; the saved one is kept for the next launch.
         if !fullscreen && !w.is_minimized() {
             let sf = w.scale_factor();
-            // On macOS tao's with_position places the CONTENT area's top-left,
-            // so that is the corner saved; elsewhere it is the outer one.
-            #[cfg(target_os = "macos")]
-            let position = w.inner_position();
-            #[cfg(not(target_os = "macos"))]
-            let position = w.outer_position();
-            if let Ok(pos) = position {
+            if let Ok(pos) = placed_position(w) {
                 let p = pos.to_logical::<f64>(sf);
                 frame.x = p.x;
                 frame.y = p.y;

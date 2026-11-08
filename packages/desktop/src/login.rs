@@ -4,7 +4,6 @@
 use crate::credentials::{self, Keychain};
 use crate::probe::ProbeOutcome;
 
-/// A login the probe just tried, and what the user asked for it.
 /// The login a connect goes out with, and where its password came from. A
 /// typed password wins, then the one the Keychain holds for this user. Last
 /// comes the login of the Codeman on this Mac, which keeps it where its own
@@ -37,6 +36,7 @@ pub fn choose_login(
     (user, None, PasswordSource::Absent)
 }
 
+/// A login the probe just tried, and what the user asked for it.
 pub struct ProbedLogin<'a> {
     /// The server, as the config and the Keychain accounts key it.
     pub server: &'a str,

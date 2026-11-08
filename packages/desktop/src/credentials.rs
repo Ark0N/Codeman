@@ -88,9 +88,7 @@ impl Keychain {
             password: password.to_owned(),
             reply,
         };
-        if self.jobs.send(job).is_err() {
-            return Err(WORKER_GONE.into());
-        }
+        self.jobs.send(job).map_err(|_| WORKER_GONE.to_string())?;
         answer.recv().unwrap_or_else(|_| Err(WORKER_GONE.into()))
     }
 

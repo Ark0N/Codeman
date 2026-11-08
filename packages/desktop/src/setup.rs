@@ -37,6 +37,10 @@ pub const INSTALL_ONE_LINER: &str = "curl -fsSL https://getcodeman.com/install |
 /// Codeman's default port, and the first one a fresh install tries.
 pub const DEFAULT_PORT: u16 = 3000;
 
+/// The username Codeman logs in with when only a password is set
+/// (`CODEMAN_USERNAME` unset).
+pub const DEFAULT_USERNAME: &str = "admin";
+
 /// How many ports above 3000 a fresh install tries when 3000 is taken.
 const PORT_SEARCH: u16 = 100;
 
@@ -229,13 +233,13 @@ pub fn login_for(
     }
     if let Some(s) = service {
         if let Some(password) = &s.password {
-            let username = s.username.clone().unwrap_or_else(|| "admin".into());
+            let username = s.username.clone().unwrap_or_else(|| DEFAULT_USERNAME.into());
             return Some((username, password.clone()));
         }
     }
     let from_file = |key: &str| env_file.get(key).filter(|v| !v.is_empty()).cloned();
     let password = from_file("CODEMAN_PASSWORD")?;
-    let username = from_file("CODEMAN_USERNAME").unwrap_or_else(|| "admin".into());
+    let username = from_file("CODEMAN_USERNAME").unwrap_or_else(|| DEFAULT_USERNAME.into());
     Some((username, password))
 }
 

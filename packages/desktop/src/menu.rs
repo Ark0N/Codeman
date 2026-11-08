@@ -7,6 +7,10 @@ use crate::config::Config;
 use crate::logo::{self, BlinkStyle, Signal};
 use crate::{APP_NAME, VERSION};
 
+/// Codeman's repository and its documentation (the Help menu, About).
+pub const REPO_URL: &str = "https://github.com/Ark0N/Codeman";
+pub const DOCS_URL: &str = "https://github.com/Ark0N/Codeman/wiki";
+
 pub mod menu_id {
     pub const SWITCH: &str = "switch-server";
     pub const ADD_AGENT: &str = "add-agent";
@@ -35,7 +39,7 @@ pub fn build_menu(config: &Config) -> muda::Result<AppMenu> {
             name: Some(APP_NAME.into()),
             version: Some(VERSION.into()),
             comments: Some("A native window for your Codeman server.".into()),
-            website: Some("https://github.com/Ark0N/Codeman".into()),
+            website: Some(REPO_URL.into()),
             ..Default::default()
         }),
     );
