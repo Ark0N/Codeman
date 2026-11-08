@@ -866,11 +866,12 @@ confirms in the window, and no route this skill calls can do it.
    session's model). It fails the spawn with the answer on stderr and nothing on stdout,
    and no `confirmed*` flag is ever sent.
 5. Readiness: OpenCode's composer bar `┃` (its registry `promptGlyph`) through
-   `wait-output`, 45 s, and the session deleted on a miss. A claude agent takes the claude
-   path instead (hooks vetted, `shift+tab`, the trust dialog). Any other agent needs
-   `LOCAL_READY_MARK` set to a space-free token its composer draws, or the spawn is refused
-   before a session exists. Not measured here: an OpenCode first-run screen that hides the
-   composer would read as a miss.
+   `wait-output`, 45 s, and the session deleted on a miss. Measured on OpenCode 1.3.0 with
+   a fresh home and a custom provider: nothing draws `┃` before the composer, there was no
+   first-run screen, and a prompt pasted with its Enter at the first `┃` was submitted. A
+   claude agent takes the claude path instead (hooks vetted, `shift+tab`, the trust
+   dialog). Any other agent needs `LOCAL_READY_MARK` set to a space-free token its
+   composer draws, or the spawn is refused before a session exists.
 
 **`sendmark <sid> <prompt> [timeoutSec]`** drives it, and any other agent worker without
 an end-of-turn signal ([§5.5](#55-markers-for-hook-less-workers)):
@@ -881,14 +882,20 @@ an end-of-turn signal ([§5.5](#55-markers-for-hook-less-workers)):
   marker, so its echo cannot match.
 - It sends once with the exactly-once body (`$CID-<sid>`, an epoch-second `seq`, one `\r`)
   and a one-second `exit` wait, so `delivered` is the pane's answer, not a guess.
-- It waits on `wait-output?match=DONE_<token>&from=buffer` in rounds of at most 60 s until
+- It waits on `wait-output?match=DONE_<token>&from=buffer` in rounds of at most 10 s until
   the timeout (default 600 s), then reads the answer file from this machine's disk: only a
   regular file (a symlink is refused), at most 256 KB.
+- ⚠️ A full-screen agent can print the marker without it ever matching. OpenCode redraws
+  its spinner between the pieces a model streams, so with a reply streamed a character or
+  two at a time the stripped stream read `D⬝⬝O⬝⬝N⬝⬝E_⬝⬝m…` while the screen showed the whole
+  token (measured on OpenCode 1.3.0). So between rounds it also looks at the answer file:
+  once it is non-empty and its checksum held still from one round to the next, it is read
+  and the wait ends with `matched: false`.
 
 | exit | JSON | Meaning |
 |------|------|---------|
-| 0 | `answer` holds the file | the marker printed and the file was read |
-| 2 | `matched: false` | no marker before the timeout. The worker may still be working: re-check the pane, never resend blindly |
+| 0 | `answer` holds the file | the file was read: after the marker (`matched: true`), or once it held still (`matched: false`) |
+| 2 | `matched: false` | neither the marker nor a settled file before the timeout. The worker may still be working: re-check the pane, never resend blindly |
 | 3 | `ended: true` or `delivered: false` | the worker's pane ended |
 | 4 | `matched: true, answer: null` | the marker printed, but no file within `SENDMARK_FILE_WAIT` s (default 120): the model ignored the instruction, or a reasoning model restated the marker while planning and is still at work |
 | 1 | `detail` | the send or a wait failed |
@@ -900,8 +907,9 @@ first draft; review it before you build on it. The answer files stay in the work
 folder, a scratch case that [§5.14](#514-clean-up) lists for cleanup.
 `SENDMARK_ANSWER_FILE=0` asks for the marker alone, for a worker that cannot write where
 it runs (codex in a folder it runs read-only, an agent that asks before it writes a file,
-a worker on another host): exit 0 then means only that the marker printed. A worker that
-stops on such a question shows up here as exit 2, not as an error.
+a worker on another host): exit 0 then means only that the marker printed, and with no
+file to fall back on, a full-screen agent can answer exit 2 for a reply that finished. A
+worker that stops on such a question shows up here as exit 2, not as an error.
 
 Close every local worker you opened: while one is open the window refuses Stop and
 Remove, naming it.

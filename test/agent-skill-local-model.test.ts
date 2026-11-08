@@ -35,7 +35,8 @@ try {
  * $ANSWERS/<route>.<n> (the n-th call of that route) or $ANSWERS/<route>. `<file>.code` is the
  * HTTP status `-w` reports (default 200) and `<file>.delay` seconds to sleep first. A wait-output
  * for `DONE_<token>` writes $WD/codeman-answer-<token>.md first when $ANSWER_TEXT is set, or a
- * symlink to $ANSWER_SYMLINK, the way a worker would before printing its marker.
+ * symlink to $ANSWER_SYMLINK, the way a worker would before printing its marker; with
+ * $ANSWER_APPEND it appends that line on every such call, a worker still writing its answer.
  *
  * Written without a single dollar-brace, because this is a JS template literal.
  */
@@ -69,6 +70,7 @@ stub() {
     case "$q" in *match=DONE_*)
       tok=$(printf '%s' "$q" | sed -e 's/.*match=DONE_//' -e 's/&.*//')
       if [ -n "$ANSWER_TEXT" ]; then printf '%s' "$ANSWER_TEXT" > "$WD/codeman-answer-$tok.md"; fi
+      if [ -n "$ANSWER_APPEND" ]; then printf '%s\n' "$ANSWER_APPEND" >> "$WD/codeman-answer-$tok.md"; fi
       if [ -n "$ANSWER_SYMLINK" ]; then ln -s "$ANSWER_SYMLINK" "$WD/codeman-answer-$tok.md"; fi ;;
     esac
   fi
@@ -522,6 +524,58 @@ describe.skipIf(!hasJq)('preamble sendmark', () => {
     expect(run.rc).toBe(2);
     expect(lastJson(run.stdout)).toMatchObject({ delivered: true, matched: false, answer: null });
     expect(run.calls.some((call) => call.key === 'delete')).toBe(false);
+  });
+
+  it('reads the answer file without a marker once it held still for a round (a full-screen pane draws the marker in pieces)', () => {
+    // Measured on opencode 1.3.0: a reply streamed a character or two at a time reaches the
+    // stripped stream as D, spinner, O, spinner, N, ... and never matches, while the screen
+    // shows the whole token. The file must still end the wait.
+    const run = runSkill(
+      withSession(`sendmark ${SID} 'count to three' 30`),
+      { input: delivered, 'wait-output': NOT_MATCHED },
+      { ANSWER_TEXT: 'one two three' }
+    );
+    expect(run.stderr).toBe('');
+    expect(run.rc).toBe(0);
+    expect(lastJson(run.stdout)).toMatchObject({ delivered: true, matched: false, answer: 'one two three' });
+    // The first round finds the file, the second finds it unchanged: two marker waits, then done.
+    expect(run.calls.map((call) => call.key)).toEqual(['session', 'input', 'wait-output', 'wait-output']);
+    for (const call of run.calls.slice(2)) expect(call.q).toContain('timeout=10000');
+  });
+
+  it('does not read an answer file that is still changing, and answers 2 at the timeout', () => {
+    const run = runSkill(
+      withSession(`sendmark ${SID} 'count to three' 3`),
+      { input: delivered, 'wait-output': NOT_MATCHED, 'wait-output.delay': '1' },
+      { ANSWER_APPEND: 'one more line' }
+    );
+    expect(run.rc).toBe(2);
+    expect(lastJson(run.stdout)).toMatchObject({ matched: false, answer: null });
+    expect(run.calls.filter((call) => call.key === 'wait-output').length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('answers 3 when the worker ends while it waits for the answer file after the marker', () => {
+    const run = runSkill(withSession(`sendmark ${SID} 'count to three' 30`), {
+      input: delivered,
+      'wait-output': MATCHED,
+      wait: JSON.stringify({ success: true, data: { wait: { signal: 'exit', ended: false, timedOut: false } } }),
+    });
+    expect(run.rc).toBe(3);
+    expect(lastJson(run.stdout)).toMatchObject({ matched: true, answer: null, ended: true });
+    expect(run.calls.map((call) => call.key)).toEqual(['session', 'input', 'wait-output', 'wait']);
+  });
+
+  it('still waits two seconds per check for the answer file when the exit wait gets no answer', () => {
+    const started = Date.now();
+    const run = runSkill(
+      withSession(`sendmark ${SID} 'count to three' 30`),
+      // No answer file for `wait`: the stub answers success:false, as a server that is gone.
+      { input: delivered, 'wait-output': MATCHED },
+      { SENDMARK_FILE_WAIT: '2' }
+    );
+    expect(run.rc).toBe(4);
+    expect(run.calls.map((call) => call.key)).toEqual(['session', 'input', 'wait-output', 'wait']);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(2000);
   });
 
   it('answers 4 when the marker printed but no answer file turned up', () => {

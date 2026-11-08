@@ -363,9 +363,12 @@ spawn_worker() {
     mode=$(jq -r .cli <<<"$lm")
     cm=$(jq -c '{endpointId, modelId}' <<<"$lm")
     # Readiness is a token the agent's composer draws. The registry's composer data never
-    # reaches the API, so it is named per agent here: opencode draws `┃` at the start of
-    # every composer row (its `workDetect.promptGlyph`); claude takes the claude path
-    # below. Any other agent needs LOCAL_READY_MARK rather than a worker handed back on a guess.
+    # reaches the API, so it is named per agent here. opencode: `┃`, its `workDetect.promptGlyph`.
+    # That field is no readiness mark in general (the registry keeps `composerReadyMark` for
+    # that, and declares none for opencode), but at boot only the composer draws it: measured
+    # on opencode 1.3.0, fresh home, custom provider, the first `┃` came with the composer,
+    # and a prompt pasted with its Enter at that moment was submitted. claude takes the claude
+    # path below. Any other agent needs LOCAL_READY_MARK rather than a worker handed back on a guess.
     [ "$mode" = opencode ] && mark='┃'
     mark=${LOCAL_READY_MARK:-$mark}
     [ "$mode" = claude ] || [ -n "$mark" ] || {
@@ -560,10 +563,11 @@ sendwait() {
 # end-of-turn signal: a `local` worker whose agent is not claude, a hook-less claude, and
 # every external agent mode but deepseek (a shell worker takes §5.5's echo form instead):
 #   {"token":…,"delivered":true,"matched":true,"answerFile":"<path>","answer":"<text>",…}
-# rc 0: the marker printed and the answer file was read. 2: no marker within the timeout
-# (default 600 s; the worker may still be working, so nothing is deleted). 3: the worker's
-# pane ended. 4: the marker printed, but no answer file turned up within SENDMARK_FILE_WAIT
-# seconds of it (default 120). 1: the send or a wait failed (`detail` says why).
+# rc 0: the answer file was read, after the marker or once the file held still (below).
+# 2: neither within the timeout (default 600 s; the worker may still be working, so nothing
+# is deleted). 3: the worker's pane ended. 4: the marker printed, but no answer file turned
+# up within SENDMARK_FILE_WAIT seconds of it (default 120). 1: the send or a wait failed
+# (`detail` says why).
 # It adds ONE sentence to your prompt (joined onto one line, as sendwait does): write the
 # complete answer to codeman-answer-<token>.md in the working directory, and only then end
 # the reply with the word DONE immediately followed by _<token>. The marker is split in what
@@ -572,15 +576,22 @@ sendwait() {
 # epoch-second seq) with a one-second `exit` wait, so `delivered` says the pane took it.
 # ⚠️ A marker proves that the model printed the token. Not that it did the work, not that
 # it did it right, not even that the turn is over: a reasoning model can restate the
-# instruction while it plans. That is why the answer FILE is the second gate. It is read
-# from this machine's disk once the marker is out, only when it is a regular file (a
-# symlink is refused), at most 256 KB of it. It stays in the worker's folder (§5.14).
+# instruction while it plans. That is why the answer FILE is the second gate. ⚠️ And a
+# full-screen agent can print the marker without it ever matching: opencode redraws its
+# spinner between the pieces a model streams, so the stripped stream reads D⬝⬝O⬝⬝N⬝⬝E_⬝⬝m…
+# (measured on opencode 1.3.0 with a reply streamed a character or two at a time; the screen
+# showed the whole token). So the file is also the way out WITHOUT the marker: present, not
+# empty, and unchanged between two rounds of the marker wait (rounds of at most 10 s), it is
+# read and `matched` says false. It is read from this machine's disk, only when it is a
+# regular file (a symlink is refused), at most 256 KB of it. It stays in the worker's folder
+# (§5.14).
 # SENDMARK_ANSWER_FILE=0 asks for the marker alone, for a worker that cannot write where it
 # runs (codex in a folder it runs read-only, an agent that asks before it writes a file, a
 # worker on another host): rc 0 then means only "the marker printed", and the answer is
-# yours to read (last_text for codex, §5.4).
+# yours to read (last_text for codex, §5.4). Without the file there is no way out but the
+# marker, so on a full-screen agent that can be rc 2 for a reply that finished.
 sendmark() {
-  local sid="${1:?}" p="${2:?}" t="${3:-600}" tok mark file='' wd r w='' rem end start got=0 ended=0 matched=false i=0 rc=2
+  local sid="${1:?}" p="${2:?}" t="${3:-600}" tok mark file='' wd r w='' rem end start got=0 ended=0 matched=false i=0 rc=2 fp prev=''
   case "$p" in *$'\n'*|*$'\r'*)
     p=$(printf '%s\n' "$p" | tr '\r' '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^$/d' | paste -sd ' ' -) ;;
   esac
@@ -603,9 +614,9 @@ sendmark() {
     return "$rc"
   fi
   start=$(date +%s); end=$((start + t))
-  while :; do   # bounded waits of at most 60 s each, the server's default, until the timeout
+  while :; do   # bounded waits of at most 10 s each, until the timeout
     rem=$((end - $(date +%s))); [ "$rem" -ge 1 ] || break
-    [ "$rem" -le 60 ] || rem=60
+    [ "$rem" -le 10 ] || rem=10
     w=$("${CURL[@]}" -G "$API/api/v1/sessions/$sid/wait-output" --data-urlencode "match=$mark" \
         --data-urlencode 'from=buffer' --data-urlencode "timeout=$((rem * 1000))")
     jq -e '.data.wait.matched' <<<"$w" >/dev/null 2>&1 && { matched=true; break; }
@@ -613,22 +624,31 @@ sendmark() {
     jq -e '.success' <<<"$w" >/dev/null 2>&1 || {
       jq -nc --arg t "$tok" --arg w "$w" '{token:$t,delivered:true,matched:false,answerFile:null,answer:null,detail:($w | fromjson? // $w)}'
       return 1; }
+    # No marker this round. The answer file is the other way out (see above): it counts once
+    # it is a non-empty regular file whose checksum did not change since the last round.
+    if [ -n "$file" ] && [ ! -L "$file" ] && [ -f "$file" ] && [ -s "$file" ]; then
+      fp=$(cksum < "$file"); [ "$fp" = "$prev" ] && { got=1; break; }; prev=$fp
+    else
+      prev=''
+    fi
   done
   if [ "$matched" = true ] && [ -n "$file" ]; then
     while :; do
       [ -L "$file" ] && { echo "sendmark: $file is a symlink, not read" >&2; break; }
       [ -f "$file" ] && { got=1; break; }
       [ "$i" -lt "${SENDMARK_FILE_WAIT:-120}" ] || break
-      # Two seconds of waiting that also notices a worker that died: an exit wait answers at once then.
-      "${CURL[@]}" -G "$API/api/v1/sessions/$sid/wait" --data-urlencode 'until=exit' --data-urlencode 'timeout=2000' \
-        | jq -e '.data.wait.signal == "exit"' >/dev/null 2>&1 && { ended=1; break; }
+      # Two seconds of waiting that also notices a worker that died: an exit wait answers at
+      # once then. A wait that did not answer (server gone) still costs its two seconds.
+      w=$("${CURL[@]}" -G "$API/api/v1/sessions/$sid/wait" --data-urlencode 'until=exit' --data-urlencode 'timeout=2000')
+      jq -e '.data.wait.signal == "exit" or .data.wait.ended' <<<"$w" >/dev/null 2>&1 && { ended=1; break; }
+      jq -e '.success' <<<"$w" >/dev/null 2>&1 || sleep 2
       i=$((i + 2))
     done
   fi
   if [ "$got" = 1 ]; then
-    head -c 262144 "$file" | jq -Rsc --arg t "$tok" --arg f "$file" --argjson s "$(($(date +%s) - start))" \
-      --argjson c "$(($(wc -c < "$file")))" \
-      '{token:$t,delivered:true,matched:true,answerFile:$f,answer:.,truncated:($c > 262144),waitedSec:$s}'
+    head -c 262144 "$file" | jq -Rsc --arg t "$tok" --arg f "$file" --argjson m "$matched" \
+      --argjson s "$(($(date +%s) - start))" --argjson c "$(($(wc -c < "$file")))" \
+      '{token:$t,delivered:true,matched:$m,answerFile:$f,answer:.,truncated:($c > 262144),waitedSec:$s}'
     return 0
   fi
   jq -nc --arg t "$tok" --arg f "$file" --argjson m "$matched" --argjson e "$ended" --argjson s "$(($(date +%s) - start))" \
@@ -850,18 +870,19 @@ Reach for it when:
 local_model || exit 1      # one JSON line: model, agent, endpoint; or the reason there is none
 SID=$(spawn_worker summ local) || exit 1      # starts a stopped runtime first; empty = failed
 WD=$("${CURL[@]}" "$API/api/v1/sessions/$SID" | jq -r .data.workingDir)
-cp ./docs/*.md "$WD/"      # its input goes inside its own folder (§5.9)
-R=$(sendmark "$SID" 'Summarize each .md file in this folder in two lines' 900); RC=$?
+mkdir -p "$WD/in" && cp ./docs/*.md "$WD/in/"   # inside its own folder (§5.9), apart from its CLAUDE.md
+R=$(sendmark "$SID" 'Summarize each .md file in the folder in, two lines each' 900); RC=$?
 jq -r '.answer // "(no answer)"' <<<"$R"
 if [ "$RC" = 0 ]; then delete_session "$SID" >/dev/null
-else echo "kept $SID (sendmark rc $RC: 2 no marker yet, 3 ended, 4 no answer file): $R"; fi
+else echo "kept $SID (sendmark rc $RC: 2 no answer yet, 3 ended, 4 no answer file): $R"; fi
 ```
 
 `sendmark` is the local worker's `sendwait`: it adds one sentence to your prompt asking for
 the answer in `codeman-answer-<token>.md` in the worker's folder and then a split marker,
-waits for the marker with `wait-output`, and reads the file back
-([§5.16](reference/verbs.md#516-a-worker-on-the-local-model)). Read its `answer`, not the
-pane: a full-screen agent's pane is a poor transcript. ⚠️ A marker proves that the model
+waits for the marker with `wait-output`, and reads the file back. OpenCode can draw the
+marker in pieces that never match, so a file that holds still between two checks ends the
+wait too ([§5.16](reference/verbs.md#516-a-worker-on-the-local-model)). Read its `answer`,
+not the pane: a full-screen agent's pane is a poor transcript. ⚠️ A marker proves that the model
 printed a token, not that the work is done or right. Review what comes back the way you
 would review any first draft.
 
