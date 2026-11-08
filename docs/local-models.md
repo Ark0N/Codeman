@@ -273,8 +273,12 @@ For every model row it checks:
 - **The build a Mac pulls runs on the pinned runtime**: its config declares no newer
   Ollama (`requires`) than `OLLAMA_RUNTIME_PIN`.
 - **The pinned digest**, once a row carries one: a Mac would still pull that manifest. The
-  catalogue pins none yet, so the report lists today's digests, the one to pin being what
-  `/api/tags` reports after the pull.
+  field is `digest` and its value is what `/api/tags` reports after the pull. The catalogue
+  schema does not have it yet: `LocalModelEntrySchema` must gain an optional `digest` under
+  exactly that name, or the check never compares it. Until then the report lists today's
+  digests, rows with measured figures first, because without a digest a rebuild of about the
+  same size goes unnoticed (a switch between the mlx and the gguf build does not: their sizes
+  differ by 2% or more).
 
 For the runtime pin it checks whether a newer Ollama release exists, and whether the pinned
 `ollama-darwin.tgz` is still on GitHub with the pinned size and sha256.

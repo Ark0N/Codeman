@@ -313,12 +313,20 @@ describe('exitCodeFor', () => {
 });
 
 describe('renderReport', () => {
-  it('says clean, and lists the digests to pin in full', () => {
+  it('says clean, and lists the digests to pin in full with the build a Mac pulls', () => {
     const report = renderReport(baseResult());
     expect(report).toMatch(/^# Local model catalogue: weekly check\n/);
     expect(report).toContain('**Clean**');
-    expect(report).toContain(`| \`a:b\` | \`${hex('b')}\` | \`${hex('a')}\` |`);
+    expect(report).toContain(`| \`a:b\` | mlx, safetensors | \`${hex('b')}\` | \`${hex('a')}\` |`);
+    expect(report).toContain('as the row field `digest`');
+    expect(report).not.toContain('Pin first');
     expect(report).toContain('## Not checked');
+  });
+
+  it('asks to pin a row with measured figures first', () => {
+    const result = baseResult();
+    (result.models[0] as Record<string, unknown>).figures = 'measured';
+    expect(renderReport(result)).toContain('Pin first: `a:b`.');
   });
 
   it('names a size drift with both figures and every build the tag offers', () => {
@@ -457,7 +465,7 @@ function buildRegistry() {
   };
 }
 
-const catalogOf = (models: { id: string; bytes: number; digest?: string }[]) => ({ updated: '2026-11-06', models });
+const catalogOf = (models: { id: string; bytes: number; digest?: string; figures?: string }[]) => ({ updated: '2026-11-06', models });
 const NOW = new Date('2026-11-09T06:00:00Z');
 
 describe('inspectModel', () => {
@@ -590,8 +598,8 @@ describe('runCheck', () => {
     const { fetchFn } = fakeFetch(registry.routes);
     const result = await runCheck({
       catalog: catalogOf([
-        { id: 'listed:1b', bytes: registry.sizes.mlx, digest: registry.digests.mlxChild },
-        { id: 'plain:2b', bytes: registry.sizes.plain },
+        { id: 'listed:1b', bytes: registry.sizes.mlx, digest: registry.digests.mlxChild, figures: 'measured' },
+        { id: 'plain:2b', bytes: registry.sizes.plain, figures: 'measured' },
       ]),
       pin: PIN,
       fetchFn,
@@ -601,8 +609,10 @@ describe('runCheck', () => {
     const report = renderReport(result);
     expect(report).toContain('**Clean**');
     // The pinned row is not offered for pinning again; the unpinned one is.
-    expect(report).not.toContain(`| \`listed:1b\` | \``);
-    expect(report).toContain(`| \`plain:2b\` | \`${registry.digests.plain}\``);
+    expect(report).not.toContain('| `listed:1b` | mlx');
+    expect(report).toContain(`| \`plain:2b\` | ggml, gguf | \`${registry.digests.plain}\``);
+    // Only the measured row that has no digest yet is asked for first.
+    expect(report).toContain('Pin first: `plain:2b`.');
   });
 
   it('a newer runtime release is drift', async () => {

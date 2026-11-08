@@ -37,6 +37,14 @@
  * Every request has its own timeout and a byte cap, nothing is retried, every blob is checked
  * against its digest, and `GITHUB_TOKEN` is sent to api.github.com only, when it is set.
  *
+ * THE DIGEST CONTRACT. A row may pin the build it describes as `digest`: the digest of the
+ * manifest a Mac pulls, which is the value `/api/tags` reports after the pull (`sha256:<hex>` or
+ * the bare hex). The catalogue schema does not have that field yet: `LocalModelEntrySchema` is
+ * strict, so it must gain an optional `digest` before a row can carry one, under exactly that
+ * name, or this check never compares it. Until then the report lists the digests to pin, and
+ * a rebuild of about the same size goes unnoticed (a change of build, mlx against gguf, never
+ * does: every pair seen so far differs by 2% or more, far past the size tolerance).
+ *
  * Everything that reaches the report from the network is validated first (digests, sizes,
  * runner and format names, version tags), because the workflow puts the report in an issue.
  *
@@ -455,14 +463,28 @@ export function renderReport(result) {
   if (unpinned.length > 0) {
     lines.push('## Digests to pin', '');
     lines.push(
-      'The catalogue pins no digest for these rows. Today\'s values: the tag\'s own manifest, and the manifest a ' +
-        'Mac pulls, which is the digest `/api/tags` reports after the pull.',
+      'The catalogue pins no digest for these rows, so a build pushed again at about the same size goes unnoticed. ' +
+        'Today\'s values: the tag\'s own manifest, and the manifest a Mac pulls. The one to pin is the second, the ' +
+        'digest `/api/tags` reports after the pull, as the row field `digest` (which the catalogue schema must ' +
+        'gain first).',
       ''
     );
-    lines.push('| Model | Tag manifest | Manifest a Mac pulls |');
-    lines.push('| --- | --- | --- |');
+    const measured = unpinned.filter((model) => model.figures === 'measured');
+    if (measured.length > 0) {
+      const ids = measured.map((model) => `\`${model.id}\``).join(', ');
+      lines.push(
+        `Pin first: ${ids}. Its memory figures were measured on one build, and without a digest nothing here ` +
+          'tells that build from a rebuild of about the same size.',
+        ''
+      );
+    }
+    lines.push('| Model | Build a Mac pulls | Tag manifest | Manifest a Mac pulls |');
+    lines.push('| --- | --- | --- | --- |');
     for (const model of unpinned) {
-      lines.push(`| \`${model.id}\` | \`${model.observed.tagDigest}\` | \`${model.observed.mac.digest}\` |`);
+      lines.push(
+        `| \`${model.id}\` | ${buildName(model.observed.mac)} | \`${model.observed.tagDigest}\` | ` +
+          `\`${model.observed.mac.digest}\` |`
+      );
     }
     lines.push('');
   }
@@ -673,8 +695,9 @@ export async function runCheck({ catalog, pin, fetchFn, now, githubToken }) {
   // Rows in parallel, each row's requests one after another: a handful of rows, a few requests each.
   result.models = await Promise.all(
     catalog.models.map(async (row) => {
+      // `digest` is not in the catalogue schema yet: see the file header.
       const digest = /** @type {{ digest?: unknown }} */ (row).digest;
-      const entry = { id: row.id, bytes: row.bytes, digest, findings: [] };
+      const entry = { id: row.id, bytes: row.bytes, figures: row.figures, digest, findings: [] };
       try {
         entry.observed = await inspectModel(fetchFn, row.id);
         entry.findings = classifyModel({ id: row.id, bytes: row.bytes, digest }, entry.observed, pin.version);
