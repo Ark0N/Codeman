@@ -1601,7 +1601,7 @@ export function agentSkillDirFor(casePath: string, dir: AgentSkillDir): string {
  * Add or remove the Codeman agent skill in `<case>/<dir>/codeman`, where `dir` is the
  * skills directory the session's CLI scans (default: Claude Code's `.claude/skills`;
  * callers resolve it with `agentSkillDir()`), mirroring `applyStatusLineConfig`'s
- * shape. Gated by the synced `agentSkillEnabled` app setting (default OFF).
+ * shape. Gated by the synced `agentSkillEnabled` app setting (default ON: an absent key is ON).
  *
  * Call-site policy is ADD-ONLY on session create (callers pass `enabled: true` or
  * skip the call), for the statusLine reason: sessions in a repo share one workspace,
