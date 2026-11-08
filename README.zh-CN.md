@@ -45,6 +45,8 @@ codeman web
 
 安装器在每次系统改动前都会先询问；重跑同一条命令即可原地更新。详见[快速开始 — 安装](#快速开始--安装)。
 
+在 Mac 上可以不用终端：[下载 Codeman.dmg](https://github.com/Ark0N/Codeman/releases/latest/download/Codeman.dmg)，这个应用会替你安装 Codeman、打开已在运行的 Codeman，或者连接另一台机器上的 Codeman。详见[在 Mac 上：Codeman 应用](#在-mac-上codeman-应用)。
+
 - **一个仪表盘，十个 CLI**：每个会话可选 [Claude Code、OpenCode、Codex、Antigravity、Gemini、Pi、Grok、DeepSeek、OMP 或 GitHub Copilot](#更多特性)（外加普通 shell），在本机、[Docker 容器](#隔离的-docker-会话)或 [SSH 远程主机](#远程-ssh-会话)上运行，你自己的仪表盘也能作为 [Web 标签页](#更多特性)并排打开
 - **真正的手机友好**：[触控优化的终端](#移动端优化的-web-ui)，即时本地回显、二维码登录、滑动导航与推送通知
 - **睡觉时也在跑**：[空闲检测 + 重生循环](#重生控制器respawn-controller)，订阅限额重置后自动续跑，支持 24 小时以上的无人值守运行
@@ -98,6 +100,21 @@ bash docker/Start-Codeman.sh
 首次运行会问三个问题（数据目录、端口、密码；回车即采用默认值，包括自动生成的密码），替你写好 `docker/.env`，构建镜像，并在 Codeman 响应后给出访问地址。镜像已内置 Claude Code、Codex、Gemini CLI 和 OpenCode。Codeman 自己跑在容器里，并通过宿主机的 socket 把 Docker 案例作为并列容器拉起。更新时请使用 **App Settings → Updates**，或者先 `git pull` 再跑一次这个脚本，而不是直接 `docker compose up`，这样重建的镜像、刷新的卷和新的入口脚本会一起就位。Unraid、直接的 Compose 命令、存储与网络选项见 [Docker 部署指南](docker/README.md)（英文）。
 
 详见下文[多用户模式](#多用户模式可选启用)。
+
+### 在 Mac 上：Codeman 应用
+
+**[下载 Codeman.dmg](https://github.com/Ark0N/Codeman/releases/latest/download/Codeman.dmg)** · 同一个通用应用，适用于 Apple 芯片和 Intel · macOS 11.3 或更高版本
+
+一个小巧的原生应用，在它自己的窗口里打开 Codeman。在还没有 Codeman 的 Mac 上，它会替你安装，不用终端，也不需要管理员密码，用一张清单显示安装进度；如果这台 Mac 上还没有编程智能体，它还会提出帮你装一个。在已经运行 Codeman 的 Mac 上，它会找到服务器并打开；服务器停着时则替你启动。在 **Another machine** 下，它可以连接你的 Mac mini、家用服务器或 tailnet 上的 Codeman，密码保存在钥匙串里，还能通过 SSH 在那台机器上开始安装。在 Apple 标志会发光的 MacBook Pro 上，**View > Blink Apple Logo** 会让标志按智能体在做的事闪烁：工作中、等你回复、需要权限各用一种你自己选的样式；在你选定之前，三种都保持关闭。这个应用用 Rust 写成，套在 macOS 自带的 WebKit 外面，不捆绑浏览器，所以下载不到 5 MB。
+
+打开 `Codeman.dmg`，把 Codeman 拖进「应用程序」文件夹，再从那里打开。macOS 会问一次是否打开这个从互联网下载的应用：点**打开**。
+
+- **退出应用不会停止 Codeman。** 通过应用安装的 Codeman 以 LaunchAgent 的形式运行，登录时自动启动，所以关掉窗口后智能体照样工作，浏览器和手机也和以前一样能访问它。
+- **Codeman 的页面需要 Safari 16.4 的 WebKit。** 应用本身在 macOS 11.3 上就能启动，但 Codeman 需要 macOS 13.3 或更高版本，或者装有 Safari 16.4 或更高版本的 macOS 11 或 12。WebKit 更旧时，应用会说明原因，并且不会连接。
+- **在应用里安装需要 macOS 15，或者机器上已有 tmux。** tmux 来自 tmux 项目自己的构建，而这些构建需要 macOS 15。在没有 tmux 的旧 Mac 上，应用会改为提供终端安装方式，由 Homebrew 在终端里安装 tmux（这需要管理员操作一次）。
+- **更新。** 应用暂时不会自我更新：下载新的 `Codeman.dmg`，拖过去覆盖旧的那份即可。
+
+首次启动、已知限制以及如何自行构建：见 wiki 的 [Installation](https://github.com/Ark0N/Codeman/wiki/Installation#on-a-mac-the-codeman-app)（英文）和 [packages/desktop/README.md](packages/desktop/README.md)（英文）。
 
 <details>
 <summary><strong>让它在后台一直运行</strong></summary>

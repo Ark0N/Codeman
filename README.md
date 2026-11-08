@@ -43,6 +43,8 @@ codeman web
 
 The installer asks before every system change, and re-running the same line updates in place. Full details: [Quick Start - Installation](#quick-start---installation).
 
+On a Mac you can skip the terminal: [download Codeman.dmg](https://github.com/Ark0N/Codeman/releases/latest/download/Codeman.dmg), and the app installs Codeman for you, opens the one already running, or connects to one on another machine. More in [On a Mac: the Codeman app](#on-a-mac-the-codeman-app).
+
 - **One dashboard, ten CLIs** - run [Claude Code, OpenCode, Codex, Antigravity, Gemini, Pi, Grok, DeepSeek, OMP, or GitHub Copilot](#more-features) per session (plus plain shell), locally, [in Docker](#isolated-docker-sessions), or [over SSH](#remote-ssh-sessions), with your own dashboards open as [web tabs](#more-features) beside them
 - **Truly phone-friendly** - a [touch-optimized terminal](#mobile-optimized-web-ui) with instant local echo, QR login, swipe navigation, and push notifications
 - **Runs while you sleep** - [idle detection + respawn cycling](#respawn-controller) and auto-resume when a subscription limit resets, for 24+ hour unattended runs
@@ -96,6 +98,21 @@ bash docker/Start-Codeman.sh
 ```
 
 The first run asks three questions (data folder, port, password; Enter takes the default, including a generated password), writes `docker/.env` for you, builds the image and ends on the URL once Codeman answers. The image already includes Claude Code, Codex, Gemini CLI and OpenCode. Codeman runs in a container and spawns Docker cases as sibling containers through the host socket. To update, use **App Settings → Updates**, or `git pull` and run the script again rather than a plain `docker compose up`, so the rebuilt image, refreshed volumes and entrypoint arrive together. See the [Docker deployment guide](docker/README.md) for Unraid, direct Compose commands, storage and networking options.
+
+### On a Mac: the Codeman app
+
+**[Download Codeman.dmg](https://github.com/Ark0N/Codeman/releases/latest/download/Codeman.dmg)** · one universal app for Apple Silicon and Intel · macOS 11.3 or later
+
+A small native app that opens Codeman in its own window. On a Mac without Codeman it installs it for you, with no Terminal and no administrator password, shows the install as a checklist, and offers to install a coding agent if the Mac has none yet. On a Mac that already runs Codeman it finds the server and opens it, or starts it when it is stopped. Under **Another machine** it connects to Codeman on your Mac mini, a home server or your tailnet, with the password kept in the Keychain, and can start an install over there through SSH. On a MacBook Pro whose Apple logo lights up, **View > Blink Apple Logo** blinks the logo by what your agents are doing, with a style of your own for working, for waiting for you and for needing permission; all three stay off until you choose. The app is Rust around macOS's own WebKit, not a bundled browser, so the download is under 5 MB.
+
+Open `Codeman.dmg`, drag Codeman into Applications and open it from there. macOS asks once whether to open an app downloaded from the internet: click **Open**.
+
+- **Quitting the app doesn't stop Codeman.** An install from the app runs Codeman as a LaunchAgent that starts at login, so your agents keep working with the window closed, and your browser and phone reach it as before.
+- **Codeman's page needs the WebKit of Safari 16.4.** The app starts on macOS 11.3, but Codeman itself needs macOS 13.3 or later, or macOS 11 or 12 with Safari 16.4 or later installed. On an older WebKit the app says so and does not connect.
+- **The install from the app needs macOS 15, or a tmux that is already there.** tmux comes from the tmux project's own builds, which need macOS 15. On an older Mac without tmux the app offers Terminal instead, where Homebrew installs it (that takes an administrator once).
+- **Updating.** The app doesn't update itself yet: download the new `Codeman.dmg` and drag it over the old copy.
+
+First launch, known limits and how to build it yourself: [Installation](https://github.com/Ark0N/Codeman/wiki/Installation#on-a-mac-the-codeman-app) in the wiki and [packages/desktop/README.md](packages/desktop/README.md).
 
 <details>
 <summary><strong>Keep it running in the background</strong></summary>
