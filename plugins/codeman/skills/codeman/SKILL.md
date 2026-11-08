@@ -7,7 +7,8 @@ description: >-
   CLI, send them prompts, block until they finish (wait / wait-output / send-and-wait),
   read their output, and clean up; where available, message claude workers directly
   (Claude Code cross-session messaging). Use when asked to orchestrate or parallelize
-  work across Codeman sessions, get a second opinion from another CLI or model, watch
+  work across Codeman sessions, get a second opinion from another CLI or model, hand
+  work to the local model Codeman installed on this Mac ("use the local model"), watch
   another session, start and manage workers, or retrieve saved local Codex history
   by file/native ID or root and descendants with topic/date filters. Live API
   operations require a Codeman-managed session (CODEMAN_MUX=1). Offline history
@@ -763,8 +764,8 @@ the time went into deliberation, not the API. The four things that actually cost
   polled pid for nothing, and shipped its workers without lineage.
 - **Verifying what is already checked for you.** Two verifications specifically are not
   worth a call here, because `spawn_worker` carries them: the hooks check (it refuses a
-  name that resolved to a hook-less directory with one local grep, so a worker it hands
-  back always has a working `stop` and `sendwait` is trustworthy), and the pid poll,
+  name that resolved to a hook-less directory with one local grep, so a claude worker it
+  hands back always has a working `stop` and `sendwait` is trustworthy), and the pid poll,
   which is dead weight because `wait-output` already blocks on the composer.
 
 Four things this block leans on, each one link away, no detour needed to run it:
@@ -824,6 +825,70 @@ Three things to know before you spawn one:
   worker whose pane clearly finished: that profile is one of them, so drive it with
   markers instead.
 
+### Claude in the cloud, a local model on this Mac
+
+When Codeman has installed a model on the Mac it runs on (the **Run a local model** button
+on its welcome screen), you can hand work to that model from here. You stay the planner and
+the reviewer in the cloud; the Mac does the bulk. `spawn_worker <name> local` starts a worker
+on the installed model, run by the coding agent it was installed with (OpenCode on the Mac
+it was tested on), and from then on it is the same verbs. It mixes into one fleet like any
+other mode: `spawn_workers plan review:deepseek summ:local`.
+
+Reach for it when:
+
+- **The work is bulk, not judgment**: summarizing a folder, classifying, first drafts of
+  tests, boilerplate. A local turn has no per-token bill.
+- **The files should stay on this machine**: the worker reads them here, and only what you
+  read back from it enters your own context.
+- **You want a second opinion from a different model**, with different blind spots.
+- **The worker should not depend on the network**: the model's runtime listens on this Mac
+  only, started with its cloud features off. You, the lead, still need a connection.
+
+```bash
+. "${XDG_CACHE_HOME:-$HOME/.cache}/codeman-agent-$CODEMAN_SESSION_ID.sh" 2>/dev/null   # §0 loader
+[ "${CODEMAN_PREAMBLE:-}" = 1.50.0 ] || { echo "preamble missing or stale; run the full §0 block"; exit 1; }
+local_model || exit 1      # one JSON line: model, agent, endpoint; or the reason there is none
+SID=$(spawn_worker summ local) || exit 1      # starts a stopped runtime first; empty = failed
+WD=$("${CURL[@]}" "$API/api/v1/sessions/$SID" | jq -r .data.workingDir)
+cp ./docs/*.md "$WD/"      # its input goes inside its own folder (§5.9)
+R=$(sendmark "$SID" 'Summarize each .md file in this folder in two lines' 900); RC=$?
+jq -r '.answer // "(no answer)"' <<<"$R"
+if [ "$RC" = 0 ]; then delete_session "$SID" >/dev/null
+else echo "kept $SID (sendmark rc $RC: 2 no marker yet, 3 ended, 4 no answer file): $R"; fi
+```
+
+`sendmark` is the local worker's `sendwait`: it adds one sentence to your prompt asking for
+the answer in `codeman-answer-<token>.md` in the worker's folder and then a split marker,
+waits for the marker with `wait-output`, and reads the file back
+([§5.16](reference/verbs.md#516-a-worker-on-the-local-model)). Read its `answer`, not the
+pane: a full-screen agent's pane is a poor transcript. ⚠️ A marker proves that the model
+printed a token, not that the work is done or right. Review what comes back the way you
+would review any first draft.
+
+The limits, before you promise the user anything:
+
+- **A Mac with Apple silicon, and a model a person installed** in Codeman's local model
+  window. This skill never installs one: that is a download of many gigabytes the person
+  confirms there. `local_model` says what is missing (`not-mac`, `not-installed`,
+  `install-unfinished`, `blocked`, `admin-only`, `unsupported`), so tell the user that
+  instead of guessing.
+- **One model, one request at a time.** The runtime loads one model and answers one request
+  at a time, so two local workers take turns rather than work side by side. Fan out to the
+  cloud; give the Mac a queue.
+- **Slower than a cloud model.** The one measured pair, OpenCode with Qwen3.6 35B-A3B on an
+  M5 Pro with 48 GB, ran at about 68 tokens a second, and the first request after a start
+  loads the model first. A local worker run by claude spends minutes on its first answer
+  (its fixed prompt is about 36,000 tokens).
+- **Markers, not hooks.** OpenCode reports no end of turn, so `sendwait` answers 400 for
+  that worker; `sendmark` is the way through. If the installed agent is claude, the worker
+  has hooks and `sendwait` works as for any claude worker.
+- **Spawning can change what the person set.** A stopped runtime is started, which also
+  undoes the person's Stop: it then starts with Codeman again. And while a local worker is
+  open, the window refuses Stop and Remove and names your workers, so delete them as soon
+  as they are done.
+- **Admin only in multi-user mode, and experimental.** The local model routes answer 403
+  for anyone else (`admin-only`), and they may change in any release.
+
 ## 2. What do you want to do?
 
 One row per job. Acting on this table alone is correct; the §5 links are the detail.
@@ -833,7 +898,8 @@ One row per job. Acting on this table alone is correct; the §5 links are the de
 | start a worker **where the work is** | `POST /api/v1/quick-start {"caseName":…}`, which **creates** `~/codeman-cases/<name>` unless the name is already a case. Any other path (a git worktree): `POST /api/v1/sessions {"workingDir":…}` then `POST /api/v1/sessions/:id/interactive`. Both install hooks by default, so expect full signals in either, and **verify** rather than assume. N workers means N worktrees | [§5.1](reference/verbs.md#51-where-to-spawn) |
 | know a new worker can accept a prompt | `GET .../wait-output?match=shift+tab&from=buffer` (urlencode the `+`); a `deepseek` worker draws `❯` instead, and its boot `stop` fires ~300 ms BEFORE that, so never read the signal as readiness | [§5.2](reference/verbs.md#52-readiness) |
 | deliver a task **and** know when it finished | `POST .../input` with `"input":"…\r"`, `clientId`, `seq`, `"wait":true`. Resolves on `stop`, so it is trustworthy where the signal is real: claude mode with hooks (installed by default, but the operator can disable it and remote sessions never get them) and `deepseek` mode through its status bridge. Costs the worker one billed turn | [§5.3](reference/verbs.md#53-send-a-task-and-wait) |
-| know a hook-less worker finished | it has no `stop`, and `wait:true` there resolves on flapping `idle` **without erroring**: make it print a split, unique marker and `wait-output` on that instead | [§5.5](reference/verbs.md#55-markers-for-hook-less-workers) |
+| know a hook-less worker finished | it has no `stop`, and `wait:true` there resolves on flapping `idle` **without erroring**: make it print a split, unique marker and `wait-output` on that instead. For an agent worker, `sendmark <sid> "<prompt>"` does all of it and reads the answer back | [§5.5](reference/verbs.md#55-markers-for-hook-less-workers) |
+| hand work to the local model on this Mac (cheap bulk work, files that stay here, a second opinion) | `local_model` says what is installed; `spawn_worker <name> local` (or `name:local` in `spawn_workers`) starts a worker on it; `sendmark` tasks it and returns the answer | [Local model](#claude-in-the-cloud-a-local-model-on-this-mac), [§5.16](reference/verbs.md#516-a-worker-on-the-local-model) |
 | read the answer | `GET .../last-response`, **polled** (claude, codex and deepseek write a transcript; empty for the other modes) | [§5.4](reference/verbs.md#54-read-the-answer) |
 | know if it is alive | `GET .../wait?until=exit&timeout=1000`: an immediate `signal:"exit"` means dead. `status` and `pid` both lie | [§5.6](reference/verbs.md#56-alive-and-stuck) |
 | know if it is stuck | `GET .../active-tools` and `GET .../run-summary` are structured and free; two `terminal?tail=` samples are the crude fallback | [§5.6](reference/verbs.md#56-alive-and-stuck) |
@@ -949,6 +1015,7 @@ these**; open the one row you actually hit.
 | [5.13 Messaging claude workers](reference/verbs.md#513-messaging-claude-workers) | `ListAgents` / `SendMessage` instead of the HTTP path |
 | [5.14 Clean up](reference/verbs.md#514-clean-up) | what deleting a session does **not** remove, and how to list the case dirs you left |
 | [5.15 Agent inbox](reference/verbs.md#515-agent-inbox) | messages that wait for the receiver instead of being typed: post, read until ack, who counts as the receiver |
+| [5.16 A worker on the local model](reference/verbs.md#516-a-worker-on-the-local-model) | what `local_model` answers, what `spawn_worker <name> local` does step by step, and every `sendmark` outcome |
 
 ## 6. Setup and auth
 

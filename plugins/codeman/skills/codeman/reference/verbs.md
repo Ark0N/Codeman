@@ -484,7 +484,10 @@ snippet carries the exit code back to you.
 
 For a **claude** worker with no hooks, ask for the marker in halves in the prompt
 itself ("print the word WORKDONE immediately followed by `_<token>`") for the same
-reason, and match the joined token. ⚠️ Against a TUI, match a single space-free token:
+reason, and match the joined token. For any **agent** worker without `stop` (a hook-less
+claude, opencode, gemini, pi, grok, omp, copilot, a worker on the local model), the
+preamble's `sendmark <sid> "<prompt>"` is exactly that in one call, and also asks for the
+answer in a file it reads back: [§5.16](#516-a-worker-on-the-local-model). ⚠️ Against a TUI, match a single space-free token:
 a full-screen TUI positions text with cursor movements rather than literal spaces, so
 the stripped stream can read `Yes,Itrustthisfolder`, and whether a phrase keeps its
 spaces depends on how the TUI happened to draw it (observed live: some match, some
@@ -813,6 +816,95 @@ Rules that matter:
   not parked, `send` it one line ("read your inbox: `codeman agent inbox`").
 - **Lifetime.** An inbox goes with its session on delete. A server restart empties all
   inboxes unless the user turned on *Keep agent inbox across restarts* in Settings.
+
+### 5.16 A worker on the local model
+
+The detail behind [Claude in the cloud, a local model on this
+Mac](../SKILL.md#claude-in-the-cloud-a-local-model-on-this-mac). Three preamble functions,
+all read from source and pinned by `test/agent-skill-local-model.test.ts` against a fake
+server; the local model routes themselves are experimental.
+
+**`local_model`** is one `GET /api/v1/local-model` (the `/api/v1` alias reaches the
+experimental route like any other) and prints one JSON line. Exit 0 means a `local` worker
+can be spawned now (`running: true`) or once `spawn_worker` has started the runtime
+(`running: false`):
+
+```json
+{"spawnable":true,"state":"installed","running":true,"cli":"opencode","cliLabel":"OpenCode",
+ "endpointId":"local-ollama","modelId":"qwen3.6:35b-a3b","modelLabel":"Qwen3.6 35B-A3B"}
+```
+
+Exit 1 carries `reason` and `message` (the server's own sentence where it has one):
+
+| `reason` | What it means | What to tell the user |
+|----------|---------------|-----------------------|
+| `not-mac` | the server is not on macOS | local models need a Mac with Apple silicon |
+| `not-installed` | nothing installed; on a Mac where no model fits, `message` says why | install one with **Run a local model** on the welcome screen |
+| `install-unfinished` | a job is installing, paused or failed (`state`, `step`, `errorCode`) | finish it in that window; nothing here continues it |
+| `blocked` | installed, but the server refuses a session now (`errorCode`: `model-changed`, `port-in-use`, `runtime-start-failed`, `runtime-stopped`) | the window shows the one button that helps |
+| `admin-only` | multi-user mode, and you are not an admin (403) | ask an admin |
+| `unsupported` | the server has no local model routes (404) | it predates the feature |
+| `unauthorized`, `unreachable`, `error` | the request itself failed | §6 for a 401 |
+
+It never downloads, installs or starts anything. Installing is many gigabytes the person
+confirms in the window, and no route this skill calls can do it.
+
+**`spawn_worker <name> local`** (also `name:local` in `spawn_workers`), in order:
+
+1. `local_model`; anything but exit 0 fails the spawn with that reason.
+2. Runtime stopped: `POST /api/v1/local-model/runtime {"action":"start"}`, what the
+   window's Start button sends, then `local_model` again until it reports `running`
+   (about 30 s at most). This undoes a Stop the person made. Concurrent spawns may both
+   send it; the server runs one runtime verb at a time and keeps a runtime that runs.
+3. `POST /api/v1/quick-start {"caseName":…,"mode":"<cli>","parentSessionId":…,
+   "customModel":{"endpointId":…,"modelId":…}}`: the launch of the window's "Start a
+   session", with the installed agent as the mode. No advisor, which is a cloud model.
+   The server checks again that its own runtime runs and that the model on disk is the one
+   it installed, and refuses otherwise (`OPERATION_FAILED`, with the reason).
+4. An answer of `requiresContextWarning` or `requiresConfirmation` is a question for a
+   person (a context below the agent's safe floor, a model swap that would evict another
+   session's model). It fails the spawn with the answer on stderr and nothing on stdout,
+   and no `confirmed*` flag is ever sent.
+5. Readiness: OpenCode's composer bar `┃` (its registry `promptGlyph`) through
+   `wait-output`, 45 s, and the session deleted on a miss. A claude agent takes the claude
+   path instead (hooks vetted, `shift+tab`, the trust dialog). Any other agent needs
+   `LOCAL_READY_MARK` set to a space-free token its composer draws, or the spawn is refused
+   before a session exists. Not measured here: an OpenCode first-run screen that hides the
+   composer would read as a miss.
+
+**`sendmark <sid> <prompt> [timeoutSec]`** drives it, and any other agent worker without
+an end-of-turn signal ([§5.5](#55-markers-for-hook-less-workers)):
+
+- It joins the prompt onto one line and adds one sentence: write the complete answer to
+  `codeman-answer-<token>.md` in the working directory, and only then end the reply with
+  the word DONE immediately followed by `_<token>`. The typed text never holds the joined
+  marker, so its echo cannot match.
+- It sends once with the exactly-once body (`$CID-<sid>`, an epoch-second `seq`, one `\r`)
+  and a one-second `exit` wait, so `delivered` is the pane's answer, not a guess.
+- It waits on `wait-output?match=DONE_<token>&from=buffer` in rounds of at most 60 s until
+  the timeout (default 600 s), then reads the answer file from this machine's disk: only a
+  regular file (a symlink is refused), at most 256 KB.
+
+| exit | JSON | Meaning |
+|------|------|---------|
+| 0 | `answer` holds the file | the marker printed and the file was read |
+| 2 | `matched: false` | no marker before the timeout. The worker may still be working: re-check the pane, never resend blindly |
+| 3 | `ended: true` or `delivered: false` | the worker's pane ended |
+| 4 | `matched: true, answer: null` | the marker printed, but no file within `SENDMARK_FILE_WAIT` s (default 120): the model ignored the instruction, or a reasoning model restated the marker while planning and is still at work |
+| 1 | `detail` | the send or a wait failed |
+
+What a marker proves, and what it does not: the model printed the token. Not that the
+work is done, not that it is right, and with a reasoning model not even that the turn is
+over, which is why the file is the second gate. What a small local model writes is a
+first draft; review it before you build on it. The answer files stay in the worker's
+folder, a scratch case that [§5.14](#514-clean-up) lists for cleanup.
+`SENDMARK_ANSWER_FILE=0` asks for the marker alone, for a worker that cannot write where
+it runs (codex in a folder it runs read-only, an agent that asks before it writes a file,
+a worker on another host): exit 0 then means only that the marker printed. A worker that
+stops on such a question shows up here as exit 2, not as an error.
+
+Close every local worker you opened: while one is open the window refuses Stop and
+Remove, naming it.
 
 ## Experimental bounded inspection and guarded submission
 
