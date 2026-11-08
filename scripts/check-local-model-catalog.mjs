@@ -23,7 +23,10 @@
  * which is NOT what a Mac pulls: that is how `qwen3.6:35b-a3b` came to be "2% above its
  * manifest" in the catalogue header. So this check asks the way Ollama asks, picks the child
  * the way a Mac picks it, and compares the row's `bytes` with that child's pull total (every
- * layer plus the config, which is exactly the `total` a real pull reported on a Mac).
+ * layer plus the config, which is exactly the `total` a real pull reported on a Mac). A row
+ * that names its `runner` is also held to that child's runner (`catalogueRunner()`), because
+ * the memory figures of a row follow its runner and a change of runner can come with almost
+ * the same size.
  *
  * WHAT IS FETCHED, and nothing else:
  *  - `GET /v2/library/<name>/manifests/<tag>`, the tag's manifest or manifest list.
@@ -195,6 +198,18 @@ export function metadataForConfig(config) {
   return { runner: '', format };
 }
 
+/**
+ * A runner name in the catalogue's words (`LocalModelEntry.runner`): `mlx`, or `llamacpp` for a
+ * GGUF build, which Ollama 0.40.15 serves through llama-server whether the manifest names it
+ * `llamacpp` or names nothing (`ggml`, see `metadataForConfig()`). Undefined for anything else.
+ */
+export function catalogueRunner(runner) {
+  const name = canonicalRunner(runner);
+  if (name === 'mlx') return 'mlx';
+  if (name === 'llamacpp' || name === 'ggml') return 'llamacpp';
+  return undefined;
+}
+
 /** `[major, minor, patch]` of a version or `v`-tag, or undefined when it is not one. */
 export function parseVersion(text) {
   const match = typeof text === 'string' ? VERSION_PATTERN.exec(text.trim()) : null;
@@ -221,11 +236,14 @@ export function withinTolerance(expected, actual, tolerance = SIZE_TOLERANCE_FRA
 }
 
 /**
- * The findings for one catalogue row. `row` is `{ id, bytes, digest? }` (`digest` only once the
- * catalogue stores one); `observed` is what `inspectModel()` returned for it. A row may have
- * several findings; none means it is clean.
+ * The findings for one catalogue row. `row` is `{ id, bytes, runner?, digest? }` (`runner` once
+ * the catalogue names it, `digest` only once the catalogue stores one); `observed` is what
+ * `inspectModel()` returned for it. A row may have several findings; none means it is clean.
  *
  *  - `gone`: the tag is not in the registry, so a pull fails.
+ *  - `runner`: a Mac now pulls a build of another runner than the row names (a tag that became
+ *    a list with an mlx child, or the other way round). The two runners spend memory
+ *    differently, so the row's memory figures no longer describe what runs, whatever the size.
  *  - `size`: what a Mac downloads is outside the tolerance of the row's `bytes`.
  *  - `digest`: the row pins a digest and a Mac would now pull another one.
  *  - `requires`: the build a Mac pulls declares a newer Ollama than the pinned runtime, so the
@@ -235,6 +253,10 @@ export function classifyModel(row, observed, pinnedVersion) {
   if (observed.gone) return [{ kind: 'gone' }];
   const findings = [];
   const mac = observed.mac;
+  if (row.runner !== undefined) {
+    const actual = catalogueRunner(mac.runner) ?? 'unknown';
+    if (actual !== row.runner) findings.push({ kind: 'runner', expected: String(row.runner), actual });
+  }
   if (!withinTolerance(row.bytes, mac.bytes)) {
     findings.push({ kind: 'size', expected: row.bytes, actual: mac.bytes, fraction: sizeDifference(row.bytes, mac.bytes) });
   }
@@ -314,7 +336,13 @@ function buildName(variant) {
 function modelResult(model) {
   if (model.error) return 'check failed';
   if (model.findings.length === 0) return 'ok';
-  const names = { gone: 'tag gone', size: 'size drift', digest: 'digest changed', requires: 'needs a newer runtime' };
+  const names = {
+    gone: 'tag gone',
+    runner: 'runner changed',
+    size: 'size drift',
+    digest: 'digest changed',
+    requires: 'needs a newer runtime',
+  };
   return model.findings.map((finding) => names[finding.kind]).join(', ');
 }
 
@@ -323,6 +351,13 @@ function describeModelFinding(model, finding) {
   switch (finding.kind) {
     case 'gone':
       return `${id}: the registry no longer has this tag, so the download fails. Replace or remove the row.`;
+    case 'runner':
+      return (
+        `${id}: a Mac now pulls the ${buildName(model.observed.mac)} build, which runs on ` +
+        `\`${finding.actual}\`, while the row's \`runner\` says \`${displayName(finding.expected, ['mlx', 'llamacpp'])}\`. ` +
+        'The two runners spend memory differently, so the row\'s memory figures no longer describe what runs: ' +
+        'recompute them for the new runner, or pin the row to a single-build tag.'
+      );
     case 'size':
       return (
         `${id}: a Mac downloads the ${buildName(model.observed.mac)} build, ${groupDigits(finding.actual)} bytes, ` +
@@ -423,7 +458,7 @@ export function renderReport(result) {
     if (model.error) details.push(`- \`${model.id}\`: check failed: ${oneLine(model.error)}`);
     for (const finding of model.findings) details.push(`- ${describeModelFinding(model, finding)}`);
     const variants = model.observed?.variants ?? [];
-    if (model.findings.some((finding) => finding.kind === 'size') && variants.length > 1) {
+    if (model.findings.some((finding) => finding.kind === 'size' || finding.kind === 'runner') && variants.length > 1) {
       const offered = variants
         .map((variant) => `${buildName(variant)} ${groupDigits(variant.bytes)}${variant === model.observed.mac ? ' (a Mac takes this one)' : ''}`)
         .join('; ');
@@ -695,12 +730,14 @@ export async function runCheck({ catalog, pin, fetchFn, now, githubToken }) {
   // Rows in parallel, each row's requests one after another: a handful of rows, a few requests each.
   result.models = await Promise.all(
     catalog.models.map(async (row) => {
-      // `digest` is not in the catalogue schema yet: see the file header.
+      // `digest` is not in the catalogue schema yet: see the file header. `runner` is in the
+      // schema from the catalogue that names each row's runner on; before that it is absent.
       const digest = /** @type {{ digest?: unknown }} */ (row).digest;
+      const runner = /** @type {{ runner?: unknown }} */ (row).runner;
       const entry = { id: row.id, bytes: row.bytes, figures: row.figures, digest, findings: [] };
       try {
         entry.observed = await inspectModel(fetchFn, row.id);
-        entry.findings = classifyModel({ id: row.id, bytes: row.bytes, digest }, entry.observed, pin.version);
+        entry.findings = classifyModel({ id: row.id, bytes: row.bytes, runner, digest }, entry.observed, pin.version);
       } catch (err) {
         entry.error = err instanceof CheckFailure ? err.message : describeError(err);
       }

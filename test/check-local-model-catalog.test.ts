@@ -20,6 +20,7 @@ import {
   MEDIA_TYPE_MANIFEST_LIST,
   SIZE_TOLERANCE_FRACTION,
   boundedGet,
+  catalogueRunner,
   classifyModel,
   classifyRuntime,
   compareVersions,
@@ -153,6 +154,16 @@ describe('small helpers', () => {
     expect(metadataForConfig({})).toEqual({ runner: '', format: '' });
   });
 
+  it('catalogueRunner names a build in the catalogue words: mlx, or llamacpp for any GGUF build', () => {
+    expect(catalogueRunner('mlx')).toBe('mlx');
+    expect(catalogueRunner(' MLX ')).toBe('mlx');
+    expect(catalogueRunner('llamacpp')).toBe('llamacpp');
+    // A GGUF manifest that names no runner is `ggml` to Ollama, and llama-server runs it all the same.
+    expect(catalogueRunner('ggml')).toBe('llamacpp');
+    expect(catalogueRunner(metadataForConfig({ model_format: 'gguf' }).runner)).toBe('llamacpp');
+    for (const other of ['', 'vllm', '<img>', undefined, 3]) expect(catalogueRunner(other)).toBeUndefined();
+  });
+
   it('normalizeDigest accepts the prefixed and the bare form and nothing else', () => {
     const bare = '0ce5ff81f9ffdf89dd8192ca7b5d34cefd8996a875b3aaaaafaf5c4813569eba';
     expect(normalizeDigest(bare)).toBe(REAL_MLX_CHILD);
@@ -222,6 +233,28 @@ describe('classifyModel', () => {
       kind: 'digest',
       expected: 'not a sha256 digest',
     });
+  });
+
+  it('holds a row that names its runner to the runner of the build a Mac pulls', () => {
+    // The same size, another runner: the row's memory figures no longer describe what runs.
+    expect(classifyModel({ id: 'a:b', bytes: 100, runner: 'llamacpp' }, observed(100), '0.40.15')).toEqual([
+      { kind: 'runner', expected: 'llamacpp', actual: 'mlx' },
+    ]);
+    expect(classifyModel({ id: 'a:b', bytes: 100, runner: 'mlx' }, observed(100), '0.40.15')).toEqual([]);
+    // A GGUF build is a llamacpp row's, whether its manifest says llamacpp or nothing (ggml).
+    for (const runner of ['llamacpp', 'ggml']) {
+      const gguf = observed(100, { runner, format: 'gguf' });
+      expect(classifyModel({ id: 'a:b', bytes: 100, runner: 'llamacpp' }, gguf, '0.40.15'), runner).toEqual([]);
+      expect(classifyModel({ id: 'a:b', bytes: 100, runner: 'mlx' }, gguf, '0.40.15'), runner).toEqual([
+        { kind: 'runner', expected: 'mlx', actual: 'llamacpp' },
+      ]);
+    }
+    // A runner Ollama would not run on a Mac is never taken for the row's.
+    expect(classifyModel({ id: 'a:b', bytes: 100, runner: 'mlx' }, observed(100, { runner: '' }), '0.40.15')).toEqual([
+      { kind: 'runner', expected: 'mlx', actual: 'unknown' },
+    ]);
+    // A catalogue without the field (before rows named their runner) is never held to one.
+    expect(classifyModel({ id: 'a:b', bytes: 100 }, observed(100, { runner: 'llamacpp' }), '0.40.15')).toEqual([]);
   });
 
   it('flags a build that needs a newer runtime than the pin, and only that', () => {
@@ -349,6 +382,29 @@ describe('renderReport', () => {
     expect(report).toContain('llamacpp, gguf 90');
   });
 
+  it('names a runner change, what it means for the figures, and every build the tag offers', () => {
+    const gguf = { bytes: 100, digest: hex('c'), runner: 'llamacpp', format: 'gguf' };
+    const mac = { bytes: 100, digest: hex('a'), runner: 'mlx', format: 'safetensors' };
+    const result = baseResult({
+      models: [
+        {
+          id: 'qwen3.6:35b-a3b-mtp-q4_k_m',
+          bytes: 100,
+          findings: classifyModel({ id: 'x:y', bytes: 100, runner: 'llamacpp' }, { mac }, '0.40.15'),
+          observed: { tagDigest: hex('b'), variants: [gguf, mac], mac },
+        },
+      ],
+    });
+    const report = renderReport(result);
+    expect(report).toContain('**Drift found**: 1 of 1 models.');
+    expect(report).toContain('| runner changed |');
+    expect(report).toContain(
+      "`qwen3.6:35b-a3b-mtp-q4_k_m`: a Mac now pulls the mlx, safetensors build, which runs on `mlx`, while the row's `runner` says `llamacpp`."
+    );
+    expect(report).toContain('recompute them for the new runner');
+    expect(report).toContain('mlx, safetensors 100 (a Mac takes this one)');
+  });
+
   it('says the check failed and prints no verdict of clean', () => {
     const result = baseResult({ runtime: { error: 'GitHub answered 403 for the newest release', findings: [] } });
     const report = renderReport(result);
@@ -465,7 +521,10 @@ function buildRegistry() {
   };
 }
 
-const catalogOf = (models: { id: string; bytes: number; digest?: string; figures?: string }[]) => ({ updated: '2026-11-06', models });
+const catalogOf = (models: { id: string; bytes: number; digest?: string; figures?: string; runner?: string }[]) => ({
+  updated: '2026-11-06',
+  models,
+});
 const NOW = new Date('2026-11-09T06:00:00Z');
 
 describe('inspectModel', () => {
@@ -584,6 +643,28 @@ describe('runCheck', () => {
     const report = renderReport(result);
     expect(report).toContain('**Drift found**: 2 of 3 models.');
     expect(report).toContain('`missing:tag`: the registry no longer has this tag');
+  });
+
+  it('holds rows that name their runner to the build a Mac pulls, a plain GGUF manifest included', async () => {
+    const registry = buildRegistry();
+    const { fetchFn } = fakeFetch(registry.routes);
+    const result = await runCheck({
+      catalog: catalogOf([
+        // The right size, the wrong runner: a Mac pulls the mlx child of this list.
+        { id: 'listed:1b', bytes: registry.sizes.mlx, runner: 'llamacpp' },
+        // A manifest that names no runner is a GGUF build: a llamacpp row, clean.
+        { id: 'plain:2b', bytes: registry.sizes.plain, runner: 'llamacpp' },
+      ]),
+      pin: PIN,
+      fetchFn,
+      now: NOW,
+    });
+    expect(result.models.map((model: { findings: unknown[] }) => model.findings)).toEqual([
+      [{ kind: 'runner', expected: 'llamacpp', actual: 'mlx' }],
+      [],
+    ]);
+    expect(exitCodeFor(result)).toBe(1);
+    expect(renderReport(result)).toContain('| runner changed |');
   });
 
   it('sends no Authorization header at all without a token', async () => {

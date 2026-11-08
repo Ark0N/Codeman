@@ -270,6 +270,10 @@ For every model row it checks:
   Ollama asks, picks the build a Mac picks and sizes it the way a pull counts it (every layer
   plus the config). The plain manifest other tools get for the same tag is the `llamacpp`
   build, which is not what a Mac downloads.
+- **The runner of that build**, once a row names its `runner`: a Mac still pulls an `mlx`
+  build for an `mlx` row and a GGUF build (`llamacpp`, or a manifest that names no runner)
+  for a `llamacpp` row. A row's memory figures follow its runner, so a tag that gains or
+  loses an mlx build is drift even at about the same size.
 - **The build a Mac pulls runs on the pinned runtime**: its config declares no newer
   Ollama (`requires`) than `OLLAMA_RUNTIME_PIN`.
 - **The pinned digest**, once a row carries one: a Mac would still pull that manifest. The
