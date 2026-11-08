@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Ark0N/Codeman/releases/latest/download/Codeman.dmg"><img src="https://img.shields.io/badge/%E4%B8%8B%E8%BD%BD_Mac_%E7%89%88-Codeman.dmg-2f6fe0?style=for-the-badge&logo=apple&logoColor=white&labelColor=000000" alt="下载 Mac 版 Codeman（Codeman.dmg）" width="351"></a>
+  <a href="https://github.com/Ark0N/Codeman/releases/latest/download/Codeman.dmg"><img src="https://img.shields.io/badge/%E4%B8%8B%E8%BD%BD_Mac_%E7%89%88-Codeman.dmg-2f6fe0?style=for-the-badge&logo=apple&logoColor=white&labelColor=000000" alt="下载 Mac 版 Codeman（Codeman.dmg）" width="281"></a>
   <br>
   <sub>原生 Mac 应用：已签名并经过 Apple 公证，支持 Apple 芯片和 Intel，macOS 11.3 或更高版本。<a href="#在-mac-上codeman-应用">它能做什么</a></sub>
 </p>
@@ -27,7 +27,6 @@
   <a href="https://github.com/Ark0N/Codeman/stargazers"><img src="https://img.shields.io/github/stars/Ark0N/Codeman?style=flat-square&color=eab308" alt="GitHub stars"></a>
   <a href="https://github.com/Ark0N/Codeman/graphs/contributors"><img src="https://img.shields.io/github/contributors/Ark0N/Codeman?style=flat-square&color=3b82f6" alt="Contributors"></a>
   <a href="https://github.com/Ark0N/Codeman/commits/master"><img src="https://img.shields.io/github/commit-activity/t/Ark0N/Codeman?style=flat-square&color=1e3a5f" alt="Total commits"></a>
-  <a href="https://github.com/NipunaRanasinghe/awesome-ai-agents"><img src="https://img.shields.io/badge/Featured_in-Awesome_AI_Agents-2ea44f?style=flat-square" alt="Featured in Awesome AI Agents"></a>
 </p>
 
 <p align="center">

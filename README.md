@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Ark0N/Codeman/releases/latest/download/Codeman.dmg"><img src="https://img.shields.io/badge/Download_for_Mac-Codeman.dmg-2f6fe0?style=for-the-badge&logo=apple&logoColor=white&labelColor=000000" alt="Download Codeman for Mac (Codeman.dmg)" width="442"></a>
+  <a href="https://github.com/Ark0N/Codeman/releases/latest/download/Codeman.dmg"><img src="https://img.shields.io/badge/Download_for_Mac-Codeman.dmg-2f6fe0?style=for-the-badge&logo=apple&logoColor=white&labelColor=000000" alt="Download Codeman for Mac (Codeman.dmg)" width="354"></a>
   <br>
   <sub>The native Mac app: signed and notarized, Apple Silicon and Intel, macOS 11.3 or later. <a href="#on-a-mac-the-codeman-app">What it does</a></sub>
 </p>
@@ -23,7 +23,6 @@
   <a href="https://github.com/Ark0N/Codeman/stargazers"><img src="https://img.shields.io/github/stars/Ark0N/Codeman?style=flat-square&color=eab308" alt="GitHub stars"></a>
   <a href="https://github.com/Ark0N/Codeman/graphs/contributors"><img src="https://img.shields.io/github/contributors/Ark0N/Codeman?style=flat-square&color=3b82f6" alt="Contributors"></a>
   <a href="https://github.com/Ark0N/Codeman/commits/master"><img src="https://img.shields.io/github/commit-activity/t/Ark0N/Codeman?style=flat-square&color=1e3a5f" alt="Total commits"></a>
-  <a href="https://github.com/NipunaRanasinghe/awesome-ai-agents"><img src="https://img.shields.io/badge/Featured_in-Awesome_AI_Agents-2ea44f?style=flat-square" alt="Featured in Awesome AI Agents"></a>
 </p>
 
 <p align="center">
