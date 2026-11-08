@@ -7,7 +7,24 @@ import type { DiscordControlReply } from './discord-bridge.js';
 export function discordApprovalRevision(item: ApprovalItem): string {
   return createHash('sha256')
     .update(
-      JSON.stringify([item.id, item.kind, item.message, item.options, item.context, item.toolName, item.toolSummary])
+      JSON.stringify([
+        item.id,
+        item.kind,
+        item.message,
+        item.options,
+        item.context,
+        item.toolName,
+        item.toolSummary,
+        ...(item.nativeQuestion
+          ? [
+              item.createdAt,
+              item.nativeQuestion.conversation,
+              item.nativeQuestion.inputRevision,
+              item.nativeQuestion.dialog.identity,
+              item.nativeQuestion.state,
+            ]
+          : []),
+      ])
     )
     .digest('hex')
     .slice(0, 16);
@@ -19,7 +36,11 @@ export function discordControlCurrent(session: Session, validity: string): boole
   const item = approvalInbox.getById(validity.slice(0, split));
   return !!item && item.sessionId === session.id && discordApprovalRevision(item) === validity.slice(split + 1);
 }
-export async function discordTaskControl(session: Session, command: string): Promise<DiscordControlReply | undefined> {
+export async function discordTaskControl(
+  session: Session,
+  command: string,
+  allowed: () => boolean = () => true
+): Promise<DiscordControlReply | undefined> {
   if (command === 'pending') {
     const item = approvalInbox.listPending().find((i) => i.sessionId === session.id && i.kind !== 'idle');
     if (!item || !approvalInbox.verifyStillAnswerable(item.id))
@@ -28,7 +49,13 @@ export async function discordTaskControl(session: Session, command: string): Pro
     const scope = item.id + ':' + revision;
     const text = `**${item.kind === 'question' ? 'Question' : 'Permission needed'}**\n${(item.message || item.toolSummary || item.context || 'Review the pending prompt').slice(0, 1200)}\n`;
     if (item.answerInTerminal)
-      return { text: text + 'This CLI requires the terminal: Codeman cannot safely verify its dialog keystrokes.' };
+      return {
+        text:
+          text +
+          (item.nativeQuestion?.state === 'uncertain'
+            ? 'Answer delivery is unconfirmed. Inspect the terminal before retrying.'
+            : 'This CLI requires the terminal: Codeman cannot safely verify its dialog keystrokes.'),
+      };
     const choices = (item.options ?? []).map((o) => `${o.n}. ${o.label}`).join('\n');
     const actions = (item.options ?? [])
       .filter((o) => o.n >= 0 && o.n <= 9)
@@ -36,6 +63,12 @@ export async function discordTaskControl(session: Session, command: string): Pro
       .map((o) => ({ label: o.label.slice(0, 80), command: `answer ${item.id} ${revision} ${o.n}`, validity: scope }));
     if (item.kind === 'permission')
       actions.push({ label: 'Deny', command: `answer ${item.id} ${revision} deny`, validity: scope });
+    if (item.nativeQuestion)
+      return {
+        questionCard: true,
+        text: `${item.message}\n\n${choices}\n\nChoose below. Custom replies remain available in the terminal.`,
+        actions,
+      };
     return {
       text:
         text +
@@ -54,7 +87,8 @@ export async function discordTaskControl(session: Session, command: string): Pro
     const result = await answerPendingApproval(
       session,
       item.id,
-      answer[3] === 'deny' ? { action: 'deny' } : { action: 'option', option: Number(answer[3]) }
+      answer[3] === 'deny' ? { action: 'deny' } : { action: 'option', option: Number(answer[3]) },
+      allowed
     );
     return {
       text: result.success

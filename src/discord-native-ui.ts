@@ -18,9 +18,12 @@ import {
   DISCORD_COMPONENTS_V2,
   DISCORD_SUPPRESS_NOTIFICATIONS,
   discordDetailPages,
+  discordResponsePosts,
   formatDiscordResponseText,
 } from './discord-response-format.js';
 import { readDiscordTaskUpdates, renderDiscordTaskUpdates, type DiscordTaskUpdates } from './discord-task-updates.js';
+import { discordTableParts, type DiscordTable } from './discord-tables.js';
+import { discordTablePage, discordTableCsv, discordTablePng, interactiveDiscordTable } from './discord-table-view.js';
 import { discordDisplayText } from './discord-display-text.js';
 import type { DiscordInteraction, GatewayMessage, DiscordPost } from './discord-bridge.js';
 import type { DiscordNativeUiHost, DiscordUiPayload, DiscordUiSession } from './discord-native-ui-types.js';
@@ -130,11 +133,14 @@ export class DiscordNativeUi {
     run: UiAction['run'],
     modal?: UiAction['modal'],
     style = 2,
-    identity?: string
+    identity?: string,
+    suffix = ''
   ): Record<string, unknown> {
     this.prune();
     const id =
-      'cmui:' + (identity ? hash(JSON.stringify([this.host.scope(), ctx, identity])).slice(0, 40) : randomUUID());
+      'cmui:' +
+      (identity ? hash(JSON.stringify([this.host.scope(), ctx, identity])).slice(0, 40) : randomUUID()) +
+      suffix;
     if (!this.actions.has(id) && this.actions.size >= 2048)
       throw new Error('Too many open controls; retry after older menus expire');
     this.actions.set(id, { ...ctx, scope: this.host.scope()!, expires: this.host.now() + 6 * 60_000, run, modal });
@@ -486,6 +492,177 @@ export class DiscordNativeUi {
       });
     return [row(...controls)];
   }
+  /** Initial table cards retain exact response readers; browsing opens an actor-owned private panel. */
+  async tableResponsePosts(
+    id: string,
+    channel: string,
+    userCursor: string,
+    responseCursor: string,
+    text: string,
+    options: Parameters<typeof discordResponsePosts>[1] = {}
+  ): Promise<DiscordPost[] | undefined> {
+    const parts = discordTableParts(text);
+    const tables = parts.filter((p) => 'table' in p);
+    if (
+      !tables.length ||
+      tables.length > 4 ||
+      text.length > 12000 ||
+      tables.some((p) => !interactiveDiscordTable(p.table))
+    )
+      return undefined;
+    const s = await this.target(id);
+    if (this.host.channelForSession(id) !== channel || !s.conversation) throw new Error('Response destination changed');
+    const ctx: UiContext = { channel, session: id, conversation: s.conversation };
+    const scope = this.host.scope();
+    const posts: DiscordPost[] = [];
+    let index = 0;
+    for (const part of parts) {
+      if ('text' in part) {
+        if (part.text.trim()) posts.push(...discordResponsePosts(part.text, { ...options, controls: [] }));
+      } else {
+        const view = this.tableView(ctx, scope, userCursor, responseCursor, part.table, index++, 0);
+        const container = view.components![0];
+        container.accent_color = options.color ?? 0x58a6ff;
+        (container.components as unknown[]).unshift({
+          type: 10,
+          content: `**${options.title ?? 'Response'}**${options.subtitle ? '\n-# ' + options.subtitle : ''}`,
+        });
+        posts.push({
+          ...view,
+          allowed_mentions: noMentions,
+          flags: DISCORD_COMPONENTS_V2 | 4 | (options.silent || posts.length > 0 ? DISCORD_SUPPRESS_NOTIFICATIONS : 0),
+        });
+      }
+    }
+    // Keep adjacent prose and compact rows in one card when Discord's limits permit.
+    const merged: DiscordPost[] = [];
+    for (const post of posts) {
+      const previous = merged.at(-1);
+      const left = previous?.components?.[0].components as Array<Record<string, unknown>> | undefined;
+      const right = post.components?.[0].components as Array<Record<string, unknown>> | undefined;
+      if (left && right) {
+        const body = right[0]?.type === 10 && right[0].content === left[0]?.content ? right.slice(1) : right;
+        const joined = [...left, { type: 14, divider: true, spacing: 1 }, ...body];
+        const count = (nodes: Array<Record<string, unknown>>): number =>
+          nodes.reduce((n, c) => n + 1 + (Array.isArray(c.components) ? count(c.components) : 0), 0);
+        const size = joined.reduce((n, c) => n + (typeof c.content === 'string' ? c.content.length : 0), 0);
+        if (size <= 3500 && count(joined) <= 30) {
+          previous!.components![0].components = joined;
+          continue;
+        }
+      }
+      if (merged.length) post.flags = (post.flags ?? 0) | DISCORD_SUPPRESS_NOTIFICATIONS;
+      merged.push(post);
+    }
+    if (merged.length > 8) return undefined;
+    if (options.controls?.length) {
+      const last = merged.at(-1)!;
+      const container = last.components![0];
+      (container.components as unknown[]).push({ type: 14, divider: true, spacing: 1 }, ...options.controls);
+    }
+    return merged;
+  }
+  private async responseTable(
+    ctx: UiContext,
+    scope: string | undefined,
+    userCursor: string,
+    responseCursor: string,
+    index: number
+  ): Promise<DiscordTable> {
+    const reader = this.taskReader(ctx, scope);
+    const recent = await this.host.history(ctx.session!);
+    await this.target(ctx.session!, ctx.conversation);
+    if (
+      scope !== this.host.scope() ||
+      recent.conversationId !== ctx.conversation ||
+      this.host.channelForSession(ctx.session!) !== ctx.channel
+    )
+      throw new Error('Response conversation changed');
+    let turn = recent.turns.find((t) => t.role === 'assistant' && t.cursor === responseCursor);
+    if (!turn) {
+      let state: DiscordTaskUpdates | undefined;
+      for (let n = 0; n < 4; n++) {
+        state = await readDiscordTaskUpdates(reader, ctx.conversation!, userCursor, state, responseCursor);
+        if (state.response || state.complete) break;
+      }
+      turn = state?.response;
+    }
+    if (!turn)
+      throw new Error('Original table is outside this bounded history read. Open Codeman for older responses.');
+    const table = discordTableParts(discordDisplayText(turn.text)).filter((p) => 'table' in p)[index]?.table;
+    if (!table || !interactiveDiscordTable(table)) throw new Error('Original table changed or is unavailable');
+    return table;
+  }
+  private tableView(
+    ctx: UiContext,
+    scope: string | undefined,
+    userCursor: string,
+    responseCursor: string,
+    table: DiscordTable,
+    index: number,
+    page: number
+  ): DiscordUiPayload {
+    const current = () =>
+      scope === this.host.scope() &&
+      this.host.channelForSession(ctx.session!) === ctx.channel &&
+      (!ctx.actor || this.host.config().allowed.includes(ctx.actor));
+    const button = (label: string, targetPage: number, op: 'page' | 'png' | 'csv', disabled = false) => {
+      const b = this.action(
+        ctx,
+        label,
+        async (m) => {
+          const panel = { ...ctx, actor: m.member?.user?.id ?? m.user?.id };
+          const authorized = () => current() && this.host.config().allowed.includes(panel.actor ?? '');
+          const original = await this.responseTable(panel, scope, userCursor, responseCursor, index);
+          if (!authorized() || hash(original.source) !== hash(table.source)) throw new Error('Original table changed');
+          if (op === 'page')
+            return this.tableView(panel, scope, userCursor, responseCursor, original, index, targetPage);
+          const file =
+            op === 'csv'
+              ? { name: `table-${index + 1}.csv`, data: discordTableCsv(original) }
+              : {
+                  name: `table-${index + 1}-page-${targetPage + 1}.png`,
+                  data: await discordTablePng(original, targetPage),
+                };
+          await this.target(ctx.session!, ctx.conversation);
+          if (!authorized()) throw new Error('Response destination changed');
+          await this.host.postFile(
+            ctx.channel,
+            file,
+            op === 'csv' ? 'Requested table · all rows' : 'Requested table preview · CSV includes all rows',
+            authorized
+          );
+          return this.tableView(panel, scope, userCursor, responseCursor, original, index, targetPage);
+        },
+        undefined,
+        2,
+        `${responseCursor}:table:${index}:${targetPage}:${op}:${hash(table.source).slice(0, 32)}`,
+        `:t:${index}:${targetPage}:${op}:${hash(table.source).slice(0, 32)}`
+      );
+      if (disabled) b.disabled = true;
+      return b;
+    };
+    const components = discordTablePage(table, page);
+    if (table.rows.length > 3)
+      components.push(
+        row(
+          button('Previous', Math.max(0, page - 1), 'page', page === 0),
+          button(
+            'Next',
+            Math.min(Math.ceil(table.rows.length / 3) - 1, page + 1),
+            'page',
+            (page + 1) * 3 >= table.rows.length
+          )
+        )
+      );
+    components.push(row(button('View table', page, 'png'), button('Download CSV', page, 'csv')));
+    return {
+      content: '',
+      flags: DISCORD_COMPONENTS_V2 | DISCORD_SUPPRESS_NOTIFICATIONS,
+      allowed_mentions: noMentions,
+      components: [{ type: 17, accent_color: 0x58a6ff, components }],
+    };
+  }
   private taskReader(
     ctx: UiContext,
     scope: string | undefined
@@ -606,6 +783,32 @@ export class DiscordNativeUi {
         continue;
       const ctx: UiContext = { channel, session: id, conversation };
       const anchor = ref.responseCursor ?? ref.userCursor;
+      const route = /^cmui:[a-f0-9]{40}:t:(\d{1,2}):(\d{1,2}):(page|png|csv):([a-f0-9]{32})$/.exec(custom);
+      if (route && ref.responseCursor) {
+        const index = Number(route[1]),
+          page = Number(route[2]),
+          op = route[3];
+        if (index >= 4 || page >= 67) continue;
+        const key =
+          'cmui:' +
+          hash(JSON.stringify([scope, ctx, `${ref.responseCursor}:table:${index}:${page}:${op}:${route[4]}`])).slice(
+            0,
+            40
+          );
+        if (!custom.startsWith(key + ':t:')) continue;
+        const table = await this.responseTable(ctx, scope, ref.userCursor, ref.responseCursor, index);
+        if (hash(table.source).slice(0, 32) !== route[4]) return undefined;
+        // Register this exact target page action, including neighboring navigation targets.
+        this.tableView(ctx, scope, ref.userCursor, ref.responseCursor, table, index, page);
+        // A page route encodes its destination; its button is generated on a neighboring page.
+        if (op === 'page' && !this.actions.has(custom)) {
+          this.tableView(ctx, scope, ref.userCursor, ref.responseCursor, table, index, page > 0 ? page - 1 : 1);
+        }
+        if (!current()) return undefined;
+        const restored = this.actions.get(custom);
+        if (restored) restored.message = m.message.id;
+        return restored;
+      }
       const match = ['Show updates', 'Download response', 'Results & files'].some(
         (label) => custom === 'cmui:' + hash(JSON.stringify([scope, ctx, anchor + ':' + label])).slice(0, 40)
       );
@@ -876,7 +1079,10 @@ export class DiscordNativeUi {
     let recovering = false;
     if (custom) {
       action = this.actions.get(custom);
-      recovering = m.type === 3 && /^cmui:[a-f0-9]{40}$/.test(custom) && (!action || action.expires <= this.host.now());
+      recovering =
+        m.type === 3 &&
+        /^cmui:[a-f0-9]{40}(?::t:\d{1,2}:\d{1,2}:(?:page|png|csv):[a-f0-9]{32})?$/.test(custom) &&
+        (!action || action.expires <= this.host.now());
       if (
         !recovering &&
         (!action ||
@@ -1090,6 +1296,7 @@ export class DiscordNativeUi {
     const s = await this.target(id),
       q = this.host.services.question(id),
       ctx = this.ctx(m, s);
+    const questionScope = this.host.scope();
     if (!q) return this.payload('No pending question or permission request.');
     if (q.terminalOnly)
       return this.payload(
@@ -1109,7 +1316,17 @@ export class DiscordNativeUi {
       const fresh = this.host.services.question(id);
       if (!fresh || fresh.id !== q.id || fresh.revision !== q.revision)
         throw new Error('This question was answered elsewhere or changed');
-      const result = await this.host.services.answer(id, q.id, q.revision, value);
+      const result = await this.host.services.answer(
+        id,
+        q.id,
+        q.revision,
+        value,
+        () =>
+          questionScope === this.host.scope() &&
+          this.host.channelForSession(id) === ctx.channel &&
+          !!ctx.actor &&
+          this.host.config().allowed.includes(ctx.actor)
+      );
       const label =
         q.kind === 'idle'
           ? value

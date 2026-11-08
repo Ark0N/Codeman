@@ -1578,3 +1578,123 @@ it('renders saved URL-bearing previews as one valid thread link while keeping ti
   expect((await f.ui.store.snapshot()).activities).toEqual(stored);
   expect(f.host.submit).not.toHaveBeenCalled();
 });
+
+const tableResponse =
+  'Placement results\n\n| Pod | Namespace | State |\n|---|---|---|\n' +
+  Array.from({ length: 7 }, (_, i) => `| pod-${i} | hdai | ${i ? 'Completed' : 'Pending'} |`).join('\n') +
+  '\n\nAll original rows retained.';
+async function tableFixture() {
+  const f = await fixture();
+  f.host.history = vi.fn(async () => ({
+    conversationId: 'conversation-one',
+    partial: false,
+    turns: [
+      { role: 'user' as const, text: 'Show placement', cursor: 'u1', timestamp: '' },
+      { role: 'assistant' as const, text: tableResponse, cursor: 'r1', timestamp: '', phase: 'final_answer' as const },
+    ],
+  }));
+  const controls = await f.ui.responseControls('s1', channel, 'u1', 'r1');
+  const posts = (await f.ui.tableResponsePosts('s1', channel, 'u1', 'r1', tableResponse, {
+    title: '✓ Turn finished',
+    controls,
+  }))!;
+  const card = posts.find((p) => JSON.stringify(p).includes('Showing 1–3'))!;
+  return { ...f, posts, card };
+}
+it('paginates compact table rows privately, preserves prose and downloads the exact original CSV', async () => {
+  const f = await tableFixture();
+  expect(f.posts).toHaveLength(1);
+  expect(JSON.stringify(f.posts)).toContain('Placement results');
+  expect(JSON.stringify(f.posts)).toContain('All original rows retained.');
+  expect(JSON.stringify(f.card)).not.toContain('pod-3');
+  expect(f.component(f.card, 'Previous').disabled).toBe(true);
+  const page2 = await f.click(f.card, 'Next');
+  expect(JSON.stringify(page2)).toContain('Showing 4–6 of 7');
+  expect(f.responses.at(-1)).toEqual({ type: 5, data: { flags: 64 } });
+  const page3 = await f.click(page2, 'Next');
+  expect(f.responses.at(-1)).toEqual({ type: 6 });
+  expect(JSON.stringify(page3)).toContain('Showing 7–7 of 7');
+  expect(f.component(page3, 'Next').disabled).toBe(true);
+  const pageBack = await f.click(page3, 'Previous');
+  expect(JSON.stringify(pageBack)).toContain('Showing 4–6 of 7');
+  await f.click(pageBack, 'Download CSV');
+  const file = vi.mocked(f.host.postFile).mock.calls.at(-1)![1];
+  expect(file.name).toBe('table-1.csv');
+  expect(file.data.toString().match(/pod-/g)).toHaveLength(7);
+  expect(f.host.control).not.toHaveBeenCalled();
+  expect(f.host.submit).not.toHaveBeenCalled();
+});
+it('posts a real table image only after exact conversation validation', async () => {
+  const f = await tableFixture();
+  await f.click(f.card, 'View table');
+  const file = vi.mocked(f.host.postFile).mock.calls.at(-1)![1];
+  expect(file.name).toMatch(/\.png$/);
+  expect(file.data.subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a');
+});
+it.each(['Next', 'View table', 'Download CSV'])(
+  'recovers the original %s table button after restart',
+  async (label) => {
+    const f = await tableFixture();
+    const id = snow();
+    f.messages.set(id, { ...f.card, id, channel, channel_id: channel, author: { id: bot } } as any);
+    f.advance(7 * 60000);
+    const ui = new DiscordNativeUi(f.host);
+    await ui.interaction(f.event(f.component(f.card, label), { message: { id } }));
+    expect(JSON.stringify(f.finishes.at(-1))).not.toContain('no longer available');
+    expect(JSON.stringify(f.finishes.at(-1))).not.toContain('not confirmed');
+    if (label === 'Next') expect(JSON.stringify(f.finishes.at(-1))).toContain('Showing 4–6 of 7');
+    else expect(f.host.postFile).toHaveBeenCalledTimes(1);
+  }
+);
+it.each(['conversation', 'scope', 'actor', 'source'])('refuses table controls after %s changes', async (kind) => {
+  const f = await tableFixture();
+  if (kind === 'conversation') f.sessions[0].conversation = 'different';
+  if (kind === 'scope') f.setScope('different');
+  if (kind === 'source')
+    f.host.history = vi.fn(async () => ({
+      conversationId: 'conversation-one',
+      partial: false,
+      turns: [
+        { role: 'assistant' as const, text: tableResponse.replace('pod-0', 'changed'), cursor: 'r1', timestamp: '' },
+      ],
+    }));
+  await f.click(
+    f.card,
+    'Download CSV',
+    undefined,
+    kind === 'actor' ? { member: { user: { id: '666666666666666666' } } } : {}
+  );
+  expect(f.host.postFile).not.toHaveBeenCalled();
+});
+
+it.each([1, 2, 3])('renders a %i-row table with unique controls and usable exports', async (count) => {
+  const f = await fixture();
+  const text =
+    'Current runs\n\n| PR | Ticket | Gate |\n|---|---|---|\n' +
+    Array.from({ length: count }, (_, i) => `| #${1560 + i} | Ticket ${i} | Running |`).join('\n') +
+    '\n\nMore work is running.';
+  f.host.history = vi.fn(async () => ({
+    conversationId: 'conversation-one',
+    partial: false,
+    turns: [
+      { role: 'user' as const, text: 'Show runs', cursor: 'u1', timestamp: '' },
+      { role: 'assistant' as const, text, cursor: 'r1', timestamp: '', phase: 'final_answer' as const },
+    ],
+  }));
+  const controls = await f.ui.responseControls('s1', channel, 'u1', 'r1');
+  const posts = (await f.ui.tableResponsePosts('s1', channel, 'u1', 'r1', text, { controls }))!;
+  for (const post of posts) {
+    const ids = discordUiNodes(post.components).flatMap((n) => (typeof n.custom_id === 'string' ? [n.custom_id] : []));
+    expect(new Set(ids).size).toBe(ids.length);
+  }
+  const card = posts.find((p) => JSON.stringify(p).includes('Showing 1–'))!;
+  const labels = discordUiNodes(card.components).map((n) => n.label);
+  expect(labels).not.toContain('Previous');
+  expect(labels).not.toContain('Next');
+  expect(labels).toContain('View table');
+  expect(labels).toContain('Download CSV');
+  await f.click(card, 'Download CSV');
+  expect(f.host.postFile).toHaveBeenCalledOnce();
+  const file = (f.host.postFile as any).mock.calls[0][1];
+  expect(file.data.toString()).toContain('#1560');
+});

@@ -1,3 +1,5 @@
+import type { SessionMode } from '../types.js';
+import type { ClaudeVisibleQuestion } from './claude-visible-question.js';
 /**
  * @fileoverview Approvals Inbox: server-side registry of prompts waiting on a human.
  *
@@ -52,11 +54,18 @@ export interface ApprovalOption {
   label: string;
 }
 
+export interface NativeQuestionControl {
+  conversation: string;
+  inputRevision: string;
+  dialog: ClaudeVisibleQuestion;
+  state: 'pending' | 'answering' | 'uncertain' | 'answered';
+}
 export interface ApprovalItem {
   /** `${sessionId}:${seq}`, stable across re-captures, unique per prompt. */
   id: string;
   sessionId: string;
   sessionName: string;
+  mode?: SessionMode;
   kind: ApprovalKind;
   createdAt: number;
   /** Sanitized hook fields (already bounded by sanitizeHookData). */
@@ -95,6 +104,7 @@ export interface ApprovalItem {
    * Deny actions, and the UI offers "Open session" instead of answer buttons.
    */
   answerInTerminal?: boolean;
+  nativeQuestion?: NativeQuestionControl;
 }
 
 export interface ApprovalResolvedInfo {
@@ -107,6 +117,7 @@ export interface ApprovalResolvedInfo {
 interface NotePromptArgs {
   sessionId: string;
   sessionName: string;
+  mode?: SessionMode;
   kind: ApprovalKind;
   toolName?: string;
   toolSummary?: string;
@@ -123,6 +134,7 @@ interface NotePromptArgs {
    * `ApprovalItem.answerInTerminal`.
    */
   answerInTerminal?: boolean;
+  nativeQuestion?: NativeQuestionControl;
   /**
    * An idle prompt that should open ALREADY acknowledged for a reason other than
    * `watching`, e.g. `cache keep-alive` when the turn that just ended was Codeman's own
@@ -177,7 +189,10 @@ const CURSOR_POSITION_PATTERN = /\x1b\[(?:(\d+)(?:;(\d+))?)?[Hf]/g;
  * lines, strip ANSI, right-trim lines, drop trailing blanks, keep the last
  * MAX_CONTEXT_LINES lines.
  */
-export function normalizeCapturedFrame(raw: string | null | undefined): string | undefined {
+export function normalizeCapturedFrame(
+  raw: string | null | undefined,
+  limits: { maxLines: number; maxChars: number } = { maxLines: MAX_CONTEXT_LINES, maxChars: MAX_CONTEXT_CHARS }
+): string | undefined {
   if (!raw) return undefined;
   const rowed = raw.replace(CURSOR_POSITION_PATTERN, (_m, _row, col) => (!col || col === '1' ? '\n' : ' '));
   const lines = stripAnsi(rowed)
@@ -186,8 +201,8 @@ export function normalizeCapturedFrame(raw: string | null | undefined): string |
   while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
   while (lines.length > 0 && lines[0] === '') lines.shift();
   if (lines.length === 0) return undefined;
-  const text = lines.slice(-MAX_CONTEXT_LINES).join('\n');
-  return text.length > MAX_CONTEXT_CHARS ? text.slice(-MAX_CONTEXT_CHARS) : text;
+  const text = lines.slice(-limits.maxLines).join('\n');
+  return text.length > limits.maxChars ? text.slice(-limits.maxChars) : text;
 }
 
 /**
@@ -283,6 +298,7 @@ export class ApprovalInbox {
       id: `${args.sessionId}:${++this.seq}`,
       sessionId: args.sessionId,
       sessionName: args.sessionName,
+      mode: args.mode,
       kind: args.kind,
       createdAt: Date.now(),
       toolName: args.toolName,
@@ -290,6 +306,9 @@ export class ApprovalInbox {
       message: args.message,
       cwd: args.cwd,
       ...(args.answerInTerminal ? { answerInTerminal: true } : {}),
+      ...(args.nativeQuestion
+        ? { nativeQuestion: args.nativeQuestion, options: args.nativeQuestion.dialog.choices }
+        : {}),
     };
     if (args.kind === 'idle' && (args.preAcknowledged || args.watching)) {
       item.acknowledgedAt = item.createdAt;

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   DiscordModelControls,
+  codexStatusMatchesFooter,
   nativeModelComposerReady,
   readCodexModelStatus,
   readNativeModelMenu,
@@ -43,8 +44,13 @@ function harness(mode: 'codex' | 'claude' = 'codex') {
       ? '  enter select · esc back'
       : `  ◐ ${draftEffort === 'xhigh' ? 'xHigh' : draftEffort[0].toUpperCase() + draftEffort.slice(1)} effort ←/→ to adjust\n  Enter to set as default · s to use this session only · Esc to cancel`);
   screen = ready();
+  let unchangedStatus = false;
   const write = vi.fn(async (input: string) => {
     if (input === '/status\r') {
+      if (unchangedStatus) {
+        screen = ready();
+        return true;
+      }
       if (delayStatus && history.includes('/status')) {
         staleStatus = ready() + '\n';
         staleStatusReads = 2;
@@ -138,6 +144,9 @@ function harness(mode: 'codex' | 'claude' = 'codex') {
     },
     disable: () => {
       scope = undefined;
+    },
+    unchangedStatus: () => {
+      unchangedStatus = true;
     },
     delayStatus: () => {
       delayStatus = true;
@@ -306,4 +315,44 @@ describe('Discord model settings', () => {
       readCodexModelStatus('/status\n Model: GPT-6.1-Sol (reasoning high, summaries auto)\n Session: ' + UUID)
     ).toEqual({ model: 'GPT-6.1-Sol', effort: 'high', session: UUID });
   });
+});
+
+it('accepts a saturated identical status frame only with matching live composer footer evidence', async () => {
+  const h = harness();
+  await h.controls.control('s1', 'model');
+  h.unchangedStatus();
+  h.write.mockClear();
+  const reply = await h.controls.control('s1', 'model');
+  expect(reply?.verifiedSettings?.model).toBe('GPT-6.1-Sol');
+  expect(reply?.actions?.length).toBeGreaterThan(0);
+  expect(h.write.mock.calls.map((c) => c[0])).toEqual(['/status\r', '/model\r', '\x1b']);
+});
+it('does not confirm a changed model using an unchanged old status block', async () => {
+  const h = harness();
+  await h.controls.control('s1', 'model');
+  h.unchangedStatus();
+  h.write.mockClear();
+  const reply = await h.controls.control('s1', 'model gpt-6-luna');
+  expect(reply?.verifiedSettings).toBeUndefined();
+  expect(h.write.mock.calls.filter((c) => c[0] === '/model gpt-6-luna\r')).toHaveLength(1);
+});
+it('rejects stale footer values, transcript-only claims and nonempty drafts', () => {
+  const status = { model: 'GPT-6.1 Terra', effort: 'high' };
+  const screen =
+    'Model: GPT-6.1 Terra (reasoning high)\n Session: ' + UUID + '\n› \n GPT-6.1-Terra high · /work\n ? for shortcuts';
+  expect(codexStatusMatchesFooter(screen, status)).toBe(true);
+  expect(codexStatusMatchesFooter(screen, { ...status, effort: 'low' })).toBe(false);
+  expect(codexStatusMatchesFooter(screen, { model: 'GPT-6-Luna', effort: 'high' })).toBe(false);
+  expect(codexStatusMatchesFooter(screen.replace('› ', '› user draft'), status)).toBe(false);
+  expect(codexStatusMatchesFooter(screen.replace(' GPT-6.1-Terra high · /work', ' ? for shortcuts'), status)).toBe(
+    false
+  );
+});
+
+it('permits a native default footer only for inspection, never explicit change verification', () => {
+  const status = { model: 'GPT-6.1-Sol', effort: 'low' };
+  const screen = '› \n GPT-6.1-Sol default · /work\n ? for shortcuts';
+  expect(codexStatusMatchesFooter(screen, status)).toBe(false);
+  expect(codexStatusMatchesFooter(screen, status, true)).toBe(true);
+  expect(codexStatusMatchesFooter(screen, { ...status, model: 'GPT-6-Luna' }, true)).toBe(false);
 });

@@ -42,13 +42,41 @@ function separator(row: string): boolean {
   const compact = row.replace(/\s+/g, '');
   return compact.includes('|') && /^\|?:?-+:?(\|:?-+:?)*\|?$/.test(compact);
 }
-export function formatDiscordTables(text: string): string {
+function inlineTicks(line: string, initial = 0): number {
+  let ticks = initial;
+  for (const match of line.matchAll(/`+/g)) {
+    let slashes = 0;
+    for (let at = match.index - 1; at >= 0 && line[at] === '\\'; at--) slashes++;
+    if (slashes % 2) continue;
+    if (!ticks) ticks = match[0].length;
+    else if (ticks === match[0].length) ticks = 0;
+  }
+  return ticks;
+}
+export interface DiscordTable {
+  header: string[];
+  rows: string[][];
+  source: string;
+}
+export type DiscordTablePart = { text: string } | { table: DiscordTable };
+/** Shared code-aware parser. Invalid or excessive tables remain literal text. */
+export function discordTableParts(text: string): DiscordTablePart[] {
+  const parts: DiscordTablePart[] = [];
+  const flush = () => {
+    if (out.length) parts.push({ text: out.splice(0).join('\n') });
+  };
   const lines = text.split('\n'),
     out: string[] = [];
   let fence: { char: string; length: number } | undefined;
+  let inline = 0;
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i],
-      marker = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    const line = lines[i];
+    if (!fence && inline) {
+      inline = inlineTicks(line, inline);
+      out.push(line);
+      continue;
+    }
+    const marker = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
     if (fence) {
       out.push(line);
       if (marker && marker[1][0] === fence.char && marker[1].length >= fence.length && !marker[2].trim())
@@ -60,7 +88,14 @@ export function formatDiscordTables(text: string): string {
       out.push(line);
       continue;
     }
-    if (/^( {4}|\t)/.test(line) || !line.includes('|') || i + 1 >= lines.length || !separator(lines[i + 1])) {
+    if (!/^( {4}|\t| {0,3}>)/.test(line)) inline = inlineTicks(line);
+    if (
+      inline ||
+      /^( {4}|\t| {0,3}>)/.test(line) ||
+      !line.includes('|') ||
+      i + 1 >= lines.length ||
+      !separator(lines[i + 1])
+    ) {
       out.push(line);
       continue;
     }
@@ -101,35 +136,46 @@ export function formatDiscordTables(text: string): string {
       i = end - 1;
       continue;
     }
-    const labels = Array.from(
-      { length: width },
-      (_, col) => (header[col] ?? '').replace(/\*\*|`/g, '').trim() || `Column ${col + 1}`
-    );
-    const formatted: string[] = [];
-    let size = 0,
-      exceeded = false;
-    const budget = Math.max(4096, sourceLength * 4);
-    for (const row of rows) {
-      if (formatted.length) {
-        formatted.push('');
-        size++;
-      }
-      for (let col = 0; col < width; col++) {
-        const field = `**${labels[col]}:** ${row[col] || '—'}`;
-        size += field.length + 1;
-        if (size > budget) {
-          exceeded = true;
-          break;
-        }
-        formatted.push(field);
-      }
-      if (exceeded) break;
+    // Bound interactive snapshots; normalize missing and extra columns without dropping values.
+    if (sourceLength > 64 * 1024) {
+      original();
+      i = end - 1;
+      continue;
     }
-    if (exceeded) original();
-    else {
-      for (const field of formatted) out.push(field);
-    }
+    flush();
+    parts.push({
+      table: {
+        header: Array.from({ length: width }, (_, col) => header[col] ?? `Column ${col + 1}`),
+        rows: rows.map((r) => Array.from({ length: width }, (_, col) => r[col] ?? '')),
+        source: lines.slice(i, end).join('\n'),
+      },
+    });
     i = end - 1;
   }
-  return out.join('\n');
+  flush();
+  return parts;
+}
+
+export function formatDiscordTables(text: string): string {
+  return discordTableParts(text)
+    .map((part) => {
+      if ('text' in part) return part.text;
+      const { header, rows, source } = part.table;
+      const labels = header.map((label, col) => label.trim() || `Column ${col + 1}`);
+      const formatted: string[] = [];
+      let size = 0;
+      const budget = Math.max(4096, source.length * 4);
+      for (const row of rows) {
+        if (formatted.length) formatted.push('');
+        for (let col = 0; col < header.length; col++) {
+          const label = /[`*_[\]]/.test(labels[col]) ? labels[col] + ':' : `**${labels[col]}:**`;
+          const field = `${label} ${row[col] || '—'}`;
+          size += field.length + 1;
+          if (size > budget) return source;
+          formatted.push(field);
+        }
+      }
+      return formatted.join('\n');
+    })
+    .join('\n');
 }

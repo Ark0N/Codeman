@@ -81,6 +81,33 @@ export function readCodexModelStatus(raw: string): { model: string; effort?: str
     : undefined;
 }
 
+/** Codex can repaint an identical /status page once its viewport is saturated.
+ * Only the current empty-composer footer may corroborate an unchanged status block.
+ */
+export function codexStatusMatchesFooter(
+  raw: string,
+  status: { model: string; effort?: string },
+  allowDefaultEffort = false
+): boolean {
+  if (!status.effort || !nativeModelComposerReady('codex', raw)) return false;
+  const rows = stripAnsi(raw).split('\n');
+  let composer = -1;
+  for (let i = rows.length - 1; i >= 0; i--)
+    if (/^\s*›(?:\s|$)/.test(rows[i])) {
+      composer = i;
+      break;
+    }
+  if (composer < 0) return false;
+  return rows.slice(composer + 1).some((row) => {
+    const footer = /^\s*(.+?)\s+(default|none|minimal|low|medium|high|xhigh|max|ultra)\s*·/.exec(row);
+    return (
+      !!footer &&
+      normalize(footer[1]) === normalize(status.model) &&
+      (footer[2] === status.effort || (allowDefaultEffort && footer[2] === 'default'))
+    );
+  });
+}
+
 export interface DiscordModelTarget {
   mode: string;
   generation: string;
@@ -252,14 +279,17 @@ export class DiscordModelControls {
   }
   private async status(
     lease: NativeModelSettingsLease,
-    accept: (status: { model: string; effort?: string; session: string }) => boolean = () => true
+    accept: (status: { model: string; effort?: string; session: string }) => boolean = () => true,
+    allowDefaultEffort = false
   ) {
     const before = await lease.capture();
     await this.send(lease, '/status\r');
     return this.wait(lease, (s) => {
-      if (s === before || !nativeModelComposerReady('codex', s)) return undefined;
+      if (!nativeModelComposerReady('codex', s)) return undefined;
       const status = readCodexModelStatus(s);
-      return status && accept(status) ? status : undefined;
+      return status && accept(status) && (s !== before || codexStatusMatchesFooter(s, status, allowDefaultEffort))
+        ? status
+        : undefined;
     });
   }
   private async codex(
@@ -270,7 +300,9 @@ export class DiscordModelControls {
     value?: string,
     catalog: Array<{ id: string; label: string; efforts: string[] }> = []
   ): Promise<DiscordControlReply> {
-    const before = await this.status(lease);
+    // Initial inspection may show a native default effort label. Post-change
+    // verification below still requires explicit model and effort agreement.
+    const before = await this.status(lease, () => true, true);
     if (!value) {
       let opened = false;
       try {

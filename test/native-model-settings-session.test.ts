@@ -409,3 +409,22 @@ it('refuses native controls on an adopted pane before capture or input', async (
   expect(h.mux.capturePaneTextAsync).not.toHaveBeenCalled();
   expect(h.written).toEqual([]);
 });
+
+it('limits Claude question leases to arrows and Enter without admitting prompts, digits or other CLIs', async () => {
+  const h = harness({ mode: 'claude' });
+  h.access._isWorking = true;
+  await h.session.withNativeQuestionInput(
+    async (lease) => {
+      for (const input of ['\x1b[A', '\x1b[B', '\r']) expect(await lease.write(input)).toBe(true);
+      for (const input of ['1', ' ', '/clear\r', 'new prompt\r', '\x03']) expect(await lease.write(input)).toBe(false);
+    },
+    () => true
+  );
+  expect(h.written).toEqual(['\x1b[A', '\x1b[B', '\r']);
+  await expect(
+    harness({ mode: 'codex' }).session.withNativeQuestionInput(
+      async () => true,
+      () => true
+    )
+  ).rejects.toThrow('Only verified Claude');
+});

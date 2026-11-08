@@ -11,10 +11,15 @@ Codeman can post to a private Discord server when a session needs you, group ses
 - Posts when a session asks for permission, asks a question, goes idle or errors. Which of these a CLI can raise depends on the hooks it has: Claude Code sends a turn end (`stop`, an `info` event that posts only when **Which events** is set to Everything, and `idle_prompt`, which posts by default after the turn has waited a minute). DeepSeek Harness sends only `stop`. Codex, OMP, OpenCode, Gemini, Antigravity, Pi, Grok and Copilot send no turn end, so they reach Discord through an error, a blocked respawn, a stopped crash loop or their own `codeman notify`; Codex's permission and question dialogs are also read off its screen.
 - Posts a finished turn, and an error or blocked alert, as the CLI's whole last message, with its bold, lists and numbered questions kept (a Markdown table becomes stacked labeled records that wrap naturally on mobile), split over several posts if it is long. It reads the CLI's transcript where it keeps one (Claude Code, Codex, DeepSeek Harness, OMP) and otherwise splits the screen into turns (OpenCode, Gemini, Antigravity, Pi, Grok, Copilot), which can start mid-message when a long answer has scrolled off. A shell, and a permission or question dialog, show the last lines of the screen instead, without the prompt row and status lines under them.
 - Notifications mode creates one thread per tab in a parent channel. Full interface mode creates one channel per case in your configured category, with one thread per session. For example, `#saif` contains `w1-saif` and `w2-saif`. Replies reach that exact session.
-- Pastes your reply into that session as one prompt, preserving Markdown, indentation and line breaks, then sends Enter separately. A single digit sent while a permission or question is waiting goes as the key alone, without Enter, because the dialog acts on the keypress.
+- In Full mode, Claude single-choice and checkbox questions are also detected from the current visible pane when remote question hooks are missing. The question and all choice labels are forwarded once, with retries if delivery fails. Single-choice Claude questions offer answer buttons in a Discord card and in Codeman’s Approvals Inbox (App Settings → Panels). Selecting an answer rechecks the exact live question and cursor before submitting once. Checkbox questions and custom text still use the terminal. Ordinary chat messages cannot accidentally answer a pending question. If delivery is unconfirmed, inspect the terminal; the selection is never replayed automatically. A failed pane read does not clear a pending question.
+- Pastes your reply into that session as one prompt, preserving Markdown, indentation and line breaks, then sends Enter separately. For supported single-choice dialogs, a single digit sent while a permission or question is waiting goes as the key alone, without Enter, because the dialog acts on the keypress.
 - Lets a CLI post a deliberate message (for example "press the reset button on the case") with the `codeman notify` command, which calls `POST /api/sessions/:id/discord-notify`. Each tab may post 6 a minute; past that the command says "too many messages", so a looping agent cannot ping your phone without end.
 - Saves files you attach in a thread into that tab's working folder and tells the CLI the path. A CLI can send a file back with `codeman notify "message" --file <path>`.
 - Tells each CLI about `codeman notify` (see [Telling the CLIs](#telling-the-clis)).
+
+Streamed commentary, progress status, mirrored prompts, tool output and supplemental chunks/files are silent: they remain visible and may show an unread badge, but do not trigger push or desktop notifications. The first final-response card remains eligible for normal notifications; permission and needs-input alerts retain their existing notification and mention policy. Discord server/thread mute settings and per-user notification preferences still apply.
+
+Completed native Codex PNG-generation events are delivered as silent inline image galleries even when the final reply has no Markdown file link. The reader verifies the exact native event cursor and current conversation/profile, and opens only that event’s PNG under its conversation’s `generated_images` directory. Symlinks, non-PNG data, changed events/profiles and files over 8 MB are refused. Opaque result/base64 and revised prompts are not forwarded. General file-serving roots remain workspace-confined; container and multi-user image export are unavailable. Historical events already passed by the live checkpoint are not automatically replayed.
 
 ## Setup
 
@@ -252,6 +257,36 @@ Full mode covers native conversation output, bounded history, files and supporte
 
 For a restored SSH Codex tab without a saved conversation ID, history can recover an exact `codex resume <UUID>` invocation from the attached tmux pane’s sole interactive Codex process. It verifies that exact transcript before recording the ID. Multiple agents, missing resume arguments, missing transcripts and other ambiguity remain unavailable; workspace names and the newest transcript are never used as identity evidence.
 
+#### Compact table cards
+
+New native assistant answers in Full mode render eligible Markdown tables as
+Components V2 cards with the first column as a record heading, the remaining
+column headings shown once, and cell values kept in their original column order.
+Three records appear per page, separated by dividers. **Next** opens a private
+view; subsequent **Previous/Next** clicks update that view without changing the
+shared answer. Prose before, between and after tables stays in sequence.
+
+**View table** posts a dark PNG table preview into the same session thread.
+The preview includes all rows when it fits the bounded image size; taller tables
+show the selected three-row page. **Download CSV** posts all rows, with quoted
+cells, UTF-8 text and spreadsheet formula protection. Both actions read the exact
+original assistant response and recheck the session/conversation and permissions;
+they never submit a model prompt. Initial shared-card buttons can recover after a
+restart from stored response references and a verified bot-owned message. Private
+browsing panels expire normally.
+
+Tables with more than 200 rows/24 columns, oversized cells, excessive response
+parts or unrecognized syntax retain the existing text fallback. Literal code
+examples stay literal. Existing Discord messages are not rewritten. Table parsing
+and export evaluate no HTML, links, external images or cell code; PNG rendering
+uses the bundled resvg library and system fonts.
+
+![Compact table card layout preview](images/discord-table-card-mobile.png)
+
+This table preview is rendered from a generated Components V2 payload; Discord
+controls the exact client typography and spacing.
+
+
 ### Review clarifications
 
 Notifications remains the default. Activity titles, typing, file commands and SSH attachment uploads are Full-only. Both modes durably deduplicate inbound events and retain confirmed outbound part fingerprints: HTTP 5xx alerts remain retryable in Notifications, while an ambiguous network response is not automatically replayed. Full native streaming skips an uncertain turn, posts a catch-up notice pointing to `!codeman history`, and continues with later turns; a verified cursor outside the tail continues through bounded pages; an unavailable lost cursor receives an explicit catch-up notice before reanchoring. Streaming preferences survive `/clear`. Local history uses bounded Node reads; Python 3 is required only on remote hosts for the SSH history/file helpers. Reconnect is confirmed and refuses a missing or unverified remote agent. Interrupt sends bare Escape. Rename failures do not block alerts, honor Discord's retry duration and use a two-per-ten-minute cosmetic request budget. Live preferences do not expire just because a session is idle; abandoned conversation and finished thread metadata age out after seven days.
@@ -265,3 +300,12 @@ Normal messages go directly to the session, including while the agent is working
 Guild-scoped slash commands launch supported CLIs from an owned case channel or session thread through the same confirmed, case-aware quick-start path. Native message context menus locate sessions and open their controls. Registration preserves commands owned by other integrations; channel ownership, actor, configuration and case identity are rechecked before actions.
 
 The control-channel Activity card replaces the static dashboard with Recent, Working, Finished and Needs you views. Meaningful native events determine recency; cosmetic polling and card refreshes do not. Session names link to threads, response links target confirmed outbound messages when available, and stale/foreign destinations fail closed. Titles use plain session names. Typing and coalesced thread-state names reflect observed foreground/background work without repeated status messages. Ownership checks, retry-after handling and the shared cosmetic rename budget still apply.
+
+### Names for Discord-created sessions
+
+Case-channel launches use the same numbered names as web launches: `w1-flux-player`, `w2-flux-player`, and so on (`sN-case` for shell sessions). The next number follows existing instances of that case. Concurrent Discord confirmations reserve distinct names before creating their sessions. The name is passed to the existing creation service before the agent and thread start, so Codeman and Discord show the same case-based name instead of a short UUID. Existing explicitly named sessions are left unchanged.
+
+
+### Oversized tool records during native catch-up
+
+Conversation and Quiet readers can pass over bounded Codex `function_call_output`, `custom_tool_call_output` and image-generation Extension events that contain no chat messages. The original record hash is verified and retained as the next cursor; their contents are not posted. This prevents large image/tool payloads from blocking later user prompts, progress or final answers. The 2 MB visible-history page budget and 16 MB individual-record scan cap remain enforced. Oversized visible, unknown, malformed or ambiguous records still pause rather than being silently discarded. Tools mode retains the stricter behavior for oversized requested output; use Conversation/Quiet or the web transcript for that case.

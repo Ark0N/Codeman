@@ -138,6 +138,8 @@ export class DiscordDeliveryJournal {
         createdAt: r.createdAt,
         updatedAt: r.updatedAt,
       };
+      // Retain only this fixed refusal proof; never restore arbitrary external reason text.
+      if (r.reason === 'discord_refused') record.reason = 'discord_refused';
       if (r.payloadHash !== undefined) {
         if (typeof r.payloadHash !== 'string' || !/^[a-f0-9]{64}$/.test(r.payloadHash))
           throw new DiscordDeliveryError('Invalid Discord delivery fingerprint');
@@ -200,7 +202,33 @@ export class DiscordDeliveryJournal {
     return this.serial(async () => {
       await this.load();
       const existing = this.records.get(record.id);
-      if (existing) return { fresh: false, record: { ...existing } };
+      if (existing) {
+        // A definitive refusal created no message. A corrected formatter may retry
+        // that same destination/key, but never rewrite accepted or uncertain output.
+        if (
+          existing.direction === 'outbound' &&
+          record.direction === 'outbound' &&
+          existing.state === 'failed' &&
+          existing.reason === 'discord_refused' &&
+          !existing.messageId &&
+          existing.sessionId === record.sessionId &&
+          existing.guildId === record.guildId &&
+          existing.channelId === record.channelId &&
+          record.payloadHash &&
+          existing.payloadHash !== record.payloadHash
+        ) {
+          const revised = { ...existing, payloadHash: record.payloadHash, updatedAt: this.now() };
+          this.records.set(record.id, revised);
+          try {
+            await this.persist();
+          } catch (err) {
+            this.records.set(record.id, existing);
+            throw err;
+          }
+          return { fresh: false, record: { ...revised } };
+        }
+        return { fresh: false, record: { ...existing } };
+      }
       const before = new Map(this.records);
       const now = this.now();
       for (const [id, r] of this.records) if (r.createdAt < now - RETENTION_MS) this.records.delete(id);

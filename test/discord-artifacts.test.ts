@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { discordArtifactPaths } from '../src/discord-artifacts.js';
+import { discordArtifactPaths, discordAttachedFileLabels } from '../src/discord-artifacts.js';
 
 describe('explicit Discord artifact references', () => {
   it('recognizes output links, images and explicit downloads with local URI decoding and deduplication', () => {
@@ -40,4 +40,12 @@ describe('explicit Discord artifact references', () => {
       discordArtifactPaths(Array.from({ length: 30 }, (_, i) => `[artifact: /work/${i}.txt]`).join('\n'))
     ).toHaveLength(5);
   });
+});
+
+it('replaces only attached local links, preserving failed files, external links and code examples', () => {
+  const text =
+    '[Report](file:///work/report%20one.pdf)\n[Missing](/work/missing.pdf)\n[Site](https://example.org/report.pdf)\n`[Code](/work/report%20one.pdf)`\n```md\n[Example](/work/report%20one.pdf)\n```';
+  expect(discordAttachedFileLabels(text, new Set(['/work/report one.pdf']))).toBe(
+    text.replace('[Report](file:///work/report%20one.pdf)', 'Report')
+  );
 });

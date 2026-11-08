@@ -119,17 +119,38 @@ Object.assign(CodemanApp.prototype, {
   },
 
   async answerApproval(id, action, option) {
-    const body = option !== undefined ? { action, option } : { action };
-    const data = await this._apiJson(`/api/approvals/${encodeURIComponent(id)}/answer`, {
-      method: 'POST',
-      body,
+    if (!this._approvalAnswersInFlight) this._approvalAnswersInFlight = new Set();
+    if (this._approvalAnswersInFlight.has(id)) return;
+    this._approvalAnswersInFlight.add(id);
+    const card = document.querySelector(`[data-approval-id="${CSS.escape(id)}"]`);
+    const buttons = card ? [...card.querySelectorAll('.approval-actions button')] : [];
+    buttons.forEach((button) => {
+      button.disabled = true;
     });
-    if (data) {
-      this.showToast(action === 'deny' ? 'Denied' : 'Answer sent', 'success');
-    } else {
-      // 404/409 = resolved elsewhere or the dialog left the screen; refresh truth.
-      this.showToast('Could not answer, the prompt may already be resolved', 'warning');
-      this.seedApprovals();
+    try {
+      const body = option !== undefined ? { action, option } : { action };
+      const data = await this._apiJson(`/api/approvals/${encodeURIComponent(id)}/answer`, {
+        method: 'POST',
+        body,
+      });
+      if (data) {
+        this.showToast(action === 'deny' ? 'Denied' : 'Answer sent', 'success');
+        await this.seedApprovals();
+      } else {
+        this.showToast('Could not confirm the answer. Check the current question before retrying.', 'warning');
+        await this.seedApprovals();
+      }
+    } finally {
+      this._approvalAnswersInFlight.delete(id);
+      const current = this.approvals?.get(id);
+      if (
+        current &&
+        !current.answerInTerminal &&
+        (!current.nativeQuestion || current.nativeQuestion.state === 'pending')
+      )
+        buttons.forEach((button) => {
+          if (button.isConnected) button.disabled = false;
+        });
     }
   },
 
@@ -249,9 +270,17 @@ Object.assign(CodemanApp.prototype, {
   _approvalCardHtml(item) {
     const id = escapeHtml(item.id);
     const kindLabel = item.kind === 'permission' ? 'Permission' : item.kind === 'question' ? 'Question' : 'Idle';
-    const summary = item.toolName
-      ? `${item.toolName}${item.toolSummary ? ': ' + item.toolSummary : ''}`
-      : item.message || '';
+    const generatedIdleLabel =
+      item.kind === 'idle' && item.mode === 'codex'
+        ? 'Codex is waiting for your input'
+        : item.kind === 'idle' && item.mode === 'claude'
+          ? 'Claude is waiting for your input'
+          : '';
+    const summary = item.nativeQuestion
+      ? item.message
+      : item.toolName
+        ? `${item.toolName}${item.toolSummary ? ': ' + item.toolSummary : ''}`
+        : item.message || generatedIdleLabel;
     const age = this._approvalAge(item.createdAt);
     let actions = '';
     if (item.kind === 'idle') {
@@ -290,7 +319,7 @@ Object.assign(CodemanApp.prototype, {
       // there. An item a human acknowledged carries no reason and gets no line.
       (item.acknowledgedReason ? `<div class="approval-quiet" data-i18n-skip></div>` : '') +
       (summary ? `<div class="approval-summary" data-i18n-skip>${escapeHtml(summary)}</div>` : '') +
-      (item.context ? `<pre class="approval-context">${escapeHtml(item.context)}</pre>` : '') +
+      (item.context && !item.nativeQuestion ? `<pre class="approval-context">${escapeHtml(item.context)}</pre>` : '') +
       `<div class="approval-actions">${actions}</div>` +
       `<div class="approval-meta-actions">` +
       `<button class="approval-link" onclick="app.openApprovalSession('${id}')">Open session</button>` +

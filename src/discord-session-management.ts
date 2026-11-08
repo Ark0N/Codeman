@@ -1,5 +1,6 @@
 /** @fileoverview Explicit session lifecycle choices using shared web/backend services. No blank recovery or task replay. */
 import { configuredDiscordCaseKey } from './discord-case-identity.js';
+import { MAX_SESSION_NAME_LENGTH } from './config/terminal-limits.js';
 import { randomUUID, createHash } from 'node:crypto';
 import type { CaseInfo, SessionMode } from './types.js';
 /** Connector-facing recovery metadata; hosts without a saved recovery queue expose none. */
@@ -31,7 +32,7 @@ export interface DiscordSessionManagementDeps {
   cases(): Promise<CaseInfo[]>;
   groups(): Promise<Array<{ id: string; name: string }>>;
   modes(): string[];
-  create(body: { caseName: string; mode: SessionMode; tabGroupId?: string }): Promise<string>;
+  create(body: { caseName: string; name: string; mode: SessionMode; tabGroupId?: string }): Promise<string>;
   recoveries?(): DiscordRecoveryRecord[];
   recoveryUnavailableReason?: string;
   recover?(id: string, action: 'reconnect' | 'resume'): Promise<string>;
@@ -46,6 +47,33 @@ interface Confirmation {
 export class DiscordSessionManagement {
   private confirmations = new Map<string, Confirmation>();
   private busy = new Set<string>();
+  private pendingSessionNames = new Set<string>();
+  /** Match web launches; reserve names while concurrent confirmed creates are in flight. */
+  private async createNamed(body: { caseName: string; mode: SessionMode; tabGroupId?: string }): Promise<string> {
+    const sessions = await this.deps.sessions();
+    if (!this.deps.allowed()) throw new Error('Session creation is no longer allowed');
+    const prefix = body.mode === 'shell' ? 's' : 'w';
+    let next = 1;
+    for (const session of sessions) {
+      const match = /^([ws])(\d+)-([A-Za-z0-9_-]+)/.exec(session.name ?? '');
+      if (match?.[1] === prefix && match[3] === body.caseName) {
+        const number = Number(match[2]);
+        if (Number.isSafeInteger(number) && number >= next) next = number + 1;
+      }
+    }
+    const used = new Set(sessions.map((s) => s.name));
+    let name: string;
+    do {
+      if (!Number.isSafeInteger(next)) throw new Error('Session numbering is exhausted');
+      name = `${prefix}${next++}-${body.caseName}`.slice(0, MAX_SESSION_NAME_LENGTH);
+    } while (used.has(name) || this.pendingSessionNames.has(name));
+    this.pendingSessionNames.add(name);
+    try {
+      return await this.deps.create({ ...body, name });
+    } finally {
+      this.pendingSessionNames.delete(name);
+    }
+  }
   constructor(private readonly deps: DiscordSessionManagementDeps) {}
   current(scope: string, validity: string): boolean {
     const c = this.confirmations.get(validity);
@@ -85,7 +113,7 @@ export class DiscordSessionManagement {
     if (!this.deps.allowed() || !this.deps.modes().includes(mode))
       return { text: 'This CLI launch is unavailable. No session was created.' };
     const cases = await this.deps.cases();
-    const matches = cases.filter((c) => configuredDiscordCaseKey(c) === caseKey && !c.unreachable);
+    const matches = cases.filter((c) => configuredDiscordCaseKey(c) === caseKey && !c.unreachable && !c.docker);
     // The shared create endpoint selects by name. Reject aliases/collisions rather than risk another host.
     if (matches.length !== 1 || cases.filter((c) => c.name === matches[0].name).length !== 1)
       return {
@@ -205,7 +233,7 @@ export class DiscordSessionManagement {
             (group !== 'default' && !(await this.deps.groups()).some((g) => g.id === group))
           )
             return { text: 'Case/host/group configuration changed. Request creation again.' };
-          const id = await this.deps.create({
+          const id = await this.createNamed({
             caseName: name,
             mode: mode as SessionMode,
             tabGroupId: group === 'default' ? undefined : group,

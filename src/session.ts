@@ -5251,6 +5251,14 @@ export class Session extends EventEmitter {
   ): Promise<T> {
     return this._withNativeInputLease(operation, allowed, true);
   }
+  /** A verified Claude question answer; only navigation and one explicit selection are writable. */
+  async withNativeQuestionInput<T>(
+    operation: (lease: NativeModelSettingsLease) => Promise<T>,
+    allowed: () => boolean
+  ): Promise<T> {
+    if (this.mode !== 'claude') throw new Error('Only verified Claude question controls are supported');
+    return this._withNativeInputLease(operation, allowed, true, true);
+  }
   /** One-shot follow-up only after a fresh empty-composer capture under the input lease. */
   async submitDiscordFollowup(text: string, allowed: () => boolean): Promise<'accepted' | 'blocked' | 'uncertain'> {
     const chrome = guardedComposerChrome(getCli(this.mode));
@@ -5281,7 +5289,8 @@ export class Session extends EventEmitter {
   private async _withNativeInputLease<T>(
     operation: (lease: NativeModelSettingsLease) => Promise<T>,
     allowed: () => boolean,
-    modelOnly: boolean
+    modelOnly: boolean,
+    questionOnly = false
   ): Promise<T> {
     if (
       !getCli(this.mode)?.capabilities.nativeSettingsProfile ||
@@ -5289,7 +5298,7 @@ export class Session extends EventEmitter {
       this.isAdopted ||
       this.guardedInputHeld ||
       this._guardedPendingWrites ||
-      this.isWorking ||
+      (this.isWorking && !questionOnly) ||
       this.paneExit ||
       this._isStopped ||
       this._closing ||
@@ -5323,11 +5332,13 @@ export class Session extends EventEmitter {
         },
         write: async (input) => {
           if (
-            !(modelOnly
-              ? isNativeModelSettingsInput(input)
-              : input.length <= 16000 &&
-                input.endsWith('\r') &&
-                !Array.from(input.slice(0, -1)).some((c) => c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127)) ||
+            !(questionOnly
+              ? input === '\r' || input === '\x1b[A' || input === '\x1b[B'
+              : modelOnly
+                ? isNativeModelSettingsInput(input)
+                : input.length <= 16000 &&
+                  input.endsWith('\r') &&
+                  !Array.from(input.slice(0, -1)).some((c) => c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127)) ||
             !current()
           )
             return false;

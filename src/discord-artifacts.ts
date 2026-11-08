@@ -62,3 +62,29 @@ export function discordArtifactPaths(text: string): string[] {
   }
   return [...paths].slice(0, DISCORD_ARTIFACT_COUNT + 1);
 }
+
+/** Keep readable labels for successfully attached files instead of broken local Markdown links. */
+export function discordAttachedFileLabels(text: string, attached: ReadonlySet<string>): string {
+  let fence: string | undefined;
+  return text
+    .split('\n')
+    .map((line) => {
+      const marker = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+      if (marker) {
+        if (!fence) fence = marker[1];
+        else if (marker[1][0] === fence[0] && marker[1].length >= fence.length) fence = undefined;
+        return line;
+      }
+      if (fence || /^(?: {4}|\t|\s*>)/.test(line)) return line;
+      const code = [...line.matchAll(/(`+)[^`]*?\1/g)];
+      return line.replace(
+        /!?\[([^\]\n]{0,200})\]\(\s*(<[^>\n]{1,2048}>|[^\s\n]{1,2048}?)(?:\s+"[^"\n]*")?\s*\)/g,
+        (match, label: string, raw: string, offset: number) => {
+          if (code.some((m) => offset >= m.index! && offset < m.index! + m[0].length)) return match;
+          const path = localPath(raw);
+          return path && attached.has(path) ? label || posix.basename(path) : match;
+        }
+      );
+    })
+    .join('\n');
+}

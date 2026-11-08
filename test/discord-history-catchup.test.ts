@@ -125,3 +125,114 @@ describe('bounded native cursor catch-up', () => {
     }
   );
 });
+it('traverses consecutive oversized tool outputs using exact hashed anchors, retaining later prompts and answers', async () => {
+  await fixture('codex', async (root, path) => {
+    const source = { mode: 'codex', conversationId: id, configHome: root };
+    await appendFile(path, row(answer('codex', 'Already delivered')));
+    const after = (await readDiscordHistory(source)).turns[0].cursor;
+    await appendFile(
+      path,
+      row({
+        type: 'response_item',
+        payload: { type: 'custom_tool_call_output', output: 'PRIVATE_IMAGE_DATA'.repeat(150000) },
+      }) +
+        row({
+          type: 'response_item',
+          payload: { type: 'function_call_output', output: 'PRIVATE_TOOL_TEXT'.repeat(150000) },
+        }) +
+        row({ type: 'event_msg', payload: { type: 'user_message', message: 'Next real user' } }) +
+        row({
+          type: 'event_msg',
+          payload: { type: 'agent_message', message: 'Progress retained', phase: 'commentary' },
+        }) +
+        row(answer('codex', 'Final answer retained'))
+    );
+    const first = await readDiscordHistory({ ...source, after });
+    expect(first.verifiedAfter).toBe(after);
+    expect(first.scannedCursor).not.toBe(after);
+    expect(first.hasMore).toBe(true);
+    const second = await readDiscordHistory({ ...source, after: first.scannedCursor });
+    expect(second.verifiedAfter).toBe(first.scannedCursor);
+    expect(second.scannedCursor).not.toBe(first.scannedCursor);
+    expect(second.hasMore).toBe(true);
+    const final = await readDiscordHistory({ ...source, after: second.scannedCursor });
+    expect(final.turns.map((t) => t.text)).toEqual(['Next real user', 'Progress retained', 'Final answer retained']);
+    expect(final.hasMore).toBe(false);
+    expect(JSON.stringify([first, second, final])).not.toContain('PRIVATE_');
+    const again = await readDiscordHistory({ ...source, after: final.scannedCursor });
+    expect(again.turns.filter((t) => t.cursor !== final.scannedCursor)).toEqual([]);
+  });
+});
+it.each([
+  { type: 'response_item', payload: { type: 'message', role: 'assistant', content: 'x'.repeat(2300000) } },
+  { type: 'response_item', payload: { type: 'message', role: 'user', content: 'x'.repeat(2300000) } },
+  { type: 'response_item', payload: { type: 'custom_tool_call_output', role: 'user', output: 'x'.repeat(2300000) } },
+  { type: 'response_item', payload: { type: 'unknown-output', output: 'x'.repeat(2300000) } },
+  { type: 'response_item', payload: { type: 'custom_tool_call_output', output: 'x'.repeat(17 * 1024 * 1024) } },
+])('keeps oversized visible, ambiguous, unknown and over-cap rows fail-closed (%#)', async (record) => {
+  await fixture('codex', async (root, path) => {
+    const source = { mode: 'codex', conversationId: id, configHome: root };
+    await appendFile(path, row(answer('codex', 'anchor')));
+    const after = (await readDiscordHistory(source)).turns[0].cursor;
+    await appendFile(path, row(record));
+    await expect(readDiscordHistory({ ...source, after })).rejects.toThrow('bounded recovery size');
+  });
+});
+it.each(['function_call_output', 'custom_tool_call_output'])(
+  'does not silently discard requested large tool text in Tools mode (%s)',
+  async (type) => {
+    await fixture('codex', async (root, path) => {
+      const source = { mode: 'codex', conversationId: id, configHome: root, includeTools: true };
+      await appendFile(path, row(answer('codex', 'anchor')));
+      const after = (await readDiscordHistory(source)).turns[0].cursor;
+      await appendFile(path, row({ type: 'response_item', payload: { type, output: 'x'.repeat(2300000) } }));
+      await expect(readDiscordHistory({ ...source, after })).rejects.toThrow('bounded recovery size');
+    });
+  }
+);
+
+it('crosses an oversized image-generation event and its output without exporting either body', async () => {
+  await fixture('codex', async (root, path) => {
+    const source = { mode: 'codex', conversationId: id, configHome: root };
+    await appendFile(path, row(answer('codex', 'anchor')));
+    const after = (await readDiscordHistory(source)).turns[0].cursor;
+    await appendFile(
+      path,
+      row({
+        type: 'event_msg',
+        payload: {
+          type: 'item_completed',
+          item: { type: 'Extension', kind: 'image_gen.generation', result: 'PRIVATE_IMAGE'.repeat(200000) },
+        },
+      }) +
+        row({
+          type: 'response_item',
+          payload: { type: 'custom_tool_call_output', output: 'PRIVATE_IMAGE'.repeat(200000) },
+        }) +
+        row(answer('codex', 'after image'))
+    );
+    const first = await readDiscordHistory({ ...source, after });
+    const second = await readDiscordHistory({ ...source, after: first.scannedCursor });
+    const third = await readDiscordHistory({ ...source, after: second.scannedCursor });
+    expect(third.turns.map((t) => t.text)).toEqual(['after image']);
+    expect(third.hasMore).toBe(false);
+    expect(JSON.stringify([first, second, third])).not.toContain('PRIVATE_IMAGE');
+  });
+});
+it.each([
+  { type: 'UserMessage', kind: 'image_gen.generation' },
+  { type: 'AgentMessage', kind: 'image_gen.generation' },
+  { type: 'Extension', kind: 'unknown-extension' },
+  { type: 'Extension', kind: 'image_gen.generation', role: 'assistant' },
+])('does not skip visible or ambiguous oversized item events (%#)', async (item) => {
+  await fixture('codex', async (root, path) => {
+    const source = { mode: 'codex', conversationId: id, configHome: root };
+    await appendFile(path, row(answer('codex', 'anchor')));
+    const after = (await readDiscordHistory(source)).turns[0].cursor;
+    await appendFile(
+      path,
+      row({ type: 'event_msg', payload: { type: 'item_completed', item: { ...item, content: 'x'.repeat(2300000) } } })
+    );
+    await expect(readDiscordHistory({ ...source, after })).rejects.toThrow('bounded recovery size');
+  });
+});

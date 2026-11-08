@@ -31,15 +31,16 @@ const cfg = {
 let dir: string;
 let sessions: Array<import('../src/discord-activity.js').DiscordActivitySession & { remote?: boolean }>;
 let bridges: DiscordBridge[];
-let posts: Array<{ path: string; method: string; body?: any }>;
+let posts: Array<{ path: string; method: string; body?: any; fileFields?: string[] }>;
 let sendInput: ReturnType<typeof vi.fn>;
 let sequence: number;
 let remoteChannels: Map<string, any>;
 let remoteMessages: Map<string, any>;
 let statusEditRefused: boolean;
+let artifactPostRefused: boolean;
+let artifactPostUncertain: boolean;
 let activityRenameRetryAfter: number | undefined;
 let uncertainText: string | undefined;
-let artifactPostRefused: boolean;
 
 let uploaded: Array<{ name: string; text: string }>;
 /** Assert what a reader sees, across plain text and native response cards. */
@@ -79,8 +80,17 @@ function makeBridge(
           if (key.startsWith('files[') && file instanceof Blob)
             uploaded.push({ name: String((file as { name?: string }).name), text: await file.text() });
       }
-      posts.push({ path, method, body } as any);
-      if (artifactPostRefused && method === 'POST' && init.body instanceof FormData)
+      posts.push({
+        path,
+        method,
+        body,
+        ...(init.body instanceof FormData
+          ? { fileFields: [...init.body.keys()].filter((k) => k.startsWith('files[')) }
+          : {}),
+      } as any);
+      if (artifactPostUncertain && ['POST', 'PATCH'].includes(method) && init.body instanceof FormData)
+        throw Error('Upload outcome unknown');
+      if (artifactPostRefused && ['POST', 'PATCH'].includes(method) && init.body instanceof FormData)
         return Response.json({}, { status: 403 });
       if (/\/applications\/.*\/commands$/.test(path)) {
         if (method === 'GET') return Response.json([]);
@@ -194,6 +204,7 @@ beforeEach(async () => {
   statusEditRefused = false;
   activityRenameRetryAfter = undefined;
   artifactPostRefused = false;
+  artifactPostUncertain = false;
   activityRenameRetryAfter = undefined;
   uploaded = [];
   sendInput = vi.fn(async () => true);
@@ -464,7 +475,7 @@ describe('Discord interface mode', () => {
     expect(sendInput).not.toHaveBeenCalled();
   });
 
-  it('groups explicit output files beneath a new response and does not repeat uploads after replay/restart', async () => {
+  it('groups explicit output files inside a new response and does not repeat uploads after replay/restart', async () => {
     let now = 100000;
     let turns: import('../src/discord-history.js').DiscordHistoryTurn[] = [];
     sessions = [{ id: 's1', name: 'one' }];
@@ -492,9 +503,16 @@ describe('Discord interface mode', () => {
       { name: 'mockup.png', text: 'image-bytes' },
       { name: 'report.pdf', text: 'pdf-bytes' },
     ]);
-    const attachments = posts.filter((p) => p.body?.content === 'Files from this response');
+    const attachments = posts.filter((p) => p.method === 'PATCH' && (p as any).fileFields?.length);
     expect(attachments).toHaveLength(1);
     expect(attachments[0].body?.allowed_mentions).toEqual({ parse: [], users: [] });
+    expect(visibleText(attachments[0].body)).toContain('Done.');
+    expect(attachments[0].body.content).toBeNull();
+    expect(attachments[0].body.embeds).toEqual([]);
+    expect(visibleText(attachments[0].body)).not.toContain('./report.pdf');
+    expect(attachments[0].body.components[0].components.filter((c: any) => c.type === 13)).toHaveLength(2);
+    expect(remoteMessages.has(attachments[0].path.split('/').at(-1)!)).toBe(true);
+    expect(posts.some((p) => p.method === 'POST' && p.body?.content === 'Files from this response')).toBe(false);
     expect(getAttachment).toHaveBeenCalledTimes(2);
     const before = posts.findIndex((p) => p === attachments[0]);
     expect(posts.slice(0, before).some((p) => visibleText(p.body)?.includes('Done.'))).toBe(true);
@@ -535,7 +553,9 @@ describe('Discord interface mode', () => {
     await b.pollConversations();
     expect(uploaded).toEqual([]);
     expect(posts.some((p) => visibleText(p.body)?.includes('Here are outputs.'))).toBe(true);
-    expect(posts.filter((p) => p.body?.content?.startsWith('Some linked output files'))).toHaveLength(1);
+    expect(
+      posts.filter((p) => p.method === 'PATCH' && visibleText(p.body)?.includes('Some linked output files'))
+    ).toHaveLength(1);
     expect(posts.some((p) => p.body?.content?.includes('NOT-A-REAL-SECRET'))).toBe(false);
     turns.push({ cursor: 'native1:2', role: 'assistant', text: 'The next response still arrives.', timestamp: '' });
     now += 60001;
@@ -568,7 +588,7 @@ describe('Discord interface mode', () => {
     expect(getAttachment).toHaveBeenCalledTimes(4);
     expect(uploaded).toHaveLength(1);
     expect(
-      posts.filter((p) => p.body?.content?.startsWith('Files from this response\nSome linked output files'))
+      posts.filter((p) => p.method === 'PATCH' && visibleText(p.body)?.includes('Some linked output files'))
     ).toHaveLength(1);
   });
 
@@ -586,13 +606,13 @@ describe('Discord interface mode', () => {
     artifactPostRefused = true;
     turns = [{ cursor: 'native1:1', role: 'assistant', text: 'Here is the picture. ![Image](pic.png)', timestamp: '' }];
     await b.pollConversations();
-    expect(posts.filter((p) => p.body?.content === 'Files from this response')).toHaveLength(1);
+    expect(posts.filter((p) => p.method === 'PATCH' && (p as any).fileFields?.length)).toHaveLength(1);
     expect(
       posts.filter((p) => p.body?.content?.startsWith('Output file delivery could not be confirmed'))
     ).toHaveLength(1);
     now += 60001;
     await b.pollConversations();
-    expect(posts.filter((p) => p.body?.content === 'Files from this response')).toHaveLength(1);
+    expect(posts.filter((p) => p.method === 'PATCH' && (p as any).fileFields?.length)).toHaveLength(1);
     turns.push({ cursor: 'native1:2', role: 'assistant', text: 'Later response.', timestamp: '' });
     now += 60001;
     await b.pollConversations();
@@ -1081,7 +1101,7 @@ describe('Discord interface mode', () => {
     expect(selection.body.content).toContain('<#' + map.s1 + '>');
     expect(selection.body.content).toContain('<#' + map.s2 + '>');
     await b.onGatewayMessage({ ...m, id: '900000000000000002', content: '!codeman sessions' });
-    expect(control).toHaveBeenCalledExactlyOnceWith('__case__:' + caseKey, 'sessions');
+    expect(control).toHaveBeenCalledExactlyOnceWith('__case__:' + caseKey, 'sessions', expect.any(Function));
     await b.onGatewayMessage({ ...m, id: '900000000000000005', content: '!codeman stream verbose' });
     await b.onGatewayMessage({ ...m, id: '900000000000000006', content: '!codeman file /work/file.txt' });
     expect(control).toHaveBeenCalledTimes(1);
@@ -1241,7 +1261,7 @@ describe('Discord interface mode', () => {
     await b.onGatewayMessage(message);
     await b.onGatewayMessage(message);
     await b.onGatewayMessage({ ...message, id: '555555555555555556', author: { id: '999999999999999999' } });
-    expect(control).toHaveBeenCalledExactlyOnceWith('s1', 'status');
+    expect(control).toHaveBeenCalledExactlyOnceWith('s1', 'status', expect.any(Function));
     expect(sendInput).not.toHaveBeenCalled();
     expect(posts.some((p) => visibleText(p.body) === 'Working')).toBe(true);
   });
@@ -1714,7 +1734,7 @@ describe('Discord interface mode', () => {
     await b.onGatewayInteraction(click);
     await b.onGatewayInteraction(click);
     expect(control).toHaveBeenCalledTimes(2);
-    expect(control).toHaveBeenLastCalledWith('s1', 'answer current revision 1');
+    expect(control).toHaveBeenLastCalledWith('s1', 'answer current revision 1', expect.any(Function));
     expect(posts.some((p) => p.path.includes('/opaque%2B%2F%3Dtest/callback'))).toBe(true);
     expect(sendInput).not.toHaveBeenCalled();
   });
@@ -1770,7 +1790,7 @@ describe('Discord interface mode', () => {
     await b.onGatewayMessage({ ...m, channel_id: '999999999999999999' });
     expect(control).not.toHaveBeenCalled();
     await b.onGatewayMessage(m);
-    expect(control).toHaveBeenCalledExactlyOnceWith('__management__', 'help');
+    expect(control).toHaveBeenCalledExactlyOnceWith('__management__', 'help', expect.any(Function));
     expect(sendInput).not.toHaveBeenCalled();
     await writeDiscordConfig(dir, { ...cfg, mode: 'notifications' });
     await b.reload();
@@ -2250,6 +2270,62 @@ it('does not treat intentionally unsupported history adapters as session synchro
   expect(b.sessionSync.state).toBe('complete');
   expect(b.sessionSync.failed).toBe(0);
   expect(history).not.toHaveBeenCalled();
+});
+it('launches from owned case channels and threads with a confirmation, never terminal input', async () => {
+  const root = 'a'.repeat(64);
+  let currentRoot = root;
+  const launch = vi.fn(async () => ({
+    text: 'Create codex in brain on host1?',
+    actions: [{ label: 'Confirm', command: 'confirm launch', validity: 'launch' }],
+  }));
+  const control = vi.fn(async () => {
+    sessions.push({ id: 'new-session', name: 'w3-brain' });
+    return { text: 'Session created', locateSessionId: 'new-session' };
+  });
+  const b = makeBridge(undefined, {
+    caseForSession: async () => ({ key: currentRoot, name: 'brain' }),
+    launchModes: () => ['codex', 'claude'],
+    launch,
+    control,
+    controlCurrent: () => true,
+  });
+  await b.reload();
+  await b.syncSessions();
+  await b.syncLaunchCommands();
+  const parent = [...remoteChannels.values()].find((c) => c.type === 0)!;
+  const map = await readFullMap(dir);
+  const interaction = {
+    id: '900000000000000081',
+    application_id: BOT,
+    token: 'interaction-token',
+    type: 2,
+    guild_id: cfg.guildId,
+    channel_id: parent.id,
+    member: { user: { id: cfg.allowedUserIds[0] } },
+    data: { name: 'codex', id: '777777777777777771' },
+  };
+  await b.onGatewayInteraction(interaction);
+  expect(launch).toHaveBeenCalledExactlyOnceWith('__case__:' + root, root, 'codex');
+  expect(control).not.toHaveBeenCalled();
+  const review = [...remoteMessages.values()].find((m) => m.components?.length)!;
+  await b.onGatewayInteraction({
+    ...interaction,
+    id: '900000000000000082',
+    type: 3,
+    data: { custom_id: review.components[0].components[0].custom_id },
+    message: { id: review.id },
+  });
+  expect(control).toHaveBeenCalledExactlyOnceWith('__case__:' + root, 'confirm launch', expect.any(Function));
+  expect((await readFullMap(dir))['new-session']).toBeTruthy();
+  await b.onGatewayInteraction({ ...interaction, id: '900000000000000083', channel_id: map.s1 });
+  expect(launch).toHaveBeenLastCalledWith('s1', root, 'codex');
+  await b.onGatewayInteraction({ ...interaction, id: '900000000000000084', channel_id: cfg.parentChannelId });
+  await b.onGatewayInteraction({ ...interaction, id: '900000000000000085', member: { user: { id: 'unauthorized' } } });
+  await b.onGatewayInteraction({ ...interaction, id: '900000000000000086', data: { name: 'codex', id: 'foreign' } });
+  currentRoot = 'b'.repeat(64);
+  await b.onGatewayInteraction({ ...interaction, id: '900000000000000087', channel_id: map.s1 });
+  expect(launch).toHaveBeenCalledTimes(2);
+  expect(sendInput).not.toHaveBeenCalled();
 });
 it('streams explicit commentary as conversation cards and delivers the native final once', async () => {
   sessions = [{ id: 's1', name: 'one' }];
@@ -2785,3 +2861,331 @@ it.each(['false', 'throw'])(
     expect(record.state).toBe('uncertain');
   }
 );
+
+const fallbackImageText =
+  '**Build overview**\n![Desktop](/work/output/desktop.png)\n![Inspector](/work/output/inspector.png)\n[Mobile mockup](/work/output/mobile.png)';
+const fallbackImageAlert = () => ({
+  sessionId: 's1',
+  sessionName: 'one',
+  event: 'hook:idle_prompt',
+  title: 'Waiting for Input',
+  body: '[one]',
+  urgency: 'warning' as const,
+  fullText: async () => ({ text: fallbackImageText, version: 'original-turn' }),
+});
+function fallbackFiles() {
+  return vi.fn(async (_id: string, path: string) => ({
+    name: path.split('/').at(-1)!,
+    data: Buffer.from('image-fixture'),
+  }));
+}
+it('uploads generated fallback images together inside the answer, including remote workspaces', async () => {
+  sessions = [{ id: 's1', name: 'one', remote: true }];
+  const getAttachment = fallbackFiles();
+  const b = makeBridge(undefined, { getAttachment });
+  await b.reload();
+  await b.syncSessions();
+  expect((await b.notify(fallbackImageAlert()))?.ok).toBe(true);
+  expect(uploaded.map((f) => f.name)).toEqual(['desktop.png', 'inspector.png', 'mobile.png']);
+  const batches = posts.filter((p) => p.method === 'PATCH' && (p as any).fileFields?.length);
+  expect(batches).toHaveLength(1);
+  expect(batches[0].fileFields).toHaveLength(3);
+  expect(posts.findIndex((p) => visibleText(p.body)?.includes('**Build overview**'))).toBeLessThan(
+    posts.indexOf(batches[0])
+  );
+  expect(getAttachment).toHaveBeenCalledWith('s1', '/work/output/desktop.png', true);
+  expect(sendInput).not.toHaveBeenCalled();
+});
+it('does not duplicate a fallback image batch on redelivery or restart', async () => {
+  const getAttachment = fallbackFiles();
+  const b = makeBridge(undefined, { getAttachment });
+  await b.reload();
+  await b.syncSessions();
+  await b.notify(fallbackImageAlert());
+  await b.notify(fallbackImageAlert());
+  b.stop();
+  const restored = makeBridge(undefined, { getAttachment });
+  await restored.reload();
+  await restored.syncSessions();
+  await restored.notify(fallbackImageAlert());
+  expect(posts.filter((p) => p.method === 'PATCH' && (p as any).fileFields?.length)).toHaveLength(1);
+  expect(uploaded).toHaveLength(3);
+});
+it('keeps fallback text and allowed images when one linked file is refused', async () => {
+  const getAttachment = vi.fn(async (_id: string, path: string) => {
+    if (path.endsWith('inspector.png')) throw Error('Guard refused');
+    return { name: path.split('/').at(-1)!, data: Buffer.from('image') };
+  });
+  const b = makeBridge(undefined, { getAttachment });
+  await b.reload();
+  await b.syncSessions();
+  expect((await b.notify(fallbackImageAlert()))?.ok).toBe(true);
+  expect(uploaded.map((f) => f.name)).toEqual(['desktop.png', 'mobile.png']);
+  expect(posts.some((p) => visibleText(p.body)?.includes('**Build overview**'))).toBe(true);
+  expect(posts.some((p) => visibleText(p.body)?.includes('Some linked output files could not be attached'))).toBe(true);
+});
+it('respects stream-off for fallback image transfer', async () => {
+  const getAttachment = fallbackFiles();
+  const b = makeBridge(undefined, {
+    getAttachment,
+    history: async () => ({ conversationId: 'native1', turns: [], partial: false }),
+  });
+  await b.reload();
+  await b.syncSessions();
+  const thread = (await readFullMap(dir)).s1;
+  await b.onGatewayMessage({
+    id: '900000000000000001',
+    guild_id: cfg.guildId,
+    channel_id: thread,
+    author: { id: cfg.allowedUserIds[0] },
+    content: '!codeman stream off',
+  });
+  await b.notify(fallbackImageAlert());
+  expect(getAttachment).not.toHaveBeenCalled();
+  expect(uploaded).toHaveLength(0);
+});
+it('does not replay a fallback image upload whose network outcome is uncertain', async () => {
+  const getAttachment = fallbackFiles();
+  const b = makeBridge(undefined, { getAttachment });
+  await b.reload();
+  await b.syncSessions();
+  artifactPostUncertain = true;
+  await b.notify(fallbackImageAlert());
+  const attempts = posts.filter((p) => p.method === 'PATCH' && (p as any).fileFields?.length);
+  expect(attempts.length).toBeGreaterThan(0);
+  expect(new Set(attempts.map((p) => p.path)).size).toBe(1);
+  expect(attempts.every((p) => p.method === 'PATCH' && /\/messages\/\d+$/.test(p.path))).toBe(true);
+  b.stop();
+  artifactPostUncertain = false;
+  const restored = makeBridge(undefined, { getAttachment });
+  await restored.reload();
+  await restored.syncSessions();
+  await restored.notify(fallbackImageAlert());
+  expect(posts.filter((p) => p.method === 'PATCH' && (p as any).fileFields?.length)).toHaveLength(attempts.length);
+  expect(sendInput).not.toHaveBeenCalled();
+});
+
+it('keeps delivered fallback text when stream preferences cannot be read, without sending files', async () => {
+  const getAttachment = fallbackFiles();
+  const b = makeBridge(undefined, { getAttachment });
+  await b.reload();
+  await b.syncSessions();
+  b.stop();
+  await writeFile(join(dir, 'discord-conversations.json'), 'invalid json');
+  const restored = makeBridge(undefined, { getAttachment });
+  await restored.reload();
+  expect((await restored.notify(fallbackImageAlert()))?.ok).toBe(true);
+  expect(getAttachment).not.toHaveBeenCalled();
+  expect(posts.some((p) => visibleText(p.body)?.includes('**Build overview**'))).toBe(true);
+});
+
+it('attaches colliding file basenames to the exact final part of a split response without extra file posts', async () => {
+  let turns: import('../src/discord-history.js').DiscordHistoryTurn[] = [];
+  sessions = [{ id: 's1', name: 'one', remote: true }];
+  const b = makeBridge(undefined, {
+    history: async () => ({ conversationId: 'native1', partial: false, turns }),
+    getAttachment: async () => ({ name: 'report.pdf', data: Buffer.from('pdf') }),
+  });
+  await b.reload();
+  await b.syncSessions();
+  turns = [
+    {
+      cursor: 'native1:1',
+      role: 'assistant',
+      timestamp: '',
+      text: 'Summary words. '.repeat(210) + '\n[One](/work/one/report.pdf)\n[Two](/work/two/report.pdf)',
+    },
+  ];
+  await b.pollConversations();
+  const edits = posts.filter((p) => p.method === 'PATCH' && (p as any).fileFields?.length);
+  expect(edits).toHaveLength(1);
+  expect(uploaded.map((f) => f.name)).toEqual(['report.pdf', '1-report.pdf']);
+  const card = edits[0].body.components.find((c: any) => c.type === 17);
+  expect(card.components.filter((c: any) => c.type === 13).map((c: any) => c.file.url)).toEqual([
+    'attachment://report.pdf',
+    'attachment://1-report.pdf',
+  ]);
+  expect(visibleText(edits[0].body)).toContain('One\nTwo');
+  expect(visibleText(edits[0].body)).not.toContain('/work/');
+  expect(posts.filter((p) => p.method === 'POST' && (p as any).fileFields?.length)).toHaveLength(0);
+});
+
+it('posts a selectable native question as one V2 card and binds buttons to that exact message', async () => {
+  sessions = [{ id: 's1', name: 'one' }];
+  let pending = true;
+  let now = 100000,
+    answers = 0;
+  const b = makeBridge(undefined, {
+    now: () => now,
+    history: async () => ({ conversationId: 'native1', turns: [], partial: false }),
+    control: async (_id, command) =>
+      command === 'pending'
+        ? {
+            questionCard: true,
+            text: 'Which test color?\n\n1. Red\n2. Blue',
+            actions: [
+              { label: 'Red', command: 'answer q rev 1', validity: 'q:rev' },
+              { label: 'Blue', command: 'answer q rev 2', validity: 'q:rev' },
+            ],
+          }
+        : (answers++, { text: 'Answer sent.' }),
+    controlCurrent: () => pending,
+  });
+  await b.reload();
+  await b.syncSessions();
+  await b.notify({
+    sessionId: 's1',
+    sessionName: 'one',
+    event: 'hook:elicitation_dialog',
+    title: 'Question Asked',
+    body: 'Question pending',
+    urgency: 'critical',
+  });
+  const cards = posts.filter(
+    (p) => p.method === 'POST' && p.body?.flags & 32768 && visibleText(p.body)?.includes('Which test color?')
+  );
+  expect(cards).toHaveLength(1);
+  const nodes = cards[0].body.components[0].components;
+  const buttons = nodes.filter((c: any) => c.type === 1).flatMap((c: any) => c.components);
+  expect(buttons.map((c: any) => c.label)).toEqual(['Red', 'Blue']);
+  expect(visibleText(cards[0].body)).not.toContain('!codeman');
+  // A still-pending question remains usable beyond the ordinary control timeout.
+  now += 11 * 60 * 1000;
+  await b.pollConversations();
+  const destination = (await readFullMap(dir)).s1;
+  const source = [...remoteMessages.values()].find((m) => visibleText(m)?.includes('Which test color?'));
+  await b.onGatewayInteraction({
+    id: '900000000000000006',
+    application_id: BOT,
+    token: 'question-test',
+    guild_id: cfg.guildId,
+    channel_id: destination,
+    type: 3,
+    member: { user: { id: cfg.allowedUserIds[0] } },
+    data: { custom_id: buttons[1].custom_id },
+    message: { id: source.id },
+  });
+  expect(answers).toBe(1);
+  pending = false;
+  await b.pollConversations();
+  expect(
+    posts.filter((p) => p.method === 'PATCH').some((p) => visibleText(p.body)?.includes('Which test color?'))
+  ).toBe(true);
+});
+
+it('delivers native generated-image events as silent inline galleries without a prose file link and deduplicates restart', async () => {
+  sessions = [{ id: 's1', name: 'one' }];
+  let now = 100000;
+  let turns: import('../src/discord-history.js').DiscordHistoryTurn[] = [];
+  let images: import('../src/discord-history.js').DiscordGeneratedImage[] = [];
+  const history = async (_id: string, options?: { after?: string }) => ({
+    conversationId: 'native1',
+    partial: false,
+    turns,
+    generatedImages: images,
+    verifiedAfter: options?.after,
+    scannedCursor: turns.at(-1)?.cursor,
+  });
+  const getGeneratedImage = vi.fn(async () => ({ name: 'native.png', data: Buffer.from('generated PNG fixture') }));
+  const getAttachment = vi.fn();
+  const b = makeBridge(undefined, { history, now: () => now, getGeneratedImage, getAttachment });
+  await b.reload();
+  await b.syncSessions();
+  posts = [];
+  turns = [
+    { cursor: 'native1:10:user', role: 'user', text: 'Create a mockup', timestamp: '' },
+    {
+      cursor: 'native1:100:answer',
+      role: 'assistant',
+      phase: 'final_answer',
+      text: 'Concept complete.',
+      timestamp: '',
+    },
+  ];
+  images = [{ id: 'exec-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', cursor: 'native1:50:image', timestamp: '' }];
+  await b.pollConversations();
+  const gallery = posts.filter(
+    (p) => p.method === 'POST' && JSON.stringify(p.body?.components).includes('attachment://native.png')
+  );
+  expect(gallery).toHaveLength(1);
+  expect(gallery[0].body.flags & 4096).toBeTruthy();
+  expect(discordUiNodes(gallery[0].body.components).some((n) => n.type === 12)).toBe(true);
+  expect(discordUiNodes(gallery[0].body.components).some((n) => n.type === 13)).toBe(false);
+  expect(uploaded.some((f) => f.name === 'native.png')).toBe(true);
+  expect(getAttachment).not.toHaveBeenCalled();
+  const answer = posts.find((p) => visibleText(p.body) === 'Concept complete.')!;
+  expect(posts.indexOf(gallery[0])).toBeLessThan(posts.indexOf(answer));
+  b.stop();
+  const restored = makeBridge(undefined, { history, now: () => now, getGeneratedImage });
+  await restored.reload();
+  await restored.syncSessions();
+  now += 60001;
+  await restored.pollConversations();
+  expect(
+    posts.filter((p) => p.method === 'POST' && JSON.stringify(p.body?.components).includes('attachment://native.png'))
+  ).toHaveLength(1);
+  expect(sendInput).not.toHaveBeenCalled();
+});
+it('delivers a metadata-only generated-image page before advancing its native checkpoint', async () => {
+  sessions = [{ id: 's1', name: 'one' }];
+  let now = 100000;
+  let generated = false;
+  const history = async (_id: string, options?: { after?: string }) => ({
+    conversationId: 'native1',
+    partial: false,
+    turns: generated ? [] : [{ cursor: 'native1:10:user', role: 'user' as const, text: 'Generate', timestamp: '' }],
+    verifiedAfter: options?.after,
+    scannedCursor: generated ? 'native1:50:image' : 'native1:10:user',
+    generatedImages: generated
+      ? [{ id: 'exec-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', cursor: 'native1:50:image', timestamp: '' }]
+      : [],
+  });
+  const b = makeBridge(undefined, {
+    history,
+    now: () => now,
+    getGeneratedImage: async () => ({ name: 'native.png', data: Buffer.from('image') }),
+  });
+  await b.reload();
+  await b.syncSessions();
+  generated = true;
+  now += 60001;
+  await b.pollConversations();
+  const progress = JSON.parse(await readFile(join(dir, 'discord-conversations.json'), 'utf8'));
+  expect(progress.some(([, p]: any) => p.cursor === 'native1:50:image')).toBe(true);
+  expect(uploaded.some((f) => f.name === 'native.png')).toBe(true);
+  expect(sendInput).not.toHaveBeenCalled();
+});
+
+it('does not lose the later final answer when a generated-image gallery has an uncertain send', async () => {
+  sessions = [{ id: 's1', name: 'one' }];
+  let live = false;
+  const b = makeBridge(undefined, {
+    history: async (_id, options) => ({
+      conversationId: 'native1',
+      partial: false,
+      verifiedAfter: options?.after,
+      turns: live
+        ? [
+            {
+              cursor: 'native1:100:answer',
+              role: 'assistant',
+              phase: 'final_answer',
+              text: 'Final after image',
+              timestamp: '',
+            },
+          ]
+        : [],
+      generatedImages: live
+        ? [{ id: 'exec-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', cursor: 'native1:50:image', timestamp: '' }]
+        : [],
+    }),
+    getGeneratedImage: async () => ({ name: 'native.png', data: Buffer.from('image') }),
+  });
+  await b.reload();
+  await b.syncSessions();
+  live = true;
+  artifactPostUncertain = true;
+  await b.pollConversations();
+  expect(posts.some((p) => visibleText(p.body) === 'Final after image')).toBe(true);
+  expect(sendInput).not.toHaveBeenCalled();
+});

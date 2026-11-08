@@ -43,9 +43,9 @@ it.each(['local', 'remote'])(
       remote.hosts = [{ id: 'test-host', label: 'test-host', host: 'test.invalid', username: 'tester', port: 22 }];
       remote.cases = [{ name, location: 'remote', hostId: 'test-host', remotePath: '/work/review' }];
     }
-    const id = await s.discordCreate({ caseName: name, mode: 'shell' });
+    const id = await s.discordCreate({ caseName: name, name: `s9-${name}`, mode: 'shell' });
     const session = s.sessions.get(id);
-    expect(session.name).toContain(name);
+    expect(session.name).toBe(`s9-${name}`);
     expect(session.workingDir).toBe(location === 'local' ? path : '/work/review');
     if (location === 'remote')
       expect(session.remote).toMatchObject({ hostId: 'test-host', remotePath: '/work/review' });

@@ -2,9 +2,11 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { createDiscordNativeUiServices } from '../src/web/discord-native-ui-services.js';
+import { approvalInbox } from '../src/web/approval-inbox.js';
 import { SETTINGS_PATH } from '../src/web/route-helpers.js';
 import type { Session } from '../src/session.js';
 beforeEach(async () => {
+  approvalInbox.stop();
   await mkdir(dirname(SETTINGS_PATH), { recursive: true });
   await writeFile(SETTINGS_PATH, JSON.stringify({ theme: 'dark', codexDangerouslyBypassApprovals: true }));
 });
@@ -83,7 +85,7 @@ it('projects background work as busy and captures only ready Claude suggestions'
   expect((await services.sessions())[0]).toMatchObject({ working: true, ready: false, promptSuggestion: undefined });
   Object.assign(s, { mode: 'codex', activityProjection: { activityStatus: 'idle' } });
   expect((await services.sessions())[0].promptSuggestion).toBeUndefined();
-  expect(captures).toBe(1);
+  expect(captures).toBe(3);
 });
 
 it.each([

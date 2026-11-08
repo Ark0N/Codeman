@@ -1,13 +1,35 @@
 /** Read-only, explicitly unattributed workspace diff. Every exported path uses the file guard. */
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { resolve, posix } from 'node:path';
+import { realpath } from 'node:fs/promises';
+import { readDockerCasesOrThrow } from './docker-hosts.js';
+import { getDataDir } from './config/instance.js';
+import { gitSpawnAllowed, gitMissingError } from './utils/git-availability.js';
+import { resolve, relative, isAbsolute, posix } from 'node:path';
 import { readDiscordSessionFile, runDiscordRemoteRead } from './discord-file-transfers.js';
 import { shellescape, withRemotePathBootstrap } from './remote-hosts.js';
 import type { DiscordFileScope } from './discord-file-transfers.js';
 const exec = promisify(execFile);
-async function workspaceGit(scope: DiscordFileScope, args: string[]): Promise<string> {
-  const argv = ['--no-pager', '-c', 'core.fsmonitor=false', '--literal-pathspecs', ...args];
+export interface DiscordWorkspaceScope extends DiscordFileScope {
+  docker?: unknown;
+  isAdopted?: boolean;
+}
+async function assertHostWorkspace(scope: DiscordWorkspaceScope): Promise<void> {
+  if (scope.docker || scope.isAdopted) throw new Error('Container/adopted workspace diffs are unavailable');
+  if (scope.remote) return;
+  const roots = await readDockerCasesOrThrow(getDataDir());
+  const cwd = await realpath(scope.workingDir);
+  for (const c of roots) {
+    if (!c.hostWorkspacePath) continue;
+    const root = await realpath(c.hostWorkspacePath).catch(() => resolve(c.hostWorkspacePath));
+    const rel = relative(root, cwd);
+    if (!rel || (rel !== '..' && !rel.startsWith('../') && !isAbsolute(rel)))
+      throw new Error('Workspace is writable by a Docker case; host git is disabled');
+  }
+}
+async function workspaceGit(scope: DiscordWorkspaceScope, args: string[]): Promise<string> {
+  await assertHostWorkspace(scope);
+  const argv = ['--no-optional-locks', '--no-pager', '-c', 'core.fsmonitor=false', '--literal-pathspecs', ...args];
   if (scope.remote) {
     const cwd = scope.remote.remotePath;
     return (
@@ -17,17 +39,20 @@ async function workspaceGit(scope: DiscordFileScope, args: string[]): Promise<st
       )
     ).toString('utf8');
   }
+  if (!gitSpawnAllowed()) throw gitMissingError();
   return (await exec('git', argv, { cwd: scope.workingDir, timeout: 8000, maxBuffer: 256 * 1024, encoding: 'utf8' }))
     .stdout;
 }
 
 /** Names only: rendering a results menu must not download every changed remote file. */
-export async function discordWorkspaceHasChanges(scope: DiscordFileScope): Promise<boolean> {
+export async function discordWorkspaceHasChanges(scope: DiscordWorkspaceScope): Promise<boolean> {
   return !!(await workspaceGit(scope, ['diff', '--no-ext-diff', '--no-textconv', '--name-only', '-z', 'HEAD', '--']))
     .length;
 }
 
-export async function discordWorkspaceResults(scope: DiscordFileScope): Promise<{ summary: string; diff: string }> {
+export async function discordWorkspaceResults(
+  scope: DiscordWorkspaceScope
+): Promise<{ summary: string; diff: string }> {
   const run = (args: string[]) => workspaceGit(scope, args);
   const names = (await run(['diff', '--no-ext-diff', '--no-textconv', '--name-only', '-z', 'HEAD', '--']))
     .split('\0')

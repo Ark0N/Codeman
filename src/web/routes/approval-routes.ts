@@ -1,3 +1,4 @@
+import { answerClaudeQuestion, claudeQuestionConversation } from '../claude-question-answer.js';
 /**
  * @fileoverview Approvals Inbox routes.
  *
@@ -68,11 +69,47 @@ function keystrokesFor(
 export async function answerPendingApproval(
   session: Session,
   id: string,
-  answer: { action: 'approve' | 'deny' | 'option' | 'text'; option?: number; text?: string }
+  answer: { action: 'approve' | 'deny' | 'option' | 'text'; option?: number; text?: string },
+  allowed: () => boolean = () => true
 ) {
   const item = approvalInbox.getById(id);
   if (!item || item.sessionId !== session.id)
     return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Approval not found or no longer pending');
+  if (item.nativeQuestion) {
+    const native = item.nativeQuestion;
+    if (
+      session.mode !== 'claude' ||
+      native.state !== 'pending' ||
+      answer.action !== 'option' ||
+      !native.dialog.choices.some((o) => o.n === answer.option)
+    )
+      return createErrorResponse(
+        ApiErrorCode.CONFLICT,
+        'This question cannot accept this answer. Open the current question.'
+      );
+    native.state = 'answering';
+    const current = () =>
+      allowed() &&
+      approvalInbox.getById(item.id) === item &&
+      native.state === 'answering' &&
+      claudeQuestionConversation(session) === native.conversation &&
+      session.discordQueueRevision === native.inputRevision;
+    const outcome = await answerClaudeQuestion(session, native.dialog, answer.option!, current);
+    if (outcome === 'accepted') {
+      native.state = 'answered';
+      approvalInbox.take(item.id);
+      return { success: true, data: { id: item.id, sessionId: item.sessionId, action: answer.action } };
+    }
+    native.state = outcome === 'uncertain' ? 'uncertain' : 'pending';
+    if (outcome === 'uncertain') item.answerInTerminal = true;
+    approvalInbox.onUpdated?.(item);
+    return createErrorResponse(
+      ApiErrorCode.CONFLICT,
+      outcome === 'uncertain'
+        ? 'Answer delivery is unconfirmed. Check the terminal before retrying; no selection will be replayed.'
+        : 'The current dialog or input changed. Nothing was submitted; open the current question.'
+    );
+  }
   // Alert-only items: the dialog belongs to a TUI whose keystroke contract Codeman
   // has not measured, so '1'/Esc would be a blind keystroke into a foreign composer.
   // Two sources today: a supervised-hook CLI (DeepSeek Harness), whose item clears on

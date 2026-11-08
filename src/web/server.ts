@@ -38,7 +38,7 @@ import { remoteTmuxSessionName } from '../tmux-manager.js';
 import { resolveDiscordCase } from '../discord-case-identity.js';
 import { DiscordSessionManagement } from '../discord-session-management.js';
 import { discordTaskControl, discordControlCurrent } from '../discord-task-controls.js';
-import { discordHistoryControl } from '../discord-history.js';
+import { discordHistoryControl, readDiscordSessionGeneratedImage } from '../discord-history.js';
 import { readDiscordSessionFile, writeDiscordRemoteAttachment } from '../discord-file-transfers.js';
 import Fastify, { FastifyInstance } from 'fastify';
 import fastifyCompress from '@fastify/compress';
@@ -641,6 +641,20 @@ export class WebServer extends EventEmitter {
   });
   private discordBridge: DiscordBridge = new DiscordBridge({
     nativeUi: createDiscordNativeUiServices({
+      // Read-only fallback: hookless remote Claude choice dialogs must also reach Discord.
+      questionObserved: async (item) => {
+        const result = await this.discordBridge.notify({
+          event: SseEvent.HookElicitationDialog,
+          title: 'Question Asked',
+          urgency: 'critical',
+          sessionId: item.sessionId,
+          sessionName: item.sessionName,
+          body: 'Choose in the terminal; this question is waiting for your answer.',
+          tail: () => item.message || '',
+          host: this.windowTitle,
+        });
+        return result?.ok === true;
+      },
       capture: (id) => {
         const s = this.sessions.get(id);
         return s?.muxName ? this.mux.capturePaneTextAsync?.(s.muxName, { ansi: true }) : null;
@@ -705,7 +719,7 @@ export class WebServer extends EventEmitter {
         (!!session && discordControlCurrent(session, validity))
       );
     },
-    control: async (id, command) => {
+    control: async (id, command, current = () => true) => {
       const settings = await this.discordModelControls.control(id, command);
       if (settings) return settings;
       const managed = await this.discordSessionManager.control(id, command);
@@ -715,7 +729,22 @@ export class WebServer extends EventEmitter {
         return {
           text: 'Use a session thread for task/history commands; !codeman help lists management commands.',
         };
-      return (await discordTaskControl(session, command)) ?? discordHistoryControl(session, command);
+      return (
+        (await discordTaskControl(
+          session,
+          command,
+          () => current() && this.sessions.get(id) === session && !isMultiUserMode()
+        )) ?? discordHistoryControl(session, command)
+      );
+    },
+    getGeneratedImage: async (id, image) => {
+      if (isMultiUserMode() || !this.discordBridge.acceptsControls)
+        throw new Error('Generated image delivery is unavailable');
+      const session = this.sessions.get(id);
+      if (!session) throw new Error('Session unavailable');
+      const file = await readDiscordSessionGeneratedImage(session, image);
+      if (this.sessions.get(id) !== session) throw new Error('Session changed');
+      return file;
     },
     launchModes: () => enabledClis().map((c) => c.id),
     launch: (scope, key, mode) => this.discordSessionManager.launch(scope, key, mode),
@@ -1567,14 +1596,14 @@ export class WebServer extends EventEmitter {
         this.discordCreate = async (body) => {
           if (isMultiUserMode() || !this.discordBridge.acceptsControls)
             throw new Error('Discord lifecycle unavailable');
-          const input = body as { caseName: string; mode?: string };
+          const input = body as { caseName: string; name?: string; mode?: string };
           const prefix = getCli(input.mode ?? 'claude')?.capabilities.startMode === 'shell' ? 's' : 'w';
           const used = new Set([...this.sessions.values()].map((session) => session.name));
           let number = 1;
           while (used.has(`${prefix}${number}-${input.caseName}`)) number++;
           const requestBody = await applyDiscordLaunchDefaults({
             ...input,
-            sessionName: `${prefix}${number}-${input.caseName}`,
+            sessionName: input.name ?? `${prefix}${number}-${input.caseName}`,
           });
           const scope = this.discordBridge.controlScope;
           const current = () =>

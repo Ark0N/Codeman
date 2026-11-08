@@ -708,11 +708,20 @@ describe('inbound submission safety', () => {
 
   it('refuses a changed rendering plan after part of a response has been delivered', async () => {
     let count = 0;
+    let responsePosts = 0;
     let refuse = false;
-    const { b } = await ready(undefined, async (url) => {
+    const { b } = await ready(undefined, async (url, init) => {
       if (url.pathname.endsWith('/threads')) return Response.json({ id: THREAD });
       count++;
-      return refuse && count === 3 ? Response.json({}, { status: 403 }) : Response.json({ id: MESSAGE });
+      if (
+        init.method === 'POST' &&
+        url.pathname.endsWith('/messages') &&
+        String(init.body).includes('a long native response paragraph')
+      ) {
+        responsePosts++;
+        if (refuse && responsePosts === 2) return Response.json({}, { status: 403 });
+      }
+      return Response.json({ id: MESSAGE });
     });
     const msg = {
       event: 'done',
@@ -837,4 +846,72 @@ describe('visible queued-prompt provenance without execution evidence', () => {
       expect((await restarted.recent()).find((r) => r.id === meta.id)?.state).toBe('input_accepted');
     }
   );
+});
+
+it('allows a corrected definitively refused outbound payload to resume after restart', async () => {
+  const record = { ...meta, id: 'rejected-card', direction: 'outbound' as const, payloadHash: 'a'.repeat(64) };
+  const first = new DiscordDeliveryJournal(dir, () => now);
+  await first.claim(record);
+  await first.update(record.id, 'failed', 'discord_refused');
+  const restored = new DiscordDeliveryJournal(dir, () => now);
+  const revised = await restored.claim({ ...record, payloadHash: 'b'.repeat(64) });
+  expect(revised.fresh).toBe(false);
+  expect(revised.record.payloadHash).toBe('b'.repeat(64));
+  expect(revised.record.state).toBe('failed');
+  expect((await new DiscordDeliveryJournal(dir, () => now).claim(record)).record.payloadHash).toBe(record.payloadHash);
+});
+it.each(['delivered', 'uncertain', 'submitting', 'input_accepted'] as const)(
+  'does not replace the fingerprint of %s output',
+  async (state) => {
+    const record = { ...meta, id: 'guarded-card', direction: 'outbound' as const, payloadHash: 'a'.repeat(64) };
+    const j = new DiscordDeliveryJournal(dir, () => now);
+    await j.claim(record);
+    await j.update(record.id, state);
+    expect((await j.claim({ ...record, payloadHash: 'b'.repeat(64) })).record.payloadHash).toBe(record.payloadHash);
+  }
+);
+it.each(['inbound', 'message', 'channel', 'guild', 'session', 'other-failure'])(
+  'does not revise refused payload across %s guard',
+  async (guard) => {
+    const record = {
+      ...meta,
+      id: 'guarded-refusal',
+      direction: guard === 'inbound' ? ('inbound' as const) : ('outbound' as const),
+      payloadHash: 'a'.repeat(64),
+    };
+    const j = new DiscordDeliveryJournal(dir, () => now);
+    await j.claim(record);
+    if (guard === 'message') await j.annotate(record.id, { messageId: MESSAGE });
+    await j.update(record.id, 'failed', guard === 'other-failure' ? 'scope_changed' : 'discord_refused');
+    const changed = {
+      ...record,
+      payloadHash: 'b'.repeat(64),
+      ...(guard === 'channel' ? { channelId: PARENT } : {}),
+      ...(guard === 'guild' ? { guildId: PARENT } : {}),
+      ...(guard === 'session' ? { sessionId: 'other' } : {}),
+    };
+    expect((await j.claim(changed)).record.payloadHash).toBe(record.payloadHash);
+  }
+);
+it('retries corrected rejected response cards with the same nonce and never replays delivered output', async () => {
+  const requests: any[] = [];
+  const { b } = await ready(undefined, async (_url, init) => {
+    const body = JSON.parse(String(init.body));
+    requests.push(body);
+    return body.content === 'rejected rendering'
+      ? Response.json({ code: 50035 }, { status: 400 })
+      : Response.json({ id: MESSAGE });
+  });
+  const send = (b as any).deliverPost.bind(b);
+  await expect(send(THREAD, { content: 'rejected rendering' }, undefined, 's1', 'same-native-event')).rejects.toThrow(
+    'Discord HTTP 400'
+  );
+  const before = requests.length;
+  await send(THREAD, { content: 'corrected rendering' }, undefined, 's1', 'same-native-event');
+  expect(requests.at(-1).nonce).toBe(requests[before - 1].nonce);
+  await send(THREAD, { content: 'corrected rendering' }, undefined, 's1', 'same-native-event');
+  expect(requests).toHaveLength(before + 1);
+  await expect(
+    send(THREAD, { content: 'changed accepted rendering' }, undefined, 's1', 'same-native-event')
+  ).rejects.toThrow('formatting changed');
 });
