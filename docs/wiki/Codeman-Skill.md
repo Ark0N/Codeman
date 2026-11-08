@@ -83,6 +83,7 @@ These prompts work as written:
 | "Spin up 3 workers for lint, typecheck and tests, run them in parallel, report failures."  | One session per task, all started first, then gathered as each finishes. |
 | "Have a claude worker summarize `src/session.ts`, then close it."                          | Spawns, waits until the worker is ready, sends and waits, reads the answer, deletes the session. |
 | "Have a DeepSeek Harness worker build search and a claude worker build checkout."          | A mixed fleet: one worker per CLI, started in one go. |
+| "Use the local model to summarize every file in `docs/`, then check its summaries."         | A worker on the model Codeman installed on this Mac does the bulk; the lead reads its answer back and reviews it. Without a local model, it says why. |
 | "Watch session w4 and tell me if it gets stuck on a permission prompt."                    | Blocks on the `blocked` signal and brings the question to **you**. |
 
 Sessions the agent creates are deleted when it is done, so you can watch the tabs appear and
@@ -117,6 +118,12 @@ the two with real completion signals (Claude's from its hooks, DeepSeek's from t
 so the skill can wait for "turn finished" and read the answer as clean text. Every other CLI
 and plain shell sessions are synchronized on an output marker instead, which works the same
 from your side. See [Agent CLIs](Agent-CLIs) for the run modes.
+
+**The model on this Mac is a worker too.** When Codeman has installed a local model
+([A model that runs on this Mac](Custom-Model-Endpoints#a-model-that-runs-on-this-mac)), a
+Claude Code lead can hand work to it: Claude in the cloud plans and reviews, the local model
+takes summaries, first drafts and files that should stay on the machine. It answers one
+request at a time and is slower than a cloud model, and the skill never installs one for you.
 
 With Claude Code workers, where the installed Claude Code supports it, the lead can also
 message a worker directly instead of typing into its terminal.

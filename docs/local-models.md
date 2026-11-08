@@ -1,7 +1,8 @@
 # A model that runs on this Mac
 
-Codeman can set up a coding model that runs on the Mac the server runs on: no account, no
-API key, nothing leaves the machine. One button on the welcome screen opens a window that
+Codeman can set up a coding model that runs on the Mac the server runs on: no account and
+no API key, and the session's prompts and files go to a model on this Mac rather than a
+cloud provider (the coding agent itself may still check for updates). One button on the welcome screen opens a window that
 shows what fits this Mac, installs the choice and ends on a coding agent session that
 runs on it.
 
@@ -168,6 +169,19 @@ Codeman, so it is not asked: it keeps running on its port, see below.
 A different digest refuses the launch: "The model on this Mac changed since it was
 installed. Remove it and install it again." The digest is also read again at boot and when
 the runtime is started.
+
+### From a Claude Code session: cloud plus local
+
+The codeman skill ([`skills/codeman`](../skills/codeman/SKILL.md#claude-in-the-cloud-a-local-model-on-this-mac))
+lets an agent in a Codeman session hand work to this model, so Claude in the cloud plans and
+reviews while the model on this Mac does the bulk: summaries, classification, first drafts, and
+files that should not leave the machine. `local_model` reads `GET /api/local-model` and says what
+is installed or why nothing can run; `spawn_worker <name> local` starts the runtime when it was
+stopped (as Start does), then starts the installed coding agent on `local-ollama` through the same
+quick-start launch and the same checks as above; `sendmark` gives the worker a task and reads its
+answer back from a file it writes in its own folder. The skill never installs a model and never
+answers a confirmation, the runtime still answers one request at a time, and while a worker it
+opened is live, Stop and Remove are refused until it is closed.
 
 ## Stop, Start, Remove
 
