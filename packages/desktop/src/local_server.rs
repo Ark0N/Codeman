@@ -91,10 +91,10 @@ fn flavor(shell: &Path) -> Flavor {
 }
 
 /// What one process printed, stdout and stderr kept apart.
-struct Output {
-    code: Option<i32>,
-    stdout: String,
-    stderr: String,
+pub struct Output {
+    pub code: Option<i32>,
+    pub stdout: String,
+    pub stderr: String,
 }
 
 /// What `codeman` (or `SCRIPT` failing to find it) said, for the connect page.
@@ -143,8 +143,18 @@ fn pump<R: Read + Send + 'static>(pipe: Option<R>, stream: usize, tx: mpsc::Send
     });
 }
 
-/// Run `cmd` to completion with stdin closed, or kill it at `deadline`.
-fn exec(mut cmd: Command, deadline: Instant) -> Result<Output, String> {
+/// `exec_bounded` for a start.
+fn exec(cmd: Command, deadline: Instant) -> Result<Output, String> {
+    exec_bounded(
+        cmd,
+        deadline,
+        "Starting Codeman took longer than a minute; it was stopped.",
+    )
+}
+
+/// Run `cmd` to completion with stdin closed, or kill it at `deadline` and
+/// answer `timed_out`.
+pub fn exec_bounded(mut cmd: Command, deadline: Instant, timed_out: &str) -> Result<Output, String> {
     cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = cmd
         .spawn()
@@ -168,7 +178,7 @@ fn exec(mut cmd: Command, deadline: Instant) -> Result<Output, String> {
             Ok(None) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err("Starting Codeman took longer than a minute; it was stopped.".into());
+                return Err(timed_out.to_string());
             }
             Err(e) => return Err(e.to_string()),
         }
@@ -273,6 +283,17 @@ fn capture_env(
         }
         message
     }))
+}
+
+/// The login shell's environment, for a process the app runs without it (the
+/// graphical install). `None` when the shell reports none.
+pub fn login_environment() -> Option<Vec<(String, String)>> {
+    let shell = login_shell();
+    let flags: &[&str] = match flavor(&shell) {
+        Flavor::Posix => &["-l", "-c"],
+        Flavor::Capture(attempts) => attempts.first().copied().unwrap_or(&["-c"]),
+    };
+    capture_env(&shell, flags, Instant::now() + FIND_TIMEOUT).ok()?.ok()
 }
 
 /// Run `cmd` in the home folder, where a terminal and the LaunchAgent start

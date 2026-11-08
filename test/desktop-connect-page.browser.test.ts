@@ -757,20 +757,27 @@ async function everyState(browser: Browser) {
 
   await native({ type: 'localStatus', status: st16('notInstalled') });
   check(
-    'not installed: Install and the network option, no Open/Start',
-    (await visible('#local-install')) &&
-      (await visible('#local-network-row')) &&
-      !(await visible('#local-open')) &&
-      !(await visible('#local-start')) &&
-      (await page.textContent('#local-detail')).includes('Terminal')
+    'not installed: Install, no Open/Start',
+    (await visible('#local-install')) && !(await visible('#local-open')) && !(await visible('#local-start'))
   );
-  await page.click('#local-network');
+  // Install opens the graphical install (test/desktop-connect-install.test.ts walks its screens).
+  // The Terminal route is what it offers when it cannot go on, here after a failed preparation.
+  const installInTerminal = async () => {
+    await page.click('#local-install');
+    await native({ type: 'installPrepareFailed', message: 'Could not get the installer.' });
+    await page.click('#wiz-terminal');
+  };
   n0 = (await all()).length;
   await page.dblclick('#local-install');
   p = (await all()).slice(n0);
+  check('a double click on Install asks for the install once', p.length === 1 && p[0].cmd === 'installPrepare', p);
+  await native({ type: 'installPrepareFailed', message: 'Could not get the installer.' });
+  n0 = (await all()).length;
+  await page.dblclick('#wiz-terminal');
+  p = (await all()).slice(n0);
   check(
-    'Install posts installLocal once, with the network choice',
-    p.length === 1 && p[0].cmd === 'installLocal' && p[0].network === true,
+    'Install in Terminal instead posts installLocal once',
+    p.length === 1 && p[0].cmd === 'installLocal' && p[0].network === false,
     p
   );
   check('Install disabled while Terminal opens', await page.isDisabled('#local-install'));
@@ -779,7 +786,7 @@ async function everyState(browser: Browser) {
     'install failure shown as text, Install enabled again',
     (await page.textContent('#status')).includes('<b>no</b>') && !(await page.isDisabled('#local-install'))
   );
-  await page.click('#local-install');
+  await installInTerminal();
   await page.clock.install();
   await native({ type: 'installStarted', port: 3001 });
   check(
@@ -825,7 +832,7 @@ async function everyState(browser: Browser) {
 
   // A finished install whose service never answers offers Start after 90 s.
   await native({ type: 'localStatus', status: st16('notInstalled') });
-  await page.click('#local-install');
+  await installInTerminal();
   await native({ type: 'installStarted', port: 3000 });
   await native({ type: 'localStatus', status: st16('stopped', { installComplete: true }) });
   await page.clock.runFor(60000);
@@ -841,7 +848,7 @@ async function everyState(browser: Browser) {
   );
   // Stop waiting by hand.
   await native({ type: 'localStatus', status: st16('notInstalled') });
-  await page.click('#local-install');
+  await installInTerminal();
   await native({ type: 'installStarted', port: 3000 });
   n0 = (await all()).length;
   await page.click('#local-stop');
@@ -867,14 +874,84 @@ async function everyState(browser: Browser) {
     p.length === 1 && p[0].cmd === 'localStatus' && p[0].deep === true && p[0].quick === false,
     p
   );
-  await native({ type: 'localStatus', status: st16('runningElsewhere', { elsewhere: ['192.168.1.5:3000'] }) });
+  const elsewhere = [
+    { url: 'https://127.0.0.1:4000/', version: null, state: 'certificate', isDefault: false },
+    { url: 'http://192.168.1.5:3000/', version: '1.49.0', state: 'running', isDefault: false },
+  ];
+  await native({ type: 'localStatus', status: st16('runningElsewhere', { found: elsewhere }) });
   check(
-    'a server running elsewhere: no Start, no Install, says where',
+    'a server running elsewhere: no Start, no Install, a row for each address',
     !(await visible('#local-start')) &&
       !(await visible('#local-install')) &&
       !(await visible('#local-open')) &&
-      (await page.textContent('#local-detail')).includes('192.168.1.5:3000') &&
+      (await page.textContent('#local-found')).includes('http://192.168.1.5:3000/') &&
+      (await page.locator('#local-found .found').count()) === 2 &&
       (await page.textContent('#local-title')).includes('already running')
+  );
+  const foundBox = await page.evaluate(() => {
+    const r = (sel) => document.querySelector(sel).getBoundingClientRect();
+    const card = r('.card');
+    const rows = [...document.querySelectorAll('#local-found .found')].map((row) => row.getBoundingClientRect());
+    return {
+      order: [r('.local').bottom, rows[0].top, rows[1].bottom, r('#local-found-note').top, r('#local-check').top],
+      inside: rows.every((row) => row.left >= card.left && row.right <= card.right),
+      buttons: [...document.querySelectorAll('#local-found .found')].map((row) => {
+        const b = row.querySelector('button');
+        return b ? b.className : '';
+      }),
+    };
+  });
+  check(
+    'the rows sit under the title, then the sentence about a second server, then Check again',
+    foundBox.order.every((y, i) => i === 0 || y >= foundBox.order[i - 1]) && foundBox.inside,
+    foundBox
+  );
+  check(
+    'a server the app cannot open has no Connect; the first it can open is the main action',
+    foundBox.buttons[0] === '' && foundBox.buttons[1] === 'primary',
+    foundBox.buttons
+  );
+  n0 = (await all()).length;
+  await page.locator('#local-found .found button').dblclick();
+  p = (await all()).slice(n0);
+  check(
+    'Connect on a found server connects once, to its address',
+    p.length === 1 && p[0].cmd === 'connect' && p[0].url === 'http://192.168.1.5:3000/' && !('password' in p[0]),
+    p
+  );
+  await native({
+    type: 'probeResult',
+    url: 'http://192.168.1.5:3000/',
+    outcome: { kind: 'refused' },
+    canStart: false,
+  });
+  await native({
+    type: 'localStatus',
+    status: st16('running', {
+      version: '1.49.0',
+      outcome: { kind: 'ok', version: '1.49.0' },
+      found: [{ url: 'http://127.0.0.1:3000/', version: '1.49.0', state: 'running', isDefault: true }, elsewhere[1]],
+    }),
+  });
+  const alsoBox = await page.evaluate(() => {
+    const r = (sel) => document.querySelector(sel).getBoundingClientRect();
+    return {
+      open: r('#local-open').bottom,
+      also: r('#local-also').top,
+      rows: document.querySelectorAll('#local-also .found').length,
+      head: document.querySelector('#local-also-head').textContent,
+      button: document.querySelector('#local-also .found button').className,
+    };
+  });
+  check(
+    'running with another server on this Mac: it is listed under Open, as a secondary action',
+    (await visible('#local-open')) &&
+      alsoBox.also >= alsoBox.open &&
+      alsoBox.rows === 1 &&
+      alsoBox.head === 'Also running on this Mac' &&
+      alsoBox.button === 'secondary' &&
+      !(await visible('#local-found')),
+    alsoBox
   );
   await native({ type: 'localStatus', status: st16('stopped', { url: 'https://127.0.0.1:3000/', service: true }) });
   check(
@@ -1051,7 +1128,7 @@ async function layoutAndLimits(browser: Browser) {
         installComplete: true,
         installRunning: false,
         installPort: null,
-        elsewhere: [],
+        found: [],
         outcome: { kind: 'ok', version: '1.48.0' },
       },
       s
@@ -1288,7 +1365,7 @@ async function clicksKeysAndStates(browser: Browser) {
         installComplete: true,
         installRunning: false,
         installPort: null,
-        elsewhere: [],
+        found: [],
         outcome: { kind: 'ok', version: '1.48.0' },
       },
       s
@@ -1418,6 +1495,24 @@ async function clicksKeysAndStates(browser: Browser) {
     'Return never starts an install',
     (await t.posted('installLocal')).length === 0 && (await t.page.locator('#local-install').isVisible())
   );
+  await t.native(
+    localStatus({
+      state: 'runningElsewhere',
+      version: null,
+      outcome: { kind: 'refused' },
+      found: [
+        { url: 'https://127.0.0.1:4000/', version: null, state: 'certificate', isDefault: false },
+        { url: 'http://127.0.0.1:5000/', version: '1.49.0', state: 'running', isDefault: false },
+      ],
+    })
+  );
+  await t.page.keyboard.press('Enter');
+  check(
+    'Return connects to the server found on this Mac when that is the main action',
+    (await t.posted('connect')).length === 2 && (await t.posted('connect'))[1].url === 'http://127.0.0.1:5000/',
+    await t.posted('connect')
+  );
+  await t.page.keyboard.press('Escape');
   await t.native(localStatus({ state: 'stopped', version: null, outcome: { kind: 'refused' } }));
   await t.page.focus('#local-check');
   await t.page.keyboard.press('Enter');

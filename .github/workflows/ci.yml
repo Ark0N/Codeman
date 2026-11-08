@@ -80,6 +80,35 @@ jobs:
             CLI_DETECT_DONE=""; detect_all_clis
             offer_ai_cli_install >/dev/null 2>&1
             echo "bash $BASH_VERSION: skipping the AI CLI install menu continues"
+            # --ai-cli answers the same menu with no terminal: `none` carries on, and a
+            # name runs that one entry (bash 3.2 cannot expand an empty offer list under
+            # set -u, which is the guard the loop over it has to get right).
+            has_tty() { return 1; }
+            AI_CLI_CHOICE=none
+            offer_ai_cli_install >/dev/null 2>&1
+            AI_CLI_CHOICE=codex
+            k=0; while [[ $k -lt ${#CLI_INSTALL_CMD_TRUSTED[@]} ]]; do
+              CLI_INSTALL_CMD_TRUSTED[$k]=""
+              k=$((k + 1))
+            done
+            offer_ai_cli_install >/dev/null 2>&1
+            echo "bash $BASH_VERSION: --ai-cli answers the menu, also with nothing to offer"
+            # What the desktop app runs: preflight on stdout, and only JSON there. These
+            # child runs must not inherit CODEMAN_INSTALL_SH_LIB, or they stop at the
+            # sourcing guard and print nothing. Each check ends in `|| exit 1`, because
+            # bash 3.2 does not let a false [[ ]] trip set -e.
+            out=$(env -u CODEMAN_INSTALL_SH_LIB bash /w/install.sh preflight --no-admin)
+            [[ "$out" == "{\"schema\":1,"* && "$out" == *"]}" ]] || { echo "preflight printed: $out"; exit 1; }
+            json_string "a\"b\\c" >/tmp/json-out
+            [[ "$(cat /tmp/json-out)" == "\"a\\\"b\\\\c\"" ]] || { echo "json_string printed: $(cat /tmp/json-out)"; exit 1; }
+            echo "bash $BASH_VERSION: preflight prints JSON"
+            # How the desktop app adds an agent: a real run of the subcommand, which stops
+            # on the missing npm before it could install anything.
+            if out=$(env -u CODEMAN_INSTALL_SH_LIB bash /w/install.sh agent codex --no-admin --progress 2>&1); then
+              echo "agent ran with no npm to run"; exit 1
+            fi
+            [[ "$out" == *"@@codeman phase agent"* && "$out" != *"@@codeman phase done"* ]] || { echo "agent printed: $out"; exit 1; }
+            echo "bash $BASH_VERSION: agent stops without saying done"
           '
           # Issue #382: the dsh identity probe builds an OPTIONAL `timeout` prefix as an
           # array, and on stock macOS there is no `timeout`, so the array is empty and the

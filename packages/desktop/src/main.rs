@@ -24,6 +24,7 @@ mod agents;
 mod assets;
 mod config;
 mod credentials;
+mod gui_install;
 mod local_server;
 mod logo;
 #[cfg(target_os = "macos")]
@@ -37,7 +38,8 @@ use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::process::Command;
 use std::rc::Rc;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use muda::accelerator::{Accelerator, Code, Modifiers};
@@ -105,6 +107,7 @@ const START_REFUSED: &str = "Codeman can only be started here for an http://127.
 
 mod menu_id {
     pub const SWITCH: &str = "switch-server";
+    pub const ADD_AGENT: &str = "add-agent";
     pub const RELOAD: &str = "reload";
     pub const START_FULLSCREEN: &str = "start-fullscreen";
     pub const DEVTOOLS: &str = "devtools";
@@ -294,6 +297,11 @@ struct App {
     menu: AppMenu,
     /// The one Keychain worker; every Keychain job goes through its queue.
     keychain: Keychain,
+    /// Which reader of the install's output is the current one.
+    install_reader: Arc<AtomicU64>,
+    /// The connect page opens the agent chooser when it next loads: the menu
+    /// asked for it from a Codeman page.
+    add_agent_on_load: bool,
     /// While the main window may still have to be put into the full screen it
     /// asked for at launch: when to look next, and how many retries were made.
     fullscreen_retry: Option<(Instant, u8)>,
@@ -386,6 +394,8 @@ fn main() {
         downloads: HashMap::new(),
         menu,
         keychain,
+        install_reader: Arc::new(AtomicU64::new(0)),
+        add_agent_on_load: false,
         fullscreen_retry: wants_fullscreen.then(|| (Instant::now() + FULLSCREEN_FIRST_CHECK, 0)),
         logo_watch: logo::Watcher::default(),
     };
@@ -423,6 +433,7 @@ fn build_menu(config: &Config) -> muda::Result<AppMenu> {
             &about,
             &PredefinedMenuItem::separator(),
             &switch,
+            &MenuItem::with_id(menu_id::ADD_AGENT, "Add a Coding Agent to This Mac\u{2026}", true, None),
             &PredefinedMenuItem::separator(),
             &PredefinedMenuItem::services(None),
             &PredefinedMenuItem::separator(),
@@ -1179,6 +1190,7 @@ impl App {
         }
         match id {
             menu_id::SWITCH => self.show_connect_page(None, true),
+            menu_id::ADD_AGENT => self.add_agent(),
             menu_id::RELOAD => self.reload_focused(),
             menu_id::START_FULLSCREEN => {
                 let value = self.menu.start_fullscreen.is_checked();
@@ -1316,6 +1328,76 @@ impl App {
                     });
                 }
             }
+            ConnectCmd::InstallPrepare => {
+                if choosing {
+                    self.in_background(|| match gui_install::prepare() {
+                        Ok(plan) => json!({ "type": "installPlan", "plan": plan }),
+                        Err(message) => json!({ "type": "installPrepareFailed", "message": message }),
+                    });
+                }
+            }
+            ConnectCmd::InstallStart {
+                network_password,
+                ai_cli,
+            } => {
+                if choosing {
+                    let proxy = self.proxy.clone();
+                    let stale = self.next_install_reader();
+                    std::thread::spawn(move || {
+                        let plan = gui_install::Plan {
+                            port: setup::pick_install_port(),
+                            network_password,
+                            ai_cli,
+                        };
+                        let send = |msg| {
+                            let _ = proxy.send_event(UserEvent::ToConnectPage(msg));
+                        };
+                        match gui_install::start(&plan) {
+                            Ok(()) => {
+                                send(json!({ "type": "installRunning", "port": plan.port }));
+                                gui_install::follow(gui_install::Run::Codeman, stale, send);
+                            }
+                            Err(message) => send(json!({ "type": "installStartFailed", "message": message })),
+                        }
+                    });
+                }
+            }
+            ConnectCmd::InstallAttach => {
+                if choosing {
+                    self.attach_to_run(gui_install::Run::Codeman);
+                }
+            }
+            ConnectCmd::InstallCancel => {
+                std::thread::spawn(gui_install::cancel);
+            }
+            ConnectCmd::AgentPrepare => {
+                if choosing {
+                    self.in_background(|| match gui_install::prepare_agent() {
+                        Ok(plan) => json!({ "type": "installPlan", "plan": plan }),
+                        Err(message) => json!({ "type": "installPrepareFailed", "message": message }),
+                    });
+                }
+            }
+            ConnectCmd::AgentStart { ai_cli } => {
+                if choosing {
+                    let proxy = self.proxy.clone();
+                    let stale = self.next_install_reader();
+                    std::thread::spawn(move || {
+                        let send = |msg| {
+                            let _ = proxy.send_event(UserEvent::ToConnectPage(msg));
+                        };
+                        match gui_install::start_agent(&ai_cli) {
+                            Ok(()) => gui_install::follow(gui_install::Run::Agent, stale, send),
+                            Err(message) => send(json!({ "type": "installStartFailed", "message": message })),
+                        }
+                    });
+                }
+            }
+            ConnectCmd::AgentAttach => {
+                if choosing {
+                    self.attach_to_run(gui_install::Run::Agent);
+                }
+            }
             ConnectCmd::InstallRemote { target } => {
                 if choosing {
                     match setup::SshTarget::parse(&target) {
@@ -1347,6 +1429,40 @@ impl App {
         }
     }
 
+    /// A new reader of the install's output replaces the one before it: the
+    /// answer is how that new reader learns it was replaced in turn.
+    /// Report a run that is going already to the page, from its first line.
+    fn attach_to_run(&self, run: gui_install::Run) {
+        let proxy = self.proxy.clone();
+        let stale = self.next_install_reader();
+        std::thread::spawn(move || {
+            gui_install::follow(run, stale, |msg| {
+                let _ = proxy.send_event(UserEvent::ToConnectPage(msg));
+            });
+        });
+    }
+
+    /// The agent chooser lives on the connect page: from a Codeman page, this
+    /// leaves it the way Switch Server does.
+    fn add_agent(&mut self) {
+        if matches!(*self.phase.borrow(), Phase::Connect) {
+            if let Some(main) = self.windows.get(&self.main_id) {
+                main.window.set_visible(true);
+                main.window.set_focus();
+            }
+            self.to_connect_page(json!({ "type": "addAgent" }));
+        } else {
+            self.add_agent_on_load = true;
+            self.show_connect_page(None, true);
+        }
+    }
+
+    fn next_install_reader(&self) -> impl Fn() -> bool + Send + 'static {
+        let generation = self.install_reader.clone();
+        let mine = generation.fetch_add(1, Ordering::SeqCst) + 1;
+        move || generation.load(Ordering::SeqCst) != mine
+    }
+
     /// Run `work` off the event loop (it may run a login shell, plutil,
     /// Terminal or a probe) and hand what it returns to the connect page.
     fn in_background(&self, work: impl FnOnce() -> serde_json::Value + Send + 'static) {
@@ -1358,6 +1474,7 @@ impl App {
 
     fn send_init(&mut self) {
         let notice = self.notice.take();
+        let add_agent = std::mem::take(&mut self.add_agent_on_load);
         self.to_connect_page(json!({
             "type": "init",
             "servers": self.config.servers,
@@ -1366,6 +1483,7 @@ impl App {
             "version": VERSION,
             "starting": self.start_running(),
             "notice": notice,
+            "addAgent": add_agent,
         }));
     }
 
