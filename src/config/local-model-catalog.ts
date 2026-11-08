@@ -103,9 +103,11 @@
  *       measured.
  *
  * After the download the install checks that the runtime holds the whole model on the GPU.
- * For a `llamacpp` row that is the runtime's own reckoning of the load, K/V cache included.
- * For an `mlx` row it proves only the weights (issue 19417): the figures above are all that
- * stands between such a row and swap.
+ * For a `llamacpp` row both of the runtime's figures are the buffers llama-server reports
+ * allocating (weights, K/V cache, compute; `MemorySize()` in llm/llama_server.go), so the
+ * check proves the whole load is on the GPU, whatever the cache type. For an `mlx` row it
+ * proves only the weights (issue 19417): the figures above are all that stands between such
+ * a row and swap.
  *
  * Models set aside on purpose (a weekly review should look at them again):
  *  - `bonsai-2:27b`, `bonsai-2:9b` (ternary builds of Qwen3.8-27B and Qwen3.5-9B; the 27B

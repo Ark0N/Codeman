@@ -22,19 +22,19 @@ the catalogue answers today, before the runtime measured anything (the budget is
 estimate: 2/3 of the memory below 36 GB, 3/4 from 36 GB, less 1 GiB, and never more than the
 memory less 6, 8 or 12 GiB for macOS, Codeman, a browser and the agent):
 
-| Memory           | Budget  | What it gets                                                                                                                                                                                                       |
-| ---------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 8 GB             | 2.1 GB  | Nothing. The smallest model a coding agent can work with needs 9.8 GB at 65,536 tokens                                                                                                                             |
-| 16 GB            | 10.4 GB | A small model (`limited`): MiMo V2.6 9B at 65,536 tokens, 9.8 GB, tight. Its base, Qwen3.5 9B, is the one alternative                                                                                              |
-| 18 GB            | 11.8 GB | The same at 131,072 tokens, 11.0 GB, tight                                                                                                                                                                         |
-| 24 GB            | 16.1 GB | The same at 131,072 tokens, with room                                                                                                                                                                              |
-| 32 GB            | 21.8 GB | The same. North Mini Code 1.0 needs 21.8 GB and misses the estimate by a hair; once the runtime measures about 3/4 of the memory, as it did on a 16 and a 48 GB Mac, the Mac gets it, or Qwen3.8 27B on a Max chip |
-| 36 GB            | 27.9 GB | Qwen3.8 27B at 131,072 tokens on an M4 or M5 Max; on a slower chip, where the dense 27B computes to under 10 tokens per second, Qwen3.6 35B-A3B as a GGUF build                                                    |
-| 48 GB            | 37.6 GB | Qwen3.6 35B-A3B (MLX) at 131,072 tokens: the pair we tested, "Recommended" on an Apple M5 Pro with 48 GB. On a Max chip Qwen3.8 27B at 262,144 tokens                                                              |
-| 64 GB            | 50.5 GB | Qwen3.8 27B at 262,144 tokens on a Max chip; Qwen3.6 35B-A3B (MLX) on a Pro chip                                                                                                                                   |
-| 96 GB            | 76.2 GB | Qwen3.8 27B at 262,144 tokens; on an M3 Max, Qwen3.6 35B-A3B (MLX)                                                                                                                                                 |
-| 128 GB           | 102 GB  | Ornith 1.5 122B-A10B (MLX) at 131,072 tokens, 97.4 GB, tight                                                                                                                                                       |
-| 192, 256, 512 GB | 154 GB+ | Ornith 1.5 122B-A10B at 262,144 tokens                                                                                                                                                                             |
+| Memory           | Budget  | What it gets                                                                                                                                                                                                                                                                                                                      |
+| ---------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 8 GB             | 2.1 GB  | Nothing. The smallest model a coding agent can work with needs 9.8 GB at 65,536 tokens                                                                                                                                                                                                                                            |
+| 16 GB            | 10.4 GB | A small model (`limited`): MiMo V2.6 9B at 65,536 tokens, 9.8 GB, tight. Its base, Qwen3.5 9B, is the one alternative                                                                                                                                                                                                             |
+| 18 GB            | 11.8 GB | The same at 131,072 tokens, 11.0 GB, tight                                                                                                                                                                                                                                                                                        |
+| 24 GB            | 16.1 GB | The same at 131,072 tokens, with room                                                                                                                                                                                                                                                                                             |
+| 32 GB            | 21.8 GB | The same. North Mini Code 1.0 needs 21.8 GB and misses the estimate by a hair; once the runtime measures about 3/4 of the memory, as it did on a 16 and a 48 GB Mac, the Mac gets it, or Qwen3.8 27B on a Max chip                                                                                                                |
+| 36 GB            | 27.9 GB | Qwen3.8 27B at 131,072 tokens on an M4 or M5 Max; on a slower chip, where the dense 27B computes to under 10 tokens per second, Qwen3.6 35B-A3B as a GGUF build                                                                                                                                                                   |
+| 48 GB            | 37.6 GB | Qwen3.6 35B-A3B (MLX) at 131,072 tokens: the pair we tested, "Recommended" on an Apple M5 Pro with 48 GB. On a Max chip Qwen3.8 27B at 262,144 tokens. The test was a short task: in a long session MLX may keep up to 8 GiB more, which brings this pair to the edge of the budget, and past it while a long prompt is processed |
+| 64 GB            | 50.5 GB | Qwen3.8 27B at 262,144 tokens on a Max chip; Qwen3.6 35B-A3B (MLX) on a Pro chip                                                                                                                                                                                                                                                  |
+| 96 GB            | 76.2 GB | Qwen3.8 27B at 262,144 tokens; on an M3 Max, Qwen3.6 35B-A3B (MLX)                                                                                                                                                                                                                                                                |
+| 128 GB           | 102 GB  | Ornith 1.5 122B-A10B (MLX) at 131,072 tokens, 97.4 GB, tight                                                                                                                                                                                                                                                                      |
+| 192, 256, 512 GB | 154 GB+ | Ornith 1.5 122B-A10B at 262,144 tokens                                                                                                                                                                                                                                                                                            |
 
 "Tight" means the need is between 85% and 98% of the budget; above 98% a model is not
 offered. A model that computes to under 10 tokens per second on the chip is "slow" and ranks
@@ -82,6 +82,12 @@ calculation. For a llama.cpp build the check after the download catches one that
 too kindly; for an MLX build it cannot (see "The check" below). The measured row's figures come from single long prompts, not a session of many requests, in
 which MLX may keep up to 8 GiB more. The catalogue header lists the models left out on
 purpose (no evidence of working tool calls, a restrictive licence, a known bug) and why.
+
+A new row needs its model's architecture (attention layers, K/V heads, head size, and its
+linear-attention or sliding-window layers, from its `config.json`) in the table of
+`test/local-model-catalog.test.ts`, which recomputes every computed figure from it and fails
+for a row it does not know. Its answer for each memory size is then pinned in
+`test/local-model-recommend.test.ts`.
 
 ## What an install does, in order
 
@@ -156,10 +162,10 @@ After the pull, in this order:
 
 1. One tiny chat with `reasoning_effort: "none"`. It loads the model.
 2. `GET /api/ps` must show the whole model on the GPU (`size_vram` equal to `size`) at the
-   chosen context length. For a llama.cpp build that is the runtime's reckoning of the whole
-   load, K/V cache included. For an MLX build it proves only the weights: the runtime books
-   an MLX model at its weights (runtime issue 19417), so for those rows the catalogue's
-   figures are all there is.
+   chosen context length. For a llama.cpp build both figures are the buffers llama-server
+   reports allocating (weights, K/V cache, compute), so this proves the whole load is on the
+   GPU. For an MLX build it proves only the weights: the runtime books an MLX model at its
+   weights (runtime issue 19417), so for those rows the catalogue's figures are all there is.
 3. One tool probe on `/v1/chat/completions` (a `tools` array, `reasoning_effort: "none"`,
    `max_tokens` 1024). It passes on a tool call whose arguments parse.
 
