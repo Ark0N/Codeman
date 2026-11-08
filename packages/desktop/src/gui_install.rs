@@ -6,8 +6,8 @@
 //! tmux in the home folder, so nothing in it asks for a password, and the two
 //! questions only a person can answer (which coding agent, who may reach
 //! Codeman) are asked by the page and passed as flags. The Terminal route in
-//! `setup.rs` stays for what this one cannot do, a Mac older than macOS 15 with
-//! no tmux first of all.
+//! `terminal_install.rs` stays for what this one cannot do, a Mac older than
+//! macOS 15 with no tmux first of all.
 //!
 //! `prepare` downloads the installer once into a private folder and asks it
 //! what is on this Mac (`install.sh preflight`); `start` runs the same file with

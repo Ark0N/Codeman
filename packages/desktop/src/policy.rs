@@ -61,6 +61,16 @@ impl Phase {
     }
 }
 
+/// The phase a commit of `committed` in the main window moves to: Loaded once
+/// a page from the server that is loading is the document.
+pub fn loaded_on_commit(phase: &Phase, committed: &str) -> Option<Phase> {
+    let Phase::Loading(server) = phase else {
+        return None;
+    };
+    let url = Url::parse(committed).ok()?;
+    same_origin(&url, server).then(|| Phase::Loaded(server.clone()))
+}
+
 /// Turn what the user typed into a server URL: scheme added when missing,
 /// query and fragment dropped, and the path ending in `/` so `api/status`
 /// joins below a base path. The scheme is `https` for a tailnet `.ts.net`
@@ -631,7 +641,7 @@ pub enum ConnectCmd {
     /// Show the agent install that is running already.
     AgentAttach,
     /// Run the installer on another machine over SSH, in Terminal. `target`
-    /// is what the user typed; setup::SshTarget::parse checks it.
+    /// is what the user typed; terminal_install::SshTarget::parse checks it.
     InstallRemote {
         target: String,
     },
@@ -957,6 +967,32 @@ mod tests {
         assert_eq!(Phase::Loaded(srv.clone()).server(), Some(&srv));
         assert_eq!(Phase::Loaded(srv.clone()).loaded(), Some(&srv));
         assert!(!Phase::Loaded(srv).connect_page_live());
+    }
+
+    #[test]
+    fn a_commit_from_the_loading_server_is_the_loaded_page() {
+        let server = Url::parse("https://box.ts.net/codeman/").unwrap();
+        let loading = Phase::Loading(server.clone());
+        assert_eq!(
+            loaded_on_commit(&loading, "https://box.ts.net/codeman/"),
+            Some(Phase::Loaded(server.clone()))
+        );
+        // Any page of that origin counts: the server may redirect within it.
+        assert_eq!(
+            loaded_on_commit(&loading, "https://box.ts.net/codeman/session/abc"),
+            Some(Phase::Loaded(server.clone()))
+        );
+        // Another origin, the connect page, or junk: still loading.
+        assert_eq!(loaded_on_commit(&loading, "https://other.ts.net/codeman/"), None);
+        assert_eq!(loaded_on_commit(&loading, "http://box.ts.net/codeman/"), None);
+        assert_eq!(loaded_on_commit(&loading, CONNECT_PAGE), None);
+        assert_eq!(loaded_on_commit(&loading, "not a url"), None);
+        // Only a load under way can finish.
+        assert_eq!(loaded_on_commit(&Phase::Connect, "https://box.ts.net/codeman/"), None);
+        assert_eq!(
+            loaded_on_commit(&Phase::Loaded(server), "https://box.ts.net/codeman/"),
+            None
+        );
     }
 
     #[test]

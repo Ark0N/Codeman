@@ -26,12 +26,15 @@ mod config;
 mod credentials;
 mod gui_install;
 mod local_server;
+mod login;
 mod logo;
 #[cfg(target_os = "macos")]
 mod macos;
+mod menu;
 mod policy;
 mod probe;
 mod setup;
+mod terminal_install;
 
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
@@ -42,8 +45,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use muda::accelerator::{Accelerator, Code, Modifiers};
-use muda::{AboutMetadata, CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
+use muda::MenuEvent;
 use serde_json::json;
 use tao::dpi::{LogicalPosition, LogicalSize};
 use tao::event::{Event, StartCause, WindowEvent};
@@ -56,7 +58,9 @@ use wry::{NewWindowResponse, PageLoadEvent, PermissionResponse, WebView, WebView
 
 use config::{Config, Rect, WindowFrame};
 use credentials::Keychain;
+use login::{choose_login, update_keychain, KeychainUpdate, ProbedLogin};
 use logo::{BlinkStyle, Signal};
+use menu::{build_menu, menu_id, AppMenu};
 use policy::{ConnectCmd, HostCmd, Ipc, Navigation, NewWindow, OpenBudget, Phase, Recovery, Via};
 use probe::ProbeOutcome;
 
@@ -104,16 +108,6 @@ const KEYCHAIN_UNREADABLE: &str = "The saved password could not be read from the
 const PAGE_KEEPS_STOPPING: &str = "Codeman's page stopped twice in a row, so it was closed. Connect again.";
 const LOGO_SWITCHED_OFF: &str = "The Apple logo is switched off on this Mac, so it cannot blink.";
 const START_REFUSED: &str = "Codeman can only be started here for an http://127.0.0.1 or http://localhost address.";
-
-mod menu_id {
-    pub const SWITCH: &str = "switch-server";
-    pub const ADD_AGENT: &str = "add-agent";
-    pub const RELOAD: &str = "reload";
-    pub const START_FULLSCREEN: &str = "start-fullscreen";
-    pub const DEVTOOLS: &str = "devtools";
-    pub const HELP_DOCS: &str = "help-docs";
-    pub const HELP_GITHUB: &str = "help-github";
-}
 
 enum UserEvent {
     Menu(MenuEvent),
@@ -235,16 +229,6 @@ struct AppWindow {
     session_reload_at: Option<Instant>,
     /// When the window's web content process last ended.
     content_process_gone_at: Option<Instant>,
-}
-
-struct AppMenu {
-    bar: Menu,
-    window_menu: Submenu,
-    help_menu: Submenu,
-    start_fullscreen: CheckMenuItem,
-    /// One item per state and style. Empty on a Mac without a lit logo, which has no
-    /// such menu.
-    logo_styles: Vec<(Signal, BlinkStyle, CheckMenuItem)>,
 }
 
 enum Load<'a> {
@@ -408,135 +392,6 @@ fn fatal(message: &str) -> ! {
     std::process::exit(1);
 }
 
-fn build_menu(config: &Config) -> muda::Result<AppMenu> {
-    let bar = Menu::new();
-    let about = PredefinedMenuItem::about(
-        Some("About Codeman"),
-        Some(AboutMetadata {
-            name: Some(APP_NAME.into()),
-            version: Some(VERSION.into()),
-            comments: Some("A native window for your Codeman server.".into()),
-            website: Some("https://github.com/Ark0N/Codeman".into()),
-            ..Default::default()
-        }),
-    );
-    let switch = MenuItem::with_id(
-        menu_id::SWITCH,
-        "Switch Server\u{2026}",
-        true,
-        Some(Accelerator::new(Modifiers::META | Modifiers::SHIFT, Code::KeyO)),
-    );
-    let app_menu = Submenu::with_items(
-        APP_NAME,
-        true,
-        &[
-            &about,
-            &PredefinedMenuItem::separator(),
-            &switch,
-            &MenuItem::with_id(menu_id::ADD_AGENT, "Add a Coding Agent to This Mac\u{2026}", true, None),
-            &PredefinedMenuItem::separator(),
-            &PredefinedMenuItem::services(None),
-            &PredefinedMenuItem::separator(),
-            &PredefinedMenuItem::hide(None),
-            &PredefinedMenuItem::hide_others(None),
-            &PredefinedMenuItem::show_all(None),
-            &PredefinedMenuItem::separator(),
-            &PredefinedMenuItem::quit(None),
-        ],
-    )?;
-    // Without these items Cmd+C / Cmd+V do nothing inside a WKWebView.
-    let edit = Submenu::with_items(
-        "Edit",
-        true,
-        &[
-            &PredefinedMenuItem::undo(None),
-            &PredefinedMenuItem::redo(None),
-            &PredefinedMenuItem::separator(),
-            &PredefinedMenuItem::cut(None),
-            &PredefinedMenuItem::copy(None),
-            &PredefinedMenuItem::paste(None),
-            &PredefinedMenuItem::select_all(None),
-        ],
-    )?;
-    let start_fullscreen = CheckMenuItem::with_id(
-        menu_id::START_FULLSCREEN,
-        "Always Open in Full Screen",
-        true,
-        config.start_fullscreen,
-        None,
-    );
-    let view = Submenu::with_items(
-        "View",
-        true,
-        &[
-            &MenuItem::with_id(
-                menu_id::RELOAD,
-                "Reload",
-                true,
-                Some(Accelerator::new(Modifiers::META, Code::KeyR)),
-            ),
-            &PredefinedMenuItem::separator(),
-            &PredefinedMenuItem::fullscreen(None),
-            &start_fullscreen,
-            &PredefinedMenuItem::separator(),
-            &MenuItem::with_id(
-                menu_id::DEVTOOLS,
-                "Developer Tools",
-                true,
-                Some(Accelerator::new(Modifiers::META | Modifiers::ALT, Code::KeyI)),
-            ),
-        ],
-    )?;
-    // Only a Mac with a lit Apple logo has this menu at all.
-    let mut logo_styles = Vec::new();
-    if logo::available() {
-        let submenu = Submenu::new("Blink Apple Logo", true);
-        for signal in Signal::ALL {
-            let group = Submenu::new(signal.label(), true);
-            for style in BlinkStyle::ALL {
-                let chosen = style == config.logo_blink.get(signal);
-                let item = CheckMenuItem::with_id(style.menu_id(signal), style.label(), true, chosen, None);
-                group.append(&item)?;
-                if style == BlinkStyle::Off {
-                    group.append(&PredefinedMenuItem::separator())?;
-                }
-                logo_styles.push((signal, style, item));
-            }
-            submenu.append(&group)?;
-        }
-        // Right under "Always Open in Full Screen", before the separator.
-        view.insert(&submenu, 4)?;
-    }
-    let window_menu = Submenu::with_items(
-        "Window",
-        true,
-        &[
-            &PredefinedMenuItem::minimize(None),
-            &PredefinedMenuItem::maximize(None),
-            &PredefinedMenuItem::separator(),
-            &PredefinedMenuItem::close_window(None),
-            &PredefinedMenuItem::separator(),
-            &PredefinedMenuItem::bring_all_to_front(None),
-        ],
-    )?;
-    let help_menu = Submenu::with_items(
-        "Help",
-        true,
-        &[
-            &MenuItem::with_id(menu_id::HELP_DOCS, "Codeman Documentation", true, None),
-            &MenuItem::with_id(menu_id::HELP_GITHUB, "Codeman on GitHub", true, None),
-        ],
-    )?;
-    bar.append_items(&[&app_menu, &edit, &view, &window_menu, &help_menu])?;
-    Ok(AppMenu {
-        bar,
-        window_menu,
-        help_menu,
-        start_fullscreen,
-        logo_styles,
-    })
-}
-
 /// A display's whole area in points (the menu bar and the Dock are inside it).
 fn display_rect(monitor: &tao::monitor::MonitorHandle) -> Rect {
     let sf = monitor.scale_factor();
@@ -648,16 +503,6 @@ fn clear_cookies_then_load(proxy: &EventLoopProxy<UserEvent>, generation: u64, u
     done();
 }
 
-/// The phase a commit of `committed` in the main window moves to: Loaded once
-/// a page from the server that is loading is the document.
-fn loaded_on_commit(phase: &Phase, committed: &str) -> Option<Phase> {
-    let Phase::Loading(server) = phase else {
-        return None;
-    };
-    let url = Url::parse(committed).ok()?;
-    policy::same_origin(&url, server).then(|| Phase::Loaded(server.clone()))
-}
-
 /// `focused`: the web view takes the keyboard and brings the app to the front
 /// (wry's default). False for a window a script opened: it comes up without
 /// pulling the user out of the app they are typing in.
@@ -746,7 +591,7 @@ fn build_webview(
         // event arrives, in case the borrow was not free.
         if is_main {
             if let Ok(mut phase) = load_phase.try_borrow_mut() {
-                if let Some(next) = loaded_on_commit(&phase, &url) {
+                if let Some(next) = policy::loaded_on_commit(&phase, &url) {
                     *phase = next;
                 }
             }
@@ -970,7 +815,7 @@ impl App {
             }
             UserEvent::PageCommitted { window, url } => {
                 if window == self.main_id {
-                    let next = loaded_on_commit(&self.phase.borrow(), &url);
+                    let next = policy::loaded_on_commit(&self.phase.borrow(), &url);
                     if let Some(next) = next {
                         *self.phase.borrow_mut() = next;
                     }
@@ -1320,8 +1165,9 @@ impl App {
                 if choosing {
                     self.in_background(move || {
                         let port = setup::pick_install_port();
-                        let script = setup::local_install_script(setup::LocalInstall { port, network });
-                        match setup::open_in_terminal(setup::LOCAL_SCRIPT_NAME, &script) {
+                        let script =
+                            terminal_install::local_install_script(terminal_install::LocalInstall { port, network });
+                        match terminal_install::open_in_terminal(terminal_install::LOCAL_SCRIPT_NAME, &script) {
                             Ok(()) => json!({ "type": "installStarted", "port": port }),
                             Err(message) => json!({ "type": "installFailed", "message": message }),
                         }
@@ -1400,15 +1246,15 @@ impl App {
             }
             ConnectCmd::InstallRemote { target } => {
                 if choosing {
-                    match setup::SshTarget::parse(&target) {
+                    match terminal_install::SshTarget::parse(&target) {
                         Err(message) => self.to_connect_page(json!({
                             "type": "installFailed",
                             "remote": true,
                             "message": message,
                         })),
                         Ok(target) => self.in_background(move || {
-                            let script = setup::remote_install_script(&target);
-                            match setup::open_in_terminal(setup::REMOTE_SCRIPT_NAME, &script) {
+                            let script = terminal_install::remote_install_script(&target);
+                            match terminal_install::open_in_terminal(terminal_install::REMOTE_SCRIPT_NAME, &script) {
                                 Ok(()) => json!({
                                     "type": "remoteInstallStarted",
                                     "host": target.host,
@@ -1421,7 +1267,7 @@ impl App {
                 }
             }
             ConnectCmd::CopyInstallCommand => {
-                self.in_background(|| match setup::copy_to_clipboard(setup::INSTALL_ONE_LINER) {
+                self.in_background(|| match terminal_install::copy_to_clipboard(setup::INSTALL_ONE_LINER) {
                     Ok(()) => json!({ "type": "copied" }),
                     Err(message) => json!({ "type": "installFailed", "remote": true, "message": message }),
                 });
@@ -2031,282 +1877,5 @@ impl App {
                 self.config_dirty = true;
             }
         }
-    }
-}
-
-/// A login the probe just tried, and what the user asked for it.
-/// The login a connect goes out with, and where its password came from. A
-/// typed password wins, then the one the Keychain holds for this user. Last
-/// comes the login of the Codeman on this Mac, which keeps it where its own
-/// clients find it (setup::local_login: its launchd job, then
-/// ~/.codeman/.env) and only answers it at its own loopback address. That one
-/// is used only when the config expected no password in the Keychain
-/// (`expect_saved`: one that should be there and is not is reported, not
-/// papered over), only for the username in use when there is one, and it is
-/// never saved anywhere. `local` is asked only then: it runs processes.
-fn choose_login(
-    user: Option<String>,
-    typed_password: Option<String>,
-    saved: Option<String>,
-    expect_saved: bool,
-    local: impl FnOnce() -> Option<(String, String)>,
-) -> (Option<String>, Option<String>, PasswordSource) {
-    if let Some(password) = typed_password {
-        return (user, Some(password), PasswordSource::Typed);
-    }
-    if let Some(password) = saved {
-        return (user, Some(password), PasswordSource::Keychain);
-    }
-    if !expect_saved {
-        if let Some((local_user, password)) = local() {
-            if user.as_deref().is_none_or(|current| current == local_user) {
-                return (Some(local_user), Some(password), PasswordSource::LocalServer);
-            }
-        }
-    }
-    (user, None, PasswordSource::Absent)
-}
-
-struct ProbedLogin<'a> {
-    /// The server, as the config and the Keychain accounts key it.
-    server: &'a str,
-    /// The username the config named for this server before the connect.
-    previous_user: Option<&'a str>,
-    username: Option<&'a str>,
-    password: Option<&'a str>,
-    /// Where the password came from.
-    source: PasswordSource,
-    remember: bool,
-}
-
-/// Where a connect's password came from, which decides what the Keychain
-/// does with it (update_keychain).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PasswordSource {
-    /// Typed on the connect page this time: saved if Remember is on.
-    Typed,
-    /// From the Keychain: there already.
-    Keychain,
-    /// The local Codeman's own login (setup::local_login): it stays where it
-    /// is, and the Keychain never gets a copy.
-    LocalServer,
-    /// No password.
-    Absent,
-}
-
-/// What update_keychain did: whether the Keychain now holds the login's
-/// password, and whose items it deleted.
-#[derive(Default)]
-struct KeychainUpdate {
-    saved: bool,
-    deleted: Vec<String>,
-}
-
-/// Bring the Keychain in line with a probe the server answered, on the probe
-/// worker. Only an accepted login changes anything (Ok, or a password the
-/// server wants changed), since only then does the config get the new entry.
-///
-/// When that entry names another user than the config did (compared exactly,
-/// as the account string is), the old user's item is deleted FIRST, before any
-/// save: the Keychain worker runs jobs in order, so a Keychain that treats two
-/// spellings of a name as one item cannot lose the new password to that
-/// delete. Then the typed password is saved when Remember is on and deleted
-/// when it is off, and a password the server wants changed is never kept.
-fn update_keychain(keychain: &Keychain, outcome: &ProbeOutcome, login: &ProbedLogin<'_>) -> KeychainUpdate {
-    let mut update = KeychainUpdate::default();
-    if !matches!(outcome, ProbeOutcome::Ok { .. } | ProbeOutcome::PasswordChangeRequired) {
-        return update;
-    }
-    let mut delete = |user: &str| {
-        keychain.delete(&credentials::account(login.server, user));
-        update.deleted.push(user.to_string());
-    };
-    if let Some(old) = login.previous_user.filter(|old| login.username != Some(*old)) {
-        delete(old);
-    }
-    let saved = match (outcome, login.username, login.password) {
-        (ProbeOutcome::Ok { .. }, Some(user), Some(password)) if login.source == PasswordSource::Typed => {
-            if login.remember {
-                keychain
-                    .save_blocking(&credentials::account(login.server, user), password)
-                    .is_ok()
-            } else {
-                delete(user);
-                false
-            }
-        }
-        // A password that came from the Keychain is saved there already.
-        (ProbeOutcome::Ok { .. }, Some(_), Some(_)) => login.source == PasswordSource::Keychain,
-        (ProbeOutcome::PasswordChangeRequired, Some(user), _) => {
-            delete(user);
-            false
-        }
-        _ => false,
-    };
-    update.saved = saved;
-    update
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::credentials::memory;
-
-    fn none() -> Option<(String, String)> {
-        panic!("the local login must not be looked up here");
-    }
-
-    #[test]
-    fn the_login_a_connect_uses() {
-        let s = |v: &str| Some(v.to_string());
-        let local = || Some(("admin".to_string(), "from-this-mac".to_string()));
-
-        // A typed password wins over everything, and nothing else is asked.
-        assert_eq!(
-            choose_login(s("kay"), s("typed"), s("kept"), true, none),
-            (s("kay"), s("typed"), PasswordSource::Typed)
-        );
-        // Then the Keychain's.
-        assert_eq!(
-            choose_login(s("kay"), None, s("kept"), true, none),
-            (s("kay"), s("kept"), PasswordSource::Keychain)
-        );
-        // The Keychain should hold one and does not: reported as absent, the
-        // local login is not tried in its place.
-        assert_eq!(
-            choose_login(s("kay"), None, None, true, none),
-            (s("kay"), None, PasswordSource::Absent)
-        );
-        // Nothing typed, nothing expected: the Codeman on this Mac's own
-        // login, for no username or the same one.
-        assert_eq!(
-            choose_login(None, None, None, false, local),
-            (s("admin"), s("from-this-mac"), PasswordSource::LocalServer)
-        );
-        assert_eq!(
-            choose_login(s("admin"), None, None, false, local),
-            (s("admin"), s("from-this-mac"), PasswordSource::LocalServer)
-        );
-        // Never for another user: the names are compared exactly.
-        assert_eq!(
-            choose_login(s("kay"), None, None, false, local),
-            (s("kay"), None, PasswordSource::Absent)
-        );
-        assert_eq!(
-            choose_login(s("Admin"), None, None, false, local),
-            (s("Admin"), None, PasswordSource::Absent)
-        );
-        // No local login either.
-        assert_eq!(
-            choose_login(None, None, None, false, || None),
-            (None, None, PasswordSource::Absent)
-        );
-    }
-
-    /// update_keychain for one probe answer; the log is what the Keychain did,
-    /// in order (the last load only waits for the queue to drain).
-    fn keychain_after(outcome: ProbeOutcome, login: ProbedLogin<'_>) -> (KeychainUpdate, Vec<String>) {
-        let (keychain, store) = memory::keychain();
-        let update = update_keychain(&keychain, &outcome, &login);
-        keychain.load_blocking("done");
-        let mut log = store.log();
-        assert_eq!(log.pop().as_deref(), Some("load done"));
-        (update, log)
-    }
-
-    fn login<'a>(
-        previous_user: Option<&'a str>,
-        username: Option<&'a str>,
-        source: PasswordSource,
-        remember: bool,
-    ) -> ProbedLogin<'a> {
-        ProbedLogin {
-            server: "http://a/",
-            previous_user,
-            username,
-            password: (source != PasswordSource::Absent).then_some("secret"),
-            source,
-            remember,
-        }
-    }
-
-    #[test]
-    fn what_the_keychain_keeps_after_a_connect() {
-        let ok = || ProbeOutcome::Ok {
-            version: "1.48.0".into(),
-        };
-        let item = |user: &str| credentials::account("http://a/", user);
-
-        // A typed password is saved when Remember is on, deleted when it is off.
-        let (update, log) = keychain_after(ok(), login(Some("kay"), Some("kay"), PasswordSource::Typed, true));
-        assert!(update.saved && update.deleted.is_empty());
-        assert_eq!(log, [format!("save {}", item("kay"))]);
-        let (update, log) = keychain_after(ok(), login(Some("kay"), Some("kay"), PasswordSource::Typed, false));
-        assert!(!update.saved);
-        assert_eq!(update.deleted, ["kay"]);
-        assert_eq!(log, [format!("delete {}", item("kay"))]);
-
-        // One that came from the Keychain is there already: nothing is written.
-        let (update, log) = keychain_after(ok(), login(Some("kay"), Some("kay"), PasswordSource::Keychain, true));
-        assert!(update.saved && log.is_empty());
-
-        // The local Codeman's own login never gets a copy, Remember or not.
-        let (update, log) = keychain_after(ok(), login(None, Some("admin"), PasswordSource::LocalServer, true));
-        assert!(!update.saved && update.deleted.is_empty() && log.is_empty());
-
-        // Another user than before: the old user's item goes FIRST, then the save.
-        let (update, log) = keychain_after(ok(), login(Some("old"), Some("new"), PasswordSource::Typed, true));
-        assert!(update.saved);
-        assert_eq!(update.deleted, ["old"]);
-        assert_eq!(
-            log,
-            [format!("delete {}", item("old")), format!("save {}", item("new"))]
-        );
-
-        // A password the server wants changed is never kept.
-        let (update, log) = keychain_after(
-            ProbeOutcome::PasswordChangeRequired,
-            login(Some("kay"), Some("kay"), PasswordSource::Typed, true),
-        );
-        assert!(!update.saved);
-        assert_eq!(update.deleted, ["kay"]);
-        assert_eq!(log, [format!("delete {}", item("kay"))]);
-
-        // A login the server did not accept changes nothing.
-        for refused in [
-            ProbeOutcome::BadCredentials,
-            ProbeOutcome::NeedsLogin,
-            ProbeOutcome::Refused,
-            ProbeOutcome::Timeout,
-        ] {
-            let (update, log) = keychain_after(refused, login(Some("old"), Some("new"), PasswordSource::Typed, true));
-            assert!(!update.saved && update.deleted.is_empty() && log.is_empty());
-        }
-    }
-
-    #[test]
-    fn a_commit_from_the_loading_server_is_the_loaded_page() {
-        let server = Url::parse("https://box.ts.net/codeman/").unwrap();
-        let loading = Phase::Loading(server.clone());
-        assert_eq!(
-            loaded_on_commit(&loading, "https://box.ts.net/codeman/"),
-            Some(Phase::Loaded(server.clone()))
-        );
-        // Any page of that origin counts: the server may redirect within it.
-        assert_eq!(
-            loaded_on_commit(&loading, "https://box.ts.net/codeman/session/abc"),
-            Some(Phase::Loaded(server.clone()))
-        );
-        // Another origin, the connect page, or junk: still loading.
-        assert_eq!(loaded_on_commit(&loading, "https://other.ts.net/codeman/"), None);
-        assert_eq!(loaded_on_commit(&loading, "http://box.ts.net/codeman/"), None);
-        assert_eq!(loaded_on_commit(&loading, policy::CONNECT_PAGE), None);
-        assert_eq!(loaded_on_commit(&loading, "not a url"), None);
-        // Only a load under way can finish.
-        assert_eq!(loaded_on_commit(&Phase::Connect, "https://box.ts.net/codeman/"), None);
-        assert_eq!(
-            loaded_on_commit(&Phase::Loaded(server), "https://box.ts.net/codeman/"),
-            None
-        );
     }
 }
