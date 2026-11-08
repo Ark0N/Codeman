@@ -22,19 +22,19 @@ the catalogue answers today, before the runtime measured anything (the budget is
 estimate: 2/3 of the memory below 36 GB, 3/4 from 36 GB, less 1 GiB, and never more than the
 memory less 6, 8 or 12 GiB for macOS, Codeman, a browser and the agent):
 
-| Memory           | Budget  | What it gets                                                                                                                                                                                                                                                                                                                      |
-| ---------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 8 GB             | 2.1 GB  | Nothing. The smallest model a coding agent can work with needs 9.8 GB at 65,536 tokens                                                                                                                                                                                                                                            |
-| 16 GB            | 10.4 GB | A small model (`limited`): MiMo V2.6 9B at 65,536 tokens, 9.8 GB, tight. Its base, Qwen3.5 9B, is the one alternative                                                                                                                                                                                                             |
-| 18 GB            | 11.8 GB | The same at 131,072 tokens, 11.0 GB, tight                                                                                                                                                                                                                                                                                        |
-| 24 GB            | 16.1 GB | The same at 131,072 tokens, with room                                                                                                                                                                                                                                                                                             |
-| 32 GB            | 21.8 GB | The same. North Mini Code 1.0 needs 21.8 GB and misses the estimate by a hair; once the runtime measures about 3/4 of the memory, as it did on a 16 and a 48 GB Mac, the Mac gets it, or Qwen3.8 27B on a Max chip                                                                                                                |
-| 36 GB            | 27.9 GB | Qwen3.8 27B at 131,072 tokens on an M4 or M5 Max; on a slower chip, where the dense 27B computes to under 10 tokens per second, Qwen3.6 35B-A3B as a GGUF build                                                                                                                                                                   |
-| 48 GB            | 37.6 GB | Qwen3.6 35B-A3B (MLX) at 131,072 tokens: the pair we tested, "Recommended" on an Apple M5 Pro with 48 GB. On a Max chip Qwen3.8 27B at 262,144 tokens. The test was a short task: in a long session MLX may keep up to 8 GiB more, which brings this pair to the edge of the budget, and past it while a long prompt is processed |
-| 64 GB            | 50.5 GB | Qwen3.8 27B at 262,144 tokens on a Max chip; Qwen3.6 35B-A3B (MLX) on a Pro chip                                                                                                                                                                                                                                                  |
-| 96 GB            | 76.2 GB | Qwen3.8 27B at 262,144 tokens; on an M3 Max, Qwen3.6 35B-A3B (MLX)                                                                                                                                                                                                                                                                |
-| 128 GB           | 102 GB  | Ornith 1.5 122B-A10B (MLX) at 131,072 tokens, 97.4 GB, tight                                                                                                                                                                                                                                                                      |
-| 192, 256, 512 GB | 154 GB+ | Ornith 1.5 122B-A10B at 262,144 tokens                                                                                                                                                                                                                                                                                            |
+| Memory           | Budget  | What it gets                                                                                                                                                                                                                                                                                                                                       |
+| ---------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 8 GB             | 2.1 GB  | Nothing. The smallest model a coding agent can work with needs 10.2 GB at 65,536 tokens                                                                                                                                                                                                                                                            |
+| 16 GB            | 10.4 GB | Nothing. MiMo V2.6 9B at 65,536 tokens needs 10.2 GB, 98.7% of the budget, just past the 98% a tight fit may reach (it is 95% of the 10.7 GB a 16 GB Mac mini measured). On the edge either way: only a run on such a Mac settles it                                                                                                               |
+| 18 GB            | 11.8 GB | A small model (`limited`): MiMo V2.6 9B at 131,072 tokens, 11.4 GB, tight. Its base, Qwen3.5 9B, is the one alternative                                                                                                                                                                                                                            |
+| 24 GB            | 16.1 GB | The same, with room. On a base M2 or M3 (100 GB/s) it computes to 9.3 tokens per second: slow                                                                                                                                                                                                                                                      |
+| 32 GB            | 21.8 GB | The same. North Mini Code 1.0 needs 23.2 GB at 65,536 tokens; once the runtime measures about 3/4 of the memory, as it did on a 16 and a 48 GB Mac, the Mac gets it at 131,072 tokens, or Qwen3.8 27B at 65,536 tokens on a Max chip                                                                                                               |
+| 36 GB            | 27.9 GB | Qwen3.8 27B at 131,072 tokens on an M4 or M5 Max (27.0 GB, 97%); on a slower chip, where the dense 27B computes to under 10 tokens per second, Qwen3.6 35B-A3B as a GGUF build (27.2 GB, 98%). Both tight                                                                                                                                          |
+| 48 GB            | 37.6 GB | Qwen3.6 35B-A3B (MLX) at 131,072 tokens: the pair we tested, "Recommended" on an Apple M5 Pro with 48 GB. On a Max chip Qwen3.8 27B at 262,144 tokens (32.1 GB, tight). The test was a short task: in a long session MLX may keep up to 8 GiB more, which brings this pair to the edge of the budget, and past it while a long prompt is processed |
+| 64 GB            | 50.5 GB | Qwen3.8 27B at 262,144 tokens on a Max chip; Qwen3.6 35B-A3B (MLX) on a Pro chip                                                                                                                                                                                                                                                                   |
+| 96 GB            | 76.2 GB | Qwen3.8 27B at 262,144 tokens; on an M3 Max, Qwen3.6 35B-A3B (MLX)                                                                                                                                                                                                                                                                                 |
+| 128 GB           | 102 GB  | Ornith 1.5 122B-A10B (MLX) at 131,072 tokens, 97.4 GB, tight                                                                                                                                                                                                                                                                                       |
+| 192, 256, 512 GB | 154 GB+ | Ornith 1.5 122B-A10B at 262,144 tokens                                                                                                                                                                                                                                                                                                             |
 
 "Tight" means the need is between 85% and 98% of the budget; above 98% a model is not
 offered. A model that computes to under 10 tokens per second on the chip is "slow" and ranks
@@ -54,10 +54,18 @@ names its runner (`runner`) and its figures follow that runner's rule:
   model loads and does not grow after that. The runtime is started with
   `OLLAMA_KV_CACHE_TYPE=q8_0` (the cache in 8 bits, 17/32 of the default f16; the runtime's
   own documentation calls the loss very small), `OLLAMA_FLASH_ATTENTION=1` (an 8-bit cache
-  needs it) and `LLAMA_ARG_CACHE_RAM=1024` (llama-server keeps copies of earlier prompts, and
-  this bounds them to 1 GiB). A row's figures are computed from its model's `config.json`: the
-  K/V cache of its attention layers, its recurrent or sliding-window state, 1.0 GB for the
-  runner and the 1 GiB prompt cache. No peak: the buffers are allocated at load.
+  needs it), `LLAMA_ARG_CACHE_RAM=1024` (llama-server keeps copies of earlier prompts, and
+  this bounds them to 1 GiB) and `LLAMA_ARG_CTX_CHECKPOINTS=8` (llama-server keeps copies of
+  the state it cannot roll back, two or three per request, up to 32 by default: 5 GB for the
+  27B; 8 keeps the last few requests, which is what an agent's next request restores from). A
+  row's figures are computed from its model's `config.json`: the K/V cache of its attention
+  layers, its recurrent or sliding-window state, live and in each of the 8 checkpoints, 1.0
+  GB for the runner and the 1 GiB prompt cache. A build with a multi-token-prediction layer
+  (the two `-mtp` tags and `qwen3.8:27b-q8_0`) costs more: the runtime turns prediction on,
+  so llama-server keeps that layer's cache in f16 and 4 more copies of the recurrent state
+  for rollback. No peak: the buffers are allocated at load. The checkpoints and the
+  prediction costs were read in the llama.cpp source the runtime bundles (b12111), not
+  measured.
 - **MLX** grows its cache with the tokens actually used, keeps snapshots of the recurrent
   state, and may keep up to 8 GiB of snapshots of earlier prompts, which no setting bounds. A
   Mac always takes the MLX build of a tag that has one. Below 48 GB that 8 GiB does not fit
@@ -70,17 +78,19 @@ Where every figure comes from:
 | `qwen3.5:9b-q4_k_m`          | llama.cpp | computed from the Qwen3.5-9B config                                                 | 9.3: a published run on an M1 Max                         |
 | `mimo-v2.6:9b-q4_k_m`        | llama.cpp | the same (a fine-tune of Qwen3.5-9B)                                                | 9.3: the same architecture and size                       |
 | `north-mini-code-1.0:q4_k_m` | llama.cpp | computed from its config                                                            | 13.6: the 35B-A3B's, the same 3 billion active parameters |
-| `qwen3.6:35b-a3b-mtp-q4_k_m` | llama.cpp | computed from the Qwen3.6-35B-A3B config                                            | 13.6: a published run on an M1 Max                        |
+| `qwen3.6:35b-a3b-mtp-q4_k_m` | llama.cpp | computed from the Qwen3.6-35B-A3B config, prediction layer included                 | 13.6: a published run on an M1 Max                        |
 | `qwen3.6:35b-a3b`            | MLX       | **measured** on an Apple M5 Pro with 48 GB                                          | 16.9: a published run; 67.7 measured on the tested Mac    |
-| `qwen3.8:27b-q8_0`           | llama.cpp | computed from the Qwen3.8-27B config                                                | 1.7: the row below scaled by file size                    |
-| `qwen3.8:27b-mtp-q4_k_m`     | llama.cpp | computed from the Qwen3.8-27B config                                                | 2.95: a published run without prediction (a floor)        |
+| `qwen3.8:27b-q8_0`           | llama.cpp | computed from the Qwen3.8-27B config, prediction layer included                     | 1.7: the row below scaled by file size                    |
+| `qwen3.8:27b-mtp-q4_k_m`     | llama.cpp | computed from the Qwen3.8-27B config, prediction layer included                     | 2.95: a published run without prediction (a floor)        |
 | `ornith-1.5:122b`            | MLX       | computed from the Qwen3.5-122B-A10B config, scaled by the measured MLX row, + 8 GiB | 5.0: the 35B-A3B's, x 3/10 active parameters              |
 
 Sizes are what the registry serves a Mac for each tag (every layer plus the config), read on
 2026-11-08. Only one row was ever run on a Mac, so every other answer in the table above is a
-calculation. For a llama.cpp build the check after the download catches one that was judged
-too kindly; for an MLX build it cannot (see "The check" below). The measured row's figures come from single long prompts, not a session of many requests, in
-which MLX may keep up to 8 GiB more. The catalogue header lists the models left out on
+calculation. For a llama.cpp build the check after the download catches a load that was
+judged too kindly, but not what grows after it in host memory (the checkpoints and the prompt
+cache, which are counted, not checked); for an MLX build it catches neither (see "The check"
+below). The measured row's figures come from single long prompts, not a session of many
+requests, in which MLX may keep up to 8 GiB more. The catalogue header lists the models left out on
 purpose (no evidence of working tool calls, a restrictive licence, a known bug) and why.
 
 A new row needs its model's architecture (attention layers, K/V heads, head size, and its
@@ -124,10 +134,10 @@ Every step can be repeated: Resume and "Try again" enter the step the job stoppe
   copied from the server. `HOME` is a private folder. Exactly these are set:
   `OLLAMA_HOST=127.0.0.1:<port>`, `OLLAMA_MODELS`, `OLLAMA_CONTEXT_LENGTH`,
   `OLLAMA_NO_CLOUD=1`, `OLLAMA_KEEP_ALIVE=10m`, `OLLAMA_NUM_PARALLEL=1`,
-  `OLLAMA_MAX_LOADED_MODELS=1`, and three memory settings of the llama.cpp runner:
-  `OLLAMA_KV_CACHE_TYPE=q8_0`, `OLLAMA_FLASH_ATTENTION=1` and `LLAMA_ARG_CACHE_RAM=1024`
-  (see "How much memory a model needs" above). No `CODEMAN_*` variable and none of the user's
-  own `OLLAMA_*` settings reach it.
+  `OLLAMA_MAX_LOADED_MODELS=1`, and four memory settings of the llama.cpp runner:
+  `OLLAMA_KV_CACHE_TYPE=q8_0`, `OLLAMA_FLASH_ATTENTION=1`, `LLAMA_ARG_CACHE_RAM=1024` and
+  `LLAMA_ARG_CTX_CHECKPOINTS=8` (see "How much memory a model needs" above). No `CODEMAN_*`
+  variable and none of the user's own `OLLAMA_*` or `LLAMA_ARG_*` settings reach it.
 - **The port is chosen once**, by binding, from 11435 across 20 ports, and stored. 11434 is
   left alone: it is the default of a runtime the user may run themselves, which is never
   touched.

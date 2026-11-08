@@ -120,10 +120,10 @@ export interface TestedOn {
   tokensPerSecond?: number;
 }
 
-/** One model of the catalogue. */
 /** The runner of the model runtime that runs a model on a Mac, by the registry's name for it. See `LocalModelEntry.runner`. */
 export type LocalModelRunner = 'mlx' | 'llamacpp';
 
+/** One model of the catalogue. */
 export interface LocalModelEntry {
   /** `name:tag` exactly as the model registry lists it. Lowercase, one colon, no slash (`LOCAL_MODEL_ID_PATTERN`). */
   id: string;
@@ -156,7 +156,7 @@ export interface LocalModelEntry {
   /**
    * Bytes that stay HELD in memory per token of context. For a `llamacpp` row: the K/V cache
    * of its attention layers in the runtime's cache type, which llama.cpp allocates for the
-   * whole context at load. For an `mlx` row: the K/V cache in bf16 plus the snapshots of the
+   * whole context at load (a multi-token-prediction layer's in f16). For an `mlx` row: the K/V cache in bf16 plus the snapshots of the
    * recurrent state the runner keeps every 8,192 tokens, which it grows with use. Measured
    * on one row (36,000 to 38,000 on the MLX runner, so about 37,000); computed from the
    * model's config for the others, see `figures` and the catalogue header.
@@ -165,9 +165,10 @@ export interface LocalModelEntry {
   /**
    * What the runner holds beside the weights and the context, whatever the context: its own
    * buffers, the live recurrent or sliding-window caches, and the caches it keeps of earlier
-   * prompts (for `llamacpp` the 1024 MiB host prompt cache `LLAMA_ARG_CACHE_RAM` allows, for
-   * an estimated `mlx` row the 8 GiB of prefix snapshots the runner may keep). Measured on
-   * one row (about 3 GB); see the catalogue header for the others.
+   * prompts (for `llamacpp` the 1024 MiB host prompt cache `LLAMA_ARG_CACHE_RAM` allows and
+   * the copies of the recurrent or sliding-window state in its `LLAMA_ARG_CTX_CHECKPOINTS`
+   * context checkpoints, for an estimated `mlx` row the 8 GiB of prefix snapshots the runner
+   * may keep). Measured on one row (about 3 GB); see the catalogue header for the others.
    */
   overheadBytes: number;
   /**

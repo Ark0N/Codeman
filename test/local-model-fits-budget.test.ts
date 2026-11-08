@@ -97,10 +97,10 @@ describe('modelFitsBudget', () => {
     // A runtime that reports less than the estimate rules out what the estimate allowed.
     expect(modelFitsBudget(mac(48), catalog, id, 131072, { measuredTotalBytes: 33 * 1024 ** 3 })).toBe(false);
     // And one that reports more admits what the estimate ruled out: on a 36 GB Mac the GGUF
-    // 35B-A3B at its full window needs 27.9 GB, 1.0003 of the 27.9 GB estimate and 0.962 of 27 GiB.
+    // 35B-A3B at its full window needs 28.9 GB, 1.037 of the 27.9 GB estimate and 0.963 of 28 GiB.
     const moeGguf = 'qwen3.6:35b-a3b-mtp-q4_k_m';
     expect(modelFitsBudget(mac(36), catalog, moeGguf, 262144)).toBe(false);
-    expect(modelFitsBudget(mac(36), catalog, moeGguf, 262144, { measuredTotalBytes: 27 * 1024 ** 3 })).toBe(true);
+    expect(modelFitsBudget(mac(36), catalog, moeGguf, 262144, { measuredTotalBytes: 28 * 1024 ** 3 })).toBe(true);
     // The reserve still bounds it: 100 GiB "measured" on a 48 GB Mac is 40 GiB (42.9 GB) of
     // budget, so the 122B with its 97.4 GB stays out although 100 GiB would hold it.
     const huge = { measuredTotalBytes: 100 * 1024 ** 3 };

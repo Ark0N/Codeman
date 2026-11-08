@@ -16,9 +16,9 @@
  *    either case) are copied from the server's; HOME is the private one; and exactly these are
  *    set: `OLLAMA_HOST=127.0.0.1:<port>`, `OLLAMA_MODELS`, `OLLAMA_CONTEXT_LENGTH`,
  *    `OLLAMA_NO_CLOUD=1`, `OLLAMA_KEEP_ALIVE=10m`, `OLLAMA_NUM_PARALLEL=1`,
- *    `OLLAMA_MAX_LOADED_MODELS=1`, and the three memory settings of the llama.cpp runner (see
+ *    `OLLAMA_MAX_LOADED_MODELS=1`, and the four memory settings of the llama.cpp runner (see
  *    MEMORY below). Nothing else gets through: no `CODEMAN_*` and none of the user's own
- *    `OLLAMA_*`.
+ *    `OLLAMA_*` or `LLAMA_ARG_*`.
  *  - MEMORY (what the catalogue's figures for its `llamacpp` rows assume, so change both
  *    together: test/local-model-catalog.test.ts holds them to each other). Read in the
  *    runtime's v0.40.15 source, not yet measured on a Mac:
@@ -34,7 +34,20 @@
  *       for a coding model, and llama-server reads the variable from the environment it
  *       inherits (`cmd.Env = os.Environ()`). Unbounded, that cache can grow by gigabytes in a
  *       session; 1024 MiB is counted in every `llamacpp` row's `overheadBytes`.
- *    The MLX runner reads none of the three (nothing under mlxrunner/ does): an `mlx` row's
+ *     - `LLAMA_ARG_CTX_CHECKPOINTS=8` bounds the context checkpoints llama-server keeps per
+ *       slot (`--ctx-checkpoints`, read from the environment the same way). The llama.cpp the
+ *       runtime bundles (b12111, the runtime's LLAMA_CPP_VERSION) makes them for every model
+ *       of the catalogue's `llamacpp` rows: a checkpoint is a host copy of the state that
+ *       cannot be rolled back (the recurrent state of the linear-attention layers, or the
+ *       sliding-window cache), two or three per request, and llama-server keeps up to 32 by
+ *       default. 32 copies of the 27B's 157 MB state are 5 GB that the session holds for
+ *       nothing: an agent's next request restores the newest checkpoint of the previous one.
+ *       8 (llama.cpp's own default before it went to 32 to cover a 262,144-token window in
+ *       8,192-token steps) keeps the last few requests. The cost: a prompt that differs from
+ *       the last checkpoints further back (a compaction, a cleared old tool result) is
+ *       processed again from the newest checkpoint before that point, or from its start.
+ *       8 checkpoints are counted in every `llamacpp` row's `overheadBytes`.
+ *    The MLX runner reads none of the four (nothing under mlxrunner/ does): an `mlx` row's
  *    figures do not depend on them.
  *  - PORT (`chooseRuntimePort()`). Chosen ONCE by binding, from `RUNTIME_PORT_FIRST` across
  *    `RUNTIME_PORT_SPAN`, then stored by the caller. Never searched again on a later start.
@@ -105,6 +118,8 @@ export const RUNTIME_KEEP_ALIVE = '10m';
 export const RUNTIME_KV_CACHE_TYPE = 'q8_0';
 /** `LLAMA_ARG_CACHE_RAM`, in MiB: the bound of llama-server's host prompt cache. Counted in every `llamacpp` row's overhead. */
 export const RUNTIME_HOST_PROMPT_CACHE_MIB = 1024;
+/** `LLAMA_ARG_CTX_CHECKPOINTS`: the context checkpoints llama-server keeps per slot. Counted in every `llamacpp` row's overhead. */
+export const RUNTIME_CTX_CHECKPOINTS = 8;
 
 /** The name of the runtime's binary inside its folder and inside the archive. */
 const RUNTIME_BINARY_NAME = 'ollama';
@@ -279,6 +294,7 @@ export function runtimeEnv(input: RuntimeEnvInput): NodeJS.ProcessEnv {
   env.OLLAMA_KV_CACHE_TYPE = RUNTIME_KV_CACHE_TYPE;
   env.OLLAMA_FLASH_ATTENTION = '1';
   env.LLAMA_ARG_CACHE_RAM = String(RUNTIME_HOST_PROMPT_CACHE_MIB);
+  env.LLAMA_ARG_CTX_CHECKPOINTS = String(RUNTIME_CTX_CHECKPOINTS);
   return env;
 }
 

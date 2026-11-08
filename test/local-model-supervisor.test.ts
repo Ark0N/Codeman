@@ -209,6 +209,7 @@ describe('start', () => {
       OLLAMA_KV_CACHE_TYPE: 'q8_0',
       OLLAMA_FLASH_ATTENTION: '1',
       LLAMA_ARG_CACHE_RAM: '1024',
+      LLAMA_ARG_CTX_CHECKPOINTS: '8',
     });
   });
 

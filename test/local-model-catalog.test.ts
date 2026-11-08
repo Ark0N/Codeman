@@ -31,7 +31,12 @@ import {
   LocalModelCatalogSchema,
   STOCK_LOCAL_MODEL_CATALOG,
 } from '../src/config/local-model-catalog.js';
-import { RUNTIME_HOST_PROMPT_CACHE_MIB, RUNTIME_KV_CACHE_TYPE, runtimeEnv } from '../src/local-model/runtime.js';
+import {
+  RUNTIME_CTX_CHECKPOINTS,
+  RUNTIME_HOST_PROMPT_CACHE_MIB,
+  RUNTIME_KV_CACHE_TYPE,
+  runtimeEnv,
+} from '../src/local-model/runtime.js';
 import type { LocalModelCatalog, LocalModelEntry } from '../src/types.js';
 
 /** A deep copy of the stock catalogue that a test may break. */
@@ -79,10 +84,12 @@ type ArchitectureName = keyof typeof ARCHITECTURES;
 type Architecture = (typeof ARCHITECTURES)[ArchitectureName];
 
 /**
- * Which architecture each stock row runs, and whether its GGUF carries the one
- * multi-token-prediction layer (counted as one more attention layer, see the catalogue
- * header). A row the catalogue gains must be added here, or the test below fails: its figures
- * cannot be checked without it.
+ * Which architecture each stock row runs, and whether its GGUF carries a
+ * multi-token-prediction layer (`nextn_predict_layers` 1 in the GGUF header, read on
+ * 2026-11-08 from the first bytes of each model layer). For such a model the runtime turns on
+ * prediction, which costs a cache for that layer and rollback copies of the recurrent state
+ * (see the catalogue header). A row the catalogue gains must be added here, or the test below
+ * fails: its figures cannot be checked without it.
  */
 const ROW_ARCHITECTURE: Record<string, { architecture: ArchitectureName; predictionLayer: boolean }> = {
   'qwen3.5:9b-q4_k_m': { architecture: 'Qwen3.5-9B', predictionLayer: false },
@@ -97,6 +104,19 @@ const ROW_ARCHITECTURE: Record<string, { architecture: ArchitectureName; predict
 
 /** Bytes per cached value in each K/V cache type of llama.cpp: q8_0 keeps 32 values in 34 bytes. */
 const KV_BYTES_PER_VALUE: Record<string, number> = { f16: 2, q8_0: 34 / 32 };
+/**
+ * The cache type of llama-server's draft context, which holds the prediction layer's cache: its
+ * default, because the runtime sets only the main context's (`--cache-type-k`).
+ */
+const DRAFT_KV_CACHE_TYPE = 'f16';
+/**
+ * The recurrent states llama.cpp keeps beside the live one for a model with prediction: the
+ * runtime's draft length (`draft_num_predict` 4, passed as `--spec-draft-n-max`), which
+ * `need_n_rs_seq()` turns into that many rollback copies.
+ */
+const MTP_ROLLBACK_STATES = 4;
+/** The sliding-window cache holds the window plus one batch of 512 tokens (`n_swa + n_ubatch`). */
+const SLIDING_EXTRA_CELLS = 512;
 /** The head size of a Gated DeltaNet layer's keys and values, and its convolution kernel, in every model above. */
 const LINEAR_HEAD_DIM = 128;
 const LINEAR_CONV_KERNEL = 4;
@@ -114,15 +134,20 @@ function recurrentStateBytes(arch: Architecture, convBytes: number): number {
 /** What a `llamacpp` row's three figures must be, from its architecture and the runtime's settings. */
 function llamaCppFigures(arch: Architecture, predictionLayer: boolean): [number, number, number] {
   const perValue = KV_BYTES_PER_VALUE[RUNTIME_KV_CACHE_TYPE];
-  const layers = arch.attentionLayers + (predictionLayer ? 1 : 0);
-  const held = layers * arch.kvHeads * arch.headDim * 2 * perValue;
+  const perLayer = arch.kvHeads * arch.headDim * 2;
+  // The prediction layer's cache sits in the draft context, in the draft's cache type.
+  const held =
+    arch.attentionLayers * perLayer * perValue +
+    (predictionLayer ? perLayer * KV_BYTES_PER_VALUE[DRAFT_KV_CACHE_TYPE] : 0);
   // llama.cpp keeps the recurrent state in f32 (both parts), the sliding window in the cache type.
+  const recurrent = recurrentStateBytes(arch, 4);
   const sliding =
-    'sliding' in arch
-      ? arch.sliding.layers * (arch.sliding.window + 512) * arch.kvHeads * arch.headDim * 2 * perValue
-      : 0;
-  const fixed = recurrentStateBytes(arch, 4) + sliding;
-  return [held, fixed + 1_000_000_000 + RUNTIME_HOST_PROMPT_CACHE_MIB * MIB, 0];
+    'sliding' in arch ? arch.sliding.layers * (arch.sliding.window + SLIDING_EXTRA_CELLS) * perLayer * perValue : 0;
+  // Live: the sliding window, and the recurrent state with its rollback copies under prediction.
+  const live = sliding + recurrent * (1 + (predictionLayer ? MTP_ROLLBACK_STATES : 0));
+  // A context checkpoint is a copy of what cannot be rolled back: the recurrent state or the window.
+  const checkpoints = RUNTIME_CTX_CHECKPOINTS * (recurrent + sliding);
+  return [held, live + checkpoints + 1_000_000_000 + RUNTIME_HOST_PROMPT_CACHE_MIB * MIB, 0];
 }
 
 /** The per-token figure of the MLX runner computed from an architecture: K/V in bf16, a recurrent snapshot per 8,192 tokens. */
@@ -304,7 +329,10 @@ describe('the memory figures of the stock rows: each row has its own', () => {
     const env = runtimeEnv({ source: {}, home: '/h', modelsDir: '/m', port: 11435, contextLength: 65536 });
     expect(env.OLLAMA_KV_CACHE_TYPE).toBe(RUNTIME_KV_CACHE_TYPE);
     expect(env.LLAMA_ARG_CACHE_RAM).toBe(String(RUNTIME_HOST_PROMPT_CACHE_MIB));
+    expect(env.LLAMA_ARG_CTX_CHECKPOINTS).toBe(String(RUNTIME_CTX_CHECKPOINTS));
     expect(KV_BYTES_PER_VALUE[RUNTIME_KV_CACHE_TYPE]).toBeDefined();
+    // The runtime sets no cache type for the draft context, so the prediction layer's stays f16.
+    expect(Object.keys(env).filter((name) => /DRAFT|SPEC/.test(name))).toEqual([]);
   });
 
   it("recomputes every estimated row's figures from its own model's architecture and runner", () => {
@@ -318,15 +346,22 @@ describe('the memory figures of the stock rows: each row has its own', () => {
 
   it('states the numbers the header and the row comments name', () => {
     expect(Object.fromEntries(models.map((m) => [m.id, figuresOf(m)]))).toEqual({
-      'qwen3.5:9b-q4_k_m': [17_408, 2_126_432_768, 0],
-      'mimo-v2.6:9b-q4_k_m': [17_408, 2_126_432_768, 0],
-      'north-mini-code-1.0:q4_k_m': [14_144, 2_254_227_968, 0],
-      'qwen3.6:35b-a3b-mtp-q4_k_m': [11_968, 2_139_605_504, 0],
+      // State x (1 live + 8 checkpoints) + 1.0 GB + 1 GiB.
+      'qwen3.5:9b-q4_k_m': [17_408, 2_547_960_320, 0],
+      'mimo-v2.6:9b-q4_k_m': [17_408, 2_547_960_320, 0],
+      // The sliding window x (1 live + 8 checkpoints) + 1.0 GB + 1 GiB.
+      'north-mini-code-1.0:q4_k_m': [14_144, 3_698_117_120, 0],
+      // State x (1 live + 4 rollback copies + 8 checkpoints) + 1.0 GB + 1 GiB; the prediction
+      // layer's cache in f16 per token.
+      'qwen3.6:35b-a3b-mtp-q4_k_m': [12_928, 2_929_969_664, 0],
       'qwen3.6:35b-a3b': [37_000, 3_000_000_000, 5_000_000_000],
-      'qwen3.8:27b-q8_0': [36_992, 2_230_635_008, 0],
-      'qwen3.8:27b-mtp-q4_k_m': [36_992, 2_230_635_008, 0],
+      'qwen3.8:27b-q8_0': [38_912, 4_113_353_216, 0],
+      'qwen3.8:27b-mtp-q4_k_m': [38_912, 4_113_353_216, 0],
       'ornith-1.5:122b': [56_574, 11_589_934_592, 5_000_000_000],
     });
+    // The two parts of a llamacpp overhead that are not computed from the architecture.
+    expect(RUNTIME_CTX_CHECKPOINTS).toBe(8);
+    expect(RUNTIME_HOST_PROMPT_CACHE_MIB).toBe(1024);
     // The MLX calibration: 37,000 held against 28,340 computed for the measured row.
     expect(mlxComputedPerToken(ARCHITECTURES['Qwen3.6-35B-A3B'])).toBe(28_340);
     expect(mlxComputedPerToken(ARCHITECTURES['Qwen3.5-122B-A10B'])).toBe(43_332);

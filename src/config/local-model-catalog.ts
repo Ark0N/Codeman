@@ -68,23 +68,35 @@
  * (src/local-model/recommend.ts). The two runners spend memory differently, so a row's three
  * figures are filled by the rule of its runner:
  *
- *  - `llamacpp` (llama-server on Metal; runtime v0.40.15 source, llm/llama_server.go). It
- *    allocates the K/V cache for the WHOLE context when the model loads, in the cache type the
- *    runtime sets (`RUNTIME_KV_CACHE_TYPE` in src/local-model/runtime.ts, q8_0: 34 bytes per
- *    32 values), and does not grow after that.
- *     - held = attention layers x K/V heads x head dim x 2 (K and V) x 34/32. The one
- *       multi-token-prediction layer of the `-mtp` tags is counted as one more attention
- *       layer, and so it is for `qwen3.8:27b-q8_0`, whose GGUF may carry it too: neither
- *       whether that GGUF has it nor whether llama.cpp gives it a cache was checked, so this
- *       errs on the careful side.
+ *  - `llamacpp` (llama-server on Metal; runtime v0.40.15 source, llm/llama_server.go, and the
+ *    llama.cpp it bundles, b12111). It allocates the K/V cache for the WHOLE context when the
+ *    model loads, in the cache type the runtime sets (`RUNTIME_KV_CACHE_TYPE` in
+ *    src/local-model/runtime.ts, q8_0: 34 bytes per 32 values), and does not grow after that.
+ *    "MTP" below is a GGUF with a multi-token-prediction layer (`nextn_predict_layers` 1 in
+ *    its header, read on 2026-11-08 from the first bytes of each model layer: the two `-mtp`
+ *    tags and `qwen3.8:27b-q8_0` have it, the two 9B tags and North Mini Code do not). For
+ *    such a model the runtime always passes `--spec-type draft-mtp --spec-draft-n-max 4`
+ *    (its default `draft_num_predict` is 4).
+ *     - held = attention layers x K/V heads x head dim x 2 (K and V) x 34/32. An MTP model
+ *       adds its prediction layer, whose cache llama-server keeps in a draft context of the
+ *       same length in the draft's own cache type, f16 by default (2 bytes per value).
  *     - overhead = the fixed caches (the f32 recurrent state of the linear-attention layers,
- *       or the sliding-window cache of `n_swa + 512` cells), + 1.0 GB for the runner's own
- *       buffers (calibrated on a third-party table of a 27B model on llama.cpp: 8.4 GB at
- *       4,096 tokens with 7.15 GB of weights), + the 1024 MiB host prompt cache that
- *       `LLAMA_ARG_CACHE_RAM` allows (`RUNTIME_HOST_PROMPT_CACHE_MIB`).
+ *       or the sliding-window cache of `n_swa + 512` cells), held 1 + 4 times for an MTP
+ *       model (llama.cpp keeps one recurrent state per drafted token for rollback,
+ *       `need_n_rs_seq()`), + the context checkpoints: `LLAMA_ARG_CTX_CHECKPOINTS` host copies
+ *       (`RUNTIME_CTX_CHECKPOINTS`, 8) of the state that cannot be rolled back (the recurrent
+ *       state, or the sliding-window cache), + 1.0 GB for the runner's own buffers (calibrated
+ *       on a third-party table of a 27B model on llama.cpp: 8.4 GB at 4,096 tokens with
+ *       7.15 GB of weights), + the 1024 MiB host prompt cache that `LLAMA_ARG_CACHE_RAM`
+ *       allows (`RUNTIME_HOST_PROMPT_CACHE_MIB`). The checkpoints and the prompt cache are
+ *       host memory, not Metal buffers; on a Mac both come out of the same memory, so they
+ *       are counted like the rest.
  *     - peak = 0: its compute buffers are allocated at load and are inside the 1.0 GB.
  *    The one outside check of this rule: a third party measured 65,600 bytes per token of
  *    growth at f16 for a model of the Qwen3.8-27B architecture, where its config gives 65,536.
+ *    The checkpoints and the rollback copies are read in the llama.cpp source
+ *    (tools/server/server-context.cpp `create_checkpoint`, src/llama-memory-recurrent.cpp),
+ *    not measured.
  *  - `mlx` (runtime v0.40.15 source, mlxrunner/). It grows the K/V cache in bf16 with the
  *    tokens used, keeps the recurrent state in f32 and a snapshot of it every 8,192 tokens,
  *    and keeps up to 8 GiB of paged-out prefix snapshots (prefix_cache.go `maxPagedOutBytes`,
@@ -106,9 +118,10 @@
  * After the download the install checks that the runtime holds the whole model on the GPU.
  * For a `llamacpp` row both of the runtime's figures are the buffers llama-server reports
  * allocating (weights, K/V cache, compute; `MemorySize()` in llm/llama_server.go), so the
- * check proves the whole load is on the GPU, whatever the cache type. For an `mlx` row it
- * proves only the weights (issue 19417): the figures above are all that stands between such
- * a row and swap.
+ * check proves the whole load is on the GPU, whatever the cache type; what grows after the
+ * load in host memory (the context checkpoints and the prompt cache) is counted above, not
+ * checked. For an `mlx` row it proves only the weights (issue 19417): the figures above are
+ * all that stands between such a row and swap.
  *
  * Models set aside on purpose (a weekly review should look at them again):
  *  - `bonsai-2:27b`, `bonsai-2:9b` (ternary builds of Qwen3.8-27B and Qwen3.5-9B; the 27B
@@ -308,6 +321,10 @@ const MEASURED_MEMORY = {
 const LLAMACPP_RUNNER_BYTES = 1_000_000_000;
 /** The host prompt cache llama-server may keep: `LLAMA_ARG_CACHE_RAM`, 1024 MiB (`RUNTIME_HOST_PROMPT_CACHE_MIB`). */
 const LLAMACPP_PROMPT_CACHE_BYTES = 1024 * 1024 * 1024;
+/** The context checkpoints llama-server may keep: `LLAMA_ARG_CTX_CHECKPOINTS`, 8 (`RUNTIME_CTX_CHECKPOINTS`). */
+const LLAMACPP_CTX_CHECKPOINTS = 8;
+/** The recurrent states llama.cpp keeps beside the live one for an MTP model: the runtime's draft length, 4. */
+const LLAMACPP_MTP_ROLLBACK_STATES = 4;
 /** The prefix snapshots the MLX runner may keep: `maxPagedOutBytes`, 8 GiB. */
 const MLX_PREFIX_CACHE_BYTES = 8 * 1024 * 1024 * 1024;
 
@@ -334,8 +351,9 @@ export const STOCK_LOCAL_MODEL_CATALOG: LocalModelCatalog = {
       bytes: 6_550_825_550,
       // 8 attention layers x 4 K/V heads x 256 x 2 x 34/32.
       heldBytesPerToken: 17_408,
-      // 24 linear-attention layers hold 52,690,944 bytes of f32 state.
-      overheadBytes: 52_690_944 + LLAMACPP_RUNNER_BYTES + LLAMACPP_PROMPT_CACHE_BYTES,
+      // 24 linear-attention layers hold 52,690,944 bytes of f32 state: once live, and once in
+      // each context checkpoint.
+      overheadBytes: 52_690_944 * (1 + LLAMACPP_CTX_CHECKPOINTS) + LLAMACPP_RUNNER_BYTES + LLAMACPP_PROMPT_CACHE_BYTES,
       peakExtraBytes: 0,
       figures: 'estimated',
       contexts: [131072, 65536],
@@ -357,7 +375,7 @@ export const STOCK_LOCAL_MODEL_CATALOG: LocalModelCatalog = {
       bytes: 6_550_811_033,
       // The architecture and the quantization of the row above, so its figures.
       heldBytesPerToken: 17_408,
-      overheadBytes: 52_690_944 + LLAMACPP_RUNNER_BYTES + LLAMACPP_PROMPT_CACHE_BYTES,
+      overheadBytes: 52_690_944 * (1 + LLAMACPP_CTX_CHECKPOINTS) + LLAMACPP_RUNNER_BYTES + LLAMACPP_PROMPT_CACHE_BYTES,
       peakExtraBytes: 0,
       figures: 'estimated',
       contexts: [131072, 65536],
@@ -378,8 +396,9 @@ export const STOCK_LOCAL_MODEL_CATALOG: LocalModelCatalog = {
       bytes: 18_593_967_008,
       // 13 full-attention layers x 4 K/V heads x 128 x 2 x 34/32.
       heldBytesPerToken: 14_144,
-      // 36 sliding-window layers: (4,096 + 512) cells x 4 x 128 x 2 x 34/32 = 180,486,144.
-      overheadBytes: 180_486_144 + LLAMACPP_RUNNER_BYTES + LLAMACPP_PROMPT_CACHE_BYTES,
+      // 36 sliding-window layers: (4,096 + 512) cells x 4 x 128 x 2 x 34/32 = 180,486,144, live
+      // and in each context checkpoint.
+      overheadBytes: 180_486_144 * (1 + LLAMACPP_CTX_CHECKPOINTS) + LLAMACPP_RUNNER_BYTES + LLAMACPP_PROMPT_CACHE_BYTES,
       peakExtraBytes: 0,
       figures: 'estimated',
       contexts: [262144, 131072, 65536],
@@ -398,10 +417,15 @@ export const STOCK_LOCAL_MODEL_CATALOG: LocalModelCatalog = {
       paramsB: 35,
       runner: 'llamacpp',
       bytes: 22_621_314_381,
-      // (10 attention layers + 1 prediction layer) x 2 K/V heads x 256 x 2 x 34/32.
-      heldBytesPerToken: 11_968,
-      // 30 linear-attention layers hold 65,863,680 bytes of f32 state.
-      overheadBytes: 65_863_680 + LLAMACPP_RUNNER_BYTES + LLAMACPP_PROMPT_CACHE_BYTES,
+      // 10 attention layers x 2 K/V heads x 256 x 2 x 34/32 = 10,880, + the prediction layer in
+      // f16: 2 x 256 x 2 x 2 = 2,048.
+      heldBytesPerToken: 12_928,
+      // 30 linear-attention layers hold 65,863,680 bytes of f32 state: live, in the 4 rollback
+      // copies of prediction, and in each context checkpoint.
+      overheadBytes:
+        65_863_680 * (1 + LLAMACPP_MTP_ROLLBACK_STATES + LLAMACPP_CTX_CHECKPOINTS) +
+        LLAMACPP_RUNNER_BYTES +
+        LLAMACPP_PROMPT_CACHE_BYTES,
       peakExtraBytes: 0,
       figures: 'estimated',
       contexts: [262144, 131072, 65536],
@@ -438,9 +462,13 @@ export const STOCK_LOCAL_MODEL_CATALOG: LocalModelCatalog = {
       paramsB: 27.8,
       runner: 'llamacpp',
       bytes: 29_978_242_050,
-      // The architecture of the row below, its prediction layer counted (file header).
-      heldBytesPerToken: 36_992,
-      overheadBytes: 156_893_184 + LLAMACPP_RUNNER_BYTES + LLAMACPP_PROMPT_CACHE_BYTES,
+      // The architecture of the row below, prediction layer included (its GGUF has one), so its
+      // figures.
+      heldBytesPerToken: 38_912,
+      overheadBytes:
+        156_893_184 * (1 + LLAMACPP_MTP_ROLLBACK_STATES + LLAMACPP_CTX_CHECKPOINTS) +
+        LLAMACPP_RUNNER_BYTES +
+        LLAMACPP_PROMPT_CACHE_BYTES,
       peakExtraBytes: 0,
       figures: 'estimated',
       contexts: [262144, 131072, 65536],
@@ -458,10 +486,15 @@ export const STOCK_LOCAL_MODEL_CATALOG: LocalModelCatalog = {
       paramsB: 27.8,
       runner: 'llamacpp',
       bytes: 17_741_872_154,
-      // (16 attention layers + 1 prediction layer) x 4 K/V heads x 256 x 2 x 34/32.
-      heldBytesPerToken: 36_992,
-      // 48 linear-attention layers hold 156,893,184 bytes of f32 state.
-      overheadBytes: 156_893_184 + LLAMACPP_RUNNER_BYTES + LLAMACPP_PROMPT_CACHE_BYTES,
+      // 16 attention layers x 4 K/V heads x 256 x 2 x 34/32 = 34,816, + the prediction layer in
+      // f16: 4 x 256 x 2 x 2 = 4,096.
+      heldBytesPerToken: 38_912,
+      // 48 linear-attention layers hold 156,893,184 bytes of f32 state: live, in the 4 rollback
+      // copies of prediction, and in each context checkpoint.
+      overheadBytes:
+        156_893_184 * (1 + LLAMACPP_MTP_ROLLBACK_STATES + LLAMACPP_CTX_CHECKPOINTS) +
+        LLAMACPP_RUNNER_BYTES +
+        LLAMACPP_PROMPT_CACHE_BYTES,
       peakExtraBytes: 0,
       figures: 'estimated',
       contexts: [262144, 131072, 65536],
