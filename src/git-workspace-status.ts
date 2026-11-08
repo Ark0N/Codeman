@@ -50,6 +50,7 @@ import { homedir } from 'node:os';
 import { basename, join, relative, sep } from 'node:path';
 import { promisify } from 'node:util';
 import { gitNonInteractiveEnv, redactGitCredentials } from './git-clone.js';
+import { gitMissingError, gitSpawnAllowed } from './utils/git-availability.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -265,6 +266,8 @@ export function parseCommitLog(text: string): GitCommitEntry[] {
 export type GitRunner = (cwd: string, args: string[], opts?: { timeoutMs?: number }) => Promise<string>;
 
 export const runGit: GitRunner = async (cwd, args, opts) => {
+  // Never Apple's placeholder git on a Mac without developer tools (utils/git-availability.ts).
+  if (!gitSpawnAllowed()) throw gitMissingError();
   const { stdout } = await execFileAsync(
     'git',
     // --no-optional-locks: never touch the index just to look. core.fsmonitor=false: do not start or
