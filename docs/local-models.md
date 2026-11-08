@@ -29,7 +29,7 @@ memory less 6, 8 or 12 GiB for macOS, Codeman, a browser and the agent):
 | 18 GB            | 11.8 GB | A small model (`limited`): MiMo V2.6 9B at 131,072 tokens, 11.4 GB, tight. Its base, Qwen3.5 9B, is the one alternative                                                                                                                                                                                                                            |
 | 24 GB            | 16.1 GB | The same, with room. On a base M2 or M3 (100 GB/s) it computes to 9.3 tokens per second: slow                                                                                                                                                                                                                                                      |
 | 32 GB            | 21.8 GB | The same. North Mini Code 1.0 needs 23.2 GB at 65,536 tokens; once the runtime measures about 3/4 of the memory, as it did on a 16 and a 48 GB Mac, the Mac gets it at 131,072 tokens, or Qwen3.8 27B at 65,536 tokens on a Max chip                                                                                                               |
-| 36 GB            | 27.9 GB | Qwen3.8 27B at 131,072 tokens on an M4 or M5 Max (27.0 GB, 97%); on a slower chip, where the dense 27B computes to under 10 tokens per second, Qwen3.6 35B-A3B as a GGUF build (27.2 GB, 98%). Both tight                                                                                                                                          |
+| 36 GB            | 27.9 GB | Qwen3.8 27B at 131,072 tokens on an M4 or M5 Max (27.0 GB, 97%); on a slower chip, where the dense 27B computes to under 10 tokens per second, Qwen3.6 35B-A3B as a GGUF build (27.1 GB, 97%). Both tight                                                                                                                                          |
 | 48 GB            | 37.6 GB | Qwen3.6 35B-A3B (MLX) at 131,072 tokens: the pair we tested, "Recommended" on an Apple M5 Pro with 48 GB. On a Max chip Qwen3.8 27B at 262,144 tokens (32.1 GB, tight). The test was a short task: in a long session MLX may keep up to 8 GiB more, which brings this pair to the edge of the budget, and past it while a long prompt is processed |
 | 64 GB            | 50.5 GB | Qwen3.8 27B at 262,144 tokens on a Max chip; Qwen3.6 35B-A3B (MLX) on a Pro chip                                                                                                                                                                                                                                                                   |
 | 96 GB            | 76.2 GB | Qwen3.8 27B at 262,144 tokens; on an M3 Max, Qwen3.6 35B-A3B (MLX)                                                                                                                                                                                                                                                                                 |
@@ -62,8 +62,9 @@ names its runner (`runner`) and its figures follow that runner's rule:
   layers, its recurrent or sliding-window state, live and in each of the 8 checkpoints, 1.0
   GB for the runner and the 1 GiB prompt cache. A build with a multi-token-prediction layer
   (the two `-mtp` tags and `qwen3.8:27b-q8_0`) costs more: the runtime turns prediction on,
-  so llama-server keeps that layer's cache in f16 and 4 more copies of the recurrent state
-  for rollback. No peak: the buffers are allocated at load. The checkpoints and the
+  so llama-server keeps that layer's cache in f16 and one more copy of the recurrent state for
+  rollback per drafted token (the tag's `draft_num_predict`: 2 for the 35B-A3B, 4 for the
+  27B). No peak: the buffers are allocated at load. The checkpoints and the
   prediction costs were read in the llama.cpp source the runtime bundles (b12111), not
   measured.
 - **MLX** grows its cache with the tokens actually used, keeps snapshots of the recurrent

@@ -75,13 +75,15 @@
  *    "MTP" below is a GGUF with a multi-token-prediction layer (`nextn_predict_layers` 1 in
  *    its header, read on 2026-11-08 from the first bytes of each model layer: the two `-mtp`
  *    tags and `qwen3.8:27b-q8_0` have it, the two 9B tags and North Mini Code do not). For
- *    such a model the runtime always passes `--spec-type draft-mtp --spec-draft-n-max 4`
- *    (its default `draft_num_predict` is 4).
+ *    such a model the runtime always passes `--spec-type draft-mtp --spec-draft-n-max N`, N
+ *    being the tag's own `draft_num_predict` (its params layer: 4 for
+ *    `qwen3.8:27b-mtp-q4_k_m`, 2 for `qwen3.6:35b-a3b-mtp-q4_k_m`) or the runtime's default
+ *    of 4 (`qwen3.8:27b-q8_0` sets none).
  *     - held = attention layers x K/V heads x head dim x 2 (K and V) x 34/32. An MTP model
  *       adds its prediction layer, whose cache llama-server keeps in a draft context of the
  *       same length in the draft's own cache type, f16 by default (2 bytes per value).
  *     - overhead = the fixed caches (the f32 recurrent state of the linear-attention layers,
- *       or the sliding-window cache of `n_swa + 512` cells), held 1 + 4 times for an MTP
+ *       or the sliding-window cache of `n_swa + 512` cells), held 1 + N times for an MTP
  *       model (llama.cpp keeps one recurrent state per drafted token for rollback,
  *       `need_n_rs_seq()`), + the context checkpoints: `LLAMA_ARG_CTX_CHECKPOINTS` host copies
  *       (`RUNTIME_CTX_CHECKPOINTS`, 8) of the state that cannot be rolled back (the recurrent
@@ -323,8 +325,8 @@ const LLAMACPP_RUNNER_BYTES = 1_000_000_000;
 const LLAMACPP_PROMPT_CACHE_BYTES = 1024 * 1024 * 1024;
 /** The context checkpoints llama-server may keep: `LLAMA_ARG_CTX_CHECKPOINTS`, 8 (`RUNTIME_CTX_CHECKPOINTS`). */
 const LLAMACPP_CTX_CHECKPOINTS = 8;
-/** The recurrent states llama.cpp keeps beside the live one for an MTP model: the runtime's draft length, 4. */
-const LLAMACPP_MTP_ROLLBACK_STATES = 4;
+/** The tokens the runtime drafts per step for an MTP model whose tag sets no `draft_num_predict`, 4: so many rollback states. */
+const LLAMACPP_DEFAULT_DRAFT_TOKENS = 4;
 /** The prefix snapshots the MLX runner may keep: `maxPagedOutBytes`, 8 GiB. */
 const MLX_PREFIX_CACHE_BYTES = 8 * 1024 * 1024 * 1024;
 
@@ -420,12 +422,11 @@ export const STOCK_LOCAL_MODEL_CATALOG: LocalModelCatalog = {
       // 10 attention layers x 2 K/V heads x 256 x 2 x 34/32 = 10,880, + the prediction layer in
       // f16: 2 x 256 x 2 x 2 = 2,048.
       heldBytesPerToken: 12_928,
-      // 30 linear-attention layers hold 65,863,680 bytes of f32 state: live, in the 4 rollback
-      // copies of prediction, and in each context checkpoint.
+      // 30 linear-attention layers hold 65,863,680 bytes of f32 state: live, in the 2 rollback
+      // copies of prediction (this tag drafts 2 tokens, `draft_num_predict` 2), and in each
+      // context checkpoint.
       overheadBytes:
-        65_863_680 * (1 + LLAMACPP_MTP_ROLLBACK_STATES + LLAMACPP_CTX_CHECKPOINTS) +
-        LLAMACPP_RUNNER_BYTES +
-        LLAMACPP_PROMPT_CACHE_BYTES,
+        65_863_680 * (1 + 2 + LLAMACPP_CTX_CHECKPOINTS) + LLAMACPP_RUNNER_BYTES + LLAMACPP_PROMPT_CACHE_BYTES,
       peakExtraBytes: 0,
       figures: 'estimated',
       contexts: [262144, 131072, 65536],
@@ -462,11 +463,11 @@ export const STOCK_LOCAL_MODEL_CATALOG: LocalModelCatalog = {
       paramsB: 27.8,
       runner: 'llamacpp',
       bytes: 29_978_242_050,
-      // The architecture of the row below, prediction layer included (its GGUF has one), so its
-      // figures.
+      // The architecture of the row below, prediction layer included (its GGUF has one), and the
+      // runtime's 4 drafted tokens (the tag sets none), so its figures.
       heldBytesPerToken: 38_912,
       overheadBytes:
-        156_893_184 * (1 + LLAMACPP_MTP_ROLLBACK_STATES + LLAMACPP_CTX_CHECKPOINTS) +
+        156_893_184 * (1 + LLAMACPP_DEFAULT_DRAFT_TOKENS + LLAMACPP_CTX_CHECKPOINTS) +
         LLAMACPP_RUNNER_BYTES +
         LLAMACPP_PROMPT_CACHE_BYTES,
       peakExtraBytes: 0,
@@ -490,11 +491,9 @@ export const STOCK_LOCAL_MODEL_CATALOG: LocalModelCatalog = {
       // f16: 4 x 256 x 2 x 2 = 4,096.
       heldBytesPerToken: 38_912,
       // 48 linear-attention layers hold 156,893,184 bytes of f32 state: live, in the 4 rollback
-      // copies of prediction, and in each context checkpoint.
+      // copies of prediction (`draft_num_predict` 4), and in each context checkpoint.
       overheadBytes:
-        156_893_184 * (1 + LLAMACPP_MTP_ROLLBACK_STATES + LLAMACPP_CTX_CHECKPOINTS) +
-        LLAMACPP_RUNNER_BYTES +
-        LLAMACPP_PROMPT_CACHE_BYTES,
+        156_893_184 * (1 + 4 + LLAMACPP_CTX_CHECKPOINTS) + LLAMACPP_RUNNER_BYTES + LLAMACPP_PROMPT_CACHE_BYTES,
       peakExtraBytes: 0,
       figures: 'estimated',
       contexts: [262144, 131072, 65536],

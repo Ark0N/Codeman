@@ -489,7 +489,7 @@ describe('needBytes', () => {
       'qwen3.5:9b-q4_k_m': 11_380_487_246,
       'mimo-v2.6:9b-q4_k_m': 11_380_472_729,
       'north-mini-code-1.0:q4_k_m': 25_999_848_864,
-      'qwen3.6:35b-a3b-mtp-q4_k_m': 28_940_281_677,
+      'qwen3.6:35b-a3b-mtp-q4_k_m': 28_808_554_317,
       'qwen3.6:35b-a3b': 35_955_462_956,
       'qwen3.8:27b-q8_0': 44_292_142_594,
       'qwen3.8:27b-mtp-q4_k_m': 32_055_772_698,
@@ -647,7 +647,7 @@ describe('the MacBook Pro (Mac17,13: Apple M5 Pro, 48 GB)', () => {
     expect(
       result.alternatives.map((c) => [c.modelId, c.context, c.fit, c.speed, c.tokensPerSecond ?? null, c.tag?.kind])
     ).toEqual([
-      // The same model as a GGUF build: its fixed footprint holds the full window, 28.9 GB.
+      // The same model as a GGUF build: its fixed footprint holds the full window, 28.8 GB.
       ['qwen3.6:35b-a3b-mtp-q4_k_m', 262144, 'good', 'ok', 41.8, undefined],
       ['north-mini-code-1.0:q4_k_m', 262144, 'good', 'ok', 41.8, undefined],
       ['mimo-v2.6:9b-q4_k_m', 131072, 'good', 'ok', 28.6, 'small'],
@@ -809,7 +809,7 @@ describe('every memory size, with the stock catalogue', () => {
     [32, 'Apple M1 Max', 'limited mimo-v2.6:9b-q4_k_m@131072 good ok'],
     // A Max chip runs the dense 27B fast enough (12.1); an M3 Max (300 GB/s) does not (8.9),
     // and takes the 35B-A3B as a GGUF build, whose memory does not grow after it loaded. Both
-    // at 131072 tokens, 0.966 and 0.976 of the budget.
+    // at 131072 tokens, 0.966 and 0.971 of the budget.
     [36, 'Apple M4 Max', 'ok qwen3.8:27b-mtp-q4_k_m@131072 tight ok'],
     [36, 'Apple M3 Max', 'ok qwen3.6:35b-a3b-mtp-q4_k_m@131072 tight ok'],
     // The tested pair on the tested Mac; on a Pro chip the 27B is slow (8.1), so the same pick.
@@ -2077,8 +2077,8 @@ describe('the measured budget, end to end', () => {
     expect([measured.budgetSource, measured.budgetGb]).toEqual(['measured', '40.2']);
     // The same rows in the same order; only the share of each changes.
     expect(order(measured)).toEqual(order(estimated));
-    expect(rows(estimated).map((c) => c.budgetShare)).toEqual([0.957, 0.77, 0.692, 0.303, 0.303]);
-    expect(rows(measured).map((c) => c.budgetShare)).toEqual([0.895, 0.721, 0.647, 0.283, 0.283]);
+    expect(rows(estimated).map((c) => c.budgetShare)).toEqual([0.957, 0.767, 0.692, 0.303, 0.303]);
+    expect(rows(measured).map((c) => c.budgetShare)).toEqual([0.895, 0.717, 0.647, 0.283, 0.283]);
     for (const candidate of rows(measured)) {
       expect(candidate.budgetShare).toBeCloseTo(candidate.needBytes / MACBOOK_MEASURED_TOTAL, 3);
     }

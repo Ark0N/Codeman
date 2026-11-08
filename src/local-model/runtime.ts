@@ -40,13 +40,13 @@
  *       of the catalogue's `llamacpp` rows: a checkpoint is a host copy of the state that
  *       cannot be rolled back (the recurrent state of the linear-attention layers, or the
  *       sliding-window cache), two or three per request, and llama-server keeps up to 32 by
- *       default. 32 copies of the 27B's 157 MB state are 5 GB that the session holds for
- *       nothing: an agent's next request restores the newest checkpoint of the previous one.
- *       8 (llama.cpp's own default before it went to 32 to cover a 262,144-token window in
- *       8,192-token steps) keeps the last few requests. The cost: a prompt that differs from
- *       the last checkpoints further back (a compaction, a cleared old tool result) is
- *       processed again from the newest checkpoint before that point, or from its start.
- *       8 checkpoints are counted in every `llamacpp` row's `overheadBytes`.
+ *       default. 32 copies of the 27B's 157 MB state are 5 GB, most of which an agent never
+ *       uses: its next request restores the newest checkpoint of the previous one. 8
+ *       (llama.cpp's own default from b6800 to b8200; it became 32 at b8250, together with a
+ *       checkpoint every 8,192 tokens of a long prompt) keeps the last few requests. The cost:
+ *       a prompt that differs from the last checkpoints further back (a compaction, a cleared
+ *       old tool result) is processed again from the newest checkpoint before that point, or
+ *       from its start. 8 checkpoints are counted in every `llamacpp` row's `overheadBytes`.
  *    The MLX runner reads none of the four (nothing under mlxrunner/ does): an `mlx` row's
  *    figures do not depend on them.
  *  - PORT (`chooseRuntimePort()`). Chosen ONCE by binding, from `RUNTIME_PORT_FIRST` across

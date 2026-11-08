@@ -84,22 +84,26 @@ type ArchitectureName = keyof typeof ARCHITECTURES;
 type Architecture = (typeof ARCHITECTURES)[ArchitectureName];
 
 /**
- * Which architecture each stock row runs, and whether its GGUF carries a
- * multi-token-prediction layer (`nextn_predict_layers` 1 in the GGUF header, read on
- * 2026-11-08 from the first bytes of each model layer). For such a model the runtime turns on
- * prediction, which costs a cache for that layer and rollback copies of the recurrent state
- * (see the catalogue header). A row the catalogue gains must be added here, or the test below
- * fails: its figures cannot be checked without it.
+ * Which architecture each stock row runs, and how many tokens the runtime drafts per step with
+ * its multi-token-prediction layer: 0 when the GGUF has none (`nextn_predict_layers` in the GGUF
+ * header, read on 2026-11-08 from the first bytes of each model layer), else the tag's own
+ * `draft_num_predict` (its params layer) or the runtime's default of 4 when the tag sets none.
+ * Prediction costs a cache for that layer and one rollback copy of the recurrent state per
+ * drafted token (see the catalogue header). A row the catalogue gains must be added here, or the
+ * test below fails: its figures cannot be checked without it.
  */
-const ROW_ARCHITECTURE: Record<string, { architecture: ArchitectureName; predictionLayer: boolean }> = {
-  'qwen3.5:9b-q4_k_m': { architecture: 'Qwen3.5-9B', predictionLayer: false },
-  'mimo-v2.6:9b-q4_k_m': { architecture: 'Qwen3.5-9B', predictionLayer: false },
-  'north-mini-code-1.0:q4_k_m': { architecture: 'North-Mini-Code-1.0', predictionLayer: false },
-  'qwen3.6:35b-a3b-mtp-q4_k_m': { architecture: 'Qwen3.6-35B-A3B', predictionLayer: true },
-  'qwen3.6:35b-a3b': { architecture: 'Qwen3.6-35B-A3B', predictionLayer: false },
-  'qwen3.8:27b-q8_0': { architecture: 'Qwen3.8-27B', predictionLayer: true },
-  'qwen3.8:27b-mtp-q4_k_m': { architecture: 'Qwen3.8-27B', predictionLayer: true },
-  'ornith-1.5:122b': { architecture: 'Qwen3.5-122B-A10B', predictionLayer: false },
+const ROW_ARCHITECTURE: Record<string, { architecture: ArchitectureName; draftTokens: number }> = {
+  'qwen3.5:9b-q4_k_m': { architecture: 'Qwen3.5-9B', draftTokens: 0 },
+  'mimo-v2.6:9b-q4_k_m': { architecture: 'Qwen3.5-9B', draftTokens: 0 },
+  'north-mini-code-1.0:q4_k_m': { architecture: 'North-Mini-Code-1.0', draftTokens: 0 },
+  // Its params layer sets `draft_num_predict` 2.
+  'qwen3.6:35b-a3b-mtp-q4_k_m': { architecture: 'Qwen3.6-35B-A3B', draftTokens: 2 },
+  'qwen3.6:35b-a3b': { architecture: 'Qwen3.6-35B-A3B', draftTokens: 0 },
+  // A prediction layer, and no `draft_num_predict`: the runtime's 4.
+  'qwen3.8:27b-q8_0': { architecture: 'Qwen3.8-27B', draftTokens: 4 },
+  // Its params layer sets `draft_num_predict` 4.
+  'qwen3.8:27b-mtp-q4_k_m': { architecture: 'Qwen3.8-27B', draftTokens: 4 },
+  'ornith-1.5:122b': { architecture: 'Qwen3.5-122B-A10B', draftTokens: 0 },
 };
 
 /** Bytes per cached value in each K/V cache type of llama.cpp: q8_0 keeps 32 values in 34 bytes. */
@@ -109,12 +113,6 @@ const KV_BYTES_PER_VALUE: Record<string, number> = { f16: 2, q8_0: 34 / 32 };
  * default, because the runtime sets only the main context's (`--cache-type-k`).
  */
 const DRAFT_KV_CACHE_TYPE = 'f16';
-/**
- * The recurrent states llama.cpp keeps beside the live one for a model with prediction: the
- * runtime's draft length (`draft_num_predict` 4, passed as `--spec-draft-n-max`), which
- * `need_n_rs_seq()` turns into that many rollback copies.
- */
-const MTP_ROLLBACK_STATES = 4;
 /** The sliding-window cache holds the window plus one batch of 512 tokens (`n_swa + n_ubatch`). */
 const SLIDING_EXTRA_CELLS = 512;
 /** The head size of a Gated DeltaNet layer's keys and values, and its convolution kernel, in every model above. */
@@ -132,7 +130,8 @@ function recurrentStateBytes(arch: Architecture, convBytes: number): number {
 }
 
 /** What a `llamacpp` row's three figures must be, from its architecture and the runtime's settings. */
-function llamaCppFigures(arch: Architecture, predictionLayer: boolean): [number, number, number] {
+function llamaCppFigures(arch: Architecture, draftTokens: number): [number, number, number] {
+  const predictionLayer = draftTokens > 0;
   const perValue = KV_BYTES_PER_VALUE[RUNTIME_KV_CACHE_TYPE];
   const perLayer = arch.kvHeads * arch.headDim * 2;
   // The prediction layer's cache sits in the draft context, in the draft's cache type.
@@ -143,8 +142,9 @@ function llamaCppFigures(arch: Architecture, predictionLayer: boolean): [number,
   const recurrent = recurrentStateBytes(arch, 4);
   const sliding =
     'sliding' in arch ? arch.sliding.layers * (arch.sliding.window + SLIDING_EXTRA_CELLS) * perLayer * perValue : 0;
-  // Live: the sliding window, and the recurrent state with its rollback copies under prediction.
-  const live = sliding + recurrent * (1 + (predictionLayer ? MTP_ROLLBACK_STATES : 0));
+  // Live: the sliding window, and the recurrent state with one rollback copy per drafted token
+  // (`--spec-draft-n-max`, which `need_n_rs_seq()` turns into that many copies).
+  const live = sliding + recurrent * (1 + draftTokens);
   // A context checkpoint is a copy of what cannot be rolled back: the recurrent state or the window.
   const checkpoints = RUNTIME_CTX_CHECKPOINTS * (recurrent + sliding);
   return [held, live + checkpoints + 1_000_000_000 + RUNTIME_HOST_PROMPT_CACHE_MIB * MIB, 0];
@@ -337,9 +337,9 @@ describe('the memory figures of the stock rows: each row has its own', () => {
 
   it("recomputes every estimated row's figures from its own model's architecture and runner", () => {
     for (const model of models.filter((m) => m.figures === 'estimated')) {
-      const { architecture, predictionLayer } = ROW_ARCHITECTURE[model.id];
+      const { architecture, draftTokens } = ROW_ARCHITECTURE[model.id];
       const arch = ARCHITECTURES[architecture];
-      const expected = model.runner === 'llamacpp' ? llamaCppFigures(arch, predictionLayer) : mlxFigures(arch);
+      const expected = model.runner === 'llamacpp' ? llamaCppFigures(arch, draftTokens) : mlxFigures(arch);
       expect(figuresOf(model), `${model.id} (${architecture}, ${model.runner})`).toEqual(expected);
     }
   });
@@ -351,9 +351,9 @@ describe('the memory figures of the stock rows: each row has its own', () => {
       'mimo-v2.6:9b-q4_k_m': [17_408, 2_547_960_320, 0],
       // The sliding window x (1 live + 8 checkpoints) + 1.0 GB + 1 GiB.
       'north-mini-code-1.0:q4_k_m': [14_144, 3_698_117_120, 0],
-      // State x (1 live + 4 rollback copies + 8 checkpoints) + 1.0 GB + 1 GiB; the prediction
-      // layer's cache in f16 per token.
-      'qwen3.6:35b-a3b-mtp-q4_k_m': [12_928, 2_929_969_664, 0],
+      // State x (1 live + 2 rollback copies + 8 checkpoints) + 1.0 GB + 1 GiB; the prediction
+      // layer's cache in f16 per token. The 27B rows below draft 4 tokens: 4 rollback copies.
+      'qwen3.6:35b-a3b-mtp-q4_k_m': [12_928, 2_798_242_304, 0],
       'qwen3.6:35b-a3b': [37_000, 3_000_000_000, 5_000_000_000],
       'qwen3.8:27b-q8_0': [38_912, 4_113_353_216, 0],
       'qwen3.8:27b-mtp-q4_k_m': [38_912, 4_113_353_216, 0],
@@ -367,7 +367,7 @@ describe('the memory figures of the stock rows: each row has its own', () => {
     expect(mlxComputedPerToken(ARCHITECTURES['Qwen3.5-122B-A10B'])).toBe(43_332);
   });
 
-  it('lets two rows share figures only when they share the architecture, the prediction layer and the runner', () => {
+  it('lets two rows share figures only when they share the architecture, the drafted tokens and the runner', () => {
     const byFigures = new Map<string, LocalModelEntry[]>();
     for (const model of models) {
       const key = figuresOf(model).join('/');
