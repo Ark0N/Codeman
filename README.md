@@ -9,6 +9,12 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/Ark0N/Codeman/releases/latest/download/Codeman.dmg"><img src="https://img.shields.io/badge/Download_for_Mac-Codeman.dmg-2f6fe0?style=for-the-badge&logo=apple&logoColor=white&labelColor=000000" alt="Download Codeman for Mac (Codeman.dmg)" width="442"></a>
+  <br>
+  <sub>The native Mac app: signed and notarized, Apple Silicon and Intel, macOS 11.3 or later. <a href="#on-a-mac-the-codeman-app">What it does</a></sub>
+</p>
+
+<p align="center">
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-1e3a5f?style=flat-square" alt="License: MIT"></a>
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-22%2B-22c55e?style=flat-square&logo=node.js&logoColor=white" alt="Node.js 22+"></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-5.9-3b82f6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript 5.9"></a>
