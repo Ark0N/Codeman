@@ -775,13 +775,15 @@ Web UI 仍是主要界面；完整指南见 **[docs/tui.md](docs/tui.md)**（英
 
 #### 第 1 步：安装
 
+通常什么都不用装：从 1.50.0 起，每个新会话都会在自己的文件夹里、在它的 CLI 查找技能的位置拿到这个技能（即下表的 Web UI 一行，默认开启）。这份副本会让 git 忽略它自己，所以你的仓库永远不会把它列为新文件。其他方式适用于 pi，或者你想要一份不依赖这个设置的副本的情况。
+
 | 方式             | 命令                                                       | 范围                                                                                       |
 | ---------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
 | Skills CLI       | `npx skills add Ark0N/Codeman --skill codeman -g`          | 全局，任何支持技能的智能体都能用（[skills.sh](https://skills.sh)）；给 pi 装技能就用这个方式 |
 | Claude Code 插件 | `/plugin marketplace add Ark0N/Codeman`，然后 `/plugin install codeman@codeman` | 全局，通过 Claude Code 自带的插件管理器；`/plugin update codeman` 跟随新版本。与 `codeman skill install` 二选一：两者都装会让技能出现两次（`codeman` 和 `codeman:codeman`） |
 | 内置 CLI         | `codeman skill install`                                    | 全局（`~/.claude/skills/codeman`），给那些从 npm 安装、从未克隆过仓库的用户                |
 | 内置 CLI         | `codeman skill install --case <name> [--mode <mode>]`      | 仅一个 case；`--mode codex`（或任何其他运行模式）会把它写到那个 CLI 查找技能的位置          |
-| Web UI           | App Settings → Agents & CLIs → All agent CLIs → **Codeman Agent Skill** | 每次创建会话时自动注入到 case 里该会话的 CLI 查找技能的位置：Claude Code 是 `.claude/skills/`，Codex、Gemini CLI、OpenCode、Antigravity、Grok、DeepSeek 和 OMP 是 `.agents/skills/`；pi 除外，因为它的项目级技能会触发信任提示（`agentSkillEnabled`，跨设备同步，默认关闭） |
+| Web UI           | App Settings → Agents & CLIs → All agent CLIs → **Codeman Agent Skill** | 每次创建会话时自动注入到 case 里该会话的 CLI 查找技能的位置：Claude Code 是 `.claude/skills/`，Codex、Gemini CLI、OpenCode、Antigravity、Grok、DeepSeek 和 OMP 是 `.agents/skills/`；pi 除外，因为它的项目级技能会触发信任提示（`agentSkillEnabled`，跨设备同步，从 1.50.0 起**默认开启**；同时装了插件的 Claude Code 会把技能列出两次，两个都能用，嫌重复就去掉其中一个） |
 
 `codeman skill uninstall [--case <name>]` 可以撤销 CLI 安装（带 `--case` 时，删除该 case 里所有由 Codeman 管理的副本，不论它在哪个 CLI 的目录里），并且绝不会碰你自己写的 `skills/codeman`。
 
@@ -848,7 +850,7 @@ deleted 9f2d8e5f, aff9c691, be9f1f15    标签消失
 - **它会自我门禁。** 它在 Codeman 管理的会话里工作。不在这样的会话里（`CODEMAN_MUX` 未设置）时，它只会离线读取已保存的 Codex 对话（`codeman history read`），其他一律拒绝，也从不去猜 API 地址，所以全局安装对无关的 Claude Code 会话没有任何代价。
 - **它刻意保守。** 未经提示，它只会拉起会话、给它们发提示，并删除**它在同一段对话里自己创建的**会话（按精确 id，经由一个拒绝删除智能体自身会话的失败即关闭守卫）。删除 case（会抹掉一个真实的代码目录）、批量杀会话、改动 respawn/ralph/cron/orchestrator 以及写设置，都需要你开口并指名目标。
 
-⚠️ 把 `agentSkillEnabled` 关回去**不会删掉已经注入的副本**（在创建时做清扫，会把技能从共用同一个工作区的其他活动会话脚下抽走）。要删就按 case 删：`codeman skill uninstall --case <name>`。
+⚠️ 从 1.50.0 起，Web UI 注入**默认开启**。`settings.json` 里没有 `agentSkillEnabled` 这个键就表示开启；如果你在更早的版本里保存过 App Settings，当时存下的是旧默认值（`false`），它会保持关闭，直到你手动打开。把它关掉**不会删掉已经注入的副本**（在创建时做清扫，会把技能从共用同一个工作区的其他活动会话脚下抽走）。要删就按 case 删：`codeman skill uninstall --case <name>`。
 
 ---
 

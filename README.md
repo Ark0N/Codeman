@@ -775,13 +775,15 @@ Everything in this section also ships as an **agent skill**, [`skills/codeman`](
 
 #### Step 1: install it
 
+Usually there is nothing to install: since 1.50.0 every new session gets the skill in its folder, where its CLI looks for skills (the web UI row below, on by default). The copy ignores itself in git, so your repository never lists it as a new file. The other routes are for pi, or for a copy that does not depend on that setting.
+
 | How            | Command                                                    | Scope                                                                                      |
 | -------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
 | Skills CLI     | `npx skills add Ark0N/Codeman --skill codeman -g`          | Global, for any skills-aware agent ([skills.sh](https://skills.sh)); the way to give it to pi |
 | Claude Code plugin | `/plugin marketplace add Ark0N/Codeman` then `/plugin install codeman@codeman` | Global, through Claude Code's plugin manager; `/plugin update codeman` follows releases. Pick this OR a `codeman skill install`, not both: a Claude Code with both lists the skill twice (`codeman` and `codeman:codeman`) |
 | Bundled CLI    | `codeman skill install`                                    | Global (`~/.claude/skills/codeman`), for npm installs that never cloned the repo            |
 | Bundled CLI    | `codeman skill install --case <name> [--mode <mode>]`      | One case only; `--mode codex` (or any other run mode) writes it where that CLI looks for skills |
-| Web UI         | App Settings → Agents & CLIs → All agent CLIs → **Codeman Agent Skill** | Auto-injects into each case on session create, where that session's CLI looks: `.claude/skills/` for Claude Code, `.agents/skills/` for Codex, Gemini CLI, OpenCode, Antigravity, Grok, DeepSeek and OMP; not pi, whose project skills trigger a trust prompt (`agentSkillEnabled`, SYNCED, default off) |
+| Web UI         | App Settings → Agents & CLIs → All agent CLIs → **Codeman Agent Skill** | Auto-injects into each case on session create, where that session's CLI looks: `.claude/skills/` for Claude Code, `.agents/skills/` for Codex, Gemini CLI, OpenCode, Antigravity, Grok, DeepSeek and OMP; not pi, whose project skills trigger a trust prompt (`agentSkillEnabled`, SYNCED, **on by default** since 1.50.0; a Claude Code that also has the plugin lists the skill twice, both work, so drop one if the duplicate bothers you) |
 
 `codeman skill uninstall [--case <name>]` reverses the CLI installs (with `--case`, every Codeman-managed copy in that case, whichever CLI's directory it sits in), and never touches a `skills/codeman` you wrote yourself.
 
@@ -848,7 +850,7 @@ Every recipe in there was verified against a live server, and the comments recor
 - **It self-gates.** It acts inside a Codeman-managed session. Outside one (`CODEMAN_MUX` unset) it only reads saved Codex conversations offline (`codeman history read`) and refuses everything else, and it never guesses an API URL, so a global install costs an unrelated Claude Code session nothing.
 - **It is deliberately conservative.** Unprompted, it may only spawn sessions, prompt them, and delete ones **it created in that same conversation, by exact id**, through a fail-closed guard that refuses to delete the agent's own session. Deleting a case (which erases a real directory of your code), bulk kills, respawn/ralph/cron/orchestrator changes and settings writes all require you to ask, naming the target.
 
-⚠️ Turning `agentSkillEnabled` back off **does not remove already-injected copies** (a create-time sweep would yank the skill out from under other live sessions sharing that workspace). Remove them per case with `codeman skill uninstall --case <name>`.
+⚠️ The web UI injection is **on by default** since 1.50.0. A `settings.json` without the `agentSkillEnabled` key means on; an install whose App Settings were saved on an earlier version stored the old default (`false`) and stays off until you switch it on. Turning it off **does not remove already-injected copies** (a create-time sweep would yank the skill out from under other live sessions sharing that workspace). Remove them per case with `codeman skill uninstall --case <name>`.
 
 ---
 
