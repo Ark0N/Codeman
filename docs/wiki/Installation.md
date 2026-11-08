@@ -232,7 +232,7 @@ A small native app that opens Codeman in its own window. Its first screen has tw
   for you, with no Terminal and no administrator password: it asks which coding agent to
   install (only when the Mac has none, and *Skip for now* is there) and who may reach
   Codeman (this Mac only, or the local network with a password), then shows the install as
-  a checklist. *Add a coding agent*, on this tab and in the app menu, installs one later.
+  a checklist. *Add a coding agent* on this tab (*Add a Coding Agent to This Mac…* in the app menu) installs one later.
 - **Another machine** connects to Codeman by address, a tailnet name included, and keeps
   the password in the Keychain. *Codeman is not installed there yet?* opens Terminal and
   runs the installer on that machine over SSH.
