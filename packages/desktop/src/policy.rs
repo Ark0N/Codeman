@@ -21,6 +21,7 @@ pub const CONNECT_PAGE: &str = "codemanapp://localhost/index.html";
 /// Caps on what a page may hand the native side.
 pub const MAX_URL_LEN: usize = 4096;
 pub const MAX_FIELD_LEN: usize = 1024;
+const MAX_MESSAGE_LEN: usize = 16 * 1024;
 
 /// Where the main window is in reaching a server. The gates below take it
 /// instead of "is a server set", because what may talk to the native side
@@ -552,12 +553,9 @@ pub fn new_window(target: &str, phase: &Phase, via: Via) -> NewWindow {
     if target.len() > MAX_URL_LEN {
         return NewWindow::Deny;
     }
-    let Ok(url) = Url::parse(target) else {
+    let Some(url) = external_url(target) else {
         return NewWindow::Deny;
     };
-    if !matches!(url.scheme(), "http" | "https") {
-        return NewWindow::Deny;
-    }
     let Some(srv) = phase.loaded() else {
         return NewWindow::Deny;
     };
@@ -656,7 +654,12 @@ pub enum Ipc {
 }
 
 #[derive(Deserialize)]
-#[serde(tag = "cmd", rename_all = "camelCase", deny_unknown_fields)]
+#[serde(
+    tag = "cmd",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
 enum RawConnect {
     Ready,
     Connect {
@@ -696,18 +699,15 @@ enum RawConnect {
     },
     InstallPrepare,
     InstallStart {
-        // rename_all above reaches variant names only, and deny_unknown_fields
-        // would refuse the page's spelling of these.
-        #[serde(default, rename = "networkPassword")]
+        #[serde(default)]
         network_password: Option<String>,
-        #[serde(default, rename = "aiCli")]
+        #[serde(default)]
         ai_cli: Option<String>,
     },
     InstallAttach,
     InstallCancel,
     AgentPrepare,
     AgentStart {
-        #[serde(rename = "aiCli")]
         ai_cli: String,
     },
     AgentAttach,
@@ -761,7 +761,7 @@ fn is_connect_page(frame: &Url) -> bool {
 /// - A server page is listened to only once it committed, and only from a
 ///   frame running Codeman's own app shell (trusted_frame).
 pub fn parse_ipc(frame_url: &str, body: &str, phase: &Phase, is_main_window: bool) -> Option<Ipc> {
-    if body.len() > 16 * 1024 {
+    if body.len() > MAX_MESSAGE_LEN {
         return None;
     }
     let frame = Url::parse(frame_url).ok()?;
@@ -776,17 +776,12 @@ pub fn parse_ipc(frame_url: &str, body: &str, phase: &Phase, is_main_window: boo
                 username,
                 password,
                 remember,
-            } => {
-                if url.len() > MAX_URL_LEN {
-                    return None;
-                }
-                ConnectCmd::Connect {
-                    url,
-                    username: bounded(username, MAX_FIELD_LEN)?,
-                    password: bounded(password, MAX_FIELD_LEN)?,
-                    remember,
-                }
-            }
+            } if url.len() <= MAX_URL_LEN => ConnectCmd::Connect {
+                url,
+                username: bounded(username, MAX_FIELD_LEN)?,
+                password: bounded(password, MAX_FIELD_LEN)?,
+                remember,
+            },
             RawConnect::Cancel => ConnectCmd::Cancel,
             RawConnect::StartServer { url } if url.len() <= MAX_URL_LEN => ConnectCmd::StartServer { url },
             RawConnect::Forget { url } if url.len() <= MAX_URL_LEN => ConnectCmd::Forget { url },
@@ -799,15 +794,10 @@ pub fn parse_ipc(frame_url: &str, body: &str, phase: &Phase, is_main_window: boo
             RawConnect::InstallStart {
                 network_password,
                 ai_cli,
-            } => {
-                if ai_cli.as_deref().is_some_and(|id| !is_cli_id(id)) {
-                    return None;
-                }
-                ConnectCmd::InstallStart {
-                    network_password: bounded(network_password, MAX_FIELD_LEN)?.filter(|p| !p.is_empty()),
-                    ai_cli,
-                }
-            }
+            } if ai_cli.as_deref().is_none_or(is_cli_id) => ConnectCmd::InstallStart {
+                network_password: bounded(network_password, MAX_FIELD_LEN)?.filter(|p| !p.is_empty()),
+                ai_cli,
+            },
             RawConnect::InstallAttach => ConnectCmd::InstallAttach,
             RawConnect::InstallCancel => ConnectCmd::InstallCancel,
             RawConnect::AgentPrepare => ConnectCmd::AgentPrepare,
