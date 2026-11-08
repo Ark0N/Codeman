@@ -2941,7 +2941,7 @@
                   <div class="set-row" data-search="agent skill codeman api workers codex gemini opencode pi grok deepseek omp antigravity">
                     <div class="set-row-text">
                       <span class="set-row-label">Codeman Agent Skill</span>
-                      <span class="set-row-desc">Write Codeman's agent skill into each new session's folder, where that CLI looks for skills, so the agent in it can start workers in any installed CLI, send them prompts and wait for results. Every CLI except Pi and a plain shell.</span>
+                      <span class="set-row-desc">Write Codeman's agent skill into each new session's folder, where that CLI looks for skills, so the agent in it can start workers in any installed CLI, send them prompts and wait for results. Every CLI except Pi and a plain shell. On by default. The copy ignores itself in git, so your repository never lists it as a new file. Off stops new copies but removes none: <code>codeman skill uninstall --case &lt;name&gt;</code> does that.</span>
                     </div>
                     <label class="switch switch-sm"><input type="checkbox" id="appSettingsAgentSkill"><span class="slider"></span></label>
                   </div>

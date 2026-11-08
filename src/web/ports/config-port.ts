@@ -17,7 +17,7 @@ export interface ConfigPort {
   getModelConfig(): Promise<{ defaultModel?: string; agentTypeOverrides?: Record<string, string> } | null>;
   getClaudeModeConfig(): Promise<{ claudeMode?: ClaudeMode; allowedTools?: string }>;
   getTerminalHistoryConfig(): Promise<TerminalHistoryConfig>;
-  /** Synced `agentSkillEnabled` app setting (default OFF); gates per-case agent-skill injection. */
+  /** Synced `agentSkillEnabled` app setting (default ON, only an explicit false is off); gates per-case agent-skill injection. */
   getAgentSkillEnabled(): Promise<boolean>;
   /** Synced `workspaceHooksEnabled` app setting (default ON); gates INSTALLING hooks into a session's workspace. */
   getWorkspaceHooksEnabled(): Promise<boolean>;

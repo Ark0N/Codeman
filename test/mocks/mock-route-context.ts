@@ -128,10 +128,10 @@ export function createMockRouteContext(options?: {
     getModelConfig: vi.fn(async () => null),
     getClaudeModeConfig: vi.fn(async () => ({})),
     getTerminalHistoryConfig: vi.fn(async () => resolveTerminalHistoryConfig({})),
-    // Default OFF mirrors the shipped setting, so existing tests never touch a
-    // case's .claude/skills. Overridable per test because the create-time
-    // injection call sites are otherwise unreachable from a route test.
-    getAgentSkillEnabled: vi.fn(async () => options?.agentSkillEnabled ?? false),
+    // Default ON mirrors the shipped setting (since 1.50.0), so a route test sees
+    // what a user sees. Writes land in the test's temp working dir, never in a real
+    // repo. Overridable per test, so the OFF branch stays reachable.
+    getAgentSkillEnabled: vi.fn(async () => options?.agentSkillEnabled ?? true),
     // Default OFF mirrors the shipped setting: no test opens a voice relay by accident.
     getClaudeVoiceEnabled: vi.fn(async () => options?.claudeVoiceEnabled ?? false),
     // Default ON mirrors the shipped setting, so a route test sees what a user sees.

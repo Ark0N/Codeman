@@ -2450,11 +2450,15 @@ export class WebServer extends EventEmitter {
     return resolveTerminalHistoryConfig(settings);
   }
 
-  // Whether the Codeman agent skill is injected into cases on Claude session create
-  // (synced `agentSkillEnabled` setting, default OFF; docs/agent-control-plan.md §2).
+  // Whether the Codeman agent skill is injected into a session's workspace on create
+  // (synced `agentSkillEnabled` setting; docs/agent-control-plan.md §2). Default ON
+  // since 1.50.0, like `workspaceHooksEnabled` below: an absent key means a user who
+  // has never touched the switch, and only an explicit false turns it off. The copy
+  // ignores itself in git (`.gitignore` of `*`, see installAgentSkillInto), so the
+  // default leaves a user's `git status` clean.
   private async getAgentSkillEnabled(): Promise<boolean> {
     const settings = await this.readSettings();
-    return settings.agentSkillEnabled === true;
+    return settings.agentSkillEnabled !== false;
   }
 
   // Whether pending agent-inbox mail is snapshotted to disk (synced

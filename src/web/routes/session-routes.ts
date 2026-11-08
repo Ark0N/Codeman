@@ -978,8 +978,8 @@ export function _paneDeathWatcherCount(): number {
  *
  * `applyAgentSkill` declines two shapes rather than writing through them ('foreign':
  * an unmarked skills/codeman the user authored; 'symlink': the skill dir or its
- * parent is a link). Both were silent: the user flips `agentSkillEnabled` on, nothing
- * appears in the case, and there is nowhere to look for why. The ordinary outcomes
+ * parent is a link). Both were silent: `agentSkillEnabled` is on (the default since
+ * 1.50.0), nothing appears in the case, and there is nowhere to look for why. The ordinary outcomes
  * ('installed'/'refreshed'/'unchanged') stay unlogged since they would print on every
  * single session create.
  *

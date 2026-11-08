@@ -1666,7 +1666,10 @@ export function agentSkillDirFor(casePath: string, dir: AgentSkillDir): string {
  * Add or remove the Codeman agent skill in `<case>/<dir>/codeman`, where `dir` is the
  * skills directory the session's CLI scans (default: Claude Code's `.claude/skills`;
  * callers resolve it with `agentSkillDir()`), mirroring `applyStatusLineConfig`'s
- * shape. Gated by the synced `agentSkillEnabled` app setting (default OFF).
+ * shape. Gated by the synced `agentSkillEnabled` app setting: default ON since 1.50.0
+ * (an absent key is on, only an explicit false is off; `getAgentSkillEnabled()` in
+ * server.ts), which is safe for a user's repository because the copy ignores itself
+ * in git (`ensureAgentSkillGitignore`).
  *
  * Call-site policy is ADD-ONLY on session create (callers pass `enabled: true` or
  * skip the call), for the statusLine reason: sessions in a repo share one workspace,
