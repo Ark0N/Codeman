@@ -12,7 +12,15 @@ name: macOS app
 #   gh workflow run desktop-dmg.yml --ref <branch>           # dry run of a branch that carries this file
 #   gh workflow run desktop-dmg.yml -f tag=codeman@1.50.0    # rebuild that tag, replace its Codeman.dmg
 # Only a run on master (or Release itself) attaches anything; every run leaves
-# the signed Codeman.dmg as an artifact on its run page.
+# the signed Codeman.dmg as an artifact on its run page. A rebuild takes only a
+# Codeman release tag whose commit is on master ("Check the tag", in build and
+# in sign).
+#
+# A dispatch runs its ref's copy of this file with the secrets, as every
+# repository secret reaches anyone with write access. A GitHub Environment
+# limited to master would not narrow the rebuild path (the job's ref is master
+# while it runs the tag's scripts) and would refuse the branch dry run above;
+# the tag check is what keeps a rebuild on master's history.
 #
 # Three jobs, so no job that holds a secret runs code from a crate:
 # - build runs cargo, and with it the build script of every crate in
@@ -78,6 +86,36 @@ jobs:
         with:
           ref: ${{ env.BUILD_REF }}
           persist-credentials: false
+
+      # A rebuild by hand builds the tag it names, and sign then runs that tag's
+      # scripts with the Developer ID key unlocked. So the tag must be a Codeman
+      # release (another package's tag would put Codeman.dmg on its release), and
+      # its commit must be on master's history, where those scripts were reviewed.
+      # aicodeman@ is the tag a failed rename leaves (Release's retag step).
+      # A tag can move between jobs, so build and sign each check their own
+      # checkout. Inline on purpose: a script from the checkout would be the
+      # tag's own code. Kept the same as the step in sign.
+      - name: Check the tag
+        if: github.event_name == 'workflow_dispatch' && inputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          TAG_RE='^(ai)?codeman@[0-9]+\.[0-9]+\.[0-9]+$'
+          if ! [[ $TAG =~ $TAG_RE ]]; then
+            echo "::error::The tag input is not a Codeman release tag (codeman@x.y.z)"
+            exit 1
+          fi
+          SHA=$(git rev-parse HEAD)
+          # behind: an ancestor of master's tip; identical: the tip itself.
+          STATUS=$(gh api "repos/$GITHUB_REPOSITORY/compare/master...$SHA" --jq .status)
+          case "$STATUS" in
+            behind | identical) echo "$TAG ($SHA) is on master's history" ;;
+            *)
+              echo "::error::$TAG ($SHA) is not on master's history (compare says $STATUS)"
+              exit 1
+              ;;
+          esac
 
       - name: Rust toolchain
         run: |
@@ -150,6 +188,30 @@ jobs:
         with:
           ref: ${{ env.BUILD_REF }}
           persist-credentials: false
+
+      # The same check as in build, on this job's own checkout, before anything
+      # here touches a secret. Kept the same as the step in build.
+      - name: Check the tag
+        if: github.event_name == 'workflow_dispatch' && inputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          TAG_RE='^(ai)?codeman@[0-9]+\.[0-9]+\.[0-9]+$'
+          if ! [[ $TAG =~ $TAG_RE ]]; then
+            echo "::error::The tag input is not a Codeman release tag (codeman@x.y.z)"
+            exit 1
+          fi
+          SHA=$(git rev-parse HEAD)
+          # behind: an ancestor of master's tip; identical: the tip itself.
+          STATUS=$(gh api "repos/$GITHUB_REPOSITORY/compare/master...$SHA" --jq .status)
+          case "$STATUS" in
+            behind | identical) echo "$TAG ($SHA) is on master's history" ;;
+            *)
+              echo "::error::$TAG ($SHA) is not on master's history (compare says $STATUS)"
+              exit 1
+              ;;
+          esac
 
       - name: Download the unsigned app
         uses: actions/download-artifact@v8
