@@ -25,7 +25,8 @@ curl -fsSL https://getcodeman.com/install | bash
 
 This installs Node.js, tmux and a build toolchain if they are missing (node-pty ships no
 Linux prebuild, so it compiles from source), clones Codeman into `~/.codeman/app`, and
-builds it.
+builds it. On a Mac, the [Codeman app](#on-a-mac-the-codeman-app) can run this installer
+for you, with no Terminal.
 
 It starts by printing what it found (git, Node, tmux, build tools, agent CLIs, Tailscale,
 an existing install), then asks everything it needs up front, then does the work
@@ -215,6 +216,73 @@ Run the script again after updating rather than a plain `docker compose up`, so 
 image, the refreshed volumes and the entrypoint arrive together. The full guide, including
 Unraid, storage and networking options, is
 [`docker/README.md`](https://github.com/Ark0N/Codeman/blob/master/docker/README.md).
+
+## On a Mac: the Codeman app
+
+[Download Codeman.dmg](https://github.com/Ark0N/Codeman/releases/latest/download/Codeman.dmg):
+one universal app for Apple Silicon and Intel, macOS 11.3 or later.
+
+A small native app that opens Codeman in its own window. Its first screen has two tabs:
+
+- **This Mac** looks for Codeman here and offers what fits: *Open Codeman* when it runs,
+  *Start Codeman* when it is installed but stopped, *Install Codeman on this Mac* when it is
+  not there. It also lists the Codeman servers of yours that already run on this Mac (one
+  started by hand in a terminal, say) and offers to connect to those; it never starts a
+  second one next to them. Install runs [the installer](#route-a-the-installer-recommended)
+  for you, with no Terminal and no administrator password: it asks which coding agent to
+  install (only when the Mac has none, and *Skip for now* is there) and who may reach
+  Codeman (this Mac only, or the local network with a password), then shows the install as
+  a checklist. *Add a coding agent*, on this tab and in the app menu, installs one later.
+- **Another machine** connects to Codeman by address, a tailnet name included, and keeps
+  the password in the Keychain. *Codeman is not installed there yet?* opens Terminal and
+  runs the installer on that machine over SSH.
+
+On a MacBook Pro whose Apple logo lights up, **View > Blink Apple Logo** blinks the logo by
+what your agents are doing, with a style of your own for working, for waiting for you and
+for needing permission. All three are off until you choose, and the menu only exists on a
+Mac with that logo.
+
+### First launch
+
+1. Open `Codeman.dmg` and drag Codeman into Applications.
+2. Open Codeman from Applications. macOS asks once whether to open an app downloaded from
+   the internet: click **Open**.
+3. On macOS 15 and later, the first connection to an address on your local network (a LAN
+   IP, a `.local` name) makes macOS ask whether Codeman may use the local network, and that
+   first attempt can fail while the question is open: connect again after answering. If
+   you denied it, turn Codeman on in **System Settings > Privacy & Security > Local
+   Network**.
+
+What to know about it:
+
+- **Quitting the app does not stop Codeman.** An install from the app runs Codeman as a
+  LaunchAgent that starts at login, so agents keep working with the window closed, and a
+  browser or phone reaches it as before.
+- **Codeman's page needs the WebKit of Safari 16.4.** The app starts on macOS 11.3, but
+  Codeman itself needs macOS 13.3 or later, or macOS 11 or 12 with Safari 16.4 or later
+  installed. On an older WebKit the app says so and does not connect.
+- **The install from the app needs macOS 15, or a tmux that is already there.** tmux comes
+  from the tmux project's own builds, which need macOS 15. On an older Mac without tmux the
+  app offers Terminal instead, where Homebrew installs it (that takes an administrator once).
+- **The install from the app reaches as far as the local network.** Tailscale needs its own
+  login and setup, which the installer does at a terminal: choose *Install in Terminal
+  instead*, or run `install.sh tailscale` afterwards.
+- **Self-signed HTTPS is refused.** A server started with `codeman web --https` uses a
+  self-signed certificate, which macOS's WebKit rejects. Use `http://127.0.0.1:3000` for a
+  server on this Mac. For another machine, serve Codeman through `tailscale serve`
+  (`https://<machine>.<tailnet>.ts.net` has a real certificate) or a reverse proxy with a
+  real certificate.
+- **The Codeman it installs is an ordinary installer install,** made on the
+  [route without administrator rights](#without-administrator-rights), so
+  [Updating](#updating) and [Uninstalling](#uninstalling) below apply to it.
+- **The app does not update itself yet.** Download the new `Codeman.dmg` and drag it over
+  the old copy.
+- **Deleting the app leaves Codeman running.** The app's own settings are in
+  `~/Library/Application Support/Codeman/`, and its saved passwords in the Keychain under
+  *Codeman Desktop*.
+
+Everything else, including how to build it yourself:
+[`packages/desktop/README.md`](https://github.com/Ark0N/Codeman/blob/master/packages/desktop/README.md).
 
 ## Installing an agent CLI
 
