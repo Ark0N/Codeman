@@ -73,9 +73,10 @@
  *    runtime sets (`RUNTIME_KV_CACHE_TYPE` in src/local-model/runtime.ts, q8_0: 34 bytes per
  *    32 values), and does not grow after that.
  *     - held = attention layers x K/V heads x head dim x 2 (K and V) x 34/32. The one
- *       multi-token-prediction layer of a Qwen3.5-family GGUF that carries it (the `-mtp`
- *       tags, and `qwen3.8:27b-q8_0`) is counted as one more attention layer: whether
- *       llama.cpp gives it a cache was not checked, so this errs on the careful side.
+ *       multi-token-prediction layer of the `-mtp` tags is counted as one more attention
+ *       layer, and so it is for `qwen3.8:27b-q8_0`, whose GGUF may carry it too: neither
+ *       whether that GGUF has it nor whether llama.cpp gives it a cache was checked, so this
+ *       errs on the careful side.
  *     - overhead = the fixed caches (the f32 recurrent state of the linear-attention layers,
  *       or the sliding-window cache of `n_swa + 512` cells), + 1.0 GB for the runner's own
  *       buffers (calibrated on a third-party table of a 27B model on llama.cpp: 8.4 GB at
@@ -120,7 +121,8 @@
  *    in NVIDIA's table).
  *  - `flint:40b`: runtime issue 19191 breaks integer tool arguments after the first call.
  *  - `lfm2.5:24b-a2b`: its licence allows commercial use only below USD 10M of revenue.
- *  - `laguna-xs-2.1`, `laguna-s-2.1`: the runtime's own page names an open problem on macOS.
+ *  - `laguna-xs-2.1`: the runtime's own page names an open problem with it on macOS.
+ *    `laguna-s-2.1`: open runtime issues 17602 and 17632.
  *  - `qwen3.8-flash-next:125b`: the Qwen Community License, not an open licence.
  *  - The plain tags `qwen3.5:9b`, `mimo-v2.6:9b` and `qwen3.8:27b`: a Mac pulls their MLX
  *    builds, whose 8 GiB of prefix snapshots do not fit the Macs a 9B or a 27B is for. Their
