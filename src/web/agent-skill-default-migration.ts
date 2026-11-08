@@ -14,7 +14,8 @@
  * page. Every browser that saved App Settings keeps the form in its localStorage blob, and
  * `loadAppSettingsFromServer()` only overwrites a synced key the server HAS: a key the server
  * lacks keeps the device's `false`, the switch loads off, and the next Save of any setting writes
- * `false` back (test/agent-skill-setting-ui.test.ts proves both shapes). A stored `true` wins on
+ * `false` back (measured with the real page code in the JSDOM harness of
+ * test/agent-skill-setting-ui.test.ts, which pins the shipped shape). A stored `true` wins on
  * every device, including a browser still running a cached settings-ui.js from before the upgrade.
  * Every reader treats `true` and an absent key alike (`!== false`).
  *
