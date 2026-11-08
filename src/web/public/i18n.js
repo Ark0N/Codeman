@@ -1126,7 +1126,6 @@
     'When to use this preset': '此预设的适用场景',
     'Start Loop': '启动循环',
     'Start Ralph Loop': '启动 Ralph 循环',
-    'Start Ralph Loop →': '启动 Ralph 循环 →',
     'Enable Tracker': '启用跟踪器',
     'Ralph / Todo': 'Ralph / 待办',
     'Ralph / Todo Tracker': 'Ralph / 待办跟踪器',
