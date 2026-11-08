@@ -228,7 +228,7 @@ spawn_worker() {
     # reaches the API, so it is named per agent here. opencode: `┃`, its `workDetect.promptGlyph`.
     # That field is no readiness mark in general (the registry keeps `composerReadyMark` for
     # that, and declares none for opencode), but at boot only the composer draws it: measured
-    # on opencode 1.3.0, fresh home, custom provider, the first `┃` came with the composer,
+    # on opencode 1.3.0 on Linux, fresh home, custom provider, the first `┃` came with the composer,
     # and a prompt pasted with its Enter at that moment was submitted. claude takes the claude
     # path below. Any other agent needs LOCAL_READY_MARK rather than a worker handed back on a guess.
     [ "$mode" = opencode ] && mark='┃'
@@ -441,7 +441,7 @@ sendwait() {
 # instruction while it plans. That is why the answer FILE is the second gate. ⚠️ And a
 # full-screen agent can print the marker without it ever matching: opencode redraws its
 # spinner between the pieces a model streams, so the stripped stream reads D⬝⬝O⬝⬝N⬝⬝E_⬝⬝m…
-# (measured on opencode 1.3.0 with a reply streamed a character or two at a time; the screen
+# (measured on opencode 1.3.0 on Linux, a reply streamed a character or two at a time; the screen
 # showed the whole token). So the file is also the way out WITHOUT the marker: present, not
 # empty, and unchanged between two rounds of the marker wait (rounds of at most 10 s), it is
 # read and `matched` says false. It is read from this machine's disk, only when it is a

@@ -866,8 +866,8 @@ confirms in the window, and no route this skill calls can do it.
    session's model). It fails the spawn with the answer on stderr and nothing on stdout,
    and no `confirmed*` flag is ever sent.
 5. Readiness: OpenCode's composer bar `┃` (its registry `promptGlyph`) through
-   `wait-output`, 45 s, and the session deleted on a miss. Measured on OpenCode 1.3.0 with
-   a fresh home and a custom provider: nothing draws `┃` before the composer, there was no
+   `wait-output`, 45 s, and the session deleted on a miss. Measured on OpenCode 1.3.0 on
+   Linux (not yet on a Mac) with a fresh home and a custom provider: nothing draws `┃` before the composer, there was no
    first-run screen, and a prompt pasted with its Enter at the first `┃` was submitted. A
    claude agent takes the claude path instead (hooks vetted, `shift+tab`, the trust
    dialog). Any other agent needs `LOCAL_READY_MARK` set to a space-free token its
@@ -888,7 +888,7 @@ an end-of-turn signal ([§5.5](#55-markers-for-hook-less-workers)):
 - ⚠️ A full-screen agent can print the marker without it ever matching. OpenCode redraws
   its spinner between the pieces a model streams, so with a reply streamed a character or
   two at a time the stripped stream read `D⬝⬝O⬝⬝N⬝⬝E_⬝⬝m…` while the screen showed the whole
-  token (measured on OpenCode 1.3.0). So between rounds it also looks at the answer file:
+  token (measured on OpenCode 1.3.0 on Linux). So between rounds it also looks at the answer file:
   once it is non-empty and its checksum held still from one round to the next, it is read
   and the wait ends with `matched: false`.
 
@@ -896,7 +896,7 @@ an end-of-turn signal ([§5.5](#55-markers-for-hook-less-workers)):
 |------|------|---------|
 | 0 | `answer` holds the file | the file was read: after the marker (`matched: true`), or once it held still (`matched: false`) |
 | 2 | `matched: false` | neither the marker nor a settled file before the timeout. The worker may still be working: re-check the pane, never resend blindly |
-| 3 | `ended: true` or `delivered: false` | the worker's pane ended |
+| 3 | `ended: true` or `delivered: false` | the worker's pane ended. A pane that ended after it wrote the file but before the marker matched leaves `codeman-answer-<token>.md` in its folder: look there yourself |
 | 4 | `matched: true, answer: null` | the marker printed, but no file within `SENDMARK_FILE_WAIT` s (default 120): the model ignored the instruction, or a reasoning model restated the marker while planning and is still at work |
 | 1 | `detail` | the send or a wait failed |
 
