@@ -29,6 +29,7 @@ import {
 } from '../src/local-model/harness-facts.js';
 import { stockInstallCommand } from '../src/cli-install-runner.js';
 import { getCli, registryFilePath, reloadCliRegistry } from '../src/config/cli-registry/registry.js';
+import { getLocalModelCatalog } from '../src/config/local-model-catalog.js';
 import type { CliEntry } from '../src/config/cli-registry/types.js';
 import type { LocalModelCatalog } from '../src/types.js';
 
@@ -103,6 +104,15 @@ describe('cliAcceptsCustomModelId (the launch path’s model id test, on the sto
     // pi and codex force the id onto `--model`, and both of their patterns allow a colon.
     for (const id of ['opencode', 'claude', 'pi', 'codex']) {
       expect(cliAcceptsCustomModelId(stockEntry(id), 'qwen3.5:9b')).toBe(true);
+    }
+  });
+
+  it('accepts every model id of the stock catalogue for every harness the catalogue offers', () => {
+    const catalog = getLocalModelCatalog();
+    for (const harness of catalog.harnesses.filter((row) => !row.gated)) {
+      for (const model of catalog.models) {
+        expect(cliAcceptsCustomModelId(stockEntry(harness.cli), model.id), `${harness.cli} ${model.id}`).toBe(true);
+      }
     }
   });
 
