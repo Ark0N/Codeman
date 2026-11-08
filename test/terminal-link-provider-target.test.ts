@@ -83,6 +83,7 @@ function makeApp() {
   app.openFilePreview = vi.fn();
   app.openLogViewerWindow = vi.fn();
   app._isExternalPreviewPath = () => false;
+  app._isOutsideWorktreePath = () => false;
   return app;
 }
 

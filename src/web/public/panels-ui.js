@@ -3293,6 +3293,8 @@ Object.assign(CodemanApp.prototype, {
         filter: typeof this.fileBrowserFilter === 'string' ? this.fileBrowserFilter : '',
         // The person asked for the session folder while the agent is in a worktree (#765).
         sessionRootPinned: false,
+        // The worktree on screen when the pin was set: a pinned listing omits an outside worktree.
+        pinnedWorktree: null,
       };
     }
     return this._fileBrowserState;
@@ -3316,6 +3318,7 @@ Object.assign(CodemanApp.prototype, {
     state.filter = '';
     state.view = 'normal';
     state.sessionRootPinned = false;
+    state.pinnedWorktree = null;
     this.fileBrowserData = null;
     this.fileBrowserFilter = '';
     this.fileBrowserExpandedDirs?.clear?.();
@@ -3360,6 +3363,7 @@ Object.assign(CodemanApp.prototype, {
     state.filter = '';
     state.view = 'normal';
     state.sessionRootPinned = false;
+    state.pinnedWorktree = null;
     this.fileBrowserData = null;
     this.fileBrowserFilter = '';
     this.fileBrowserExpandedDirs?.clear?.();
@@ -3473,49 +3477,58 @@ Object.assign(CodemanApp.prototype, {
   _renderFileBrowserRoot(data) {
     const strip = this.$?.('fileBrowserRoot');
     if (!strip) return;
-    const worktree = data?.worktree;
+    const worktree =
+      data?.worktree ?? (this._fileBrowserState?.sessionRootPinned ? this._fileBrowserState.pinnedWorktree : null);
     if (typeof worktree?.path !== 'string' || typeof worktree?.name !== 'string') {
       strip.hidden = true;
       return;
     }
-    const inWorktree = data.root === worktree.path;
+    const inWorktree = data?.root === worktree.path;
     const label = this.$?.('fileBrowserRootLabel');
     const name = this.$?.('fileBrowserRootName');
     const button = this.$?.('fileBrowserRootSwitch');
     if (label) label.textContent = inWorktree ? 'Worktree' : 'Session folder';
     if (name) name.textContent = inWorktree ? worktree.name : '';
     if (button) button.textContent = inWorktree ? 'Session folder' : 'Back to worktree';
-    strip.title = typeof data.root === 'string' ? data.root : '';
+    strip.title = typeof data?.root === 'string' ? data.root : '';
     strip.hidden = false;
   },
 
   // The `root` parameter of a listing or search. The server ignores it while the pane is not in
   // a worktree, so the panel always asks unless the person chose the session folder.
   _fileBrowserRootParam() {
-    return this._ensureFileBrowserState().sessionRootPinned ? '' : '&root=live';
+    return this._ensureFileBrowserState().sessionRootPinned ? '' : '&root=live-any';
   },
 
   toggleFileBrowserRoot() {
     const state = this._ensureFileBrowserState();
     state.sessionRootPinned = !state.sessionRootPinned;
+    const shown = this.fileBrowserData?.worktree;
+    state.pinnedWorktree =
+      state.sessionRootPinned && typeof shown?.path === 'string' && typeof shown?.name === 'string'
+        ? { name: shown.name, path: shown.path }
+        : null;
     return this._reloadFileBrowserKeepingQuery();
   },
 
   // Called on every session update of the active session. Compares with what the listing on
   // screen reported rather than with the previous update, so a load already in flight when the
-  // pane moved is corrected by the next update, and an answer that matches ends it: a listing
-  // always reports the session's worktree, whichever folder it walked, so this cannot loop.
+  // pane moved is corrected by the next update, and an answer that matches ends it. A listing
+  // reports the session's worktree whichever folder it walked, except that a listing without
+  // root=live-any omits an outside worktree. While the person has pinned the session folder, the
+  // panel compares with the worktree it pinned away from, so this cannot loop.
   _followFileBrowserWorktree(session) {
     const state = this._fileBrowserState;
     if (!state || state.ownerSessionId !== session.id) return;
     if (this.$?.('fileBrowserPanel')?.classList.contains('visible') !== true) return;
     const normal = state.normalState;
     if (normal?.phase !== 'ready' || normal.sessionId !== session.id) return;
-    const live = session.liveWorktree?.path ?? null;
-    const listed = normal.data?.worktree?.path ?? null;
+    const live = (session.liveWorktree ?? session.outsideWorktree)?.path ?? null;
+    const listed = (normal.data?.worktree ?? (state.sessionRootPinned ? state.pinnedWorktree : null))?.path ?? null;
     if (live === listed) return;
     // The pin was about the worktree the agent has just left.
     state.sessionRootPinned = false;
+    state.pinnedWorktree = null;
     this._reloadFileBrowserKeepingQuery();
   },
 
@@ -4256,10 +4269,12 @@ Object.assign(CodemanApp.prototype, {
   /**
    * Whether a path is absolute and provably OUTSIDE this session's workspace.
    *
-   * `file-content` / `file-raw` resolve every path against `workingDir` and
-   * refuse anything that escapes it, so an absolute path elsewhere on the host
-   * (an agent's `/tmp` scratchpad capture, a screenshot, another checkout) can
-   * only ever 404 there — it has to go through the attachment routes instead.
+   * `file-content` / `file-raw` serve paths inside `workingDir` and, as a second
+   * root, an absolute path inside a followed worktree outside it
+   * (`outsideWorktree`). They refuse every other path that escapes
+   * `workingDir`, so an absolute path elsewhere on the host (an agent's `/tmp`
+   * scratchpad capture, a screenshot, another checkout) can only ever 404 there
+   * — it has to go through the attachment routes instead.
    *
    * A string compare is enough for ROUTING; the real containment decision stays
    * server-side (realpath + guard) on whichever route the request lands on. An
@@ -4273,7 +4288,24 @@ Object.assign(CodemanApp.prototype, {
     const workingDir = this.sessions.get(sessionId)?.workingDir;
     if (!workingDir) return false;
     const root = workingDir.endsWith('/') ? workingDir : `${workingDir}/`;
-    return filePath !== workingDir && !filePath.startsWith(root);
+    if (filePath === workingDir || filePath.startsWith(root)) return false;
+    // A worktree outside `workingDir` that the agent is in (#765) is a second root the file
+    // routes serve, so a path inside it previews (and edits) like a workspace path.
+    return this._isOutsideWorktreePath(filePath, sessionId) !== true;
+  },
+
+  /**
+   * Whether an absolute path lies inside the worktree OUTSIDE `workingDir` that the session's agent
+   * is in (`outsideWorktree`, #765). The file routes serve it as a second root, while the log
+   * viewer's `tail-file` stays confined to `workingDir`, so the terminal opens such a path in the
+   * file preview.
+   */
+  _isOutsideWorktreePath(filePath, sessionId) {
+    if (typeof filePath !== 'string' || !filePath.startsWith('/')) return false;
+    const worktree = this.sessions.get(sessionId)?.outsideWorktree;
+    if (worktree?.outside !== true || typeof worktree.path !== 'string' || !worktree.path) return false;
+    const root = worktree.path.endsWith('/') ? worktree.path : `${worktree.path}/`;
+    return filePath === worktree.path || filePath.startsWith(root);
   },
 
   /**
@@ -5206,6 +5238,13 @@ Object.assign(CodemanApp.prototype, {
   _rebaseFilePreviewMarkdownRefs(root, { sessionId, filePath, attachmentId }) {
     const dir = filePath.includes('/') ? filePath.slice(0, filePath.lastIndexOf('/') + 1) : '';
     const unresolvable = !!attachmentId && !filePath.startsWith('/');
+    // A root-relative ref (`/docs/x.png`) resolves from the workspace root, as on GitHub, or from
+    // the top of the worktree outside the workspace that the agent is in (#765).
+    const worktree = this.sessions.get(sessionId)?.outsideWorktree;
+    const rootPrefix =
+      worktree?.outside === true && this._isOutsideWorktreePath(filePath, sessionId)
+        ? `${worktree.path.replace(/\/+$/, '')}/`
+        : '';
     // Workspace ref = no scheme, not protocol-relative (//host), not a fragment.
     const isWorkspaceRef = (ref) =>
       !!ref && !/^[a-z][a-z0-9+.-]*:/i.test(ref) && !ref.startsWith('//') && !ref.startsWith('#');
@@ -5225,7 +5264,7 @@ Object.assign(CodemanApp.prototype, {
         /* malformed escape: keep the ref as written */
       }
       const parts = [];
-      for (const seg of (rel.startsWith('/') ? rel.slice(1) : dir + rel).split('/')) {
+      for (const seg of (rel.startsWith('/') ? rootPrefix + rel.slice(1) : dir + rel).split('/')) {
         if (seg === '.' || (seg === '' && parts.length)) continue;
         if (seg === '..' && parts.length && parts[parts.length - 1] !== '..' && parts[parts.length - 1] !== '') parts.pop();
         else parts.push(seg);
