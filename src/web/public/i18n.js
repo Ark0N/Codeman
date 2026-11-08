@@ -1414,6 +1414,191 @@
       '该 tmux 会话在此处打开时所在的位置。它是在 Codeman 之外启动的，关闭此标签页后仍会继续运行。',
     'Git status is not available for a tmux session opened outside Codeman.':
       '在 Codeman 之外打开的 tmux 会话无法使用 Git 状态。',
+    // Run a model on this Mac (local-model-ui.js: the welcome button, the chooser window and its
+    // App Settings group). The first block is the page's and the module's own text; sizes and
+    // names fill the {placeholder} slots.
+    'Model on this Mac': '此 Mac 上的模型',
+    'Run a coding model on the Mac that Codeman runs on. No account and no API key.':
+      '在运行 {name} 的这台 Mac 上运行编程模型。无需账号，也无需 API 密钥。',
+    'Run a model on this Mac': '在此 Mac 上运行模型',
+    'Run a local model': '运行本地模型',
+    'Local model': '本地模型',
+    'The Mac that Codeman runs on, which is not always the device you are reading on.':
+      '指运行 {name} 的那台 Mac，不一定是你正在使用的这台设备。',
+    '{chip}, {memory} GB memory, {free} GB free': '{chip}，内存 {memory} GB，可用磁盘空间 {free} GB',
+    '{chip}, {memory} GB memory': '{chip}，内存 {memory} GB',
+    '{memory} GB memory, {free} GB free': '内存 {memory} GB，可用磁盘空间 {free} GB',
+    '{memory} GB memory': '内存 {memory} GB',
+    // The App Settings row: where the install stands, in a few words.
+    'No model installed': '尚未安装模型',
+    'Installing {model}': '正在安装 {model}',
+    'The install of {model} is paused': '{model} 的安装已暂停',
+    'The install of {model} stopped': '{model} 的安装已中止',
+    '{model} is running': '{model} 正在运行',
+    '{model} is installed and stopped': '{model} 已安装，当前已停止',
+    'Checking this Mac': '正在检查此 Mac',
+    // The chooser: the memory bar, the list, the coding agent.
+    'About {need} of {budget} GB of memory': '约需 {need} GB 内存，共 {budget} GB 可用',
+    estimated: '估算',
+    'The selected model needs {share}% of the memory this Mac can give a model':
+      '所选模型需要此 Mac 可分配给模型的内存的 {share}%',
+    'The model': '模型',
+    'Context, {context} tokens': '上下文，{context} 个 Token',
+    'Brief peaks': '短时峰值',
+    'Stays free': '剩余可用',
+    'Good fit': '宽裕',
+    'Tight fit': '偏紧',
+    'Models that fit this Mac': '此 Mac 装得下的模型',
+    Speed: '速度',
+    Download: '下载',
+    'speed not known': '速度未知',
+    '{speed} tokens/s': '{speed} Token/秒',
+    'about {speed} tokens/s': '约 {speed} Token/秒',
+    'Runs with': '搭配',
+    'Not on this Mac yet. Codeman installs it for you.': '此 Mac 上尚未安装，{name} 会为你一并安装。',
+    'The first answer can take minutes.': '第一次回答可能需要几分钟。',
+    'No account and no API key. The model runs only on this Mac.': '无需账号，也无需 API 密钥。模型只在此 Mac 上运行。',
+    'Install on this Mac': '安装到此 Mac',
+    // The confirm screen: the download as a table, where it goes.
+    'What will be downloaded': '将下载的内容',
+    'At {context} tokens of context, with {cli}': '上下文 {context} 个 Token，搭配 {cli}',
+    'Ollama {version}': 'Ollama {version}',
+    'The program that runs the model': '用于运行模型的程序',
+    Total: '合计',
+    'Not on this Mac yet. Its own installer fetches it with this command:':
+      '此 Mac 上尚未安装。它自带的安装程序会用以下命令获取它：',
+    'Not on this Mac yet. Its own installer fetches it.': '此 Mac 上尚未安装。它自带的安装程序会获取它。',
+    'Goes into': '存放位置：',
+    'No administrator password.': '无需管理员密码。',
+    'Download and install': '下载并安装',
+    // Progress, and the same picture paused.
+    '{done} of {total} GB': '已下载 {done} GB，共 {total} GB',
+    '{speed} MB per second, {left}': '每秒 {speed} MB，{left}',
+    '{speed} MB per second': '每秒 {speed} MB',
+    'less than a minute left': '剩余不到 1 分钟',
+    'about 1 minute left': '剩余约 1 分钟',
+    'about {minutes} minutes left': '剩余约 {minutes} 分钟',
+    'about 1 hour left': '剩余约 1 小时',
+    'about {hours} hours left': '剩余约 {hours} 小时',
+    'Getting the runtime': '获取运行时',
+    'Downloading the model': '下载模型',
+    'Loading and checking': '加载并检查',
+    'Installing {cli}': '安装 {cli}',
+    Connecting: '正在连接',
+    'Download of the model': '模型下载进度',
+    '0 of {total} GB': '已下载 0 GB，共 {total} GB',
+    'You can close this window. The download continues while Codeman is running.':
+      '你可以关闭此窗口。只要 {name} 在运行，下载就会继续。',
+    'You can close this window. The install continues while Codeman is running.':
+      '你可以关闭此窗口。只要 {name} 在运行，安装就会继续。',
+    'The download waits until you continue.': '下载会等你点击继续后再进行。',
+    'The install waits until you continue.': '安装会等你点击继续后再进行。',
+    Continue: '继续',
+    'Choose another model': '选择其他模型',
+    // After an error: the one action that helps.
+    'Use another port': '改用其他端口',
+    'Try {model}': '试试 {model}',
+    Start: '启动',
+    'The server did not accept that.': '服务器未接受该请求。',
+    // Installed, and the Remove question.
+    '{model} is ready on this Mac.': '{model} 已在此 Mac 上准备就绪。',
+    '{model} is installed on this Mac.': '{model} 已安装在此 Mac 上。',
+    'Runs with {cli}.': '搭配 {cli} 运行。',
+    'Context {context} tokens.': '上下文 {context} 个 Token。',
+    'Takes {memory} GB of memory now, and up to about {peak} GB at its peak, with all of the context in use.':
+      '目前占用 {memory} GB 内存；上下文全部用满时，峰值约为 {peak} GB。',
+    'Takes {memory} GB of memory now.': '目前占用 {memory} GB 内存。',
+    'All of it is on the GPU.': '全部位于 GPU 上。',
+    'Start a session': '开始会话',
+    'Remove the local model from this Mac?': '要从此 Mac 移除本地模型吗？',
+    'Also delete the downloaded model': '同时删除已下载的模型',
+    'The coding agent stays installed.': '编程智能体会保留，不会被卸载。',
+    // The sentences and labels the SERVER picks (LOCAL_MODEL_LABELS in src/types/local-model.ts), keyed
+    // by their exact English text: changing a text there means changing its key here.
+    'Best fit for this Mac': '最适合此 Mac 的选择',
+    'Recommended for this Mac': '为此 Mac 推荐',
+    'This Mac can run a small model. It handles small edits and questions. It does not replace a cloud model.':
+      '此 Mac 可以运行小型模型。它能处理小幅修改和问答，但不能替代云端模型。',
+    'Codeman has not run this on a Mac like this yet.': '{name} 尚未在同类 Mac 上运行过它。',
+    'The best fit is a small model. It handles small edits and questions. It does not replace a cloud model.':
+      '最适合的是一个小型模型。它能处理小幅修改和问答，但不能替代云端模型。',
+    '{model} fits the memory of this Mac too, but its download needs about {missing} GB more free disk space.':
+      '{model} 也能装入此 Mac 的内存，但下载它还需要再腾出约 {missing} GB 的可用磁盘空间。',
+    Good: '良好',
+    Tight: '偏紧',
+    Slow: '较慢',
+    'Speed unknown': '速度未知',
+    'Codeman recommends a local model only on a Mac with Apple silicon.':
+      '{name} 仅在搭载 Apple 芯片的 Mac 上推荐本地模型。',
+    'Local coding models need Apple silicon, and this Mac has an Intel processor.':
+      '本地编程模型需要 Apple 芯片，而此 Mac 使用的是 Intel 处理器。',
+    'With {memory} GB of memory, this Mac cannot run a model that can drive a coding agent.':
+      '此 Mac 只有 {memory} GB 内存，无法运行能够驱动编程智能体的模型。',
+    'This Mac can give a model about {budget} GB of memory, and the smallest model a coding agent can work with needs about {need} GB.':
+      '此 Mac 可分配给模型的内存约为 {budget} GB，而编程智能体能够使用的最小模型约需 {need} GB。',
+    'Codeman could not read how much memory this Mac has, so it recommends no model here.':
+      '{name} 无法读取此 Mac 的内存大小，因此在此不推荐任何模型。',
+    'Free up about {missing} GB of disk space to install the smallest model that fits this Mac.':
+      '请腾出约 {missing} GB 磁盘空间，以便安装适合此 Mac 的最小模型。',
+    'Local models need macOS {minimum} or newer, and this Mac runs macOS {version}.':
+      '本地模型需要 macOS {minimum} 或更高版本，而此 Mac 运行的是 macOS {version}。',
+    'No coding agent that Codeman can connect to a local model is available on this Mac.':
+      '此 Mac 上没有 {name} 可以连接到本地模型的编程智能体。',
+    // The tag of a model row (LOCAL_MODEL_TAG_LABELS in src/types/local-model.ts). Tight and Slow are
+    // the entries above.
+    'Tested on a Mac like this': '已在同类 Mac 上测试',
+    'Best fit': '最适合',
+    'Best fit, tight': '最适合，内存偏紧',
+    'Small model': '小型模型',
+    // The sentences of the install (LOCAL_MODEL_INSTALL_LABELS in src/types/local-model-install.ts):
+    // why a job stopped, why a request was refused, and the one sentence about the developer tools.
+    'The download of the runtime stopped and could not be continued. Check the network connection, then try again.':
+      '运行时的下载已中断，且无法继续。请检查网络连接，然后重试。',
+    'The runtime download was damaged and has been deleted. Try again.': '下载的运行时已损坏，已被删除。请重试。',
+    'The runtime could not be unpacked on this Mac.': '无法在此 Mac 上解压运行时。',
+    'The runtime did not start on this Mac.': '运行时未能在此 Mac 上启动。',
+    'The runtime keeps stopping, so Codeman no longer restarts it.': '运行时反复停止，因此 {name} 不再重新启动它。',
+    'The model on this Mac is not running. Start it first.': '此 Mac 上的模型没有在运行。请先启动它。',
+    'Port {port} is in use by another program.': '端口 {port} 已被其他程序占用。',
+    'The disk is full. Free up space, then try again.': '磁盘已满。请腾出空间，然后重试。',
+    'The download keeps stopping. The network may be damaging data. Try again or use another network.':
+      '下载反复中断。网络可能正在损坏数据。请重试，或换一个网络。',
+    '{model} is no longer offered under this name. Update Codeman or pick another model.':
+      '{model} 已不再以此名称提供。请更新 {name}，或选择其他模型。',
+    '{model} does not fit in the memory of this Mac after all.': '{model} 终究装不进此 Mac 的内存。',
+    '{model} loaded with a context of {actual} tokens instead of {wanted}.':
+      '{model} 加载时的上下文为 {actual} 个 Token，而不是 {wanted} 个。',
+    '{model} did not load on this Mac.': '{model} 未能在此 Mac 上加载。',
+    '{model} loaded but did not call a tool, so a coding agent cannot work with it.':
+      '{model} 已加载，但没有调用工具，因此编程智能体无法使用它。',
+    'The check of {model} did not finish.': '对 {model} 的检查没有完成。',
+    '{cli} could not be installed.': '无法安装 {cli}。',
+    'A saved model connection named {id} already exists and was not created here. Rename or delete it in App Settings, then try again.':
+      '已存在名为 {id} 的已保存模型连接，而它不是在这里创建的。请在“应用设置”中重命名或删除它，然后重试。',
+    'Codeman could not save the connection to the model.': '{name} 无法保存与模型的连接。',
+    'The model on this Mac changed since it was installed. Remove it and install it again.':
+      '此 Mac 上的模型在安装后发生了变化。请移除后重新安装。',
+    'The install stopped on an unexpected error.': '安装因意外错误而中止。',
+    'An install is already running.': '已有一个安装正在进行。',
+    'A model is already installed on this Mac. Remove it first.': '此 Mac 上已安装了一个模型。请先移除它。',
+    'The download is {size} GB now. Check the sizes and confirm again.':
+      '现在的下载大小为 {size} GB。请核对大小后再次确认。',
+    'Sessions are still using this model: {sessions}. Close them first.':
+      '仍有会话在使用此模型：{sessions}。请先关闭它们。',
+    'That is not possible in the current state.': '当前状态下无法执行此操作。',
+    'This model at this context is not offered for this Mac right now.':
+      '目前不为此 Mac 提供这一上下文大小下的该模型。',
+    'This coding agent is not offered for this model.': '该模型不提供这个编程智能体。',
+    '{cli} is not installed and cannot be installed from here.': '{cli} 尚未安装，也无法从这里安装。',
+    'Only {model} is installed on this Mac. Remove it and install another model first.':
+      '此 Mac 上只安装了 {model}。请先移除它，再安装其他模型。',
+    // What the endpoint routes answer for the record of the model on this Mac (shown as a toast).
+    'This endpoint belongs to the model Codeman runs on this Mac. Change or remove it in the local model window.':
+      '此端点属于 {name} 在此 Mac 上运行的模型。请在本地模型窗口中更改或移除它。',
+    'This endpoint id is reserved for the model Codeman runs on this Mac. Pick another id.':
+      '此端点标识已保留给 {name} 在此 Mac 上运行的模型。请换一个标识。',
+    'Coding agents use git and Python. This Mac has no developer tools yet, so macOS will offer to install them the first time an agent needs one.':
+      '编程智能体会用到 git 和 Python。此 Mac 尚未安装开发者工具，因此在智能体首次需要时，macOS 会提示安装。',
   });
 
   const ZH_CN_LOWER = new Map(Object.entries(ZH_CN).map(([key, value]) => [key.toLocaleLowerCase('en'), value]));

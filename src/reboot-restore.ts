@@ -134,6 +134,8 @@ export interface RebootRestoreRejection {
     | 'workspace-forbidden'
     | 'already-live'
     | 'capacity-reached'
+    /** The session ran on the model Codeman runs on this Mac, and that model cannot be started on right now. */
+    | 'local-model-not-ready'
     | 'rebuild-failed';
 }
 

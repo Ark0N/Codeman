@@ -510,6 +510,17 @@
                it sits under them as a quiet link; settings-ui.js rewrites its
                contents on every state change and owns its inline display. -->
           <div class="welcome-actions">
+            <!-- A model that runs on the Mac the server runs on (local-model-ui.js).
+                 The first thing on the start screen, above the launchers, in the size of
+                 the primary button. A sibling of the launcher slot and never inside it (renderWelcomeCliActions empties that slot on every
+                 state change). Ships `hidden`: only that module reveals it, once the
+                 server has answered for a Mac. It opens the chooser window
+                 (#localModelModal) and the module writes its label through its own
+                 translator call, hence data-i18n-skip. -->
+            <button type="button" class="welcome-chip welcome-local-model" id="welcomeLocalModelBtn" data-i18n-skip hidden onclick="app.openLocalModelWindow()">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9.5 2.5v3.5M14.5 2.5v3.5M9.5 18v3.5M14.5 18v3.5M2.5 9.5H6M2.5 14.5H6M18 9.5h3.5M18 14.5h3.5"/></svg>
+              <span class="welcome-label" id="welcomeLocalModelLabel">Run a local model</span>
+            </button>
             <div class="welcome-cli-actions" id="welcomeCliActions"></div>
             <button type="button" class="welcome-tunnel-link" id="welcomeTunnelBtn" style="display: none;" onclick="app.toggleTunnelFromWelcome()">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
@@ -2866,6 +2877,28 @@
                   </div>
                 </div>
               </div>
+
+              <!-- The model that runs on the Mac the server runs on (local-model-ui.js). One row:
+                   the state in a few words, written by the module from GET /api/local-model
+                   through its own translator call (hence data-i18n-skip on the text and on the
+                   button), and a button that opens the chooser window (#localModelModal), where
+                   everything happens. The module shows the group only once the server has
+                   answered for a Mac: it hides it for a server on another system (the title
+                   and hint are about "this Mac"), while the first request is in flight, and
+                   for a non-admin in multi-user mode (the routes are admin-only). Not gated on
+                   the endpoints toggle above: an install switches that on itself. -->
+              <div class="set-group" id="localModelGroup">
+                <div class="set-group-head"><h4>Model on this Mac</h4></div>
+                <p class="set-group-hint">Run a coding model on the Mac that Codeman runs on. No account and no API key.</p>
+                <div class="set-group-body">
+                  <div class="set-row" data-search="local model mac apple silicon memory llm offline install download ollama">
+                    <div class="set-row-text" id="localModelSettings" data-i18n-skip aria-live="polite"></div>
+                    <div class="set-row-actions">
+                      <button type="button" class="btn-toolbar btn-sm" id="localModelSettingsOpen" data-i18n-skip onclick="app.openLocalModelWindow()">Open</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </section>
 
             <!-- ══ Agents &amp; CLIs ═════════════════════════════════════════ -->
@@ -3641,6 +3674,27 @@
           <button class="btn-toolbar" onclick="app.applyAppSettings()" title="Save and keep Settings open">Apply</button>
           <button class="btn-toolbar btn-primary" onclick="app.saveAppSettings()">Save</button>
         </div>
+      </div>
+    </div>
+
+    <!-- The local model window (local-model-ui.js): choose a model, confirm the sizes,
+         watch the download, start a session. Opened by the welcome button and by the
+         row in App Settings > Models; placed AFTER #appSettingsModal so it stacks above
+         it when opened from there. The module fills the body from GET /api/local-model
+         through its own translator call (model, agent and chip names are someone
+         else's text), hence data-i18n-skip on the body; the title and the close button
+         are static and go through the page translator. -->
+    <div class="modal" id="localModelModal" role="dialog" aria-modal="true" aria-labelledby="localModelModalTitle">
+      <div class="modal-backdrop" onclick="app.closeLocalModelWindow()"></div>
+      <div class="modal-content local-model-window">
+        <div class="modal-header">
+          <h3 id="localModelModalTitle">Run a model on this Mac</h3>
+          <button class="modal-close" onclick="app.closeLocalModelWindow()" aria-label="Close">&times;</button>
+        </div>
+        <div class="modal-body lm-body" id="localModelWindowBody" data-i18n-skip></div>
+        <!-- The buttons of the current screen. Outside the body, so they keep their
+             place while the body changes and scrolls. -->
+        <div class="lm-foot-slot" id="localModelWindowFoot" data-i18n-skip></div>
       </div>
     </div>
 
@@ -4684,6 +4738,7 @@
   <script defer src="foreign-sessions.js"></script>
   <script defer src="git-status-ui.js"></script>
   <script defer src="edit-history-ui.js"></script>
+  <script defer src="local-model-ui.js"></script>
   <script defer src="entrance-animations.js"></script>
   <script defer src="ralph-wizard.js"></script>
   <script defer src="api-client.js"></script>

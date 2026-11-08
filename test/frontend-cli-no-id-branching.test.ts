@@ -38,6 +38,9 @@ const SCANNED_FILES = [
   'panels-ui.js',
   // A row's mode comes from the same catalog, never from a list of ids here.
   'foreign-sessions.js',
+  // The harness a local model is paired with arrives as a label in the payload
+  // (`Candidate.cliLabel`); the card names no CLI and compares no id.
+  'local-model-ui.js',
 ];
 
 /**

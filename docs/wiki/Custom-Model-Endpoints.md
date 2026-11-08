@@ -204,6 +204,45 @@ Which harnesses show up in the Run-menu picker is read live off Codeman's own CL
 not a fixed list here, so this table can go stale before this page does — a greyed-out or
 missing entry is the more current answer.
 
+## A model that runs on this Mac
+
+If the Codeman server runs on a Mac with Apple silicon, you do not need a server of your
+own: Codeman can set one model up for you on that Mac. This is experimental.
+
+1. Press **Run a local model** on the welcome screen (or open App Settings > Models > Model
+   on this Mac).
+2. The window shows what fits this Mac. A bar shows how much of the memory the selected
+   model takes at its full context; a nearly full bar means a tight fit. Pick a model and
+   the coding agent to run it with.
+3. Press **Install on this Mac**, check the sizes and where they go, and confirm. Nothing is
+   downloaded before this click.
+4. Codeman downloads a model runtime (Ollama, about 186 MB) and the model into
+   `~/.codeman/local-model`, loads the model, checks that all of it runs on the GPU and that
+   it can call a tool, installs the coding agent if it is missing, and saves an endpoint
+   named **This Mac**. No administrator password is asked for.
+5. Press **Start a session**.
+
+Good to know:
+
+- You can close the window: the download continues while Codeman is running. **Cancel**
+  pauses it and **Continue** picks it up where it stopped. After a Codeman restart an
+  unfinished install waits for your click.
+- The memory figure is an estimate until the runtime has started once. From then on it is
+  what the runtime itself measured, and the model is judged against that before it is
+  downloaded.
+- The endpoint "This Mac" belongs to this install. It is in the list and in the Run menu,
+  but it is changed and removed in the local model window, not here.
+- Codeman starts the runtime with the server and stops it with it. **Stop** keeps it from
+  starting next time.
+- **Remove** deletes the runtime and the endpoint, and the model too if you tick that. The
+  coding agent stays installed.
+- If the model on disk is no longer the one that was installed, Codeman refuses to start a
+  session on it and tells you to remove and install it again.
+- Any program on this Mac, and any web page served from `localhost`, can reach the model
+  runtime: its port has no login. It listens on this Mac only.
+- On a Mac without Apple's developer tools, macOS will offer to install them the first time
+  a coding agent runs `git` or Python. The window tells you when that applies.
+
 ## What it does not do
 
 - **No remote or Docker sessions yet.** Both restart their agent differently under the hood
