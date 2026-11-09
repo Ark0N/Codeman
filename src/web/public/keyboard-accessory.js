@@ -74,6 +74,8 @@ const PathPicker = {
   _previewOverlay: null,
   _previewRequestSequence: 0,
   _previewPreviousFocus: null,
+  _previewImageCleanup: null,
+  _previewImageZoom: null,
   _showHidden: false,
   _sortMode: PATH_PICKER_DEFAULT_SORT,
 
@@ -563,6 +565,11 @@ const PathPicker = {
             <strong class="path-preview-title"></strong>
             <span class="path-preview-path"></span>
           </div>
+          <div class="path-preview-zoom" hidden aria-label="Image zoom controls">
+            <button type="button" data-zoom="out" aria-label="Zoom out">−</button>
+            <button type="button" data-zoom="fit" aria-label="Fit image">Fit</button>
+            <button type="button" data-zoom="in" aria-label="Zoom in">+</button>
+          </div>
           <a class="path-preview-open" target="_blank" rel="noopener noreferrer">Open</a>
           <button type="button" class="path-preview-close" aria-label="Close preview">&times;</button>
         </div>
@@ -580,13 +587,30 @@ const PathPicker = {
 
     const body = overlay.querySelector('.path-preview-body');
     if (entry.previewKind === 'image') {
+      const zoomControls = overlay.querySelector('.path-preview-zoom');
+      body.classList.add('path-preview-image-viewport');
       const image = document.createElement('img');
       image.className = 'path-preview-image';
       image.alt = entry.name;
-      image.addEventListener('load', () => body.querySelector('.path-preview-loading')?.remove());
-      image.addEventListener('error', () => this.showPreviewError('Image preview failed to load'));
+      image.draggable = false;
+      // Both handlers check the sequence like the text branch: an image whose preview was already
+      // replaced can still finish loading, and `this._previewOverlay` and the zoom state are then
+      // the newer preview's. The controls show only once there is an image to zoom.
+      image.addEventListener('load', () => {
+        if (requestSequence !== this._previewRequestSequence) return;
+        body.querySelector('.path-preview-loading')?.remove();
+        zoomControls.hidden = false;
+        this._setPreviewImageZoom(1);
+      });
+      image.addEventListener('error', () => {
+        if (requestSequence !== this._previewRequestSequence) return;
+        zoomControls.hidden = true;
+        this._previewImageCleanup?.();
+        this.showPreviewError('Image preview failed to load');
+      });
       image.src = previewUrl;
       body.appendChild(image);
+      this._bindPreviewImageGestures(image, body, zoomControls);
     } else if (entry.previewKind === 'text') {
       fetch(previewUrl)
         .then(async (response) => {
@@ -630,8 +654,142 @@ const PathPicker = {
     body.replaceChildren(error);
   },
 
+  _setPreviewImageZoom(scale, focalPoint) {
+    const state = this._previewImageZoom;
+    if (!state) return;
+    const nextScale = Math.max(1, Math.min(6, scale));
+    if (focalPoint) {
+      const rect = state.body.getBoundingClientRect();
+      const qx = focalPoint.x - (rect.left + rect.width / 2);
+      const qy = focalPoint.y - (rect.top + rect.height / 2);
+      const ratio = nextScale / state.scale;
+      state.x = qx + (state.x - qx) * ratio;
+      state.y = qy + (state.y - qy) * ratio;
+    }
+    state.scale = nextScale;
+    this._clampPreviewImagePan();
+    state.image.style.transform = `translate(${state.x}px, ${state.y}px) scale(${state.scale})`;
+    const fitButton = state.controls.querySelector('[data-zoom="fit"]');
+    if (fitButton) fitButton.textContent = `${Math.round(state.scale * 100)}%`;
+    state.image.classList.toggle('is-zoomed', state.scale > 1);
+  },
+
+  /** Size the image is drawn at before zoom: `object-fit: scale-down` in the viewport box, so never
+   *  larger than its natural size. The box until the image has loaded (no natural size yet). */
+  _previewImageFitSize(state, rect) {
+    const naturalWidth = state.image.naturalWidth;
+    const naturalHeight = state.image.naturalHeight;
+    if (!naturalWidth || !naturalHeight) return { width: rect.width, height: rect.height };
+    const fit = Math.min(1, rect.width / naturalWidth, rect.height / naturalHeight);
+    return { width: naturalWidth * fit, height: naturalHeight * fit };
+  },
+
+  /** Keep the zoomed image covering the viewport: it may move until its edge reaches the viewport's
+   *  edge, never further, and an axis on which it is still smaller than the viewport stays centred.
+   *  Clamping to the image box instead let a small or letterboxed image be panned out of view. */
+  _clampPreviewImagePan() {
+    const state = this._previewImageZoom;
+    if (!state) return;
+    const rect = state.body.getBoundingClientRect();
+    const fitted = this._previewImageFitSize(state, rect);
+    const maxX = Math.max(0, (fitted.width * state.scale - rect.width) / 2);
+    const maxY = Math.max(0, (fitted.height * state.scale - rect.height) / 2);
+    state.x = Math.max(-maxX, Math.min(maxX, state.x));
+    state.y = Math.max(-maxY, Math.min(maxY, state.y));
+  },
+
+  /** Zoom factor for one wheel event, proportional to `deltaY` (d3-zoom's scale: about 15% per
+   *  100px mouse notch, ten times that for ctrl+wheel, which is how Chrome and Firefox deliver a
+   *  trackpad pinch), so a trackpad's stream of small deltas zooms smoothly instead of 20% per
+   *  event. Clamped per event so one large delta cannot jump to the maximum; no vertical delta
+   *  (a sideways scroll) zooms nothing. */
+  _previewWheelZoomFactor(event) {
+    const deltaY = Number(event?.deltaY) || 0;
+    if (!deltaY) return 1;
+    const perUnit = event.deltaMode === 1 ? 0.05 : event.deltaMode ? 1 : 0.002;
+    const exponent = -deltaY * perUnit * (event.ctrlKey ? 10 : 1);
+    return 2 ** Math.max(-0.5, Math.min(0.5, exponent));
+  },
+
+  _bindPreviewImageGestures(image, body, controls) {
+    this._previewImageZoom = { image, body, controls, scale: 1, x: 0, y: 0, pointers: new Map(), gesture: null };
+    const state = this._previewImageZoom;
+    const cleanups = [];
+    const listen = (target, name, handler, options) => {
+      target.addEventListener(name, handler, options);
+      cleanups.push(() => target.removeEventListener(name, handler, options));
+    };
+    const pointer = (event) => ({ x: event.clientX, y: event.clientY });
+    const midpoint = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+    const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+    const startGesture = () => {
+      const points = Array.from(state.pointers.values());
+      if (points.length > 1) {
+        state.gesture = {
+          kind: 'pinch',
+          scale: state.scale,
+          distance: Math.max(1, distance(points[0], points[1])),
+          midpoint: midpoint(points[0], points[1]),
+        };
+      } else if (points.length === 1) {
+        state.gesture = { kind: 'pan', point: points[0], x: state.x, y: state.y };
+      }
+    };
+    listen(image, 'pointerdown', (event) => {
+      event.preventDefault();
+      image.setPointerCapture?.(event.pointerId);
+      state.pointers.set(event.pointerId, pointer(event));
+      startGesture();
+    });
+    listen(image, 'pointermove', (event) => {
+      if (!state.pointers.has(event.pointerId) || !state.gesture) return;
+      event.preventDefault();
+      state.pointers.set(event.pointerId, pointer(event));
+      if (state.pointers.size > 1) {
+        const points = Array.from(state.pointers.values());
+        this._setPreviewImageZoom(
+          state.gesture.scale * distance(points[0], points[1]) / state.gesture.distance,
+          state.gesture.midpoint
+        );
+      } else if (state.gesture.kind === 'pan' && state.scale > 1) {
+        const point = state.pointers.values().next().value;
+        state.x = state.gesture.x + point.x - state.gesture.point.x;
+        state.y = state.gesture.y + point.y - state.gesture.point.y;
+        this._setPreviewImageZoom(state.scale);
+      }
+    });
+    const endPointer = (event) => {
+      state.pointers.delete(event.pointerId);
+      startGesture();
+    };
+    listen(image, 'pointerup', endPointer);
+    listen(image, 'pointercancel', endPointer);
+    listen(image, 'lostpointercapture', endPointer);
+    listen(image, 'dblclick', (event) => {
+      event.preventDefault();
+      this._setPreviewImageZoom(state.scale > 1 ? 1 : 2, pointer(event));
+    });
+    listen(body, 'wheel', (event) => {
+      event.preventDefault();
+      const factor = this._previewWheelZoomFactor(event);
+      if (factor !== 1) this._setPreviewImageZoom(state.scale * factor, pointer(event));
+    }, { passive: false });
+    listen(controls, 'click', (event) => {
+      const button = event.target.closest('[data-zoom]');
+      if (!button) return;
+      if (button.dataset.zoom === 'fit') this._setPreviewImageZoom(1);
+      else this._setPreviewImageZoom(state.scale * (button.dataset.zoom === 'in' ? 1.5 : 1 / 1.5));
+    });
+    this._previewImageCleanup = () => {
+      cleanups.forEach((cleanup) => cleanup());
+      this._previewImageZoom = null;
+      this._previewImageCleanup = null;
+    };
+  },
+
   closePreview(restoreFocus = true) {
     this._previewRequestSequence += 1;
+    this._previewImageCleanup?.();
     this._previewOverlay?.remove();
     this._previewOverlay = null;
     const previousFocus = this._previewPreviousFocus;
