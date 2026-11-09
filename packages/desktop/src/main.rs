@@ -727,6 +727,18 @@ fn build_webview(
     Ok(webview)
 }
 
+/// Hides the whole app, as Cmd+H does. A click on the Dock icon (or Cmd+Tab)
+/// shows it again with every window as it was, a full-screen one included,
+/// which hiding the main window alone would not do.
+#[cfg(target_os = "macos")]
+fn hide_app(target: &EventLoopWindowTarget<UserEvent>) {
+    use tao::platform::macos::EventLoopWindowTargetExtMacOS;
+    target.hide_application();
+}
+
+#[cfg(not(target_os = "macos"))]
+fn hide_app(_target: &EventLoopWindowTarget<UserEvent>) {}
+
 impl App {
     fn handle(
         &mut self,
@@ -743,7 +755,7 @@ impl App {
                     self.menu.help_menu.set_as_help_menu_for_nsapp();
                 }
             }
-            Event::WindowEvent { window_id, event, .. } => self.on_window_event(window_id, event, control_flow),
+            Event::WindowEvent { window_id, event, .. } => self.on_window_event(window_id, event, target, control_flow),
             Event::UserEvent(event) => self.on_user_event(event, target),
             // A click on the Dock icon while no window is visible, which is
             // the main window minimized: tao only reports it, so bring the
@@ -815,18 +827,33 @@ impl App {
         self.fullscreen_retry = Some((now + FULLSCREEN_RETRY_EVERY, attempts + 1));
     }
 
-    fn on_window_event(&mut self, id: WindowId, event: WindowEvent, control_flow: &mut ControlFlow) {
+    fn on_window_event(
+        &mut self,
+        id: WindowId,
+        event: WindowEvent,
+        target: &EventLoopWindowTarget<UserEvent>,
+        control_flow: &mut ControlFlow,
+    ) {
         match event {
             WindowEvent::CloseRequested => {
-                if id == self.main_id {
+                if id != self.main_id {
+                    self.remove_window(id);
+                } else if self.config.keep_awake.mode.close_hides_app() {
+                    // Keep This Mac Awake ends with the app, so closing the
+                    // window while it is on hides Codeman instead, as Cmd+H
+                    // does (full screen and pop-outs included): the Mac stays
+                    // awake, a click on the Dock icon brings it back, and
+                    // Cmd+Q still quits.
+                    self.record_main_frame();
+                    self.save_config();
+                    hide_app(target);
+                } else {
                     // Closing the main window quits; the server and its
                     // sessions keep running, so nothing is lost.
                     self.keep_awake.shutdown();
                     self.record_main_frame();
                     self.save_config();
                     *control_flow = ControlFlow::Exit;
-                } else {
-                    self.remove_window(id);
                 }
             }
             WindowEvent::Moved(_) | WindowEvent::Resized(_) if id == self.main_id => self.record_main_frame(),
