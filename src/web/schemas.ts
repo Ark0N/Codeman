@@ -1461,6 +1461,8 @@ export const SettingsUpdateSchema = z
     defaultClaudeMdPath: z.string().max(500).optional(),
     defaultWorkingDir: z.string().max(500).optional(),
     lastUsedCase: z.string().max(200).optional(),
+    /** The case a person last picked in a case picker; what other devices follow while `syncCaseState` is on. */
+    lastPickedCase: z.string().max(200).optional(),
     /**
      * Opt-in, SYNCED, default OFF: per-case run options (Agent Teams, Opus 1M) are kept here instead of
      * only in each browser, and a device follows the selected case another device chose.

@@ -94,10 +94,16 @@ describe('shared case options', () => {
     const oldName = caseName();
     const newName = caseName();
     mkdirSync(join(getCasesDir(), oldName), { recursive: true });
-    seed({ syncCaseState: true, caseOrder: [oldName], caseSettings: { [oldName]: on, keep: off } });
+    seed({
+      syncCaseState: true,
+      caseOrder: [oldName],
+      lastPickedCase: oldName,
+      caseSettings: { [oldName]: on, keep: off },
+    });
     const renamed = await send('POST', `/api/cases/${oldName}/rename`, { newName });
     expect(renamed.body.success).toBe(true);
     expect(readSettings().caseSettings).toEqual({ [newName]: on, keep: off });
+    expect(readSettings().lastPickedCase).toBe(newName);
     const deleted = await send('DELETE', `/api/cases/${newName}`);
     expect(deleted.body.success).toBe(true);
     expect(readSettings().caseSettings).toEqual({ keep: off });
@@ -110,6 +116,7 @@ describe('what a non-admin is given', () => {
       syncCaseState: true,
       caseOrder: ['a'],
       lastUsedCase: 'a',
+      lastPickedCase: 'a',
       caseSettings: { a: on },
       agentSkillEnabled: true,
     });

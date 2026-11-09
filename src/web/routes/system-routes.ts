@@ -161,7 +161,7 @@ export function resolveSpanUrl(hostHeader: string | undefined, fallbackPort = '3
  * What GET /api/settings answers a NON-ADMIN in multi-user mode: settings.json minus what
  * belongs to the server's admin rather than to the reader. `voiceSettings.apiKey` is the
  * Deepgram key an admin saved, a credential (the reader's browser seeded it into its own
- * voice config and dictated on the admin's account); `caseOrder`, `lastUsedCase` and `caseSettings` name
+ * voice config and dictated on the admin's account); `caseOrder`, `lastUsedCase`, `lastPickedCase` and `caseSettings` name
  * the admin's cases. Everything else stays readable, because the page reads the synced feature
  * switches from it. Writes are admin-only there (PUT /api/settings). Exported for unit testing.
  */
@@ -170,6 +170,7 @@ export function settingsForNonAdmin(settings: unknown): unknown {
   const out: Record<string, unknown> = { ...(settings as Record<string, unknown>) };
   delete out.caseOrder;
   delete out.lastUsedCase;
+  delete out.lastPickedCase;
   delete out.caseSettings;
   const voice = out.voiceSettings;
   if (voice && typeof voice === 'object' && !Array.isArray(voice) && 'apiKey' in voice) {

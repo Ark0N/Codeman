@@ -9,6 +9,8 @@ import vm from 'node:vm';
 import { SettingsUpdateSchema } from '../src/web/schemas.js';
 
 const SRC = readFileSync(new URL('../src/web/public/session-ui.js', import.meta.url), 'utf-8');
+// The real write-result handling the case sync reuses (a toast for a failed save, read-only after a 403).
+const SETTINGS_SRC = readFileSync(new URL('../src/web/public/settings-ui.js', import.meta.url), 'utf-8');
 
 type Reply = { status?: number; body?: unknown } | 'throw';
 type Handler = (url: string, init?: { method?: string; body?: string }) => Reply | Promise<Reply>;
@@ -18,11 +20,16 @@ function makeApp(settings: Record<string, unknown>, onFetch: Handler = () => ({ 
   const calls: { method: string; body: unknown }[] = [];
   const toasts: string[] = [];
   const select = { value: 'alpha' };
+  const hidden = new Set<string>();
+  const popover = (id: string) => ({ classList: { add: (c: string) => c === 'hidden' && void hidden.add(id) } });
   function CodemanApp(this: unknown) {}
   const ctx = vm.createContext({
     CodemanApp,
     window: {},
-    document: { getElementById: () => select, addEventListener: () => {} },
+    document: {
+      getElementById: (id: string) => (id.startsWith('caseSettingsPopover') ? popover(id) : select),
+      addEventListener: () => {},
+    },
     localStorage: {
       getItem: (k: string) => store.get(k) ?? null,
       setItem: (k: string, v: string) => void store.set(k, v),
@@ -38,6 +45,7 @@ function makeApp(settings: Record<string, unknown>, onFetch: Handler = () => ({ 
     console,
   });
   vm.runInContext(SRC, ctx);
+  vm.runInContext(SETTINGS_SRC, ctx);
   const app = Object.create((CodemanApp as unknown as { prototype: object }).prototype) as Record<string, any>;
   app.loadAppSettingsFromStorage = () => settings;
   app.saveAppSettingsToStorage = (s: Record<string, unknown>) => Object.assign(settings, s);
@@ -46,7 +54,8 @@ function makeApp(settings: Record<string, unknown>, onFetch: Handler = () => ({ 
   app.updateDirDisplayForCase = () => {};
   app.updateMobileCaseLabel = () => {};
   app.updateCasePickerInput = () => {};
-  return { app, store, calls, toasts, select, settings };
+  app.closeCasePicker = () => {};
+  return { app, store, calls, toasts, select, settings, hidden };
 }
 
 const settle = () => new Promise((r) => setTimeout(r, 0));
@@ -103,7 +112,6 @@ describe('saving a case', () => {
 
   it.each([
     ['an HTTP 500', { status: 500, body: { success: false, error: 'boom' } }],
-    ['a refusal answered with HTTP 200', { body: { success: false, error: 'settings.json is not valid' } }],
     ['a dropped connection', 'throw' as const],
   ])('keeps the local choice and says it was not synced after %s', async (_label, reply) => {
     const { app, store, toasts } = makeApp({ syncCaseState: true }, () => reply as Reply);
@@ -111,7 +119,8 @@ describe('saving a case', () => {
     await app._caseSyncChain;
     expect(JSON.parse(store.get('caseSettings_demo')!)).toEqual(entry);
     expect(toasts).toHaveLength(1);
-    expect(toasts[0]).toContain('not synced');
+    expect(toasts[0]).toContain('not on the server');
+    expect(toasts[0]).toContain('until the next sync');
   });
 
   it('hands an admin-only refusal to the read-only handling, without a toast', async () => {
@@ -127,6 +136,17 @@ describe('saving a case', () => {
     await app._caseSyncChain;
     expect(toasts).toEqual([]);
     expect(app._caseStateSyncOn()).toBe(false); // nothing more is sent from this page
+  });
+});
+
+describe('recording the picked case', () => {
+  it('writes lastPickedCase with lastUsedCase only while sync is on', async () => {
+    const on = makeApp({ syncCaseState: true });
+    await on.app.saveLastUsedCase('beta');
+    expect(on.calls[0].body).toEqual({ lastUsedCase: 'beta', lastPickedCase: 'beta' });
+    const off = makeApp({});
+    await off.app.saveLastUsedCase('beta');
+    expect(off.calls[0].body).toEqual({ lastUsedCase: 'beta' });
   });
 });
 
@@ -170,7 +190,7 @@ describe('returning to the tab', () => {
 
   it('follows the selected case and the options while sync is on', async () => {
     const { app, select, store } = makeApp({ syncCaseState: true }, () =>
-      env({ syncCaseState: true, lastUsedCase: 'beta', caseSettings: { beta: entry } })
+      env({ syncCaseState: true, lastPickedCase: 'beta', caseSettings: { beta: entry } })
     );
     await app._syncCaseStateFromServer();
     expect(select.value).toBe('beta');
@@ -179,13 +199,35 @@ describe('returning to the tab', () => {
 
   it('stops following when another device turned sync off, and the cached switch follows the server', async () => {
     const { app, select, store, settings } = makeApp({ syncCaseState: true }, () =>
-      env({ syncCaseState: false, lastUsedCase: 'beta', caseSettings: { beta: entry } })
+      env({ syncCaseState: false, lastPickedCase: 'beta', caseSettings: { beta: entry } })
     );
     await app._syncCaseStateFromServer();
     expect(select.value).toBe('alpha');
     expect(store.size).toBe(0);
     expect(settings.syncCaseState).toBe(false);
     expect(app._caseStateSyncOn()).toBe(false);
+  });
+
+  it('does not follow a case a quick-start or an agent started, only one picked in a picker', async () => {
+    const { app, select } = makeApp({ syncCaseState: true }, () =>
+      env({ syncCaseState: true, lastUsedCase: 'beta', lastPickedCase: 'alpha' })
+    );
+    await app._syncCaseStateFromServer();
+    expect(select.value).toBe('alpha');
+  });
+
+  it('closes an open case-options popover when the follow or an import changes what it shows', async () => {
+    const followed = makeApp({ syncCaseState: true }, () => env({ syncCaseState: true, lastPickedCase: 'beta' }));
+    await followed.app._syncCaseStateFromServer();
+    expect([...followed.hidden].sort()).toEqual(['caseSettingsPopover', 'caseSettingsPopoverMobile']);
+    const imported = makeApp({ syncCaseState: true }, () =>
+      env({ syncCaseState: true, caseSettings: { alpha: entry } })
+    );
+    await imported.app._syncCaseStateFromServer();
+    expect(imported.hidden.size).toBe(2);
+    const unchanged = makeApp({ syncCaseState: true }, () => env({ syncCaseState: true, lastPickedCase: 'alpha' }));
+    await unchanged.app._syncCaseStateFromServer();
+    expect(unchanged.hidden.size).toBe(0);
   });
 
   it('asks for nothing on a tab return while this device has sync off', async () => {

@@ -226,7 +226,7 @@ const VOLATILE_KEYS: Readonly<Record<string, readonly string[]>> = {
   // per user), a session started in another case, every captured prompt, and a Docker case's
   // conversation id after a /clear, and a web tab being opened.
   'users.json': ['lastLoginAt'],
-  'settings.json': ['lastUsedCase'],
+  'settings.json': ['lastUsedCase', 'lastPickedCase'],
   'intents.json': ['recentPrompts', 'updatedAt'],
   'docker-cases.json': ['lastClaudeSessionId'],
   'webviews.json': ['lastOpenedAt'],

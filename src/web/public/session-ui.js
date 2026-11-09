@@ -644,10 +644,13 @@ Object.assign(CodemanApp.prototype, {
     // PUT is admin-only (403), so it is not sent (_settingsReadOnly, settings-ui.js).
     if (this._settingsReadOnly?.()) return;
     try {
+      // lastPickedCase is only what a person chose on a device (never a quick-start or an agent's spawn),
+      // so it is what other devices follow when case sync is on.
+      const body = this._caseStateSyncOn?.() ? { lastUsedCase: caseName, lastPickedCase: caseName } : { lastUsedCase: caseName };
       await fetch('/api/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ lastUsedCase: caseName })
+        body: JSON.stringify(body)
       });
     } catch (err) {
       console.error('Failed to save last used case:', err);
@@ -3706,18 +3709,6 @@ Object.assign(CodemanApp.prototype, {
     return this._caseSyncChain;
   },
 
-  /** Why a settings write did not land, or '' when it did (HTTP status and the response's own error both count). */
-  async _caseSyncError(res) {
-    if (!res) return 'the server could not be reached';
-    let body = null;
-    try {
-      body = await (typeof res.clone === 'function' ? res.clone() : res).json();
-    } catch { /* not JSON: the status is all there is */ }
-    if (!res.ok) return body?.error || `HTTP ${res.status}`;
-    if (body && (body.success === false || body.error)) return body.error || 'the server refused it';
-    return '';
-  },
-
   async _pushCaseSettings(caseName, entry) {
     let res = null;
     try {
@@ -3729,10 +3720,8 @@ Object.assign(CodemanApp.prototype, {
     } catch (err) {
       console.error('Failed to sync case settings:', err);
     }
-    // The admin-only refusal marks this page read-only (settings-ui.js), so nothing more is sent from it.
-    if (await this._noteSettingsWriteRefusal?.(res)) return;
-    const error = await this._caseSyncError(res);
-    if (error) this.showToast?.(`Options for "${caseName}" saved on this device, not synced: ${error}`, 'warning');
+    // A refusal or failure keeps the choice on this device only until the next sync brings the server's copy back.
+    await this._noteSettingsWriteResult?.(res, `Options for "${caseName}" (until the next sync)`);
   },
 
   /** Server copy wins, except for a case this device is still saving: write its options into the local keys getCaseSettings() reads. */
@@ -3741,11 +3730,22 @@ Object.assign(CodemanApp.prototype, {
     // A non-admin never receives the map (the server redacts it) and must not apply one it was handed.
     if (this._settingsReadOnly?.()) return;
     try {
+      let changed = false;
       for (const [name, s] of Object.entries(server.caseSettings)) {
         if (!s || typeof s !== 'object' || this._caseSyncPending?.has(name)) continue;
-        localStorage.setItem('caseSettings_' + name, JSON.stringify({ agentTeams: s.agentTeams === true, opusContext1m: s.opusContext1m === true }));
+        const next = JSON.stringify({ agentTeams: s.agentTeams === true, opusContext1m: s.opusContext1m === true });
+        if (localStorage.getItem('caseSettings_' + name) === next) continue;
+        localStorage.setItem('caseSettings_' + name, next);
+        changed = true;
       }
+      // An open popover still shows the options it was filled with: closing it keeps a tick from writing them into another case.
+      if (changed) this._closeCaseSettingsPopovers();
     } catch { /* storage blocked: this device keeps what it has */ }
+  },
+
+  _closeCaseSettingsPopovers() {
+    document.getElementById('caseSettingsPopover')?.classList.add('hidden');
+    document.getElementById('caseSettingsPopoverMobile')?.classList.add('hidden');
   },
 
   /** The server decides whether sync is on: when it says otherwise, this device's cached switch follows it. */
@@ -3773,12 +3773,10 @@ Object.assign(CodemanApp.prototype, {
       if (server.syncCaseState !== true) return;
       this._applyServerCaseSettings(server);
       const select = document.getElementById('quickStartCase');
-      const last = server.lastUsedCase;
+      const last = server.lastPickedCase;
       if (select && last && last !== select.value && this.cases?.some((c) => c.name === last)) {
-        select.value = last;
-        this.updateDirDisplayForCase(last);
-        this.updateMobileCaseLabel(last);
-        this.updateCasePickerInput(last);
+        this._closeCaseSettingsPopovers();
+        this.selectQuickStartCase(last, { save: false });
       }
     } catch { /* offline: try again next time the tab is shown */ }
   },
