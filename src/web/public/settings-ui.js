@@ -5245,7 +5245,7 @@ Object.assign(CodemanApp.prototype, {
       const settings = settingsPromise ? await settingsPromise : await fetch('/api/settings').then(r => r.ok ? r.json() : null).then(env => env?.success === true ? env.data : env);
       if (settings) {
         // Extract notification prefs before merging app settings
-        const { notificationPreferences, voiceSettings, respawnPresets, runMode, ...appSettings } = settings;
+        const { notificationPreferences, voiceSettings, respawnPresets, runMode, caseSettings: _sharedCases, ...appSettings } = settings;
         // Display settings are device-specific (mobile vs desktop) and must not be synced
         // from the server: see _displaySettingKeySet().
         const displayKeys = this._displaySettingKeySet();

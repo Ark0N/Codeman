@@ -87,6 +87,7 @@ import {
   settingsWriteErrorResponse,
 } from '../settings-writer.js';
 import { LinkedCasesWriteRefusedError, linkedCasesPath, mutateLinkedCases } from '../linked-cases-writer.js';
+import { dropCaseSettings, renameCaseSettings } from '../case-state-sync.js';
 import { isMultiUserMode } from '../../config/multiuser.js';
 import type { AuthUser } from '../../types.js';
 import { SseEvent } from '../sse-events.js';
@@ -1747,6 +1748,14 @@ export function registerCaseRoutes(
     // a stale value is ignored at creation anyway).
     // An admin deleting another user's remote/Docker case clears that owner's too.
     const forgetCaseDefault = async (caseOwner?: string): Promise<void> => {
+      // The shared run options (syncCaseState) are the admin's server-wide map: a non-admin's own case of
+      // the same name must leave them alone. Best-effort, like the default group.
+      if (isAdmin(req)) {
+        await mutateSettingsFile((current) => {
+          const rest = dropCaseSettings(current.caseSettings, name);
+          return rest ? { ...current, caseSettings: rest } : undefined;
+        }).catch(() => undefined);
+      }
       const owners = new Set([ownerLayoutKey(ownerFor(req)), ...(caseOwner ? [ownerLayoutKey(caseOwner)] : [])]);
       for (const owner of owners) {
         try {
@@ -2023,11 +2032,18 @@ export function registerCaseRoutes(
             const { before, after } = await mutateSettingsFile((existing) => {
               const order = renameInOrder(existing.caseOrder, name, newName);
               const last = existing.lastUsedCase === name ? newName : undefined;
-              if (!order && !last) return undefined;
-              return { ...existing, ...(order ? { caseOrder: order } : {}), ...(last ? { lastUsedCase: last } : {}) };
+              // The shared run options (syncCaseState) follow the case to its new name.
+              const shared = renameCaseSettings(existing.caseSettings, name, newName);
+              if (!order && !last && !shared) return undefined;
+              return {
+                ...existing,
+                ...(order ? { caseOrder: order } : {}),
+                ...(last ? { lastUsedCase: last } : {}),
+                ...(shared ? { caseSettings: shared } : {}),
+              };
             });
             if (after) {
-              const keys = ['caseOrder', 'lastUsedCase'].filter((k) => after[k] !== before[k]);
+              const keys = ['caseOrder', 'lastUsedCase', 'caseSettings'].filter((k) => after[k] !== before[k]);
               settingsUndo = Object.fromEntries(keys.map((k) => [k, before[k]]));
             }
           }

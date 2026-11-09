@@ -3673,7 +3673,7 @@ Object.assign(CodemanApp.prototype, {
 
   saveCaseSettings(caseName, settings) {
     localStorage.setItem('caseSettings_' + caseName, JSON.stringify(settings));
-    if (this._caseStateSyncOn()) this._pushCaseSettings(caseName, settings);
+    if (this._caseStateSyncOn()) this._queueCaseSync(caseName, settings);
   },
 
   // ── Opt-in case sync (`syncCaseState`): case options live on the server, the selected case follows other devices ──
@@ -3683,43 +3683,94 @@ Object.assign(CodemanApp.prototype, {
     return this.loadAppSettingsFromStorage().syncCaseState === true && !this._settingsReadOnly?.();
   },
 
-  async _pushCaseSettings(caseName, settings) {
+  /**
+   * Send one case's options. Saves from this device run one after another in the order they were made
+   * (one chain), and each carries only its own case: the server merges it into the shared map, so a save
+   * from another device is never overwritten. `_caseSyncPending` counts a case's saves still in flight,
+   * so an import of the server's copy leaves that case alone.
+   */
+  _queueCaseSync(caseName, settings) {
+    const entry = { agentTeams: !!settings.agentTeams, opusContext1m: !!settings.opusContext1m };
+    const pending = this._caseSyncPending || (this._caseSyncPending = new Map());
+    pending.set(caseName, (pending.get(caseName) || 0) + 1);
+    const run = async () => {
+      try {
+        await this._pushCaseSettings(caseName, entry);
+      } finally {
+        const left = (pending.get(caseName) || 1) - 1;
+        if (left > 0) pending.set(caseName, left);
+        else pending.delete(caseName);
+      }
+    };
+    this._caseSyncChain = (this._caseSyncChain || Promise.resolve()).then(run, run);
+    return this._caseSyncChain;
+  },
+
+  /** Why a settings write did not land, or '' when it did (HTTP status and the response's own error both count). */
+  async _caseSyncError(res) {
+    if (!res) return 'the server could not be reached';
+    let body = null;
     try {
-      // PUT replaces the whole map, so merge into the server's current one rather than this device's copy.
-      const current = await fetch('/api/settings').then((r) => r.json()).then((env) => env?.data ?? {});
-      await fetch('/api/settings', {
+      body = await (typeof res.clone === 'function' ? res.clone() : res).json();
+    } catch { /* not JSON: the status is all there is */ }
+    if (!res.ok) return body?.error || `HTTP ${res.status}`;
+    if (body && (body.success === false || body.error)) return body.error || 'the server refused it';
+    return '';
+  },
+
+  async _pushCaseSettings(caseName, entry) {
+    let res = null;
+    try {
+      res = await fetch('/api/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          caseSettings: {
-            ...(current.caseSettings || {}),
-            [caseName]: { agentTeams: !!settings.agentTeams, opusContext1m: !!settings.opusContext1m },
-          },
-        }),
+        body: JSON.stringify({ caseSettings: { [caseName]: entry } }),
       });
     } catch (err) {
       console.error('Failed to sync case settings:', err);
     }
+    // The admin-only refusal marks this page read-only (settings-ui.js), so nothing more is sent from it.
+    if (await this._noteSettingsWriteRefusal?.(res)) return;
+    const error = await this._caseSyncError(res);
+    if (error) this.showToast?.(`Options for "${caseName}" saved on this device, not synced: ${error}`, 'warning');
   },
 
-  /** Server copy wins: write the synced per-case options into the local keys getCaseSettings() reads. */
+  /** Server copy wins, except for a case this device is still saving: write its options into the local keys getCaseSettings() reads. */
   _applyServerCaseSettings(server) {
-    if (server?.syncCaseState !== true || !server.caseSettings) return;
+    if (server?.syncCaseState !== true || !server.caseSettings || typeof server.caseSettings !== 'object') return;
+    // A non-admin never receives the map (the server redacts it) and must not apply one it was handed.
+    if (this._settingsReadOnly?.()) return;
     try {
       for (const [name, s] of Object.entries(server.caseSettings)) {
-        localStorage.setItem('caseSettings_' + name, JSON.stringify(s));
+        if (!s || typeof s !== 'object' || this._caseSyncPending?.has(name)) continue;
+        localStorage.setItem('caseSettings_' + name, JSON.stringify({ agentTeams: s.agentTeams === true, opusContext1m: s.opusContext1m === true }));
       }
     } catch { /* storage blocked: this device keeps what it has */ }
   },
 
-  /** On returning to the tab: take the other devices' case options and selected case. */
+  /** The server decides whether sync is on: when it says otherwise, this device's cached switch follows it. */
+  _adoptServerCaseSyncPreference(server) {
+    if (typeof server?.syncCaseState !== 'boolean') return;
+    const cached = this.loadAppSettingsFromStorage();
+    if ((cached.syncCaseState === true) === server.syncCaseState) return;
+    this.saveAppSettingsToStorage?.({ ...cached, syncCaseState: server.syncCaseState });
+  },
+
+  /** On returning to the tab: take the other devices' case options and selected case, if the server has sync on. */
   async _syncCaseStateFromServer() {
-    if (!this._caseStateSyncOn()) return;
+    if (this._settingsReadOnly?.()) return;
+    const seq = (this._caseSyncRefresh = (this._caseSyncRefresh || 0) + 1);
     try {
-      const server = await fetch('/api/settings').then((r) => r.json()).then((env) => env?.data ?? null);
+      await this._caseSyncChain; // this device's own saves land first, so the copy read next includes them
+      const res = await fetch('/api/settings');
+      if (!res.ok) return;
+      const server = (await res.json())?.data ?? null;
+      if (seq !== this._caseSyncRefresh || !server) return; // a newer refresh owns the answer
+      this._adoptServerCaseSyncPreference(server);
+      if (server.syncCaseState !== true) return;
       this._applyServerCaseSettings(server);
       const select = document.getElementById('quickStartCase');
-      const last = server?.lastUsedCase;
+      const last = server.lastUsedCase;
       if (select && last && last !== select.value && this.cases?.some((c) => c.name === last)) {
         select.value = last;
         this.updateDirDisplayForCase(last);

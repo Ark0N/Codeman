@@ -49,6 +49,7 @@ import {
   SETTINGS_PATH,
 } from '../route-helpers.js';
 import { mutateSettingsFile, settingsWriteErrorResponse } from '../settings-writer.js';
+import { mergeCaseSettings, SharedCaseLimitError } from '../case-state-sync.js';
 import { SseEvent } from '../sse-events.js';
 import { getInstallInfo, checkForUpdate, startUpdate, getUpdateStatusForApi } from '../self-update.js';
 
@@ -160,8 +161,8 @@ export function resolveSpanUrl(hostHeader: string | undefined, fallbackPort = '3
  * What GET /api/settings answers a NON-ADMIN in multi-user mode: settings.json minus what
  * belongs to the server's admin rather than to the reader. `voiceSettings.apiKey` is the
  * Deepgram key an admin saved, a credential (the reader's browser seeded it into its own
- * voice config and dictated on the admin's account); `caseOrder` and `lastUsedCase` name the
- * admin's cases. Everything else stays readable, because the page reads the synced feature
+ * voice config and dictated on the admin's account); `caseOrder`, `lastUsedCase` and `caseSettings` name
+ * the admin's cases. Everything else stays readable, because the page reads the synced feature
  * switches from it. Writes are admin-only there (PUT /api/settings). Exported for unit testing.
  */
 export function settingsForNonAdmin(settings: unknown): unknown {
@@ -169,6 +170,7 @@ export function settingsForNonAdmin(settings: unknown): unknown {
   const out: Record<string, unknown> = { ...(settings as Record<string, unknown>) };
   delete out.caseOrder;
   delete out.lastUsedCase;
+  delete out.caseSettings;
   const voice = out.voiceSettings;
   if (voice && typeof voice === 'object' && !Array.isArray(voice) && 'apiKey' in voice) {
     const voiceOut: Record<string, unknown> = { ...(voice as Record<string, unknown>) };
@@ -1141,8 +1143,14 @@ export function registerSystemRoutes(
       // It must never write tunnelEnabled:true: a concurrent stop has written false by now,
       // and true on disk would show a stopped tunnel as on. The stored value stays as it is.
       if (settings.tunnelEnabled === true && !tunnelEnableAuthorized) delete settingsToStore.tunnelEnabled;
-      const { before: existing } = await mutateSettingsFile((current) => ({ ...current, ...settingsToStore }));
-      const merged = { ...existing, ...settingsToStore };
+      // caseSettings merges per case inside the serialised writer, so two devices saving different cases both land.
+      const { caseSettings: incomingCases, ...plainSettings } = settingsToStore;
+      const { before: existing, after } = await mutateSettingsFile((current) => ({
+        ...current,
+        ...plainSettings,
+        ...(incomingCases ? { caseSettings: mergeCaseSettings(current.caseSettings, incomingCases as never) } : {}),
+      }));
+      const merged = after ?? { ...existing, ...plainSettings };
 
       // tmux 3.7+ resizes tracked panes; older versions apply this to new panes.
       // Already-evicted history cannot be recovered on either version.
@@ -1244,6 +1252,12 @@ export function registerSystemRoutes(
 
       return {};
     } catch (err) {
+      if (err instanceof SharedCaseLimitError) {
+        throw Object.assign(err, {
+          statusCode: 400,
+          body: createErrorResponse(ApiErrorCode.INVALID_INPUT, err.message),
+        });
+      }
       return settingsWriteErrorResponse(err);
     }
   });

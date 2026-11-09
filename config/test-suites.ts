@@ -51,6 +51,7 @@ export const BROWSER_TEST_GLOBS = [
   'test/doctor-settings.browser.test.ts',
   'test/git-status.browser.test.ts',
   'test/edit-history.browser.test.ts',
+  'test/sync-case-state.browser.test.ts',
   'test/split-pane-orchestration.browser.test.ts',
   'test/split-pane-auto-collapse.browser.test.ts',
   'test/spreadsheet-preview.browser.test.ts',

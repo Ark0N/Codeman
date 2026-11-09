@@ -1,6 +1,7 @@
 /**
- * @fileoverview Opt-in case sync: the schema accepts the setting and a per-case map, and the
- * session-ui helpers only touch the server when the setting is on. Evaluates the real session-ui.js.
+ * @fileoverview Opt-in case sync, client side: the schema accepts the setting and a per-case map, and the
+ * session-ui helpers only touch the server when the setting is on, send one case at a time, report a failed
+ * save, and obey the server's answer about whether sync is on. Evaluates the real session-ui.js.
  */
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -9,85 +10,224 @@ import { SettingsUpdateSchema } from '../src/web/schemas.js';
 
 const SRC = readFileSync(new URL('../src/web/public/session-ui.js', import.meta.url), 'utf-8');
 
-function makeApp(settings: Record<string, unknown>, server: Record<string, unknown> = {}) {
+type Reply = { status?: number; body?: unknown } | 'throw';
+type Handler = (url: string, init?: { method?: string; body?: string }) => Reply | Promise<Reply>;
+
+function makeApp(settings: Record<string, unknown>, onFetch: Handler = () => ({ body: { success: true, data: {} } })) {
   const store = new Map<string, string>();
-  const puts: unknown[] = [];
+  const calls: { method: string; body: unknown }[] = [];
+  const toasts: string[] = [];
+  const select = { value: 'alpha' };
   function CodemanApp(this: unknown) {}
   const ctx = vm.createContext({
     CodemanApp,
     window: {},
-    document: { getElementById: () => null, addEventListener: () => {} },
+    document: { getElementById: () => select, addEventListener: () => {} },
     localStorage: {
       getItem: (k: string) => store.get(k) ?? null,
       setItem: (k: string, v: string) => void store.set(k, v),
     },
-    fetch: async (_url: string, init?: { method?: string; body?: string }) => {
-      if (init?.method === 'PUT') puts.push(JSON.parse(init.body!));
-      return { ok: true, json: async () => ({ success: true, data: server }) };
+    fetch: async (url: string, init?: { method?: string; body?: string }) => {
+      calls.push({ method: init?.method ?? 'GET', body: init?.body ? JSON.parse(init.body) : undefined });
+      const r = await onFetch(url, init);
+      if (r === 'throw') throw new Error('offline');
+      const status = r.status ?? 200;
+      const res = { ok: status < 400, status, json: async () => r.body ?? {}, clone: () => res };
+      return res;
     },
     console,
   });
   vm.runInContext(SRC, ctx);
   const app = Object.create((CodemanApp as unknown as { prototype: object }).prototype) as Record<string, any>;
   app.loadAppSettingsFromStorage = () => settings;
-  return { app, store, puts };
+  app.saveAppSettingsToStorage = (s: Record<string, unknown>) => Object.assign(settings, s);
+  app.showToast = (m: string) => void toasts.push(m);
+  app.cases = [{ name: 'alpha' }, { name: 'beta' }];
+  app.updateDirDisplayForCase = () => {};
+  app.updateMobileCaseLabel = () => {};
+  app.updateCasePickerInput = () => {};
+  return { app, store, calls, toasts, select, settings };
 }
 
-describe('syncCaseState', () => {
-  it('is accepted by the settings schema with a per-case map, and rejects junk', () => {
-    expect(
-      SettingsUpdateSchema.safeParse({
-        syncCaseState: true,
-        caseSettings: { demo: { agentTeams: true, opusContext1m: false } },
-      }).success
-    ).toBe(true);
+const settle = () => new Promise((r) => setTimeout(r, 0));
+const entry = { agentTeams: true, opusContext1m: false };
+
+describe('syncCaseState schema', () => {
+  it('accepts the setting with a per-case map, and rejects junk', () => {
+    expect(SettingsUpdateSchema.safeParse({ syncCaseState: true, caseSettings: { demo: entry } }).success).toBe(true);
     expect(SettingsUpdateSchema.safeParse({ caseSettings: { demo: { agentTeams: 'yes' } } }).success).toBe(false);
     expect(
       SettingsUpdateSchema.safeParse({ caseSettings: { demo: { agentTeams: true, opusContext1m: true, x: 1 } } })
         .success
     ).toBe(false);
   });
+});
 
-  it('saves only to this browser while the setting is off', async () => {
-    const { app, store, puts } = makeApp({});
-    app.saveCaseSettings('demo', { agentTeams: true, opusContext1m: true });
-    await new Promise((r) => setTimeout(r, 0));
+describe('saving a case', () => {
+  it('stays on this browser while the setting is off', async () => {
+    const { app, store, calls } = makeApp({});
+    app.saveCaseSettings('demo', entry);
+    await settle();
     expect(store.get('caseSettings_demo')).toContain('agentTeams');
-    expect(puts).toEqual([]);
+    expect(calls).toEqual([]);
   });
 
-  it('pushes a merge into the server map while on, and never when settings are read-only', async () => {
-    const server = { caseSettings: { other: { agentTeams: false, opusContext1m: true } } };
-    const on = makeApp({ syncCaseState: true }, server);
-    on.app.saveCaseSettings('demo', { agentTeams: true, opusContext1m: false });
-    await new Promise((r) => setTimeout(r, 0));
-    expect(on.puts).toEqual([
-      {
-        caseSettings: {
-          other: { agentTeams: false, opusContext1m: true },
-          demo: { agentTeams: true, opusContext1m: false },
-        },
-      },
-    ]);
+  it('sends only that case (no read of the server map first), and nothing when read-only', async () => {
+    const on = makeApp({ syncCaseState: true });
+    on.app.saveCaseSettings('demo', entry);
+    await settle();
+    expect(on.calls).toEqual([{ method: 'PUT', body: { caseSettings: { demo: entry } } }]);
     const ro = makeApp({ syncCaseState: true });
     ro.app._settingsReadOnly = () => true;
-    ro.app.saveCaseSettings('demo', { agentTeams: true, opusContext1m: true });
-    await new Promise((r) => setTimeout(r, 0));
-    expect(ro.puts).toEqual([]);
+    ro.app.saveCaseSettings('demo', entry);
+    await settle();
+    expect(ro.calls).toEqual([]);
   });
 
-  it('takes the server copy into local keys only while the server says sync is on', () => {
+  it('sends rapid saves one after another, in the order they were made', async () => {
+    let release!: () => void;
+    const first = new Promise<void>((r) => (release = r));
+    let n = 0;
+    const { app, calls } = makeApp({ syncCaseState: true }, async () => {
+      if (++n === 1) await first;
+      return { body: { success: true, data: {} } };
+    });
+    app.saveCaseSettings('demo', { agentTeams: true, opusContext1m: true });
+    app.saveCaseSettings('demo', { agentTeams: false, opusContext1m: false });
+    await settle();
+    expect(calls).toHaveLength(1); // the second waits for the first
+    release();
+    await app._caseSyncChain;
+    expect(calls.map((c) => (c.body as any).caseSettings.demo.agentTeams)).toEqual([true, false]);
+  });
+
+  it.each([
+    ['an HTTP 500', { status: 500, body: { success: false, error: 'boom' } }],
+    ['a refusal answered with HTTP 200', { body: { success: false, error: 'settings.json is not valid' } }],
+    ['a dropped connection', 'throw' as const],
+  ])('keeps the local choice and says it was not synced after %s', async (_label, reply) => {
+    const { app, store, toasts } = makeApp({ syncCaseState: true }, () => reply as Reply);
+    app.saveCaseSettings('demo', entry);
+    await app._caseSyncChain;
+    expect(JSON.parse(store.get('caseSettings_demo')!)).toEqual(entry);
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0]).toContain('not synced');
+  });
+
+  it('hands an admin-only refusal to the read-only handling, without a toast', async () => {
+    const forbidden = { status: 403, body: { success: false, errorCode: 'FORBIDDEN' } };
+    const { app, toasts } = makeApp({ syncCaseState: true }, () => forbidden);
+    app._noteSettingsWriteRefusal = async (res: { status: number }) => {
+      if (res.status !== 403) return false;
+      app._settingsWriteForbidden = true;
+      return true;
+    };
+    app._settingsReadOnly = () => app._settingsWriteForbidden === true;
+    app.saveCaseSettings('demo', entry);
+    await app._caseSyncChain;
+    expect(toasts).toEqual([]);
+    expect(app._caseStateSyncOn()).toBe(false); // nothing more is sent from this page
+  });
+});
+
+describe('taking the server copy', () => {
+  const server = { syncCaseState: true, caseSettings: { demo: entry } };
+
+  it('writes the options into the local keys only while the server says sync is on', () => {
     const a = makeApp({});
-    a.app._applyServerCaseSettings({
-      syncCaseState: true,
-      caseSettings: { demo: { agentTeams: true, opusContext1m: false } },
-    });
-    expect(JSON.parse(a.store.get('caseSettings_demo')!)).toEqual({ agentTeams: true, opusContext1m: false });
+    a.app._applyServerCaseSettings(server);
+    expect(JSON.parse(a.store.get('caseSettings_demo')!)).toEqual(entry);
     const b = makeApp({});
-    b.app._applyServerCaseSettings({
-      syncCaseState: false,
-      caseSettings: { demo: { agentTeams: true, opusContext1m: false } },
-    });
+    b.app._applyServerCaseSettings({ ...server, syncCaseState: false });
     expect(b.store.size).toBe(0);
+  });
+
+  it('never applies a map to a read-only identity, even one the server handed over', () => {
+    const { app, store } = makeApp({ syncCaseState: true });
+    app._settingsReadOnly = () => true;
+    app._applyServerCaseSettings(server);
+    expect(store.size).toBe(0);
+  });
+
+  it('leaves a case alone while this device is still saving it', async () => {
+    let release!: () => void;
+    const hold = new Promise<void>((r) => (release = r));
+    const { app, store } = makeApp({ syncCaseState: true }, async () => {
+      await hold;
+      return { body: { success: true, data: {} } };
+    });
+    app.saveCaseSettings('demo', { agentTeams: false, opusContext1m: false });
+    app._applyServerCaseSettings({ syncCaseState: true, caseSettings: { demo: entry, other: entry } });
+    expect(JSON.parse(store.get('caseSettings_demo')!)).toEqual({ agentTeams: false, opusContext1m: false });
+    expect(JSON.parse(store.get('caseSettings_other')!)).toEqual(entry);
+    release();
+    await app._caseSyncChain;
+  });
+});
+
+describe('returning to the tab', () => {
+  const env = (data: Record<string, unknown>) => ({ body: { success: true, data } });
+
+  it('follows the selected case and the options while sync is on', async () => {
+    const { app, select, store } = makeApp({ syncCaseState: true }, () =>
+      env({ syncCaseState: true, lastUsedCase: 'beta', caseSettings: { beta: entry } })
+    );
+    await app._syncCaseStateFromServer();
+    expect(select.value).toBe('beta');
+    expect(JSON.parse(store.get('caseSettings_beta')!)).toEqual(entry);
+  });
+
+  it('stops following when another device turned sync off, and the cached switch follows the server', async () => {
+    const { app, select, store, settings } = makeApp({ syncCaseState: true }, () =>
+      env({ syncCaseState: false, lastUsedCase: 'beta', caseSettings: { beta: entry } })
+    );
+    await app._syncCaseStateFromServer();
+    expect(select.value).toBe('alpha');
+    expect(store.size).toBe(0);
+    expect(settings.syncCaseState).toBe(false);
+    expect(app._caseStateSyncOn()).toBe(false);
+  });
+
+  it('starts following when another device turned sync on', async () => {
+    const { app, select, settings } = makeApp({}, () => env({ syncCaseState: true, lastUsedCase: 'beta' }));
+    await app._syncCaseStateFromServer();
+    expect(settings.syncCaseState).toBe(true);
+    expect(select.value).toBe('beta');
+  });
+
+  it('does nothing for a read-only identity', async () => {
+    const { app, calls } = makeApp({ syncCaseState: true });
+    app._settingsReadOnly = () => true;
+    await app._syncCaseStateFromServer();
+    expect(calls).toEqual([]);
+  });
+
+  it('keeps what it has when the request fails', async () => {
+    const { app, select } = makeApp({ syncCaseState: true }, () => ({ status: 500, body: { error: 'x' } }));
+    await app._syncCaseStateFromServer();
+    expect(select.value).toBe('alpha');
+  });
+
+  it('discards an older refresh that answers after a newer one', async () => {
+    const releases: (() => void)[] = [];
+    const answers = [
+      env({ syncCaseState: true, lastUsedCase: 'beta' }), // the older request
+      env({ syncCaseState: true, lastUsedCase: 'alpha' }), // the newer request
+    ];
+    let i = 0;
+    const { app, select } = makeApp({ syncCaseState: true }, async () => {
+      const mine = answers[i++];
+      await new Promise<void>((r) => releases.push(r));
+      return mine;
+    });
+    const older = app._syncCaseStateFromServer();
+    await settle();
+    const newer = app._syncCaseStateFromServer();
+    await settle();
+    releases[1](); // the newer answers first
+    await newer;
+    releases[0](); // then the older one arrives late
+    await older;
+    expect(select.value).toBe('alpha');
   });
 });
