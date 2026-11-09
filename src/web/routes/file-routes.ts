@@ -1,9 +1,11 @@
 /**
  * @fileoverview File browser and streaming routes.
  * Provides directory listing, file content preview, raw file serving, tail
- * streaming, and the File Viewer edit-mode write path (edit=1 read +
+ * streaming, the File Viewer edit-mode write path (edit=1 read +
  * PUT /api/sessions/:id/file-content; policy in src/config/file-editing.ts,
- * design in docs/file-viewer-edit-plan.md).
+ * design in docs/file-viewer-edit-plan.md), and the Files panel's delete
+ * (DELETE /api/sessions/:id/files?path=: one regular file, the edit route's
+ * confinement and guards, symbolic links refused).
  */
 
 import { FastifyInstance, type FastifyReply } from 'fastify';
@@ -19,6 +21,7 @@ import type {
   FilesystemBrowseEntry,
   FilesystemBrowseRoot,
   FilesystemPreviewKind,
+  FileDeleteData,
   FileWriteData,
 } from '../../types.js';
 import { ApiErrorCode, createErrorResponse, getErrorMessage } from '../../types.js';
@@ -2000,45 +2003,100 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
     };
   });
 
-  // Delete a regular file from the current session workspace. The same
-  // confinement and sensitive-path checks used by previews apply here.
-  app.delete('/api/sessions/:id/files', async (req, reply) => {
+  // The Files panel's delete button: remove ONE regular file from the session's workspace (or from
+  // its outside worktree, for an absolute path inside it). A write surface like the edit route
+  // above, so it takes that route's confinement and guards whole (ownership, realpath + workspace boundary, sensitive and blocked trees, `.git`), and adds
+  // its own rule for links: a symbolic link is REFUSED, never followed. The confinement check
+  // returns the link's realpath, which is its TARGET, so an `unlink` of that path deletes the file
+  // the link points at and leaves the link dangling (#529's review: `AGENTS.md -> CLAUDE.md`
+  // deleted CLAUDE.md). The final component is therefore read with `lstat` on the path as the
+  // client named it, and only a path whose last part is a plain file goes on; `unlink` never
+  // follows a final symlink, so a link swapped in after that check is removed rather than its
+  // target, and the inode is compared again right before the unlink.
+  app.delete('/api/sessions/:id/files', async (req): Promise<ApiResponse<FileDeleteData>> => {
     const { id } = req.params as { id: string };
     const { path: filePath } = req.query as { path?: string };
     const session = findSessionOrFail(ctx, id, req);
+    // Ahead of any path check, as on the edit route: the validation below resolves against the
+    // LOCAL filesystem, so a same-named local directory would take the delete.
     if (session.remote) {
-      reply.code(400);
-      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Deleting is not supported for remote (SSH) sessions');
+      throwRouteError(400, ApiErrorCode.INVALID_INPUT, 'Deleting is not supported for remote (SSH) sessions');
     }
-    if (!filePath) {
-      reply.code(400);
-      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing path parameter');
+    // An adopted session has no workspace of ours: its folder is the neutral `/tmp`. The older
+    // file surfaces keep serving it as a standing exception (root CLAUDE.md, Adopted tmux
+    // sessions), which is not copied to a new surface, least of all one that deletes.
+    if (session.isAdopted) {
+      throwRouteError(400, ApiErrorCode.INVALID_INPUT, 'Deleting is not supported for adopted sessions');
     }
-    const validated = validateSessionFilePath(session.workingDir, filePath);
+    // A repeated `?path=` arrives as an array.
+    if (typeof filePath !== 'string' || !filePath) {
+      throwRouteError(400, ApiErrorCode.INVALID_INPUT, 'Missing path parameter');
+    }
+    // #516: the confinement check below runs realpathSync, which freezes the server on a mount
+    // that stopped answering. Probe the folders it will touch first, bounded.
+    const scope = await withGuardedOutsideWorktree({
+      workingDir: session.workingDir,
+      liveWorktree: session.liveWorktree,
+    });
+    const worktreeRoot = scope.liveWorktree?.outside && isAbsolute(filePath) ? scope.liveWorktree.path : null;
+    for (const folder of worktreeRoot ? [session.workingDir, worktreeRoot] : [session.workingDir]) {
+      if ((await probePathKind(folder, { pastCap: true })) === 'unknown') {
+        throwRouteError(
+          422,
+          ApiErrorCode.OPERATION_FAILED,
+          describeUnknownPath('Workspace', folder, { pastCap: true })
+        );
+      }
+    }
+    const validated = validateLocalSessionFilePath(scope, filePath);
     if (!validated) {
-      reply.code(404);
-      return createErrorResponse(ApiErrorCode.NOT_FOUND, 'File not found');
+      // Missing files, traversal and symlink escapes alike, as on every other file route.
+      throwRouteError(404, ApiErrorCode.NOT_FOUND, 'File not found');
     }
     const { resolvedPath, relativePath } = validated;
+    // The path as the client named it: `resolve` keeps an absolute (outside worktree) path as is.
+    const namedPath = resolve(session.workingDir, filePath);
     const guard = await loadAttachmentGuardConfig();
     if (
       isSensitivePath(resolvedPath) ||
+      isSensitivePath(namedPath) ||
       isBlockedAttachmentPath(resolvedPath, guard.blockedTrees) ||
-      isDeniedEditRelativePath(relativePath)
+      isBlockedAttachmentPath(namedPath, guard.blockedTrees)
     ) {
-      reply.code(403);
-      return createErrorResponse(ApiErrorCode.FORBIDDEN, 'Deleting this file is blocked');
+      throwRouteError(403, ApiErrorCode.FORBIDDEN, 'Deleting this file is blocked');
     }
-    const stat = await fs.lstat(resolvedPath).catch(() => undefined);
-    if (!stat) {
-      reply.code(404);
-      return createErrorResponse(ApiErrorCode.NOT_FOUND, 'File not found');
+    // Both spellings: a `.git` reached through a linked folder, and a linked `.git`.
+    if (isDeniedEditRelativePath(relativePath) || isDeniedEditRelativePath(relative(session.workingDir, namedPath))) {
+      throwRouteError(403, ApiErrorCode.FORBIDDEN, 'Files under .git cannot be deleted');
     }
-    if (!stat.isFile()) {
-      reply.code(400);
-      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Only regular files can be deleted');
+    const named = await fs.lstat(namedPath).catch(() => undefined);
+    if (!named) {
+      throwRouteError(404, ApiErrorCode.NOT_FOUND, 'File not found');
     }
-    await fs.unlink(resolvedPath);
+    if (named.isSymbolicLink()) {
+      throwRouteError(
+        400,
+        ApiErrorCode.INVALID_INPUT,
+        'Symbolic links are not deleted from the Files panel (deleting one here would remove the file it points to)'
+      );
+    }
+    if (!named.isFile()) {
+      throwRouteError(400, ApiErrorCode.INVALID_INPUT, 'Only regular files can be deleted');
+    }
+    // The same file the checks were made on: realpath of a path whose last part is no link names
+    // the same inode. A change in between (the file replaced) refuses rather than guesses.
+    const real = await fs.lstat(resolvedPath).catch(() => undefined);
+    if (!real || !real.isFile() || real.ino !== named.ino || real.dev !== named.dev) {
+      throwRouteError(409, ApiErrorCode.CONFLICT, 'The file changed while it was being deleted; reload and try again');
+    }
+    try {
+      await fs.unlink(resolvedPath);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT') throwRouteError(404, ApiErrorCode.NOT_FOUND, 'File not found');
+      // The errno text names the resolved path, so only its code goes back.
+      throwRouteError(500, ApiErrorCode.OPERATION_FAILED, `Failed to delete the file (${code ?? 'error'})`);
+    }
     return { success: true, data: { path: filePath } };
   });
 

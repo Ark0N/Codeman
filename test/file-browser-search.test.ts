@@ -30,6 +30,9 @@ interface FakeRow {
   dataset: Record<string, string>;
   addEventListener: (type: string, handler: ClickHandler) => void;
   click: () => void;
+  // The row's delete button is looked up per row; the fake rows carry none (file-delete-ui.test.ts
+  // drives it over a real DOM).
+  querySelector: (selector: string) => null;
 }
 
 interface FakeElement {
@@ -105,6 +108,7 @@ function fakeElement(initialClasses: string[] = []): FakeElement {
           click() {
             clickHandler?.();
           },
+          querySelector: () => null,
         });
       }
     },

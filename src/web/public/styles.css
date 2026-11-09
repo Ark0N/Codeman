@@ -12404,6 +12404,14 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
 .file-tree-delete:hover {
   color: #ef5350;
 }
+/* A touch screen has no hover, so the row's buttons stay visible there: otherwise the first tap
+   on a row opens the preview and the buttons never show. */
+@media (hover: none) {
+  .file-tree-download,
+  .file-tree-delete {
+    display: inline;
+  }
+}
 
 /* File tree indent levels */
 .file-tree-item[data-depth="0"] { padding-left: 0.5rem; }
