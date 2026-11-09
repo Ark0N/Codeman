@@ -33,7 +33,9 @@
 //! another, so no separate "remove" item and no helper left behind unasked.
 //!
 //! It lives in the app, so it ends with the app: Codeman's LaunchAgent keeps the server
-//! running after the app quits, but nothing keeps the Mac awake then.
+//! running after the app quits, but nothing keeps the Mac awake then. So while a mode is
+//! on, closing the main window hides the app instead of quitting it
+//! (`Mode::close_hides_app`): only Cmd+Q (or Quit from the Dock) ends it.
 //!
 //! The agents are asked natively, like the logo blink does (`agents`): WebKit stalls the
 //! event stream of a hidden page. A worker thread does the asking and the holding, and
@@ -122,6 +124,14 @@ impl Mode {
 
     pub fn from_menu_id(id: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|mode| mode.menu_id() == id)
+    }
+
+    /// Whether closing the main window hides the app instead of quitting it.
+    /// Keep-awake ends with the app, so while a mode is on, the red button (or
+    /// Cmd+W) must not end it: the app hides as Cmd+H does, a click on its Dock
+    /// icon brings it back, and Cmd+Q still quits.
+    pub fn close_hides_app(self) -> bool {
+        available() && self != Mode::Off
     }
 }
 
@@ -1219,6 +1229,16 @@ mod tests {
     fn the_grace_is_the_one_the_status_line_names() {
         assert_eq!(GRACE, Duration::from_secs(5 * 60));
         assert!(Status::Recently.text().contains("5 minutes"));
+    }
+
+    #[test]
+    fn closing_the_window_hides_the_app_only_while_a_mode_is_on() {
+        // Off quits as it always did; a mode that keeps the Mac awake must not
+        // end with the red button, since keep-awake ends with the app.
+        assert!(!Mode::Off.close_hides_app());
+        for mode in [Mode::WhileWorking, Mode::Always] {
+            assert_eq!(mode.close_hides_app(), available(), "{mode:?}");
+        }
     }
 
     #[test]
