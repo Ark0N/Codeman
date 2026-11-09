@@ -30,6 +30,8 @@ function validRemote(remote: SessionRemote): void {
   if (!remote.host || !remote.username || !posix.isAbsolute(remote.remotePath) || /[\0\r\n]/.test(remote.remotePath))
     throw new DiscordFileProblem('Remote session connection metadata is incomplete');
 }
+const PYTHON_REQUIRED = 'CODEMAN_DISCORD_PYTHON_REQUIRED';
+const PYTHON_CHECK = `command -v python3 >/dev/null 2>&1 || { printf '%s\\n' ${PYTHON_REQUIRED} >&2; exit 72; }`;
 const READ_SCRIPT = String.raw`
 import os,sys,json,stat
 o=json.loads(sys.argv[1]);root=o["root"];path=o["path"];limit=o["limit"]
@@ -59,7 +61,11 @@ finally:
 `;
 export function discordRemoteReadCommand(root: string, path: string, maxBytes = DISCORD_FILE_LIMIT): string {
   return withRemotePathBootstrap(
-    'python3 -c ' + shellescape(READ_SCRIPT) + ' ' + shellescape(JSON.stringify({ root, path, limit: maxBytes }))
+    PYTHON_CHECK +
+      '; python3 -c ' +
+      shellescape(READ_SCRIPT) +
+      ' ' +
+      shellescape(JSON.stringify({ root, path, limit: maxBytes }))
   );
 }
 export async function runDiscordRemoteRead(remote: SessionRemote, command: string): Promise<Buffer> {
@@ -72,6 +78,8 @@ export async function runDiscordRemoteRead(remote: SessionRemote, command: strin
         const chunks: Buffer[] = [];
         let bytes = 0,
           stderr = 0,
+          stderrTail = '',
+          pythonMissing = false,
           settled = false;
         const finish = (err?: Error) => {
           if (settled) return;
@@ -91,11 +99,21 @@ export async function runDiscordRemoteRead(remote: SessionRemote, command: strin
         });
         child.stderr.on('data', (data: Buffer) => {
           stderr += data.length;
+          stderrTail = (stderrTail + data.toString('utf8')).slice(-256);
+          pythonMissing ||= stderrTail.includes(PYTHON_REQUIRED);
           if (stderr > 65536) finish(new DiscordFileProblem('Remote file transfer failed'));
         });
         child.on('error', () => finish(new DiscordFileProblem('Remote file transfer failed')));
         child.on('close', (code) =>
-          finish(code === 0 ? undefined : new DiscordFileProblem('Remote file could not be read safely'))
+          finish(
+            code === 0
+              ? undefined
+              : new DiscordFileProblem(
+                  pythonMissing
+                    ? 'Remote attachment access requires python3. Install Python 3 on that host and retry.'
+                    : 'Remote file could not be read safely'
+                )
+          )
         );
       })
   );
@@ -189,6 +207,7 @@ export async function writeDiscordRemoteAttachment(
       .slice(0, 80) || 'file';
   const path = posix.join(dir, randomUUID() + '-' + safe);
   try {
+    if (!current()) throw new DiscordFileProblem('Attachment scope changed');
     const base = {
       dir,
       timeoutMs: 30000,
