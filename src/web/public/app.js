@@ -1232,6 +1232,11 @@ class CodemanApp {
     // and then applies the sidebar variant on top — do not call both.
     this.applySessionListLayout();
     this.applyTabOrientation();
+    // The home screens' breakpoint listeners, once, before any home surface is
+    // shown: a fold or unfold must swap the surface whichever width the page
+    // loaded at (#702). Both self-gate on a home screen being up.
+    this._wireMobileOverviewBreakpoint?.();
+    this._wireHomeSessionsBreakpoint?.();
     this.initTabRailResize?.();
     this.applyMonitorVisibility();
     this.applyLineageLineSettings?.();
