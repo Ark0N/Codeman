@@ -126,20 +126,31 @@ Object.assign(CodemanApp.prototype, {
     this._stopHomeSessionsClock();
   },
 
-  /** Re-render only when showing (called from the tab renderer's tail). */
+  /**
+   * Re-render only when showing (called from the tab renderer's tail). Asked
+   * again when the debounce fires: `renderHomeSessions()` unhides the column,
+   * so a render queued just before a fold to phone width hid it (#702) would
+   * otherwise bring it back behind the phone overview.
+   */
   _refreshHomeSessionsIfVisible() {
     if (!this.isHomeSessionsVisible()) return;
-    this._debouncedCall('homeSessions', () => this.renderHomeSessions(), 150);
+    this._debouncedCall(
+      'homeSessions',
+      () => {
+        if (this.isHomeSessionsVisible() && this.shouldShowHomeSessions()) this.renderHomeSessions();
+      },
+      150
+    );
   },
 
   /**
-   * One delegated click listener for every row, plus a width listener so
-   * resizing the window while on the home screen adds or drops the column
-   * instead of leaving it overlapping the content it was sized to clear.
+   * One delegated click listener for every row. The width listener lives in
+   * `_wireHomeSessionsBreakpoint()`, installed at startup.
    */
   _wireHomeSessions(el) {
     if (this._homeSessionsWired) return;
     this._homeSessionsWired = true;
+    this._wireHomeSessionsBreakpoint();
 
     el.addEventListener('click', (event) => {
       const target = event.target?.closest?.('[data-hs-action]');
@@ -150,20 +161,29 @@ Object.assign(CodemanApp.prototype, {
         void this.openWebview?.(target.dataset.hsWebview);
       }
     });
+  },
 
-    if (window.matchMedia) {
-      const mq = window.matchMedia(`(min-width: ${HOME_SESSIONS_MIN_WIDTH}px)`);
-      const onChange = () => {
-        // Only relevant while the welcome screen is up; entering a session
-        // re-decides through hideWelcome()/showWelcome() anyway.
-        if (this.activeSessionId) return;
-        const overlay = document.getElementById('welcomeOverlay');
-        if (!overlay || !overlay.classList.contains('visible')) return;
-        this.showHomeSessions();
-      };
-      if (mq.addEventListener) mq.addEventListener('change', onChange);
-      else if (mq.addListener) mq.addListener(onChange);
-    }
+  /**
+   * Add or drop the column when the window crosses its width gate, so it never
+   * overlaps the content it was sized to clear. Installed ONCE at startup
+   * (`init()` in app.js) like the phone overview's breakpoint listener, so a
+   * page that loads on a phone and is unfolded to desktop width gets it too
+   * (#702). Idempotent.
+   */
+  _wireHomeSessionsBreakpoint() {
+    if (this._homeSessionsBreakpointWired || !window.matchMedia) return;
+    this._homeSessionsBreakpointWired = true;
+    const mq = window.matchMedia(`(min-width: ${HOME_SESSIONS_MIN_WIDTH}px)`);
+    const onChange = () => {
+      // Only relevant while the welcome screen is up; entering a session
+      // re-decides through hideWelcome()/showWelcome() anyway.
+      if (this.activeSessionId) return;
+      const overlay = document.getElementById('welcomeOverlay');
+      if (!overlay || !overlay.classList.contains('visible')) return;
+      this.showHomeSessions();
+    };
+    if (mq.addEventListener) mq.addEventListener('change', onChange);
+    else if (mq.addListener) mq.addListener(onChange);
   },
 
   // ═══════════════════════════════════════════════════════════════
