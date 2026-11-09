@@ -1415,11 +1415,13 @@ const VoiceInput = {
 
   /** Cleanup on SSE reconnect or page unload */
   cleanup() {
+    // Hide the Send button first: stop(true) below may insert the words it
+    // salvaged and show the button again for them.
+    this._hideVoiceSendBtn();
     if (this.isRecording) {
       this.stop(true);
       try { this.recognition?.abort(); } catch (_e) { /* already ended */ }
     }
-    this._hideVoiceSendBtn();
     DeepgramProvider._cleanup();
     ClaudeVoiceProvider._cleanup();
     this.recognition = null;

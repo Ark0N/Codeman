@@ -1842,7 +1842,8 @@ same speech-to-text service the CLI's own `/voice` mode uses. Gated on the synce
   little-endian PCM, 16 kHz mono (<= 64 KB per frame), plus JSON control frames
   `{"t":"finalize"}` (ask for the final transcript) and `{"t":"stop"}`. Server
   sends `{"t":"ready"}`, `{"t":"transcript","text","final"}` (each frame is the
-  WHOLE running transcript, not a delta), `{"t":"error","message"}` and
+  current utterance so far, not a delta, and a `final: true` frame ends that
+  utterance), `{"t":"error","message"}` and
   `{"t":"closed"}`. Close codes: `4003` disallowed Host/Origin, `4004`
   unavailable (reason in the close reason), `4008` too many concurrent streams.
   Streams are capped in count and length (`src/config/voice.ts`).
