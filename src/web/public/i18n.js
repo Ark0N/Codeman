@@ -1688,6 +1688,11 @@
       // The file name is user text: it passes through untranslated.
       [/^Downloaded (.+) to Downloads$/, (_m, name) => `已将 ${name} 下载到“下载”文件夹`],
       [/^Download of (.+) failed$/, (_m, name) => `下载 ${name} 失败`],
+      // The Files panel's delete button (panels-ui.js): the path is user text, and the server's
+      // reason passes through untranslated.
+      [/^Delete the file ([\s\S]+)\? This cannot be undone\.$/, (_m, path) => `删除文件 ${path}？此操作无法撤销。`],
+      [/^File deleted: ([\s\S]+)$/, (_m, path) => `已删除文件：${path}`],
+      [/^Delete failed: ([\s\S]+)$/, (_m, why) => `删除失败：${why}`],
       // Group names are user text: they pass through untranslated.
       [/^Move to "(.+)"$/, (_m, group) => `移到“${group}”`],
       // Session names are user text too.

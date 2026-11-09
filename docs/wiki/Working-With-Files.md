@@ -19,6 +19,13 @@ not finish shows **Not fully scanned** rather than looking empty. A folder that 
 such as a network mount that went away, is skipped rather than waited on and is marked the same way,
 so a search can miss what is inside it. The panel's Refresh button tries it again.
 
+Each file row has a download arrow and a × that deletes the file after you confirm. Both show
+when you point at the row, and always on a touch screen. Delete removes one file at a time,
+never a folder, and refuses a symbolic link (deleting one from here would remove the file it
+points to), anything under `.git`, and the sensitive files the viewer will not serve. It is not
+offered for remote (SSH) sessions or for tmux sessions opened from outside Codeman. Deleting
+from search results takes the row out of the results.
+
 It renders what it can:
 
 | Kind                     | Behaviour                                                                 |

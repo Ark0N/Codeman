@@ -3777,6 +3777,7 @@ Object.assign(CodemanApp.prototype, {
     }
 
     const html = [];
+    const canDelete = this._fileBrowserCanDelete(owner);
 
     const renderNode = (node, depth) => {
       const isDir = node.type === 'directory';
@@ -3799,6 +3800,13 @@ Object.assign(CodemanApp.prototype, {
       const downloadBtn = !isDir
         ? `<a class="file-tree-download" href="${escapeHtml(CodemanBase.url(`/api/sessions/${encodeURIComponent(owner)}/file-raw?path=${encodeURIComponent(node.path)}&download=true`))}" title="Download" onclick="event.stopPropagation()">&#x2B07;</a>`
         : '';
+      // No inline handler: the path is a workspace file name, which an agent or a cloned repo
+      // chose, and `encodeURIComponent` leaves `'` alone, so a quoted string in an onclick ran
+      // whatever a file name like `x'-alert(1)-'.txt` held (#529's review). The click is bound
+      // below from the row's already-escaped `data-path`.
+      const deleteBtn = !isDir && canDelete
+        ? `<button type="button" class="file-tree-delete" title="Delete" aria-label="Delete ${escapeHtml(node.name)}">&times;</button>`
+        : '';
 
       html.push(`
         <div class="file-tree-item" data-path="${escapeHtml(node.path)}" data-type="${escapeHtml(node.type)}" data-depth="${depth}">
@@ -3807,6 +3815,7 @@ Object.assign(CodemanApp.prototype, {
           <span class="${nameClass}">${escapeHtml(node.name)}</span>
           ${sizeStr}
           ${downloadBtn}
+          ${deleteBtn}
         </div>
       `);
 
@@ -3842,7 +3851,19 @@ Object.assign(CodemanApp.prototype, {
           this.openFilePreview(path, owner);
         }
       });
+      item.querySelector('.file-tree-delete')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.deleteFileFromBrowser(owner, item.dataset.path);
+      });
     });
+  },
+
+  // The delete button is offered only where the route can act: never for a remote (SSH) session,
+  // whose files live on another host, nor for an adopted one, whose folder is not a workspace of
+  // ours (`session.remote` is undefined on an adopted session, so both are tested).
+  _fileBrowserCanDelete(sessionId) {
+    const session = this.sessions?.get?.(sessionId);
+    return !session?.remote && !session?.adopt;
   },
 
   toggleFileBrowserFolder(path) {
@@ -3970,6 +3991,7 @@ Object.assign(CodemanApp.prototype, {
       treeEl.innerHTML = `<div class="file-browser-empty">${escapeHtml('No matches')}</div>`;
     } else {
       const ownerPath = encodeURIComponent(ownerSessionId);
+      const canDelete = this._fileBrowserCanDelete(ownerSessionId);
       treeEl.innerHTML = matches
         .map(match => {
           const isDir = match.type === 'directory';
@@ -3981,6 +4003,10 @@ Object.assign(CodemanApp.prototype, {
           const downloadBtn = !isDir
             ? `<a class="file-tree-download" href="${escapeHtml(CodemanBase.url(`/api/sessions/${ownerPath}/file-raw?path=${encodeURIComponent(match.path)}&download=true`))}" title="Download" onclick="event.stopPropagation()">&#x2B07;</a>`
             : '';
+          // Bound below from `data-path`, never an inline handler (see renderFileBrowserTree).
+          const deleteBtn = !isDir && canDelete
+            ? `<button type="button" class="file-tree-delete" title="Delete" aria-label="Delete ${escapeHtml(match.name)}">&times;</button>`
+            : '';
           return `
             <div class="file-tree-item" data-path="${escapeHtml(match.path)}" data-type="${escapeHtml(match.type)}" data-owner="${escapeHtml(ownerSessionId)}">
               <span class="file-tree-expand"></span>
@@ -3988,6 +4014,7 @@ Object.assign(CodemanApp.prototype, {
               <span class="${nameClass}">${escapeHtml(match.name)}</span>
               ${sizeStr}
               ${downloadBtn}
+              ${deleteBtn}
             </div>
           `;
         })
@@ -4003,6 +4030,10 @@ Object.assign(CodemanApp.prototype, {
           this.openFilePreview(path, ownerSessionId);
         }
       });
+      item.querySelector('.file-tree-delete')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.deleteFileFromBrowser(ownerSessionId, item.dataset.path);
+      });
     });
 
     const statusEl = this.$('fileBrowserStatus');
@@ -4010,6 +4041,33 @@ Object.assign(CodemanApp.prototype, {
       const count = data.matchCount === undefined ? matches.length : data.matchCount;
       statusEl.textContent = `${count} ${count === 1 ? 'match' : 'matches'}${data.truncated ? ' (truncated)' : ''}`;
     }
+  },
+
+  // The Files panel's delete button (DELETE .../files?path=): asks first, in the same native
+  // dialog the panel's other destructive actions use, then reloads the listing. With a search in
+  // the box the reload re-runs it, so the deleted row leaves the results too; a plain reload
+  // would refresh the tree behind them and leave the row on screen.
+  async deleteFileFromBrowser(sessionId, filePath) {
+    if (!sessionId || !filePath) return;
+    if (!confirm(`Delete the file ${filePath}? This cannot be undone.`)) return;
+    let result = null;
+    try {
+      const response = await fetch(
+        `/api/sessions/${encodeURIComponent(sessionId)}/files?path=${encodeURIComponent(filePath)}`,
+        { method: 'DELETE' },
+      );
+      result = await response.json().catch(() => null);
+      if (!response.ok || result?.success !== true) {
+        throw new Error(result?.error || `HTTP ${response.status}`);
+      }
+    } catch (error) {
+      console.error('File browser delete failed:', error);
+      this.showToast(`Delete failed: ${error?.message || 'network error'}`, 'error');
+      return;
+    }
+    this.showToast(`File deleted: ${filePath}`, 'success');
+    const state = this._ensureFileBrowserState();
+    if (state.ownerSessionId === sessionId) await this._reloadFileBrowserKeepingQuery();
   },
 
   _findFileBrowserDirectory(nodes, targetPath, ancestors = []) {

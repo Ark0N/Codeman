@@ -901,6 +901,25 @@ already serves non-media text inert (`text/plain`, `nosniff`), so this just
 keeps the server from storing what it would serve or an agent could run, and
 html and svg are the ones deliberately kept out.
 
+## Deleting a file (`DELETE /api/v1/sessions/:id/files?path=`)
+
+The Files panel's delete button. `path` is what the listing gave the row: relative to the
+session's `workingDir`, or absolute inside the session's outside worktree (see
+[Live worktree](#live-worktree-liveworktree-outsideworktree)). It removes that one regular file
+and answers `{ path }` as sent. It never deletes a folder and never follows a symbolic link:
+the file routes resolve a link to its target, so deleting through one would remove the file it
+points to.
+
+| Status | When |
+| ------ | ---- |
+| `200`  | The file is gone. |
+| `400`  | A remote (SSH) session or an adopted session (both refused before any path is looked at), a missing or repeated `path`, a symbolic link, or anything that is not a regular file. |
+| `403`  | A sensitive file (`.env`, credentials and the like), a blocked attachment tree, or anything under `.git`. |
+| `404`  | No such file, a path outside the workspace (`../`, an absolute path elsewhere, a link leading out), a dangling link, or a session the caller does not own in multi-user mode. |
+| `409`  | The file was replaced between the checks and the delete; reload the listing. |
+| `422`  | The workspace's mount did not answer. |
+
+## New folder in the path picker
 ## New folder in the path picker
 
 `POST /api/filesystem/mkdir` with `{ path, name, sessionId?, showHidden? }` makes one
@@ -1021,8 +1040,8 @@ of `liveWorktree` and `outsideWorktree`:
 Like `liveWorktree`, it is never restored after a restart.
 
 Such a worktree is a second root for the session's file routes. `file-content` (read and edit),
-`file-raw`, `file-preview`, `file-thumbnail`, `GET /api/v1/download` and
-`POST /api/v1/sessions/:id/html-view` accept an ABSOLUTE path inside it, while a relative path
+`file-raw`, `file-preview`, `file-thumbnail`, `GET /api/v1/download`,
+`POST /api/v1/sessions/:id/html-view` and `DELETE /api/v1/sessions/:id/files` accept an ABSOLUTE path inside it, while a relative path
 still resolves against `workingDir` only. A file there that the sensitive-path blocklist names
 (`.env`, `.aws/credentials`, `users.json` and the like) is refused on every one of those routes.
 Codeman reports the worktree only when the session's own repository lists it, and only when `workingDir` is the top of that repository or of a linked worktree, so a session started in a subfolder of its repository reports none. It never reports:
