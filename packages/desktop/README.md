@@ -41,6 +41,7 @@ cannot do.
 | **Downloads** | Codeman's Download links, and downloads Codeman opens in a new window, save the file to `~/Downloads` whatever its type, and a toast in Codeman names the file. Files the web view cannot display are saved the same way. |
 | **A page that stops** | When the web content process of a window ends (a WebKit crash, or macOS taking the process back under memory pressure), the window loads its page again instead of staying blank. A second time within 30 seconds, the main window goes back to the connect screen and a pop-out closes, so a page that cannot stay up never becomes a reload loop. |
 | **Apple logo** | On a MacBook Pro with a PROLED XDR display, the lit Apple logo on the lid says what the agents are doing, with a blink style of your own for each state: **View > Blink Apple Logo > While Working**, **Waiting for You (Yellow)** and **Needs Permission (Red)**. Off, Calm, Slow, Wink, Heartbeat, Fast, or Alarm, three sharp flashes for a state that needs you. All three are off until you choose. When several states hold, the most urgent one with a style shows: red, then yellow, then work. A style chosen in an earlier version stays as the one for work, and yellow and red start as Wink and Alarm. The menu only exists on a Mac with that logo. No password is needed. Shell tabs do not count. The app asks the server every two seconds, and a change has to hold for three seconds before the logo follows it, so an agent between two turns does not flicker it. It keeps working while the window is hidden, and with any Codeman server. A logo you switched off yourself stays off, and if the setting changes while a blink runs, the blink ends and leaves it as it found it. While the app is closed nothing blinks, and macOS keeps the logo dark while the display sleeps or the lid is closed, so the blink pauses then and writes nothing. |
+| **Keep awake** | **Codeman > Keep This Mac Awake** keeps the Mac from going to sleep while Codeman's agents work on it: **While Agents Work** (an agent at work, and for 5 minutes after the last one stopped, so the gap between two turns or a reply from your phone does not let it drop off), or **Always While Codeman Is Open**. Off until you choose. Only for a Codeman on this Mac (`127.0.0.1`, `localhost`, or one of this Mac's own addresses); for a server on another machine the menu says there is nothing to keep awake here. The display still sleeps. No password is needed for this part: the app holds a power assertion of its own, which macOS shows in Activity Monitor and in `pmset -g assertions` as *Codeman keeps this Mac awake while its agents work*, and which ends with the app, a crash or a Force Quit included. On a MacBook, **Only on Power Adapter** (on by default) pauses it on battery, and **Also With the Lid Closed…** keeps a closed MacBook awake as well: nothing an app holds can do that, so the first time it asks for your administrator password and installs a small helper (see Decisions). The lid is never kept awake on battery, whatever the settings, and while the lid is covered *Sleep* in the Apple menu does nothing. **Remove the Lid Helper…** takes it out again. A line at the bottom of the menu says what it does right now. It lives in the app, so it ends when the app quits: Codeman keeps running as a LaunchAgent, but nothing keeps the Mac awake then. |
 | **Window** | Size, position and full-screen state are remembered. A saved window that hangs off the screen it opens on (it was last on a larger display that is gone, say) is pulled back on and shrunk to fit; one whose title bar is on no screen at all opens at the default size instead. Clicking the Dock icon brings back a minimized window. |
 
 ## Build (on a Mac)
@@ -146,6 +147,30 @@ classes of wry's own delegates, so wry stays an unmodified crates.io dependency.
   the main window may talk to it.
 - `codeman web -d` gets the port and base path as separate arguments, never as
   shell text.
+
+**Keeping a closed MacBook awake takes a root helper, installed on request.**
+macOS sleeps on lid close whatever an app asks: `caffeinate` and every power
+assertion stop idle sleep only. `pmset -a disablesleep 1` keeps a closed MacBook
+awake, but it is a machine-wide root setting with no owner process, so nothing
+would undo it after a crash. So *Also With the Lid Closed…* installs a
+LaunchDaemon (`com.getcodeman.keepawake`) that runs `macos/keep-awake-lid.sh`
+every 20 seconds. The script sets `disablesleep` only while a request file next
+to `desktop.json` is younger than 2 minutes, is not a symlink, names a live
+process of the file's owner, and `pmset -g batt` says the Mac runs on its power
+adapter. The app writes its own pid there and rewrites it every 30 seconds while
+it wants the lid covered, so an app that quits or crashes is a dead pid and the
+lid is released at the next run. The script undoes only a `disablesleep` it set
+itself (a marker file), never an administrator's own. The app writes the script
+and the plist itself, as root, straight into `/Library/Application
+Support/Codeman` and `/Library/LaunchDaemons` from the copies built into it
+(base64 in the root command, so nothing user-writable is copied and no file
+content needs quoting), behind macOS's administrator prompt (`do shell script
+... with administrator privileges` through `osascript`, so the event loop keeps
+running while the prompt is open). The idle-sleep part needs none of this: an
+`NSProcessInfo` activity with `IdleSystemSleepDisabled`, released by the kernel
+with the process. While the app watches for work but holds nothing, a second
+kind of activity keeps App Nap from slowing its look at the server, and still
+allows sleep.
 
 **The app runs the installer itself; Terminal is the fallback.** `install.sh
 --no-admin` puts Node.js and tmux in the home folder, so a This Mac install needs
@@ -319,6 +344,14 @@ crosses, so the login is never on a command line.
   dark phase the logo stays dark until the app next starts. `api/sessions` does
   not say which turns are Codeman's own, so with prompt-cache keep-warm on, a
   keep-alive turn blinks too.
+- **Keeping the lid awake has not been seen on a real closed MacBook yet.**
+  The helper ran every case against a stand-in `pmset`, the install and removal
+  commands ran in a temporary folder with stand-ins for `chown` and `launchctl`,
+  and the power assertion was measured on a Mac mini (it appears with its name
+  while agents work, and goes with a clean end and with a SIGKILL). Whether a
+  closed MacBook goes to sleep at once when the helper lets go (the app quit, an
+  agent finished, the adapter came out) has not been watched. The helper is
+  machine-wide: on a Mac where two users install it, the last install wins.
 - **Self-signed HTTPS is refused.** A server started with `codeman web --https`
   uses a self-signed certificate, and WKWebView rejects it (wry has no trust
   override). Use `http://127.0.0.1:3000` for a server on this Mac. For another

@@ -4,6 +4,7 @@ use muda::accelerator::{Accelerator, Code, Modifiers};
 use muda::{AboutMetadata, CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 
 use crate::config::Config;
+use crate::keep_awake::{self, HelperState, Mode};
 use crate::logo::{self, BlinkStyle, Signal};
 use crate::{APP_NAME, VERSION};
 
@@ -29,6 +30,94 @@ pub struct AppMenu {
     /// One item per state and style. Empty on a Mac without a lit logo, which has no
     /// such menu.
     pub logo_styles: Vec<(Signal, BlinkStyle, CheckMenuItem)>,
+    /// None where the app cannot keep the Mac awake (a build for another OS).
+    pub keep_awake: Option<KeepAwakeMenu>,
+}
+
+/// App menu > Keep This Mac Awake.
+pub struct KeepAwakeMenu {
+    pub modes: Vec<(Mode, CheckMenuItem)>,
+    /// Only on a Mac with a lid: a desktop Mac always runs on mains and cannot close.
+    pub ac_only: Option<CheckMenuItem>,
+    pub lid: Option<CheckMenuItem>,
+    pub remove_helper: Option<MenuItem>,
+    /// What it does right now (keep_awake::status_line). Not clickable.
+    pub status: MenuItem,
+}
+
+impl KeepAwakeMenu {
+    /// The lid items as the helper now is. The lid item ends in an ellipsis while
+    /// choosing it asks for the administrator password first.
+    pub fn show_helper(&self, state: HelperState, lid_on: bool) {
+        if let Some(item) = &self.lid {
+            item.set_text(lid_label(state));
+            item.set_checked(lid_on && state == HelperState::Installed);
+        }
+        if let Some(item) = &self.remove_helper {
+            item.set_enabled(state != HelperState::Missing);
+        }
+    }
+}
+
+fn lid_label(state: HelperState) -> &'static str {
+    match state {
+        HelperState::Installed => "Also With the Lid Closed",
+        _ => "Also With the Lid Closed\u{2026}",
+    }
+}
+
+fn build_keep_awake(config: &Config) -> muda::Result<(Submenu, KeepAwakeMenu)> {
+    let settings = config.keep_awake;
+    let submenu = Submenu::new("Keep This Mac Awake", true);
+    let mut modes = Vec::new();
+    for mode in Mode::ALL {
+        let item = CheckMenuItem::with_id(mode.menu_id(), mode.label(), true, settings.mode == mode, None);
+        submenu.append(&item)?;
+        modes.push((mode, item));
+    }
+    let (mut ac_only, mut lid, mut remove_helper) = (None, None, None);
+    if keep_awake::has_lid() {
+        let state =
+            keep_awake::request_path().map_or(HelperState::Missing, |request| keep_awake::helper_state(&request));
+        let ac = CheckMenuItem::with_id(
+            keep_awake::AC_ONLY_ID,
+            "Only on Power Adapter",
+            true,
+            settings.ac_only,
+            None,
+        );
+        let lid_item = CheckMenuItem::with_id(
+            keep_awake::LID_ID,
+            lid_label(state),
+            true,
+            settings.lid && state == HelperState::Installed,
+            None,
+        );
+        let remove = MenuItem::with_id(
+            keep_awake::REMOVE_HELPER_ID,
+            "Remove the Lid Helper\u{2026}",
+            state != HelperState::Missing,
+            None,
+        );
+        submenu.append_items(&[&PredefinedMenuItem::separator(), &ac, &lid_item, &remove])?;
+        (ac_only, lid, remove_helper) = (Some(ac), Some(lid_item), Some(remove));
+    }
+    let initial = match settings.mode {
+        Mode::Off => keep_awake::OFF_TEXT,
+        _ => keep_awake::NO_SERVER_TEXT,
+    };
+    let status = MenuItem::new(initial, false, None);
+    submenu.append_items(&[&PredefinedMenuItem::separator(), &status])?;
+    Ok((
+        submenu,
+        KeepAwakeMenu {
+            modes,
+            ac_only,
+            lid,
+            remove_helper,
+            status,
+        },
+    ))
 }
 
 pub fn build_menu(config: &Config) -> muda::Result<AppMenu> {
@@ -67,6 +156,15 @@ pub fn build_menu(config: &Config) -> muda::Result<AppMenu> {
             &PredefinedMenuItem::quit(None),
         ],
     )?;
+    // Right under "Add a Coding Agent to This Mac…".
+    let keep_awake = match keep_awake::available() {
+        true => {
+            let (submenu, items) = build_keep_awake(config)?;
+            app_menu.insert(&submenu, 4)?;
+            Some(items)
+        }
+        false => None,
+    };
     // Without these items Cmd+C / Cmd+V do nothing inside a WKWebView.
     let edit = Submenu::with_items(
         "Edit",
@@ -157,5 +255,6 @@ pub fn build_menu(config: &Config) -> muda::Result<AppMenu> {
         help_menu,
         start_fullscreen,
         logo_styles,
+        keep_awake,
     })
 }

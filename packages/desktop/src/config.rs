@@ -3,6 +3,7 @@
 //! (`~/Library/Application Support/Codeman/desktop.json` on macOS). Passwords
 //! never go here; they live in the Keychain (see `credentials`).
 
+use crate::keep_awake;
 use crate::logo::BlinkStyles;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -49,6 +50,10 @@ pub struct Config {
     /// reads as off: a bad style must not make the whole file unreadable.
     #[serde(deserialize_with = "lenient_blink")]
     pub logo_blink: BlinkStyles,
+    /// Keep This Mac Awake (keep_awake.rs): when, only on the power adapter, and
+    /// with the lid closed too. Read field by field, like `logo_blink`.
+    #[serde(deserialize_with = "lenient_keep_awake")]
+    pub keep_awake: keep_awake::Settings,
     /// Anything that is not a whole frame reads as None: a bad frame must not
     /// make the whole file unreadable, which would cost the server list.
     #[serde(deserialize_with = "lenient_window")]
@@ -64,6 +69,10 @@ fn lenient_blink<'de, D: serde::Deserializer<'de>>(d: D) -> Result<BlinkStyles, 
     Ok(BlinkStyles::read(&serde_json::Value::deserialize(d)?))
 }
 
+fn lenient_keep_awake<'de, D: serde::Deserializer<'de>>(d: D) -> Result<keep_awake::Settings, D::Error> {
+    Ok(keep_awake::Settings::read(&serde_json::Value::deserialize(d)?))
+}
+
 impl Default for Config {
     fn default() -> Self {
         Config {
@@ -71,6 +80,7 @@ impl Default for Config {
             auto_connect: true,
             start_fullscreen: false,
             logo_blink: BlinkStyles::default(),
+            keep_awake: keep_awake::Settings::default(),
             window: None,
         }
     }
@@ -427,6 +437,33 @@ mod tests {
             let c: Config = serde_json::from_str(bad).unwrap();
             assert_eq!(c.logo_blink, BlinkStyles::default(), "{bad}");
         }
+    }
+
+    #[test]
+    fn keep_awake_round_trips_and_a_bad_value_never_costs_the_file() {
+        use crate::keep_awake::{Mode, Settings};
+        let mut c = Config::default();
+        assert_eq!(c.keep_awake, Settings::default());
+        c.keep_awake.mode = Mode::WhileWorking;
+        c.keep_awake.lid = true;
+        let text = serde_json::to_string(&c).unwrap();
+        assert!(
+            text.contains(r#""keepAwake":{"mode":"whileWorking","acOnly":true,"lid":true}"#),
+            "{text}"
+        );
+        assert_eq!(serde_json::from_str::<Config>(&text).unwrap().keep_awake, c.keep_awake);
+        for bad in [
+            r#"{"keepAwake":3}"#,
+            r#"{"keepAwake":null}"#,
+            r#"{"keepAwake":"always"}"#,
+        ] {
+            let c: Config = serde_json::from_str(bad).unwrap();
+            assert_eq!(c.keep_awake, Settings::default(), "{bad}");
+        }
+        // A file from before the setting: every other field still reads.
+        let c: Config = serde_json::from_str(r#"{"startFullscreen":true}"#).unwrap();
+        assert!(c.start_fullscreen);
+        assert_eq!(c.keep_awake, Settings::default());
     }
 
     #[test]

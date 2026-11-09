@@ -27,6 +27,7 @@ mod assets;
 mod config;
 mod credentials;
 mod gui_install;
+mod keep_awake;
 mod local_server;
 mod login;
 mod logo;
@@ -182,6 +183,18 @@ enum UserEvent {
     /// install opened in Terminal, the install command copied): the message
     /// goes to the page if it is still the one choosing a server.
     ToConnectPage(serde_json::Value),
+    /// The keep-awake worker's status line, for the value numbered `generation`
+    /// (keep_awake::KeepAwake::is_current).
+    KeepAwakeStatus {
+        generation: u64,
+        text: String,
+    },
+    /// The administrator prompt for the lid helper was answered, and its command
+    /// ran (keep_awake::install_helper, keep_awake::remove_helper).
+    LidHelperDone {
+        install: bool,
+        outcome: keep_awake::AdminOutcome,
+    },
 }
 
 struct ProbeDone {
@@ -318,6 +331,10 @@ struct App {
     fullscreen_retry: Option<(Instant, u8)>,
     /// The child that watches the connected server and blinks the logo.
     logo_watch: logo::Watcher,
+    /// The worker that keeps this Mac awake while its agents work.
+    keep_awake: keep_awake::KeepAwake,
+    /// An administrator prompt for the lid helper is open.
+    lid_helper_busy: bool,
 }
 
 fn main() {
@@ -370,6 +387,7 @@ fn main() {
     let mut windows = HashMap::new();
     windows.insert(main_id, AppWindow::new(webview, window, Kind::Main));
 
+    let keep_awake_proxy = proxy.clone();
     let mut app = App {
         proxy,
         config,
@@ -397,6 +415,10 @@ fn main() {
         add_agent_on_load: false,
         fullscreen_retry: wants_fullscreen.then(|| (Instant::now() + FULLSCREEN_FIRST_CHECK, 0)),
         logo_watch: logo::Watcher::default(),
+        keep_awake: keep_awake::KeepAwake::new(move |generation, text| {
+            let _ = keep_awake_proxy.send_event(UserEvent::KeepAwakeStatus { generation, text });
+        }),
+        lid_helper_busy: false,
     };
 
     event_loop.run(move |event, target, control_flow| app.handle(event, target, control_flow));
@@ -730,6 +752,7 @@ impl App {
             } => self.show_main_window(),
             Event::MainEventsCleared => self.on_events_cleared(control_flow),
             Event::LoopDestroyed => {
+                self.keep_awake.shutdown();
                 self.record_main_frame();
                 self.save_config();
             }
@@ -796,6 +819,7 @@ impl App {
                 if id == self.main_id {
                     // Closing the main window quits; the server and its
                     // sessions keep running, so nothing is lost.
+                    self.keep_awake.shutdown();
                     self.record_main_frame();
                     self.save_config();
                     *control_flow = ControlFlow::Exit;
@@ -875,6 +899,7 @@ impl App {
                         *self.phase.borrow_mut() = next;
                     }
                     self.sync_logo_watch();
+                    self.sync_keep_awake();
                 }
                 if let Some(w) = self.windows.get_mut(&window) {
                     w.committed = Url::parse(&url).ok();
@@ -937,6 +962,14 @@ impl App {
             }
             UserEvent::AuthRejected => self.recheck_login(),
             UserEvent::ContentProcessGone { window } => self.on_content_process_gone(window),
+            UserEvent::KeepAwakeStatus { generation, text } => {
+                if self.keep_awake.is_current(generation) {
+                    if let Some(items) = &self.menu.keep_awake {
+                        items.status.set_text(&text);
+                    }
+                }
+            }
+            UserEvent::LidHelperDone { install, outcome } => self.on_lid_helper_done(install, outcome),
         }
     }
 
@@ -1061,12 +1094,142 @@ impl App {
         }
     }
 
+    /// Keep-awake watches the open server while a mode is chosen. Whether that
+    /// server is this Mac is the worker's to find out.
+    fn sync_keep_awake(&mut self) {
+        let settings = self.config.keep_awake;
+        let server = self.phase.borrow().loaded().cloned();
+        let watch = server
+            .filter(|_| settings.mode != keep_awake::Mode::Off)
+            .map(|server| keep_awake::Watch {
+                server,
+                authorization: self.auth.clone(),
+                settings,
+            });
+        let idle = match (settings.mode, &watch) {
+            (keep_awake::Mode::Off, _) => Some(keep_awake::OFF_TEXT),
+            (_, None) => Some(keep_awake::NO_SERVER_TEXT),
+            _ => None,
+        };
+        self.keep_awake.sync(watch);
+        if let (Some(text), Some(items)) = (idle, &self.menu.keep_awake) {
+            items.status.set_text(text);
+        }
+    }
+
+    fn choose_keep_awake_mode(&mut self, mode: keep_awake::Mode) {
+        if let Some(items) = &self.menu.keep_awake {
+            // A click flips the item it landed on, the chosen one included.
+            for (item_mode, item) in &items.modes {
+                item.set_checked(*item_mode == mode);
+            }
+        }
+        self.config.keep_awake.mode = mode;
+        self.config_dirty = true;
+        self.sync_keep_awake();
+    }
+
+    fn toggle_keep_awake_ac_only(&mut self) {
+        let Some(item) = self.menu.keep_awake.as_ref().and_then(|items| items.ac_only.as_ref()) else {
+            return;
+        };
+        self.config.keep_awake.ac_only = item.is_checked();
+        self.config_dirty = true;
+        self.sync_keep_awake();
+    }
+
+    /// Choosing the lid item asks for the administrator password first while the
+    /// helper is missing or from another version; the setting goes on once it is in.
+    fn toggle_keep_awake_lid(&mut self) {
+        let Some(items) = &self.menu.keep_awake else {
+            return;
+        };
+        let Some(item) = &items.lid else {
+            return;
+        };
+        let state = keep_awake::request_path().map_or(keep_awake::HelperState::Missing, |request| {
+            keep_awake::helper_state(&request)
+        });
+        if !item.is_checked() || state == keep_awake::HelperState::Installed {
+            self.config.keep_awake.lid = item.is_checked();
+            self.config_dirty = true;
+            items.show_helper(state, self.config.keep_awake.lid);
+            self.sync_keep_awake();
+            return;
+        }
+        // Not on until the helper is in.
+        item.set_checked(false);
+        self.run_lid_helper(true);
+    }
+
+    fn run_lid_helper(&mut self, install: bool) {
+        if self.lid_helper_busy {
+            return;
+        }
+        self.lid_helper_busy = true;
+        let proxy = self.proxy.clone();
+        std::thread::spawn(move || {
+            let outcome = match install {
+                true => keep_awake::install_helper(),
+                false => keep_awake::remove_helper(),
+            };
+            let _ = proxy.send_event(UserEvent::LidHelperDone { install, outcome });
+        });
+    }
+
+    fn on_lid_helper_done(&mut self, install: bool, outcome: keep_awake::AdminOutcome) {
+        use keep_awake::{AdminOutcome, HelperState};
+        self.lid_helper_busy = false;
+        let state =
+            keep_awake::request_path().map_or(HelperState::Missing, |request| keep_awake::helper_state(&request));
+        let failure = match (&outcome, install, state) {
+            (AdminOutcome::Cancelled, _, _) => None,
+            (AdminOutcome::Failed(error), true, _) => Some(("The lid helper could not be installed.", error.clone())),
+            (AdminOutcome::Failed(error), false, _) => Some(("The lid helper could not be removed.", error.clone())),
+            (AdminOutcome::Done, true, HelperState::Installed) => {
+                self.config.keep_awake.lid = true;
+                self.config_dirty = true;
+                None
+            }
+            (AdminOutcome::Done, true, _) => Some((
+                "The lid helper could not be installed.",
+                "The installation ran, but the helper's files are not what the app wrote.".to_owned(),
+            )),
+            (AdminOutcome::Done, false, HelperState::Missing) => {
+                self.config.keep_awake.lid = false;
+                self.config_dirty = true;
+                None
+            }
+            (AdminOutcome::Done, false, _) => Some((
+                "The lid helper could not be removed.",
+                "The removal ran, but the helper's files are still there.".to_owned(),
+            )),
+        };
+        if let Some(items) = &self.menu.keep_awake {
+            items.show_helper(state, self.config.keep_awake.lid);
+        }
+        self.keep_awake.refresh();
+        self.sync_keep_awake();
+        if let Some((title, detail)) = failure {
+            eprintln!("codeman-desktop: {title} {detail}");
+            #[cfg(target_os = "macos")]
+            macos::show_message(title, &detail);
+        }
+    }
+
     fn on_menu(&mut self, id: &str) {
         if let Some((signal, style)) = BlinkStyle::from_menu_id(id) {
             self.choose_logo_blink(signal, style);
             return;
         }
+        if let Some(mode) = keep_awake::Mode::from_menu_id(id) {
+            self.choose_keep_awake_mode(mode);
+            return;
+        }
         match id {
+            keep_awake::AC_ONLY_ID => self.toggle_keep_awake_ac_only(),
+            keep_awake::LID_ID => self.toggle_keep_awake_lid(),
+            keep_awake::REMOVE_HELPER_ID => self.run_lid_helper(false),
             menu_id::SWITCH => self.show_connect_page(None, true),
             menu_id::ADD_AGENT => self.add_agent(),
             menu_id::RELOAD => self.reload_focused(),
