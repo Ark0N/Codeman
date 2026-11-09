@@ -811,6 +811,8 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('voiceKeyterms').value = voiceCfg.keyterms || DEFAULT_VOICE_KEYTERMS;
     document.getElementById('voiceInsertMode').value = voiceCfg.insertMode || 'direct';
     document.getElementById('voiceProvider').value = voiceCfg.provider || 'auto';
+    document.getElementById('voiceSilenceTimeout').value = VoiceInput.SILENCE_TIMEOUT_SECONDS.includes(voiceCfg.silenceTimeout)
+      ? String(voiceCfg.silenceTimeout) : 'default';
     document.getElementById('appSettingsClaudeVoice').checked = settings.claudeVoiceEnabled ?? false;
     // Reset key visibility to hidden
     const keyInput = document.getElementById('voiceDeepgramKey');
@@ -3299,6 +3301,8 @@ Object.assign(CodemanApp.prototype, {
       language: document.getElementById('voiceLanguage').value,
       keyterms: document.getElementById('voiceKeyterms').value.trim(),
       insertMode: document.getElementById('voiceInsertMode').value,
+      silenceTimeout: document.getElementById('voiceSilenceTimeout').value === 'default'
+        ? undefined : Number(document.getElementById('voiceSilenceTimeout').value),
     };
     VoiceInput._saveDeepgramConfig(voiceSettings);
 

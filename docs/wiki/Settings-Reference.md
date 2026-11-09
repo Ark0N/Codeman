@@ -247,8 +247,9 @@ Discord group for the two-way bot (token, IDs, thread and ping options; see
 ### Voice
 
 Active provider and the engine behind it, insert mode, language, domain keywords to bias
-recognition, the Deepgram API key, and the opt-in switch for transcribing through this
-server's Claude login, with its live credential status. See
+recognition, **Stop after silence** (provider default, 3, 6, 15 or 30 seconds, or Manual),
+the Deepgram API key, and the opt-in switch for transcribing through this server's Claude
+login, with its live credential status. See
 [Input And Voice](Input-And-Voice).
 
 ### Shortcuts
