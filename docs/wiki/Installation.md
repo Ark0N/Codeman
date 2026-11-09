@@ -248,9 +248,10 @@ A small native app that opens Codeman in its own window. Its first screen has tw
   runs the installer on that machine over SSH.
 
 On a MacBook Pro with a PROLED XDR display, whose lid logo lights up,
-**View > Blink Apple Logo** blinks the logo by what your agents are doing, with a style of
-your own for working, for waiting for you and for needing permission. All three are off
-until you choose, and the menu only exists on such a Mac.
+**View > Blink Apple Logo** makes the logo show what your agents are doing: it breathes while
+they work, blinks when one waits for you and flashes three times when one needs permission.
+Each state can take another style under **View > Apple Logo Blink Styles**. It is off until
+you turn it on, and the menu only exists on such a Mac.
 
 ### First launch
 

@@ -110,7 +110,7 @@ bash docker/Start-Codeman.sh
 
 **[下载 Codeman.dmg](https://github.com/Ark0N/Codeman/releases/latest/download/Codeman.dmg)** · 同一个通用应用，适用于 Apple 芯片和 Intel · macOS 11.3 或更高版本
 
-一个小巧的原生应用，在它自己的窗口里打开 Codeman。在还没有 Codeman 的 Mac 上，它会替你安装，不用终端，也不需要管理员密码，用一张清单显示安装进度；如果这台 Mac 上还没有编程智能体，它还会提出帮你装一个。在已经运行 Codeman 的 Mac 上，它会找到服务器并打开；服务器停着时则替你启动。在 **Another machine** 下，它可以连接你的 Mac mini、家用服务器或 tailnet 上的 Codeman，密码保存在钥匙串里，还能通过 SSH 在那台机器上开始安装。在配备 PROLED XDR 显示屏、机盖 Apple 标志会发光的 MacBook Pro 上，**View > Blink Apple Logo** 会让标志按智能体在做的事闪烁：工作中、等你回复、需要权限各用一种你自己选的样式；在你选定之前，三种都保持关闭。这个应用用 Rust 写成，套在 macOS 自带的 WebKit 外面，不捆绑浏览器，所以下载不到 5 MB。
+一个小巧的原生应用，在它自己的窗口里打开 Codeman。在还没有 Codeman 的 Mac 上，它会替你安装，不用终端，也不需要管理员密码，用一张清单显示安装进度；如果这台 Mac 上还没有编程智能体，它还会提出帮你装一个。在已经运行 Codeman 的 Mac 上，它会找到服务器并打开；服务器停着时则替你启动。在 **Another machine** 下，它可以连接你的 Mac mini、家用服务器或 tailnet 上的 Codeman，密码保存在钥匙串里，还能通过 SSH 在那台机器上开始安装。在配备 PROLED XDR 显示屏、机盖 Apple 标志会发光的 MacBook Pro 上，**View > Blink Apple Logo** 会让标志显示智能体在做的事：工作时缓慢呼吸，有智能体等你回复时闪烁，需要权限时快闪三下；每种状态也可以换成你自己选的样式。在你打开之前，它保持关闭。这个应用用 Rust 写成，套在 macOS 自带的 WebKit 外面，不捆绑浏览器，所以下载不到 5 MB。
 
 打开 `Codeman.dmg`，把 Codeman 拖进「应用程序」文件夹，再从那里打开。macOS 会问一次是否打开这个从互联网下载的应用：点**打开**。
 

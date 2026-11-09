@@ -40,7 +40,7 @@ cannot do.
 | **Links** | On Codeman's own pages (the dashboard and session windows), a link to another site opens in your default browser, also on `⌘`-click or a middle click. Pages can send at most 3 links to the browser at once, then 1 per second. Inside a rendered HTML preview or a web tab, a plain link to another site does nothing, while one that asks for a new window (`target="_blank"`, `window.open`) opens in your default browser within the same budget (see Known limits). |
 | **Downloads** | Codeman's Download links, and downloads Codeman opens in a new window, save the file to `~/Downloads` whatever its type, and a toast in Codeman names the file. Files the web view cannot display are saved the same way. |
 | **A page that stops** | When the web content process of a window ends (a WebKit crash, or macOS taking the process back under memory pressure), the window loads its page again instead of staying blank. A second time within 30 seconds, the main window goes back to the connect screen and a pop-out closes, so a page that cannot stay up never becomes a reload loop. |
-| **Apple logo** | On a MacBook Pro with a PROLED XDR display, the lit Apple logo on the lid says what the agents are doing, with a blink style of your own for each state: **View > Blink Apple Logo > While Working**, **Waiting for You (Yellow)** and **Needs Permission (Red)**. Off, Calm, Slow, Wink, Heartbeat, Fast, or Alarm, three sharp flashes for a state that needs you. All three are off until you choose. When several states hold, the most urgent one with a style shows: red, then yellow, then work. A style chosen in an earlier version stays as the one for work, and yellow and red start as Wink and Alarm. The menu only exists on a Mac with that logo. No password is needed. Shell tabs do not count. The app asks the server every two seconds, and a change has to hold for three seconds before the logo follows it, so an agent between two turns does not flicker it. It keeps working while the window is hidden, and with any Codeman server. A logo you switched off yourself stays off, and if the setting changes while a blink runs, the blink ends and leaves it as it found it. While the app is closed nothing blinks, and macOS keeps the logo dark while the display sleeps or the lid is closed, so the blink pauses then and writes nothing. |
+| **Apple logo** | On a MacBook Pro with a PROLED XDR display, the lit Apple logo on the lid says what the agents are doing. **View > Blink Apple Logo** is the one switch, off until you turn it on. The more the logo moves, the more it needs you: it breathes (a slow fade out and back in) while agents work, blinks every two seconds for a yellow tab and flashes three times, then rests, for a red one. Each state can take another style under **View > Apple Logo Blink Styles**: Off, Breathe, Calm, Slow, Wink, Heartbeat, Fast, or Alarm. Picking a style turns the switch on, and turning the switch on with every state off brings back the recommended three (Breathe, Calm, Alarm). When several states hold, the most urgent one with a style shows: red, then yellow, then work. Styles chosen in 1.50.0 are kept, with the switch on if any of them was. The menu only exists on a Mac with that logo. No password is needed. Shell tabs do not count. The app asks the server every two seconds, and a change has to hold for three seconds before the logo follows it, so an agent between two turns does not flicker it. It keeps working while the window is hidden, and with any Codeman server. The logo moves on its own hardware fades, the ones [LogoLight](https://github.com/Ark0N/LogoLight) uses, so a blink writes no setting, and a logo you switched off yourself stays off. While LogoLight runs, Codeman leaves the logo to it. While the app is closed nothing blinks, and while the display sleeps or the lid is closed the blink pauses and writes nothing. |
 | **Window** | Size, position and full-screen state are remembered. A saved window that hangs off the screen it opens on (it was last on a larger display that is gone, say) is pulled back on and shrunk to fit; one whose title bar is on no screen at all opens at the default size instead. Clicking the Dock icon brings back a minimized window. |
 
 ## Build (on a Mac)
@@ -225,31 +225,43 @@ If that probe is refused or rate limited, the connect screen comes back; the
 app does not send the refused login again. Keeping no copy of the login in
 WebKit has a cost here: after a server restart, each request that arrives
 without a cookie gets a 401 before the
-login goes out, and those count until one succeeds. Many windows reconnecting
-at once can push a request past 10, and that request then fails with a 429
-instead of being answered. A refusal that lands while you are in another app
-does not bring Codeman forward: the connect screen loads where the window is,
-and the Dock icon bounces.
+login goes out, and those count until on**The logo moves on its own hardware fades, from a child process, through CoreBrightness.**
+Apple documents one control for the logo ([support.apple.com/en-us/149248](https://support.apple.com/en-us/149248)):
+`sudo defaults write com.apple.CoreBrightness LEBacklightMode -int 0`, an on/off setting that
+`corebrightnessd` keeps in root's preferences. A process of the logged-in user can reach the
+daemon without an administrator through `BrightnessSystemClient` in the private CoreBrightness
+framework, and 1.50.0 blinked by switching that setting there. The blink now uses two other
+properties of the same client, which [LogoLight](https://github.com/Ark0N/LogoLight) (MIT, its
+`docs/corebrightnessd.md`) measured on the real logo and `src/logo.rs` reimplements:
+`LEPWMFactorFadeDuration` sets how long the next fade takes, and `DisplayLogicalState` 1
+(Blank) fades the logo to dark and 2 (Unblank) back to lit, on the LED's own spring curve.
+Nothing of that is saved, so a blink writes no setting and leaves nothing behind a restart;
+`LEBacklightMode` is only read.
 
-**The logo blinks from a child process, through CoreBrightness.** Apple documents
-one control for the logo ([support.apple.com/en-us/149248](https://support.apple.com/en-us/149248)):
-`sudo defaults write com.apple.CoreBrightness LEBacklightMode -int 0`. Doing that
-for every blink would need a root helper and an administrator password. The same
-setting is also a property of `BrightnessSystemClient` in the private
-CoreBrightness framework, and a process of the logged-in user can set it there,
-which is what `src/logo.rs` does. Measured on a Mac17,13 with macOS 27.2 from an
-ad-hoc signed binary: `corebrightnessd` logs the logo dark about a millisecond
-after the write, with no fade, and the NVRAM variable `bklb-backlight-enabled`
-keeps its value while the logo is dark.
+The daemon decides the rest. Writing the direction the logo already heads in is ignored, and
+the state cannot be read back, so the child keeps track of it and, when it does not know,
+first turns the logo round with a fade too slow to see. The keyboard backlight follows
+`DisplayLogicalState` too, so after every Blank the keyboards alone are told Unblank
+(`setProperty:withKey:keyboardID:`), only while the built-in display is awake
+(`CGDisplayIsAsleep`); when it sleeps they are told Blank, and Unblank when it wakes. A rise
+from exactly dark waits for the display to show a frame, up to half a second with nothing
+changing on screen. So the short dark beats (Alarm's, Heartbeat's, Wink's, Fast's) turn round
+while their fall is still under way and never quite reach dark, and a long one (Calm's,
+Slow's, the breath's rest) times its light from when the rise starts.
 
-The setting is system-wide and survives a reboot, so the app must not end with the
-logo dark, and the release profile has `panic = "abort"`, so no cleanup code of the
-app can be relied on. So all of it runs as this same binary with
-`--logo-blink`, for as long as any style is chosen and a server is open, tied to the app
-by nothing but a pipe: when the pipe closes, however the app ended, it puts the logo
-back and exits. Switching it off closes the same pipe, so the path a crash
-takes is the one used every day. A marker file
-(`logo-blink`, next to `desktop.json`) covers what the child cannot survive itself:
+The app must not end with the logo dark, and the release profile has `panic = "abort"`, so no
+cleanup code of the app can be relied on. So all of it runs as this same binary with
+`--logo-blink`, for as long as the switch is on and a server is open, tied to the app by
+nothing but a pipe: when the pipe closes, however the app ended, it puts the logo back (lit,
+with the daemon's automatic fade duration) and exits. Switching it off closes the same pipe,
+so the path a crash takes is the one used every day. A marker file (`logo-fade`, next to
+`desktop.json`) covers what the child cannot survive itself: at the next launch the app puts
+back a logo a blink left dark, and with 1.50.0's marker (`logo-blink`) it switches back on a
+logo that version left off. The framework is loaded at run time and never linked, and
+`LEBacklightMode` reading nil (a Mac mini answers nil) is what hides the option, so a macOS
+that drops it loses this feature and nothing else.
+
+e child cannot survive itself:
 at the next launch the app puts back a logo a blink left dark. The framework is
 loaded at run time and never linked, and `LEBacklightMode` reading nil (a Mac mini
 answers nil) is what hides the option, so a macOS that drops it loses this feature
@@ -308,17 +320,17 @@ crosses, so the login is never on a command line.
   look as a failed login, like any look at a server the app has no login for.
   *Check again* asks again.
 - **The logo blink rests on a private macOS interface.** Apple documents the
-  setting, not the way the app reaches it, so a macOS update can take it away;
-  the menu then disappears. Every change of the logo writes `LEBacklightMode`,
-  from about once every two seconds (*Slow*, *Wink*) to about three times a
-  second (*Fast*), which `corebrightnessd` keeps in root's preferences. The
-  setting is on or off, so these styles are rhythms of hard changes. After a
-  blink the key stays there rather than being absent as on a fresh Mac. That
-  reads the same to macOS; `sudo defaults delete com.apple.CoreBrightness
-  LEBacklightMode` removes it. After a power cut in a
-  dark phase the logo stays dark until the app next starts. `api/sessions` does
-  not say which turns are Codeman's own, so with prompt-cache keep-warm on, a
-  keep-alive turn blinks too.
+  on/off setting, not the fades the app uses, so a macOS update can take them
+  away. The menu disappears if `LEBacklightMode` goes; if only the fade keys
+  change, the logo stops moving. A long dark beat (*Calm*, *Slow*, the rest in
+  *Breathe*) can be up to half a second longer than its style says, while the
+  display waits for a frame before the logo rises. Every Blank dims the
+  keyboard backlight a little before it is told to stay lit. A child killed
+  outright (SIGKILL) leaves the logo where it was, perhaps dark, until the
+  display next sleeps and wakes or the app next starts. Another app that drives
+  the logo the same way and is not LogoLight is not recognised, and the two
+  fight. `api/sessions` does not say which turns are Codeman's own, so with
+  prompt-cache keep-warm on, a keep-alive turn blinks too.
 - **Self-signed HTTPS is refused.** A server started with `codeman web --https`
   uses a self-signed certificate, and WKWebView rejects it (wry has no trust
   override). Use `http://127.0.0.1:3000` for a server on this Mac. For another
