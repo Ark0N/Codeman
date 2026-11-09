@@ -1739,6 +1739,11 @@
         (_m, what, why) =>
           `${what === 'Run mode' ? '运行模式' : '重生预设'}已保存到本设备，但未保存到服务器：${ZH_CN[why] || why}`,
       ],
+      // The case-options save (session-ui.js _pushCaseSettings): the case name passes through.
+      [
+        /^Options for "([^"]+)" \(until the next sync\) saved on this device, not on the server: ([\s\S]+)$/,
+        (_m, name, why) => `案例“${name}”的选项已保存到本设备（同步前有效），但未保存到服务器：${ZH_CN[why] || why}`,
+      ],
       // A dialog read off a hook-less CLI's screen (src/web/screen-blocked.ts), as the
       // notification drawer shows it. The CLI's label passes through.
       [/^(.+) is waiting for your answer in the terminal$/, (_m, cli) => `${cli} 正在终端中等待你的回答`],

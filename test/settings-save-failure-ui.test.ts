@@ -526,6 +526,10 @@ describe('the new toasts in zh-CN', () => {
         'Saved on this device, not on the server: the server could not be reached',
         '已保存到本设备，但未保存到服务器：无法连接到服务器',
       ],
+      [
+        'Options for "demo" (until the next sync) saved on this device, not on the server: HTTP 500',
+        '案例“demo”的选项已保存到本设备（同步前有效），但未保存到服务器：HTTP 500',
+      ],
       [`Tunnel not stopped: ${TORN}`, `隧道未停止：${TORN}`],
     ];
     for (const [english, chinese] of cases) {

@@ -173,7 +173,11 @@ describe('createConfigBackup', () => {
       'hostId',
     ],
     ['users.json', (n: number) => JSON.stringify({ users: [{ name: 'a', role: 'admin', lastLoginAt: n }] }), 'role'],
-    ['settings.json', (n: number) => JSON.stringify({ displayName: 'x', lastUsedCase: `case-${n}` }), 'displayName'],
+    [
+      'settings.json',
+      (n: number) => JSON.stringify({ displayName: 'x', lastUsedCase: `case-${n}`, lastPickedCase: `case-${n}` }),
+      'displayName',
+    ],
     [
       'intents.json',
       (n: number) => JSON.stringify({ profiles: [{ key: 'k', goals: 'g', updatedAt: n, recentPrompts: [`p${n}`] }] }),

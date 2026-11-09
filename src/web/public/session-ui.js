@@ -613,6 +613,9 @@ Object.assign(CodemanApp.prototype, {
           this.updateCasePickerInput(select.value);
         });
         select.dataset.listenerAdded = 'true';
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'visible') this._syncCaseStateFromServer();
+        });
       }
       this.setupQuickStartCasePicker();
       // The phone overview labels rows with their case name, and a case rename or
@@ -640,15 +643,29 @@ Object.assign(CodemanApp.prototype, {
     // Multi-user non-admin: lastUsedCase is a key of the server-wide settings.json, whose
     // PUT is admin-only (403), so it is not sent (_settingsReadOnly, settings-ui.js).
     if (this._settingsReadOnly?.()) return;
-    try {
-      await fetch('/api/settings', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ lastUsedCase: caseName })
-      });
-    } catch (err) {
-      console.error('Failed to save last used case:', err);
-    }
+    // lastPickedCase is only what a person chose on a device (never a quick-start or an agent's spawn),
+    // so it is what other devices follow when case sync is on.
+    const sync = this._caseStateSyncOn?.() === true;
+    const body = sync ? { lastUsedCase: caseName, lastPickedCase: caseName } : { lastUsedCase: caseName };
+    const send = async () => {
+      let stored = false;
+      try {
+        const res = await fetch('/api/settings', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        stored = res?.ok !== false;
+      } catch (err) {
+        console.error('Failed to save last used case:', err);
+      }
+      // While this device's own pick is not on the server, the next tab return must not follow the server's older one.
+      if (sync) this._ownPickNotStored = !stored;
+    };
+    if (!sync) return send();
+    // On the chain the tab-return refresh already awaits, so a pick lands before the copy it reads.
+    this._caseSyncChain = (this._caseSyncChain || Promise.resolve()).then(send, send);
+    return this._caseSyncChain;
   },
 
   async quickStart() {
@@ -3670,6 +3687,111 @@ Object.assign(CodemanApp.prototype, {
 
   saveCaseSettings(caseName, settings) {
     localStorage.setItem('caseSettings_' + caseName, JSON.stringify(settings));
+    if (this._caseStateSyncOn()) this._queueCaseSync(caseName, settings);
+  },
+
+  // ── Opt-in case sync (`syncCaseState`): case options live on the server, the selected case follows other devices ──
+
+  /** Off unless the user turned it on; a non-admin in multi-user mode cannot write the shared settings.json. */
+  _caseStateSyncOn() {
+    return this.loadAppSettingsFromStorage?.()?.syncCaseState === true && !this._settingsReadOnly?.();
+  },
+
+  /**
+   * Send one case's options. Saves from this device run one after another in the order they were made
+   * (one chain), and each carries only its own case: the server merges it into the shared map, so a save
+   * from another device is never overwritten. `_caseSyncPending` counts a case's saves still in flight,
+   * so an import of the server's copy leaves that case alone.
+   */
+  _queueCaseSync(caseName, settings) {
+    const entry = { agentTeams: !!settings.agentTeams, opusContext1m: !!settings.opusContext1m };
+    const pending = this._caseSyncPending || (this._caseSyncPending = new Map());
+    pending.set(caseName, (pending.get(caseName) || 0) + 1);
+    const run = async () => {
+      try {
+        await this._pushCaseSettings(caseName, entry);
+      } finally {
+        const left = (pending.get(caseName) || 1) - 1;
+        if (left > 0) pending.set(caseName, left);
+        else pending.delete(caseName);
+      }
+    };
+    this._caseSyncChain = (this._caseSyncChain || Promise.resolve()).then(run, run);
+    return this._caseSyncChain;
+  },
+
+  async _pushCaseSettings(caseName, entry) {
+    let res = null;
+    try {
+      res = await fetch('/api/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ caseSettings: { [caseName]: entry } }),
+      });
+    } catch (err) {
+      console.error('Failed to sync case settings:', err);
+    }
+    // A refusal or failure keeps the choice on this device only until the next sync brings the server's copy back.
+    await this._noteSettingsWriteResult?.(res, `Options for "${caseName}" (until the next sync)`);
+  },
+
+  /** Server copy wins, except for a case this device is still saving: write its options into the local keys getCaseSettings() reads. */
+  _applyServerCaseSettings(server) {
+    if (server?.syncCaseState !== true || !server.caseSettings || typeof server.caseSettings !== 'object') return;
+    // A non-admin never receives the map (the server redacts it) and must not apply one it was handed.
+    if (this._settingsReadOnly?.()) return;
+    try {
+      let changed = false;
+      for (const [name, s] of Object.entries(server.caseSettings)) {
+        if (!s || typeof s !== 'object' || this._caseSyncPending?.has(name)) continue;
+        const next = JSON.stringify({ agentTeams: s.agentTeams === true, opusContext1m: s.opusContext1m === true });
+        if (localStorage.getItem('caseSettings_' + name) === next) continue;
+        localStorage.setItem('caseSettings_' + name, next);
+        changed = true;
+      }
+      // An open popover still shows the options it was filled with: closing it keeps a tick from writing them into another case.
+      if (changed) this._closeCaseSettingsPopovers();
+    } catch { /* storage blocked: this device keeps what it has */ }
+  },
+
+  _closeCaseSettingsPopovers() {
+    document.getElementById('caseSettingsPopover')?.classList.add('hidden');
+    document.getElementById('caseSettingsPopoverMobile')?.classList.add('hidden');
+  },
+
+  /** The server decides whether sync is on: when it says otherwise, this device's cached switch follows it. */
+  _adoptServerCaseSyncPreference(server) {
+    if (typeof server?.syncCaseState !== 'boolean') return;
+    const cached = this.loadAppSettingsFromStorage();
+    if ((cached.syncCaseState === true) === server.syncCaseState) return;
+    this.saveAppSettingsToStorage?.({ ...cached, syncCaseState: server.syncCaseState });
+  },
+
+  /** On returning to the tab: take the other devices' case options and selected case, if the server has sync on. */
+  async _syncCaseStateFromServer() {
+    if (this._settingsReadOnly?.()) return;
+    // Off on this device: no request on every tab return. Turning it on elsewhere is learned from the
+    // next settings load; turning it off elsewhere still reaches a device whose cached switch is on.
+    if (this.loadAppSettingsFromStorage?.()?.syncCaseState !== true) return;
+    const seq = (this._caseSyncRefresh = (this._caseSyncRefresh || 0) + 1);
+    try {
+      const chain = this._caseSyncChain;
+      await chain; // this device's own saves land first, so the copy read next includes them
+      const res = await fetch('/api/settings');
+      if (!res.ok) return;
+      const server = (await res.json())?.data ?? null;
+      if (seq !== this._caseSyncRefresh || !server) return; // a newer refresh owns the answer
+      if (this._caseSyncChain !== chain) return; // a save or pick made while the read was out is newer than it
+      this._adoptServerCaseSyncPreference(server);
+      if (server.syncCaseState !== true) return;
+      this._applyServerCaseSettings(server);
+      const select = document.getElementById('quickStartCase');
+      const last = server.lastPickedCase;
+      if (select && last && !this._ownPickNotStored && last !== select.value && this.cases?.some((c) => c.name === last)) {
+        this._closeCaseSettingsPopovers();
+        this.selectQuickStartCase(last, { save: false });
+      }
+    } catch { /* offline: try again next time the tab is shown */ }
   },
 
   onCaseSettingChanged() {

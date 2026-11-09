@@ -87,6 +87,7 @@ import {
   settingsWriteErrorResponse,
 } from '../settings-writer.js';
 import { LinkedCasesWriteRefusedError, linkedCasesPath, mutateLinkedCases } from '../linked-cases-writer.js';
+import { dropCaseSettings, renameCaseSettings } from '../case-state-sync.js';
 import { isMultiUserMode } from '../../config/multiuser.js';
 import type { AuthUser } from '../../types.js';
 import { SseEvent } from '../sse-events.js';
@@ -1747,6 +1748,14 @@ export function registerCaseRoutes(
     // a stale value is ignored at creation anyway).
     // An admin deleting another user's remote/Docker case clears that owner's too.
     const forgetCaseDefault = async (caseOwner?: string): Promise<void> => {
+      // The shared run options (syncCaseState) are the admin's server-wide map: a non-admin's own case of
+      // the same name must leave them alone. Best-effort, like the default group.
+      if (isAdmin(req)) {
+        await mutateSettingsFile((current) => {
+          const rest = dropCaseSettings(current.caseSettings, name);
+          return rest ? { ...current, caseSettings: rest } : undefined;
+        }).catch(() => undefined);
+      }
       const owners = new Set([ownerLayoutKey(ownerFor(req)), ...(caseOwner ? [ownerLayoutKey(caseOwner)] : [])]);
       for (const owner of owners) {
         try {
@@ -2015,6 +2024,7 @@ export function registerCaseRoutes(
         // The settings.json values this rename replaced, set only once it wrote them. A failure puts back
         // these keys alone, so a settings save that landed in between is kept.
         let settingsUndo: Record<string, unknown> | undefined;
+        let sharedRenamed = false;
         try {
           // settings.json is server-wide and caseOrder/lastUsedCase name the admin's cases, so only the
           // admin's rename touches it (a non-admin's own rename must not rewrite someone else's list).
@@ -2023,12 +2033,24 @@ export function registerCaseRoutes(
             const { before, after } = await mutateSettingsFile((existing) => {
               const order = renameInOrder(existing.caseOrder, name, newName);
               const last = existing.lastUsedCase === name ? newName : undefined;
-              if (!order && !last) return undefined;
-              return { ...existing, ...(order ? { caseOrder: order } : {}), ...(last ? { lastUsedCase: last } : {}) };
+              const picked = existing.lastPickedCase === name ? newName : undefined;
+              // The shared run options (syncCaseState) follow the case to its new name.
+              const shared = renameCaseSettings(existing.caseSettings, name, newName);
+              if (!order && !last && !picked && !shared) return undefined;
+              return {
+                ...existing,
+                ...(order ? { caseOrder: order } : {}),
+                ...(last ? { lastUsedCase: last } : {}),
+                ...(picked ? { lastPickedCase: picked } : {}),
+                ...(shared ? { caseSettings: shared } : {}),
+              };
             });
             if (after) {
-              const keys = ['caseOrder', 'lastUsedCase'].filter((k) => after[k] !== before[k]);
+              // caseSettings is undone by renaming its entry back (below), not by restoring the whole map, so a
+              // per-case save from another device that landed since is kept.
+              const keys = ['caseOrder', 'lastUsedCase', 'lastPickedCase'].filter((k) => after[k] !== before[k]);
               settingsUndo = Object.fromEntries(keys.map((k) => [k, before[k]]));
+              sharedRenamed = after.caseSettings !== before.caseSettings;
             }
           }
           if (isLinked) {
@@ -2049,7 +2071,12 @@ export function registerCaseRoutes(
           // The folder moved but the registries did not follow: put settings.json and the folder back
           // rather than leave a case whose name and folder disagree.
           const undo = settingsUndo;
-          if (undo) await mutateSettingsFile((current) => ({ ...current, ...undo })).catch(() => {});
+          if (undo) {
+            await mutateSettingsFile((current) => {
+              const back = sharedRenamed ? renameCaseSettings(current.caseSettings, newName, name) : null;
+              return { ...current, ...undo, ...(back ? { caseSettings: back } : {}) };
+            }).catch(() => {});
+          }
           if (moveFolder) {
             const movedBack = await fs.rename(newPath, oldPath).then(
               () => true,
