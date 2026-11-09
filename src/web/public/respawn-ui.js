@@ -601,13 +601,13 @@ Object.assign(CodemanApp.prototype, {
     // presets are a key of the server-wide settings.json there, and its PUT is admin-only
     // (403), so they are kept as their own on this device and win over the server's on the
     // next load (_rememberOwnSetting, settings-ui.js). A PUT refused that way (sent before the
-    // role was known) marks the page read-only for the writes after it.
+    // role was known) marks the page read-only for the writes after it; any other failure is toasted.
     if (this._settingsReadOnly?.()) {
       this._rememberOwnSetting?.('respawnPresets', custom);
       return;
     }
     this._apiPut('/api/settings', { respawnPresets: custom })
-      .then((res) => this._noteSettingsWriteRefusal?.(res))
+      .then((res) => this._noteSettingsWriteResult?.(res, 'Respawn presets'))
       .catch(() => {});
   },
 

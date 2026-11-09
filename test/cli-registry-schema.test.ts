@@ -55,6 +55,65 @@ describe('customModelInjection.launchModel', () => {
   });
 });
 
+/** Mutates the shipped deepseek configDir recipe (the one real-home-linking entry) and expects rejection. */
+function expectRejectedOnDeepSeek(mutate: (recipe: Record<string, unknown>) => void, because: string): void {
+  const entry = baseEntry('deepseek');
+  const recipe = (entry.capabilities as Record<string, unknown>).customModelInjection as Record<string, unknown>;
+  mutate(recipe);
+  const result = CliEntrySchema.safeParse(entry);
+  expect(result.success, `expected rejection: ${because}`).toBe(false);
+}
+
+describe('configDir real-home linking (linkFromRealHome / realHomeFallback)', () => {
+  it('rejects a realHomeFallback that is not a single relative path segment', () => {
+    // The consumer joins it under the user's home, so any of these escapes that home:
+    // and bare `.` IS that home: linking through it would expose the whole tree
+    // unshielded instead of just the declared segments.
+    for (const bad of ['../x', '.dsh/evil', '/.dsh', '..', '.']) {
+      expectRejectedOnDeepSeek((r) => {
+        r.realHomeFallback = bad;
+      }, `realHomeFallback ${JSON.stringify(bad)}`);
+    }
+  });
+
+  it('accepts a shipped-style dot-prefixed segment', () => {
+    const entry = baseEntry('deepseek');
+    expect(CliEntrySchema.safeParse(entry).success).toBe(true); // ships as `.dsh`
+    const recipe = (entry.capabilities as Record<string, unknown>).customModelInjection as Record<string, unknown>;
+    recipe.realHomeFallback = '.dsh-relocated';
+    expect(CliEntrySchema.safeParse(entry).success).toBe(true);
+  });
+
+  it('requires realHomeFallback whenever linkFromRealHome is declared', () => {
+    expectRejectedOnDeepSeek((r) => {
+      delete r.realHomeFallback;
+    }, 'without it the consumer would have to hardcode a per-CLI home default');
+  });
+
+  it('rejects a linked entry that collides with fileName', () => {
+    // A symlink at the generated file's own name would write THROUGH into the user's real config.
+    expectRejectedOnDeepSeek((r) => {
+      r.linkFromRealHome = ['cordis.patch.yml', 'profiles'];
+    }, 'linkFromRealHome containing fileName');
+  });
+
+  it('requires linkFromRealHomeDirs to be a subset of linkFromRealHome', () => {
+    // types.ts documents the rule; a name absent from the linked list names nothing,
+    // so the create-missing-directory behaviour would silently never apply to it.
+    expectRejectedOnDeepSeek((r) => {
+      r.linkFromRealHome = ['profiles', 'settings.yaml'];
+      r.linkFromRealHomeDirs = ['profiles', 'sessions'];
+    }, 'linkFromRealHomeDirs naming an unlinked entry');
+    // The shipped recipe is a valid subset (deepseek: profiles and sessions are dirs
+    // of the three linked entries) and keeps loading.
+    const entry = baseEntry('deepseek');
+    const recipe = (entry.capabilities as Record<string, unknown>).customModelInjection as Record<string, unknown>;
+    expect(recipe.linkFromRealHome).toEqual(['profiles', 'sessions', 'settings.yaml']);
+    expect(recipe.linkFromRealHomeDirs).toEqual(['profiles', 'sessions']);
+    expect(CliEntrySchema.safeParse(entry).success).toBe(true);
+  });
+});
+
 describe('the shipped catalog', () => {
   it('validates every stock entry exactly as shipped', () => {
     // If this fails, the catalog cannot load at all — every other test here is downstream.
@@ -181,6 +240,69 @@ describe('workDetect.workingLine is guarded like every other config regex', () =
       const src = entry.capabilities.workDetect?.awaitingLine;
       if (!src) continue;
       expect(compileVersionRegex(src), `${entry.id} declares an awaitingLine the guard refuses`).not.toBeNull();
+    }
+  });
+
+  it('holds the optional composerFooterLine to the same guard', () => {
+    // Run over the rows under the composer each time guarded input reads the pane.
+    for (const composerFooterLine of ['(a+)+b', 'a'.repeat(201), '([unclosed', '']) {
+      expectRejected((e) => {
+        (e.capabilities as Record<string, unknown>).workDetect = {
+          promptGlyph: '>',
+          workingLine: 'working',
+          composerFooterLine,
+        };
+      }, 'guarded input tests it against pane rows a clis.json override can supply');
+    }
+  });
+
+  it('accepts every shipped composerFooterLine', () => {
+    for (const entry of STOCK_CLIS) {
+      const src = entry.capabilities.workDetect?.composerFooterLine;
+      if (!src) continue;
+      expect(compileVersionRegex(src), `${entry.id} declares a composerFooterLine the guard refuses`).not.toBeNull();
+    }
+  });
+
+  it('holds the optional composerPopupLine to the same guard, and accepts the shipped one', () => {
+    // Run over the rows just above the composer each time guarded input reads the pane.
+    for (const composerPopupLine of ['(a+)+b', 'a'.repeat(201), '([unclosed', '']) {
+      expectRejected((e) => {
+        (e.capabilities as Record<string, unknown>).workDetect = {
+          promptGlyph: '>',
+          workingLine: 'working',
+          composerPopupLine,
+        };
+      }, 'guarded input tests it against pane rows a clis.json override can supply');
+    }
+    for (const entry of STOCK_CLIS) {
+      const src = entry.capabilities.workDetect?.composerPopupLine;
+      if (src)
+        expect(compileVersionRegex(src), `${entry.id} declares a composerPopupLine the guard refuses`).not.toBeNull();
+    }
+  });
+
+  it('takes only short runs of ASCII punctuation as composer trigger characters', () => {
+    for (const field of ['composerCommandPrefixes', 'composerCompletionSigils']) {
+      for (const value of ['', 'a', '/a', '/ ', '/\t', '\u00a7', '!!!!!!!!!']) {
+        expectRejected(
+          (e) => {
+            (e.capabilities as Record<string, unknown>).workDetect = {
+              promptGlyph: '>',
+              workingLine: 'working',
+              [field]: value,
+            };
+          },
+          `${field} ${JSON.stringify(value)} would refuse letters, spaces or an unbounded set`
+        );
+      }
+      const entry = baseEntry();
+      (entry.capabilities as Record<string, unknown>).workDetect = {
+        promptGlyph: '>',
+        workingLine: 'working',
+        [field]: '/!@$',
+      };
+      expect(CliEntrySchema.safeParse(entry).success, field).toBe(true);
     }
   });
 
@@ -328,7 +450,7 @@ describe('cross-field integrity', () => {
     // shipped entry must be on the param side of that line.
     const codex = STOCK_CLIS.find((e) => (e.id as string) === 'codex');
     expect(codex).toBeDefined();
-    expect(codex!.capabilities.privilegedParams.map((c) => c.param)).toEqual(['bypassApprovals']);
+    expect(codex!.capabilities.privilegedParams.map((c) => c.param)).toEqual(['bypassApprovals', 'networkAccess']);
     expect(codex!.launch.legacyConfigAliases?.bypassApprovals).toBe('dangerouslyBypassApprovals');
 
     const wrong = baseEntry('codex');
@@ -485,22 +607,48 @@ describe('capability shapes', () => {
     }, 'transcriptPageKeys is a boolean');
   });
 
+  it("takes keyboardHold as an optional 'inline', absent meaning the keyboard resizes", () => {
+    const inline = baseEntry();
+    (inline.capabilities as Record<string, unknown>).keyboardHold = 'inline';
+    expect(CliEntrySchema.safeParse(inline).success).toBe(true);
+    const absent = baseEntry();
+    delete (absent.capabilities as Record<string, unknown>).keyboardHold;
+    expect(CliEntrySchema.safeParse(absent).success).toBe(true);
+    for (const value of [true, 'fullscreen', '']) {
+      expectRejected(
+        (e) => {
+          (e.capabilities as Record<string, unknown>).keyboardHold = value;
+        },
+        `keyboardHold=${JSON.stringify(value)} names no renderer kind`
+      );
+    }
+  });
+
+  it('declares keyboardHold for exactly the inline renderer measured losing lines on a height change', () => {
+    // Claude Code 2.1.306's inline renderer was measured dropping transcript lines from
+    // tmux on keyboard-driven height changes; every other stock entry resizes.
+    const holding = STOCK_CLIS.filter((e) => e.capabilities.keyboardHold === 'inline').map((e) => e.id as string);
+    expect(holding).toEqual(['claude']);
+  });
+
   it('declares which CLIs get the wheel forwarded, and whether a version gates it', () => {
     // Claude forwards from 2.1.187 (fullscreen only); tracked Codex and Copilot
-    // forward without a version gate. Unmeasured entries stay 'never'.
+    // forward without a version gate, and so does pi. Unmeasured entries stay 'never'.
     const mode = (id: string) => STOCK_CLIS.find((e) => (e.id as string) === id)?.capabilities.wheelForward;
     expect(mode('copilot')).toEqual({ mode: 'always' });
     expect(mode('claude')).toEqual({ mode: 'version-gated', minVersion: '2.1.187' });
     const forwarding = STOCK_CLIS.filter((e) => e.capabilities.wheelForward.mode !== 'never').map(
       (e) => e.id as string
     );
-    expect(forwarding.sort()).toEqual(['claude', 'codex', 'copilot']);
+    expect(forwarding.sort()).toEqual(['claude', 'codex', 'copilot', 'pi']);
     expect(CliEntrySchema.safeParse(baseEntry('copilot')).success).toBe(true);
   });
 
   it('declares transcriptPageKeys for exactly the CLIs measured to page on PageUp/PageDown', () => {
     // claude (repaint mode), codex, opencode and copilot (all on the alternate screen) were
     // measured paging their own transcript on PageUp/PageDown; no other stock entry has been.
+    // pi pages too when fullscreen, and stays out on purpose: in `tuiMode: regular` the same keys
+    // move the caret of a multi-line draft.
     const paging = STOCK_CLIS.filter((e) => e.capabilities.transcriptPageKeys === true).map((e) => e.id as string);
     expect(paging.sort()).toEqual(['claude', 'codex', 'copilot', 'opencode']);
   });

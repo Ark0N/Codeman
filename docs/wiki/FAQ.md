@@ -179,12 +179,13 @@ the defaults discovers and attaches your live sessions.
 | Install route | Update with                                                                 |
 | ------------- | --------------------------------------------------------------------------- |
 | Installer     | Re-run the install one-liner, or **App Settings → System → Updates**.         |
+| Installer, without git | Re-run the install one-liner. The in-app updater says so instead of offering an update. |
 | npm           | `npm update -g aicodeman`                                                     |
 | git clone     | `git pull && npm install && npm run build`, then restart the service.         |
 
 The in-app updater covers git-clone installs supervised by systemd or launchd. It stashes a
 dirty tree rather than discarding it, and streams progress across the restart. npm installs
-report as non-updatable.
+and installs without git report as non-updatable.
 
 ### Will updating kill my running sessions?
 
@@ -214,7 +215,9 @@ Yes. Codeman ships an agent skill that lets an agent inside a session drive the 
 list sessions, spawn workers in any installed CLI, send prompts, and block until a worker's
 turn finishes. Install it once with `codeman skill install` or the Claude Code plugin, then
 ask in plain English, for example *"use codeman to start 5 claude workers, one per TODO
-item"*. The web UI setting that injects it into every new session's case is off by default.
+item"*. Since 1.50.0 Codeman also injects it into every new session's case by default, so an
+agent inside Codeman usually has it already (App Settings → Agents & CLIs → **Codeman Agent
+Skill** turns that off).
 
 See [The Codeman Skill](Codeman-Skill), with recordings of real runs, and
 [Driving Codeman From An Agent](Driving-Codeman-From-An-Agent) for the other routes.

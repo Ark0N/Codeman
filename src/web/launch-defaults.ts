@@ -2,7 +2,7 @@
  * @fileoverview Launch-time defaults from synced App Settings, driven by registry data.
  *
  * A CLI entry declares `capabilities.launchDefaults` (launch param -> settings key; today
- * only codex, `{ model: 'codexModel', reasoningEffort: 'codexReasoningEffort' }`), and
+ * only codex: `model`, `reasoningEffort` and `networkAccess`), and
  * `applyLaunchDefaults()` fills those settings into the entry's `launch.legacyConfigField`
  * object, setting ONLY the fields the caller left unset. Persisted values are re-validated
  * with `SettingsUpdateSchema`, so a hand-edited settings.json can never smuggle an
@@ -39,7 +39,7 @@ export async function applyLaunchDefaults<T extends object>(
   const defaults: Record<string, unknown> = {};
   for (const [param, settingKey] of Object.entries(declared)) {
     const parsed = SettingsUpdateSchema.shape[settingKey].safeParse(settings[settingKey]);
-    // '' is the settings' "leave it to the CLI" value, the same as unset.
+    // '' and an off switch are the settings' "leave it to the CLI" value, the same as unset.
     const value = parsed.success ? parsed.data || undefined : undefined;
     const wireKey = aliases[param] ?? param;
     if (value !== undefined && (current?.[wireKey] ?? undefined) === undefined) defaults[wireKey] = value;

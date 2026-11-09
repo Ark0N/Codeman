@@ -35,6 +35,7 @@ import fastifyWebsocket from '@fastify/websocket';
 import fastifyMultipart from '@fastify/multipart';
 import { pasteImageDirInUseByOtherSession, startPasteImageGc, uploadDirs } from './paste-image-gc.js';
 import { CLEAN_EXIT_CLOSE_REASON, shouldCloseCleanlyExitedSession } from '../pane-exit-sweep.js';
+import { findLiveWorktree, type OutsideWorktreeOptions } from '../live-worktree.js';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync, mkdirSync, readFileSync, chmodSync, statSync } from 'node:fs';
@@ -45,6 +46,8 @@ import { looksLikeHostReboot, newestPersistedActivity, planRebootRestore } from 
 import { rebootRestoreRegistry } from './reboot-restore-registry.js';
 import { dataPath, getDataDir, CODEMAN_INSTANCE } from '../config/instance.js';
 import { WebhookNotifier, readWebhookConfig } from '../webhook-notify.js';
+import { DiscordBridge, screenTail } from '../discord-bridge.js';
+import { isExternalCliTranscriptMode } from './response-viewer-transcript.js';
 import { stopHostSensors } from '../host-sensors.js';
 import type { WebhookUrgency } from '../types/push.js';
 import { webviewFetch } from './webview-egress.js';
@@ -77,11 +80,17 @@ import {
 import { imageWatcher } from '../image-watcher.js';
 import { workflowRunWatcher, summarizeRun } from '../workflow-run-watcher.js';
 import { attachmentRegistry, buildFileThumbnailRoute, registerExternalAttachment } from '../attachment-registry.js';
-import { folderGrants } from '../folder-listing.js';
+import { folderAllowedForUser, folderGrants } from '../folder-listing.js';
+import { isOutsideWorktreeRootRefused, loadAttachmentGuardConfig } from '../config/attachment-guard.js';
 import { getCli, enabledClis, listClis } from '../config/cli-registry/registry.js';
 import { isCliEntryInstalled, probeStockCliAvailability } from '../utils/cli-installed-probes.js';
-import { readCustomModelHosts } from '../custom-model-hosts.js';
-import { applyCustomModelInjection, customModelConfigDir, removeConfigDir } from '../custom-model-injection-apply.js';
+import { readCustomModelHosts, resolveCustomModelContextLength } from '../custom-model-hosts.js';
+import {
+  applyCustomModelInjection,
+  customModelConfigDir,
+  removeConfigDir,
+  type AppliedCustomModel,
+} from '../custom-model-injection-apply.js';
 import type { CustomModelBookkeeping } from '../types/session.js';
 import { registerGeneratedArtifactAttachment } from '../generated-artifact-attachments.js';
 import {
@@ -97,9 +106,11 @@ import { RunSummaryTracker } from '../run-summary.js';
 import { PlanOrchestrator } from '../plan-orchestrator.js';
 import { OrchestratorLoop } from '../orchestrator-loop.js';
 import { getLifecycleLog } from '../session-lifecycle-log.js';
+import { clampEnvOverridesForOwner } from '../session-env-clamp.js';
 import {
   applyWorkspaceHooks,
   pruneAgentSessionPreambles,
+  readGitFetchSettings,
   readKeepWarmSettingsOrThrow,
   readPlanUsageTelemetryEnabled,
   removeAgentSessionPreamble,
@@ -123,9 +134,20 @@ import { AI_CHECK_MODEL } from '../config/ai-defaults.js';
 import { approvalInbox } from './approval-inbox.js';
 import { SCREEN_BLOCKED_SOURCE } from './screen-blocked.js';
 import { PromptCacheKeepWarmService } from '../prompt-cache-keepwarm.js';
+import { fetchWorkspaceOnce } from '../git-fetch.js';
+import { GitFetchScheduler } from '../git-fetch-scheduler.js';
+import { probePathKind } from '../utils/bounded-path-probe.js';
+import { defaultDockerWorkspaces } from './routes/git-status-routes.js';
+import { guardSessionConfigDirHome } from './routes/session-routes.js';
 import { composerIsEmpty, plainFrame } from '../session-submit-verifier.js';
 import { detectUsageLimitPause } from '../usage-limit-patterns.js';
+import { EditHistorySync, remoteTranscriptIds } from './edit-history-sync.js';
+import { EditHistoryStore } from '../edit-history-store.js';
+import { probeLocalPaths, readClaudeEditSources, resolveClaudeTranscript } from '../edit-history-local-source.js';
+import { remoteLocateClaudeTranscript, remoteProbePaths, remoteReadClaudeEditSources } from '../remote-files.js';
+import { remoteTmuxLocation } from '../tmux-manager.js';
 import { stopDeepSeekWeb } from '../deepseek-web-server.js';
+import { getLocalModelService } from '../local-model/install-job.js';
 import {
   wireRespawnListeners,
   setupTimedRespawn,
@@ -174,6 +196,8 @@ import { MAX_PASTE_IMAGE_BYTES } from '../config/buffer-limits.js';
 import { resolveTerminalHistoryConfig } from '../config/terminal-history.js';
 import { SseEvent } from './sse-events.js';
 import { MAX_ROUTE_PARAM_LENGTH } from './route-helpers.js';
+import { mutateSettingsFile } from './settings-writer.js';
+import { migrateAgentSkillDefault } from './agent-skill-default-migration.js';
 import { getLatestPlanUsage, setLatestCodexPlanUsage, setLatestCopilotPlanUsage } from './plan-usage-latest.js';
 import { telemetrySignature } from '../usage-telemetry.js';
 import { readCodexPlanUsage, resolveCodexBinaryPath } from '../utils/codex-cli-resolver.js';
@@ -192,8 +216,9 @@ import {
   sendLostWebviewFramePage,
 } from './middleware/auth.js';
 import { isMultiUserMode } from '../config/multiuser.js';
-import { bootstrapInitialAdmin, hasUsers, resolveClaudeModeForUsername } from '../user-store.js';
+import { bootstrapInitialAdmin, findUser, hasUsers, resolveClaudeModeForUsername } from '../user-store.js';
 import { installRouteErrorHandler } from './route-error-handler.js';
+import { installEmptyApiPostParser } from './request-body-parser.js';
 import { isExplicitlyEnabled, isLoopbackBindHost, buildHostPolicy, type HostPolicy } from './network-auth-policy.js';
 import {
   registerPushRoutes,
@@ -208,11 +233,13 @@ import {
   registerRebootRestoreRoutes,
   registerReadMyMindRoutes,
   registerGitStatusRoutes,
+  registerEditHistoryRoutes,
   registerStatusTelemetryRoutes,
   registerSystemRoutes,
   registerCaseRoutes,
   registerWorktreeRoutes,
   registerSessionRoutes,
+  registerAgentSessionRoutes,
   registerRespawnRoutes,
   registerRalphRoutes,
   registerPlanRoutes,
@@ -230,6 +257,7 @@ import {
   registerConfigBackupRoutes,
   runConfigBackup,
   registerWebhookRoutes,
+  registerDiscordRoutes,
   registerDoctorRoutes,
   registerCustomModelRoutes,
   refreshAllCustomModelHosts,
@@ -239,6 +267,7 @@ import {
   pruneIdleLlamaSwapLogTails,
   tryWebviewRefererFallback,
   registerCliRegistryRoutes,
+  registerLocalModelRoutes,
 } from './routes/index.js';
 import { isLostWebviewFrameNavigation } from './webview-proxy.js';
 import { CronService } from '../cron/cron-service.js';
@@ -293,6 +322,7 @@ import {
   STATS_COLLECTION_INTERVAL_MS,
   INACTIVITY_TIMEOUT_MS,
   CRON_TICK_INTERVAL,
+  GIT_FETCH_TICK_INTERVAL_MS,
 } from '../config/server-timing.js';
 
 /**
@@ -334,6 +364,36 @@ function getOrCreateSelfSignedCert(): { key: string; cert: string } {
 export class WebServer extends EventEmitter {
   private app: FastifyInstance;
   private sessions: Map<string, Session> = new Map();
+  /**
+   * The edit history panel's reader (edit-history-sync.ts). Reads only when the panel asks.
+   * A local session's main transcript is the one the transcript watcher follows (hook-reported
+   * path), or, before the first hook after a restart, a lookup under the session's claude
+   * config dir. A remote session sends no hooks: its host is asked over ssh for the transcript
+   * the pane's claude writes, else the stored conversation's (`remoteTranscriptIds`), and is
+   * never woken for it (remote-files.ts).
+   */
+  private readonly editHistorySync = new EditHistorySync({
+    transcriptPath: (session, storedTranscriptId) =>
+      session.remote
+        ? remoteLocateClaudeTranscript(
+            session.remote,
+            remoteTranscriptIds(session, storedTranscriptId),
+            remoteTmuxLocation(session.remote, session.id)
+          )
+        : resolveClaudeTranscript(
+            this.transcriptWatchers.get(session.id)?.getPath(),
+            [session.claudeSessionId || session.id, session.id],
+            session.claudeConfigDir
+          ),
+    readSources: (session, mainPath, requests, budget, opts) =>
+      session.remote
+        ? remoteReadClaudeEditSources(session.remote, mainPath, requests, budget, opts)
+        : readClaudeEditSources(mainPath, requests, budget, opts),
+    probe: (session, paths) => (session.remote ? remoteProbePaths(session.remote, paths) : probeLocalPaths(paths)),
+    loadStore: (sessionId) => EditHistoryStore.load(sessionId),
+    deleteStore: (sessionId) => EditHistoryStore.delete(sessionId),
+    sweepStores: (keep) => EditHistoryStore.sweep(keep),
+  });
   private respawnControllers: Map<string, RespawnController> = new Map();
   private respawnTimers: Map<string, { timer: NodeJS.Timeout; endAt: number; startedAt: number }> = new Map();
   private runSummaryTrackers: Map<string, RunSummaryTracker> = new Map();
@@ -386,6 +446,37 @@ export class WebServer extends EventEmitter {
       if (status.state !== 'off' || status.reason !== 'off') {
         console.log(`[KeepWarm] ${id.slice(0, 8)}: ${status.state}${status.reason ? ` (${status.reason})` : ''}`);
       }
+    },
+    log: (message) => console.log(message),
+  });
+  // Git fetch on an interval (git-fetch-scheduler.ts): the due-tracking lives in the service; the server
+  // lends it the facts a decision needs and stores what it reports on the session. A field initializer for
+  // the same reason as the keep-warm one above, and the scheduler reads the app setting FRESH on every tick:
+  // that is what makes a live toggle take effect on the next tick, and what makes turning it off actually
+  // stop the fetching. Default OFF, so an install that never enabled it spawns nothing at all.
+  private readonly gitFetchScheduler = new GitFetchScheduler({
+    sessionIds: () => this.sessions.keys(),
+    getSession: (id) => this.sessions.get(id),
+    readSettings: readGitFetchSettings,
+    // The same Docker list the panel's Fetch button uses: the rule has to be one rule. It rejects on a list
+    // that cannot be read, and the tick then fetches nothing (fail closed).
+    dockerWorkspaces: defaultDockerWorkspaces,
+    // Bounded probe, DEFAULT options (rule #516): a tick is a bulk scan, so it keeps the stall cap and must
+    // never be handed `pastCap`. A folder on a mount that stopped answering is skipped, not fetched.
+    probePath: (path) => probePathKind(path),
+    // Through the join, so the tick and the panel's Fetch button are the same run: a click on a folder the
+    // tick is already fetching joins it rather than starting a second `git fetch` in the same clone, and the
+    // run that gets published is the one that ran, with its own trigger.
+    fetch: (cwd, opts, trigger) => fetchWorkspaceOnce(cwd, opts, trigger),
+    publish: (id, status) => {
+      const session = this.sessions.get(id);
+      if (!session?.setGitFetchStatus(status)) return;
+      // No new SSE event: the status rides the session state the page already listens for, and the Git
+      // panel polls on its own clock. It is written to disk with the rest of the record, but the restore
+      // copies only the fields its own config lists and this is not one of them (src/types/session.ts), so
+      // what a run found is the panel's truth for the life of the session, not across a restart.
+      this.persistSessionState(session);
+      this.broadcast(SseEvent.SessionUpdated, this.getSessionStateWithRespawn(session));
     },
     log: (message) => console.log(message),
   });
@@ -466,12 +557,36 @@ export class WebServer extends EventEmitter {
   private pushStore: PushSubscriptionStore = new PushSubscriptionStore();
   /** ntfy / Slack / Discord / generic webhook for the push events; config in webhook.json (0600). */
   private webhookNotifier = new WebhookNotifier(() => readWebhookConfig(getDataDir()), webviewFetch);
+  /** Two-way Discord bridge (thread per tab); config in discord.json (0600). Idle until enabled in Settings. */
+  /** Set by the session routes when they register (see SessionPort). */
+  lastResponseFor?: (session: Session, context?: string) => Promise<{ text: string; timestamp?: string }>;
+  private discordBridge = new DiscordBridge({
+    configDir: getDataDir(),
+    fetchImpl: webviewFetch,
+    sendInput: async (sessionId, text) => {
+      const session = this.sessions.get(sessionId);
+      if (!session) return false;
+      // A Discord reply is a person's own input, so it names the tab like any other prompt.
+      if (await session.writeViaMux(text, { fromUser: true }).catch(() => false)) return true;
+      return session.write(text, { fromUser: true });
+    },
+    agentExited: (id) => !!this.sessions.get(id)?.paneExit,
+    awaitingChoice: (id) => approvalInbox.listPending().some((item) => item.sessionId === id && item.kind !== 'idle'),
+    // Remote (ssh) sessions keep their folder on another host, so received files have nowhere local to go.
+    // An adopted session's folder is the neutral wrapper folder, which its agent need not be able to read.
+    sessionDir: (sessionId) => {
+      const session = this.sessions.get(sessionId);
+      return session && !session.remote && !session.isAdopted ? session.workingDir : undefined;
+    },
+  });
   private teamWatcher: TeamWatcher = new TeamWatcher();
   private _orchestratorLoop: import('../orchestrator-loop.js').OrchestratorLoop | null = null;
   private readonly titleHostname: string;
   private windowTitle: string;
   private readonly indexHtmlTemplate: string;
   private readonly allowUnauthenticatedNetwork: boolean;
+  /** `--allow-unauthenticated-tunnel`; the tunnel guard reads it through the route context (#706). */
+  private readonly allowUnauthenticatedTunnel: boolean;
   private _pasteImageGcStop: (() => void) | null = null;
   private _eventLoopMonitor: EventLoopMonitorHandle | null = null;
   /** Opt-in hooks-only listener on the docker bridge gateway (CODEMAN_DOCKER_BRIDGE_HOOKS). */
@@ -489,7 +604,8 @@ export class WebServer extends EventEmitter {
     host: string = '127.0.0.1',
     titleHostname?: string,
     allowUnauthenticatedNetwork: boolean = false,
-    basePath: string = ''
+    basePath: string = '',
+    allowUnauthenticatedTunnel: boolean = false
   ) {
     super();
     this.setMaxListeners(0);
@@ -501,6 +617,7 @@ export class WebServer extends EventEmitter {
     this.testMode = testMode;
     this.allowUnauthenticatedNetwork =
       allowUnauthenticatedNetwork || isExplicitlyEnabled(process.env.CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK);
+    this.allowUnauthenticatedTunnel = allowUnauthenticatedTunnel;
     this.titleHostname = titleHostname || getHostname();
     this.windowTitle = `codeman:${this.titleHostname}`;
     this.indexHtmlTemplate = readFileSync(join(__dirname, 'public', 'index.html'), 'utf-8');
@@ -829,6 +946,7 @@ export class WebServer extends EventEmitter {
       addSession: this.registerSessionWithLayout.bind(this),
       tabLayouts: this.tabLayouts,
       cleanupSession: this.cleanupSession.bind(this),
+      forgetEditHistory: this.forgetEditHistory.bind(this),
       setupSessionListeners: this.setupSessionListeners.bind(this),
       persistSessionState: this.persistSessionState.bind(this),
       persistSessionStateNow: this._persistSessionStateNow.bind(this),
@@ -880,6 +998,7 @@ export class WebServer extends EventEmitter {
       scheduledRuns: this.scheduledRuns,
       teamWatcher: this.teamWatcher,
       tunnelManager: this.tunnelManager,
+      allowUnauthenticatedTunnel: this.allowUnauthenticatedTunnel,
       pushStore: this.pushStore,
       startScheduledRun: this.startScheduledRun.bind(this),
       stopScheduledRun: this.stopScheduledRun.bind(this),
@@ -969,6 +1088,9 @@ export class WebServer extends EventEmitter {
       this.userFailures = authState.userFailures;
       this.userIpFailures = authState.userIpFailures;
     }
+
+    // Bodyless API POSTs may arrive as empty chunked streams through a proxy.
+    installEmptyApiPostParser(this.app);
 
     // WebSocket support (terminal I/O — low-latency bidirectional channel)
     await this.app.register(fastifyWebsocket);
@@ -1242,6 +1364,22 @@ export class WebServer extends EventEmitter {
     registerRebootRestoreRoutes(this.app, ctx);
     registerReadMyMindRoutes(this.app, ctx);
     registerGitStatusRoutes(this.app, ctx);
+    registerEditHistoryRoutes(this.app, ctx, this.editHistorySync);
+    // Git fetch on an interval: this is only the wake-up, the scheduler itself decides what is due. Off in
+    // tests for the same reason as the polls below: a test drives `tick()` directly instead of waiting on
+    // a timer the harness would have to keep alive. The setting is read FRESH inside `tick()`, so turning
+    // it on takes effect on the next tick and turning it off actually stops the fetching.
+    if (!this.testMode) {
+      this.cleanup.setInterval(
+        () => {
+          this.gitFetchScheduler.tick().catch((err) => {
+            console.error('[git fetch] interval tick failed:', getErrorMessage(err));
+          });
+        },
+        GIT_FETCH_TICK_INTERVAL_MS,
+        { description: 'git fetch interval checker' }
+      );
+    }
     registerStatusTelemetryRoutes(this.app, ctx);
     registerSystemRoutes(this.app, ctx);
     registerCaseRoutes(this.app, ctx);
@@ -1249,6 +1387,9 @@ export class WebServer extends EventEmitter {
     // The registry's lifetime is the server's: it drops per-session wake state on every
     // cleanup path and resolves in-flight wakes on shutdown.
     this.remoteWake = registerSessionRoutes(this.app, ctx);
+    // The routes' ctx is a separate object: take the last-response reader they registered on it (Discord alerts).
+    this.lastResponseFor = (ctx as { lastResponseFor?: WebServer['lastResponseFor'] }).lastResponseFor;
+    registerAgentSessionRoutes(this.app, ctx);
     registerRespawnRoutes(this.app, ctx);
     registerRalphRoutes(this.app, ctx);
     registerPlanRoutes(this.app, ctx);
@@ -1260,15 +1401,27 @@ export class WebServer extends EventEmitter {
     registerWebviewRoutes(this.app, ctx, this.basePath);
     registerTabLayoutRoutes(this.app, ctx);
     registerMcpSyncRoutes(this.app);
-    registerConfigBackupRoutes(this.app);
+    registerConfigBackupRoutes(this.app, { reloadDiscord: () => this.discordBridge.reload() });
     registerWebhookRoutes(this.app, {
       notifier: this.webhookNotifier,
       configDir: getDataDir(),
       hostTitle: () => this.windowTitle,
     });
+    registerDiscordRoutes(this.app, {
+      bridge: this.discordBridge,
+      configDir: getDataDir(),
+      ctx,
+      hostTitle: () => this.windowTitle,
+    });
+    if (!this.testMode) {
+      // The gateway waits for restoreMuxSessions(): a reply during restore would be told the tab is gone.
+      this.discordBridge.hold();
+      void this.discordBridge.ensureLoaded().catch(() => undefined);
+    }
     registerDoctorRoutes(this.app);
     registerCustomModelRoutes(this.app);
     registerCliRegistryRoutes(this.app);
+    registerLocalModelRoutes(this.app, ctx);
 
     // Cron: build the service from the same context, recompute
     // due times for any persisted jobs, then expose it to its routes.
@@ -1389,8 +1542,9 @@ export class WebServer extends EventEmitter {
    */
   private async _rebuildCustomModelEnv(
     session: Session,
-    saved: CustomModelBookkeeping
-  ): Promise<Record<string, string> | undefined> {
+    saved: CustomModelBookkeeping,
+    ownEnv: Record<string, string> = {}
+  ): Promise<AppliedCustomModel | undefined> {
     const entry = getCli(session.mode);
     if (!entry) return undefined;
     const endpoint = (await readCustomModelHosts(getDataDir())).find((h) => h.id === saved.endpointId);
@@ -1401,17 +1555,63 @@ export class WebServer extends EventEmitter {
       return undefined;
     }
     try {
+      // Boot recovery omits `workingDir` (no reason to re-answer a trust dialog that already
+      // fired once). The real-home lookup reads the record's own values, since the session's
+      // overrides hold what the previous run injected. `linkRealHomeEntry()` keeps what is
+      // there, so this only decides an entry that is missing, which an own home skips when it
+      // does not hold one. With no own home, or one that does not answer (probed under the
+      // bulk cap, this walks every saved session), a missing entry links from the SERVER's
+      // `DSH_HOME` or `CLAUDE_CONFIG_DIR`, or their defaults (~/.dsh, ~/.claude).
       return applyCustomModelInjection(
         entry,
         endpoint,
         saved.modelId,
         session.id,
-        endpoint.modelContextLengths?.[saved.modelId]
-      )?.envOverrides;
+        resolveCustomModelContextLength(endpoint, saved.modelId),
+        undefined,
+        await guardSessionConfigDirHome(entry, (envVar) => ownEnv[envVar], {})
+      );
     } catch (err) {
       console.warn('[WebServer] Failed to rebuild custom-model env on recovery:', err);
       return undefined;
     }
+  }
+
+  /**
+   * Restore one persisted custom-model selection (both boot-recovery paths). The rebuilt
+   * bookkeeping must come from the CURRENT recipe, not from the saved record: this is the
+   * first feature where a shipped recipe changed KIND (deepseek: env redirect -> per-session
+   * patch home), so a selection saved by an old build restores with e.g. no `configDir`
+   * while the new recipe writes one, and clearing it later could then never delete the
+   * generated dir. `envKeys` is the UNION of saved and applied keys: the tmux session may
+   * still carry `setenv`s from both, and a clear has to unset every one.
+   *
+   * `ownEnv` is always passed, empty for a record saved before it existed: `_envOverrides`
+   * holds what the previous run injected, and only this record says what was the session's
+   * own. It meets the owner's grant again, like every other env override rebuilt from disk.
+   */
+  private async _restoreCustomModel(session: Session, saved: CustomModelBookkeeping): Promise<void> {
+    const ownEnv = (await clampEnvOverridesForOwner(session.owner, saved.ownEnv)) ?? {};
+    const applied = await this._rebuildCustomModelEnv(session, saved, ownEnv);
+    if (!applied) {
+      // Endpoint gone or CLI unregistered: restore the bookkeeping exactly as saved, which
+      // is what a later clear needs.
+      session.setCustomModel({ ...saved, ownEnv });
+      return;
+    }
+    session.setCustomModel(
+      {
+        ...saved,
+        ownEnv,
+        homeEnvVar: applied.homeEnvVar ?? saved.homeEnvVar,
+        // Prefer the current recipe's dir; keep the saved one when the recipe writes none,
+        // so a clear can still delete a directory an older recipe created.
+        configDir: applied.configDir ?? saved.configDir,
+        launchModel: applied.launchModel,
+        envKeys: [...new Set([...saved.envKeys, ...applied.envKeys])],
+      },
+      applied.envOverrides
+    );
   }
 
   /** Persists full session state including respawn config to state.json */
@@ -1423,8 +1623,9 @@ export class WebServer extends EventEmitter {
     // __attachmentHistory keeps the private (externalPath-bearing) history on disk,
     // separate from the sanitized public attachmentHistory in toState().
     const attachmentHistory = session.getAttachmentHistoryForPersist();
-    // __customModel keeps the selection's bookkeeping (injected env KEYS, config dir,
-    // launch model; never the values) so recovery can restore and later clear it.
+    // __customModel keeps the selection's bookkeeping (injected env KEYS, config dir, launch
+    // model, the session's own home path; never an injected value or any other own value)
+    // so recovery can restore and later clear it.
     const customModel = session.getCustomModelForPersist();
     const state = {
       ...base,
@@ -1499,6 +1700,9 @@ export class WebServer extends EventEmitter {
   ): Promise<void> {
     const session = this.sessions.get(sessionId);
     this.keepWarmService.remove(sessionId);
+    // A closed session takes its place in the fetch schedule with it: otherwise a detached-and-forgotten id
+    // would still count as tracked, and its next run would land on a session that no longer exists.
+    this.gitFetchScheduler.remove(sessionId);
     const pinned = session?.pinned === true || this.store.getSession(sessionId)?.pinned === true;
     if (coordinateLayout && session && killMux && !pinned) {
       return this.tabLayouts.runSessionDeletion([{ id: sessionId, owner: session.owner }], () =>
@@ -1685,7 +1889,8 @@ export class WebServer extends EventEmitter {
       // Only remove from state.json if we're also killing the mux session.
       // When killMux=false (server shutdown), preserve state for recovery.
       if (killMux) {
-        this.store.demoteOrRemoveSession(sessionId);
+        // The edit history goes with the record; a pinned session's demoted record keeps it.
+        if (this.store.demoteOrRemoveSession(sessionId) !== 'preserved') this.forgetEditHistory(sessionId);
       }
     }
 
@@ -1700,7 +1905,11 @@ export class WebServer extends EventEmitter {
     // detach: mail posted before that is still there when the session is re-attached
     // (while detached, the routes answer 404, so nothing new arrives). Before
     // cancelAll, so a reader released by it reads an empty inbox.
-    if (killMux) agentInbox.drop(sessionId);
+    if (killMux) {
+      agentInbox.drop(sessionId);
+      // A real delete only: a detach (killMux=false) leaves the session running and re-attachable.
+      void this.discordBridge.sessionDeleted(sessionId).catch(() => undefined);
+    }
     sessionWaits.notifySignal(sessionId, 'exit');
     sessionWaits.cancelAll(sessionId);
     approvalInbox.resolveForSession(sessionId, 'session_ended');
@@ -1914,6 +2123,16 @@ export class WebServer extends EventEmitter {
       '</head>',
       () => `<script>window.__codemanTranscriptPageKeys=${JSON.stringify(pageKeyClis)};</script>\n</head>`
     );
+    // Which run modes keep their PTY rows under a phone keyboard (inline renderers,
+    // the `keyboardHold` capability; `_keyboardHoldEligible` in terminal-ui.js). Same
+    // shape and reasoning as the page-key list above.
+    const keyboardHoldClis = enabledClis()
+      .filter((entry) => entry.capabilities.keyboardHold === 'inline')
+      .map((entry) => entry.id);
+    html = html.replace(
+      '</head>',
+      () => `<script>window.__codemanKeyboardHoldModes=${JSON.stringify(keyboardHoldClis)};</script>\n</head>`
+    );
     if (!soloSessionId && process.env.CODEMAN_GESTURE === '1') {
       html = html.replace('</head>', () => `<script>window.__codemanGestureAvailable=true;</script>\n</head>`);
       if (settings.gestureControlEnabled === true) {
@@ -1977,6 +2196,17 @@ export class WebServer extends EventEmitter {
     // First keep-warm evaluation: publishes the effective opt-in for the Session Options
     // readout even before any cache report arrives.
     void this.keepWarmService.schedule(session.id);
+    // Before every start of a NEW agent process the session asks this (a fresh pane, the
+    // respawn of a dead one, a restart in place; never an attach to an agent that runs).
+    // The model Codeman runs on this Mac is the one endpoint with something to say: no agent
+    // is started on it while its runtime is down or its model is not the one that was
+    // installed. Every other session, and every other endpoint, is answered `undefined`.
+    // Set on every call, above the idempotency return: it holds no state of its own.
+    session.setLaunchGuard(async () => {
+      const selection = session.customModel;
+      if (!selection) return undefined;
+      return getLocalModelService().launchRefusalMessage(selection.endpointId, selection.modelId);
+    });
     // Idempotent: the wiring exit handler detaches ALL listeners on every PTY exit
     // (removeSessionListenerRefs), so the re-attach routes (/interactive,
     // /interactive-respawn, /shell) call this again to restore observability
@@ -1989,13 +2219,27 @@ export class WebServer extends EventEmitter {
     this.runSummaryTrackers.set(session.id, summaryTracker);
     summaryTracker.recordSessionStarted(session.mode, session.workingDir);
 
-    // Set working directory for Ralph tracker to auto-load @fix_plan.md (not supported for external CLIs)
-    if (!isExternalCliMode(session.mode)) {
-      session.ralphTracker.setWorkingDir(session.workingDir);
+    // Set working directory for Ralph tracker to auto-load @fix_plan.md (not supported for external CLIs).
+    // A remote session's workingDir is a path on the remote host, and the watcher reads and
+    // fs.watch()es it on the LOCAL disk, so a remote session only records the path: the fix plan stays
+    // authoritative as for a local session (keeping the output-based completion guessers off), and its
+    // file is read over ssh only on an explicit import (fix-plan/read).
+    // ⚠️ An ADOPTED session is skipped outright: Ralph is refused for one anyway, and its
+    // `workingDir` is the neutral wrapper folder, not the foreign pane's work.
+    if (!isExternalCliMode(session.mode) && !session.isAdopted) {
+      if (session.remote) {
+        session.ralphTracker.setRemoteWorkingDir(session.workingDir);
+      } else {
+        session.ralphTracker.setWorkingDir(session.workingDir);
+      }
     }
 
-    // Start watching for new images in this session's working directory (if enabled globally and per-session)
-    if ((await this.isImageWatcherEnabled()) && session.imageWatcherEnabled) {
+    // Start watching for new images in this session's working directory (if enabled globally and per-session).
+    // A remote session's workingDir is a path on the remote host, and the watcher watches it on the LOCAL
+    // disk, so it is skipped there (the per-session and app-wide toggles skip it too). An ADOPTED session
+    // is skipped for the same reason as the Ralph watcher above: nothing in its wrapper folder is the
+    // foreign pane's work.
+    if ((await this.isImageWatcherEnabled()) && session.imageWatcherEnabled && !session.remote && !session.isAdopted) {
       imageWatcher.watchSession(session.id, session.workingDir);
     }
 
@@ -2082,6 +2326,9 @@ export class WebServer extends EventEmitter {
   ): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) return;
+    // ⚠️ A link scanned from an adopted pane was printed by a process on another host or in a
+    // container, while confinement here would be to this host's `/tmp`, the wrapper's folder.
+    if (session.isAdopted) return;
     const event =
       source === 'codex-generated'
         ? await registerGeneratedArtifactAttachment({
@@ -2219,11 +2466,15 @@ export class WebServer extends EventEmitter {
     return resolveTerminalHistoryConfig(settings);
   }
 
-  // Whether the Codeman agent skill is injected into cases on Claude session create
-  // (synced `agentSkillEnabled` setting, default OFF; docs/agent-control-plan.md §2).
+  // Whether the Codeman agent skill is injected into a session's workspace on create
+  // (synced `agentSkillEnabled` setting; docs/agent-control-plan.md §2). Default ON
+  // since 1.50.0, like `workspaceHooksEnabled` below: an absent key means a user who
+  // has never touched the switch, and only an explicit false turns it off. The copy
+  // ignores itself in git (`.gitignore` of `*`, see installAgentSkillInto), so the
+  // default leaves a user's `git status` clean.
   private async getAgentSkillEnabled(): Promise<boolean> {
     const settings = await this.readSettings();
-    return settings.agentSkillEnabled === true;
+    return settings.agentSkillEnabled !== false;
   }
 
   // Whether pending agent-inbox mail is snapshotted to disk (synced
@@ -2503,8 +2754,25 @@ export class WebServer extends EventEmitter {
     const lifecycleLog = getLifecycleLog();
     for (const s of result.cleaned) {
       lifecycleLog.log({ event: 'stale_cleaned', sessionId: s.id, name: s.name });
+      this.forgetEditHistory(s.id);
     }
+    // History files no session owns (a crash between removing a record and deleting its file).
+    const exists = (id: string) => this.sessions.has(id) || !!this.store.getSession(id);
+    await this.editHistorySync.sweep(exists).catch((err) => {
+      console.warn('[EditHistory] Sweeping orphaned histories failed:', getErrorMessage(err));
+    });
     return result.count;
+  }
+
+  /**
+   * Delete a session's edit history (diffs can hold secrets) once its record is gone: deleted
+   * live (`cleanupSession`), deleted as a record only (DELETE route), or cleaned as stale
+   * (startup, `POST /api/cleanup-state`).
+   */
+  private forgetEditHistory(sessionId: string): void {
+    void this.editHistorySync.remove(sessionId).catch((err) => {
+      console.warn(`[EditHistory] Removing history of ${sessionId} failed:`, getErrorMessage(err));
+    });
   }
 
   /**
@@ -2612,6 +2880,23 @@ export class WebServer extends EventEmitter {
     // Multi-user: derive an ownership routing hint so an event only reaches the
     // clients entitled to it (no-op in single-user — hint stays undefined).
     this.sse.broadcast(event, data, isMultiUserMode() ? this.deriveSseHint(event, data) : undefined);
+    this.bridgeSessionEvent(event, data);
+  }
+
+  /** Keep the Discord thread in step with the tab: created, renamed, deleted. Never throws. */
+  private bridgeSessionEvent(event: string, data: unknown): void {
+    // Deletion is NOT handled here: `session:deleted` also fires for a detach (killMux=false), where the
+    // session keeps running and can be re-attached. The real delete calls the bridge from the cleanup path.
+    if (event !== SseEvent.SessionCreated && event !== SseEvent.SessionUpdated) return;
+    const d = (data ?? {}) as { id?: string; name?: string; session?: { id?: string; name?: string } };
+    const s = d.session ?? d;
+    if (!s.id) return;
+    const id = s.id;
+    const run =
+      event === SseEvent.SessionCreated
+        ? this.discordBridge.sessionCreated(id, s.name).then(() => this.discordBridge.sessionRenamed(id, s.name))
+        : this.discordBridge.sessionRenamed(id, s.name);
+    void run.catch(() => undefined);
   }
 
   /**
@@ -2725,16 +3010,74 @@ export class WebServer extends EventEmitter {
   private applyPaneExits(): void {
     const getPaneExit = this.mux.getPaneExit?.bind(this.mux);
     if (!getPaneExit) return;
+    const getPaneCurrentPath = this.mux.getPaneCurrentPath?.bind(this.mux);
     for (const session of this.sessions.values()) {
       const muxName = session.muxName;
       // No pane, so nothing to report — and `setPaneExit()` would force UNKNOWN
       // for such a session anyway.
       if (!muxName) continue;
-      if (!session.setPaneExit(getPaneExit(muxName))) continue;
-      this.persistSessionState(session);
+      // The pane's live directory rides the same read: it is the base a relative
+      // path printed in the terminal resolves against. The manager's answer is
+      // applied as given, `undefined` included: it keeps its map across a failed
+      // or empty read and carries a blank `#{pane_current_path}` forward, so an
+      // `undefined` here means an authoritative read listed no single directory
+      // for the session (split into several panes, or gone from the socket).
+      const paneCwdChanged = getPaneCurrentPath ? session.setPaneCwd(getPaneCurrentPath(muxName)) : false;
+      if (paneCwdChanged) void this.refreshLiveWorktree(session);
+      if (session.setPaneExit(getPaneExit(muxName))) {
+        this.persistSessionState(session);
+      } else if (!paneCwdChanged) {
+        continue;
+      }
       this.broadcastSessionStateDebounced(session.id);
     }
     this.closeCleanlyExitedSessions();
+  }
+
+  /**
+   * Work out which linked worktree a session's pane moved into (#765). In the background, since
+   * it reads the folder, and only after the directory changed, so an idle pane costs nothing.
+   * A reading newer than the one this lookup started from owns the answer.
+   */
+  private async refreshLiveWorktree(session: Session): Promise<void> {
+    const cwd = session.paneCwd;
+    const worktree = await findLiveWorktree(session.workingDir, cwd, this.outsideWorktreeOptions(session));
+    if (session.paneCwd !== cwd) return;
+    if (session.setLiveWorktree(worktree)) this.broadcastSessionStateDebounced(session.id);
+  }
+
+  /**
+   * The rules a worktree OUTSIDE the session's folder must pass to be followed (#765 follow-up):
+   *
+   * - none in a Docker case workspace (the list is read only when a candidate needs it, and an
+   *   unreadable list follows nothing);
+   * - none while attachment workspace confinement is on (`attachmentConfineToWorkspace` /
+   *   `CODEMAN_ATTACHMENT_CONFINE`), since an outside worktree is a second served root;
+   * - none at, inside or around an attachment blocked tree (`attachmentBlockedPaths` /
+   *   `CODEMAN_ATTACHMENT_BLOCKED_PATHS`, plus the defaults), or at a sensitive path;
+   * - in multi-user mode, only inside the owner's space or `workingDir`.
+   *
+   * Codeman judges these rules when the pane moves. The file routes judge the two guard rules
+   * again on every request (`isOutsideWorktreeRootRefused()`), so a setting changed later applies
+   * at once. The Docker and multi-user rules are judged only when the pane moves. Undefined for a remote, Docker or
+   * adopted session, whose pane directory is not a path the agent works in on this host (an
+   * adopted session's pane runs our tmux attach client). None of the three gets a `paneCwd`
+   * either (`paneExitApplies`), so this is belt and braces; an adopted session needs its own
+   * test because `session.remote` and `session.docker` are undefined on one.
+   */
+  private outsideWorktreeOptions(session: Session): OutsideWorktreeOptions | undefined {
+    if (session.remote || session.docker || session.isAdopted) return undefined;
+    return {
+      dockerWorkspaces: defaultDockerWorkspaces,
+      allowRoot: async (root: string): Promise<boolean> => {
+        if (isOutsideWorktreeRootRefused(root, await loadAttachmentGuardConfig())) return false;
+        if (!isMultiUserMode()) return true;
+        const owner = session.owner ? await findUser(session.owner) : undefined;
+        return folderAllowedForUser(root, owner ? { username: owner.username, role: owner.role } : undefined, {
+          workingDir: session.workingDir,
+        });
+      },
+    };
   }
 
   /**
@@ -2847,6 +3190,27 @@ export class WebServer extends EventEmitter {
       })
       .catch(() => undefined);
 
+    // Discord: same event, same independence from Web Push. It adds the tail of what the CLI printed,
+    // so the person reading the thread can see what is being asked without opening the tab.
+    const dcSession = sessionId ? this.sessions.get(sessionId) : undefined;
+    // A question or permission dialog lives on the screen, so it keeps the screen tail (its options are
+    // there); a finished turn posts the CLI's whole last message instead, from its transcript.
+    const dialogEvent = event === SseEvent.HookPermissionPrompt || event === SseEvent.HookElicitationDialog;
+    void this.discordBridge
+      .notify({
+        event,
+        title: template.title,
+        body,
+        urgency: template.urgency as WebhookUrgency,
+        sessionId: sessionId || undefined,
+        sessionName: sessionName || undefined,
+        // A function, so the screen is only read (a synchronous tmux exec) once the bridge has decided to post.
+        tail: dcSession ? () => this.discordTail(dcSession, !dialogEvent) : undefined,
+        fullText: dcSession && !dialogEvent ? () => this.discordFullText(dcSession) : undefined,
+        host: this.windowTitle,
+      })
+      .catch(() => undefined);
+
     const subscriptions = this.pushStore.getAll();
     if (subscriptions.length === 0) return;
 
@@ -2926,6 +3290,34 @@ export class WebServer extends EventEmitter {
         }
       });
     }
+  }
+
+  /**
+   * What the person would see on the tab right now, for a Discord alert: the rendered tmux screen
+   * (`capture-pane -p`), never the raw output stream, which a full-screen UI repaints in place and
+   * reads as garbage. A session with no pane falls back to its plain text output, else nothing.
+   */
+  private discordTail(session: Session, cutComposer: boolean): string {
+    const pane = session.muxName ? (this.mux.capturePaneText?.(session.muxName) ?? null) : null;
+    // The composer row and the status lines under it are screen chrome, not what the CLI said.
+    const glyph = cutComposer ? getCli(session.mode)?.capabilities.workDetect?.promptGlyph : undefined;
+    return screenTail(pane ?? session.textOutput ?? '', 14, 900, glyph);
+  }
+
+  /**
+   * The CLI's whole last message from the response viewer's reader (the CLI's own transcript, or the pane
+   * segmented into turns for the CLIs that keep none); undefined for a shell, which has no turns, and the
+   * screen tail stands in whenever the reader finds nothing.
+   */
+  private async discordFullText(session: Session): Promise<{ text: string; version?: string } | undefined> {
+    if (!this.lastResponseFor) return undefined;
+    // A CLI with a transcript reader, or whose pane the viewer segments into turns; a shell has neither.
+    if (getCli(session.mode)?.capabilities.transcript === 'none' && !isExternalCliTranscriptMode(session.mode)) {
+      return undefined;
+    }
+    const r = await this.lastResponseFor(session);
+    // The turn it came from: the transcript's stamp, else when the person last submitted (a pane has no stamp).
+    return { text: r.text, version: r.timestamp || String(session.lastSubmitAt ?? '') };
   }
 
   /** The notification body for an event (shared by Web Push and the webhook channel). */
@@ -3059,6 +3451,14 @@ export class WebServer extends EventEmitter {
       reconcileUpdateOnBoot();
     }
 
+    // One-time, once per data dir: a stored `agentSkillEnabled: false` written by the switch's
+    // old default (up to 1.49.0) becomes true, so the 1.50.0 default reaches installs that ever
+    // saved App Settings (agent-skill-default-migration.ts). Before the restore below reads
+    // settings (2 s cache) and before listen, so no session create can see the old value.
+    if (!this.testMode && (await migrateAgentSkillDefault()) === 'switched-on') {
+      this._settingsCache = null;
+    }
+
     // Restore mux sessions BEFORE accepting connections
     // This prevents race conditions where clients connect before state is ready
     // CRITICAL: Skip in test mode to prevent tests from picking up user sessions
@@ -3069,6 +3469,20 @@ export class WebServer extends EventEmitter {
       if (restoredMail > 0) console.log(`[AgentInbox] restored ${restoredMail} pending message(s)`);
       const restored = await this.restoreMuxSessions();
       await this.finalizeRestoredState(restored);
+      void this.discordBridge
+        .release()
+        .then(async () => {
+          // Only after a successful restore, like the agent inbox prune and the tab layout reconciliation, and
+          // with the same keep set: a reboot-restore rebuild reuses the old id.
+          if (!restored) return;
+          await this.discordBridge.prune([
+            ...this.sessions.keys(),
+            ...Object.keys(this.store.getSessions()),
+            ...rebootRestoreRegistry.list(() => true).map((entry) => entry.sessionId),
+          ]);
+        })
+        .then(() => this.discordBridge.startStaleSweep())
+        .catch(() => undefined);
 
       // Instance-scoped reaper: after restore, `docker rm -f` managed containers of
       // THIS instance whose case is gone from docker-cases.json (best-effort, never
@@ -3085,6 +3499,14 @@ export class WebServer extends EventEmitter {
             /* best-effort — daemon may be absent */
           });
       }
+    }
+
+    // The model Codeman runs on this Mac (src/local-model/): a job a restart interrupted comes
+    // back paused and waits for a click, and an installed runtime that was not stopped is
+    // started again (an own orphan on its port is adopted or replaced). Off the startup path:
+    // boot() never throws, and nothing waits for a runtime to answer. Not in tests.
+    if (!this.testMode) {
+      void getLocalModelService().boot();
     }
 
     // Sweep agent preamble caches whose sessions are gone (see
@@ -3346,16 +3768,12 @@ export class WebServer extends EventEmitter {
     // Tunnel only starts when user clicks the toggle in the UI — never on boot.
     // Reset persisted tunnelEnabled so the UI toggle reflects actual state.
     if (await this.isTunnelEnabled()) {
-      const settingsPath = dataPath('settings.json');
       try {
-        const content = await fs.readFile(settingsPath, 'utf-8');
-        const settings = JSON.parse(content);
-        settings.tunnelEnabled = false;
-        await fs.writeFile(settingsPath, JSON.stringify(settings, null, 2));
-      } catch {
-        /* ignore */
+        await mutateSettingsFile((settings) => ({ ...settings, tunnelEnabled: false }));
+        console.log('Cloudflare tunnel setting reset (tunnel only starts on explicit UI toggle)');
+      } catch (err) {
+        console.warn('Could not reset the Cloudflare tunnel setting:', getErrorMessage(err));
       }
-      console.log('Cloudflare tunnel setting reset (tunnel only starts on explicit UI toggle)');
     }
 
     // Start team watcher for agent team awareness (always on — lightweight polling)
@@ -3521,7 +3939,7 @@ export class WebServer extends EventEmitter {
       // bookkeeping survives a restart and the values are re-derived here.
       const savedCustomModel = (saved as { __customModel?: CustomModelBookkeeping }).__customModel;
       if (savedCustomModel) {
-        session.setCustomModel(savedCustomModel, await this._rebuildCustomModelEnv(session, savedCustomModel));
+        await this._restoreCustomModel(session, savedCustomModel);
       }
       if (saved.niceEnabled !== undefined || saved.niceValue !== undefined) {
         session.setNice({ enabled: saved.niceEnabled, niceValue: saved.niceValue });
@@ -3539,6 +3957,9 @@ export class WebServer extends EventEmitter {
     }
     if (saved.autoClearEnabled !== undefined || saved.autoClearThreshold !== undefined) {
       session.setAutoClear(saved.autoClearEnabled ?? false, saved.autoClearThreshold);
+    }
+    if (saved.gitFetchEnabled !== undefined || saved.gitFetchIntervalSeconds !== undefined) {
+      session.setGitFetchSettings(saved.gitFetchEnabled, saved.gitFetchIntervalSeconds);
     }
     if (saved.autoResumeEnabled) {
       // The stamp is re-armed by default, because a Codeman restart leaves the
@@ -3654,6 +4075,9 @@ export class WebServer extends EventEmitter {
     } catch (err) {
       console.warn(`[Server] releasing the tab layout slot failed: ${getErrorMessage(err)}`);
     }
+    // Per-tab bridge state only: a reboot-restore rebuild reuses the old id and stays on offer for a
+    // retry, so its thread must survive the discard.
+    this.discordBridge.forgetTab(sessionId);
     // Any `session:updated` the half-built session emitted before it failed left a
     // tab on every other open board, and the client's handler is an upsert.
     this.broadcast(SseEvent.SessionDeleted, { id: sessionId });
@@ -3762,6 +4186,11 @@ export class WebServer extends EventEmitter {
               // below, a future `expiresAt` re-arms the timer once the pane is attached.
               lastRealPromptAt: savedState?.lastRealPromptAt,
               keepWarmEnabled: savedState?.keepWarmEnabled,
+              // The session's own fetch switch and interval, carried over rather than reset to the app default:
+              // the choice is the user's and outlives the run that made it. The scheduler reads them fresh
+              // on its next tick, so a restored session is back on its own schedule without a restart.
+              gitFetchEnabled: savedState?.gitFetchEnabled,
+              gitFetchIntervalSeconds: savedState?.gitFetchIntervalSeconds,
               // Conversations this pane provably owned, oldest first. Its tail is
               // the conversation the CLI was on when the server stopped, which is
               // what a re-attach must point the viewer at instead of the launch id.
@@ -3801,6 +4230,14 @@ export class WebServer extends EventEmitter {
               // MuxSession.docker; state.json carries SessionState.docker), so recovery
               // rebuilds the `docker exec` launch instead of a broken local command.
               docker: muxSession.docker ?? savedState?.docker,
+              // Adoption metadata round-trips for the same reason remote/docker do,
+              // and one more: it is the ONLY thing that marks this session as
+              // wrapping a process Codeman never launched. Dropping it on recovery
+              // silently re-enabled respawn, Ralph and hook-backed waits against
+              // someone else's live tmux session after every server restart:
+              // measured, not hypothetical. The mux record is preferred because it
+              // is what `killSession`'s detach-not-kill guard already reads.
+              adopt: muxSession.adopt ?? savedState?.adopt,
               owner: recoveredOwner,
               // Tab lineage survives a restart. It is only decoration, so a parent
               // that did NOT come back is harmless: the frontend draws an edge only
@@ -3815,7 +4252,7 @@ export class WebServer extends EventEmitter {
             // the isolated config dir; an endpoint that has since been deleted still gets
             // the bookkeeping restored, which is what a later clear needs to unset.
             if (savedCustomModel) {
-              session.setCustomModel(savedCustomModel, await this._rebuildCustomModelEnv(session, savedCustomModel));
+              await this._restoreCustomModel(session, savedCustomModel);
             }
 
             // Update session name if it was a "Restored:" placeholder or doesn't match saved name
@@ -4084,6 +4521,13 @@ export class WebServer extends EventEmitter {
     const workspaces = new Set<string>();
     for (const session of this.sessions.values()) {
       if (session.mode !== 'claude' || session.remote) continue;
+      // ⚠️ An ADOPTED session is not caught by the `remote` check above: its
+      // connection facts live on `adopt.remote` / `adopt.docker`, so a session
+      // wrapping someone's in-container or over-ssh claude looks local here.
+      // Its workspace was never Codeman's to begin with, so installing hooks
+      // there writes `.claude/settings.local.json` into the human's own repo,
+      // on EVERY restart, since this sweep runs from boot recovery.
+      if (session.isAdopted) continue;
       if (session.docker && !session.docker.hooksEnabled) continue;
       if (session.workingDir) workspaces.add(session.workingDir);
     }
@@ -4214,12 +4658,22 @@ export class WebServer extends EventEmitter {
     // got wrong once.
     void stopDeepSeekWeb();
 
+    // The local model runtime is a non-detached child, but a child is not ended by its
+    // parent's exit: it gets SIGTERM here, and an install job in flight is interrupted (the
+    // next start reads it as paused). An orphan a hard kill leaves is adopted at the next boot.
+    if (!this.testMode) {
+      void getLocalModelService().shutdown();
+    }
+
     // The header's GPU / CPU clock sampler is a Windows child process under WSL, and its idle sweep a timer.
     stopHostSensors();
 
     // Same teardown rule: the per-endpoint llama-swap log tails are otherwise closed
     // only by the periodic idle sweep, whose interval is disposed just below.
     closeAllLlamaSwapLogTails();
+
+    // Close the Discord gateway socket and its heartbeat, and clear the bridge's per-tab maps.
+    this.discordBridge.stop();
 
     // Dispose all managed timers (intervals + resettable timeouts)
     this.cleanup.dispose();
@@ -4233,6 +4687,9 @@ export class WebServer extends EventEmitter {
     sessionWaits.cancelEverything();
     approvalInbox.stop();
     this.keepWarmService.stop();
+    // Stops the fetch sweep from starting another run while the server is closing; a git process already
+    // running is left to finish, which is what a fetch does to a repository nothing else is touching.
+    this.gitFetchScheduler.stop();
     // A post within the debounce window before shutdown would otherwise not reach disk.
     // Flushed again after `app.close()` below, for a post that lands in between.
     agentInboxPersistence.flush();
@@ -4348,6 +4805,9 @@ export class WebServer extends EventEmitter {
     this.respawnTimers.clear();
     this.runSummaryTrackers.clear();
     this.transcriptWatchers.clear();
+    await this.editHistorySync.flushAll().catch((err) => {
+      console.warn('[EditHistory] Saving on shutdown failed:', getErrorMessage(err));
+    });
     this.sessionListenerRefs.clear();
     this.scheduledRuns.clear();
     // Dispose StaleExpirationMaps (stops internal cleanup timers)
@@ -4399,9 +4859,19 @@ export async function startWebServer(
   host: string = '127.0.0.1',
   titleHostname?: string,
   allowUnauthenticatedNetwork: boolean = false,
-  basePath: string = ''
+  basePath: string = '',
+  allowUnauthenticatedTunnel: boolean = false
 ): Promise<WebServer> {
-  const server = new WebServer(port, https, testMode, host, titleHostname, allowUnauthenticatedNetwork, basePath);
+  const server = new WebServer(
+    port,
+    https,
+    testMode,
+    host,
+    titleHostname,
+    allowUnauthenticatedNetwork,
+    basePath,
+    allowUnauthenticatedTunnel
+  );
   await server.start();
   return server;
 }

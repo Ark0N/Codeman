@@ -18,6 +18,15 @@
  * cache, a missing CLI re-ran the whole chain and stalled the event loop for up
  * to 5s on every request, forever.
  *
+ * One thing ends a backoff early: `install.sh` touches `CLI_INSTALLED_MARKER` in
+ * the data dir when it has installed a CLI, because Run reads this same answer, so
+ * "Run fails, add the agent, Run again" would otherwise fail twice. The check is
+ * one `stat` of that file, inside the backoff branch, so a resolved CLI never pays
+ * for it. It is deliberately not a re-walk of PATH during the backoff: that would
+ * put a synchronous stat of every PATH entry on the request path, where one dead
+ * network mount freezes the server (#516), and execute candidates that were
+ * already refused. A CLI installed some other way waits out the backoff as before.
+ *
  * Test hermeticity: under vitest (`process.env.VITEST`) the production host
  * short-circuits — IO primitives that were not injected become inert stubs, so
  * a suite can never scan the machine's PATH or spawn login shells (the same
@@ -34,6 +43,7 @@ import { execFileSync } from 'node:child_process';
 import { accessSync, constants, statSync } from 'node:fs';
 import { basename, delimiter, dirname, isAbsolute, join } from 'node:path';
 import { EXEC_TIMEOUT_MS } from '../config/exec-timeout.js';
+import { dataPath } from '../config/instance.js';
 import { loginShellArgs, resolveLocalShell } from './shell-resolver.js';
 
 const SAFE_BINARY_NAME = /^[a-z0-9][a-z0-9._-]*$/i;
@@ -41,6 +51,12 @@ const LOGIN_SHELL_BEGIN_MARKER = '__CODEMAN_CLI_RESOLVE_BEGIN__';
 const LOGIN_SHELL_END_MARKER = '__CODEMAN_CLI_RESOLVE_END__';
 /** Maximum rendered length of each bounded diagnostic field, excluding its label. */
 const DIAGNOSTIC_FIELD_MAX_LENGTH = 1024;
+
+/**
+ * The file `install.sh` touches in the data dir once it has installed a CLI (`mark_cli_installed`).
+ * Its mtime is all that is read; test/install-sh-invariants.test.ts pins the name on both sides.
+ */
+export const CLI_INSTALLED_MARKER = 'cli-installed';
 
 /** First retry window after a full-chain resolution miss. */
 const RESOLVE_RETRY_BASE_MS = 60_000;
@@ -79,6 +95,8 @@ export interface CliResolverHost {
   findOnProcessPath(binary: string): string | null;
   findInLoginShell(binary: string): string | null;
   exists(path: string): boolean;
+  /** A number that changes when the installer has installed a CLI; 0 when it never did. */
+  installStamp?(): number;
 }
 
 export interface CandidateValidation<T> {
@@ -113,6 +131,8 @@ export interface ProductionCliResolverHostOptions {
   shellArgs?: string[];
   runCommand?: CliResolverCommandRunner;
   isExecutableFile?: (path: string) => boolean;
+  /** Where the installer's marker is. Defaults to `CLI_INSTALLED_MARKER` in the data dir. */
+  installMarkerPath?: string;
   /**
    * Test-only escape hatch: keep the REAL IO primitives even under vitest.
    * For tests that exercise `isExecutableRegularFile` against their own temp
@@ -202,6 +222,14 @@ export function createProductionCliResolverHost(options: ProductionCliResolverHo
       return candidate && isExecutableFile(candidate) ? candidate : null;
     },
     exists: isExecutableFile,
+    installStamp: () => {
+      if (inert) return 0;
+      try {
+        return statSync(options.installMarkerPath ?? dataPath(CLI_INSTALLED_MARKER)).mtimeMs;
+      } catch {
+        return 0;
+      }
+    },
   };
 }
 
@@ -260,6 +288,8 @@ export function createCliExecutableResolver<T = undefined>(
   let lastFailureAt = 0;
   /** The invalidation generation the cached state above belongs to. */
   let generation = binaryGenerations.get(options.binary) ?? 0;
+  /** The installer's stamp at the last run of the chain: only a CHANGE is news. */
+  let installStampSeen = 0;
   const accept = (path: string | null, source: CliResolutionSource): CliResolution<T> | null => {
     if (!path || !isAbsolute(path) || !host.exists(path)) return null;
     const validation = options.validateCandidate?.(path) ?? ({ accepted: true } as CandidateValidation<T>);
@@ -285,8 +315,13 @@ export function createCliExecutableResolver<T = undefined>(
       // Negative cache: a miss is remembered and the chain — whose login-shell
       // tail is a synchronous 5s-bounded spawn — is not re-run until the
       // backoff elapses. Without this, every status poll and Run click against
-      // a missing CLI froze the event loop for the full probe, forever.
-      if (failures > 0 && now() - lastFailureAt < cliResolveRetryDelayMs(failures)) return null;
+      // a missing CLI froze the event loop for the full probe, forever. A changed
+      // installer stamp is the one early way out (see the @fileoverview), and buys
+      // one run of the chain.
+      const installStamp = host.installStamp?.() ?? 0;
+      const installedSince = installStamp !== installStampSeen;
+      if (failures > 0 && !installedSince && now() - lastFailureAt < cliResolveRetryDelayMs(failures)) return null;
+      installStampSeen = installStamp;
 
       cached = accept(host.findOnProcessPath(options.binary), 'process-path');
       if (!cached) {

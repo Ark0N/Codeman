@@ -29,13 +29,8 @@
  * write path (`registry-writer.ts` mirrors `custom-model-hosts.ts`).
  */
 
-import { execFile, spawn } from 'node:child_process';
-import { constants as fsConstants } from 'node:fs';
-import { access } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
-import { promisify } from 'node:util';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { ApiErrorCode, createErrorResponse, getErrorMessage, type ApiResponse } from '../../types.js';
+import { ApiErrorCode, createErrorResponse, type ApiResponse } from '../../types.js';
 import { getAuthUser, isAdmin, parseBody, readJsonConfig, SETTINGS_PATH } from '../route-helpers.js';
 import { isMultiUserMode } from '../../config/multiuser.js';
 import { listClis, resolveInstallCommandForPlatform } from '../../config/cli-registry/registry.js';
@@ -45,9 +40,18 @@ import { STOCK_CLIS } from '../../config/cli-registry/stock.js';
 import type { CliEntry } from '../../config/cli-registry/types.js';
 import { CliCustomEntrySchema, CliEnableSchema } from '../schemas.js';
 import { appendAdminAudit } from '../admin-audit.js';
-import { invalidateCliExecutableResolvers } from '../../utils/cli-executable-resolver.js';
-import { invalidateCliResolverCache } from '../../utils/cli-resolver.js';
 import { isCliEntryInstalled, probeStockCliAvailability } from '../../utils/cli-installed-probes.js';
+import {
+  CLI_INSTALL_TIMEOUT_MS,
+  forgetResolvedCli,
+  runInstallCommand,
+  tryBeginCliInstall,
+  type CliInstallResult,
+} from '../../cli-install-runner.js';
+
+// The install runner lives in src/cli-install-runner.ts, shared with the local model install
+// job. These two stay importable from here, where the route's tests take them from.
+export { installEnv, npmGlobalPrefixWritable } from '../../cli-install-runner.js';
 
 /**
  * `cliManagementEnabled` defaults OFF, same reasoning as
@@ -76,17 +80,6 @@ export interface CliListItem {
    * absent for a custom entry, whose install command is never executed (Decision 3).
    */
   installCommand?: string;
-}
-
-/**
- * Forget every cached binary lookup for this CLI — the generic per-id resolver (which
- * captures the entry's binaries when first built) and every underlying per-binary cache,
- * success and negative-cache backoff alike. Called after anything that changes what is on
- * disk or what the CLI's binary IS; see `invalidateCliExecutableResolvers`.
- */
-function forgetResolvedCli(id: string, binaries: readonly string[]): void {
-  invalidateCliExecutableResolvers(binaries);
-  invalidateCliResolverCache(id);
 }
 
 const STOCK_IDS = new Set(STOCK_CLIS.map((e) => e.id as string));
@@ -202,195 +195,6 @@ function nextOrder(): number {
   return (orders.length ? Math.max(...orders) : 0) + 10;
 }
 
-/** Bounded execution: `PATH_INSTALL_TIMEOUT_MS`, output capped, process GROUP killed on timeout. */
-const CLI_INSTALL_TIMEOUT_MS = 300_000;
-
-/**
- * Ids with an install running right now. A second request for the same id gets 409 rather
- * than a second `curl | bash` or `npm install -g` racing the first over the same prefix.
- */
-const installsInFlight = new Set<string>();
-
-const execFileAsync = promisify(execFile);
-
-/**
- * True when `npm install -g` can write to this process's npm global prefix, or when that cannot
- * be determined (then nothing is redirected: a wrong guess would move installs somewhere the
- * user did not choose). `npm config get prefix` is asked rather than guessed from `process.execPath`
- * because a user `.npmrc` / `NPM_CONFIG_PREFIX` can point it anywhere.
- *
- * Async so the server keeps serving while npm boots (130 to 240 ms), and killed with SIGKILL on
- * timeout because `SIGTERM` alone leaves the wait running. A prefix that does not exist yet is
- * judged by the nearest ancestor that does: npm creates the missing directories, so a user
- * `.npmrc` pointing at `~/.npm-global` before it was made is not moved.
- */
-export async function npmGlobalPrefixWritable(source: NodeJS.ProcessEnv): Promise<boolean> {
-  try {
-    const { stdout } = await execFileAsync('npm', ['config', 'get', 'prefix'], {
-      env: source,
-      encoding: 'utf8',
-      timeout: 5_000,
-      killSignal: 'SIGKILL',
-    });
-    const prefix = stdout.trim();
-    if (!prefix) return true;
-    // npm creates lib/node_modules under the prefix; walk up to the first directory that exists.
-    let dir = join(prefix, 'lib', 'node_modules');
-    for (;;) {
-      try {
-        await access(dir, fsConstants.W_OK);
-        return true;
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return false;
-        const parent = dirname(dir);
-        if (parent === dir) return false;
-        dir = parent;
-      }
-    }
-  } catch {
-    return true;
-  }
-}
-
-/**
- * The server's environment minus every `CODEMAN_*` variable. An install script is third-party
- * code, and those variables carry Codeman's own secrets and wiring (`CODEMAN_PASSWORD`, the
- * data dir, the tmux socket), none of which an installer needs.
- *
- * It also points `NPM_CONFIG_PREFIX` at `$HOME/.local` so an `npm install -g` lands somewhere the
- * server user can write and Codeman's resolvers already search (`~/.local/bin`):
- *  - inside the Docker Compose container (`CODEMAN_IN_CONTAINER=1`), so installs survive an image
- *    update (the image's own prefix is image content);
- *  - on a native install whose npm global prefix is not writable by the server user (a system node
- *    under `/usr`, installed by root). Without this `npm install -g` died with EACCES (exit 243),
- *    e.g. DeepSeek's `npm install -g @deepseek-ai/dsh`. An explicit `NPM_CONFIG_PREFIX` the
- *    operator set is respected, and so is a prefix that is writable (nvm, `~/.npm-global`, ...).
- */
-export function installEnv(
-  source: NodeJS.ProcessEnv = process.env,
-  prefixWritable: (env: NodeJS.ProcessEnv) => boolean = () => true
-): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {};
-  for (const [key, value] of Object.entries(source)) {
-    if (!key.startsWith('CODEMAN_')) env[key] = value;
-  }
-  // ⚠️ In the Docker Compose deployment the image sets NPM_CONFIG_PREFIX=/opt/codeman-cli, which is IMAGE
-  // content: `Update-Codeman.sh` recreates the container and every CLI installed there (dsh, pi, ...)
-  // vanishes. HOME is the persistent bind mount and `~/.local/bin` is already on every resolver's search
-  // list, so npm-based installs are redirected there. curl|bash installers already target HOME.
-  if (source.CODEMAN_IN_CONTAINER === '1' && source.HOME) {
-    redirectNpmPrefix(env, source.HOME);
-  } else if (process.platform !== 'win32' && source.HOME && !source.NPM_CONFIG_PREFIX && !prefixWritable(env)) {
-    redirectNpmPrefix(env, source.HOME);
-  }
-  return env;
-}
-
-/**
- * Point npm at `$HOME/.local`, dropping every spelling of the prefix key first. `npm run` exports a
- * lowercase `npm_config_prefix`, npm reads `npm_config_*` case-insensitively, and when both spellings
- * are present a `/bin/sh` that sorts its environment (bash) lets the older value win. The explicit
- * operator guard in `installEnv` stays on the uppercase key only: npm always injects the lowercase one.
- */
-function redirectNpmPrefix(env: NodeJS.ProcessEnv, home: string): void {
-  for (const key of Object.keys(env)) if (/^npm_config_prefix$/i.test(key)) delete env[key];
-  env.NPM_CONFIG_PREFIX = `${home}/.local`;
-}
-
-/**
- * `installEnv` for this process, with the (async) npm prefix probe done first and only when the
- * command runs npm at all: a `curl | bash` installer never pays for it.
- */
-async function installEnvFor(command: string, source: NodeJS.ProcessEnv = process.env): Promise<NodeJS.ProcessEnv> {
-  const usesNpm = /\bnpm\b/.test(command);
-  const probeNeeded =
-    usesNpm &&
-    source.CODEMAN_IN_CONTAINER !== '1' &&
-    process.platform !== 'win32' &&
-    !!source.HOME &&
-    !source.NPM_CONFIG_PREFIX;
-  const writable = probeNeeded ? await npmGlobalPrefixWritable(installEnv(source)) : true;
-  return installEnv(source, () => writable);
-}
-
-interface InstallResult {
-  code: number | null;
-  output: string;
-  timedOut: boolean;
-}
-
-/**
- * Runs a STOCK entry's already-vetted install command. `shell: true` is unavoidable here —
- * the shipped commands are genuinely `curl | bash` / `npm install -g` one-liners — but this
- * is NOT a reopening of the config-shell-text concern the registry's `shellToken` pattern
- * exists to prevent: the string executed here is NEVER user input, only ever what is
- * already hardcoded and reviewed in `stock.ts` (`resolveInstallCommandForPlatform`), and a
- * CUSTOM entry can never reach this function at all — see the route's own guard below.
- */
-async function runInstallCommand(command: string): Promise<InstallResult> {
-  const env = await installEnvFor(command);
-  return new Promise((resolve) => {
-    let child: ReturnType<typeof spawn>;
-    try {
-      child = spawn(command, {
-        shell: true,
-        stdio: ['ignore', 'pipe', 'pipe'],
-        // Own process group; the timeout below kills the whole tree by hand, mirroring
-        // the DeepSeek profile-install endpoint's own reasoning: an install command fans
-        // out into package-manager children, and spawn's own `timeout` option signals
-        // only the direct child, leaving survivors holding the pipes open forever.
-        detached: true,
-        env,
-      });
-    } catch (err) {
-      resolve({ code: null, output: `spawn failed: ${getErrorMessage(err)}`, timedOut: false });
-      return;
-    }
-
-    let output = '';
-    let timedOut = false;
-    let settled = false;
-    let killTimer: NodeJS.Timeout | undefined;
-    let reapTimer: NodeJS.Timeout | undefined;
-
-    const capture = (chunk: Buffer) => {
-      if (output.length < 16_384) output += chunk.toString('utf-8');
-    };
-    child.stdout?.on('data', capture);
-    child.stderr?.on('data', capture);
-
-    const killTree = (signal: NodeJS.Signals) => {
-      try {
-        if (child.pid) process.kill(-child.pid, signal);
-      } catch {
-        /* already gone */
-      }
-    };
-
-    const finish = (code: number | null) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      if (killTimer) clearTimeout(killTimer);
-      if (reapTimer) clearTimeout(reapTimer);
-      resolve({ code, output, timedOut });
-    };
-
-    const timer = setTimeout(() => {
-      timedOut = true;
-      killTree('SIGTERM');
-      killTimer = setTimeout(() => killTree('SIGKILL'), 3_000);
-      reapTimer = setTimeout(() => finish(null), 8_000);
-    }, CLI_INSTALL_TIMEOUT_MS);
-
-    child.on('error', (err) => {
-      output = `${output}\n${err.message}`;
-      finish(null);
-    });
-    child.on('close', (code) => finish(code));
-  });
-}
-
 export function registerCliRegistryRoutes(app: FastifyInstance): void {
   // ---- Phase 2: read ----------------------------------------------------
   // GET /api/clis — every registry entry, disabled ones included (this is an
@@ -461,6 +265,8 @@ export function registerCliRegistryRoutes(app: FastifyInstance): void {
 
   // ---- Phase 4: auto-install (stock only) --------------------------------
   // One install per id at a time (409 otherwise), and the script never sees CODEMAN_* env.
+  // Bounded execution (`CLI_INSTALL_TIMEOUT_MS`), output capped, process GROUP killed on
+  // timeout: all of that is `runInstallCommand()` in src/cli-install-runner.ts.
   // POST /api/clis/:id/install — runs the entry's already-vetted install
   // command. Separate endpoint from Phase 3's toggle: installing is a bigger
   // action than a boolean flip and gets its own audit entry. Never auto-
@@ -488,15 +294,16 @@ export function registerCliRegistryRoutes(app: FastifyInstance): void {
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `"${id}" has no install command for this platform`);
       }
 
-      if (installsInFlight.has(id)) {
+      // ONE slot per id, shared with the local model install job (src/cli-install-runner.ts).
+      const release = tryBeginCliInstall(id);
+      if (!release) {
         return createErrorResponse(ApiErrorCode.CONFLICT, `"${id}" is already being installed`);
       }
-      installsInFlight.add(id);
-      let result: InstallResult;
+      let result: CliInstallResult;
       try {
         result = await runInstallCommand(command);
       } finally {
-        installsInFlight.delete(id);
+        release();
       }
       // Even a failed or timed-out install may have left a binary behind, so forget the
       // cached lookups either way: the next Run click or badge read probes afresh

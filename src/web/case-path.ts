@@ -60,6 +60,8 @@ export interface NewCasePathContext {
    * listed as a local case, so it must not be registered as a linked one too.
    */
   casesDirs?: readonly string[];
+  /** What to do instead when the path is the cases folder or directly in it. Defaults to Create New's wording. */
+  casesDirAdvice?: string;
 }
 
 export type NewCasePathResult =
@@ -106,10 +108,10 @@ export function blockedReason(
   // refusing everything below it blocked most of the tree.
   for (const dir of ctx.casesDirs ?? []) {
     if (absPath === dir) {
-      return `That is the cases folder itself (${dir}); create a case inside it with plain Create New (no custom folder)`;
+      return `That is the cases folder itself (${dir}); ${ctx.casesDirAdvice ?? 'create a case inside it with plain Create New (no custom folder)'}`;
     }
     if (dirname(absPath) === dir) {
-      return `That folder is directly in the cases folder (${dir}), where it is listed as a local case; create it there with plain Create New (no custom folder)`;
+      return `That folder is directly in the cases folder (${dir}), where it is listed as a local case; ${ctx.casesDirAdvice ?? 'create it there with plain Create New (no custom folder)'}`;
     }
   }
   return null;
@@ -132,7 +134,7 @@ async function resolvedPolicy(ctx: NewCasePathContext): Promise<[NewCasePathCont
     Promise.all((ctx.casesDirs ?? []).map(realpathOr)),
     Promise.all(BLOCKED_SYSTEM_ROOTS.map(realpathOr)),
   ]);
-  return [{ home, dataDir, casesDirs }, systemRoots];
+  return [{ home, dataDir, casesDirs, casesDirAdvice: ctx.casesDirAdvice }, systemRoots];
 }
 
 /**

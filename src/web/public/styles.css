@@ -616,6 +616,52 @@ body {
   padding-left: var(--lineage-spine-channel);
 }
 
+/* L-shaped strip (`_syncTabStripCorner()`, app.js): a wrapped classic strip
+   runs the header's full width, the toolbar sits over its top-right corner,
+   and only the rows beside the toolbar stop short of it. A flex line cannot
+   be shortened on its own, so the strip lays its tabs out inline, around a
+   float the size of the toolbar's box (measured into --tab-corner-width and
+   --tab-corner-height). The strip is a scroll container, so it contains the
+   float and is never shorter than the toolbar it now holds up; a strip that
+   would actually scroll keeps the plain wrap instead. Inline tabs space their
+   rows with a bottom margin (the old row-gap, lineage's included); the strip
+   carries no font size of its own, so the whitespace between tabs is 0 wide. */
+.header:has(> .session-tabs-host > .session-tabs.tabs-corner) > .header-right {
+  position: absolute;
+  top: 0.35rem;
+  right: 0.75rem;
+}
+
+.session-tabs-host > .session-tabs.tabs-corner {
+  display: block;
+  font-size: 0;
+  padding-bottom: 0;
+}
+
+.session-tabs-host > .session-tabs.tabs-corner::before {
+  content: '';
+  float: right;
+  width: var(--tab-corner-width, 0px);
+  height: var(--tab-corner-height, 0px);
+}
+
+.session-tabs-host > .session-tabs.tabs-corner > .session-tab {
+  display: inline-flex;
+  vertical-align: top;
+  margin: 0 2px var(--lineage-row-gap, 4px) 0;
+}
+
+/* The first tab is capped to the room beside the toolbar: one wider than that (a
+   selected one shows its gear and close) has its name trimmed to fit, so the
+   layout never depends on which tab is selected. */
+.session-tabs-host > .session-tabs.tabs-corner > .session-tab.tab-corner-fit {
+  max-width: var(--tab-corner-first-max, none);
+}
+
+.session-tabs-host > .session-tabs.lineage-tree.tabs-corner {
+  padding-bottom: calc(var(--lineage-bottom-room) - var(--lineage-row-gap));
+}
+
 .session-tabs::-webkit-scrollbar {
   width: 4px;
   height: 0;
@@ -2992,6 +3038,33 @@ html[data-header-stats] .header-system-stats .stat-item[hidden] {
   transform: rotate(45deg);
 }
 
+/* "+" (new session beside this tab, app.openTabNewSessionMenu): same reveal as the gear. */
+.session-tab .tab-new {
+  opacity: 0;
+  width: 0;
+  padding: 0;
+  font-size: 1rem;
+  line-height: 1;
+  color: var(--text-muted);
+  cursor: pointer;
+  overflow: hidden;
+  transition: opacity 0.15s, width 0.15s, padding 0.15s;
+}
+.session-tab.active .tab-new {
+  opacity: 1;
+  width: auto;
+  padding: 0 0.3rem;
+}
+.session-tab .tab-new:hover {
+  color: var(--accent-hover);
+}
+
+/* Per-device toggle (App Settings → Tab Bar), mirrored as tabs-show-new on <html>
+   by settings-ui.js. !important so no layout's reveal rule (sidebar, touch) wins. */
+html:not(.tabs-show-new) .session-tab .tab-new {
+  display: none !important;
+}
+
 /* ===== Session detach / undock (beta/session-detach) ===================== */
 
 /* Pop-out (detach) icon on each tab — mirrors .tab-gear reveal-on-hover. */
@@ -3145,7 +3218,7 @@ html[data-tab-orientation='vertical']:not(.tab-rail-compact) .tab-rail
   pointer-events: auto;
 }
 
-html[data-tab-orientation='vertical'].tab-rail-compact .session-tab .tab-actions > :is(.tab-gear, .tab-detach, .tab-close) {
+html[data-tab-orientation='vertical'].tab-rail-compact .session-tab .tab-actions > :is(.tab-gear, .tab-new, .tab-detach, .tab-close) {
   display: none;
 }
 
@@ -5609,21 +5682,6 @@ html[data-skin="og"] .welcome-primary:hover {
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
 }
 
-.welcome-ralph-link {
-  background: none;
-  border: none;
-  color: var(--text-muted);
-  font-size: 0.75rem;
-  cursor: pointer;
-  padding: 0.25rem 0;
-  margin-top: 0.25rem;
-  transition: color 0.15s ease;
-}
-
-.welcome-ralph-link:hover {
-  color: var(--accent);
-}
-
 /* Short window (a 1470x840 laptop is the common case): the column above now
    fits by construction, but only by taking the space out of the Resume list,
    which collapses to two rows. Buying ~80px back from the vertical rhythm keeps
@@ -7739,6 +7797,52 @@ html[data-skin="og"] .welcome-primary:hover {
   color: var(--text-muted);
   border: 1px solid var(--border);
   opacity: 0.8;
+}
+
+/* The picker's search box reuses .session-sidebar-filter-input's theme-token
+   styling (same reasoning as the .set-scope pill above): only its own spacing
+   and the no-matches line are added here. 0.35rem is the standard gap the
+   modal's neighbouring form fields already use (`.form-hint`'s own margin-top):
+   the global `* { margin: 0 }` reset left the box sitting flush under the CLI
+   hint line above it, and the old 0.5rem read as too big a gap above the list
+   (compounded by the always-visible no-matches line the rule below fixes). */
+#customModelPickModal .custom-model-pick-search {
+  margin-top: 0.35rem;
+  margin-bottom: 0.35rem;
+}
+
+#customModelPickModal .custom-model-pick-no-matches {
+  text-align: center;
+  padding: 1rem 0;
+}
+
+/* "Nothing is marked: this endpoint did not report which model it has loaded": the same
+   `.form-hint` `display: block` beats `[hidden]` trap the two rules below fix for the
+   no-matches line and the filtered rows, so the attribute needs the same re-assertion. */
+#customModelPickModal .custom-model-pick-unknown {
+  padding-bottom: 0.15rem;
+}
+
+#customModelPickModal .custom-model-pick-unknown[hidden] {
+  display: none !important;
+}
+
+/* Same class of bug as the row rule below: the no-matches line carries
+   `.form-hint`, whose `display: block` outranks the UA `[hidden]` rule, so
+   `filterCustomModelPick()` toggling `hidden` changed nothing on screen and
+   "No models match" showed while every model was listed with an empty search
+   box. The `[hidden]` re-assertion makes the attribute hide the line again. */
+#customModelPickModal .custom-model-pick-no-matches[hidden] {
+  display: none !important;
+}
+
+/* A filtered-out row's `hidden` must actually hide it: `.run-mode-option` sets
+   `display: flex` (and mobile.css restates the class in a media query), which
+   outranks the UA `[hidden] { display: none }` rule, so the filter would
+   silently do nothing without this re-assertion. Scoped to this modal's rows;
+   the Run menu's own .run-mode-option entries never take `hidden`. */
+#customModelPickModal .run-mode-option[hidden] {
+  display: none !important;
 }
 
 /* Custom Model Endpoint Profiles: llama-swap model-swap confirmation — replaces a native
@@ -12088,6 +12192,45 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
   background: var(--bg-hover);
 }
 
+.file-browser-root {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.25rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.7rem;
+  color: var(--text-dim);
+}
+
+.file-browser-root[hidden] {
+  display: none;
+}
+
+.file-browser-root-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.file-browser-root-switch {
+  flex: 0 0 auto;
+  padding: 0.1rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.file-browser-root-switch:hover {
+  color: var(--text);
+  border-color: var(--text-dim);
+}
+
 .file-browser-search {
   padding: 0.4rem;
   border-bottom: 1px solid var(--border);
@@ -12180,6 +12323,16 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
   display: none;
 }
 
+/* Under an expanded folder the scan's file limit stopped short of. Inert: no hover, no click. */
+.file-tree-incomplete {
+  padding: 0.2rem 0.5rem;
+  font-size: 0.7rem;
+  font-style: italic;
+  color: var(--text-muted);
+  white-space: nowrap;
+  cursor: default;
+}
+
 .file-tree-icon {
   width: 1rem;
   text-align: center;
@@ -12236,15 +12389,15 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
 
 /* File tree indent levels */
 .file-tree-item[data-depth="0"] { padding-left: 0.5rem; }
-.file-tree-item[data-depth="1"] { padding-left: 1.25rem; }
-.file-tree-item[data-depth="2"] { padding-left: 2rem; }
-.file-tree-item[data-depth="3"] { padding-left: 2.75rem; }
-.file-tree-item[data-depth="4"] { padding-left: 3.5rem; }
-.file-tree-item[data-depth="5"] { padding-left: 4.25rem; }
-.file-tree-item[data-depth="6"] { padding-left: 5rem; }
-.file-tree-item[data-depth="7"] { padding-left: 5.75rem; }
-.file-tree-item[data-depth="8"] { padding-left: 6.5rem; }
-.file-tree-item[data-depth="9"] { padding-left: 7.25rem; }
+.file-tree-item[data-depth="1"], .file-tree-incomplete[data-depth="1"] { padding-left: 1.25rem; }
+.file-tree-item[data-depth="2"], .file-tree-incomplete[data-depth="2"] { padding-left: 2rem; }
+.file-tree-item[data-depth="3"], .file-tree-incomplete[data-depth="3"] { padding-left: 2.75rem; }
+.file-tree-item[data-depth="4"], .file-tree-incomplete[data-depth="4"] { padding-left: 3.5rem; }
+.file-tree-item[data-depth="5"], .file-tree-incomplete[data-depth="5"] { padding-left: 4.25rem; }
+.file-tree-item[data-depth="6"], .file-tree-incomplete[data-depth="6"] { padding-left: 5rem; }
+.file-tree-item[data-depth="7"], .file-tree-incomplete[data-depth="7"] { padding-left: 5.75rem; }
+.file-tree-item[data-depth="8"], .file-tree-incomplete[data-depth="8"] { padding-left: 6.5rem; }
+.file-tree-item[data-depth="9"], .file-tree-incomplete[data-depth="9"] { padding-left: 7.25rem; }
 
 /* ========== File Preview Overlay ========== */
 
@@ -12544,13 +12697,21 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
 
 /* ---- File Viewer rendered markdown ----
    Styling comes from the Response Viewer's .rv-text rules; .rv-text itself
-   carries no padding or base font (the chat card supplies those). */
+   carries no padding or base font (the chat card supplies those).
+
+   No width cap. The window is whatever the user drags or expands it to, so the
+   document must reflow to fill it; the fixed 960px reading column this rule
+   shipped before the resize grip existed stops reflow once the window is wider
+   than the cap. --rv-content-max: none lets ASCII-diagram blocks
+   (.rv-text .rv-diagram-wrap, capped by that variable with a 720px fallback
+   meant for the Response Viewer) follow the rest of the document too. Pinned by
+   test/file-preview-window.test.ts. */
 
 .file-preview-body > .file-preview-md {
   padding: 1rem 1.25rem 2rem;
   font-size: 15px;
   line-height: 1.55;
-  max-width: 960px;
+  --rv-content-max: none;
 }
 
 /* Relative links in the document are rebased onto a.rv-path so the Response
@@ -15085,7 +15246,7 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
 .rv-text ul, .rv-text ol,
 .response-viewer-body > ul, .response-viewer-body > ol {
   margin: 0.6em 0;
-  padding-left: 1.5em;
+  padding-inline-start: 1.5em;
 }
 
 .rv-text li,
@@ -15097,12 +15258,16 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
 
 .rv-text blockquote,
 .response-viewer-body > blockquote {
-  border-left: 3px solid var(--accent);
+  border-inline-start: 3px solid var(--accent);
   background: rgba(var(--accent-rgb), 0.06);
   margin: 0.8em 0;
   padding: 0.5em 14px;
   color: var(--text-dim);
-  border-radius: 0 6px 6px 0;
+  /* Logical corners: the bar sits on the start side, right-to-left too (#715). */
+  border-start-start-radius: 0;
+  border-end-start-radius: 0;
+  border-start-end-radius: 6px;
+  border-end-end-radius: 6px;
 }
 
 .rv-text strong,
@@ -15172,9 +15337,9 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
 .response-viewer-body > table td,
 .rv-table-wrap th, .rv-table-wrap td {
   border-bottom: 1px solid var(--border);
-  border-right: 1px solid var(--border);
+  border-inline-end: 1px solid var(--border);
   padding: 8px 12px;
-  text-align: left;
+  text-align: start;
   vertical-align: top;
   white-space: normal;
 }
@@ -15183,7 +15348,7 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
 .response-viewer-body > table th:last-child,
 .response-viewer-body > table td:last-child,
 .rv-table-wrap th:last-child, .rv-table-wrap td:last-child {
-  border-right: none;
+  border-inline-end: none;
 }
 
 .rv-text tr:last-child td,
@@ -15690,6 +15855,7 @@ body.touch-device.cjk-input-visible .main {
 
 .path-picker-up,
 .path-picker-refresh,
+.path-picker-newfolder,
 .path-picker-hidden {
   flex: 0 0 38px;
   height: 38px;
@@ -15712,6 +15878,45 @@ body.touch-device.cjk-input-visible .main {
 .path-picker-hidden.active {
   color: var(--accent);
   border-color: var(--accent);
+}
+
+.path-picker-newfolder {
+  flex: 0 0 auto;
+  padding: 0 10px;
+  white-space: nowrap;
+}
+
+.path-picker-newfolder[hidden],
+.path-picker-newfolder-form[hidden] {
+  display: none;
+}
+
+.path-picker-newfolder-form {
+  display: flex;
+  gap: 8px;
+  padding: 0 12px 10px;
+}
+
+.path-picker-newfolder-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 38px;
+  padding: 0 10px;
+  color: var(--text);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.path-picker-newfolder-create,
+.path-picker-newfolder-cancel {
+  height: 38px;
+  padding: 0 12px;
+  color: var(--text);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
 }
 
 .path-picker-up:disabled {
@@ -15810,8 +16015,10 @@ body.touch-device.cjk-input-visible .main {
   white-space: nowrap;
 }
 
+/* An ordinary status fits one line; a refusal may not, and it must be readable whole. */
 .path-picker-status.error {
   color: var(--danger, #ef4444);
+  white-space: normal;
 }
 
 .path-picker-list {
@@ -19865,6 +20072,7 @@ html[data-tab-orientation='vertical'] .tab-rail .session-tab .tab-name-row > .ta
    actions permanently visible on the active session — no layout jitter when
    the pointer crosses the list. */
 html[data-session-list="sidebar"] .session-sidebar .session-tab.active .tab-gear,
+html[data-session-list="sidebar"] .session-sidebar .session-tab.active .tab-new,
 html[data-session-list="sidebar"] .session-sidebar .session-tab.active .tab-detach,
 html[data-session-list="sidebar"] .session-sidebar .session-tab.active .tab-close {
   opacity: 1;
@@ -20379,6 +20587,7 @@ html[data-session-list="sidebar"][data-sidebar="collapsed"] .session-sidebar .se
 html[data-session-list="sidebar"][data-sidebar="collapsed"] .session-sidebar .tab-info,
 html[data-session-list="sidebar"][data-sidebar="collapsed"] .session-sidebar .tab-number,
 html[data-session-list="sidebar"][data-sidebar="collapsed"] .session-sidebar .tab-gear,
+html[data-session-list="sidebar"][data-sidebar="collapsed"] .session-sidebar .tab-new,
 html[data-session-list="sidebar"][data-sidebar="collapsed"] .session-sidebar .tab-detach,
 html[data-session-list="sidebar"][data-sidebar="collapsed"] .session-sidebar .tab-close {
   display: none;
@@ -21909,6 +22118,1190 @@ html[data-tile-anim="soft"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.til
   color: var(--text-muted);
 }
 
+/* ═══════════════════════════════════════════════════════════════
+   Foreign sessions: tmux sessions a human started outside Codeman
+   (foreign-sessions.js). Rendered on the welcome screen and, with the
+   same row builder, inside the phone overview.
+
+   Colour vocabulary is deliberately the session-tab one: a mode dot on
+   the left, name over a dim meta line, action pinned right. A block that
+   invented its own language here would read as a different product.
+   ═══════════════════════════════════════════════════════════════ */
+
+.welcome-foreign {
+  width: 100%;
+  margin-top: 0.75rem;
+}
+
+.foreign-sessions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  text-align: left;
+}
+
+/* `.foreign-sessions` is a flex container, so `[hidden]` needs re-asserting or
+   the module's only visibility lever does nothing (same trap as .home-sessions). */
+.foreign-sessions[hidden] {
+  display: none;
+}
+
+.foreign-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.foreign-title {
+  font-size: 0.85rem;
+  color: var(--text-dim);
+  font-weight: 500;
+  text-align: left;
+}
+
+.foreign-count {
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 999px;
+  padding: 0.1rem 0.45rem;
+  white-space: nowrap;
+}
+
+.foreign-scan-toggle {
+  margin-left: auto;
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.12rem 0.5rem;
+  cursor: pointer;
+}
+
+.foreign-scan-toggle[aria-pressed='true'] {
+  color: var(--session-blue, #4a9eff);
+  border-color: var(--session-blue, #4a9eff);
+}
+
+.foreign-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  max-height: min(40vh, 320px);
+  overflow-y: auto;
+}
+
+.foreign-row {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.02);
+  min-width: 0;
+}
+
+.foreign-row--open {
+  opacity: 0.62;
+}
+
+.foreign-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  background: var(--text-muted, #888);
+}
+
+.foreign-dot--claude {
+  background: #d97757;
+}
+.foreign-dot--codex {
+  background: #9b8cff;
+}
+.foreign-dot--shell {
+  background: #4caf7d;
+}
+
+.foreign-row-body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.foreign-row-name {
+  font-size: 0.82rem;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.foreign-row-sub {
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.foreign-open-btn {
+  flex: 0 0 auto;
+  font-size: 0.7rem;
+  padding: 0.22rem 0.6rem;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.foreign-open-btn:hover:not(:disabled) {
+  border-color: var(--session-blue, #4a9eff);
+  color: var(--session-blue, #4a9eff);
+}
+
+.foreign-open-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.foreign-empty {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  padding: 0.3rem 0.1rem;
+}
+
+.foreign-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.foreign-note {
+  font-size: 0.66rem;
+  color: var(--text-dim);
+  opacity: 0.85;
+  line-height: 1.35;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Run a model on this Mac (local-model-ui.js): the welcome button and the
+   chooser window (#localModelModal). The App Settings row is ordinary
+   `.set-row` markup and needs nothing here.
+
+   The subject is this Mac's memory, so the window has ONE strong element:
+   the bar (`.lm-bar`), the memory this Mac can give a model, filled to what
+   the selected model needs. Everything around it is quiet: hierarchy by size
+   and weight, no box inside the window, no border around a row. The selected
+   row carries the accent on its reading edge and a faint fill.
+
+   Theme tokens only, never a black or white alpha (those vanish on the light
+   skins). The bar's track is `--text-muted`: the part of the bar that stays
+   FREE is half of what the bar says, so it must be seen against the window
+   (about 3:1 or better on every skin; the fill of the app's inputs,
+   `--bg-input`, is the window's own surface on the dark skins, and a border
+   token is 1.5:1). Nothing here is keyed on a CLI or a model id. The only
+   motion is the bar's width, and it stops under prefers-reduced-motion.
+
+   The window is ONE frame for the whole flow: a fixed height on desktop, the
+   header on top, the buttons in a foot of their own (`.lm-foot-slot`) and the
+   body scrolling between them. A click never moves the next button away.
+   ═══════════════════════════════════════════════════════════════ */
+
+/* The feature's own colours. White is what the local model is known by, on the
+   start screen and in its window: it stands apart from the app's blue instead of
+   fighting it, and on a pale page the same idea turns to dark ink. The others
+   carry meaning (blue the context, green good, amber tight, orange slow, rose the
+   brief peaks). All of them are set here, once. */
+:root {
+  --lm-brand: #e6edf5;
+  --lm-context: #38b6f0;
+  --lm-amber: #f5c451;
+  --lm-orange: #fb923c;
+  --lm-rose: #f58ba8;
+  --lm-good: #4ade80;
+  --lm-cta-a: #ffffff;
+  --lm-cta-b: #dfe7f0;
+  --lm-cta-hover-a: #ffffff;
+  --lm-cta-hover-b: #eef3f8;
+  --lm-cta-ink: #11151c;
+  --lm-cta-disc: #11151c;
+  --lm-cta-glyph: #ffffff;
+  --lm-cta-glow: rgba(223, 231, 240, 0.45);
+}
+
+/* A white button is gone on a pale page, so the light skins turn it over. */
+html[data-skin='paper-gray'],
+html[data-skin='solarized-light'],
+html[data-skin='catppuccin-latte'],
+html[data-skin='rose-pine-dawn'] {
+  --lm-brand: #2a3140;
+  --lm-context: #1c6fb8;
+  --lm-amber: #a86a00;
+  --lm-orange: #c2500f;
+  --lm-rose: #c43a68;
+  --lm-good: #16803c;
+  --lm-cta-a: #333b4a;
+  --lm-cta-b: #11151c;
+  --lm-cta-hover-a: #434c5c;
+  --lm-cta-hover-b: #1f2530;
+  --lm-cta-ink: #ffffff;
+  --lm-cta-disc: #ffffff;
+  --lm-cta-glyph: #11151c;
+  --lm-cta-glow: rgba(17, 21, 28, 0.4);
+}
+
+/* The welcome button: the first thing on the start screen, above the launchers,
+   built like the primary button (dark ink, a solid disc) in the feature's colour. */
+.welcome-local-model {
+  margin-bottom: 1.1rem;
+  height: 46px;
+  gap: 0.65rem;
+  padding: 0 1.4rem 0 0.45rem;
+  border: 1px solid var(--lm-cta-a);
+  border-radius: 23px;
+  background: linear-gradient(135deg, var(--lm-cta-a), var(--lm-cta-b));
+  color: var(--lm-cta-ink);
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: 0.005em;
+  box-shadow: 0 8px 24px -12px var(--lm-cta-glow), inset 0 1px 0 rgba(255, 255, 255, 0.22);
+}
+
+.welcome-local-model:hover,
+.welcome-local-model:focus-visible {
+  border-color: var(--lm-cta-hover-a);
+  background: linear-gradient(135deg, var(--lm-cta-hover-a), var(--lm-cta-hover-b));
+  color: var(--lm-cta-ink);
+}
+
+/* `.welcome-chip` is inline-flex, so `[hidden]` needs re-asserting or the
+   module's only visibility lever does nothing. */
+.welcome-local-model[hidden] {
+  display: none;
+}
+
+/* The chip's 14 px glyph sits in a 34 px disc, the primary button's logo size. */
+.welcome-local-model svg {
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  padding: 8px;
+  box-sizing: border-box;
+  border-radius: 50%;
+  background: var(--lm-cta-disc);
+  color: var(--lm-cta-glyph);
+}
+
+/* The window: App Settings' chrome (`.modal`, `.modal-header`, the boxed
+   close button) at a width of its own. One frame for every screen: the height
+   is fixed, so the header, the close button and the main button stay where
+   they are from the chooser to "Start a session". */
+.modal-content.local-model-window {
+  display: flex;
+  flex-direction: column;
+  width: min(640px, 94vw);
+  max-width: min(640px, 94vw);
+  height: min(640px, 88vh);
+  max-height: 88vh;
+}
+
+.local-model-window > .modal-header {
+  flex-shrink: 0;
+}
+
+/* App Settings' close button: a 30px box, not the bare glyph of a plain modal. */
+.local-model-window > .modal-header .modal-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 9px;
+  font-size: 1.2rem;
+  color: var(--text-dim);
+  background: transparent;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease,
+    transform 0.1s ease;
+}
+
+.local-model-window > .modal-header .modal-close:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.local-model-window > .modal-header .modal-close:active {
+  transform: scale(0.94);
+}
+
+.local-model-window > .lm-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 1.05rem;
+  min-height: 0;
+  padding: 1.15rem 1.25rem 1.2rem;
+  overflow-y: auto;
+  text-align: start;
+}
+
+/* The short screens (progress, paused, a failure, installed, nothing fits)
+   hold a few lines in a frame sized for the chooser: they sit in the middle of
+   it, a status in its own room, not a heading with a void under it. */
+.local-model-window
+  > .lm-body:is(
+    [data-screen='progress'],
+    [data-screen='paused'],
+    [data-screen='failed'],
+    [data-screen='installed'],
+    [data-screen='none']
+  ) {
+  justify-content: center;
+  padding-bottom: 2.2rem;
+}
+
+/* The foot of the frame: the buttons of the screen (or the Remove question),
+   outside the part that scrolls. */
+.local-model-window > .lm-foot-slot {
+  flex-shrink: 0;
+  padding: 0 1.25rem 1.15rem;
+  text-align: start;
+}
+
+.local-model-window > .lm-foot-slot:empty {
+  display: none;
+}
+
+.lm-foot-slot p {
+  margin: 0;
+}
+
+.lm-body p,
+.lm-body h4 {
+  margin: 0;
+}
+
+/* ── type: four sizes, nothing in capitals ─────────────────────────── */
+.lm-hw {
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+
+.lm-title {
+  font-size: 1rem;
+  font-weight: 650;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.lm-lead {
+  font-size: 0.84rem;
+  line-height: 1.5;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+/* Why no model fits: one sentence, read as a sentence and not as a headline. */
+.lm-reason {
+  font-size: 0.92rem;
+  font-weight: 500;
+  line-height: 1.55;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.lm-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.lm-aside {
+  font-size: 0.74rem;
+  line-height: 1.5;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+
+.lm-heading {
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+
+/* ── the bar ───────────────────────────────────────────────────────── */
+.lm-meter {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.8rem 0.9rem 0.75rem;
+  border: 1px solid color-mix(in srgb, var(--lm-brand) 22%, var(--border));
+  border-radius: 12px;
+  background:
+    linear-gradient(
+      120deg,
+      color-mix(in srgb, var(--lm-brand) 11%, transparent),
+      color-mix(in srgb, var(--lm-context) 6%, transparent) 75%
+    ),
+    var(--bg-input);
+}
+
+.lm-meter-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.15rem 0.6rem;
+}
+
+.lm-figure {
+  font-size: 1.12rem;
+  font-weight: 680;
+  letter-spacing: -0.012em;
+  color: var(--text);
+}
+
+/* Only the figure that ticks (the download) holds its digits in fixed cells.
+   In a sentence fixed cells leave a hole around every 1. */
+.lm-figure-count {
+  font-variant-numeric: tabular-nums;
+}
+
+.lm-figure-aside {
+  font-size: 0.74rem;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+/* How the selected model fits, in the colour of its verdict. */
+.lm-fit {
+  align-self: center;
+  margin-inline-start: auto;
+  padding: 0.12rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.lm-fit-good {
+  background: color-mix(in srgb, var(--lm-good) 16%, transparent);
+  color: var(--lm-good);
+}
+
+.lm-fit-tight {
+  background: color-mix(in srgb, var(--lm-amber) 16%, transparent);
+  color: var(--lm-amber);
+}
+
+/* The bar: the track is what this Mac can give a model. The memory map fills it
+   with three parts side by side; a download fills it with one. */
+.lm-bar {
+  display: flex;
+  gap: 2px;
+  height: 12px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-muted) 34%, transparent);
+  overflow: hidden;
+}
+
+.lm-bar-fill {
+  flex: none;
+  height: 100%;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--lm-brand), var(--lm-context));
+  transition: width 0.32s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.lm-part-model {
+  background: var(--lm-brand);
+}
+
+.lm-part-context {
+  background: var(--lm-context);
+}
+
+/* The brief peaks are not held all the time, so they are striped. */
+.lm-part-peak {
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--lm-rose) 0 3px,
+    color-mix(in srgb, var(--lm-rose) 62%, transparent) 3px 6px
+  );
+}
+
+.lm-part-free {
+  background: color-mix(in srgb, var(--text-muted) 34%, transparent);
+}
+
+.lm-legend {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.25rem 0.9rem;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  color: var(--text-dim);
+}
+
+.lm-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  white-space: nowrap;
+}
+
+.lm-swatch {
+  flex-shrink: 0;
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+}
+
+.lm-legend-size {
+  font-weight: 620;
+  color: var(--text);
+}
+
+/* ── the models: one grid, so the numbers line up down the list ──── */
+/* Radio, size tile, name, tag, speed, download. The tag sits next to the name
+   and takes the room that is left, which pushes the two numbers to the right. */
+.lm-list {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, max-content) minmax(0, 1fr) auto auto;
+  column-gap: 0.75rem;
+  row-gap: 0.1rem;
+  /* A row's fill reaches into the window's padding, so what is IN a row lines
+     up with every other line of the window on both edges. */
+  margin-inline: calc(-0.7rem - 2px) -0.7rem;
+}
+
+.lm-caption,
+.lm-models,
+.lm-model {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+}
+
+.lm-models {
+  row-gap: 0.1rem;
+}
+
+.lm-caption,
+.lm-model {
+  align-items: center;
+  padding: 0 0.7rem;
+  border-inline-start: 2px solid transparent;
+}
+
+.lm-caption {
+  padding-bottom: 0.3rem;
+  font-size: 0.7rem;
+  color: var(--text-dim);
+}
+
+.lm-caption-label {
+  grid-column: 1 / span 4;
+}
+
+/* The server's word for a pick it has run on a Mac like this one stands where
+   the list's label does, in the text colour. */
+.lm-caption-strong {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.lm-caption-speed,
+.lm-caption-size {
+  text-align: end;
+}
+
+.lm-model {
+  min-height: 2.6rem;
+  border-radius: 9px;
+  cursor: pointer;
+  transition: background var(--transition-smooth);
+}
+
+.lm-model:hover {
+  background: var(--control-bg);
+}
+
+.lm-model:focus-visible {
+  outline: 2px solid var(--lm-brand);
+  outline-offset: -2px;
+}
+
+/* Selected: the feature's colour on the reading edge and a fill that fades out to the right. */
+.lm-model-on,
+.lm-model-on:hover {
+  border-inline-start-color: var(--lm-brand);
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--lm-brand) 17%, transparent),
+    color-mix(in srgb, var(--lm-brand) 4%, transparent)
+  );
+}
+
+.lm-radio {
+  box-sizing: border-box;
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid var(--text-muted);
+  border-radius: 50%;
+}
+
+.lm-model-on .lm-radio {
+  border-color: var(--lm-brand);
+  background: radial-gradient(circle, var(--lm-brand) 0 3px, transparent 3.5px);
+}
+
+/* The size tile: a model's billions of parameters, coloured by how large it is. */
+.lm-tile {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 34px;
+  height: 25px;
+  border-radius: 7px;
+  font-size: 0.68rem;
+  font-weight: 720;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+
+.lm-tile-large {
+  background: color-mix(in srgb, var(--lm-brand) 20%, transparent);
+  color: var(--lm-brand);
+}
+
+.lm-tile-mid {
+  background: color-mix(in srgb, var(--lm-context) 18%, transparent);
+  color: var(--lm-context);
+}
+
+.lm-tile-small {
+  background: color-mix(in srgb, var(--text-muted) 22%, transparent);
+  color: var(--text-dim);
+}
+
+.lm-model-name {
+  min-width: 0;
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.lm-model-tag {
+  display: flex;
+  justify-content: flex-start;
+}
+
+/* A tag says one thing about a row, in the colour of what it says. */
+.lm-tag {
+  padding: 0.08rem 0.45rem;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--text-muted) 16%, transparent);
+  font-size: 0.66rem;
+  font-weight: 600;
+  line-height: 1.5;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.lm-tag-tested,
+.lm-tag-best {
+  background: color-mix(in srgb, var(--lm-good) 15%, transparent);
+  color: var(--lm-good);
+}
+
+.lm-tag-tested::before {
+  content: '\2713\00a0';
+}
+
+.lm-tag-best-tight,
+.lm-tag-tight {
+  background: color-mix(in srgb, var(--lm-amber) 15%, transparent);
+  color: var(--lm-amber);
+}
+
+.lm-tag-slow {
+  background: color-mix(in srgb, var(--lm-orange) 15%, transparent);
+  color: var(--lm-orange);
+}
+
+.lm-model-speed,
+.lm-model-size {
+  text-align: end;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.lm-model-speed {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+  font-size: 0.76rem;
+  color: var(--text-dim);
+}
+
+/* The speed at a glance: full is the fastest model in the list. */
+.lm-gauge {
+  display: block;
+  width: 64px;
+  height: 3px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-muted) 26%, transparent);
+  overflow: hidden;
+}
+
+.lm-gauge-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--lm-good);
+}
+
+.lm-gauge-slow .lm-gauge-fill {
+  background: var(--lm-orange);
+}
+
+.lm-gauge-unknown {
+  background: none;
+  border-top: 1px dashed color-mix(in srgb, var(--text-muted) 55%, transparent);
+  height: 0;
+}
+
+.lm-model-size {
+  font-size: 0.8rem;
+  font-weight: 560;
+  color: var(--text);
+}
+
+/* A browser without subgrid: fixed tracks keep the columns in line. */
+@supports not (grid-template-columns: subgrid) {
+  .lm-list,
+  .lm-models {
+    display: block;
+  }
+
+  .lm-caption,
+  .lm-model {
+    grid-template-columns: 14px 34px 9.5rem minmax(0, 1fr) 7rem 4rem;
+    column-gap: 0.75rem;
+  }
+
+  .lm-model {
+    margin-top: 0.1rem;
+  }
+}
+
+/* ── the coding agent ─────────────────────────────────────────────── */
+.lm-runs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.6rem;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+
+.lm-runs-label {
+  color: var(--text);
+}
+
+.lm-select {
+  max-width: 100%;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-input);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.78rem;
+  outline: none;
+}
+
+.lm-select:focus-visible {
+  border-color: var(--lm-brand);
+}
+
+.lm-runs-hint {
+  min-width: 0;
+  font-size: 0.74rem;
+}
+
+/* ── the confirm screen: the download as a table ──────────────────── */
+/* One row per thing that is fetched: its name in the text colour with what it
+   is underneath, its size at the right edge, and the total under a rule in the
+   strong weight. The table is the screen; nothing else on it competes. */
+.lm-sizes {
+  display: flex;
+  flex-direction: column;
+}
+
+.lm-sizes .lm-heading {
+  margin-bottom: 0.35rem;
+  font-size: 0.84rem;
+  font-weight: 650;
+  letter-spacing: -0.005em;
+  color: var(--text);
+}
+
+.lm-size-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1.2rem;
+  padding: 0.6rem 0;
+  border-top: 1px solid var(--border);
+}
+
+.lm-size-what {
+  display: flex;
+  flex-direction: column;
+  gap: 0.18rem;
+  min-width: 0;
+}
+
+.lm-size-name {
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.lm-size-note {
+  font-size: 0.74rem;
+  line-height: 1.45;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+
+.lm-size-gb {
+  flex-shrink: 0;
+  font-size: 0.86rem;
+  font-weight: 560;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.lm-size-total {
+  padding-top: 0.75rem;
+  border-top-color: var(--text-muted);
+}
+
+.lm-size-total .lm-size-name,
+.lm-size-total .lm-size-gb {
+  font-size: 1.06rem;
+  font-weight: 680;
+  letter-spacing: -0.012em;
+}
+
+/* A literal command: text to read and to copy, so it is set in the mono face
+   and selects whole. It sits in its row, under the sentence that names it. */
+.lm-command {
+  display: block;
+  margin-top: 0.15rem;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+/* Where it goes: one quiet line under the table. */
+.lm-where {
+  font-size: 0.74rem;
+  line-height: 1.5;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+
+.lm-path {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  user-select: all;
+}
+
+/* ── progress: the steps ARE a sequence, so they are a list ───────── */
+.lm-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lm-step {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.lm-step-mark {
+  position: relative;
+  box-sizing: border-box;
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid var(--border-light);
+  border-radius: 50%;
+}
+
+.lm-step-done {
+  color: var(--text-dim);
+}
+
+.lm-step-done .lm-step-mark {
+  border-color: var(--lm-good);
+  background: var(--lm-good);
+}
+
+/* The check of a finished step, drawn from two borders in the page colour. */
+.lm-step-done .lm-step-mark::after {
+  content: '';
+  position: absolute;
+  left: 3.5px;
+  top: 1px;
+  width: 3px;
+  height: 6px;
+  border: solid var(--bg-card);
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg);
+}
+
+.lm-step-now,
+.lm-step-stopped {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.lm-step-now .lm-step-mark {
+  border-color: var(--lm-brand);
+  background: radial-gradient(circle, var(--lm-brand) 0 3px, transparent 3.5px);
+}
+
+.lm-step-stopped .lm-step-mark {
+  border-color: var(--text-dim);
+  background: radial-gradient(circle, var(--text-dim) 0 3px, transparent 3.5px);
+}
+
+/* ── installed ────────────────────────────────────────────────────── */
+.lm-state {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem 0.5rem;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+}
+
+.lm-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+
+.lm-dot-on {
+  background: var(--lm-good);
+}
+
+.lm-state-text {
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* ── a refused verb, an error's raw detail, the Remove question ──── */
+.lm-notice {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding-inline-start: 0.7rem;
+  border-inline-start: 2px solid var(--yellow);
+}
+
+.lm-notice-text {
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.lm-notice-detail {
+  font-size: 0.72rem;
+  line-height: 1.45;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+
+.lm-details {
+  margin-top: 0.2rem;
+  font-size: 0.74rem;
+  color: var(--text-dim);
+}
+
+.lm-details > summary {
+  width: fit-content;
+  cursor: pointer;
+}
+
+.lm-details > summary:hover {
+  color: var(--text);
+}
+
+.lm-detail-text {
+  max-height: 9rem;
+  margin: 0.45rem 0 0;
+  padding: 0.5rem 0.6rem;
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow: auto;
+  overflow-wrap: anywhere;
+}
+
+/* An error: its first sentence as the headline, the rest in the body size. */
+.lm-error {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.lm-remove {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding-top: 0.95rem;
+  border-top: 1px solid var(--border);
+}
+
+.lm-check {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: fit-content;
+  font-size: 0.8rem;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.lm-check input {
+  margin: 0;
+  accent-color: var(--lm-brand);
+}
+
+/* ── the foot: one promise on the left, the action on the right ──── */
+.lm-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-top: 0.95rem;
+  border-top: 1px solid var(--border);
+}
+
+.lm-remove .lm-foot {
+  padding-top: 0.2rem;
+  border-top: 0;
+}
+
+.lm-foot-note {
+  min-width: 0;
+  font-size: 0.74rem;
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+
+.lm-buttons {
+  display: flex;
+  flex-shrink: 0;
+  gap: 0.5rem;
+  margin-inline-start: auto;
+}
+
+/* The buttons are the Git worktrees dialog's set (`.wt-btn`): a main action
+   that reads as one on every skin (the skin block greys
+   `.btn-toolbar.btn-primary`) and that the phone toolbar's !important sizing
+   does not reach. Only the size is the window's own. */
+.local-model-window .wt-btn.lm-btn {
+  padding: 0.5rem 0.95rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.local-model-window .wt-btn-primary.lm-btn {
+  font-weight: 700;
+}
+
+/* The main action wears the same gradient and ink as the start screen button,
+   so no skin needs a rule of its own. */
+.local-model-window .wt-btn-primary.lm-btn {
+  border-color: var(--lm-cta-a);
+  background: linear-gradient(135deg, var(--lm-cta-a), var(--lm-cta-b));
+  color: var(--lm-cta-ink);
+}
+
+.local-model-window .wt-btn-primary.lm-btn:hover:not(:disabled) {
+  border-color: var(--lm-cta-hover-a);
+  background: linear-gradient(135deg, var(--lm-cta-hover-a), var(--lm-cta-hover-b));
+  color: var(--lm-cta-ink);
+}
+
+.local-model-window .wt-btn.lm-btn:focus-visible {
+  outline: 2px solid var(--lm-brand);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lm-bar-fill,
+  .lm-model {
+    transition: none;
+  }
+}
+
+/* Touch: rows and the select get a finger's height. */
+@media (pointer: coarse) {
+  .lm-model {
+    min-height: 2.9rem;
+  }
+
+  .lm-select {
+    min-height: 36px;
+  }
+
+  .local-model-window .wt-btn.lm-btn {
+    min-height: 40px;
+  }
+}
+
 /* XLSX preview in the file-preview overlay (spreadsheet-preview.js). Read-only; cells are
    absolutely positioned inside a virtualized grid, so only the visible tile is in the DOM. */
 .spreadsheet-preview-shell {
@@ -22148,6 +23541,42 @@ html .toolbar .btn-git-status[aria-expanded='true'] {
   gap: 0.25rem;
 }
 
+/* A Fetch button cannot be clicked twice while its fetch is running, and is not offered for a session
+   there is nothing to fetch for (no repository, remote or Docker). Scoped to the Git panel's header: the
+   File Viewer's Back/Forward and the folder grid's Up button are .btn-icon-sm too, and keep their own look. */
+.git-status-actions .btn-icon-sm[disabled] {
+  color: var(--text-dim);
+  opacity: 0.45;
+  cursor: default;
+}
+
+.git-status-actions .btn-icon-sm[disabled]:hover {
+  background: none;
+}
+
+.git-status-actions .btn-icon-sm[aria-busy='true'] {
+  color: var(--text);
+  animation: btn-icon-busy 1.1s ease-in-out infinite;
+}
+
+@keyframes btn-icon-busy {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 0.9;
+  }
+}
+
+/* No pulse under reduced motion: the button holds the pulse's brighter step, still dimmer than at rest. */
+@media (prefers-reduced-motion: reduce) {
+  .git-status-actions .btn-icon-sm[aria-busy='true'] {
+    animation: none;
+    opacity: 0.7;
+  }
+}
+
 .git-status-body {
   flex: 1;
   overflow-y: auto;
@@ -22167,13 +23596,32 @@ html .toolbar .btn-git-status[aria-expanded='true'] {
 .git-status-empty,
 .git-status-ok,
 .git-status-note,
-.git-status-more {
+.git-status-more,
+.git-status-fetch-note {
   color: var(--text-muted);
   padding: 0.25rem 0;
 }
 
 .git-status-ok {
   color: rgb(34, 197, 94);
+}
+
+/* The last Fetch's result: a summary line, then a row per repository it could not fetch. */
+.git-status-fetch-note {
+  margin-top: 0.6rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid var(--border);
+}
+
+.git-status-fetch-summary {
+  margin-bottom: 0.2rem;
+}
+
+.git-status-fetch-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  padding: 0.1rem 0;
 }
 
 .git-status-branchline {
@@ -22453,6 +23901,297 @@ html .toolbar .btn-git-status[aria-expanded='true'] {
 .git-status-repo-unreadable {
   color: #e0a030;
   font-size: 0.68rem;
+}
+
+/* ── Edit history: header button + panel (edit-history-ui.js) ───────────────── */
+
+/* "Edit history" header button: opt-in (App Settings → Header & Panels), hidden by default.
+   Same marker pattern as the Attachments button: a base inline-flex !important so an inline
+   style can't override it, and a more-specific marker rule to hide. Phones hide it regardless
+   (mobile.css). */
+.btn-edit-history {
+  display: inline-flex !important;
+}
+.btn-edit-history.btn-edit-history--hidden {
+  display: none !important;
+}
+
+.btn-edit-history[aria-expanded='true'] {
+  background: color-mix(in srgb, currentColor 16%, transparent);
+}
+
+/* Same frame as the Git and Files windows: draggable by the header, resizable at the corner. */
+.edit-history-panel {
+  position: fixed;
+  top: calc(var(--header-height) + 10px);
+  /* Left of the Git window's default spot; on a narrow viewport slide right so the left edge stays on screen. */
+  right: clamp(8px, calc(100vw - 428px), 410px);
+  width: 420px;
+  max-width: calc(100vw - 16px);
+  height: calc(100vh - var(--header-height) - var(--toolbar-height) - 40px);
+  height: calc(100dvh - var(--header-height) - var(--toolbar-height) - 40px);
+  max-height: 640px;
+  min-width: 260px;
+  min-height: 220px;
+  background: var(--floating-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--control-border);
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), 0 2px 8px rgba(0, 0, 0, 0.2);
+  z-index: 100;
+  display: none;
+  flex-direction: column;
+  overflow: hidden;
+  resize: both;
+}
+
+.edit-history-panel.visible {
+  display: flex;
+}
+
+.edit-history-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.4rem 0.6rem;
+  background: var(--bg-input);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  cursor: move;
+  user-select: none;
+  touch-action: none;
+}
+
+.edit-history-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.edit-history-count {
+  margin-left: 0.4rem;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.7rem;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.edit-history-actions {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.edit-history-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 0.9rem;
+  padding: 0.3rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.edit-history-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  cursor: pointer;
+}
+
+.edit-history-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.4rem 0.5rem;
+  font-size: 0.74rem;
+  color: var(--text);
+}
+
+.edit-history-empty,
+.edit-history-note,
+.edit-history-more {
+  color: var(--text-muted);
+  padding: 0.25rem 0;
+}
+
+.edit-history-note--warn {
+  color: #e0a030;
+}
+
+.edit-history-entry {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  padding: 0.15rem 0.25rem;
+  border-radius: 4px;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.edit-history-entry:hover,
+.edit-history-entry:focus-visible,
+.edit-history-entry--open {
+  background: var(--bg-hover);
+  outline: none;
+}
+
+.edit-history-time {
+  flex: 0 0 auto;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.64rem;
+  color: var(--text-muted);
+}
+
+.edit-history-badge {
+  flex: 0 0 auto;
+  min-width: 2rem;
+  text-align: center;
+  font-size: 0.6rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #e0a030;
+}
+
+.edit-history-badge--new {
+  color: rgb(34, 197, 94);
+}
+
+.edit-history-badge--image {
+  color: var(--text-muted);
+  align-self: center;
+}
+
+.edit-history-badge--image svg {
+  display: block;
+  margin: 0 auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Only the name itself opens the preview: the rest of the row (the spacer) toggles the diff. */
+/* The folder part gives way first, so the file name stays readable (…/icons/bremse_alt1.png). */
+.edit-history-path {
+  display: inline-flex;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  text-align: left;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.7rem;
+  cursor: pointer;
+}
+
+.edit-history-path-dir {
+  /* Shrinks long before the name does; the name only gives way once the folder is at min-width. */
+  flex: 0 10000 auto;
+  min-width: 1.2em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* Ellipsis at the START of the folder (rtl); the inner <bdi dir="ltr"> keeps its text in order. */
+  direction: rtl;
+  text-align: left;
+  opacity: 0.7;
+}
+
+.edit-history-path-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.edit-history-path:hover,
+.edit-history-path:focus-visible {
+  text-decoration: underline;
+}
+
+.edit-history-spacer {
+  flex: 1;
+  align-self: stretch;
+  min-width: 0.5rem;
+  min-height: 1em;
+}
+
+.edit-history-stats {
+  flex: 0 0 auto;
+  display: inline-flex;
+  gap: 0.3rem;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.64rem;
+}
+
+.edit-history-add {
+  color: rgb(34, 197, 94);
+}
+
+.edit-history-del {
+  color: #e5534b;
+}
+
+.edit-history-agent {
+  flex: 0 1 auto;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 0.62rem;
+  color: var(--text-muted);
+}
+
+.edit-history-thumb {
+  display: block;
+  max-width: 160px;
+  max-height: 90px;
+  margin: 0.15rem 0 0.35rem 3.2rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  object-fit: contain;
+  cursor: zoom-in;
+}
+
+.edit-history-diff {
+  margin: 0.2rem 0 0.5rem 0.25rem;
+}
+
+.edit-history-group {
+  margin-bottom: 0.45rem;
+  padding-bottom: 0.2rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.edit-history-group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  padding: 0.2rem 0.25rem;
+  min-width: 0;
+}
+
+.edit-history-group-head .edit-history-path {
+  font-weight: 600;
+}
+
+.edit-history-group-count {
+  flex: 0 0 auto;
+  font-size: 0.64rem;
+  color: var(--text-muted);
+}
+
+.edit-history-older {
+  margin: 0.5rem auto 0.25rem;
 }
 
 /* ============================================================
@@ -23194,4 +24933,13 @@ html[data-header-stats='tiles'] .header-plan-usage:not(:has(.pu-row)) {
   background: var(--control-bg);
   border: 1px solid var(--control-border);
   color: var(--text-muted);
+}
+
+/* Rows held under the on-screen keyboard (keyboardHoldsRows; keyboardClipPx in
+   constants.js): the screen stays taller than its box and is scrolled up by
+   --kb-clip, set on #terminalContainer by _applyKeyboardClip (terminal-ui.js).
+   The helper textarea, IME preview, link layer and both echo overlays live
+   inside .xterm-screen, so they move with it, and every hit test reads rects. */
+body.keyboard-visible .terminal-container .xterm-screen {
+  transform: translateY(calc(-1 * var(--kb-clip, 0px)));
 }

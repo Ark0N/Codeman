@@ -102,6 +102,26 @@ const SENSITIVE_PATTERNS: RegExp[] = [
   /\/\.codeman[^/]*\/intents\.json$/,
   // Pending agent-inbox messages (opt-in snapshot): same text as prompts, same 0600.
   /\/\.codeman[^/]*\/agent-inbox\.json$/,
+  // The edit history panel's stores (edit-history-store.ts) hold every diff an
+  // agent wrote, keys and .env contents included; written 0600 and kept out of
+  // /api/search for the same reason as intents.json.
+  /\/\.codeman[^/]*\/edit-history\//,
+  // Credentials kept outside settings.json: the Discord bot token, the webhook URL
+  // (a bearer secret), the custom endpoints' API keys, and the generated per-session
+  // configs, some of which carry that key inline.
+  /\/\.codeman[^/]*\/discord\.json$/,
+  /\/\.codeman[^/]*\/webhook\.json$/,
+  /\/\.codeman[^/]*\/custom-model-hosts\.json$/,
+  /\/\.codeman[^/]*\/custom-model-configs\//,
+  // The local model runtime (src/local-model/) is started with a private HOME inside the data
+  // dir and makes a key pair for itself there (`home/.ollama/id_ed25519`). A runtime the user
+  // runs on their own keeps the same key under their real home.
+  /\/\.codeman[^/]*\/local-model\/home\//,
+  /\/\.ollama\/id_ed25519$/,
+  // Config backups are dated COPIES of the files above (users.json and settings.json
+  // included), which the name-anchored patterns do not match. A custom
+  // `configBackupDir` is outside what a pattern here can name.
+  /\/\.codeman[^/]*\/backups\//,
 ];
 
 /**

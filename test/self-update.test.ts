@@ -6,8 +6,16 @@
  *   npm test -- test/self-update.test.ts
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterAll } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
+  ARCHIVE_INSTALL_MARKER,
+  ARCHIVE_UPDATE_HINT,
+  canSelfUpdateInPlace,
+  detectInstallKind,
+  isRunningInContainer,
   parseVersionFromTag,
   compareVersions,
   isNewerStableVersion,
@@ -203,5 +211,41 @@ describe('expireStalledStatus (runtime staleness backstop)', () => {
     expect(expireStalledStatus(null, NOW)).toBeNull();
     expect(expireStalledStatus(base({ phase: 'completed', updatedAt: NOW - 60 * MIN }), NOW)).toBeNull();
     expect(expireStalledStatus(base({ phase: 'failed', updatedAt: NOW - 60 * MIN }), NOW)).toBeNull();
+  });
+});
+
+describe('detectInstallKind', () => {
+  const scratch = mkdtempSync(join(tmpdir(), 'codeman-install-kind-'));
+  afterAll(() => rmSync(scratch, { recursive: true, force: true }));
+  let n = 0;
+  const tree = (entries: string[]) => {
+    const dir = join(scratch, `install-${++n}`);
+    mkdirSync(dir);
+    for (const entry of entries) {
+      if (entry.endsWith('/')) mkdirSync(join(dir, entry));
+      else writeFileSync(join(dir, entry), 'archive\n');
+    }
+    return dir;
+  };
+
+  it('reads a source-archive install (install.sh without a working git) as archive', () => {
+    const dir = tree(['src/', 'dist/', ARCHIVE_INSTALL_MARKER]);
+    expect(detectInstallKind(dir)).toBe('archive');
+    // Nothing to pull into, so it never self-updates in place; the hint names the installer.
+    expect(canSelfUpdateInPlace('archive')).toBe(false);
+    expect(ARCHIVE_UPDATE_HINT).toContain('getcodeman.com/install');
+    expect(ARCHIVE_UPDATE_HINT).not.toContain('npm i -g');
+  });
+
+  it('lets a real checkout win over a leftover marker', () => {
+    // A re-run of the installer on a machine that gained git replaces the archive tree with
+    // a clone; were a marker ever left beside .git, the checkout is still what counts.
+    const dir = tree(['.git/', 'src/', ARCHIVE_INSTALL_MARKER]);
+    expect(detectInstallKind(dir)).toBe(isRunningInContainer() ? 'docker-compose' : 'git');
+  });
+
+  it('keeps npm and unknown as they were', () => {
+    expect(detectInstallKind(tree(['dist/']))).toBe('npm');
+    expect(detectInstallKind(tree(['dist/', 'src/']))).toBe('unknown');
   });
 });

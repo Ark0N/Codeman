@@ -541,6 +541,8 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('appSettingsApprovalsInbox').checked = settings.approvalsInboxEnabled === true;
     // Agent inbox snapshot on disk: synced, default OFF.
     document.getElementById('appSettingsAgentInboxPersist').checked = settings.agentInboxPersistEnabled === true;
+    // Experimental agent coordination (inspect/stage/submit routes): synced, default OFF.
+    document.getElementById('appSettingsAgentCoordination').checked = settings.agentCoordinationEnabled === true;
     // Custom Model Endpoint Profiles: synced, default OFF. The toggle governs both
     // the Run-menu picker's generated entries and this settings panel's visibility;
     // the endpoint list itself is server state, loaded on demand below.
@@ -548,6 +550,10 @@ Object.assign(CodemanApp.prototype, {
     // Assigning .checked above does not fire onchange, so the body's visibility
     // (and its lazy load) needs an explicit sync on every open, not just a save.
     this.applyCustomModelEndpointsVisibility();
+    // Model on this Mac (local-model-ui.js): a row that says where the local model stands and
+    // opens its window, not a setting. Server state, asked for at most once a minute; nothing
+    // here is loaded or saved by id.
+    this.loadLocalModel?.();
     // CLI management (docs/cli-enable-disable-plan.md): synced, default OFF.
     document.getElementById('appSettingsCliManagement').checked = settings.cliManagementEnabled === true;
     // Same reasoning as applyCustomModelEndpointsVisibility above: assigning
@@ -568,6 +574,7 @@ Object.assign(CodemanApp.prototype, {
     this.loadConfigBackups();
     this._applyDoctorAdminGate();
     this.loadWebhook();
+    this.loadDiscord();
     // Read My Mind: synced, default OFF (opt-in; capture + prediction cost real tokens).
     document.getElementById('appSettingsReadMyMind').checked = settings.readMyMindEnabled === true;
     document.getElementById('appSettingsUltracodeFloatingWindows').checked =
@@ -602,6 +609,12 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('appSettingsGitStatusTree').checked = settings.gitStatusTree ?? defaults.gitStatusTree ?? true;
     document.getElementById('appSettingsGitStatusMaxRepos').value = settings.gitStatusMaxRepos ?? defaults.gitStatusMaxRepos ?? 12;
     document.getElementById('appSettingsGitStatusTimeout').value = settings.gitStatusTimeoutSeconds ?? defaults.gitStatusTimeoutSeconds ?? 30;
+    // Git fetch on an interval: synced, default OFF, interval default 300 s (DEFAULT_GIT_FETCH_INTERVAL_SECONDS).
+    // Synced means the SERVER decides whether to fetch, so these keys stay out of the per-device display list
+    // below and are not stripped from a save: a stripped key would never reach the scheduler.
+    document.getElementById('appSettingsGitFetchEnabled').checked = settings.gitFetchEnabled === true;
+    document.getElementById('appSettingsGitFetchIntervalSeconds').value = settings.gitFetchIntervalSeconds ?? 300;
+    document.getElementById('appSettingsShowEditHistory').checked = settings.showEditHistory ?? defaults.showEditHistory ?? false;
     // Gesture control lives in the Input section (alongside Local Echo / CJK Input)
     // but is only available when the instance runs with CODEMAN_GESTURE=1 (server sets
     // window.__codemanGestureAvailable). Hide just this item otherwise so the toggle
@@ -618,6 +631,8 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('appSettingsTunnelEnabled').checked = settings.tunnelEnabled ?? false;
     this.loadTunnelStatus();
     document.getElementById('appSettingsLocalEcho').checked = settings.localEchoEnabled ?? MobileDetection.isTouchDevice();
+    // Default ON, so an absent key reads as enabled rather than as off.
+    document.getElementById('appSettingsKeyboardHoldsRows').checked = settings.keyboardHoldsRows !== false;
     // Auto Copy (copy-on-select): per-device, default OFF everywhere. It quietly
     // overwrites the system clipboard on a gesture the user may have meant only as
     // a way to read, so it is opt-in rather than a default anyone has to discover.
@@ -658,6 +673,8 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('appSettingsShowTabDetachButton').checked =
       this.tabDetachButtonEnabled?.(settings, defaults)
       ?? (settings.showTabDetachButton ?? defaults.showTabDetachButton ?? false);
+    // The tab's "+" (applyHeaderVisibilitySettings): per-device, OFF unless switched on.
+    document.getElementById('appSettingsShowTabNewButton').checked = settings.showTabNewButton === true;
     // Detach Tiles (tile-grid.js): per-device, OFF unless switched on. The tile
     // grid is desktop-only, so the row is hidden elsewhere, like the lineage lines.
     document.getElementById('appSettingsTileDetach').checked = settings.tileDetachEnabled === true;
@@ -686,6 +703,7 @@ Object.assign(CodemanApp.prototype, {
     // that does have it.
     document.getElementById('appSettingsCodexDangerouslyBypassApprovals').checked =
       settings.codexDangerouslyBypassApprovals ?? false;
+    document.getElementById('appSettingsCodexNetworkAccess').checked = settings.codexNetworkAccess ?? false;
     document.getElementById('appSettingsCodexAnimations').checked =
       settings.codexAnimationsEnabled ?? false;
     document.getElementById('appSettingsCodexModel').value = settings.codexModel ?? '';
@@ -693,7 +711,9 @@ Object.assign(CodemanApp.prototype, {
     this._applyCodexSettingsVisibility();
     // Claude Permissions settings
     document.getElementById('appSettingsAgentTeams').checked = settings.agentTeamsEnabled ?? false;
-    document.getElementById('appSettingsAgentSkill').checked = settings.agentSkillEnabled ?? false;
+    // Default ON (since 1.50.0), like the workspace hooks below: the server reads an
+    // absent key as on, so the switch must too, or the next Save would write false.
+    document.getElementById('appSettingsAgentSkill').checked = settings.agentSkillEnabled !== false;
     // Default ON: an absent key is a user who has never seen this setting, and OFF
     // for them means no tab alerts in any workspace Codeman did not scaffold.
     document.getElementById('appSettingsWorkspaceHooks').checked = settings.workspaceHooksEnabled !== false;
@@ -1723,6 +1743,115 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
+   * Discord bridge (Settings → Notifications). Server-side config behind /api/discord, not a
+   * settings-payload field: the bot token is a secret, so it never round-trips through settings.json
+   * or this page. The token box is write-only. Unlike the webhook group it has its own Save button
+   * only (the modal's main Save does not touch it), so a half-typed token is never sent by accident.
+   */
+  _discordSay(text, bad = false) {
+    const out = document.getElementById('discordResult');
+    if (!out) return;
+    out.textContent = text;
+    out.style.display = text ? 'block' : 'none';
+    out.style.color = bad ? 'var(--danger, #e5534b)' : '';
+  },
+
+  async loadDiscord() {
+    const group = document.getElementById('discordGroup');
+    if (!group) return;
+    const res = await this._api('/api/discord');
+    let body = null;
+    try { body = res && res.ok ? await res.json() : null; } catch { /* leave hidden */ }
+    if (!body || body.success === false) { group.style.display = 'none'; return; } // not an admin, or an older server
+    const d = body.data;
+    group.style.display = '';
+    document.getElementById('discordEnabled').checked = d.enabled === true;
+    const token = document.getElementById('discordToken');
+    token.value = '';
+    token.placeholder = d.hasToken ? 'Saved. Paste a new token to replace it' : 'Bot token from the Developer Portal';
+    document.getElementById('discordTokenHint').textContent = d.hasToken ? `Saved: ${d.tokenMasked}` : 'Nothing saved yet.';
+    document.getElementById('discordGuildId').value = d.guildId || '';
+    document.getElementById('discordParentChannelId').value = d.parentChannelId || '';
+    document.getElementById('discordAllowedUserIds').value = (d.allowedUserIds || []).join(', ');
+    document.getElementById('discordThreadCreation').value = d.threadCreation;
+    document.getElementById('discordOnSessionDelete').value = d.onSessionDelete;
+    document.getElementById('discordStaleThreads').value = d.staleThreads || 'keep';
+    document.getElementById('discordPingMode').value = d.pingMode;
+    document.getElementById('discordScope').value = d.scope;
+    document.getElementById('discordStartupHint').checked = d.startupHint !== false;
+    const clearBtn = document.getElementById('discordClearBtn');
+    if (clearBtn) clearBtn.style.display = d.hasToken ? '' : 'none';
+    const gw = { off: 'Not connected (disabled).', connecting: 'Connecting to Discord…', connected: 'Connected: replies are being read.', error: `Not connected: ${d.gatewayError || 'error'}` };
+    let line = gw[d.gateway] || '';
+    if (d.lastResult) {
+      const when = new Date(d.lastResult.at).toLocaleString();
+      line += d.lastResult.ok ? ` Last post succeeded (${when}).` : ` Last post failed (${when}): ${d.lastResult.error}`;
+    }
+    this._discordSay(line.trim(), d.gateway === 'error' || (d.lastResult && !d.lastResult.ok));
+  },
+
+  /** PUT the group's state. Resolves to '' on success, else the error (also shown in the group). */
+  async saveDiscord() {
+    const ids = document.getElementById('discordAllowedUserIds').value.split(/[\s,]+/).filter(Boolean);
+    const payload = {
+      enabled: document.getElementById('discordEnabled').checked,
+      guildId: document.getElementById('discordGuildId').value.trim(),
+      parentChannelId: document.getElementById('discordParentChannelId').value.trim(),
+      allowedUserIds: ids,
+      threadCreation: document.getElementById('discordThreadCreation').value,
+      onSessionDelete: document.getElementById('discordOnSessionDelete').value,
+      staleThreads: document.getElementById('discordStaleThreads').value,
+      pingMode: document.getElementById('discordPingMode').value,
+      scope: document.getElementById('discordScope').value,
+      startupHint: document.getElementById('discordStartupHint').checked,
+    };
+    const token = document.getElementById('discordToken').value.trim();
+    if (token) payload.token = token; // blank = keep the saved one (Remove token is the way to clear it)
+    const res = await this._api('/api/discord', { method: 'PUT', body: payload });
+    let body = null;
+    try { body = res ? await res.json() : null; } catch { /* fall through */ }
+    if (!res || !res.ok || !body || body.success === false) {
+      const error = body?.error || 'Could not save the Discord settings.';
+      this._discordSay(error, true);
+      return error;
+    }
+    await this.loadDiscord();
+    return '';
+  },
+
+  async clearDiscord() {
+    if (!confirm('Remove the saved bot token from the server? The Discord bridge stops until you save a new one.')) return;
+    const res = await this._api('/api/discord', { method: 'PUT', body: { token: '', enabled: false } });
+    let body = null;
+    try { body = res ? await res.json() : null; } catch { /* fall through */ }
+    if (!res || !res.ok || !body || body.success === false) {
+      this._discordSay(body?.error || 'Could not remove the token.', true);
+      return;
+    }
+    await this.loadDiscord();
+  },
+
+  async testDiscord() {
+    const btn = document.getElementById('discordTestBtn');
+    if (btn) btn.disabled = true;
+    try {
+      if (await this.saveDiscord()) return; // saves first, so it never tests the old values; the error is shown
+      this._discordSay('Sending…');
+      const res = await this._apiPost('/api/discord/test', {});
+      let body = null;
+      try { body = res ? await res.json() : null; } catch { /* fall through */ }
+      if (!res || !res.ok || !body || body.success === false) {
+        this._discordSay(body?.error || 'Could not send the test.', true);
+        return;
+      }
+      const r = body.data;
+      this._discordSay(r.ok ? 'Test sent. Check the channel.' : `Delivery failed: ${r.error}`, !r.ok);
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  },
+
+  /**
    * Settings → System → Diagnostics: run `codeman doctor` on the server (GET /api/doctor) and list
    * each tool. Built with DOM nodes and textContent: paths and versions come from the host.
    */
@@ -1818,10 +1947,14 @@ Object.assign(CodemanApp.prototype, {
     // `docker-compose` self-updates in place like `git` does — the container
     // restarts itself. Anything else cannot.
     if (data.installKind && data.installKind !== 'git' && data.installKind !== 'docker-compose') {
+      // `archive` = installed by install.sh on a machine with no working git: the
+      // installer replaces it with a fresh build, so point there, not at npm.
       const hint =
         data.supervisor === 'docker-compose'
           ? 'Update from the Docker host with <code>docker/Start-Codeman.sh</code>.'
-          : 'Update with <code>npm i -g aicodeman@latest</code>.';
+          : data.installKind === 'archive'
+            ? 'It was installed without git. Re-run the installer to update: <code>curl -fsSL https://getcodeman.com/install | bash</code>'
+            : 'Update with <code>npm i -g aicodeman@latest</code>.';
       this._setUpdateResult(`This install can't update itself (${escapeHtml(data.installKind)}). ${hint}`);
       return;
     }
@@ -2271,15 +2404,29 @@ Object.assign(CodemanApp.prototype, {
     btn.disabled = true;
     try {
       const newEnabled = !isActive;
+      const gate = newEnabled ? await this._confirmTunnelEnable() : { proceed: true, acknowledge: false };
+      if (!gate.proceed) {
+        this._updateWelcomeTunnelBtn(false);
+        btn.disabled = false;
+        return;
+      }
       const res = await fetch('/api/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tunnelEnabled: newEnabled }),
+        body: JSON.stringify({ tunnelEnabled: newEnabled, ...(gate.acknowledge ? { acknowledgeUnauthTunnel: true } : {}) }),
       });
       // COD-55: server refuses an unauthenticated public tunnel (403). Surface it.
       if (newEnabled && (await this._handleTunnelEnableRefusal(res))) {
         this._dismissTunnelConnecting();
         this._updateWelcomeTunnelBtn(false);
+        btn.disabled = false;
+        return;
+      }
+      // A stop the server did not store (a 409 for a settings.json that does not parse) left the
+      // tunnel running: say so, and leave the button showing it on.
+      const stopError = newEnabled ? '' : await this._settingsWriteError(res);
+      if (stopError) {
+        this.showToast(`Tunnel not stopped: ${stopError}`, 'error', { duration: 0 });
         btn.disabled = false;
         return;
       }
@@ -2583,14 +2730,72 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
+   * End an App Settings save whose tunnel enable did not go through (confirm cancelled, or
+   * refused by the server): the WHOLE settings PUT is off, so turn the tunnel toggle back
+   * off in the UI and localStorage. Other settings persisted to localStorage still apply locally.
+   */
+  _abandonTunnelEnable(settings, keepOpen) {
+    settings.tunnelEnabled = false;
+    this.saveAppSettingsToStorage(settings);
+    const cb = document.getElementById('appSettingsTunnelEnabled');
+    if (cb) cb.checked = false;
+    if (!keepOpen) this.closeAppSettings();
+  },
+
+  /** The one SECURITY WARNING prompt for an unauthenticated public tunnel. */
+  _askUnauthTunnel() {
+    return confirm(
+      '⚠️ SECURITY WARNING — no password set\n\n' +
+        'Enabling the Cloudflare tunnel will publish THIS machine to a public URL with ' +
+        'NO login. Anyone who gets the URL has full terminal control — effectively remote ' +
+        'code execution on your computer.\n\n' +
+        'Strongly recommended: set CODEMAN_PASSWORD instead.\n\n' +
+        'Enable the unauthenticated public tunnel anyway?'
+    );
+  },
+
+  /**
+   * #706: ask BEFORE a tunnel enable whenever the server has no login (no CODEMAN_PASSWORD,
+   * not multi-user), every time, whatever the server would accept. With
+   * CODEMAN_ALLOW_UNAUTHENTICATED_TUNNEL set the PUT is never refused, so the refusal
+   * handler below would never ask. The ONE gate for the welcome link, the tunnel panel and
+   * the App Settings save. A tunnel that is already running is not being turned on, and
+   * the server does not guard it either. When the status cannot be read, the PUT goes out
+   * without the acknowledgement and `_handleTunnelEnableRefusal` stays the fallback.
+   * @returns {Promise<{ proceed: boolean, acknowledge: boolean }>} proceed=false: cancelled,
+   *   send nothing; acknowledge: send `acknowledgeUnauthTunnel: true` with the enable.
+   */
+  async _confirmTunnelEnable() {
+    let status = null;
+    try {
+      const res = await fetch('/api/tunnel/status');
+      if (res.ok) {
+        const env = await res.json();
+        status = env?.success === true ? env.data : env;
+      }
+    } catch {
+      /* unknown: the 403 handler asks instead */
+    }
+    if (!status || status.running || status.loginConfigured !== false) return { proceed: true, acknowledge: false };
+    if (!this._askUnauthTunnel()) {
+      this.showToast('Tunnel not enabled', 'info');
+      return { proceed: false, acknowledge: false };
+    }
+    return { proceed: true, acknowledge: true };
+  },
+
+  /**
    * COD-55: detect the server's refusal to start an unauthenticated public tunnel.
    * The PUT /api/settings route returns a 4xx with { success:false, error } when no
-   * CODEMAN_PASSWORD is set and the unauthenticated-network opt-in is not acknowledged.
-   * Shows the server's (actionable) message as an error toast.
+   * CODEMAN_PASSWORD is set and the unauthenticated-tunnel opt-in is not acknowledged.
+   * Shows the server's (actionable) message as an error toast. Since #706 this is the
+   * fallback for when `_confirmTunnelEnable` could not read the tunnel status.
    * @param {Response|null} res - the fetch Response from the settings PUT
+   * @param {object} [sent] - what that PUT sent, resent with the acknowledgement: the refusal
+   *   rejected all of it, so an App Settings save retried with the tunnel keys alone lost the rest
    * @returns {Promise<boolean>} true if the tunnel-enable was refused (caller should abort)
    */
-  async _handleTunnelEnableRefusal(res) {
+  async _handleTunnelEnableRefusal(res, sent = { tunnelEnabled: true }) {
     if (!res || res.ok) return false;
     let message = 'Tunnel refused: set CODEMAN_PASSWORD before exposing Codeman publicly.';
     let errorCode = '';
@@ -2612,14 +2817,7 @@ Object.assign(CodemanApp.prototype, {
     // 403 = the no-password safety refusal (COD-55). Warn loudly and let the
     // operator acknowledge the risk; on confirm, retry with explicit acknowledgment.
     if (res.status === 403) {
-      const confirmed = confirm(
-        '⚠️ SECURITY WARNING — no password set\n\n' +
-          'Enabling the Cloudflare tunnel will publish THIS machine to a public URL with ' +
-          'NO login. Anyone who gets the URL has full terminal control — effectively remote ' +
-          'code execution on your computer.\n\n' +
-          'Strongly recommended: set CODEMAN_PASSWORD instead.\n\n' +
-          'Enable the unauthenticated public tunnel anyway?'
-      );
+      const confirmed = this._askUnauthTunnel();
       if (!confirmed) {
         this._dismissTunnelConnecting?.();
         this.showToast('Tunnel not enabled', 'info');
@@ -2629,7 +2827,7 @@ Object.assign(CodemanApp.prototype, {
         const retry = await fetch('/api/settings', {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ tunnelEnabled: true, acknowledgeUnauthTunnel: true }),
+          body: JSON.stringify({ ...sent, acknowledgeUnauthTunnel: true }),
         });
         if (retry.ok) {
           this.showToast('Public tunnel enabling — no password set ⚠️', 'warning');
@@ -2664,13 +2862,25 @@ Object.assign(CodemanApp.prototype, {
       return;
     }
     try {
+      const gate = enable ? await this._confirmTunnelEnable() : { proceed: true, acknowledge: false };
+      if (!gate.proceed) {
+        this.closeTunnelPanel();
+        return;
+      }
       const res = await fetch('/api/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tunnelEnabled: enable }),
+        body: JSON.stringify({ tunnelEnabled: enable, ...(gate.acknowledge ? { acknowledgeUnauthTunnel: true } : {}) }),
       });
       // COD-55: server refuses an unauthenticated public tunnel (403). Surface it.
       if (enable && (await this._handleTunnelEnableRefusal(res))) {
+        this.closeTunnelPanel();
+        return;
+      }
+      // A stop the server did not store left the tunnel running (see toggleTunnelFromWelcome).
+      const stopError = enable ? '' : await this._settingsWriteError(res);
+      if (stopError) {
+        this.showToast(`Tunnel not stopped: ${stopError}`, 'error', { duration: 0 });
         this.closeTunnelPanel();
         return;
       }
@@ -2892,7 +3102,11 @@ Object.assign(CodemanApp.prototype, {
     // Gesture overlay is injected at page render (server-side), so a change to it
     // only takes effect on reload — remember the prior value to decide below.
     const _prev = this.loadAppSettingsFromStorage();
-    const _prevGestureEnabled = (_prev.gestureControlEnabled ?? false) === true;
+    // After a save the server did not store, this device's blob is ahead of the server, so the
+    // two server-side changes judged against it (the gesture reload, the plan-usage collection
+    // flip) are judged against the blob that save started from until a save lands.
+    const _prevServer = this._unsavedSettingsBaseline ?? _prev;
+    const _prevGestureEnabled = (_prevServer.gestureControlEnabled ?? false) === true;
     // WebGL toggle: default ON (desktop), so only an explicit stored false counts
     // as "previously off" — used below to detect a real OFF→ON flip.
     const _prevWebglEnabled = (_prev.webglRendererEnabled ?? true) === true;
@@ -2929,6 +3143,7 @@ Object.assign(CodemanApp.prototype, {
       configBackupDir: document.getElementById('appSettingsConfigBackupDir').value.trim(),
       ...this._configBackupRetentionPayload(_prev),
       agentInboxPersistEnabled: document.getElementById('appSettingsAgentInboxPersist').checked,
+      agentCoordinationEnabled: document.getElementById('appSettingsAgentCoordination').checked,
       readMyMindEnabled: document.getElementById('appSettingsReadMyMind').checked,
       ultracodeFloatingWindows: document.getElementById('appSettingsUltracodeFloatingWindows').checked,
       showMultiMonitorButton: document.getElementById('appSettingsShowMultiMonitorButton').checked,
@@ -2948,6 +3163,14 @@ Object.assign(CodemanApp.prototype, {
       // Clamped here and again on the server; an empty or odd value falls back to the default.
       gitStatusMaxRepos: Math.min(50, Math.max(1, parseInt(document.getElementById('appSettingsGitStatusMaxRepos').value, 10) || 12)),
       gitStatusTimeoutSeconds: Math.min(120, Math.max(5, parseInt(document.getElementById('appSettingsGitStatusTimeout').value, 10) || 30)),
+      // Clamped to the schema's bounds here too: a value outside them fails the whole save, and these keys
+      // must survive the strip below because the server's scheduler is what reads them.
+      gitFetchEnabled: document.getElementById('appSettingsGitFetchEnabled').checked,
+      gitFetchIntervalSeconds: Math.min(
+        3600,
+        Math.max(30, parseInt(document.getElementById('appSettingsGitFetchIntervalSeconds').value, 10) || 300)
+      ),
+      showEditHistory: document.getElementById('appSettingsShowEditHistory').checked,
       gestureControlEnabled: document.getElementById('appSettingsGestureControl').checked,
       subagentTrackingEnabled: document.getElementById('appSettingsSubagentTracking').checked,
       subagentActiveTabOnly: document.getElementById('appSettingsSubagentActiveTabOnly').checked,
@@ -2958,6 +3181,7 @@ Object.assign(CodemanApp.prototype, {
         Math.min(24, Math.max(0.5, parseFloat(document.getElementById('appSettingsPromptCacheKeepWarmMaxHours').value) || 2)),
       tunnelEnabled: document.getElementById('appSettingsTunnelEnabled').checked,
       localEchoEnabled: document.getElementById('appSettingsLocalEcho').checked,
+      keyboardHoldsRows: document.getElementById('appSettingsKeyboardHoldsRows').checked,
       autoCopySelection: document.getElementById('appSettingsAutoCopySelection').checked,
       copyStripMargin: document.getElementById('appSettingsCopyStripMargin').checked,
       terminalFontFamily: document.getElementById('appSettingsTerminalFont').value.trim(),
@@ -2978,6 +3202,7 @@ Object.assign(CodemanApp.prototype, {
       tabArrangement: document.getElementById('appSettingsTabArrangement').value,
       tabStateOrder: document.getElementById('appSettingsTabStateOrder').value,
       showTabDetachButton: document.getElementById('appSettingsShowTabDetachButton').checked,
+      showTabNewButton: document.getElementById('appSettingsShowTabNewButton').checked,
       tileDetachEnabled: document.getElementById('appSettingsTileDetach').checked,
       sessionListLayout: document.getElementById('appSettingsSessionListLayout').value,
       sessionSidebarFontSize: this.resolveSessionSidebarFontSize(
@@ -2991,6 +3216,7 @@ Object.assign(CodemanApp.prototype, {
       codexModel: document.getElementById('appSettingsCodexModel').value.trim(),
       codexReasoningEffort: document.getElementById('appSettingsCodexReasoningEffort').value,
       codexDangerouslyBypassApprovals: document.getElementById('appSettingsCodexDangerouslyBypassApprovals').checked,
+      codexNetworkAccess: document.getElementById('appSettingsCodexNetworkAccess').checked,
       codexAnimationsEnabled: document.getElementById('appSettingsCodexAnimations').checked,
       // Claude Permissions settings
       agentTeamsEnabled: document.getElementById('appSettingsAgentTeams').checked,
@@ -3050,6 +3276,8 @@ Object.assign(CodemanApp.prototype, {
     // Save to localStorage
     this.saveAppSettingsToStorage(settings);
     this._updateLocalEchoState();
+    // Turning Keep Size Under Keyboard off while it holds releases it now.
+    this._reconcileKeyboardHold?.();
     this.applyTerminalFontFamily?.(settings.terminalFontFamily);
     this.applyTerminalFontWeights?.(settings);
 
@@ -3199,9 +3427,12 @@ Object.assign(CodemanApp.prototype, {
     // switch collection off for every desktop, whose chip then went stale with
     // no error anywhere. An explicit toggle on any device still writes it, in
     // either direction.
-    const _chipFlip = this.planUsageCollectionFlip(_prev, settings.showPlanUsageLimits);
+    const _chipFlip = this.planUsageCollectionFlip(_prevServer, settings.showPlanUsageLimits);
     const {
       localEchoEnabled: _leo,
+      // Per-device (it is about this screen's keyboard) and absent from
+      // SettingsUpdateSchema (.strict()), so sending it would 400 the whole PUT.
+      keyboardHoldsRows: _khr,
       cjkInputEnabled: _cjk,
       extendedKeyboardBar: _ekb,
       skin: _skin,
@@ -3248,7 +3479,10 @@ Object.assign(CodemanApp.prototype, {
       gitStatusTree: _gst,
       gitStatusMaxRepos: _gsm,
       gitStatusTimeoutSeconds: _gst2,
+      // Per-device header button (edit-history-ui.js), likewise absent from the .strict() schema.
+      showEditHistory: _seh,
       showTabDetachButton: _tdb,
+      showTabNewButton: _tnb,
       // Detach Tiles: what a tile drag does is a property of this device's
       // windows, and the key is absent from the .strict() SettingsUpdateSchema.
       tileDetachEnabled: _tde,
@@ -3268,16 +3502,29 @@ Object.assign(CodemanApp.prototype, {
       ...serverSettings
     } = settings;
     let webhookError = '';
+    let saveError = '';
     let serverSaved = false;
     try {
+      // #706: a save that turns the tunnel on asks first when the server has no login
+      // (one already running is not asked about, see _confirmTunnelEnable).
+      const tunnelGate = settings.tunnelEnabled && !settingsReadOnly
+        ? await this._confirmTunnelEnable()
+        : { proceed: true, acknowledge: false };
+      if (!tunnelGate.proceed) {
+        this._unsavedSettingsBaseline = _prevServer;
+        this._abandonTunnelEnable(settings, keepOpen);
+        return;
+      }
       // A non-admin's save is not sent at all (see settingsReadOnly above): the server
       // would refuse it with a 403, the plan-usage collection flip included.
-      const res = settingsReadOnly ? null : await this._apiPut('/api/settings', {
+      const body = {
         ...serverSettings,
         ...(_chipFlip !== undefined ? { showPlanUsageLimits: _chipFlip } : {}),
+        ...(tunnelGate.acknowledge ? { acknowledgeUnauthTunnel: true } : {}),
         notificationPreferences: notifPrefsToSave,
         voiceSettings,
-      });
+      };
+      const res = settingsReadOnly ? null : await this._apiPut('/api/settings', body);
 
       // Multi-user mode, a non-admin whose role was not known when this save started
       // (/api/me had not answered, or failed and admin-ui.js fell back to a single-user
@@ -3292,20 +3539,25 @@ Object.assign(CodemanApp.prototype, {
 
       // COD-55: the server refuses an unauthenticated public tunnel with a 403 — which
       // rejects the WHOLE settings PUT. Surface the message and revert the tunnel toggle
-      // (in the UI + localStorage) so it doesn't look enabled. Other settings persisted
-      // to localStorage above still apply locally.
-      if (!refusedAsNonAdmin && settings.tunnelEnabled && (await this._handleTunnelEnableRefusal(res))) {
-        settings.tunnelEnabled = false;
-        this.saveAppSettingsToStorage(settings);
-        const cb = document.getElementById('appSettingsTunnelEnabled');
-        if (cb) cb.checked = false;
-        if (!keepOpen) this.closeAppSettings();
+      // so it doesn't look enabled. Only a 403: any other failure with the switch on is
+      // not about the tunnel, and turning the switch off for it would be wrong too.
+      const tunnelRefused = !refusedAsNonAdmin && settings.tunnelEnabled && res?.status === 403;
+      if (tunnelRefused && (await this._handleTunnelEnableRefusal(res, body))) {
+        this._unsavedSettingsBaseline = _prevServer;
+        this._abandonTunnelEnable(settings, keepOpen);
         return;
       }
 
       // `_apiPut` answers null or a non-ok response instead of throwing, so this is the only
-      // evidence the server kept the flags the Apply refresh below reads.
-      serverSaved = !!res?.ok;
+      // evidence the server kept the flags the Apply refresh below reads (a tunnel 403 still
+      // here was retried with the whole save and accepted).
+      serverSaved = !!res?.ok || tunnelRefused;
+      // Any other failure (a 409 for a settings.json that does not parse, a 400, a 500, a dropped
+      // connection) stored nothing on the server, so the save must not say it did. A known
+      // non-admin sent nothing (res is null).
+      saveError =
+        settingsReadOnly || refusedAsNonAdmin || tunnelRefused ? '' : await this._settingsWriteError(res);
+      this._unsavedSettingsBaseline = saveError ? _prevServer : null;
 
       // Save model configuration separately. For a non-admin it is not sent either, and the
       // answer says whether this save would have changed it.
@@ -3316,7 +3568,9 @@ Object.assign(CodemanApp.prototype, {
       // it. Only when the group was edited: an untouched group must not re-PUT. A refusal (bad URL,
       // enabled with no URL) keeps the modal open below, with the pasted URL still in the box.
       webhookError = this._webhookPending() ? await this.saveWebhook() : '';
-      if (webhookError) {
+      if (saveError) {
+        this.showToast(`Saved on this device, not on the server: ${saveError}`, 'warning', { duration: 0 });
+      } else if (webhookError) {
         this.showToast(`Settings saved, but not the webhook: ${webhookError}`, 'warning');
       } else if (syncedChangeRefused || modelConfigRefused || refusedAsNonAdmin) {
         // ONE toast for the whole save, and only when the user really changed a server-wide
@@ -3329,7 +3583,7 @@ Object.assign(CodemanApp.prototype, {
 
       // Show tunnel-specific feedback if toggled on (never for a non-admin, whose save
       // starts nothing: the box only shows what the server already has)
-      if (settings.tunnelEnabled && !settingsReadOnly && !refusedAsNonAdmin) {
+      if (settings.tunnelEnabled && !settingsReadOnly && !refusedAsNonAdmin && !saveError) {
         this.showToast('Tunnel starting — QR code will appear when ready...', 'info');
       }
     } catch (err) {
@@ -3341,9 +3595,10 @@ Object.assign(CodemanApp.prototype, {
     // old flags, and a webhook-only failure still saved the rest, so this runs ahead of that branch.
     if (keepOpen && serverSaved) this._refreshSettingsAfterApply(settings);
 
+    // A failed settings PUT keeps the modal open too, with the form as the user left it.
     if (webhookError) {
       document.getElementById('webhookGroup')?.scrollIntoView({ block: 'center' });
-    } else if (!keepOpen) {
+    } else if (!keepOpen && !saveError) {
       this.closeAppSettings();
     }
 
@@ -3354,10 +3609,10 @@ Object.assign(CodemanApp.prototype, {
     // The gesture overlay is injected at page render (server reads
     // gestureControlEnabled from settings.json), so a change only takes effect on
     // reload. Reload when it actually changed — the server PUT above already
-    // persisted the new value.
+    // persisted the new value (not after a failed PUT: the reload would render the old one).
     // `?? false`: a non-admin's save puts a synced key the server never stored back to
     // absent (_keepServerSyncedSettings), and absent means off, as in _prevGestureEnabled.
-    if ((settings.gestureControlEnabled ?? false) !== _prevGestureEnabled) {
+    if (!saveError && (settings.gestureControlEnabled ?? false) !== _prevGestureEnabled) {
       this.showToast(
         settings.gestureControlEnabled ? 'Enabling gesture control — reloading…' : 'Disabling gesture control — reloading…',
         'info'
@@ -3404,6 +3659,35 @@ Object.assign(CodemanApp.prototype, {
     if (body?.errorCode !== 'FORBIDDEN') return false;
     this._settingsWriteForbidden = true;
     return true;
+  },
+
+  /**
+   * Why a settings write did not land, or '' when it did: the server's `error` (a 409 when
+   * settings.json does not parse, a 400, ...), else the HTTP status, else, for the null that
+   * `_apiPut` answers a dropped connection with, that the server could not be reached. Reads a
+   * clone, like _noteSettingsWriteRefusal.
+   * @returns {Promise<string>}
+   */
+  async _settingsWriteError(res) {
+    if (!res) return 'the server could not be reached';
+    if (res.ok) return '';
+    let body = null;
+    try {
+      body = await res.clone().json();
+    } catch {
+      /* not JSON: the status is all there is */
+    }
+    return body?.error || `HTTP ${res.status}`;
+  },
+
+  /**
+   * The end of a background settings write (run mode, respawn presets): the admin-only refusal is
+   * _noteSettingsWriteRefusal's, and any other failure says that `what` stayed on this device only.
+   */
+  async _noteSettingsWriteResult(res, what) {
+    if (await this._noteSettingsWriteRefusal(res)) return;
+    const error = await this._settingsWriteError(res);
+    if (error) this.showToast(`${what} saved on this device, not on the server: ${error}`, 'warning', { duration: 0 });
   },
 
   /**
@@ -3717,6 +4001,9 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('customModelHostApiKey').value = ''; // the server never returns the real value (apiKeySet is a bool)
     document.getElementById('customModelHostApiKey').placeholder = host?.apiKeySet ? '•••••••• (unchanged if left blank)' : '';
     document.getElementById('customModelHostAuthStyle').value = host?.authStyle || 'bearer';
+    // User-set fallback, round-tripped verbatim (discovery never touches it, so the
+    // cached copy is authoritative); blank means "no default", cleared on save.
+    document.getElementById('customModelHostDefaultContextLength').value = host?.defaultContextLength ?? '';
     this._populateCustomModelDefaultSelect(host);
     document.getElementById('customModelHostEditor').style.display = '';
   },
@@ -3742,6 +4029,18 @@ Object.assign(CodemanApp.prototype, {
     const baseUrl = document.getElementById('customModelHostBaseUrl').value.trim();
     const apiKeyInput = document.getElementById('customModelHostApiKey').value;
     const authStyle = document.getElementById('customModelHostAuthStyle').value;
+    // Blank means "no default" (key omitted, so PUT clears it); a value must satisfy
+    // the same bound the server schema enforces, caught here for a friendlier message.
+    const defaultContextLengthInput = document.getElementById('customModelHostDefaultContextLength').value.trim();
+    let defaultContextLength;
+    if (defaultContextLengthInput !== '') {
+      const parsed = Number(defaultContextLengthInput);
+      if (!Number.isInteger(parsed) || parsed < 1 || parsed > 100000000) {
+        this.showToast('Default context length must be a whole number of tokens between 1 and 100,000,000', 'warning');
+        return;
+      }
+      defaultContextLength = parsed;
+    }
     const defaultModelId = document.getElementById('customModelHostDefaultModel').value || undefined;
     if (!id || !label || !baseUrl) {
       this.showToast('Id, label and base URL are all required', 'warning');
@@ -3762,6 +4061,7 @@ Object.assign(CodemanApp.prototype, {
       baseUrl,
       authStyle,
       defaultModelId,
+      defaultContextLength,
       apiKey: apiKeyInput || undefined,
       models: existing?.models,
       lastDiscoveredAt: existing?.lastDiscoveredAt,
@@ -4387,6 +4687,9 @@ Object.assign(CodemanApp.prototype, {
       this.tabDetachButtonEnabled?.(settings, defaults)
       ?? (settings.showTabDetachButton ?? defaults.showTabDetachButton ?? false);
     document.documentElement.classList.toggle('tabs-show-detach', showTabDetach);
+    // The tab's "+" (new session beside it): per-device and opt-in everywhere,
+    // like the pop-out button. On a phone it also widens the active tab (mobile.css).
+    document.documentElement.classList.toggle('tabs-show-new', settings.showTabNewButton === true);
     const compactHeader = MobileDetection.getDeviceType() !== 'desktop';
     const showFontControls = compactHeader ? false : (settings.showFontControls ?? defaults.showFontControls ?? false);
     const showSystemStats = compactHeader ? false : (settings.showSystemStats ?? defaults.showSystemStats ?? true);
@@ -4539,6 +4842,8 @@ Object.assign(CodemanApp.prototype, {
     // Bottom-bar Git indicator (git-status-ui.js): opt-in, per-device. Starts or stops its poll to
     // match the setting, so a live toggle needs no reload.
     this.applyGitStatusVisibility?.();
+    // Header Edit history button (edit-history-ui.js): opt-in, per-device, marker-class hidden.
+    this.applyEditHistoryVisibility?.();
 
     // Notification bell is retired (notifications live in Settings → Notifications
     // + the drawer); keep it hidden regardless of the notification-enabled state.
@@ -4896,14 +5201,15 @@ Object.assign(CodemanApp.prototype, {
       'showFontControls', 'showSystemStats', 'showGpuStats', 'showCpuMhz', 'headerStatsStyle', 'showTokenCount', 'showCost',
       'showLifecycleLog', 'showResponseViewer', 'showRedrawButton',
       'showMonitor', 'showProjectInsights', 'showFileBrowser', 'showSubagents',
-      'subagentActiveTabOnly', 'tabTwoRows', 'showTabCliLogos', 'tabOrientation', 'tabRailWidth', 'tabRailDetail', 'tabRailSort', 'tabArrangement', 'tabStateOrder', 'sessionListLayout', 'sessionSidebarFontSize', 'localEchoEnabled', 'cjkInputEnabled', 'extendedKeyboardBar',
+      'subagentActiveTabOnly', 'tabTwoRows', 'showTabCliLogos', 'tabOrientation', 'tabRailWidth', 'tabRailDetail', 'tabRailSort', 'tabArrangement', 'tabStateOrder', 'sessionListLayout', 'sessionSidebarFontSize', 'localEchoEnabled', 'keyboardHoldsRows', 'cjkInputEnabled', 'extendedKeyboardBar',
       'skin', 'showPlanUsageLimits', 'showAttachmentsButton', 'showFileViewerButton', 'webglRendererEnabled',
       'terminalFontFamily', 'terminalFontWeight', 'terminalFontWeightBold',
       'language',
       'terminalWheelLocalScrollback',
       'autoCopySelection', 'copyStripMargin',
-      'showSessionButton', 'showAwayDigestButton', 'showCronButton', 'showGitStatus', 'gitStatusTree', 'gitStatusMaxRepos', 'gitStatusTimeoutSeconds',
+      'showSessionButton', 'showAwayDigestButton', 'showCronButton', 'showGitStatus', 'gitStatusTree', 'gitStatusMaxRepos', 'gitStatusTimeoutSeconds', 'showEditHistory',
       'showTabDetachButton',
+      'showTabNewButton',
       'mobileOverviewEnabled',
       'sessionLineageLines',
       'showSplitButton',
@@ -4966,6 +5272,13 @@ Object.assign(CodemanApp.prototype, {
             merged[key] = value;
           }
         }
+        // The agent skill is a synced key that is ON when absent (since 1.50.0). A server
+        // without the key means that default, so this device's own copy goes rather than
+        // standing in for it: up to 1.49.0 the switch loaded an absent key as off, so a
+        // device whose save never reached the server still holds `false`, and its next
+        // Save would write it back. The server's one-time boot migration stores `true` for
+        // installs that had saved `false` (agent-skill-default-migration.ts).
+        if (!('agentSkillEnabled' in appSettings)) delete merged.agentSkillEnabled;
         this.saveAppSettingsToStorage(merged);
 
         // Apply notification prefs from server if present (only if localStorage has none)

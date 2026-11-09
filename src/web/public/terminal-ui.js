@@ -767,6 +767,7 @@ Object.assign(CodemanApp.prototype, {
       scrollback: scrollback,
       allowTransparency: true,
       allowProposedApi: true,
+      linkHandler: this._terminalOsc8LinkHandler(),
     });
 
     this.fitAddon = new FitAddon.FitAddon();
@@ -1060,6 +1061,9 @@ Object.assign(CodemanApp.prototype, {
     if (MobileDetection.isTouchDevice()) {
       this.terminal.onCursorMove(() => this._syncMobileHelperTextareaToCursor());
       this.terminal.onRender(() => this._syncMobileHelperTextareaToCursor());
+      // Keep the live content above the keyboard while the rows are held.
+      this.terminal.onCursorMove(() => this._applyKeyboardClip());
+      this.terminal.onRender(() => this._applyKeyboardClip());
     }
 
     // Renderer liveness — see _startRenderLivenessWatchdog. Registered for every
@@ -1568,8 +1572,8 @@ Object.assign(CodemanApp.prototype, {
     // A real mouse click normally reaches the PTY through xterm's own mouse
     // encoder, but that encoder only runs while mouseTrackingMode is ON — and
     // the server strips the enabling DECSETs from claude/codex/gemini output
-    // (isAltScreenStripMode, session.ts) and from opencode's (isMuxMouseStripMode,
-    // so a drag selects text) so the wheel keeps scrolling
+    // (isAltScreenStripMode, session.ts) and from the mouse-strip modes'
+    // (isMuxMouseStripMode, so a drag selects text) so the wheel keeps scrolling
     // scrollback. Desktop clicks therefore stopped reporting entirely (the
     // same breakage the mobile touchend tap branch above works around).
     // Hand-encode the SGR report for plain left-clicks on those sessions.
@@ -2104,6 +2108,7 @@ Object.assign(CodemanApp.prototype, {
     // Twin: TerminalTile (terminal-tile.js _createKeyCode229Recovery and its
     // connect() key handler and onData) wires its own controller the same way
     // for every grid tile and the split's Pane B; keep the two in step.
+    // create() returns null unless the primary pointer is coarse (#716).
     try {
       this._keyCode229Recovery = window.CodemanKeyCode229Recovery?.create?.({
         textarea: this.terminal.textarea,
@@ -2141,13 +2146,16 @@ Object.assign(CodemanApp.prototype, {
 
   /**
    * A clicked path as the preview needs it: relative paths resolved against the
-   * session's working directory, absolute and `~/` paths unchanged
+   * directory the session's pane is in now, else its working directory
+   * (`relativeResolutionBase`), absolute and `~/` paths unchanged
    * (`resolveLinkedFilePath`, constants.js). Shared by the terminal link
    * provider and the response viewer, so one path opens the same file in both.
    */
   _resolveLinkedFilePath(filePath, sessionId) {
     if (typeof resolveLinkedFilePath !== 'function') return filePath;
-    return resolveLinkedFilePath(filePath, this.sessions?.get?.(sessionId)?.workingDir);
+    const session = this.sessions?.get?.(sessionId);
+    const base = typeof relativeResolutionBase === 'function' ? relativeResolutionBase(session) : session?.workingDir;
+    return resolveLinkedFilePath(filePath, base);
   },
 
   /**
@@ -2208,8 +2216,11 @@ Object.assign(CodemanApp.prototype, {
         // links as the one file it is.
         // Bounded so a screenful of full-width output (wide tables, box drawing)
         // cannot make every hover stitch and re-scan the entire viewport.
+        // `terminalLinkLine` widens that once more to the rows of a URL the CLI
+        // wrapped short of the edge (a table cell or an indented paragraph),
+        // where nothing marks the break and no row is full width.
         const MAX_STITCHED_ROWS = 12;
-        const logical = window.CodemanTerminalLines?.terminalPathLine(
+        const logical = window.CodemanTerminalLines?.terminalLinkLine(
           buffer,
           bufferLineNumber - 1,
           terminal.cols,
@@ -2227,8 +2238,16 @@ Object.assign(CodemanApp.prototype, {
           return { x: cell.col + 1, y: cell.row + 1 };
         };
 
+        // Paths a CLI word-wrapped inside a table cell (terminalCellWrappedPaths,
+        // constants.js). They follow their own cell down the rows, which the
+        // linear stitch above cannot do for a multi-column table, so they are
+        // found from the buffer directly and claim their cells over the rest.
+        const cellWrappedPaths = (
+          window.CodemanTerminalLines?.terminalCellWrappedPaths?.(buffer, bufferLineNumber - 1, 4) ?? []
+        ).filter((hit) => !/(^|\/)\.\.(\/|$)/.test(hit.path));
+
         // A path needs a `/` or an extension's `.`; a line with neither has no link.
-        if (!lineText || (!lineText.includes('/') && !lineText.includes('.'))) {
+        if (!lineText || (!lineText.includes('/') && !lineText.includes('.') && cellWrappedPaths.length === 0)) {
           callback(undefined);
           return;
         }
@@ -2240,44 +2259,46 @@ Object.assign(CodemanApp.prototype, {
         const taken = [];
         const isTaken = (start, length) => taken.some((t) => start < t.end && t.start < start + length);
 
-        // Pattern 0: URLs (https://, http://) — matched first so they take priority
-        //
-        // A single `&` is PART of the URL: it separates query parameters, so excluding
-        // it truncated every real query string (`?post=1479&action=edit` linked only
-        // through `1479`, landing on the wrong page). `&&` is still a boundary, since
-        // that is the shell operator and never appears inside a URL. A lone trailing
-        // `&` is trimmed below with the other trailing punctuation.
-        const urlPattern = /https?:\/\/(?:[^\s"'<>|;&)\]\x00-\x1f]|&(?!&))+/g;
-
-        const addUrlLink = (url, matchIndex) => {
-          // Strip trailing punctuation that's likely not part of the URL
-          const cleaned = url.replace(/[.,;:!?)&]+$/, '');
-          const startCol = lineText.indexOf(cleaned, matchIndex);
-          if (startCol === -1) return;
-
-          const start = coordAt(startCol);
-          const end = coordAt(startCol + cleaned.length);
+        // Pattern 0: URLs (https://, http://) — matched first so they take priority.
+        // The grammar (balanced parens, `&` vs `&&`, trailing punctuation) is
+        // findTerminalUrls() in constants.js, which the wrap-continuation extent
+        // above reads URLs with too, so the two cannot disagree.
+        const addUrlLink = ({ url, startIndex }) => {
+          const start = coordAt(startIndex);
           if (links.some((l) => l.range.start.x === start.x && l.range.start.y === start.y)) return;
-          taken.push({ start: startCol, end: startCol + cleaned.length });
+          taken.push({ start: startIndex, end: startIndex + url.length });
 
-          links.push({
-            text: cleaned,
-            range: { start, end },
-            decorations: { pointerCursor: true, underline: true },
-            activate(_event, text) {
-              // A `localhost` link tapped from another device can only work
-              // through the server: route it into a proxied web tab
-              // (webview-tabs.js). Anything else opens as before.
-              if (self.openLinkThroughWebTabIfLoopback?.(text)) return;
-              window.open(text, '_blank', 'noopener,noreferrer');
-            },
-            hover() {
-              setHovered(true);
-            },
-            leave() {
-              setHovered(false);
-            },
-          });
+          // One link per terminal row the URL occupies, each opening the WHOLE
+          // URL. A single range spanning rows would also underline (and make
+          // clickable) the indent and table columns between the pieces of a
+          // URL the CLI wrapped. A single-row URL keeps its original range.
+          const endIndex = startIndex + url.length;
+          const pieces = [];
+          let pieceStart = startIndex;
+          for (let i = startIndex + 1; i < endIndex; i++) {
+            if (coordAt(i).y !== coordAt(i - 1).y) {
+              pieces.push([pieceStart, i]);
+              pieceStart = i;
+            }
+          }
+          pieces.push([pieceStart, endIndex]);
+          for (let n = 0; n < pieces.length; n++) {
+            const [from, to] = pieces[n];
+            links.push({
+              text: url,
+              range: { start: coordAt(from), end: pieces.length === 1 ? coordAt(to) : coordAt(to - 1) },
+              decorations: { pointerCursor: true, underline: true },
+              activate() {
+                self._openTerminalUrl(url);
+              },
+              hover() {
+                setHovered(true);
+              },
+              leave() {
+                setHovered(false);
+              },
+            });
+          }
         };
 
         // Pattern 1: Commands with file paths (tail -f, cat, head, grep pattern, etc.)
@@ -2300,6 +2321,65 @@ Object.assign(CodemanApp.prototype, {
         // Pattern 3: Bash() tool output
         const bashPattern = /Bash\([^)]*?(\/(?:home|tmp|var|etc|opt)[^\s"'<>|;&\)\n\x00-\x1f]+)/g;
 
+        const activateFilePath = (text, folder = false, verifiedSessionId = null) => {
+          // Tailing a PNG in the log viewer shows binary noise; the file preview
+          // already renders images, PDFs, documents and media inline — and it
+          // now reaches files outside the workspace too, which is where an
+          // agent's screenshots and scratchpad captures actually land.
+          //
+          // Text goes to the log viewer, which follows a file that is still
+          // being written — but ONLY where it can actually read: it spawns
+          // `tail -f` and allows the workspace, /var/log and ~/logs, so an
+          // out-of-workspace path there answered "Path must be within
+          // working directory or allowed log directories" while the SAME
+          // path clicked in the response viewer previewed fine. The preview
+          // reads those through the guarded attachment routes, so external
+          // paths route there and the two surfaces agree.
+          //
+          // A relative path is resolved against the session's working
+          // directory first, and a `~/` path always previews (only the
+          // server knows that host's home, and the log viewer cannot ask).
+          const sessionId = verifiedSessionId || getSessionId();
+          if (!sessionId) return;
+          const target = self._resolveLinkedFilePath(text, sessionId);
+          const alternative = !folder && logical.pathAlternatives?.find((candidate) => candidate.path === text);
+          if (alternative && !verifiedSessionId) {
+            return (async () => {
+              const original = await self._registerExternalPreview(target, sessionId);
+              // Attachment policy must not gate the workspace's normal opener.
+              if (original.status !== 404) return activateFilePath(target, false, sessionId);
+              const path = self._resolveLinkedFilePath(alternative.spacedPath, sessionId);
+              const registered = await self._registerExternalPreview(path, sessionId);
+              if (registered.status === 404) return activateFilePath(target, false, sessionId);
+              if (!registered.attachmentId) {
+                self.showToast(registered.error || 'Cannot open this file', 'error');
+                return;
+              }
+              // The normal opener rechecks its guards; attachment registration deduplicates the path.
+              return activateFilePath(path, false, sessionId);
+            })();
+          }
+          // A folder path opens the folder grid (which falls back to the
+          // preview if the server finds a file there after all).
+          if (folder) {
+            self.openFolderGrid(target, sessionId);
+            return;
+          }
+          // An HTML file renders as a page in the preview, never as source
+          // in the log viewer (markdown is in FILE_PREVIEW_EXTENSIONS).
+          // The log viewer's tail-file stays confined to workingDir, so a path in a worktree outside it previews.
+          if (
+            previewsInFileViewer(target) ||
+            rendersAsPage(target) ||
+            self._isExternalPreviewPath(target, sessionId) ||
+            self._isOutsideWorktreePath(target, sessionId)
+          ) {
+            self.openFilePreview(target, sessionId);
+            return;
+          }
+          self.openLogViewerWindow(target, sessionId);
+        };
+
         const addLink = (filePath, matchIndex, folder = false) => {
           const startCol = lineText.indexOf(filePath, matchIndex);
           if (startCol === -1) return;
@@ -2318,43 +2398,8 @@ Object.assign(CodemanApp.prototype, {
               pointerCursor: true,
               underline: true,
             },
-            activate(event, text) {
-              // Tailing a PNG in the log viewer shows binary noise; the file preview
-              // already renders images, PDFs, documents and media inline — and it
-              // now reaches files outside the workspace too, which is where an
-              // agent's screenshots and scratchpad captures actually land.
-              //
-              // Text goes to the log viewer, which follows a file that is still
-              // being written — but ONLY where it can actually read: it spawns
-              // `tail -f` and allows the workspace, /var/log and ~/logs, so an
-              // out-of-workspace path there answered "Path must be within
-              // working directory or allowed log directories" while the SAME
-              // path clicked in the response viewer previewed fine. The preview
-              // reads those through the guarded attachment routes, so external
-              // paths route there and the two surfaces agree.
-              //
-              // A relative path is resolved against the session's working
-              // directory first, and a `~/` path always previews (only the
-              // server knows that host's home, and the log viewer cannot ask).
-              const sessionId = getSessionId();
-              const target = self._resolveLinkedFilePath(text, sessionId);
-              // A folder path opens the folder grid (which falls back to the
-              // preview if the server finds a file there after all).
-              if (folder) {
-                self.openFolderGrid(target, sessionId);
-                return;
-              }
-              // An HTML file renders as a page in the preview, never as source
-              // in the log viewer (markdown is in FILE_PREVIEW_EXTENSIONS).
-              if (
-                previewsInFileViewer(target) ||
-                rendersAsPage(target) ||
-                self._isExternalPreviewPath(target, sessionId)
-              ) {
-                self.openFilePreview(target, sessionId);
-                return;
-              }
-              self.openLogViewerWindow(target, sessionId);
+            activate(_event, text) {
+              return activateFilePath(text, folder);
             },
             hover() {
               setHovered(true);
@@ -2368,9 +2413,8 @@ Object.assign(CodemanApp.prototype, {
         // Match all patterns — URLs first so they take priority
         let match;
 
-        urlPattern.lastIndex = 0;
-        while ((match = urlPattern.exec(lineText)) !== null) {
-          addUrlLink(match[0], match.index);
+        for (const reference of window.CodemanTerminalLines?.findTerminalUrls?.(lineText) ?? []) {
+          addUrlLink(reference);
         }
 
         cmdPattern.lastIndex = 0;
@@ -2385,6 +2429,54 @@ Object.assign(CodemanApp.prototype, {
         bashPattern.lastIndex = 0;
         while ((match = bashPattern.exec(lineText)) !== null) {
           addLink(match[1], match.index);
+        }
+
+        // One link per row segment, each opening the WHOLE path (as for a wrapped
+        // URL). A fragment of the same cells linked by another detector (a
+        // relative `243/after-overview.png`, say) would open the wrong file, so
+        // the cell-wrapped path displaces it.
+        // A path the line stitch already joined whole (a single-column wrap, which
+        // terminalPathLine handles) keeps its one link.
+        const cellOnlyPaths = cellWrappedPaths.filter(
+          (hit) =>
+            !links.some(
+              (l) =>
+                l.text === hit.path &&
+                l.range.start.y === hit.segments[0].row + 1 &&
+                l.range.start.x === hit.segments[0].startCol + 1
+            )
+        );
+        if (cellOnlyPaths.length > 0) {
+          const claimed = cellOnlyPaths.flatMap((hit) => hit.segments);
+          const overlapsClaim = (link) =>
+            claimed.some((seg) => {
+              const y = seg.row + 1;
+              if (y < link.range.start.y || y > link.range.end.y) return false;
+              const from = y === link.range.start.y ? link.range.start.x : 1;
+              const to = y === link.range.end.y ? link.range.end.x : Number.MAX_SAFE_INTEGER;
+              return from <= seg.endCol && to >= seg.startCol + 1;
+            });
+          for (let i = links.length - 1; i >= 0; i--) {
+            if (overlapsClaim(links[i])) links.splice(i, 1);
+          }
+          for (const hit of cellOnlyPaths) {
+            for (const seg of hit.segments) {
+              links.push({
+                text: hit.path,
+                range: { start: { x: seg.startCol + 1, y: seg.row + 1 }, end: { x: seg.endCol, y: seg.row + 1 } },
+                decorations: { pointerCursor: true, underline: true },
+                activate() {
+                  activateFilePath(hit.path);
+                },
+                hover() {
+                  setHovered(true);
+                },
+                leave() {
+                  setHovered(false);
+                },
+              });
+            }
+          }
         }
 
         if (links.length > 0) {
@@ -2407,6 +2499,30 @@ Object.assign(CodemanApp.prototype, {
 
     console.log('[LinkProvider] File path link provider registered');
     return provider;
+  },
+
+  /**
+   * xterm's handler for OSC 8 hyperlinks (a program's own `ESC ]8;;url` links),
+   * which take precedence over the text link provider. Routed through the same
+   * opener after confirming the real target (the label may hide it), and only
+   * for web URLs: any other scheme a program sends is ignored.
+   */
+  _terminalOsc8LinkHandler() {
+    return {
+      activate: (_event, text) => {
+        if (!/^https?:\/\/[^\s\x00-\x1f]+$/i.test(text)) return;
+        if (window.confirm(`Open this link?\n\n${text}`)) this._openTerminalUrl(text);
+      },
+    };
+  },
+
+  /** Open a URL clicked in a terminal (text link or OSC 8). */
+  _openTerminalUrl(text) {
+    // A `localhost` link tapped from another device can only work through the
+    // server: route it into a proxied web tab (webview-tabs.js). Anything else
+    // opens in a new tab.
+    if (this.openLinkThroughWebTabIfLoopback?.(text)) return;
+    window.open(text, '_blank', 'noopener,noreferrer');
   },
 
   /**
@@ -2833,6 +2949,9 @@ Object.assign(CodemanApp.prototype, {
       if (overlay) overlay.classList.remove('visible');
       this.hideHomeSessions?.();
       this.showMobileOverview();
+      // The phone overview hosts the same list in its own container.
+      this.wireForeignSessions?.();
+      this.startForeignPolling?.();
       this._updateCjkInputState?.();
       return;
     }
@@ -2847,6 +2966,14 @@ Object.assign(CodemanApp.prototype, {
       // Open tabs down the left gutter. Self-gating: a window too narrow to hold
       // the column without overlapping the content leaves it hidden.
       this.showHomeSessions?.();
+      // Sessions a human opened outside Codeman. Polls only while this screen is
+      // up (stopped in hideWelcome), see foreign-sessions.js.
+      this.wireForeignSessions?.();
+      this.startForeignPolling?.();
+      // The "Run a local model" button (local-model-ui.js). One request, at most
+      // once a minute, no timer here: only its open window polls, and closing
+      // that window stops it, so there is nothing to stop in hideWelcome.
+      this.loadLocalModel?.();
     }
     // Home screen has no input target — hide the CJK textarea (activeSessionId
     // is null by the time we get here). Guarded: defined on the app object.
@@ -2856,6 +2983,7 @@ Object.assign(CodemanApp.prototype, {
   hideWelcome() {
     this.hideMobileOverview?.();
     this.hideHomeSessions?.();
+    this.stopForeignPolling?.();
     const overlay = document.getElementById('welcomeOverlay');
     if (overlay) {
       overlay.classList.remove('visible');
@@ -5832,8 +5960,8 @@ Object.assign(CodemanApp.prototype, {
    * literal text (`[<0;88;20M`) and they garble the next line typed.
    *
    * Fails toward silence: an unknown or stale flag reports nothing rather than
-   * injecting bytes. After a server restart the flag is false until the CLI
-   * re-emits its DECSET, which closing and reopening a dialog does.
+   * injecting bytes. After a server restart the flag is false until the DECSET
+   * passes again, which tmux does itself when the server re-attaches to the pane.
    *
    * `sessionId` defaults to the primary pane's session; a TerminalTile passes
    * its own (through _handleDesktopTerminalClick's target), never the active one.
@@ -5949,18 +6077,21 @@ Object.assign(CodemanApp.prototype, {
     // option, but it would override an explicit user choice; instead the caller
     // falls through to _maybePageCliTranscript, so the gesture still pages the
     // CLI's transcript (or loads unloaded tmux scrollback, see there) and the
-    // setting keeps meaning exactly what it says.
+    // setting keeps meaning exactly what it says. Pi is the accepted exception:
+    // it declares no `transcriptPageKeys`, so with this on its wheel stays dead.
     if (this.loadAppSettingsFromStorage?.()?.terminalWheelLocalScrollback) return false;
     const mode = (target.terminal || this.terminal)?.modes?.mouseTrackingMode;
     if (mode && mode !== 'none') return false;
     const session = this.sessions?.get(target.sessionId || this.activeSessionId);
     const sessionMode = session?.mode || 'claude';
-    // GitHub Copilot CLI scrolls its own transcript on SGR wheel reports (checked with xterm
-    // encoding them natively). Its mouse DECSETs are stripped server-side so a drag selects
-    // locally (strip-mux-and-mouse), which also means xterm no longer encodes the wheel: send the
-    // same reports by hand, but only while the CLI is actually tracking the mouse. Not gated on a
-    // version; a stale-false flag falls through to the PageUp/PageDown fallback like claude's.
-    if (sessionMode === 'copilot') return session?.cliMouseTracking === true;
+    // GitHub Copilot CLI (and pi, fullscreen by default) scrolls its own transcript on SGR wheel
+    // reports (checked with xterm encoding them natively). Their mouse DECSETs are stripped
+    // server-side so a drag selects locally (strip-mux-and-mouse), which also means xterm no longer
+    // encodes the wheel: send the same reports by hand, but only while the CLI is actually tracking
+    // the mouse. Not gated on a version. On Copilot a stale-false flag falls through to the
+    // PageUp/PageDown fallback like claude's; pi has none on purpose (the `transcriptPageKeys` note
+    // in stock.ts), so there the wheel does nothing until the flag is back.
+    if (sessionMode === 'copilot' || sessionMode === 'pi') return session?.cliMouseTracking === true;
     if (sessionMode !== 'claude' && sessionMode !== 'codex') return false;
     if (sessionMode === 'claude' && !this._cliVersionAtLeast(session?.cliVersion, '2.1.187')) return false;
     // Only while Claude or Codex is actually listening for the mouse. Claude's
@@ -6298,8 +6429,8 @@ Object.assign(CodemanApp.prototype, {
    * The reason is that the habit and xterm's Shift mean different things once
    * the DECSETs are stripped. xterm reads Shift as "force selection" ONLY while
    * the app actually has mouse tracking on; the server strips those DECSETs for
-   * claude/codex/gemini (isAltScreenStripMode) and opencode (isMuxMouseStripMode),
-   * so xterm's mouseTrackingMode is
+   * claude/codex/gemini (isAltScreenStripMode) and the mouse-strip modes
+   * (isMuxMouseStripMode), so xterm's mouseTrackingMode is
    * permanently `none`, that branch is unreachable, and Shift instead falls into
    * `_onIncrementalClick` — EXTEND an existing selection. Extending is a no-op
    * when `selectionStart` is null, so the drag never anchors and no selection is
@@ -6556,10 +6687,122 @@ Object.assign(CodemanApp.prototype, {
     // timer and the resize observer, where an exception takes the rest of the
     // callback (the padding fit, the scroll restore, the SIGWINCH) with it.
     try {
-      return window.CodemanTerminalGeometry.clampTerminalDimensions(this.fitAddon?.proposeDimensions());
+      const dims = window.CodemanTerminalGeometry.clampTerminalDimensions(this.fitAddon?.proposeDimensions());
+      // Rows held under the on-screen keyboard (see keyboardClipPx): the
+      // container shrank, the PTY must not. Columns still follow the container.
+      const held = this._keyboardHeldRowsActive?.();
+      if (dims && held) dims.rows = Math.max(dims.rows, held);
+      return dims;
     } catch {
       return null;
     }
+  },
+
+  /**
+   * Rows held while the on-screen keyboard is up, or 0. Set by KeyboardHandler
+   * on the show transition when `keyboardHoldsRows` is on (default), cleared on
+   * hide and on a shape change. Every geometry read goes through
+   * getTerminalDimensions(), so holding it there holds the fit, the PTY resize
+   * and every capture-geometry comparison alike.
+   * @returns {number}
+   */
+  _keyboardHeldRowsActive() {
+    if (!(this._keyboardHeldRows > 0)) return 0;
+    return typeof KeyboardHandler !== 'undefined' && KeyboardHandler.keyboardVisible ? this._keyboardHeldRows : 0;
+  },
+
+  /**
+   * May the keyboard hold this session's rows? Only an INLINE renderer (the
+   * `keyboardHold` capability, read from `window.__codemanKeyboardHoldModes`,
+   * never an id literal here): a CLI that lays out the full height (codex) cannot
+   * show both its content and its composer above the keyboard and must be
+   * resized, as before. Never while the CLI reports mouse tracking (Claude's
+   * fullscreen mode), and never for a remote or docker session, whose pane hosts
+   * a nested client. Absent data means no hold. Per-device setting
+   * `keyboardHoldsRows`, default ON.
+   */
+  _keyboardHoldEligible(sessionId = this.activeSessionId) {
+    if (this.loadAppSettingsFromStorage?.()?.keyboardHoldsRows === false) return false;
+    const session = sessionId ? this.sessions?.get(sessionId) : null;
+    if (!session || session.remote || session.docker || session.adopt || session.cliMouseTracking) return false;
+    const modes = window.__codemanKeyboardHoldModes;
+    return Array.isArray(modes) && modes.includes(session.mode || 'claude');
+  },
+
+  /**
+   * Drop a hold the active session no longer qualifies for (switched to a CLI
+   * that resizes, entered fullscreen, setting turned off) and, unless the caller
+   * resizes itself (selectSession), fit and tell the PTY at once, which is the
+   * old keyboard behavior. Never re-holds: a session that becomes eligible with
+   * the keyboard already up keeps the short rows until the keyboard closes.
+   */
+  _reconcileKeyboardHold({ resize = true } = {}) {
+    if (!this._keyboardHeldRows || this._keyboardHoldEligible()) return;
+    this._releaseKeyboardHold();
+    if (resize && this.activeSessionId) this.sendResize(this.activeSessionId)?.catch?.(() => {});
+  },
+
+  /**
+   * End a keyboard row hold and put the screen back in place (no offset, no
+   * overlay bound). Shared by KeyboardHandler (keyboard hide, shape change)
+   * and _reconcileKeyboardHold.
+   * @returns {boolean} whether a hold was released
+   */
+  _releaseKeyboardHold() {
+    if (!this._keyboardHeldRows) return false;
+    this._keyboardHeldRows = 0;
+    this._applyKeyboardClip();
+    return true;
+  },
+
+  /**
+   * Scroll the (held, taller than its box) terminal screen so the live content
+   * sits above the keyboard, and bound the local-echo overlay to the rows that
+   * are visible. Runs on every render and cursor move while the hold is active;
+   * resets once when it ends.
+   */
+  _applyKeyboardClip() {
+    const container = this.terminal?.element?.parentElement;
+    if (!container) return;
+    const rows = this._keyboardHeldRowsActive() ? this.terminal.rows : 0;
+    const cellHeight = rows ? this.terminal._core?._renderService?.dimensions?.css?.cell?.height : 0;
+    const viewHeight = rows ? container.clientHeight : 0;
+    let clip = 0;
+    if (cellHeight && viewHeight) {
+      const buffer = this.terminal.buffer.active;
+      const following = buffer.viewportY >= buffer.baseY;
+      let lastContentRow = -1;
+      if (following) {
+        for (let row = rows - 1; row >= 0; row--) {
+          if (buffer.getLine(buffer.baseY + row)?.translateToString(true).trim()) {
+            lastContentRow = row;
+            break;
+          }
+        }
+      }
+      clip = window.CodemanTerminalGeometry.keyboardClipPx({
+        rows,
+        cellHeight,
+        viewHeight,
+        cursorRow: buffer.cursorY,
+        lastContentRow,
+        following,
+        viewportY: buffer.viewportY,
+        baseY: buffer.baseY,
+      });
+    }
+    if (clip !== (this._keyboardClipPx || 0)) {
+      this._keyboardClipPx = clip;
+      if (clip) container.style.setProperty('--kb-clip', `${clip}px`);
+      else container.style.removeProperty('--kb-clip');
+    }
+    // Bounded whenever rows are held, even at offset 0 (a prompt near the top
+    // still has held rows below it, under the keyboard). setRowLimit dedupes.
+    this._localEchoOverlay?.setRowLimit?.(
+      cellHeight && viewHeight
+        ? window.CodemanTerminalGeometry.keyboardVisibleRowLimit(clip, viewHeight, cellHeight)
+        : null
+    );
   },
 
   /**
@@ -6589,7 +6832,10 @@ Object.assign(CodemanApp.prototype, {
   syncTerminalGeometry() {
     if (!this.fitAddon || !this.terminal) return null;
     try {
-      this.fitAddon.fit();
+      // fit() would shrink xterm to the keyboard-shortened box before the held
+      // rows put it back: skip it while they are held (_resizeTerminalTo below
+      // still applies the container's columns).
+      if (!this._keyboardHeldRowsActive?.()) this.fitAddon.fit();
     } catch {
       /* a disposed or unattached terminal cannot be fitted; fall through to the read */
     }
@@ -6614,8 +6860,9 @@ Object.assign(CodemanApp.prototype, {
    * part of the scrollback in between. The mobile retry asks every 30 seconds,
    * so that happened on a timer for as long as the refusal lasted. So the
    * columns stay at the PTY's (the #464 invariant: the browser never draws at
-   * a width the PTY does not have), the rows follow the container (they are
-   * never adopted, see reconcilePtyGeometry), and the container's columns go
+   * a width the PTY does not have), the rows follow the container or the
+   * keyboard hold (they are never adopted, see reconcilePtyGeometry and
+   * getTerminalDimensions), and the container's columns go
    * out as the request. An accepted request is adopted by the report.
    *
    * @returns {{cols: number, rows: number}|null} the geometry to request

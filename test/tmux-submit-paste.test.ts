@@ -229,6 +229,21 @@ describe('sendInput line breaks', () => {
     return argvOf(setBufferCmd.replace(/^.*? set-buffer /, `${FAKE_TMUX} set-buffer `)).at(-1) as string;
   }
 
+  it('checks a conditional Enter before the actual inputRunner command', async () => {
+    const manager = managerWithSession();
+    try {
+      expect(await manager.sendInput('s1', '\r', { beforeDispatch: () => false })).toBe(false);
+      expect(manager.ran).toEqual([]);
+      expect(await manager.sendInput('s1', '\r', { beforeDispatch: () => true })).toBe(true);
+      expect(manager.ran).toEqual([expect.stringMatching(/ Enter$/)]);
+      manager.ran = [];
+      expect(await manager.sendInput('s1', 'draft\r', { beforeDispatch: () => true })).toBe(false);
+      expect(manager.ran).toEqual([]);
+    } finally {
+      manager.destroy();
+    }
+  });
+
   it('submits a multi-line prompt as one paste with its line breaks, then Enter', async () => {
     const manager = managerWithSession();
     expect(await manager.sendInput('s1', 'line one\nline two\n\nparagraph three\r')).toBe(true);
@@ -310,4 +325,14 @@ describe('sendInput line breaks', () => {
     expect(keysArgv(answer.ran[0]).slice(-3)).toEqual(['-l', '--', '-']);
     expect(answer.ran[1]).toMatch(/ send-keys -t "codeman-abc12345" Enter$/);
   });
+});
+
+it('terminates literal operands in both sendInputToPane branches', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const src = await readFile(new URL('../src/tmux-manager.ts', import.meta.url), 'utf8');
+  const start = src.indexOf('  sendInputToPane(');
+  const body = src.slice(start, src.indexOf('\n  }\n', start));
+  const literal = body.match(/send-keys[^`\n]*-l[^`\n]*/g) ?? [];
+  expect(literal).toHaveLength(2);
+  for (const command of literal) expect(command).toContain(' -l -- ');
 });

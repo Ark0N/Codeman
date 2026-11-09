@@ -4,7 +4,7 @@
  *
  * ⚠️ test/setup.ts gives the whole FILE one temp HOME (and so one data dir). Port: N/A (inject()).
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -118,6 +118,22 @@ describe('/api/config-backups', () => {
     } finally {
       rmSync(clis, { recursive: true, force: true });
     }
+  });
+
+  it('a restored discord.json reaches the running bridge (it caches its config)', async () => {
+    const reloadDiscord = vi.fn(async () => undefined);
+    const { app } = await createRouteTestHarness((a) => registerConfigBackupRoutes(a, { reloadDiscord }));
+    writeFileSync(join(dirname(SETTINGS_PATH), 'discord.json'), '{"enabled":false}', { mode: 0o600 });
+    const id = (await app.inject({ method: 'POST', url: '/api/config-backups' })).json().data.id;
+    writeFileSync(join(dirname(SETTINGS_PATH), 'discord.json'), '{"enabled":true}', { mode: 0o600 });
+    const res = await app.inject({ method: 'POST', url: `/api/config-backups/${id}/restore` });
+    expect(res.json().data.restored).toContain('discord.json');
+    expect(reloadDiscord).toHaveBeenCalledTimes(1);
+    // A restore that does not carry the file leaves the bridge alone.
+    rmSync(join(dirname(SETTINGS_PATH), 'discord.json'), { force: true });
+    const id2 = (await app.inject({ method: 'POST', url: '/api/config-backups' })).json().data.id;
+    await app.inject({ method: 'POST', url: `/api/config-backups/${id2}/restore` });
+    expect(reloadDiscord).toHaveBeenCalledTimes(1);
   });
 
   it('a restored intents.json is not reverted by the next captured prompt', async () => {

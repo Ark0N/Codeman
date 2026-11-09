@@ -28,6 +28,7 @@ import {
   persistDockerCaseClaudeSessionId,
   probeDockerCliVersion,
   readDockerCases,
+  readDockerCasesOrThrow,
   readDockerHosts,
   resolveClaudeJsonSeedMount,
   resolveDockerClaudeArtifacts,
@@ -68,6 +69,28 @@ describe('docker-hosts storage', () => {
   it('returns [] for a missing file', async () => {
     expect(await readDockerHosts(dir)).toEqual([]);
     expect(await readDockerCases(dir)).toEqual([]);
+  });
+
+  /**
+   * The git fetch paths read the list through the strict reader: the writer truncates and rewrites the file in
+   * place, and a list read as `[]` there would let a fetch run git inside a Docker workspace.
+   */
+  it('has a strict reader that rejects a list it cannot parse, where the plain reader returns []', async () => {
+    expect(await readDockerCasesOrThrow(dir)).toEqual([]); // missing: no cases
+    await writeDockerCases(dir, [CASE]);
+    expect(await readDockerCasesOrThrow(dir)).toEqual([CASE]);
+    const path = join(dir, 'docker-cases.json');
+    for (const text of ['', '[{"name":"myproj","hostWorkspacePath":"/home/arkon/cas', '{"name":"myproj"}', 'null']) {
+      writeFileSync(path, text);
+      expect(await readDockerCases(dir)).toEqual([]);
+      const err = await readDockerCasesOrThrow(dir).then(
+        () => null,
+        (e: Error) => e
+      );
+      expect(err?.message).toMatch(/not a valid JSON array/);
+      // The parser's message quotes the file; the strict reader's never does.
+      expect(err?.message).not.toContain('/home/arkon/cas');
+    }
   });
 
   it('persists the last Claude conversation id keyed by container name', async () => {

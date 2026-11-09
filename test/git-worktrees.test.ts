@@ -17,7 +17,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   agentSkillExcludeLine,
   createCaseWorktree,
@@ -50,6 +50,7 @@ const ENV = {
   GIT_COMMITTER_EMAIL: 't@example.com',
   GIT_CONFIG_GLOBAL: '/dev/null',
   GIT_CONFIG_NOSYSTEM: '1',
+  XDG_CONFIG_HOME: '/nonexistent-xdg',
 };
 const git = (cwd: string, ...args: string[]) =>
   execFileSync('git', args, { cwd, env: ENV, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
@@ -205,6 +206,13 @@ describe('git worktrees on a real repository', () => {
 
   beforeEach(async () => {
     dir = realpathSync(mkdtempSync(join(tmpdir(), 'git-worktrees-')));
+    // The code under test runs git with the real process env. git reads the global ignore file
+    // from $XDG_CONFIG_HOME/git/ignore, which GIT_CONFIG_GLOBAL does not cover: a user who
+    // ignores `.claude/settings.local.json` globally would see that line silently not appended.
+    // A core.excludesFile in the system gitconfig does the same, hence GIT_CONFIG_NOSYSTEM.
+    vi.stubEnv('XDG_CONFIG_HOME', join(dir, 'xdg'));
+    vi.stubEnv('GIT_CONFIG_GLOBAL', '/dev/null');
+    vi.stubEnv('GIT_CONFIG_NOSYSTEM', '1');
     repoDir = join(dir, 'repo');
     mkdirSync(repoDir);
     git(repoDir, 'init', '-q', '-b', 'main');
@@ -216,6 +224,7 @@ describe('git worktrees on a real repository', () => {
     repo = resolved.repo;
   });
   afterEach(() => {
+    vi.unstubAllEnvs();
     rmSync(dir, { recursive: true, force: true });
   });
 

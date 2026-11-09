@@ -154,6 +154,8 @@ describe('Grok mode gates', () => {
     expect(defaultDockerCommandForMode('grok')).toBe('exec grok');
     // Routed through an interactive login shell so ~/.grok/bin resolves,
     // the same fix as the other remote agent CLIs (see defaultRemoteCommandForMode).
-    expect(defaultRemoteCommandForMode('grok')).toBe('exec "${SHELL:-/bin/sh}" -i -l -c \'grok\'');
+    expect(defaultRemoteCommandForMode('grok')).toBe(
+      '{ set -- -i -l; case ${SHELL##*/} in csh|tcsh) set --;; esac; exec "${SHELL:-/bin/sh}" "$@" -c \'grok\'; }'
+    );
   });
 });

@@ -77,6 +77,14 @@ An agent tab shows its CLI's logo before the name, and a shell tab an `SH` badge
 on Tabs** (App Settings → Appearance → Tabs) hides the logos on that device; the tile and split
 headers and the Run menus keep theirs.
 
+**New Session Button on Tabs** (same place, per device, off by default) adds a **+** beside
+the tab's gear. It lists the CLIs that tab's case can start, each with its logo and name (a
+Docker case lists what its container has), and a pick starts one session in that tab's case,
+or the worktree it runs in, and in its named group. The Run button keeps its own mode and case.
+Wherever a tab has a row menu (the vertical rail, the sidebar, `Shift+F10` on a grouped row),
+the same list is its **New session here…** entry. From a tab outside any named group, the new
+session lands in the case's default group if the case has one, as a Run from the toolbar does.
+
 **Status is carried by the dot and the tab's own styling:**
 
 | Look                          | Meaning                                                                 |
@@ -278,6 +286,39 @@ Two extras depending on the device:
   it is hidden so it cannot overlap the search panel.
 - **Phones**: tapping the "C" logo gives a session overview instead: NEEDS YOU first, then
   current sessions, then past ones. On by default.
+
+### Opened outside Codeman
+
+A tmux session you started by hand (`tmux new -s work`, then `claude`, or just a shell) shows
+up on the home screen under **Opened outside Codeman**, on the desktop and in the phone
+overview. **Open** wraps it in a tab, and **Go to tab** on a row means it already has one.
+
+| Where it runs        | How it is found                                                              |
+| -------------------- | ---------------------------------------------------------------------------- |
+| **This machine**     | Automatically, every few seconds while the home screen is up.               |
+| **A container**      | The `⟳` button in the block's header scans the containers behind your Docker cases. |
+| **Over SSH**         | The same button scans your saved remote hosts.                               |
+
+The container and SSH scan costs one connection per target, so it runs when you press the
+button, and **Rescan** runs it again.
+
+- **Closing the tab only detaches.** The session keeps running, and the close dialog offers no
+  kill. Opening one types nothing into it.
+- **Codeman did not start it,** so it will not drive it: respawn, Ralph, auto-clear,
+  auto-compact, auto-resume, custom model endpoints, prompt uploads and the image watcher are
+  refused, the git panel shows nothing, and Edit history says it is not available.
+- **The tab opens on the session's first window,** and the row describes that same window.
+- **It joins like a second tmux client.** While the tab is open it can resize a session
+  someone else is viewing, the way any second client does, and that reverses when it closes.
+- **A short line in the block says why a session is missing.** One whose name holds unusual
+  characters is skipped, and so is one named so that tmux reads the name as something else (it
+  starts with `=`, `@` or `%`, or is a bare `~`). Rename it with `tmux rename-session`. A tmux
+  server that stopped answering costs only its own sessions. One case gets no line: a session
+  named `codeman-*` or `claudeman-*`, or on a Codeman socket, counts as Codeman's own.
+
+Only sockets in tmux's own folder are scanned, so `tmux -L <name>` is found and
+`tmux -S /custom/path` is not. In multi-user mode the block is for admins, since it shows
+everyone's processes.
 
 ## Panels
 

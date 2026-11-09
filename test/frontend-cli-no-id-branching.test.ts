@@ -36,6 +36,11 @@ const SCANNED_FILES = [
   // The command palette's new-session agent picker reads its agents from the
   // injected catalog; panels-ui.js carries no id branch, so keep it that way.
   'panels-ui.js',
+  // A row's mode comes from the same catalog, never from a list of ids here.
+  'foreign-sessions.js',
+  // The harness a local model is paired with arrives as a label in the payload
+  // (`Candidate.cliLabel`); the card names no CLI and compares no id.
+  'local-model-ui.js',
 ];
 
 /**

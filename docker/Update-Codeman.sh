@@ -166,16 +166,33 @@ fi
 # appdata directory (which creates it): this script updates an EXISTING
 # deployment, so a missing appdata path means there is nothing here yet to
 # update, and creating one would just be this script quietly doing
-# Start-Codeman.sh's first-run job worse.
+# Start-Codeman.sh's first-run job worse. No early `exit` in awk: a closed pipe
+# would end this script through pipefail, with no message.
 appdata_path=$(
   "${compose_command[@]}" config --environment |
-    awk -F= '$1 == "CODEMAN_APPDATA_PATH" { sub(/^[^=]*=/, ""); print; exit }'
+    awk -F= '$1 == "CODEMAN_APPDATA_PATH" && !found { sub(/^[^=]*=/, ""); print; found = 1 }'
 )
 if [[ -z "$appdata_path" || ! -d "$appdata_path" ]]; then
   printf 'Error: CODEMAN_APPDATA_PATH is not set or does not exist: %s\n' "${appdata_path:-<unset>}" >&2
   printf 'Run docker/Start-Codeman.sh first to set up a new deployment.\n' >&2
   exit 1
 fi
+
+# Start-Codeman.sh refuses to start while the password is still the example's
+# `changeme`. Checked here too, BEFORE the build and the `down` below: found
+# only at the handoff, that refusal would leave the stack this script just
+# stopped down. No early `exit` in awk, so printf never meets a closed pipe.
+codeman_password=$(
+  "${compose_command[@]}" config --environment |
+    awk -F= '$1 == "CODEMAN_PASSWORD" && !found { sub(/^[^=]*=/, ""); print; found = 1 }'
+)
+if [[ "$codeman_password" == 'changeme' ]]; then
+  printf 'Error: CODEMAN_PASSWORD is still the example value "changeme".\n' >&2
+  printf 'Codeman is reachable from your network and controls Docker on this machine, so\n' >&2
+  printf 'set a real password in %s, then rerun this script. Nothing was stopped.\n' "$env_file" >&2
+  exit 1
+fi
+unset codeman_password
 
 # `stat -c` is GNU, `stat -f` is BSD/macOS; the bind source lives on the Docker
 # host, so both need to work. Identical to Start-Codeman.sh's own helper.

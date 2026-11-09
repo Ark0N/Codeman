@@ -38,6 +38,7 @@ import {
   buildSendBody,
   composerReadyMark,
   describeFailure,
+  describeRequestError,
   httpRequest,
   inputRefusal,
   isSelfSession,
@@ -497,7 +498,7 @@ export function createToolRunner(deps: ToolRunnerDeps) {
     } catch (err) {
       if (signal?.aborted) throw err;
       throw new ToolError(
-        `Cannot reach Codeman at ${ctx.apiUrl}: ${getErrorMessage(err)}. Check that it is running. If every call ` +
+        `Cannot reach Codeman at ${ctx.apiUrl}: ${describeRequestError(err)}. Check that it is running. If every call ` +
           'fails at once, a sandbox around this MCP server may be blocking network access to this machine.'
       );
     }

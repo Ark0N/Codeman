@@ -192,7 +192,7 @@ start/stop wrapper to manage; tailscaled owns the lifecycle).
 | First cert issuance latency | Verify step retries ~30s and says why the first load may be slow. |
 | `tailscale up` needs auth | Print the auth URL prominently, poll with timeout, skip gracefully. Works headless. |
 | Custom `CODEMAN_PORT` | Serve target uses the actual port; `install.sh tailscale` re-reads it from the service file. |
-| Funnel (public internet) | OUT OF SCOPE for v1. If ever added it must mirror the tunnel guard: refuse without `CODEMAN_PASSWORD` (`isUnauthenticatedNetworkAcknowledged`). Funnel exposes to the whole internet and is a different risk class than tailnet-only serve. Mention `tailscale funnel` in docs only, with the password warning. |
+| Funnel (public internet) | OUT OF SCOPE for v1. If ever added it must mirror the tunnel guard: refuse without `CODEMAN_PASSWORD` (`isUnauthenticatedTunnelAcknowledged` and the login check in the `PUT /api/settings` tunnel guard). Funnel exposes to the whole internet and is a different risk class than tailnet-only serve. Mention `tailscale funnel` in docs only, with the password warning. |
 | Uninstall | Best effort: if `serve status --json` shows 443 proxying to our port, run the targeted `tailscale serve --https=443 off` (still accepted by current CLIs); if the CLI rejects it, print manual instructions. Never touch other mappings, never uninstall tailscale itself. |
 | User already fronting Codeman some other way (reverse proxy etc.) | The serve check only looks at tailscale state; other proxies are invisible and unaffected (same stance as the loopback-exemption note in security-architecture). |
 

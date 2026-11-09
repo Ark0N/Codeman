@@ -25,7 +25,7 @@ Every run mode Codeman can launch — Claude Code, Terminal/Shell, OpenCode, Cod
 App Settings → Agents & CLIs → **CLI management** (`cliManagementEnabled`, default OFF; admin-only in multi-user mode) lists every entry with an installed/not-installed badge and:
 
 - toggles any entry on or off. A `kind: 'shell'` entry cannot be disabled, and the row shows no switch for it. A disabled CLI disappears from the Run menu, the welcome screen and the phone overview, and new session requests for it are rejected.
-- installs a missing **stock** CLI by running its shipped install command, after a confirm that names the exact command. Only one install per CLI runs at a time, and the command runs without any `CODEMAN_*` variable in its environment. An `npm install -g` command is pointed at `~/.local` (which every resolver searches) when the npm global prefix is not writable by the server user, for example a system node under `/usr`; a writable prefix, a prefix that does not exist yet but could be created, and an explicit `NPM_CONFIG_PREFIX` are left alone. A custom entry's install command is never executed.
+- installs a missing **stock** CLI by running its shipped install command (the entry as merged with `clis.json`, so an override of a stock entry's install command is what runs here), after a confirm that names the exact command. Only one install per CLI runs at a time, and the command runs without any `CODEMAN_*` variable in its environment. An `npm install -g` command is pointed at `~/.local` (which every resolver searches) when the npm global prefix is not writable by the server user, for example a system node under `/usr`; a writable prefix, a prefix that does not exist yet but could be created, and an explicit `NPM_CONFIG_PREFIX` are left alone. A custom entry's install command is never executed.
 - adds, edits and deletes **custom** entries (id, label, badge, binaries, launch argv). The server re-validates the whole assembled entry through `CliEntrySchema`, so the form cannot bypass the load-time rules.
 
 These are the only writes to `clis.json`. They are serialized, and a file that does not parse or has unsafe permissions is refused rather than overwritten; fix it (or `chmod 600` it) and retry. The HTTP routes are listed in `docs/api-reference.md` under *CLI management*.
@@ -47,14 +47,21 @@ interface CliEntry {
   env: CliEnv; // exports, tmux setenv keys, the env-override allowlist
   capabilities: CliCapabilities; // what every call site reads instead of the id
   //   .workDetect?: { promptGlyph, workingLine, watchingLine?, watchingLines?, awaitingLine?,
-  //                   blockedLine?, blockedLines? }
+  //                   blockedLine?, blockedLines?, composerFooterLine?, composerPopupLine?,
+  //                   composerCommandPrefixes?, composerCompletionSigils? }
   //   (how this CLI's pane shows work, work it started in the background, a turn
-  //   that ended waiting for workers it will resume from, and a dialog it is blocked on)
+  //   that ended waiting for workers it will resume from, a dialog it is blocked on,
+  //   the rows around its idle composer that guarded input relies on, and what a
+  //   draft can trigger)
   //   .modelDetect?: { screenLine, screenLines? }
   //   (where this CLI's own chrome names the model it runs: SessionState.displayModel)
   //   .launchDefaults?: { [launchParam]: settingsKey }
   //   (synced App Settings that seed a LOCAL launch's params the caller left unset;
-  //   codex's model and reasoning effort, via src/web/launch-defaults.ts)
+  //   codex's model, reasoning effort and network access, via src/web/launch-defaults.ts)
+  //   .gates: { [name]: { minVersion, failClosed } }
+  //   (version gates a `capabilityGate` launch condition names: claude's `--name`,
+  //   codex's `--no-daemon`. Measured against THAT CLI's own version, never claude's:
+  //   resolveSessionCliVersion, so an unknown version passes no fail-closed gate)
   overlays: CliOverlays; // remote-SSH / Docker pane commands, credential store
 }
 ```
@@ -63,7 +70,7 @@ interface CliEntry {
 
 ### Regexes that come from config
 
-Six capability fields carry a regular expression an override file can set: `discovery.version.regex`, `capabilities.workDetect.workingLine`, `capabilities.workDetect.watchingLine`, `capabilities.workDetect.awaitingLine`, `capabilities.workDetect.blockedLine` and `capabilities.modelDetect.screenLine`. All six go through `compileVersionRegex()`, which caps the source at 200 characters, refuses the nested-quantifier shapes that cause catastrophic backtracking, and returns `null` rather than throwing so every caller degrades instead of crashing.
+Eight capability fields carry a regular expression an override file can set: `discovery.version.regex`, `capabilities.workDetect.workingLine`, `capabilities.workDetect.watchingLine`, `capabilities.workDetect.awaitingLine`, `capabilities.workDetect.blockedLine`, `capabilities.workDetect.composerFooterLine`, `capabilities.workDetect.composerPopupLine` and `capabilities.modelDetect.screenLine`. All eight go through `compileVersionRegex()`, which caps the source at 200 characters, refuses the nested-quantifier shapes that cause catastrophic backtracking, and returns `null` rather than throwing so every caller degrades instead of crashing.
 
 `workingLine` is the one that matters most, because it is compiled once per session and then run against every accumulated PTY chunk and every pane capture. A nested quantifier there is a ReDoS against the event loop for the whole server, not just that session. The guard therefore runs in two places, and neither is redundant: `schema.ts` rejects the entry at LOAD time so a bad pattern never reaches a session, and `_workingLinePattern()` in `session.ts` compiles through the same helper so the runtime cannot end up with a pattern the schema would have refused.
 
@@ -123,6 +130,33 @@ IDLE prompt from a codex session ever reaches the approvals inbox (its screen-re
 below, open PERMISSION items, which a watching label never acknowledges), so a forged label
 costs a wrong badge and cannot silence an alert. Before giving a CLI idle signals and a
 pattern, make sure its row is one the agent cannot write.
+
+### The idle composer guarded input reads (`composerFooterLine`)
+
+The experimental guarded `stage`/`submit` routes (`src/agent-staging.ts`, opt-in through
+`agentCoordinationEnabled`) type into a composer only after proving, from a fresh capture,
+that the newest `promptGlyph` row is the CLI's own composer at rest, with the caret at the
+exact end of its text. `composerFooterLine` is the second half of that proof: every
+non-blank row below the composer (at most three) must match it, one row at a time. A CLI
+that declares none never takes guarded input; only codex declares one, built from the same
+effort-word list as its `modelDetect.screenLine` (`CODEX_EFFORT_WORDS` in `stock.ts`), so a
+codex footer change is a one-place edit. Like `blockedLine`, the rows it sees are near the
+foot of the screen, so a pattern must anchor on chrome only that CLI draws there.
+
+Three more fields cover what a draft can do to Enter. Codex draws every suggestion popup
+(its slash-command list, file search, skill and mention lists) ABOVE the composer and
+leaves the footer below it alone, so the footer check reads `› /stat` with the command
+list open as an idle draft, and Enter would run the highlighted `/status`.
+`composerPopupLine` matches a popup row; it is tested against the contiguous block of
+non-blank rows directly above the composer (past at most three blank rows, at most twelve
+rows), never further up, and any match refuses the frame. `composerCommandPrefixes` lists
+the characters that, first in a draft, make Enter run a command (codex: `/!`), and
+`composerCompletionSigils` the ones that, starting the word under the caret, open a popup
+(codex: `@$`); stage refuses such a message before typing, the sigils only on the last
+word since the caret ends there. Both are 1 to 8 ASCII punctuation characters. Codex's
+values were read from `codex-rs/tui/src/bottom_pane` at `rust-v0.162.0`; a file-search
+popup with results shows bare path rows no pattern can tell from prose, which is why the
+trigger refusal is there as well as the frame check.
 
 ### Dialogs a CLI blocks on (`blockedLine`)
 
@@ -298,7 +332,7 @@ already have.
 
 Three rules, and the middle one is why the embed matters:
 
-1. **The server never executes an entry's `install.command`.** Unchanged, and still enforced by nothing executing it: the field is display text (`CliDiscovery.install.command`).
+1. **The server executes an entry's `install.command` in exactly two places, both behind a consent click that shows the literal text.** CLI management (above, `cliManagementEnabled`, the merged entry's command) and the local model install (`docs/local-models.md`: only the COMPILED stock command of a catalogue harness row, through `stockInstallCommand()`, so no `clis.json` override reaches it; no setting gates that path, the consent screen does). Both run through the one runner in `src/cli-install-runner.ts` (one install per CLI at a time, no `CODEMAN_*` in the environment, the whole process group killed on a timeout or a cancel) and both are written to the admin audit log in multi-user mode. Everywhere else the field is display text (`CliDiscovery.install.command`).
 2. **`install.sh` executes only commands embedded in itself.** Those arrive in the same file, over the same TLS fetch, in the same commit as the `curl \| bash` line that fetched the script — identical trust to the hardcoded vendor one-liners it replaces.
 3. **Nothing fetched at install time is ever executed.** There is no second code path that fetches anything after the script itself has been fetched.
 

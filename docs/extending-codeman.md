@@ -165,7 +165,7 @@ agent skill instead of teaching it these calls by hand: `skills/codeman` in the 
 (`npx skills add Ark0N/Codeman --skill codeman -g`, or `codeman skill install
 [--case <name>] [--mode <mode>]`, or the synced `agentSkillEnabled` App Setting for
 automatic per-case injection on session create, into the directory each CLI scans for
-skills). The skill carries the guard, the safety rules, and verified
+skills, on by default since 1.50.0). The skill carries the guard, the safety rules, and verified
 wait/orchestration recipes.
 
 If the caller speaks the Model Context Protocol (Claude Desktop, Cursor, Codex, any MCP

@@ -338,9 +338,11 @@ export class PromptCacheKeepWarmService implements KeepWarmScheduler {
       try {
         settings = await this.readSettings();
       } catch (err) {
-        // A read that lands mid-write is retried. A settings.json that stays broken (a hand edit
-        // with a trailing comma) fails every read until it is fixed, so it is logged once rather
-        // than once a minute per session, and only a session that could nudge retries.
+        // A failed read is retried (settings.json is replaced atomically, so a read never sees a
+        // half-written file; a failure is a read error or a file that does not parse). A settings.json
+        // that stays broken (a hand edit with a trailing comma) fails every read until it is fixed, so
+        // it is logged once rather than once a minute per session, and only a session that could
+        // nudge retries.
         const message = err instanceof Error ? err.message : String(err);
         if (message !== this.settingsFailure) {
           this.settingsFailure = message;

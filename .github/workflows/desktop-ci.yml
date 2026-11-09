@@ -1,0 +1,72 @@
+name: Desktop app
+
+# Checks the native macOS app in packages/desktop on the pull requests and master
+# pushes that change it: formatting, clippy and the unit tests, on macOS. No
+# secret and a read-only token, because cargo runs the build script of every
+# crate in Cargo.lock. The release build, signing and notarization live in
+# desktop-dmg.yml.
+
+on:
+  pull_request:
+    paths:
+      - 'packages/desktop/**'
+      - '.github/workflows/desktop-ci.yml'
+  push:
+    branches: [master]
+    paths:
+      - 'packages/desktop/**'
+      - '.github/workflows/desktop-ci.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+env:
+  # Keep in step with desktop-dmg.yml, which builds the release with it.
+  RUST_TOOLCHAIN: '1.99.1'
+
+jobs:
+  check:
+    name: fmt, clippy, test
+    runs-on: macos-26
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: packages/desktop
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component clippy --component rustfmt
+          rustup default "$RUST_TOOLCHAIN"
+          rustc --version
+          cargo --version
+
+      - name: Format
+        run: cargo fmt --check
+
+      # A test build bakes another installer in at compile time (option_env! in
+      # setup.rs), so neither variable may reach cargo.
+      - name: Clippy
+        run: |
+          unset CODEMAN_DESKTOP_INSTALLER_URL CODEMAN_DESKTOP_INSTALL_BRANCH
+          cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Unit tests
+        run: |
+          unset CODEMAN_DESKTOP_INSTALLER_URL CODEMAN_DESKTOP_INSTALL_BRANCH
+          cargo test --locked
+
+      # /bin/bash on macOS is 3.2, the bash these scripts run under on a Mac.
+      - name: Scripts parse on bash 3.2
+        run: |
+          for script in scripts/*.sh; do
+            /bin/bash -n "$script"
+          done

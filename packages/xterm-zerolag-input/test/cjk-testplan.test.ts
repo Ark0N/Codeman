@@ -14,7 +14,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { renderOverlay, charCellWidth, stringCellWidth } from '../src/overlay-renderer.js';
 import type { RenderParams, FontStyle } from '../src/types.js';
-import { createMockTerminal } from './helpers.js';
+import { createMockTerminal, lineSpans } from './helpers.js';
 import { ZerolagInputAddon } from '../src/zerolag-input-addon.js';
 
 // ─── Shared fixtures ─────────────────────────────────────────────────
@@ -47,16 +47,7 @@ function makeParams(overrides: Partial<RenderParams> = {}): RenderParams {
 
 /** Extract span data from a rendered line div */
 function getSpans(lineDiv: HTMLDivElement) {
-  const spans: { text: string; left: number; width: number }[] = [];
-  for (let i = 0; i < lineDiv.children.length; i++) {
-    const span = lineDiv.children[i] as HTMLSpanElement;
-    spans.push({
-      text: span.textContent || '',
-      left: parseFloat(span.style.left),
-      width: parseFloat(span.style.width),
-    });
-  }
-  return spans;
+  return lineSpans(lineDiv).map(({ text, left, width }) => ({ text, left, width }));
 }
 
 // ─── Addon setup helpers ─────────────────────────────────────────────
@@ -199,18 +190,27 @@ describe('Test 2: CJK double-width spacing', () => {
 
   it('CJK span widths are exactly 2 * cellW pixels', () => {
     const container = document.createElement('div');
-    renderOverlay(container, makeParams({ lines: ['你'], cellW: 8.4 }));
+    renderOverlay(container, makeParams({ lines: ['你'], cellW: 8.5 }));
     const lineDiv = container.children[0] as HTMLDivElement;
     const span = lineDiv.children[0] as HTMLSpanElement;
-    expect(span.style.width).toBe('16.8px'); // 2 * 8.4
+    expect(span.style.width).toBe('17px'); // 2 * 8.5
   });
 
   it('ASCII span widths remain 1 * cellW pixels', () => {
     const container = document.createElement('div');
-    renderOverlay(container, makeParams({ lines: ['a'], cellW: 8.4 }));
+    renderOverlay(container, makeParams({ lines: ['a'], cellW: 8.5 }));
     const lineDiv = container.children[0] as HTMLDivElement;
     const span = lineDiv.children[0] as HTMLSpanElement;
-    expect(span.style.width).toBe('8.4px'); // 1 * 8.4
+    expect(span.style.width).toBe('8.5px'); // 1 * 8.5
+  });
+
+  it('at a fractional cell width, CJK and ASCII spans still cover 2 and 1 cells to within 1/8 px', () => {
+    const container = document.createElement('div');
+    renderOverlay(container, makeParams({ lines: ['你a'], cellW: 8.4 }));
+    const [wide, narrow] = getSpans(container.children[0] as HTMLDivElement);
+    expect(Math.abs(wide.width - 2 * 8.4)).toBeLessThanOrEqual(0.125);
+    expect(Math.abs(narrow.left - 2 * 8.4)).toBeLessThanOrEqual(0.125);
+    expect(Math.abs(narrow.left + narrow.width - 3 * 8.4)).toBeLessThanOrEqual(0.125);
   });
 
   it('terminal unicode addon is preferred over fallback when available', () => {
@@ -644,8 +644,9 @@ describe('Test 6: ASCII input — no regression', () => {
     const spans = getSpans(lineDiv);
 
     expect(spans[0].left).toBe(0);
-    expect(spans[1].left).toBeCloseTo(8.4, 5);
-    expect(spans[2].left).toBeCloseTo(16.8, 5);
+    // Edges are snapped to a quarter pixel, so within 1/8 px of the grid.
+    expect(Math.abs(spans[1].left - 8.4)).toBeLessThanOrEqual(0.125);
+    expect(Math.abs(spans[2].left - 16.8)).toBeLessThanOrEqual(0.125);
   });
 
   it('ASCII cursor positions at correct column', () => {

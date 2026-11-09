@@ -181,6 +181,16 @@ describe('WebServer.renderIndexHtml', () => {
     }
   });
 
+  it('injects the keyboard-hold modes from the keyboardHold capability: inline Claude, never full-height codex', async () => {
+    for (const solo of [undefined, 'sess-123']) {
+      const { server } = makeServer();
+      const html = await render(server, solo);
+      const match = html.match(/window\.__codemanKeyboardHoldModes=(\[[^<]*\]);/);
+      expect(match).not.toBeNull();
+      expect(JSON.parse(match![1])).toEqual(['claude']);
+    }
+  });
+
   it('escapes the solo id so it cannot break out of the inline <script>', async () => {
     const { server } = makeServer({});
     const html = await render(server, 'a</script><b>');

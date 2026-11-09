@@ -718,6 +718,15 @@ export class RalphTracker extends EventEmitter {
   }
 
   /**
+   * Record a remote session's working directory without touching the local disk (see
+   * `RalphFixPlanWatcher.setRemoteWorkingDir`): the fix plan stays authoritative, as for a local session.
+   * @param workingDir - The session's working directory on the remote host
+   */
+  setRemoteWorkingDir(workingDir: string): void {
+    this.fixPlanWatcher.setRemoteWorkingDir(workingDir);
+  }
+
+  /**
    * Load @fix_plan.md from disk if it exists.
    */
   async loadFixPlanFromDisk(): Promise<number> {

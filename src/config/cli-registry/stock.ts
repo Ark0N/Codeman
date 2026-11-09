@@ -13,6 +13,14 @@
 import type { CliEntry } from './types.js';
 import { CODEX_REASONING_EFFORTS } from '../../types/session.js';
 
+/**
+ * Codex's footer effort words: every CODEX_REASONING_EFFORTS level plus `default` (what
+ * codex prints when no effort is configured), as one regex alternation. Shared by the two
+ * patterns that read that footer (`modelDetect.screenLine` and
+ * `workDetect.composerFooterLine`), so a new level is a one-place edit.
+ */
+const CODEX_EFFORT_WORDS = [...CODEX_REASONING_EFFORTS, 'default'].join('|');
+
 const HOME_DIRS = {
   local: '~/.local/bin',
   usrLocal: '/usr/local/bin',
@@ -144,6 +152,7 @@ const CLAUDE: CliEntry = {
       // from the EFFORT_LEVELS allowlist upstream, same as every other engine value).
       effortLevel: { type: 'engine', source: 'effortLevel' },
       effortJson: { type: 'engine', source: 'effortSettingsJson' },
+      discordHint: { type: 'engine', source: 'appendSystemPrompt' },
       sessionId: { type: 'engine', source: 'sessionId' },
       sessionName: { type: 'engine', source: 'sessionName' },
     },
@@ -171,6 +180,12 @@ const CLAUDE: CliEntry = {
           { flag: '--effort', valueFrom: 'effortLevel', quote: 'single', when: { param: 'effortLevel', state: 'set' } },
           { flag: '--settings', valueFrom: 'effortJson', quote: 'single', when: { param: 'effortJson', state: 'set' } },
           { flag: '--name', valueFrom: 'sessionName', quote: 'double', when: { capabilityGate: 'nameFlag' } },
+          {
+            flag: '--append-system-prompt',
+            valueFrom: 'discordHint',
+            quote: 'single',
+            when: { param: 'discordHint', state: 'set' },
+          },
         ],
       },
       {
@@ -195,6 +210,12 @@ const CLAUDE: CliEntry = {
           { flag: '--effort', valueFrom: 'effortLevel', quote: 'single', when: { param: 'effortLevel', state: 'set' } },
           { flag: '--settings', valueFrom: 'effortJson', quote: 'single', when: { param: 'effortJson', state: 'set' } },
           { flag: '--name', valueFrom: 'sessionName', quote: 'double', when: { capabilityGate: 'nameFlag' } },
+          {
+            flag: '--append-system-prompt',
+            valueFrom: 'discordHint',
+            quote: 'single',
+            when: { param: 'discordHint', state: 'set' },
+          },
         ],
       },
     ],
@@ -289,6 +310,10 @@ const CLAUDE: CliEntry = {
     // forwarded (older CLI, inline renderer, the local-scrollback opt-out) a scroll is
     // turned into PageUp/PageDown, which Claude pages its transcript on (#205).
     transcriptPageKeys: true,
+    // Claude's default renderer is inline, and each keyboard-driven PTY height change made
+    // it reprint only the tail that fits, erasing transcript rows from tmux (measured on
+    // 2.1.306: 25 of 100 lines over five keyboard cycles). See CliCapabilities.keyboardHold.
+    keyboardHold: 'inline',
     keyboardAccessory: 'agent',
     privilegedCommandGate: false,
     startMode: 'interactive',
@@ -615,8 +640,12 @@ const CODEX: CliEntry = {
   launch: {
     params: {
       bypassApprovals: { type: 'bool' },
+      networkAccess: { type: 'bool' },
       animations: { type: 'bool' },
-      model: { type: 'token', pattern: 'model' },
+      // `model-plain-colon`, not `model`: the custom-model feature forces the selected id
+      // onto this param (`launchModel: '{modelId}'` below), and Ollama-style ids carry a
+      // `:` (`qwen3:32b`). A leading alphanumeric still keeps `--yolo` from riding a flag.
+      model: { type: 'token', pattern: 'model-plain-colon' },
       reasoningEffort: { type: 'enum', values: [...CODEX_REASONING_EFFORTS] },
       resumeId: { type: 'token', pattern: 'id' },
     },
@@ -625,7 +654,38 @@ const CODEX: CliEntry = {
         id: 'default',
         args: [
           { lit: 'codex' },
+          // Codex 0.162 hands every client's tool commands to ONE shared background
+          // app-server (`codex app-server --managed-daemon`), started by whichever client
+          // came first. Two things break inside a Codeman pane, both measured 2026-11-01 on
+          // 0.162.0: the commands run with the STARTER's environment, so
+          // `$CODEMAN_SESSION_ID`/`$CODEMAN_API_URL` belong to another session (the codeman
+          // skill's self-check 404s and its delete guard protects the wrong id), and a daemon
+          // of another version (a 0.166 one left by a later install) stops every launch on an
+          // "incompatible feature settings" dialog before the composer appears. `--no-daemon`
+          // runs this session's own in-process server, which is what a pane per session
+          // means anyway. Gated at the version it was measured on; an older or unknown
+          // codex gets nothing (fail-closed), since an unknown flag makes codex exit.
+          { flag: '--no-daemon', when: { capabilityGate: 'noDaemonFlag' } },
           { flag: '--dangerously-bypass-approvals-and-sandbox', when: { param: 'bypassApprovals', is: true } },
+          // Lets commands in codex's workspace-write sandbox open network connections,
+          // Codeman's own API on loopback included (the codeman skill's curl calls fail
+          // with "couldn't connect" without it). Measured on 0.162.0 (`codex sandbox` and
+          // a live pane): loopback stays blocked under workspace-write until this is set.
+          // ⚠️ Not a safe middle ground below the bypass above: that API can start a session
+          // outside the sandbox with no approval prompt, so codex's sandbox no longer contains
+          // a command once this is on. Measured 2026-11-06: a `touch` the sandbox refused
+          // landed through POST /api/sessions, and with a password set too from inside a
+          // Codeman pane, which inherits CODEMAN_PASSWORD by design.
+          // ⚠️ Workspace-write ONLY: a folder codex runs read-only (one it does not trust,
+          // such as a fresh non-git case) keeps the network closed and asks per command.
+          // Deliberately not paired with `--sandbox workspace-write` (owner decision,
+          // 2026-11-06), which would also grant write access to a folder codex itself chose
+          // not to trust, under a label that only says "network".
+          {
+            flag: '--config',
+            value: 'sandbox_workspace_write.network_access=true',
+            when: { param: 'networkAccess', is: true },
+          },
           { flag: '--config', value: 'tui.animations=true', when: { param: 'animations', is: true } },
           { flag: '--config', value: 'tui.animations=false', when: { param: 'animations', is: false } },
           { flag: '--model', valueFrom: 'model', when: { param: 'model', state: 'set' } },
@@ -734,6 +794,34 @@ const CODEX: CliEntry = {
       watchingLines: 4,
       blockedLine: String.raw`(?:^|\n) {0,4}› \d\. [\s\S]*\n {2}(?:Press enter to confirm|tab (?:to add|or esc to clear) notes|enter continue)(?:[^\n]|\n {2}(?=[a-z←])){0,120}(?:cancel|interrupt|quit|back|answer|all)$`,
       blockedLines: 20,
+      // The rows codex draws under an idle composer, tested one at a time by guarded
+      // stage/submit (agent-staging.ts): the model footer (`  gpt-5.6-terra default ·
+      // ~/case`, effort words from CODEX_EFFORT_WORDS as in modelDetect below), the
+      // `? for shortcuts` / `← for agents` hint row 0.162.0 adds at rest, and the older
+      // `NN% context left` footer. Indented, so the `›` composer row itself never matches.
+      composerFooterLine: String.raw`^\s+(?:\d+% context left|\? for shortcuts|← for agents|\S+ (?:${CODEX_EFFORT_WORDS}) · )`,
+      // Read from codex-rs/tui/src/bottom_pane at rust-v0.162.0 (chat_composer/
+      // popup_state.rs, composer_layout.rs and the popups' render code and snapshots):
+      // every suggestion popup renders ABOVE the composer and keeps the footer below it,
+      // so the footer alone cannot tell `› /stat` with the command list open from an
+      // idle draft, and Enter then runs the highlighted `/status`. What sits in the
+      // block just above the composer (past its blank top padding row):
+      //   command list (`/`)           `› /status      show current session ...`
+      //                                `  /statusline  configure which items ...`
+      //   skill and mention lists      `  enter insert · esc close` (key-hint row)
+      //   (`$`, `@` with mentions on)  `  enter/tab insert · esc close · ↑/↓ select · ←/→ filter`
+      //   file search (`@`)            `  loading...` / `  no matches`, else bare path
+      //                                rows, which no pattern can tell from prose
+      // The last case is why stage also refuses the triggers themselves (below).
+      composerPopupLine: String.raw`^ {0,2}(?:enter(?:/tab)? insert · esc close|loading\.\.\.$|no matches$)|^[› ] /[\w:-]+ {2,}\S`,
+      // Same source. A draft starting with `/` is a slash command (the popup opens while
+      // the caret is in its name, and Enter runs a command either way), and one starting
+      // with `!` is a shell command (codex switches its prompt to `!` and runs it). Popups
+      // open for the word under the caret only: `@` (file search, or the unified mention
+      // list) and `$` (skills and mentions; whether a given `$word` opens it depends on
+      // codex's skill catalog, so every `$` word is refused).
+      composerCommandPrefixes: '/!',
+      composerCompletionSigils: '@$',
     },
     // The footer under the composer, measured on a live 0.147.0 pane:
     // `  gpt-5.6-terra default · ~/codeman-cases/th-scratch` (model, reasoning effort,
@@ -757,13 +845,20 @@ const CODEX: CliEntry = {
     // and the `›` composer, and a forged footer-shaped transcript line is not followed by
     // an indented row, so it is not read.
     modelDetect: {
-      screenLine: String.raw`(?:^|\n) {2}([A-Za-z0-9][\w.:/@+-]{0,79}) (?:${[...CODEX_REASONING_EFFORTS, 'default'].join('|')}) · [^\n]*(?:\n {2}[^\n]*)?$`,
+      screenLine: String.raw`(?:^|\n) {2}([A-Za-z0-9][\w.:/@+-]{0,79}) (?:${CODEX_EFFORT_WORDS}) · [^\n]*(?:\n {2}[^\n]*)?$`,
       screenLines: 2,
     },
     // App Settings → Codex model / reasoning effort (synced), filled into a LOCAL launch's
     // codexConfig wherever the caller left the field unset. Launch-only: nothing writes
     // codex's own config.toml. Read by applyLaunchDefaults() in src/web/launch-defaults.ts.
-    launchDefaults: { model: 'codexModel', reasoningEffort: 'codexReasoningEffort' },
+    // `networkAccess` (App Settings → Codex → Allow network access) rides the same path, so
+    // a codex session started by the codeman skill, `codeman agent spawn` or the MCP server
+    // gets it as well as one started from the browser. Off (the default) fills nothing.
+    launchDefaults: {
+      model: 'codexModel',
+      reasoningEffort: 'codexReasoningEffort',
+      networkAccess: 'codexNetworkAccess',
+    },
     // Two columns, like claude's, measured on a live 0.154.0 answer: the `•`/`›`/`⚠`
     // markers sit in the gutter, prose continuations sit at 2, and a nested YAML block
     // the model wrote rendered at 2/4/6/8 for its own 0/2/4/6. Replayed at 100, 120,
@@ -788,7 +883,19 @@ const CODEX: CliEntry = {
     // does. codex is the entry where the two names differ (`bypassApprovals` here,
     // `dangerouslyBypassApprovals` on the wire), so it is the one that would have caught a
     // regression; `schema.ts` now rejects a name that is not a declared param.
-    privilegedParams: [{ param: 'bypassApprovals', clampTo: false }],
+    //
+    // `networkAccess` widens the sandbox too (any host, not just Codeman's loopback API), so
+    // a non-granted owner gets it forced off like the bypass. Only-if-sent is enough here as
+    // well: an absent value leaves codex's own no-network default, and the launch default
+    // above is filled BEFORE the clamp runs, so a filled `true` is still clamped.
+    privilegedParams: [
+      { param: 'bypassApprovals', clampTo: false },
+      { param: 'networkAccess', clampTo: false },
+    ],
+    // `--no-daemon` above. Evaluated against codex's OWN version (resolveSessionCliVersion).
+    gates: {
+      noDaemonFlag: { minVersion: '0.162.0', failClosed: true },
+    },
     mcpConfig: {
       path: '.codex/config.toml',
       format: 'codex-toml',
@@ -801,6 +908,7 @@ const CODEX: CliEntry = {
       dirEnvVar: 'CODEX_HOME',
       fileName: 'config.toml',
       template: 'codex-toml',
+      launchModel: '{modelId}',
     },
     // CODEX_HOME already matches the CODEX_ allowedPrefix above, so it was ALREADY
     // reachable via plain envOverrides before this feature existed. It is arguably
@@ -1123,7 +1231,23 @@ const PI: CliEntry = {
     // (hasTrustRequiringProjectResources, pi 1.1.0), which would stall a spawned worker on
     // a dialog. pi reads the user-level `~/.agents/skills` without that prompt, so a pi
     // user installs it there (`npx skills add Ark0N/Codeman --skill codeman -g`).
-    altScreen: 'preserve', // pi's TUI renders into the main screen with terminal-owned scrollback
+    // Fullscreen is pi's default `tuiMode` since 1.0.0 (measured 1.0.0, 1.1.0, 1.4.0, 1.5.0 in
+    // tmux: alternate_on=1, history_size=0, mouse on, SGR): a TUI that enables tracking once at
+    // start. Codeman's replay (tab switch, reload) drops that mode in xterm, so the wheel hit an
+    // empty local buffer and went dead until a redraw. Same shape as copilot: strip the DECSETs
+    // (a drag selects locally), publish `cliMouseTracking`, and forward the wheel by hand from
+    // that flag. pi scrolls on SGR wheel reports, one row each at a low rate, faster on a spin.
+    // `tuiMode: regular`, the default below 1.0.0, is inline and emits no mouse DECSET, so the
+    // strip finds nothing and the flag stays false. A pi from 0.84.0 set to fullscreen does emit
+    // them (0.84.1 and 0.99.2 measured: alternate_on=1, mouse_any_flag=1, SGR) and the flag
+    // covers it.
+    // ⚠️ No `transcriptPageKeys`, though fullscreen pi does page on PageUp/PageDown. pi binds
+    // those keys to its editor in regular mode too, where they page nothing and move the caret
+    // of a multi-line draft, so a wheel over a fresh regular pane sent the next keystroke to the
+    // wrong line (measured). The cost: a fullscreen pi with "Wheel scrolls local history" on
+    // has no paging fallback.
+    altScreen: 'strip-mux-and-mouse',
+    wheelForward: { mode: 'always' },
     echo: { policy: 'buffer', anchor: { kind: 'cursor' } },
     // Measured on a live pi 1.1.0 pane (capture-pane every 250 ms through a turn,
     // 2026-10-09): pi has no composer glyph. Its composer sits between two `─` rules, and
@@ -1313,8 +1437,7 @@ const GROK: CliEntry = {
     // docs/, bin/ — per-file seeding like pi's credStore, not a whole-dir seedWhole copy.
     credStore: { rel: '.grok', seedFiles: ['auth.json', 'config.toml', 'pager.toml'] },
     // No remote/docker overlay needed: the defaults (exec grok / login-shell `grok`) are
-    // already correct — verified against upstream's own pinned test/grok-mode.test.ts
-    // expectation `exec "${SHELL:-/bin/sh}" -i -l -c 'grok'`.
+    // already correct, verified against upstream's own pinned test/grok-mode.test.ts.
   },
 };
 
@@ -1505,30 +1628,30 @@ const DEEPSEEK: CliEntry = {
     // SERVER's own key into every dsh pane, so DEEPSEEK_BASE_URL is the exfiltration
     // vector, not the key itself — a non-granted owner supplying THEIR OWN key removes
     // privilege rather than granting it, and clamping it here was a real regression
-    // (test/deepseek-mode.test.ts) fixed before this shipped.
-    privilegedEnvKeys: ['DSH_PERMISSION_MODE', 'DSH_HOME', 'DEEPSEEK_BASE_URL'],
-    // Reuses the already-existing DEEPSEEK_BASE_URL/DEEPSEEK_API_KEY keys above. No
-    // modelVars — dsh's model is a profile-composition entry (see `model: { source: 'none'
-    // }` above), not an env var, so forcing a specific model name may not fully work;
-    // verify against a real profile before shipping.
-    //
-    // ⚠️ appendV1Suffix is REQUIRED, not optional-nice-to-have: without it every request
-    // 404s. Confirmed live and by reading dsh's own bundled source
-    // (@deepseek-ai/dsh-llm-deepseek): it builds the request URL as
-    // `${DEEPSEEK_BASE_URL}/chat/completions` with no "/v1" of its own (its real public
-    // API, https://api.deepseek.com, expects the caller's base URL to already carry any
-    // needed prefix), while llama-swap/llama.cpp only serves the OpenAI-conventional
-    // "/v1/chat/completions" — a bare POST to ".../chat/completions" 404s live, and the
-    // 404 reported here originally ("dsh: HTTP_404: DeepSeek API error (HTTP 404)")
-    // matches dsh's own error-message template for exactly this failure. See the
-    // customModelInjection doc comment in cli-registry/types.ts for the full reasoning,
-    // including why claude/gemini must NOT get this.
+    // (test/deepseek-mode.test.ts) fixed before this shipped. CODEMAN_CUSTOM_MODEL_API_KEY
+    // joins it (like codex's entry): the dedicated custom-endpoint key rides the same
+    // allowlisted-envOverrides path as the redirect itself.
+    privilegedEnvKeys: ['DSH_PERMISSION_MODE', 'DSH_HOME', 'DEEPSEEK_BASE_URL', 'CODEMAN_CUSTOM_MODEL_API_KEY'],
+    // The installed profile supplies the transport; a per-session patch selects its exact model.
     customModelInjection: {
-      kind: 'env',
-      baseUrlVar: 'DEEPSEEK_BASE_URL',
-      apiKeyVar: 'DEEPSEEK_API_KEY',
-      modelVars: [],
-      appendV1Suffix: true,
+      kind: 'configDir',
+      dirEnvVar: 'DSH_HOME',
+      fileName: 'cordis.patch.yml',
+      template: 'deepseek-patch-json',
+      // dsh keeps state in its home that the redirect must NOT swallow: `sessions` is the
+      // session-log root (deleting it would take the user's transcripts with it on clear/
+      // close), `profiles` are the installed bundles the patch composes over, and
+      // `settings.yaml` must keep applying (read through the link only until the session's
+      // first settings write: dsh saves by rename, which replaces the link with a local file
+      // that goes away with the session). The generated home-level `cordis.patch.yml`
+      // deliberately replaces the user's own for the session rather than linking it.
+      // `sessions` and `profiles` are directories: dsh creates them itself on a first
+      // turn, and a fresh/relocated $DSH_HOME that never ran one would otherwise get a
+      // dangling link whose every write fails ENOENT: the consumer creates missing
+      // directory targets and skips missing file targets like `settings.yaml`.
+      linkFromRealHome: ['profiles', 'sessions', 'settings.yaml'],
+      linkFromRealHomeDirs: ['profiles', 'sessions'],
+      realHomeFallback: '.dsh',
     },
   },
   overlays: {
@@ -1881,8 +2004,8 @@ const COPILOT: CliEntry = {
     // custom provider and drops the GitHub sign-in requirement; COPILOT_PROVIDER_TYPE defaults to
     // "openai", which is what a Codeman custom endpoint is (llama.cpp, vLLM, Ollama).
     // COPILOT_MODEL names the model and COPILOT_PROVIDER_MODEL_ID / _WIRE_MODEL default to it.
-    // The OpenAI-style route is `<base>/v1/chat/completions`, so the base gets the `/v1` suffix
-    // the same way deepseek's does. All four already match the COPILOT_ prefix allowlist, so
+    // The OpenAI-style route is `<base>/v1/chat/completions`, so the base gets the `/v1`
+    // suffix via appendV1Suffix below. All four already match the COPILOT_ prefix allowlist, so
     // they are privileged env keys below: a non-granted multi-user owner must not be able to
     // redirect the session's endpoint or credentials through plain envOverrides.
     customModelInjection: {
