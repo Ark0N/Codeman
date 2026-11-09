@@ -63,6 +63,7 @@ export const BROWSER_TEST_GLOBS = [
   'test/desktop-connect-page.browser.test.ts', // no server: the page is served by request interception
   'test/local-model-ui.browser.test.ts',
   'test/home-breakpoint-swap.browser.test.ts',
+  'test/log-viewer-reconnect.browser.test.ts',
 ];
 
 /**

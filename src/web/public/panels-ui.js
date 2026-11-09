@@ -6163,6 +6163,7 @@ Object.assign(CodemanApp.prototype, {
       CodemanBase.url(`/api/sessions/${sessionId}/tail-file?path=${encodeURIComponent(filePath)}&lines=50`)
     );
 
+    let connected = false;
     eventSource.onmessage = (e) => {
       const data = JSON.parse(e.data);
       const body = document.getElementById(`log-viewer-body-${windowId}`);
@@ -6170,6 +6171,7 @@ Object.assign(CodemanApp.prototype, {
 
       switch (data.type) {
         case 'connected':
+          connected = true;
           body.innerHTML = '';
           break;
         case 'data':
@@ -6189,6 +6191,7 @@ Object.assign(CodemanApp.prototype, {
           this.updateLogViewerStatus(windowId, 'disconnected', 'ended');
           break;
         case 'error':
+          if (!connected) eventSource.close();
           body.innerHTML += `<div class="log-error">${escapeHtml(data.error)}</div>`;
           this.updateLogViewerStatus(windowId, 'error', 'error');
           break;
