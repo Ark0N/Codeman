@@ -1742,6 +1742,21 @@ const OMP: CliEntry = {
   capabilities: {
     ...agentDefaults(),
     ...AGENTS_DIR_SKILL,
+    // omp emits REAL approval events (`tool_approval_requested` / `tool_approval_resolved`),
+    // so an omp pane can report a pending dialog first-hand instead of by inference.
+    // Codeman installs the hook module named by `approvalHookFile` into
+    // `<workspace>/.claude/hooks/pre/` when a session is created; it forwards those two
+    // events to /api/hook-event as `permission_prompt` / `elicitation_complete`, the same
+    // names claude's settings block sends, so the tab alert, the desktop notification and
+    // the Approvals Inbox work unchanged.
+    // ⚠️ 'always' rather than 'supervised': the report comes from a hook Codeman owns and
+    // installs (like claude's), not from a supervised-CLI status bridge.
+    // ⚠️ Only approvals are reported. `stop`/`idle_prompt` still come from `workDetect`
+    // below, which stays the source of truth for whether an omp pane is working or idle.
+    hooks: 'always',
+    // The hook module Codeman writes for this CLI. Declared as data so the session-create
+    // path asks "does this CLI declare a hook file?" instead of branching on an id.
+    approvalHookFile: 'codeman-approval.ts',
     // Fullscreen alt-screen TUI, same shape as antigravity/grok: only the
     // tmux-attach-time smcup strip, not Ink's full erase-scrollback+DECSET strip.
     altScreen: 'strip-mux-only',

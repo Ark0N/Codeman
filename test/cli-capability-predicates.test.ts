@@ -35,7 +35,7 @@ describe('per-mode capability predicates', () => {
     ['pi', true, false, false],
     ['grok', true, false, false],
     ['deepseek', true, false, true],
-    ['omp', true, false, false],
+    ['omp', true, false, true],
     ['copilot', true, false, false],
   ] as Array<[SessionMode, boolean, boolean, boolean]>)(
     '%s: external=%s altScreenStrip=%s hooks=%s',

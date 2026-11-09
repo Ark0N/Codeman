@@ -156,6 +156,7 @@ import {
   seedAgentSessionPreamble,
   applyWorkspaceHooks,
   refreshStaleCodemanHooks,
+  applyApprovalHookFile,
 } from '../../hooks-config.js';
 import { generateClaudeMd } from '../../templates/claude-md.js';
 import { imageWatcher } from '../../image-watcher.js';
@@ -1329,6 +1330,18 @@ export function registerSessionRoutes(
     // materializing in ~/.claude/settings.local.json was never asked for.
     if (!remote && body.workingDir && (body.mode ?? 'claude') === 'claude') {
       await applyWorkspaceHooks(workingDir, await ctx.getWorkspaceHooksEnabled());
+    }
+
+    // A CLI whose hooks are MODULES rather than a settings.local.json block (omp) needs
+    // its hook file installed into the workspace, so its approval dialogs raise the same
+    // alert a claude pane does. Registry-driven: `approvalHookFile` names the file, so no
+    // call site branches on a CLI id. Same local-workspace and `workspaceHooksEnabled`
+    // gate as claude's block; best-effort, because a failure here must not block a create.
+    const approvalHookFile = getCli(body.mode ?? 'claude')?.capabilities.approvalHookFile;
+    if (!remote && body.workingDir && approvalHookFile) {
+      if (await ctx.getWorkspaceHooksEnabled()) {
+        await applyApprovalHookFile(workingDir, approvalHookFile).catch(() => {});
+      }
     }
 
     // Refuse up front if the requested CLI cannot start, rather than spawning a pane that

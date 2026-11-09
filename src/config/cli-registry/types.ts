@@ -509,7 +509,9 @@ export interface CliCapabilities {
    *
    * ⚠️ A TRI-STATE, not a boolean, because for one CLI this is a per-SESSION question:
    *   'none'       — no hook signals, ever (every external CLI, and `shell`).
-   *   'always'     — the CLI installs Codeman's hooks (claude).
+   *   'always'     — the CLI's signals are installed by Codeman and are unconditional:
+   *                  claude via a `.claude/settings.local.json` block, omp via the hook
+   *                  MODULE named by `approvalHookFile` below.
    *   'supervised' — the CLI REPORTS its own idle/working/blocked state to a supervisor
    *                  over a generic env-gated contract, and Codeman is that supervisor
    *                  (deepseek, via deepseek-status-shim.ts). Definitive rather than
@@ -523,6 +525,20 @@ export interface CliCapabilities {
    * timeout the predicate exists to prevent.
    */
   hooks: 'none' | 'always' | 'supervised';
+  /**
+   * A CLI whose hooks are MODULES rather than a settings-file block names the file
+   * Codeman installs into its project hook directory.
+   *
+   * omp is the case that exists today: it loads `<cwd>/.claude/hooks/pre/*.ts`, and the
+   * installed module forwards `tool_approval_requested`/`tool_approval_resolved` to
+   * `/api/hook-event` as `permission_prompt`/`elicitation_complete`, so an omp pane asking
+   * for approval raises the same tab alert, notification and Approvals Inbox item a claude
+   * pane does. Absent with `hooks: 'always'` means Claude's settings-file block.
+   *
+   * Declared as data, not a branch on the id, so the session-create path can ask
+   * "does this CLI need a hook file installed?" (see cli-registry-no-id-branching).
+   */
+  approvalHookFile?: string;
   /**
    * Which transcript reader, if any, understands this CLI's on-disk history.
    *
