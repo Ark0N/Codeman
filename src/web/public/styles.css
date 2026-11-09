@@ -16281,7 +16281,9 @@ body.touch-device.cjk-input-visible .main {
   display: block;
   width: 100%;
   height: 100%;
-  object-fit: contain;
+  /* scale-down, not contain: a small image keeps its own size instead of being blown up to the
+     viewport (the zoom controls are there to enlarge it). */
+  object-fit: scale-down;
   touch-action: none;
   user-select: none;
   -webkit-user-drag: none;

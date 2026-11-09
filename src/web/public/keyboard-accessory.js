@@ -588,17 +588,26 @@ const PathPicker = {
     const body = overlay.querySelector('.path-preview-body');
     if (entry.previewKind === 'image') {
       const zoomControls = overlay.querySelector('.path-preview-zoom');
-      zoomControls.hidden = false;
       body.classList.add('path-preview-image-viewport');
       const image = document.createElement('img');
       image.className = 'path-preview-image';
       image.alt = entry.name;
       image.draggable = false;
+      // Both handlers check the sequence like the text branch: an image whose preview was already
+      // replaced can still finish loading, and `this._previewOverlay` and the zoom state are then
+      // the newer preview's. The controls show only once there is an image to zoom.
       image.addEventListener('load', () => {
+        if (requestSequence !== this._previewRequestSequence) return;
         body.querySelector('.path-preview-loading')?.remove();
+        zoomControls.hidden = false;
         this._setPreviewImageZoom(1);
       });
-      image.addEventListener('error', () => this.showPreviewError('Image preview failed to load'));
+      image.addEventListener('error', () => {
+        if (requestSequence !== this._previewRequestSequence) return;
+        zoomControls.hidden = true;
+        this._previewImageCleanup?.();
+        this.showPreviewError('Image preview failed to load');
+      });
       image.src = previewUrl;
       body.appendChild(image);
       this._bindPreviewImageGestures(image, body, zoomControls);
@@ -665,14 +674,41 @@ const PathPicker = {
     state.image.classList.toggle('is-zoomed', state.scale > 1);
   },
 
+  /** Size the image is drawn at before zoom: `object-fit: scale-down` in the viewport box, so never
+   *  larger than its natural size. The box until the image has loaded (no natural size yet). */
+  _previewImageFitSize(state, rect) {
+    const naturalWidth = state.image.naturalWidth;
+    const naturalHeight = state.image.naturalHeight;
+    if (!naturalWidth || !naturalHeight) return { width: rect.width, height: rect.height };
+    const fit = Math.min(1, rect.width / naturalWidth, rect.height / naturalHeight);
+    return { width: naturalWidth * fit, height: naturalHeight * fit };
+  },
+
+  /** Keep the zoomed image covering the viewport: it may move until its edge reaches the viewport's
+   *  edge, never further, and an axis on which it is still smaller than the viewport stays centred.
+   *  Clamping to the image box instead let a small or letterboxed image be panned out of view. */
   _clampPreviewImagePan() {
     const state = this._previewImageZoom;
     if (!state) return;
     const rect = state.body.getBoundingClientRect();
-    const maxX = rect.width * (state.scale - 1) / 2;
-    const maxY = rect.height * (state.scale - 1) / 2;
+    const fitted = this._previewImageFitSize(state, rect);
+    const maxX = Math.max(0, (fitted.width * state.scale - rect.width) / 2);
+    const maxY = Math.max(0, (fitted.height * state.scale - rect.height) / 2);
     state.x = Math.max(-maxX, Math.min(maxX, state.x));
     state.y = Math.max(-maxY, Math.min(maxY, state.y));
+  },
+
+  /** Zoom factor for one wheel event, proportional to `deltaY` (d3-zoom's scale: about 15% per
+   *  100px mouse notch, ten times that for ctrl+wheel, which is how Chrome and Firefox deliver a
+   *  trackpad pinch), so a trackpad's stream of small deltas zooms smoothly instead of 20% per
+   *  event. Clamped per event so one large delta cannot jump to the maximum; no vertical delta
+   *  (a sideways scroll) zooms nothing. */
+  _previewWheelZoomFactor(event) {
+    const deltaY = Number(event?.deltaY) || 0;
+    if (!deltaY) return 1;
+    const perUnit = event.deltaMode === 1 ? 0.05 : event.deltaMode ? 1 : 0.002;
+    const exponent = -deltaY * perUnit * (event.ctrlKey ? 10 : 1);
+    return 2 ** Math.max(-0.5, Math.min(0.5, exponent));
   },
 
   _bindPreviewImageGestures(image, body, controls) {
@@ -735,7 +771,8 @@ const PathPicker = {
     });
     listen(body, 'wheel', (event) => {
       event.preventDefault();
-      this._setPreviewImageZoom(state.scale * (event.deltaY < 0 ? 1.2 : 1 / 1.2), pointer(event));
+      const factor = this._previewWheelZoomFactor(event);
+      if (factor !== 1) this._setPreviewImageZoom(state.scale * factor, pointer(event));
     }, { passive: false });
     listen(controls, 'click', (event) => {
       const button = event.target.closest('[data-zoom]');
