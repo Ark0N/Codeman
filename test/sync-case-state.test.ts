@@ -150,6 +150,38 @@ describe('recording the picked case', () => {
   });
 });
 
+describe('a pick that did not reach the server', () => {
+  it('is not undone by the next tab return, and following resumes once a pick is stored', async () => {
+    let putOk = false;
+    const { app, select } = makeApp({ syncCaseState: true }, (_url, init) =>
+      init?.method === 'PUT'
+        ? putOk
+          ? { body: { success: true } }
+          : { status: 500, body: { error: 'x' } }
+        : { body: { success: true, data: { syncCaseState: true, lastPickedCase: 'alpha' } } }
+    );
+    select.value = 'beta';
+    await app.saveLastUsedCase('beta'); // the pick fails
+    await app._syncCaseStateFromServer(); // the server still says alpha
+    expect(select.value).toBe('beta');
+    putOk = true;
+    await app.saveLastUsedCase('beta');
+    await app._syncCaseStateFromServer();
+    expect(select.value).toBe('alpha');
+  });
+
+  it('lands before the copy a tab return reads', async () => {
+    const order: string[] = [];
+    const { app } = makeApp({ syncCaseState: true }, async (_url, init) => {
+      order.push(init?.method ?? 'GET');
+      return { body: { success: true, data: { syncCaseState: true } } };
+    });
+    void app.saveLastUsedCase('beta');
+    await app._syncCaseStateFromServer();
+    expect(order).toEqual(['PUT', 'GET']);
+  });
+});
+
 describe('taking the server copy', () => {
   const server = { syncCaseState: true, caseSettings: { demo: entry } };
 
@@ -253,8 +285,8 @@ describe('returning to the tab', () => {
   it('discards an older refresh that answers after a newer one', async () => {
     const releases: (() => void)[] = [];
     const answers = [
-      env({ syncCaseState: true, lastUsedCase: 'beta' }), // the older request
-      env({ syncCaseState: true, lastUsedCase: 'alpha' }), // the newer request
+      env({ syncCaseState: true, lastPickedCase: 'beta' }), // the older request
+      env({ syncCaseState: true, lastPickedCase: 'alpha' }), // the newer request
     ];
     let i = 0;
     const { app, select } = makeApp({ syncCaseState: true }, async () => {

@@ -41,7 +41,7 @@ cron jobs.
   A field a file rewrites on its own is not a change, and the comparison looks through it (the
   snapshot still stores the file exactly as written, and a restore puts those fields back as they
   were): `custom-model-hosts.json` `lastDiscoveredAt` (the model-discovery poll, every five
-  minutes), `users.json` `lastLoginAt`, `settings.json` `lastUsedCase`, `intents.json`
+  minutes), `users.json` `lastLoginAt`, `settings.json` `lastUsedCase` and `lastPickedCase`, `intents.json`
   `recentPrompts` and `updatedAt` (every captured prompt) and `docker-cases.json`
   `lastClaudeSessionId` (a Docker case's conversation id after a `/clear`) and `webviews.json`
   `lastOpenedAt` (opening a web tab). Without that, every

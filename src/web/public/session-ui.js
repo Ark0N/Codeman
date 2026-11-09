@@ -643,18 +643,29 @@ Object.assign(CodemanApp.prototype, {
     // Multi-user non-admin: lastUsedCase is a key of the server-wide settings.json, whose
     // PUT is admin-only (403), so it is not sent (_settingsReadOnly, settings-ui.js).
     if (this._settingsReadOnly?.()) return;
-    try {
-      // lastPickedCase is only what a person chose on a device (never a quick-start or an agent's spawn),
-      // so it is what other devices follow when case sync is on.
-      const body = this._caseStateSyncOn?.() ? { lastUsedCase: caseName, lastPickedCase: caseName } : { lastUsedCase: caseName };
-      await fetch('/api/settings', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      });
-    } catch (err) {
-      console.error('Failed to save last used case:', err);
-    }
+    // lastPickedCase is only what a person chose on a device (never a quick-start or an agent's spawn),
+    // so it is what other devices follow when case sync is on.
+    const sync = this._caseStateSyncOn?.() === true;
+    const body = sync ? { lastUsedCase: caseName, lastPickedCase: caseName } : { lastUsedCase: caseName };
+    const send = async () => {
+      let stored = false;
+      try {
+        const res = await fetch('/api/settings', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        stored = res?.ok !== false;
+      } catch (err) {
+        console.error('Failed to save last used case:', err);
+      }
+      // While this device's own pick is not on the server, the next tab return must not follow the server's older one.
+      if (sync) this._ownPickNotStored = !stored;
+    };
+    if (!sync) return send();
+    // On the chain the tab-return refresh already awaits, so a pick lands before the copy it reads.
+    this._caseSyncChain = (this._caseSyncChain || Promise.resolve()).then(send, send);
+    return this._caseSyncChain;
   },
 
   async quickStart() {
@@ -3683,7 +3694,7 @@ Object.assign(CodemanApp.prototype, {
 
   /** Off unless the user turned it on; a non-admin in multi-user mode cannot write the shared settings.json. */
   _caseStateSyncOn() {
-    return this.loadAppSettingsFromStorage().syncCaseState === true && !this._settingsReadOnly?.();
+    return this.loadAppSettingsFromStorage?.()?.syncCaseState === true && !this._settingsReadOnly?.();
   },
 
   /**
@@ -3761,7 +3772,7 @@ Object.assign(CodemanApp.prototype, {
     if (this._settingsReadOnly?.()) return;
     // Off on this device: no request on every tab return. Turning it on elsewhere is learned from the
     // next settings load; turning it off elsewhere still reaches a device whose cached switch is on.
-    if (this.loadAppSettingsFromStorage().syncCaseState !== true) return;
+    if (this.loadAppSettingsFromStorage?.()?.syncCaseState !== true) return;
     const seq = (this._caseSyncRefresh = (this._caseSyncRefresh || 0) + 1);
     try {
       await this._caseSyncChain; // this device's own saves land first, so the copy read next includes them
@@ -3774,7 +3785,7 @@ Object.assign(CodemanApp.prototype, {
       this._applyServerCaseSettings(server);
       const select = document.getElementById('quickStartCase');
       const last = server.lastPickedCase;
-      if (select && last && last !== select.value && this.cases?.some((c) => c.name === last)) {
+      if (select && last && !this._ownPickNotStored && last !== select.value && this.cases?.some((c) => c.name === last)) {
         this._closeCaseSettingsPopovers();
         this.selectQuickStartCase(last, { save: false });
       }

@@ -302,7 +302,13 @@ describe('POST /api/cases/:name/rename (a linked case)', () => {
     const real = join(work, 'my-project');
     mkdirSync(real);
     writeFileSync(LINKED(), JSON.stringify({ proj: real }));
-    writeFileSync(SETTINGS_PATH, JSON.stringify({ caseOrder: ['a', 'proj', 'b'], lastUsedCase: 'proj' }));
+    const seeded = {
+      caseOrder: ['a', 'proj', 'b'],
+      lastUsedCase: 'proj',
+      lastPickedCase: 'proj',
+      caseSettings: { proj: { agentTeams: true, opusContext1m: false } },
+    };
+    writeFileSync(SETTINGS_PATH, JSON.stringify(seeded));
     // the registry reads fine but cannot be written: the rename must undo the folder move
     const spy = failRegistryWrite();
     let res;
@@ -316,7 +322,7 @@ describe('POST /api/cases/:name/rename (a linked case)', () => {
     expect(linked()).toEqual({ proj: real });
     expect(existsSync(join(work, 'renamed'))).toBe(false);
     // settings.json is written first, so it must be put back too
-    expect(settings()).toEqual({ caseOrder: ['a', 'proj', 'b'], lastUsedCase: 'proj' });
+    expect(settings()).toEqual(seeded);
   });
 
   it('puts back only the keys it wrote, keeping a settings write made in between', async () => {
@@ -324,17 +330,38 @@ describe('POST /api/cases/:name/rename (a linked case)', () => {
     const real = join(work, 'my-project');
     mkdirSync(real);
     writeFileSync(LINKED(), JSON.stringify({ proj: real }));
-    writeFileSync(SETTINGS_PATH, JSON.stringify({ caseOrder: ['a', 'proj', 'b'], lastUsedCase: 'proj' }));
-    // Another writer (a settings save) lands after the rename wrote settings.json and before the
-    // registry write fails.
-    const spy = failRegistryWrite(() => mutateSettingsFile((current) => ({ ...current, agentSkillEnabled: true })));
+    const entry = { agentTeams: true, opusContext1m: false };
+    writeFileSync(
+      SETTINGS_PATH,
+      JSON.stringify({
+        caseOrder: ['a', 'proj', 'b'],
+        lastUsedCase: 'proj',
+        lastPickedCase: 'proj',
+        caseSettings: { proj: entry },
+      })
+    );
+    // Another writer (a settings save, and a per-case save from another device) lands after the rename wrote
+    // settings.json and before the registry write fails.
+    const spy = failRegistryWrite(() =>
+      mutateSettingsFile((current) => ({
+        ...current,
+        agentSkillEnabled: true,
+        caseSettings: { ...(current.caseSettings as object), other: { agentTeams: false, opusContext1m: true } },
+      }))
+    );
     try {
       const res = await rename(app, 'proj', { newName: 'renamed', renameFolder: true });
       expect(res.statusCode).toBe(500);
     } finally {
       spy.mockRestore();
     }
-    expect(settings()).toEqual({ caseOrder: ['a', 'proj', 'b'], lastUsedCase: 'proj', agentSkillEnabled: true });
+    expect(settings()).toEqual({
+      caseOrder: ['a', 'proj', 'b'],
+      lastUsedCase: 'proj',
+      lastPickedCase: 'proj',
+      caseSettings: { proj: entry, other: { agentTeams: false, opusContext1m: true } },
+      agentSkillEnabled: true,
+    });
   });
 
   describe('when the registry changes after the first check', () => {

@@ -75,11 +75,11 @@ describe('Sync cases across devices in two browsers', () => {
   });
 
   it('follows the selected case while sync is on, and stops once the server says it is off', async () => {
-    await put({ lastUsedCase: two });
+    await put({ lastPickedCase: two });
     await returnToTab(a);
     expect(await a.evaluate(() => (document.getElementById('quickStartCase') as HTMLSelectElement).value)).toBe(two);
 
-    await put({ syncCaseState: false, lastUsedCase: one });
+    await put({ syncCaseState: false, lastPickedCase: one });
     await returnToTab(a);
     expect(await a.evaluate(() => (document.getElementById('quickStartCase') as HTMLSelectElement).value)).toBe(two);
     expect(await a.evaluate(() => (window as any).app.loadAppSettingsFromStorage().syncCaseState)).toBe(false);
