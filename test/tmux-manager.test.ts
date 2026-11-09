@@ -10,6 +10,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   TmuxManager,
+  buildAdoptSessionCommand,
   buildCodexCommand,
   buildRemoteKillCommand,
   buildRemoteLaunchCommand,
@@ -17,17 +18,33 @@ import {
   parsePaneRows,
   derivePaneExits,
   hasObservablePaneSession,
+  endedAdoptedAttaches,
   type PaneRow,
   resolveActivePaneTarget,
 } from '../src/tmux-manager.js';
 import { execSync, exec } from 'node:child_process';
 import type { MuxSession } from '../src/mux-interface.js';
+import type { SessionAdopt } from '../src/types/session.js';
 
 // ============================================================================
 // Unit Tests (mocked)
 // ============================================================================
 
 // Mock child_process
+/**
+ * Runs a captured `… respawn-pane … bash -c <arg>` line through a real local sh (with a
+ * foreign HOME/PATH) and returns the string bash would get, i.e. what ssh sends on.
+ */
+async function bashArgAfterLocalShell(respawnCmd: string): Promise<string> {
+  const real = await vi.importActual<typeof import('node:child_process')>('node:child_process');
+  const at = respawnCmd.indexOf(' bash -c ');
+  expect(at).toBeGreaterThan(0);
+  return real.execFileSync('/bin/sh', ['-c', `printf '%s' ${respawnCmd.slice(at + ' bash -c '.length)}`], {
+    env: { HOME: '/local-home-xyz', PATH: '/local-path-xyz:/usr/bin:/bin' },
+    encoding: 'utf8',
+  });
+}
+
 vi.mock('node:child_process', async () => {
   const actual = await vi.importActual('node:child_process');
   return {
@@ -189,7 +206,7 @@ describe('TmuxManager (unit)', () => {
         sessionId: 'abc123def456',
       });
 
-      expect(command).toContain('exec "${SHELL:-/bin/sh}" -i -l');
+      expect(command).toContain('exec "${SHELL:-/bin/sh}" "$@"; }');
       // `failed`, not `on`: `on` also keeps the pane after a CLEAN exit, so typing
       // `exit` in a remote shell strands a dead pane that the next launch's `-A`
       // reattaches to instead of starting a shell.
@@ -212,7 +229,7 @@ describe('TmuxManager (unit)', () => {
       // interactive nor login, so a bare `exec claude` fails with "command not found".
       // The inner quoting is escaped twice over (once per shellescape() layer), so
       // assert on the unescaped substrings rather than the literal quoted form.
-      expect(command).toContain('exec "${SHELL:-/bin/sh}" -i -l -c');
+      expect(command).toContain('exec "${SHELL:-/bin/sh}" "$@" -c');
       expect(command).toContain('claude --dangerously-skip-permissions');
     });
 
@@ -863,6 +880,171 @@ describe('TmuxManager (unit)', () => {
       } finally {
         nonTestManager.destroy();
       }
+    });
+
+    it('hands a remote launch to ssh with $HOME and $PATH unexpanded', async () => {
+      // respawn-pane runs `bash -c <arg>` through the local sh. In double quotes that sh
+      // expanded withRemoteTmuxPath's `$HOME/…:$PATH` to the Codeman host's values, so a
+      // remote user with another home found no tmux and the pane exited 127.
+      const NonTestTmuxManager = await importWithTmuxCommandsEnabled();
+      const nonTestManager = new NonTestTmuxManager();
+
+      try {
+        await nonTestManager.createSession({
+          sessionId: 'abc12345-1234-5678-90ab-cdef12345679',
+          workingDir: '/w',
+          mode: 'shell',
+          remote: { hostId: 'gpu-box', label: 'GPU Box', host: '10.0.0.42', username: 'ubuntu', remotePath: '/w' },
+        });
+        const launch = [...mockedExecSync.mock.calls, ...vi.mocked(exec).mock.calls]
+          .map(([cmd]) => cmd)
+          .find((cmd) => typeof cmd === 'string' && cmd.includes(' respawn-pane '));
+        const sent = await bashArgAfterLocalShell(launch as string);
+        expect(sent).toContain('ssh ');
+        expect(sent).toContain('export PATH="$HOME/');
+        expect(sent).toContain(':$PATH"; tmux ');
+        expect(sent).not.toContain('local-home-xyz');
+        expect(sent).not.toContain('local-path-xyz');
+      } finally {
+        nonTestManager.destroy();
+      }
+    });
+
+    it('respawns a remote pane with $HOME unexpanded as well', async () => {
+      const NonTestTmuxManager = await importWithTmuxCommandsEnabled();
+      const nonTestManager = new NonTestTmuxManager();
+      nonTestManager.registerSession({
+        sessionId: 'respawnremote2',
+        muxName: 'codeman-abcd8888',
+        pid: 1000,
+        createdAt: Date.now(),
+        workingDir: '/w',
+        mode: 'shell',
+        attached: false,
+      });
+
+      try {
+        await nonTestManager.respawnPane({
+          sessionId: 'respawnremote2',
+          workingDir: '/w',
+          mode: 'shell',
+          remote: { hostId: 'gpu-box', label: 'GPU Box', host: '10.0.0.42', username: 'ubuntu', remotePath: '/w' },
+        });
+        const { exec: currentExec } = await import('node:child_process');
+        const respawnCall = vi
+          .mocked(currentExec)
+          .mock.calls.find(([cmd]) => typeof cmd === 'string' && cmd.includes(' respawn-pane '));
+        const sent = await bashArgAfterLocalShell(respawnCall?.[0] as string);
+        expect(sent).toContain('export PATH="$HOME/');
+        expect(sent).not.toContain('local-home-xyz');
+      } finally {
+        nonTestManager.destroy();
+      }
+    });
+
+    it('hands a docker override to bash with $HOME unexpanded', async () => {
+      const NonTestTmuxManager = await importWithTmuxCommandsEnabled();
+      const nonTestManager = new NonTestTmuxManager();
+
+      try {
+        await nonTestManager.createSession({
+          sessionId: 'abc12345-1234-5678-90ab-cdef12345680',
+          workingDir: '/w',
+          mode: 'shell',
+          docker: {
+            hostId: 'h',
+            label: 'L',
+            engine: 'docker',
+            image: 'codeman/agent:base',
+            containerName: 'codeman-case-x',
+            hostWorkspacePath: '/w',
+            containerWorkdir: '/w',
+            commands: { shell: 'echo CONTAINER_HOME=$HOME; exec sleep 30' },
+          } as never,
+        });
+        const launch = [...mockedExecSync.mock.calls, ...vi.mocked(exec).mock.calls]
+          .map(([cmd]) => cmd)
+          .find((cmd) => typeof cmd === 'string' && cmd.includes(' respawn-pane '));
+        const sent = await bashArgAfterLocalShell(launch as string);
+        expect(sent).toContain('docker');
+        expect(sent).toContain('CONTAINER_HOME=$HOME');
+        expect(sent).not.toContain('local-home-xyz');
+      } finally {
+        nonTestManager.destroy();
+      }
+    });
+
+    describe('an adopted launch reaches bash exactly as built', () => {
+      // A single quote, a real newline and `$HOME` in one value. Discovery refuses such a
+      // socket path, so this measures the quoting alone: `$HOME/…:$PATH` in the ssh line and
+      // the `'\''` of every nested quote have to come through the same way.
+      const foreign = {
+        socketPath: "/tmp/it's\n$HOME/sock",
+        targetSession: 'work',
+        viewSession: 'codeman-view-abc12345',
+      };
+      const adoptions: [string, SessionAdopt][] = [
+        ['local', { ...foreign, location: 'local' }],
+        [
+          'docker',
+          {
+            ...foreign,
+            location: 'docker',
+            docker: { hostId: 'local', label: 'Local', engine: 'docker', containerName: 'their-box' },
+          },
+        ],
+        [
+          'ssh',
+          {
+            ...foreign,
+            location: 'remote',
+            remote: { hostId: 'gpu-box', label: 'GPU Box', host: '10.0.0.42', username: 'ubuntu' },
+          },
+        ],
+      ];
+      const respawnLine = () =>
+        [...mockedExecSync.mock.calls, ...vi.mocked(exec).mock.calls]
+          .map(([cmd]) => cmd)
+          .find((cmd) => typeof cmd === 'string' && cmd.includes(' respawn-pane ')) as string;
+
+      it.each(adoptions)('at create: %s', async (_location, adopt) => {
+        const sessionId = 'abc12345-1234-5678-90ab-cdef12345681';
+        const NonTestTmuxManager = await importWithTmuxCommandsEnabled();
+        const nonTestManager = new NonTestTmuxManager();
+
+        try {
+          await nonTestManager.createSession({ sessionId, workingDir: '/tmp', mode: 'shell', adopt });
+          // Equal to the built line: no `cd`, nothing expanded here, nothing re-escaped.
+          expect(await bashArgAfterLocalShell(respawnLine())).toBe(buildAdoptSessionCommand(adopt, sessionId));
+        } finally {
+          nonTestManager.destroy();
+        }
+      });
+
+      it.each(adoptions)('at respawn: %s', async (_location, adopt) => {
+        const sessionId = 'respawnadopted';
+        const NonTestTmuxManager = await importWithTmuxCommandsEnabled();
+        const nonTestManager = new NonTestTmuxManager();
+        nonTestManager.registerSession({
+          sessionId,
+          muxName: 'codeman-abcd7777',
+          pid: 1000,
+          createdAt: Date.now(),
+          workingDir: '/tmp',
+          mode: 'shell',
+          attached: false,
+          adopt,
+        });
+
+        try {
+          // No `adopt` here: a respawn takes it from the tracked session, so a caller
+          // that forgets the field still re-attaches rather than launching an agent.
+          await nonTestManager.respawnPane({ sessionId, workingDir: '/tmp', mode: 'shell' });
+          expect(await bashArgAfterLocalShell(respawnLine())).toBe(buildAdoptSessionCommand(adopt, sessionId));
+        } finally {
+          nonTestManager.destroy();
+        }
+      });
     });
 
     it('changes the global history default on tmux versions that cannot resize panes', async () => {
@@ -1539,4 +1721,72 @@ describe('hasObservablePaneSession', () => {
   // The predicate has to agree with `Session.paneExitApplies`, which is where
   // the rule is enforced; that pairing is pinned in session-pane-exit.test.ts,
   // where a real Session can answer for itself.
+});
+
+describe('an adopted wrapper whose pane died', () => {
+  const adopted = new Set(['codeman-aaaa1111']);
+
+  class WatchedManager extends TmuxManager {
+    rows = '';
+    detached: string[] = [];
+    protected override async readAttachRows(): Promise<string> {
+      return this.rows;
+    }
+    protected override async detachClients(muxName: string): Promise<void> {
+      this.detached.push(muxName);
+    }
+    adopt(sessionId: string, adopt?: MuxSession['adopt']): void {
+      const session = {
+        sessionId,
+        muxName: `codeman-${sessionId}`,
+        pid: 1,
+        createdAt: 0,
+        workingDir: '/tmp',
+        mode: 'shell',
+        attached: false,
+        adopt,
+      };
+      (this as unknown as { sessions: Map<string, MuxSession> }).sessions.set(sessionId, session as MuxSession);
+    }
+  }
+  const adoption = {
+    location: 'local',
+    socketPath: '/tmp/s',
+    targetSession: 'work',
+    viewSession: 'codeman-view-aaaa1111',
+  } as MuxSession['adopt'];
+
+  it('reads as ended only with a dead pane and a client still on it', () => {
+    expect(endedAdoptedAttaches('1 1 codeman-aaaa1111\n', adopted)).toEqual(['codeman-aaaa1111']);
+    expect(endedAdoptedAttaches('1 2 codeman-aaaa1111', adopted)).toEqual(['codeman-aaaa1111']);
+    // Nothing to detach: a second try would only print `no current client` every tick.
+    expect(endedAdoptedAttaches('1 0 codeman-aaaa1111', adopted)).toEqual([]);
+    expect(endedAdoptedAttaches('0 1 codeman-aaaa1111', adopted)).toEqual([]);
+    expect(endedAdoptedAttaches('', adopted)).toEqual([]);
+  });
+
+  it("leaves every other session's dead pane alone, since that one is an agent's exit", () => {
+    expect(endedAdoptedAttaches('1 1 codeman-bbbb2222', adopted)).toEqual([]);
+  });
+
+  it('detaches the client from a dead wrapper on the tick', async () => {
+    const manager = new WatchedManager();
+    manager.adopt('aaaa1111', adoption);
+    manager.adopt('bbbb2222');
+    manager.rows = '1 1 codeman-aaaa1111\n1 1 codeman-bbbb2222\n';
+
+    await manager.detachEndedAdoptedAttaches();
+
+    expect(manager.detached).toEqual(['codeman-aaaa1111']);
+  });
+
+  it('does not read tmux while nothing is adopted', async () => {
+    const manager = new WatchedManager();
+    manager.adopt('bbbb2222');
+    const read = vi.spyOn(manager as unknown as { readAttachRows: () => Promise<string> }, 'readAttachRows');
+
+    await manager.detachEndedAdoptedAttaches();
+
+    expect(read).not.toHaveBeenCalled();
+  });
 });

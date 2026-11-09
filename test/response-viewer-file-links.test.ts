@@ -78,6 +78,15 @@ function linkify(html: string): HTMLElement {
 const paths = (root: HTMLElement) => Array.from(root.querySelectorAll('a.rv-path'));
 
 describe('response viewer file-path linkifier', () => {
+  it('links a parenthesised configuration filename with spaces without changing the prose', () => {
+    const path = '/mnt/user/Scratch/Kobo/Set-KoboCovers/Kobo eReader.conf';
+    const text = `Prepared a corrected configuration (${path}).`;
+    const root = linkify(`<p>${text}</p>`);
+    expect(paths(root).map((a) => a.dataset.path)).toEqual([path]);
+    expect(paths(root)[0].dataset.folder).toBeUndefined();
+    expect(root.textContent).toBe(text);
+  });
+
   it.each([
     ['- 03 Attachments/Build SIPOC Design/Build-SIPOC.pptx', ['Design/Build-SIPOC.pptx']],
     ['- notes/a b/c.md', ['b/c.md']],

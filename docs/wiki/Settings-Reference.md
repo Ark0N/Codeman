@@ -38,8 +38,8 @@ as usual and tells them that server-wide settings can only be changed by an admi
 ### Updates
 
 Current version, a manual check, and the in-app updater. Covers git-clone installs
-supervised by systemd or launchd; npm installs report as non-updatable. See
-[Running As A Service](Running-As-A-Service).
+supervised by systemd or launchd; npm installs and installs without git report as
+non-updatable. See [Running As A Service](Running-As-A-Service).
 
 ### Terminal & Input
 
@@ -49,7 +49,7 @@ supervised by systemd or launchd; npm installs report as non-updatable. See
 | Keep Size Under Keyboard      | On                   | For local Claude sessions, the on-screen keyboard no longer resizes the session: the terminal keeps its rows and the view scrolls so the prompt sits just above the keyboard. Resizing made Claude reprint its screen and drop transcript lines from history. Codex, Claude's fullscreen mode, remote and Docker sessions resize as before. See [Mobile Guide](Mobile-Guide). |
 | CJK Input                     | Off                  | IME composition through a dedicated text field.                        |
 | Extended Keyboard Bar         | Per device           | Which accessory bar phones get. Shell sessions override it while they are active. |
-| Wheel Scrolls Local History   | Off                  | Keeps the wheel on the local buffer instead of forwarding it to the CLI. |
+| Wheel Scrolls Local History   | Off                  | Keeps the wheel on the local buffer instead of forwarding it to the CLI. Fullscreen pi leaves that buffer empty and has no paging fallback, so with this on the wheel does nothing there. |
 | Auto Copy Selection           | Off                  | Copies highlighted terminal text to the clipboard the moment you finish selecting it. Ctrl+C still copies on demand. |
 | Trim The Pane Margin On Copy  | On                   | Takes the left margin a full-screen agent CLI paints down its own edge off a copy, so the text pastes flush. Each CLI declares its own width, and the strip never exceeds the indent every selected line shares, so nesting is kept. Claude Code and Codex declare a margin; a shell does not. |
 | Normal / Bold font weight     | xterm defaults       | Per device, each slot from 100 to 900. The bundled JetBrains Mono renders every step, so a lighter normal weight makes Claude's bold headings stand out. Applies live to the terminal, both echo overlays and open team panes. |
@@ -62,7 +62,7 @@ supervised by systemd or launchd; npm installs report as non-updatable. See
 Chips for every optional header control, with a live preview of the resulting header:
 
 Run, Font Size, System Stats, Redraw Terminal, Response Viewer, Away Digest, Session
-Manager, Attachments, File Viewer, Multi-monitor, Split, Tiles, Plan Usage, Lifecycle Log, Monitor,
+Manager, Attachments, Edit history, File Viewer, Multi-monitor, Split, Tiles, Plan Usage, Lifecycle Log, Monitor,
 Project Insights, File Browser, Subagents, Approvals Inbox, Read My Mind, Ultracode Agents,
 Ultracode Windows, Cron.
 
@@ -105,6 +105,12 @@ when you asked for them at the moment you asked), and the one that can run a rep
 nothing waits for a login, and that is a default, never an override: your own `GIT_SSH_COMMAND`, or the
 repository's `core.sshCommand`, is used when either is set. ⚠️ The default's `StrictHostKeyChecking=accept-new`
 records an unknown host key in `~/.ssh/known_hosts` without asking: BatchMode stops a prompt, not a write.
+
+**Edit history** (per device, off by default, never on phones) adds a header button for the
+active session's edit history: every edit the agent and its subagents made, with its diff, and
+images it produced. Claude sessions, local and remote (SSH). Nothing is read until you open the window, and it
+stores those diffs (secrets included) under `~/.codeman/edit-history/`; see
+[Working With Files](Working-With-Files#edit-history).
 
 Most default to off. The stock desktop header is system stats, File Viewer, Tiles, and the gear.
 **Header Stats Style** picks how the system stats and plan usage are drawn: *Compact*
@@ -187,6 +193,26 @@ attached.
 section to the Run dropdown, for pointing a harness at your own OpenAI-compatible server
 instead of its native cloud backend. See [Custom Model Endpoints](Custom-Model-Endpoints).
 
+**Model on this Mac** is not a setting: it is the state of a model Codeman can run for you
+on the Mac the server runs on, with a button that opens the local model window. The same
+window opens from the **Run a local model** button on the welcome screen. It shows that
+Mac's chip, memory and free disk space, a bar for how much of the memory the selected model
+takes, and the models that fit, each with one tag (Best fit, Tight, Slow, Small model, or
+"Tested on a Mac like this"), a speed and a download size. **Install on this Mac** asks you
+to confirm the sizes once, then downloads a model runtime and the model into
+`~/.codeman/local-model`, checks that the model loads and can call a tool, installs the
+coding agent if it is missing, and ends on **Start a session**. No account, no API key and
+no administrator password. You can close the window while it downloads, cancel and continue
+later; after a Codeman restart an unfinished install waits for you to press Continue. Once a
+model is installed the window offers Start a session, Stop or Start, and Remove. Installing
+switches **Custom model endpoints** on and saves one endpoint named "This Mac"; Remove takes
+the endpoint away again and switches the setting back off if nothing else uses it. A Mac
+that can only run a small model is told so in plain words, and a Mac with too little memory,
+too little free disk space or an Intel processor is told why nothing is offered. The group
+is not shown when the server runs on Linux or Windows, and in multi-user mode only an admin
+sees it. The "Mac" is always the machine the server runs on, not the device you are reading
+on. Details: [Custom Model Endpoints](Custom-Model-Endpoints#a-model-that-runs-on-this-mac).
+
 ### Agents & CLIs
 
 | Setting                          | Notes                                                                                        |
@@ -196,12 +222,13 @@ instead of its native cloud backend. See [Custom Model Endpoints](Custom-Model-E
 | Ralph / Todo Tracker             | Enables the Ralph loop surfaces.                                                               |
 | Agent Teams                      | Experimental teams. Also needs the CLI's own environment flag.                                 |
 | Pin tab names on the CLI         | Launches every Claude session with `--name` set to its tab name, so Claude Code's prompt label and `/resume` list match your tabs. Claude then stops generating its own titles for those sessions, and a rename in Codeman holds only until the next turn. Synced, off by default; applies from the next session start or respawn. |
-| Codeman Agent Skill              | Under **All agent CLIs**. Injects the agent skill into each new session's case, where that session's CLI looks for skills (every CLI except Pi and a plain shell). Off by default. See [The Codeman Skill](Codeman-Skill). |
+| Codeman Agent Skill              | Under **All agent CLIs**. Injects the agent skill into each new session's case, where that session's CLI looks for skills (every CLI except Pi, GitHub Copilot and a plain shell). On by default since 1.50.0; existing installs that stored off are switched on once at the first 1.50.0 start, and turning it off afterwards sticks. The copy ignores itself in git, so your repository never lists it. Off stops new copies but removes none (`codeman skill uninstall --case <name>` does). See [The Codeman Skill](Codeman-Skill). |
 | Remote auto-reconnect            | Reattaches dropped remote SSH sessions. On by default.                                         |
 | Nice priority / value            | Runs agent processes at a lower CPU priority.                                                  |
 | Default Codex model              | Model for new local Codex sessions; empty uses Codex's own config. Letters, digits, `.` `_` `-` `/` only. |
 | Default Codex reasoning effort   | Reasoning level for new local Codex sessions; empty uses Codex's own config.                   |
 | Bypass approvals and sandbox     | Starts new Codex sessions with `--dangerously-bypass-approvals-and-sandbox`. Read [Agent CLIs](Agent-CLIs) before enabling. |
+| Allow network access             | Starts new local Codex sessions (Run menu, Resume and the API; not scheduled jobs) with `sandbox_workspace_write.network_access=true`, so commands in Codex's workspace-write sandbox can use the network. The [Codeman Skill](Codeman-Skill) needs it to reach this server from a Codex session. It applies to every such session, and those commands can then call Codeman's API, which can start a session outside the sandbox with no approval prompt, even when a password is set: see [Security](Security#what-codeman-does-not-protect-against). It applies where Codex runs the folder in workspace-write (a project you trusted in Codex) and does not change Codex's sandbox mode: a folder Codex runs read-only keeps the network closed, and Codex asks for approval per command. Synced, off by default; forced off for users without the privileged-commands grant in multi-user mode. |
 | Animated status effects          | Cosmetic.                                                                                      |
 | MCP server sync                  | Copies the MCP servers each installed, enabled CLI (Claude, Codex, Gemini, OpenCode, Antigravity) and GitHub Copilot CLI has into the others' own config files. Synced, off by default, admin only in multi-user mode. Turn it on and **Apply** or **Save** (Apply keeps Settings open), then **Preview** shows what would change and **Sync now** applies it. It only adds missing servers, keeps the previous file as `.codeman-bak`, and leaves a file that receives env values or headers readable by you only. A config dir moved by `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `XDG_CONFIG_HOME`, `GEMINI_CLI_HOME` or `COPILOT_HOME` in Codeman's own environment is followed. |
 
@@ -213,8 +240,9 @@ how long a desktop notification stays up before Codeman closes it (**Browser
 notification display time**, default 8; both per device, and your OS may close a
 desktop notification sooner), the idle
 threshold that decides when a quiet session counts as needing you, and the server-wide
-webhook (ntfy, Slack, Discord or generic JSON; admins only in multi-user mode). See
-[Notifications And Approvals](Notifications-And-Approvals).
+webhook (ntfy, Slack, Discord or generic JSON; admins only in multi-user mode), and the
+Discord group for the two-way bot (token, IDs, thread and ping options; see
+[Discord Bridge](Discord-Bridge)). See [Notifications And Approvals](Notifications-And-Approvals).
 
 ### Voice
 

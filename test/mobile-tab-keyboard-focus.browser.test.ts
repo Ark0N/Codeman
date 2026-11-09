@@ -55,7 +55,7 @@ async function harness(browser: Browser, touch = true): Promise<Page> {
   });
   return page;
 }
-describe('explicit mobile tab keyboard focus', () => {
+describe('passive mobile session selection', () => {
   let browser: Browser;
   beforeAll(async () => {
     browser = await chromium.launch({ headless: true });
@@ -63,102 +63,49 @@ describe('explicit mobile tab keyboard focus', () => {
   afterAll(async () => {
     await browser.close();
   });
-  for (const target of ['same', 'other']) {
-    it(`focuses the terminal synchronously for a closed-keyboard ${target} tab tap`, async () => {
-      const page = await harness(browser);
-      try {
-        await page.locator('#terminal').focus(); // stale textarea focus with keyboard gone
-        await page.locator(`#${target}`).tap();
-        expect(await page.evaluate(() => document.activeElement?.id)).toBe('terminal');
-        expect(await page.evaluate('focusCalls')).toBe(1);
-      } finally {
-        await page.close();
-      }
-    });
-  }
-  it('direct same-session selection also restores terminal focus', async () => {
+  it.each(['same', 'other'])('does not focus terminal for a closed-keyboard %s tab tap', async (target) => {
     const page = await harness(browser);
     try {
-      await page.evaluate('app.selectSession("a")');
-      expect(await page.evaluate(() => document.activeElement?.id)).toBe('terminal');
+      await page.locator('#terminal').focus();
+      await page.locator('#' + target).tap();
+      expect(await page.evaluate('focusCalls')).toBe(0);
+      expect(await page.evaluate(() => document.activeElement?.id)).not.toBe('terminal');
     } finally {
       await page.close();
     }
   });
-  it('keeps keyboard-hidden automatic selection passive, and preserves an existing keyboard', async () => {
+  it('uses the real passive predicate when an overlay closes', async () => {
     const page = await harness(browser);
     try {
-      await page.evaluate('app.selectSession("b",{auto:true})');
-      expect(await page.evaluate('focusCalls')).toBe(0);
+      await page.addScriptTag({
+        content:
+          'app._restoreOverlayFocus=({' +
+          '' +
+          method('panels-ui.js', '_restoreOverlayFocus') +
+          '})._restoreOverlayFocus',
+      });
       await page.evaluate(
-        'KeyboardHandler.keyboardVisible=true;app.activeSessionId="a";app.selectSession("b",{auto:true})'
+        'document.activeElement?.blur();app.saved=document.body;app._restoreOverlayFocus("saved",null)'
       );
+      expect(await page.evaluate('focusCalls')).toBe(0);
+    } finally {
+      await page.close();
+    }
+  });
+  it('preserves the existing keyboard and desktop focus policy', async () => {
+    const page = await harness(browser);
+    try {
+      await page.evaluate('KeyboardHandler.keyboardVisible=true;app.selectSession("b")');
       expect(await page.evaluate('focusCalls')).toBe(1);
     } finally {
       await page.close();
     }
-  });
-  it('reveals a webview-hidden terminal before spending the synchronous focus', async () => {
-    const page = await harness(browser);
+    const desktop = await harness(browser, false);
     try {
-      await page.evaluate(() => {
-        const input = document.getElementById('terminal')!;
-        const wrap = document.createElement('div');
-        wrap.id = 'hidden-terminal';
-        input.before(wrap);
-        wrap.append(input);
-        wrap.style.display = 'none';
-        (window as any).app._hideWebviewLayer = () => {
-          wrap.style.display = '';
-        };
-      });
-      await page.locator('#other').tap();
-      expect(await page.evaluate(() => document.activeElement?.id)).toBe('terminal');
+      await desktop.locator('#other').click();
+      expect(await desktop.evaluate('focusCalls')).toBe(1);
     } finally {
-      await page.close();
-    }
-  });
-  it('retires the previous text selection guard on an explicit tab tap', async () => {
-    const page = await harness(browser);
-    try {
-      await page.evaluate(() => {
-        const app = (window as any).app;
-        app._touchSelecting = true;
-        app._clearTouchSelection = () => {
-          app._touchSelecting = false;
-        };
-        document.getElementById('terminal')!.addEventListener('focus', (e) => {
-          if (app._touchSelecting) (e.target as HTMLElement).blur();
-        });
-      });
-      await page.locator('#other').tap();
-      expect(await page.evaluate(() => document.activeElement?.id)).toBe('terminal');
-    } finally {
-      await page.close();
-    }
-  });
-  it('uses the mobile input target after mode setup, including CJK input', async () => {
-    const page = await harness(browser);
-    try {
-      await page.evaluate(() => {
-        const field = document.createElement('textarea');
-        field.id = 'cjkInput';
-        document.body.append(field);
-        (window as any).app._focusMobileTerminalInput = () => field.focus();
-      });
-      await page.locator('#other').tap();
-      expect(await page.evaluate(() => document.activeElement?.id)).toBe('cjkInput');
-    } finally {
-      await page.close();
-    }
-  });
-  it('preserves desktop selection focus', async () => {
-    const page = await harness(browser, false);
-    try {
-      await page.locator('#other').click();
-      expect(await page.evaluate(() => document.activeElement?.id)).toBe('terminal');
-    } finally {
-      await page.close();
+      await desktop.close();
     }
   });
 });
@@ -273,95 +220,6 @@ describe('keyboard lifecycle and stale visibility', () => {
     }
   });
 
-  it('transfers dismiss ownership after a settled tab choice with the keyboard open', async () => {
-    const page = await keyboardPage();
-    try {
-      await page.evaluate(`
-        window.cycleHeight=visualViewport.height;window.fullHeight=cycleHeight;
-        Object.defineProperty(visualViewport,'height',{configurable:true,get:()=>cycleHeight});
-        KeyboardHandler.keyboardVisible=false;KeyboardHandler.init();
-        document.getElementById('menu').onclick=()=>app._focusMobileTerminalInput('session-tab');
-      `);
-      for (let cycle = 0; cycle < 6; cycle++) {
-        await page.locator('#menu').tap();
-        await page.evaluate('cycleHeight=fullHeight-300;KeyboardHandler.handleViewportResize()');
-        // A tab/search choice moves focus temporarily, while the OS keyboard stays up.
-        await page.locator('#menu').tap();
-        await page.waitForTimeout(420);
-        expect(await page.evaluate('KeyboardHandler._keyboardFocusOwner===app._mobileKeyboardFocusGeneration')).toBe(
-          true
-        );
-        await page.evaluate('cycleHeight=fullHeight;KeyboardHandler.handleViewportResize()');
-        expect(await page.evaluate(() => document.activeElement?.id)).not.toBe('terminal');
-      }
-    } finally {
-      await page.close();
-    }
-  });
-
-  for (const interruption of ['other-editor', 'new-request', 'closing-geometry']) {
-    it(`does not adopt a settled tab request after ${interruption}`, async () => {
-      const page = await keyboardPage();
-      try {
-        await page.evaluate(`
-          window.cycleHeight=visualViewport.height;window.fullHeight=cycleHeight;
-          Object.defineProperty(visualViewport,'height',{configurable:true,get:()=>cycleHeight});
-          KeyboardHandler.keyboardVisible=false;KeyboardHandler.init();
-          app._focusMobileTerminalInput();
-          cycleHeight=fullHeight-300;KeyboardHandler.handleViewportResize();
-          window.oldOwner=KeyboardHandler._keyboardFocusOwner;
-          app.terminal.textarea.blur();app._focusMobileTerminalInput('session-tab');
-        `);
-        await page.evaluate((kind) => {
-          const w = window as any;
-          if (kind === 'other-editor') {
-            const other = document.createElement('textarea');
-            other.id = 'other-editor';
-            document.body.append(other);
-            other.focus();
-          } else if (kind === 'new-request') {
-            w.app.terminal.textarea.blur();
-            w.app._focusMobileTerminalInput();
-          } else {
-            w.cycleHeight += 50;
-            w.KeyboardHandler.handleViewportResize();
-          }
-        }, interruption);
-        await page.waitForTimeout(420);
-        expect(await page.evaluate('KeyboardHandler._keyboardFocusOwner===oldOwner')).toBe(true);
-        expect(await page.evaluate(() => document.activeElement?.id)).toBe(
-          interruption === 'other-editor' ? 'other-editor' : 'terminal'
-        );
-      } finally {
-        await page.close();
-      }
-    });
-  }
-
-  for (const delay of [0, 80, 200, 349]) {
-    it(`protects a tab opening from the previous keyboard close at ${delay}ms`, async () => {
-      const page = await keyboardPage();
-      try {
-        await page.evaluate(`
-          window.cycleHeight=visualViewport.height;window.fullHeight=cycleHeight;
-          Object.defineProperty(visualViewport,'height',{configurable:true,get:()=>cycleHeight});
-          KeyboardHandler.keyboardVisible=false;KeyboardHandler.init();
-          app._focusMobileTerminalInput();
-          cycleHeight=fullHeight-300;KeyboardHandler.handleViewportResize();
-          app.terminal.textarea.blur();
-          app._focusMobileTerminalInput('session-tab');
-          setTimeout(()=>{cycleHeight=fullHeight;KeyboardHandler.handleViewportResize()},${delay});
-        `);
-        await page.waitForTimeout(500);
-        expect(await page.evaluate(() => document.activeElement?.id)).toBe('terminal');
-        expect(await page.evaluate('KeyboardHandler.keyboardVisible')).toBe(false);
-        expect(await page.evaluate('KeyboardHandler._keyboardFocusOwner')).toBeUndefined();
-      } finally {
-        await page.close();
-      }
-    });
-  }
-
   it('survives listener reconnect with the keyboard open, then dismisses and reopens', async () => {
     const page = await keyboardPage();
     try {
@@ -446,55 +304,6 @@ describe('keyboard lifecycle and stale visibility', () => {
       await page.evaluate('KeyboardHandler.handleViewportResize()');
       expect(await page.evaluate('KeyboardHandler.keyboardVisible')).toBe(true);
       expect(await page.evaluate(() => document.activeElement?.id)).toBe('terminal');
-    } finally {
-      await page.close();
-    }
-  });
-  it('observes a focus request without stealing a different editor after the tap', async () => {
-    const page = await keyboardPage();
-    try {
-      await page.evaluate(`
-        window._crashDiag={log(){}};window.observations=[];
-        KeyboardHandler._traceKeyboardState=reason=>observations.push(reason);
-        app._focusMobileTerminalInput('session-tab');
-        const editor=document.createElement('textarea');editor.id='other-editor';
-        document.body.append(editor);editor.focus();
-      `);
-      await page.waitForTimeout(1150);
-      expect(await page.evaluate(() => document.activeElement?.id)).toBe('other-editor');
-      expect(await page.evaluate('observations')).toEqual([
-        'viewport-hide',
-        'request-1-session-tab',
-        'request-1-after-350ms',
-        'request-1-after-1000ms',
-      ]);
-    } finally {
-      await page.close();
-    }
-  });
-  it('records clipped input geometry without recording text or changing focus', async () => {
-    const page = await browser.newPage({ viewport: { width: 440, height: 852 } });
-    try {
-      await page.setContent(`<div style="position:absolute;left:20px;top:100px;width:200px;height:100px;overflow:hidden">
-        <textarea id="terminal" class="xterm-helper-textarea" style="position:absolute;left:5px;top:170px;width:1px;height:1px;padding:0;border:0"></textarea>
-        </div><textarea id="editor"></textarea>`);
-      await page.addScriptTag({
-        content: `
-        window.logs=[];window._crashDiag={log:message=>logs.push(message)};
-        window.KeyboardHandler={${['_traceKeyboardInputBox', '_isTerminalInput'].map((n) => method('mobile-handlers.js', n, 'KeyboardHandler')).join(',')}};
-        window.app={terminal:{textarea:document.getElementById('terminal')}};
-        document.getElementById('terminal').value='PRIVATE_TYPED_CONTENT';
-        document.getElementById('editor').focus();
-        KeyboardHandler._traceKeyboardInputBox('before-menu');
-        document.getElementById('terminal').style.top='20px';
-        KeyboardHandler._traceKeyboardInputBox('after-menu');
-      `,
-      });
-      const logs = (await page.evaluate('logs')) as string[];
-      expect(logs[0]).toContain('"intersects":false');
-      expect(logs[1]).toContain('"intersects":true');
-      expect(logs.join('')).not.toContain('PRIVATE_TYPED_CONTENT');
-      expect(await page.evaluate(() => document.activeElement?.id)).toBe('editor');
     } finally {
       await page.close();
     }

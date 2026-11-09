@@ -392,7 +392,7 @@ export function isAdoptedContainer(docker: Pick<SessionDocker, 'owned'>): boolea
 /**
  * POSIX single-quote shell-escaping (end-quote, escaped-quote, restart-quote).
  * Mirror of the helper in remote-hosts.ts / tmux-manager.ts. Every dynamic value
- * interpolated into the outer `bash -c "..."` launch layer is escaped through
+ * interpolated into the `bash -c` launch layer is escaped through
  * this so a path with spaces stays a single shell token. Operator-entered fields
  * are ALSO schema-rejected for `$`/backtick (NO_SHELL_META) as defense in depth.
  */
@@ -1014,7 +1014,7 @@ export function resolveDockerCredentialArtifacts(
  * string; argv arrays must NOT carry literal quotes (mirror of docker-export's
  * dockerArgv).
  */
-function dockerEngineArgv(docker: Pick<SessionDocker, 'engine' | 'context' | 'daemonHost'>): string[] {
+export function dockerEngineArgv(docker: Pick<SessionDocker, 'engine' | 'context' | 'daemonHost'>): string[] {
   const argv: string[] = [docker.engine === 'podman' ? 'podman' : 'docker'];
   if (docker.context) argv.push('--context', docker.context);
   if (docker.daemonHost) argv.push('-H', docker.daemonHost);
@@ -1682,9 +1682,9 @@ export async function probeDockerCliVersion(
   if (IS_TEST_MODE) return undefined;
   // ⚠️ The MODE NAME IS NOT ALWAYS THE BINARY NAME — `antigravity` runs `agy`. This used
   // to pass the mode straight through as the command, which would have probed a binary that
-  // does not exist. Only claude reaches this today (it is the one CLI with a version gate),
-  // so nothing was actually broken, but the registry is what makes it correct for the next
-  // CLI that needs a version.
+  // does not exist. Claude and codex reach this today (the CLIs with a version gate), and
+  // both binaries match their mode, so nothing was actually broken, but the registry is what
+  // makes it correct for the next CLI that needs a version.
   const bin = getCli(mode)?.discovery.binaries[0];
   if (!bin) return undefined; // `shell` has no binary of its own
   const argv = dockerEngineArgv(docker);

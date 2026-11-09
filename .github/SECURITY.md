@@ -69,6 +69,7 @@ shared-host, multi-user, or tunneled deployments.
 - **Multi-instance tmux socket is process-wide.** Two Codeman instances on the same `CODEMAN_INSTANCE` share a tmux socket and can attach each other's live sessions — isolate with distinct `CODEMAN_INSTANCE` values.
 - **The live log-tail route reads `/var/log` and `~/logs`** in addition to the session working directory (read-only) — a deliberate choice for tailing system/app logs. On a password-protected remote deployment an authenticated user can therefore read those roots outside their session. See `docs/security-architecture.md` §5.
 
+- **The local model runtime listens on a loopback port with no login.** The model server the local model install starts (macOS only, opt-in by a click) accepts requests from any process of any account on the Mac, and from any page served from `localhost`, like every model server of its kind. Codeman limits what that buys (one model in the endpoint record, a digest check before an agent is started on it) but does not authenticate the port. See `docs/security-architecture.md` §10d.
 - **The web-tab proxy fetches from the server's network position.** Any authenticated user can save a dashboard URL on loopback or a private range and have Codeman relay to it; that is the feature. Link-local and cloud-metadata addresses are the only refused targets (see below). On a shared host, restrict who holds an account.
 
 Recent hardening (2026-09-04): the web-tab proxy, its "Test" probe and its

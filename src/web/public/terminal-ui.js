@@ -1573,8 +1573,8 @@ Object.assign(CodemanApp.prototype, {
     // A real mouse click normally reaches the PTY through xterm's own mouse
     // encoder, but that encoder only runs while mouseTrackingMode is ON — and
     // the server strips the enabling DECSETs from claude/codex/gemini output
-    // (isAltScreenStripMode, session.ts) and from opencode's (isMuxMouseStripMode,
-    // so a drag selects text) so the wheel keeps scrolling
+    // (isAltScreenStripMode, session.ts) and from the mouse-strip modes'
+    // (isMuxMouseStripMode, so a drag selects text) so the wheel keeps scrolling
     // scrollback. Desktop clicks therefore stopped reporting entirely (the
     // same breakage the mobile touchend tap branch above works around).
     // Hand-encode the SGR report for plain left-clicks on those sessions.
@@ -2147,13 +2147,16 @@ Object.assign(CodemanApp.prototype, {
 
   /**
    * A clicked path as the preview needs it: relative paths resolved against the
-   * session's working directory, absolute and `~/` paths unchanged
+   * directory the session's pane is in now, else its working directory
+   * (`relativeResolutionBase`), absolute and `~/` paths unchanged
    * (`resolveLinkedFilePath`, constants.js). Shared by the terminal link
    * provider and the response viewer, so one path opens the same file in both.
    */
   _resolveLinkedFilePath(filePath, sessionId) {
     if (typeof resolveLinkedFilePath !== 'function') return filePath;
-    return resolveLinkedFilePath(filePath, this.sessions?.get?.(sessionId)?.workingDir);
+    const session = this.sessions?.get?.(sessionId);
+    const base = typeof relativeResolutionBase === 'function' ? relativeResolutionBase(session) : session?.workingDir;
+    return resolveLinkedFilePath(filePath, base);
   },
 
   /**
@@ -2319,7 +2322,7 @@ Object.assign(CodemanApp.prototype, {
         // Pattern 3: Bash() tool output
         const bashPattern = /Bash\([^)]*?(\/(?:home|tmp|var|etc|opt)[^\s"'<>|;&\)\n\x00-\x1f]+)/g;
 
-        const activateFilePath = (text, folder = false) => {
+        const activateFilePath = (text, folder = false, verifiedSessionId = null) => {
           // Tailing a PNG in the log viewer shows binary noise; the file preview
           // already renders images, PDFs, documents and media inline — and it
           // now reaches files outside the workspace too, which is where an
@@ -2337,8 +2340,26 @@ Object.assign(CodemanApp.prototype, {
           // A relative path is resolved against the session's working
           // directory first, and a `~/` path always previews (only the
           // server knows that host's home, and the log viewer cannot ask).
-          const sessionId = getSessionId();
+          const sessionId = verifiedSessionId || getSessionId();
+          if (!sessionId) return;
           const target = self._resolveLinkedFilePath(text, sessionId);
+          const alternative = !folder && logical.pathAlternatives?.find((candidate) => candidate.path === text);
+          if (alternative && !verifiedSessionId) {
+            return (async () => {
+              const original = await self._registerExternalPreview(target, sessionId);
+              // Attachment policy must not gate the workspace's normal opener.
+              if (original.status !== 404) return activateFilePath(target, false, sessionId);
+              const path = self._resolveLinkedFilePath(alternative.spacedPath, sessionId);
+              const registered = await self._registerExternalPreview(path, sessionId);
+              if (registered.status === 404) return activateFilePath(target, false, sessionId);
+              if (!registered.attachmentId) {
+                self.showToast(registered.error || 'Cannot open this file', 'error');
+                return;
+              }
+              // The normal opener rechecks its guards; attachment registration deduplicates the path.
+              return activateFilePath(path, false, sessionId);
+            })();
+          }
           // A folder path opens the folder grid (which falls back to the
           // preview if the server finds a file there after all).
           if (folder) {
@@ -2347,7 +2368,13 @@ Object.assign(CodemanApp.prototype, {
           }
           // An HTML file renders as a page in the preview, never as source
           // in the log viewer (markdown is in FILE_PREVIEW_EXTENSIONS).
-          if (previewsInFileViewer(target) || rendersAsPage(target) || self._isExternalPreviewPath(target, sessionId)) {
+          // The log viewer's tail-file stays confined to workingDir, so a path in a worktree outside it previews.
+          if (
+            previewsInFileViewer(target) ||
+            rendersAsPage(target) ||
+            self._isExternalPreviewPath(target, sessionId) ||
+            self._isOutsideWorktreePath(target, sessionId)
+          ) {
             self.openFilePreview(target, sessionId);
             return;
           }
@@ -2373,7 +2400,7 @@ Object.assign(CodemanApp.prototype, {
               underline: true,
             },
             activate(_event, text) {
-              activateFilePath(text, folder);
+              return activateFilePath(text, folder);
             },
             hover() {
               setHovered(true);
@@ -2923,6 +2950,9 @@ Object.assign(CodemanApp.prototype, {
       if (overlay) overlay.classList.remove('visible');
       this.hideHomeSessions?.();
       this.showMobileOverview();
+      // The phone overview hosts the same list in its own container.
+      this.wireForeignSessions?.();
+      this.startForeignPolling?.();
       this._updateCjkInputState?.();
       return;
     }
@@ -2937,6 +2967,14 @@ Object.assign(CodemanApp.prototype, {
       // Open tabs down the left gutter. Self-gating: a window too narrow to hold
       // the column without overlapping the content leaves it hidden.
       this.showHomeSessions?.();
+      // Sessions a human opened outside Codeman. Polls only while this screen is
+      // up (stopped in hideWelcome), see foreign-sessions.js.
+      this.wireForeignSessions?.();
+      this.startForeignPolling?.();
+      // The "Run a local model" button (local-model-ui.js). One request, at most
+      // once a minute, no timer here: only its open window polls, and closing
+      // that window stops it, so there is nothing to stop in hideWelcome.
+      this.loadLocalModel?.();
     }
     // Home screen has no input target — hide the CJK textarea (activeSessionId
     // is null by the time we get here). Guarded: defined on the app object.
@@ -2946,6 +2984,7 @@ Object.assign(CodemanApp.prototype, {
   hideWelcome() {
     this.hideMobileOverview?.();
     this.hideHomeSessions?.();
+    this.stopForeignPolling?.();
     const overlay = document.getElementById('welcomeOverlay');
     if (overlay) {
       overlay.classList.remove('visible');
@@ -5807,37 +5846,14 @@ Object.assign(CodemanApp.prototype, {
     // the previous request BEFORE blur/focus callbacks can run (#35).
     const retainsFocus = keyboardUp && !!target && document.activeElement === target;
     if (!retainsFocus) this._mobileKeyboardFocusGeneration = (this._mobileKeyboardFocusGeneration || 0) + 1;
-    // Fallback for callers without a terminal touchstart (e.g. tab selection).
+    // Fallback for terminal input requests without a preceding touchstart.
     if (this._isMobileTerminalInputFocused() && !keyboardUp) this._blurMobileTerminalInput();
     if (cjkInput?.classList.contains('cjk-input-visible')) {
       cjkInput.focus();
     } else {
       this.terminal?.focus();
     }
-    // A tab/search choice can reuse the visible keyboard without another
-    // viewport shrink. Transfer dismiss ownership only after that request has
-    // settled; a pending close must still leave a newer opening focused (#35).
     const handler = typeof KeyboardHandler !== 'undefined' ? KeyboardHandler : null;
-    const viewport = window.visualViewport;
-    const transferGeneration = this._mobileKeyboardFocusGeneration;
-    const transferHeight = viewport?.height;
-    const transferWidth = viewport?.width;
-    if (source === 'session-tab' && !retainsFocus && handler?.keyboardVisible &&
-        Number.isSafeInteger(handler._keyboardFocusOwner) &&
-        transferHeight > 0 && transferHeight <= handler._keyboardMinHeight + 2 &&
-        handler.initialViewportHeight - transferHeight > 150) {
-      setTimeout(() => {
-        if (this._mobileKeyboardFocusGeneration !== transferGeneration ||
-            document.visibilityState !== 'visible' || !handler.keyboardVisible ||
-            !Number.isSafeInteger(handler._keyboardFocusOwner) ||
-            document.activeElement !== target || !this._isMobileTerminalInputFocused() ||
-            viewport?.height !== transferHeight || viewport?.width !== transferWidth ||
-            viewport.height > handler._keyboardMinHeight + 2) return;
-        handler._keyboardFocusOwner = transferGeneration;
-        handler._keyboardFocusOwnerInput = target;
-        handler._traceKeyboardState?.('tab-focus-owner-transfer');
-      }, handler.KEYBOARD_FOCUS_SETTLE_MS || 350);
-    }
     // Script window.focus() was declined on the phone. Preserve the native
     // compatibility mouse default that can activate its page, then focus from
     // that trusted click. Never forward those mouse events to the CLI.
@@ -6013,8 +6029,8 @@ Object.assign(CodemanApp.prototype, {
    * literal text (`[<0;88;20M`) and they garble the next line typed.
    *
    * Fails toward silence: an unknown or stale flag reports nothing rather than
-   * injecting bytes. After a server restart the flag is false until the CLI
-   * re-emits its DECSET, which closing and reopening a dialog does.
+   * injecting bytes. After a server restart the flag is false until the DECSET
+   * passes again, which tmux does itself when the server re-attaches to the pane.
    *
    * `sessionId` defaults to the primary pane's session; a TerminalTile passes
    * its own (through _handleDesktopTerminalClick's target), never the active one.
@@ -6130,18 +6146,21 @@ Object.assign(CodemanApp.prototype, {
     // option, but it would override an explicit user choice; instead the caller
     // falls through to _maybePageCliTranscript, so the gesture still pages the
     // CLI's transcript (or loads unloaded tmux scrollback, see there) and the
-    // setting keeps meaning exactly what it says.
+    // setting keeps meaning exactly what it says. Pi is the accepted exception:
+    // it declares no `transcriptPageKeys`, so with this on its wheel stays dead.
     if (this.loadAppSettingsFromStorage?.()?.terminalWheelLocalScrollback) return false;
     const mode = (target.terminal || this.terminal)?.modes?.mouseTrackingMode;
     if (mode && mode !== 'none') return false;
     const session = this.sessions?.get(target.sessionId || this.activeSessionId);
     const sessionMode = session?.mode || 'claude';
-    // GitHub Copilot CLI scrolls its own transcript on SGR wheel reports (checked with xterm
-    // encoding them natively). Its mouse DECSETs are stripped server-side so a drag selects
-    // locally (strip-mux-and-mouse), which also means xterm no longer encodes the wheel: send the
-    // same reports by hand, but only while the CLI is actually tracking the mouse. Not gated on a
-    // version; a stale-false flag falls through to the PageUp/PageDown fallback like claude's.
-    if (sessionMode === 'copilot') return session?.cliMouseTracking === true;
+    // GitHub Copilot CLI (and pi, fullscreen by default) scrolls its own transcript on SGR wheel
+    // reports (checked with xterm encoding them natively). Their mouse DECSETs are stripped
+    // server-side so a drag selects locally (strip-mux-and-mouse), which also means xterm no longer
+    // encodes the wheel: send the same reports by hand, but only while the CLI is actually tracking
+    // the mouse. Not gated on a version. On Copilot a stale-false flag falls through to the
+    // PageUp/PageDown fallback like claude's; pi has none on purpose (the `transcriptPageKeys` note
+    // in stock.ts), so there the wheel does nothing until the flag is back.
+    if (sessionMode === 'copilot' || sessionMode === 'pi') return session?.cliMouseTracking === true;
     if (sessionMode !== 'claude' && sessionMode !== 'codex') return false;
     if (sessionMode === 'claude' && !this._cliVersionAtLeast(session?.cliVersion, '2.1.187')) return false;
     // Only while Claude or Codex is actually listening for the mouse. Claude's
@@ -6479,8 +6498,8 @@ Object.assign(CodemanApp.prototype, {
    * The reason is that the habit and xterm's Shift mean different things once
    * the DECSETs are stripped. xterm reads Shift as "force selection" ONLY while
    * the app actually has mouse tracking on; the server strips those DECSETs for
-   * claude/codex/gemini (isAltScreenStripMode) and opencode (isMuxMouseStripMode),
-   * so xterm's mouseTrackingMode is
+   * claude/codex/gemini (isAltScreenStripMode) and the mouse-strip modes
+   * (isMuxMouseStripMode), so xterm's mouseTrackingMode is
    * permanently `none`, that branch is unreachable, and Shift instead falls into
    * `_onIncrementalClick` — EXTEND an existing selection. Extending is a no-op
    * when `selectionStart` is null, so the drag never anchors and no selection is
@@ -6791,7 +6810,7 @@ Object.assign(CodemanApp.prototype, {
   _keyboardHoldEligible(sessionId = this.activeSessionId) {
     if (this.loadAppSettingsFromStorage?.()?.keyboardHoldsRows === false) return false;
     const session = sessionId ? this.sessions?.get(sessionId) : null;
-    if (!session || session.remote || session.docker || session.cliMouseTracking) return false;
+    if (!session || session.remote || session.docker || session.adopt || session.cliMouseTracking) return false;
     const modes = window.__codemanKeyboardHoldModes;
     return Array.isArray(modes) && modes.includes(session.mode || 'claude');
   },

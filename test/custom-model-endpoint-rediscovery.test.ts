@@ -13,7 +13,9 @@
  * directly plus the mocked webviewFetch dispatcher).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { getDataDir } from '../src/config/instance.js';
+import { readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { dataPath, getDataDir } from '../src/config/instance.js';
+import { customModelHostsPath } from '../src/custom-model-hosts.js';
 import { readCustomModelHosts, writeCustomModelHosts, type CustomModelHost } from '../src/custom-model-hosts.js';
 import { clearPropsProbeCache, refreshAllCustomModelHosts } from '../src/web/routes/custom-model-routes.js';
 import { webviewFetch } from '../src/web/webview-egress.js';
@@ -481,6 +483,54 @@ describe('refreshAllCustomModelHosts: parallel-slot enrichment (llama.cpp splits
     const [updated] = await readCustomModelHosts(dir);
     expect(updated.modelSlotCounts).toEqual({ a: 4 });
   });
+
+  it('a round where only the listed figure answers resets the slot count a loaded round learned', async () => {
+    // The false-warning scenario, measured on a real llama-swap: round 1 has the model
+    // loaded under `--ctx-size 262144 --parallel 4`: a TOTAL window shared across slots,
+    // correctly stored with its count. Round 2 finds it unloaded and takes the LISTED
+    // `context_length`, which llama-swap documents as the PER-SLOT window. If the stored 4
+    // survived, the floor check would divide the per-slot figure a second time
+    // (65536/4 = 16384) and warn about a model that serves 65536 to every request.
+    const dir = getDataDir();
+    await writeCustomModelHosts(dir, [host({ id: 'ep', baseUrl: 'http://localhost:8080' })]);
+    fetchMock.mockImplementation(async (url: URL) => {
+      if (url.pathname === '/v1/models') {
+        return new Response(JSON.stringify({ data: [{ id: 'm', status: { value: 'loaded' } }] }), { status: 200 });
+      }
+      if (url.pathname === '/running') {
+        return new Response(
+          JSON.stringify({
+            running: [
+              { model: 'm', state: 'ready', cmd: 'llama-server -m /models/m.gguf --ctx-size 262144 --parallel 4' },
+            ],
+          }),
+          { status: 200 }
+        );
+      }
+      throw new Error(`unexpected request: ${url.href}`); // the command answers both questions
+    });
+
+    await refreshAllCustomModelHosts();
+
+    let [round1] = await readCustomModelHosts(dir);
+    expect(round1.modelContextLengths).toEqual({ m: 262144 });
+    expect(round1.modelSlotCounts).toEqual({ m: 4 });
+
+    // Round 2: unloaded, no /running or /props probe in order, listing its per-slot figure.
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ data: [{ id: 'm', status: { value: 'unloaded' }, context_length: 65536 }] }), {
+        status: 200,
+      })
+    );
+
+    await refreshAllCustomModelHosts();
+
+    const [round2] = await readCustomModelHosts(dir);
+    expect(round2.modelContextLengths).toEqual({ m: 65536 });
+    // 1 slot, not the stale 4: 65536 per slot with 1 recorded slot is the honest pair, so
+    // the floor check reads 65536/request: exactly what the server gives a single request.
+    expect(round2.modelSlotCounts).toEqual({ m: 1 });
+  });
 });
 
 describe('refreshAllCustomModelHosts: model-size enrichment (parsed from /v1/models description)', () => {
@@ -554,5 +604,106 @@ describe('refreshAllCustomModelHosts: model-size enrichment (parsed from /v1/mod
 
     const [updated] = await readCustomModelHosts(dir);
     expect(updated.modelSizesGB).toEqual({ a: 8 }); // 'a' kept from before, 'b' dropped (gone from the list)
+  });
+});
+
+describe('the sweep and the serialized writer', () => {
+  it('an endpoint created while the sweep was probing another one is kept', async () => {
+    const dir = getDataDir();
+    await writeCustomModelHosts(dir, [host({ id: 'probed', baseUrl: 'http://localhost:8080' })]);
+    fetchMock.mockImplementation(async () => {
+      // An admin saves a second endpoint between the sweep's read and its write. The sweep
+      // must splice its result onto the list as it is then, not write back the one it read.
+      const current = await readCustomModelHosts(dir);
+      if (!current.some((h) => h.id === 'added')) {
+        await writeCustomModelHosts(dir, [...current, host({ id: 'added', baseUrl: 'http://localhost:8082' })]);
+      }
+      return new Response(JSON.stringify({ data: [{ id: 'qwen3' }] }), { status: 200 });
+    });
+
+    await refreshAllCustomModelHosts();
+
+    const hosts = await readCustomModelHosts(dir);
+    expect(hosts.map((h) => h.id)).toEqual(['probed', 'added']);
+    expect(hosts[0].models).toEqual(['qwen3']);
+  });
+
+  it('never writes over a store that stopped parsing while the sweep ran', async () => {
+    const dir = getDataDir();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await writeCustomModelHosts(dir, [
+      host({ id: 'a', baseUrl: 'http://localhost:8080', apiKey: 'sk-keep' }),
+      host({ id: 'b', baseUrl: 'http://localhost:8081' }),
+    ]);
+    const broken = '[{"id":"a","apiKey":"sk-keep"},';
+    fetchMock.mockImplementation(async () => {
+      writeFileSync(customModelHostsPath(dir), broken);
+      return new Response(JSON.stringify({ data: [{ id: 'qwen3' }] }), { status: 200 });
+    });
+
+    await expect(refreshAllCustomModelHosts()).resolves.toBeUndefined();
+
+    // It used to read the broken file as an empty list and carry on; it is left as it is.
+    expect(readFileSync(customModelHostsPath(dir), 'utf8')).toBe(broken);
+    // And the sweep stopped there: the second endpoint was not probed for nothing.
+    expect(fetchMock.mock.calls.every(([url]) => !(url as URL).href.includes('8081'))).toBe(true);
+    vi.restoreAllMocks();
+  });
+});
+
+describe('the sweep leaves the local model record alone', () => {
+  const STATE = () => dataPath('local-model.json');
+  const MANAGED: CustomModelHost = {
+    id: 'local-ollama',
+    label: 'This Mac',
+    baseUrl: 'http://127.0.0.1:11435',
+    authStyle: 'bearer',
+    models: ['qwen3.6:35b-a3b'],
+    defaultModelId: 'qwen3.6:35b-a3b',
+    defaultContextLength: 131072,
+  };
+
+  beforeEach(() => {
+    rmSync(STATE(), { force: true });
+  });
+
+  it('while it is managed: it is not probed, and a model somebody pulled through the port does not become launchable', async () => {
+    const dir = getDataDir();
+    writeFileSync(
+      STATE(),
+      JSON.stringify({
+        schema: 1,
+        state: 'installed',
+        model: { id: 'qwen3.6:35b-a3b', label: 'Qwen3.6 35B-A3B', context: 131072 },
+        cli: { id: 'opencode', label: 'OpenCode' },
+        runtime: { version: '0.40.15', port: 11435, enabled: true },
+        connection: { endpointId: 'local-ollama', flagWasEnabled: false },
+      })
+    );
+    await writeCustomModelHosts(dir, [MANAGED, host({ id: 'other', baseUrl: 'http://localhost:8080' })]);
+    fetchMock.mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ data: [{ id: 'qwen3.6:35b-a3b' }, { id: 'sneaked-in:7b' }] }), { status: 200 })
+    );
+
+    await refreshAllCustomModelHosts();
+
+    const hosts = await readCustomModelHosts(dir);
+    // Our record is exactly what the install wrote: no new model, no discovery stamp.
+    expect(hosts.find((h) => h.id === 'local-ollama')).toEqual(MANAGED);
+    // Every other endpoint is refreshed as before.
+    expect(hosts.find((h) => h.id === 'other')?.models).toEqual(['qwen3.6:35b-a3b', 'sneaked-in:7b']);
+    for (const [url] of fetchMock.mock.calls) expect((url as URL).href).not.toContain('11435');
+    rmSync(STATE(), { force: true });
+  });
+
+  it('a record with that id that nobody installed is refreshed like any other', async () => {
+    const dir = getDataDir();
+    await writeCustomModelHosts(dir, [{ ...MANAGED, models: [], defaultModelId: undefined }]);
+    fetchMock.mockImplementation(
+      async () => new Response(JSON.stringify({ data: [{ id: 'mine:1b' }] }), { status: 200 })
+    );
+    await refreshAllCustomModelHosts();
+    expect((await readCustomModelHosts(dir))[0].models).toEqual(['mine:1b']);
   });
 });

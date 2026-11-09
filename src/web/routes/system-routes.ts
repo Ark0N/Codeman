@@ -856,6 +856,7 @@ export function registerSystemRoutes(
       // Keeping a pane that died while detached errs toward the 12 h TTL and the boot
       // prune, the same trade the boot keep set makes.
       if (!ctx.mux.getSession(s.id)) agentInbox.drop(s.id);
+      ctx.forgetEditHistory(s.id);
     }
     return { cleanedSessions: result.count };
   });
@@ -1184,9 +1185,10 @@ export function registerSystemRoutes(
       // Handle image watcher toggle dynamically
       toggleService((merged.imageWatcherEnabled as boolean) ?? false, imageWatcher, 'Image watcher', () => {
         // Re-watch all active sessions that have image watcher enabled (never a remote session: its
-        // workingDir is a path on the remote host, not on this disk)
+        // workingDir is a path on the remote host, not on this disk; nor an adopted one, whose folder
+        // is the neutral wrapper folder and not the foreign pane's work)
         for (const session of ctx.sessions.values()) {
-          if (session.imageWatcherEnabled && !session.remote) {
+          if (session.imageWatcherEnabled && !session.remote && !session.isAdopted) {
             imageWatcher.watchSession(session.id, session.workingDir);
           }
         }

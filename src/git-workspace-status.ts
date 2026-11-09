@@ -50,6 +50,7 @@ import { homedir } from 'node:os';
 import { basename, join, relative, sep } from 'node:path';
 import { promisify } from 'node:util';
 import { gitNonInteractiveEnv, redactGitCredentials } from './git-clone.js';
+import { gitMissingError, gitSpawnAllowed } from './utils/git-availability.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -95,7 +96,7 @@ export interface GitWorkspaceStatus {
    * `unsupported`: a remote or Docker session (never inspected). `error`: git failed; see `error`.
    */
   state: 'ok' | 'not-a-repo' | 'unsupported' | 'error';
-  reason?: 'remote' | 'docker';
+  reason?: 'remote' | 'docker' | 'adopted';
   error?: string;
   repoRoot?: string;
   /** Null when HEAD is detached. */
@@ -265,6 +266,8 @@ export function parseCommitLog(text: string): GitCommitEntry[] {
 export type GitRunner = (cwd: string, args: string[], opts?: { timeoutMs?: number }) => Promise<string>;
 
 export const runGit: GitRunner = async (cwd, args, opts) => {
+  // Never Apple's placeholder git on a Mac without developer tools (utils/git-availability.ts).
+  if (!gitSpawnAllowed()) throw gitMissingError();
   const { stdout } = await execFileAsync(
     'git',
     // --no-optional-locks: never touch the index just to look. core.fsmonitor=false: do not start or
@@ -482,7 +485,7 @@ export interface GitRepoEntry {
 export interface GitWorkspaceOverview {
   /** `ok` when at least one repository was found; the other states are as in `GitWorkspaceStatus`. */
   state: 'ok' | 'not-a-repo' | 'unsupported' | 'error';
-  reason?: 'remote' | 'docker';
+  reason?: 'remote' | 'docker' | 'adopted';
   error?: string;
   repos: GitRepoEntry[];
   /** More than `repoLimit` repositories were found; only the first are reported. */

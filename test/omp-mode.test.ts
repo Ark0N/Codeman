@@ -130,7 +130,9 @@ describe('OMP mode gates', () => {
     expect(defaultDockerCommandForMode('omp')).toBe('exec omp');
     // Routed through an interactive login shell so per-user PATH entries resolve —
     // same fix as the other remote agent CLIs (see defaultRemoteCommandForMode).
-    expect(defaultRemoteCommandForMode('omp')).toBe('exec "${SHELL:-/bin/sh}" -i -l -c \'omp\'');
+    expect(defaultRemoteCommandForMode('omp')).toBe(
+      '{ set -- -i -l; case ${SHELL##*/} in csh|tcsh) set --;; esac; exec "${SHELL:-/bin/sh}" "$@" -c \'omp\'; }'
+    );
   });
 });
 

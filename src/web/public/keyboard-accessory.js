@@ -80,7 +80,7 @@ const PathPicker = {
   /**
    * Open the lazy filesystem browser.
    * @param {{sessionId?: string, initialPath?: string, directoriesOnly?: boolean,
-   *   title?: string, onSelect: (path: string) => void}} options
+   *   allowNewFolder?: boolean, title?: string, onSelect: (path: string) => void}} options
    */
   open(options) {
     this.close(false);
@@ -114,9 +114,15 @@ const PathPicker = {
             <input type="text" class="path-picker-current" aria-label="Current folder path" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="go">
             <button type="submit" class="path-picker-go" title="Go to this path" aria-label="Go to this path">Go</button>
           </form>
+          <button type="button" class="path-picker-newfolder" title="New folder" aria-label="New folder" hidden>+&#x1F4C1;</button>
           <button type="button" class="path-picker-hidden" title="Show hidden files and folders" aria-label="Show hidden files and folders" aria-pressed="false">.*</button>
           <button type="button" class="path-picker-refresh" title="Refresh" aria-label="Refresh">&#x21BB;</button>
         </div>
+        <form class="path-picker-newfolder-form" hidden>
+          <input type="text" class="path-picker-newfolder-name" aria-label="New folder name" placeholder="New folder name" maxlength="255" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="done">
+          <button type="submit" class="path-picker-newfolder-create">Create</button>
+          <button type="button" class="path-picker-newfolder-cancel">Cancel</button>
+        </form>
         <div class="path-picker-toolbar">
           <div class="path-picker-status" aria-live="polite">Loading...</div>
           <label class="path-picker-sort-label">Sort
@@ -147,6 +153,7 @@ const PathPicker = {
     overlay.querySelector('.path-picker-refresh').addEventListener('click', () => this.load(this._currentPath));
     overlay.querySelector('.path-picker-hidden').addEventListener('click', () => this.toggleHidden());
     this._syncHiddenButton();
+    this._wireNewFolder(overlay, !!options.allowNewFolder);
     // Typing a path is the fast way there. The listing is loaded ONLY on Enter/Go,
     // never on each keystroke: a half-typed path is a 404 the server has to
     // answer for nothing, and jumping mid-edit would yank the field around.
@@ -181,6 +188,70 @@ const PathPicker = {
     document.addEventListener('keydown', this._keydownHandler);
     document.body.appendChild(overlay);
     this.load(options.initialPath || '');
+  },
+
+  /**
+   * "New folder": opt-in per caller (`allowNewFolder`), so a picker that browses somewhere the host
+   * filesystem route cannot create in (the container-workdir picker) never shows it. The folder is made
+   * inside the folder being viewed and is selected once it exists.
+   */
+  _wireNewFolder(overlay, enabled) {
+    const button = overlay.querySelector('.path-picker-newfolder');
+    const form = overlay.querySelector('.path-picker-newfolder-form');
+    const input = overlay.querySelector('.path-picker-newfolder-name');
+    if (!enabled) return;
+    button.hidden = false;
+    const close = () => {
+      form.hidden = true;
+      input.value = '';
+    };
+    button.addEventListener('click', () => {
+      form.hidden = !form.hidden;
+      if (!form.hidden) input.focus();
+    });
+    overlay.querySelector('.path-picker-newfolder-cancel').addEventListener('click', close);
+    input.addEventListener('keydown', (event) => {
+      // Escape closes the form first; the document handler would close the whole picker.
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      close();
+    });
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const name = input.value.trim();
+      if (!name || !this._currentPath) return;
+      const status = overlay.querySelector('.path-picker-status');
+      const create = overlay.querySelector('.path-picker-newfolder-create');
+      const parent = this._currentPath;
+      // One request at a time: a double tap would send a second one whose 409 shows after the first succeeded.
+      create.disabled = true;
+      try {
+        const res = await fetch('/api/filesystem/mkdir', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            path: parent,
+            name,
+            sessionId: this._options?.sessionId || undefined,
+            showHidden: this._showHidden ? 'true' : undefined,
+          }),
+        });
+        const result = await res.json();
+        if (!result?.success) throw new Error(result?.error || 'Could not create the folder');
+        if (!this.overlay) return;
+        close();
+        await this.load(parent);
+        // The listing may have moved on while the request ran; only select it if it is still on screen.
+        if (this._currentPath === parent) this.select(result.data.path);
+      } catch (error) {
+        if (!this.overlay) return;
+        status.textContent = error.message || 'Could not create the folder';
+        status.classList.add('error');
+      } finally {
+        create.disabled = false;
+      }
+    });
   },
 
   _loadShowHidden() {
@@ -1300,7 +1371,7 @@ const KeyboardAccessoryBar = {
           <strong>Compose prompt</strong>
           <span>Enter adds a new line</span>
         </div>
-        <textarea class="paste-textarea prompt-composer-textarea" aria-label="Prompt" placeholder="Write your prompt…" autocorrect="on" autocapitalize="sentences" spellcheck="true"></textarea>
+        <textarea class="paste-textarea prompt-composer-textarea" dir="auto" aria-label="Prompt" placeholder="Write your prompt…" autocorrect="on" autocapitalize="sentences" spellcheck="true"></textarea>
         <div class="paste-actions prompt-composer-actions">
           <button type="button" class="prompt-composer-terminal">Use terminal keyboard</button>
           <button type="button" class="paste-image">📎 Attach</button>
@@ -1313,6 +1384,8 @@ const KeyboardAccessoryBar = {
 
     this._composerOverlay = overlay;
     const textarea = overlay.querySelector('.prompt-composer-textarea');
+    // The textarea's dir="auto" lays a prompt written in Persian, Arabic or
+    // Hebrew out right to left, from its first letter (#715).
     // i18n.js skips <textarea> subtrees (what is typed there is user content),
     // so the placeholder and label are translated here, when the dialog is built.
     const i18n = typeof window !== 'undefined' ? window.CodemanI18n : undefined;

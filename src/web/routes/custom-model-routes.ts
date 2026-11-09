@@ -12,17 +12,34 @@
  * connect time, redirects included — a save-time hostname check alone would
  * let `models.example` resolve to 169.254.169.254 later. The endpoint is
  * admin-configured, so this is defence in depth rather than the only gate.
+ *
+ * Every write of `custom-model-hosts.json` goes through `mutateCustomModelHosts()`
+ * (src/custom-model-hosts-writer.ts): the four writing routes and the re-discovery sweep run
+ * one at a time, each check ("the id is free", "the record still exists") inside the same
+ * serialized step as its write, and a file that does not parse is refused with 409 rather than
+ * overwritten. They used to read, change and write on their own, through one shared temp file
+ * name: a route and the sweep could tear the file, and the next writer then saved a list that
+ * held only its own record.
+ *
+ * The local model install (src/local-model/) keeps ONE record here under a reserved id
+ * (`LOCAL_MODEL_ENDPOINT_ID`). A new endpoint may not take that id. While the record is the
+ * managed one (`isManagedLocalEndpoint()`: the local model state file records it as ours) it
+ * is not edited, deleted or re-discovered from here: its `models` must stay the one model the
+ * install checked, and its `baseUrl` the port of the runtime Codeman supervises. It is changed
+ * and removed through the local model routes.
  */
 
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { ApiErrorCode, createErrorResponse, type ApiResponse } from '../../types.js';
+import { ApiErrorCode, createErrorResponse, LOCAL_MODEL_INSTALL_LABELS, type ApiResponse } from '../../types.js';
 import { isAdmin, parseBody, readJsonConfig, SETTINGS_PATH } from '../route-helpers.js';
 import { isMultiUserMode } from '../../config/multiuser.js';
 import { getDataDir } from '../../config/instance.js';
 import { isBlockedWebviewUrl } from '../webview-egress-policy.js';
 import { egressBlockedReason, webviewFetch } from '../webview-egress.js';
-import { CustomModelHostSchema } from '../schemas.js';
-import { readCustomModelHosts, writeCustomModelHosts, type CustomModelHost } from '../../custom-model-hosts.js';
+import { CustomModelHostSchema, MAX_DISCOVERED_CONTEXT_TOKENS } from '../schemas.js';
+import { readCustomModelHosts, type CustomModelHost } from '../../custom-model-hosts.js';
+import { customModelHostsWriteErrorResponse, mutateCustomModelHosts } from '../../custom-model-hosts-writer.js';
+import { isLocalModelEndpointId, isManagedLocalEndpoint } from '../../local-model/connect.js';
 import type { CliEntry } from '../../config/cli-registry/types.js';
 
 const CODEMAN_CONFIG_DIR = getDataDir();
@@ -158,9 +175,14 @@ function authHeaders(host: Pick<CustomModelHost, 'apiKey' | 'authStyle'>): Recor
 
 export interface DiscoveryResult {
   models: string[];
-  /** See `CustomModelHost.modelContextLengths` — only ever populated for models already loaded. */
+  /**
+   * See `CustomModelHost.modelContextLengths`: populated from a model's own `/v1/models`
+   * entry (`context_length`, else `context_window`) whenever the server states one, and
+   * from the launch command or `/props` for loaded models, which overwrite (and so win
+   * over) any listed figure for the same model.
+   */
   contextLengths: Record<string, number>;
-  /** See `CustomModelHost.modelSlotCounts`; populated on the same loaded-models-only basis as `contextLengths`. */
+  /** See `CustomModelHost.modelSlotCounts`; populated only for models the server reports loaded (launch command or `/props`). No listing states a slot count, unlike `contextLengths`. */
   slotCounts: Record<string, number>;
   /** See `CustomModelHost.modelSizesGB` — populated for every model whose own listing states one. */
   sizesGB: Record<string, number>;
@@ -180,6 +202,20 @@ function parseSizeGB(description: unknown): number | undefined {
   if (!match) return undefined;
   const size = Number(match[1]);
   return Number.isFinite(size) && size > 0 ? size : undefined;
+}
+
+/**
+ * Best-effort: reads a context length (tokens) stated by a model's OWN entry in
+ * `GET /v1/models`. OpenRouter-style servers call the field `context_length`; current
+ * llama-swap sends both `context_length` and `context_window` per model, and current
+ * Bifrost (a gateway in front of llama-swap) passes `context_window` through. Older
+ * servers send neither, and a server that states nothing gets no entry, never a guess.
+ * Non-numeric, zero, negative, fractional or over-the-ceiling values are ignored, the
+ * same rule the stored field's schema enforces: a wrong figure here is worse than none.
+ */
+function parseListedContextLength(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) return undefined;
+  return value <= MAX_DISCOVERED_CONTEXT_TOKENS ? value : undefined;
 }
 
 /**
@@ -312,25 +348,42 @@ async function discoverModels(
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const body = (await res.json()) as {
-    data?: Array<{ id?: unknown; status?: { value?: unknown }; description?: unknown }>;
+    data?: Array<{
+      id?: unknown;
+      status?: { value?: unknown };
+      description?: unknown;
+      context_length?: unknown;
+      context_window?: unknown;
+    }>;
   };
   const entries = body.data ?? [];
   const models = entries.map((m) => m.id).filter((id): id is string => typeof id === 'string' && id.length > 0);
 
   const sizesGB: Record<string, number> = {};
+  // The lowest-precedence context source, and the only one a gateway without /running or
+  // /props of its own (e.g. Bifrost) can offer: the figure a model's own listing states
+  // (`context_length`, else `context_window`). The loaded-model pass below OVERWRITES
+  // these for whatever it reads from the launch command or /props, so precedence per
+  // model stays: `/running` cmd, then `/props`, then this listed figure.
+  const contextLengths: Record<string, number> = {};
   for (const entry of entries) {
     if (typeof entry.id !== 'string' || !entry.id) continue;
     const size = parseSizeGB(entry.description);
     if (size !== undefined) sizesGB[entry.id] = size;
+    const listed = parseListedContextLength(entry.context_length) ?? parseListedContextLength(entry.context_window);
+    if (listed !== undefined) contextLengths[entry.id] = listed;
   }
 
   // llama-swap-specific, feature-detected: a server that never mentions `status` on ANY
-  // entry gets no context-length enrichment at all, rather than treating "no status field"
-  // as "assume unloaded" — either reading is a guess, and skipping is the safe one, since
-  // fetchContextLength must only ever run against a model this server itself calls loaded.
+  // entry gets no launch-command/props context enrichment at all, rather than treating
+  // "no status field" as "assume unloaded"; either reading is a guess, and skipping is
+  // the safe one, since fetchContextLength must only ever run against a model this server
+  // itself calls loaded. Listed figures above are unaffected: reading them triggers nothing.
   const hasStatusField = entries.some((m) => m && typeof m === 'object' && 'status' in m);
-  const contextLengths: Record<string, number> = {};
   const slotCounts: Record<string, number> = {};
+  // Ids whose figure THIS round's loaded-model probe answered: the listed figure remains
+  // the source only for the ids NOT in this set (see the per-slot correction below).
+  const ctxFromProbe = new Set<string>();
   if (hasStatusField) {
     const loadedIds = entries
       .filter((m) => m.status && typeof m.status === 'object' && (m.status as { value?: unknown }).value === 'loaded')
@@ -364,10 +417,29 @@ async function discoverModels(
           // merges onto what was learned before).
           if (cmdSlots !== undefined && ctxFromProps) slots = 1;
         }
-        if (ctx !== undefined) contextLengths[id] = ctx;
+        // Assigning only when a probe answered keeps the listed figure (if any) when
+        // neither the launch command nor /props stated one, and replaces it with the
+        // stronger source whenever they did: cmd > /props > listed, never the reverse.
+        if (ctx !== undefined) {
+          contextLengths[id] = ctx;
+          ctxFromProbe.add(id);
+        }
         if (slots !== undefined) slotCounts[id] = slots;
       }
     }
+  }
+  // llama-swap documents the LISTED `context_length` as the PER-SLOT window, so whenever
+  // the listed figure is the one taken this round (the model was not loaded, or the
+  // probe answered nothing), its slot count is 1 by definition: the floor check must NOT
+  // divide a per-slot figure a second time. Without recording 1 here, the count a loaded
+  // round stored survives the merge (applyDiscoveredModels keeps what a later round does
+  // not overwrite): 262144 @ 4 slots stored, model unloaded, listed 65536 → 65536 with 4
+  // slots → a false 16384-per-slot warning. Even a count this round's launch command
+  // parsed must yield: pairing a per-slot listed figure with the cmd's --parallel is the
+  // same double division. Same rule the /props branch above applies. Ids whose figure the
+  // probe DID answer keep their probe-derived count untouched.
+  for (const id of Object.keys(contextLengths)) {
+    if (!ctxFromProbe.has(id)) slotCounts[id] = 1;
   }
   return { models, contextLengths, slotCounts, sizesGB };
 }
@@ -740,20 +812,30 @@ export async function refreshAllCustomModelHosts(): Promise<void> {
   const hosts = await readCustomModelHosts(dataDir);
   for (const host of hosts) {
     if (isBlockedWebviewUrl(host.baseUrl)) continue;
+    // The local model's own record keeps the one model its install checked: whatever else the
+    // runtime lists (a model somebody pulled through its port) must not become launchable.
+    if (await isManagedLocalEndpoint(host.id)) continue;
     let result: DiscoveryResult;
     try {
       result = await discoverModels(host);
     } catch {
       continue; // unreachable this cycle — try again next tick, not fatal to the sweep
     }
-    // Re-read + splice by id rather than reusing the array captured above: an
-    // admin editing or deleting an endpoint via the API mid-sweep must win,
-    // not be silently overwritten by a refresh that started before their change.
-    const current = await readCustomModelHosts(dataDir);
-    const index = current.findIndex((item) => item.id === host.id);
-    if (index === -1) continue; // deleted mid-sweep
-    current[index] = applyDiscoveredModels(current[index], result);
-    await writeCustomModelHosts(dataDir, current);
+    // Spliced by id inside the serialized writer, onto the list as it is THEN, rather than
+    // the array captured above: an admin editing or deleting an endpoint via the API mid-sweep
+    // must win, not be silently overwritten by a refresh that started before their change.
+    try {
+      await mutateCustomModelHosts<void>((current) => {
+        const index = current.findIndex((item) => item.id === host.id);
+        if (index === -1) return { result: undefined }; // deleted mid-sweep
+        current[index] = applyDiscoveredModels(current[index], result);
+        return { hosts: current, result: undefined };
+      }, dataDir);
+    } catch {
+      // A file that must not be overwritten (it does not parse) refuses every write of this
+      // sweep the same way. The writer logged why; nothing more can be saved this cycle.
+      return;
+    }
   }
 }
 
@@ -842,6 +924,18 @@ export async function detectCustomModelSwapDisplacements(
   return displacements;
 }
 
+/** A write the serialized writer refused (the file does not parse) is 409 with the fix; any other failure stays in the envelope. */
+function refusedHostsWrite(err: unknown, reply: { code: (n: number) => unknown }): ApiResponse<never> {
+  const response = customModelHostsWriteErrorResponse(err);
+  if (!response.success && response.errorCode === ApiErrorCode.CONFLICT) reply.code(409);
+  return response;
+}
+
+/** The answer to an edit or a delete of the record the local model install manages. */
+function managedEndpointRefusal(): ApiResponse<never> {
+  return createErrorResponse(ApiErrorCode.INVALID_INPUT, LOCAL_MODEL_INSTALL_LABELS.endpointManaged);
+}
+
 export function registerCustomModelRoutes(app: FastifyInstance): void {
   app.get('/api/model-endpoints', async (req): Promise<RedactedHost[]> => {
     if (isMultiUserMode() && !isAdmin(req)) return [];
@@ -858,12 +952,19 @@ export function registerCustomModelRoutes(app: FastifyInstance): void {
     }
     const badDefault = invalidDefaultModel(host);
     if (badDefault) return badDefault;
-    const hosts = await readCustomModelHosts(CODEMAN_CONFIG_DIR);
-    if (hosts.some((item) => item.id === host.id)) {
-      return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, 'Model endpoint already exists');
+    if (isLocalModelEndpointId(host.id)) {
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, LOCAL_MODEL_INSTALL_LABELS.endpointIdReserved);
     }
-    await writeCustomModelHosts(CODEMAN_CONFIG_DIR, [...hosts, host]);
-    return { success: true, data: { host: redactApiKey(host) } };
+    try {
+      return await mutateCustomModelHosts<ApiResponse<{ host: RedactedHost }>>((hosts) => {
+        if (hosts.some((item) => item.id === host.id)) {
+          return { result: createErrorResponse(ApiErrorCode.ALREADY_EXISTS, 'Model endpoint already exists') };
+        }
+        return { hosts: [...hosts, host], result: { success: true, data: { host: redactApiKey(host) } } };
+      }, CODEMAN_CONFIG_DIR);
+    } catch (err) {
+      return refusedHostsWrite(err, reply);
+    }
   });
 
   app.put('/api/model-endpoints/:id', async (req, reply): Promise<ApiResponse<{ host: RedactedHost }>> => {
@@ -876,26 +977,37 @@ export function registerCustomModelRoutes(app: FastifyInstance): void {
     }
     const badDefault = invalidDefaultModel(incoming);
     if (badDefault) return badDefault;
-    const hosts = await readCustomModelHosts(CODEMAN_CONFIG_DIR);
-    const index = hosts.findIndex((item) => item.id === id);
-    if (index === -1) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Model endpoint not found');
-    const host = applyDiscoveredFields(applyStoredApiKey(incoming, hosts[index]), hosts[index]);
-    const next = [...hosts];
-    next[index] = host;
-    await writeCustomModelHosts(CODEMAN_CONFIG_DIR, next);
-    return { success: true, data: { host: redactApiKey(host) } };
+    if (await isManagedLocalEndpoint(id)) return managedEndpointRefusal();
+    try {
+      return await mutateCustomModelHosts<ApiResponse<{ host: RedactedHost }>>((hosts) => {
+        const index = hosts.findIndex((item) => item.id === id);
+        if (index === -1) return { result: createErrorResponse(ApiErrorCode.NOT_FOUND, 'Model endpoint not found') };
+        const host = applyDiscoveredFields(applyStoredApiKey(incoming, hosts[index]), hosts[index]);
+        const next = [...hosts];
+        next[index] = host;
+        return { hosts: next, result: { success: true, data: { host: redactApiKey(host) } } };
+      }, CODEMAN_CONFIG_DIR);
+    } catch (err) {
+      return refusedHostsWrite(err, reply);
+    }
   });
 
   app.delete('/api/model-endpoints/:id', async (req, reply): Promise<ApiResponse<{ id: string }>> => {
     const denied = adminOnly(req, reply);
     if (denied) return denied;
     const { id } = req.params as { id: string };
-    const hosts = await readCustomModelHosts(CODEMAN_CONFIG_DIR);
-    await writeCustomModelHosts(
-      CODEMAN_CONFIG_DIR,
-      hosts.filter((item) => item.id !== id)
-    );
-    return { success: true, data: { id } };
+    if (await isManagedLocalEndpoint(id)) return managedEndpointRefusal();
+    try {
+      return await mutateCustomModelHosts<ApiResponse<{ id: string }>>((hosts) => {
+        const next = hosts.filter((item) => item.id !== id);
+        // Nothing to take out: the file is left as it is, and the answer is the same.
+        return next.length === hosts.length
+          ? { result: { success: true, data: { id } } }
+          : { hosts: next, result: { success: true, data: { id } } };
+      }, CODEMAN_CONFIG_DIR);
+    } catch (err) {
+      return refusedHostsWrite(err, reply);
+    }
   });
 
   app.post(
@@ -911,18 +1023,30 @@ export function registerCustomModelRoutes(app: FastifyInstance): void {
       if (isBlockedWebviewUrl(host.baseUrl)) {
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Endpoint base URL is not allowed');
       }
+      // The local model's own record is not probed: it lists the one model its install checked,
+      // and that list is the answer.
+      if (await isManagedLocalEndpoint(id)) return { success: true, data: { models: host.models ?? [] } };
+      let result: DiscoveryResult;
       try {
-        const result = await discoverModels(host);
-        const next = [...hosts];
-        next[index] = applyDiscoveredModels(host, result);
-        await writeCustomModelHosts(CODEMAN_CONFIG_DIR, next);
-        return { success: true, data: { models: result.models } };
+        result = await discoverModels(host);
       } catch (err) {
         const blocked = egressBlockedReason(err);
         return createErrorResponse(
           ApiErrorCode.OPERATION_FAILED,
           blocked ? `Endpoint refused: ${blocked}` : `Could not reach endpoint: ${describeFetchError(err)}`
         );
+      }
+      try {
+        // Onto the record as it is NOW: the probe above took a moment, and an edit made
+        // meanwhile must not be replaced by the copy read before it.
+        return await mutateCustomModelHosts<ApiResponse<{ models: string[] }>>((current) => {
+          const at = current.findIndex((item) => item.id === id);
+          if (at === -1) return { result: createErrorResponse(ApiErrorCode.NOT_FOUND, 'Model endpoint not found') };
+          current[at] = applyDiscoveredModels(current[at], result);
+          return { hosts: current, result: { success: true, data: { models: result.models } } };
+        }, CODEMAN_CONFIG_DIR);
+      } catch (err) {
+        return refusedHostsWrite(err, reply);
       }
     }
   );

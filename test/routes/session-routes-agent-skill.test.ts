@@ -2,8 +2,9 @@
  * @fileoverview Agent-skill injection on POST /api/sessions (docs/agent-control-plan.md §2).
  *
  * The quick-start half of this is covered end-to-end in test/quick-start.test.ts;
- * the plain create path had NO coverage, because the shared mock context hardcoded
- * `getAgentSkillEnabled` to false and nothing could flip it. This exercises the real
+ * the plain create path had NO coverage, because the shared mock context once hardcoded
+ * `getAgentSkillEnabled` to false and nothing could flip it (it now defaults to true,
+ * the shipped default since 1.50.0, and takes an override). This exercises the real
  * `applyAgentSkill` against a temp working dir, so it asserts bytes on disk rather
  * than a spy call.
  *
@@ -81,6 +82,27 @@ describe('POST /api/sessions agent-skill injection', () => {
     // remove what this create wrote.
     expect(skillMd).toContain(MARKER_PREFIX);
     expect(existsSync(join(skillDir(), 'reference', 'endpoints.md'))).toBe(true);
+    // The copy ignores itself, so the default leaves the user's `git status` clean.
+    expect(await readFile(join(skillDir(), '.gitignore'), 'utf-8')).toBe('*\n');
+  });
+
+  it('injects with the shared mock context left at its default (the shipped default is ON)', async () => {
+    const app = Fastify({ logger: false });
+    await app.register(fastifyCookie);
+    const ctx = createMockRouteContext();
+    registerSessionRoutes(app, ctx);
+    installRouteErrorHandler(app);
+    await app.ready();
+    harness = { app, ctx };
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/sessions',
+      payload: { name: 'skill-default', mode: 'claude', workingDir },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(existsSync(join(skillDir(), 'SKILL.md'))).toBe(true);
   });
 
   it('leaves the working dir untouched when the gate is OFF', async () => {

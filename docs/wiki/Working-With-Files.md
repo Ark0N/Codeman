@@ -6,15 +6,25 @@ until you get home.
 
 ## The File Viewer
 
-A panel that browses the active session's working directory. Its header button is on by
-default; if it is missing, re-enable it in **App Settings → Header & Panels**.
+A panel that browses the active session's working directory, or the git worktree its agent
+moved into ([Git Worktrees](Git-Worktrees#when-an-agent-moves-into-a-worktree)). Its header
+button is on by default; if it is missing, re-enable it in **App Settings → Header & Panels**.
+
+The panel and its search list up to 5,000 files and folders per load, shallow levels first and
+taking turns between folders, so one huge folder cannot use up that limit before the ones after it,
+or the folders inside it, get a turn. They also stop opening folders after reading 250,000 entries,
+so a workspace with several enormous folders can still leave later ones unread. When a workspace is
+bigger than either limit the status line says `(truncated)`, and an expanded folder the scan did
+not finish shows **Not fully scanned** rather than looking empty. A folder that does not answer,
+such as a network mount that went away, is skipped rather than waited on and is marked the same way,
+so a search can miss what is inside it. The panel's Refresh button tries it again.
 
 It renders what it can:
 
 | Kind                     | Behaviour                                                                 |
 | ------------------------ | ------------------------------------------------------------------------- |
 | Text and code            | Plain preview with Lines (line numbers) and Wrap toggles in the header. Long files are truncated in plain preview. |
-| Markdown                 | Rendered by default: headings, tables, code blocks with copy buttons, images and links relative to the file (root-relative ones resolve from the workspace root, as on GitHub). Links to another heading of the same file (`[Install](#installation)`) scroll to it, with GitHub's heading names (lower-case, punctuation dropped, repeats numbered `-1`, `-2`), and never leave the page. Opened from an attachment card, where the file's folder is unknown, relative images show their alt text and relative links show as plain text. The MD pill in the header flips to source. |
+| Markdown                 | Rendered by default: headings, tables, code blocks with copy buttons, images and links relative to the file (root-relative ones resolve from the workspace root, as on GitHub; for a file in a worktree beside the workspace that the agent is in, they resolve from the top of that worktree). Links to another heading of the same file (`[Install](#installation)`) scroll to it, with GitHub's heading names (lower-case, punctuation dropped, repeats numbered `-1`, `-2`), and never leave the page. Opened from an attachment card, where the file's folder is unknown, relative images show their alt text and relative links show as plain text. Persian, Arabic and Hebrew read right to left, each block following its own first letter, while code stays left to right. The MD pill in the header flips to source. |
 | Images                   | Inline.                                                                    |
 | Audio and video          | Inline with a working scrub bar, because range requests are supported.     |
 | Spreadsheets (`.xlsx`)   | Read-only grid, parsed in your browser (never on the server), up to 10 MB. `.xls` and `.ods` are download only. |
@@ -87,7 +97,10 @@ detected at once would fork ten multi-minute converter processes.
 
 File paths in a session are links. That works in two places:
 
-- **In the terminal**, on any absolute path an agent prints.
+- **In the terminal**, on any path an agent or a command prints. A relative path (`src/app.ts`,
+  `../notes.md`) resolves against the directory the session's pane is in now, so after a `cd`
+  in a shell it opens the file there; until the pane reports a directory, and always for remote
+  SSH and Docker cases, it resolves against the session's working directory.
 - **In the response viewer**, where paths are usually written as prose or in backticks. They
   render as underlined monospace links. A Markdown link whose target is a path
   (`[report](/tmp/run/report.json)`, the way Codex cites files) opens the same way.
@@ -103,6 +116,8 @@ of an agent's output lands: a screenshot in `/tmp`, a capture in its own scratch
 another checkout. Those are served through the attachment routes rather than the workspace
 ones, so the same rules apply as to any other attachment: secret trees are blocked, the
 extension allowlist decides what can be opened, and symlinks are resolved before either check.
+
+One exception: while the agent works in a worktree of the session's repository beside it (see [Git Worktrees](Git-Worktrees)), a file in that worktree opens through the workspace routes like a workspace file, and you can edit it there. Two things differ from a workspace file: a text file there that you click in the terminal opens in the preview, not the live tail viewer, and secret files such as `.env` there are not served.
 
 Outside the workspace the allowlist is images, video, audio, PDF, Office documents, and text
 files, where "text" is the same list the viewer will let you edit: code, config, logs, csv,
@@ -123,9 +138,11 @@ can send what it can read to any host, open HTML only from sources you trust, as
 your own desktop. The **Page**
 pill in the viewer header switches to the source view (where **Edit** works as for any text
 file), and the viewer falls back to source on its own when a page cannot be rendered: a remote
-(SSH) case, an HTML file inside a hidden folder, or one sitting directly in a broad folder such
-as your home folder or `/tmp` (the page may read the files in its own folder tree, so move it
-into a folder of its own). The raw file routes still serve HTML as a download only.
+(SSH) case, an HTML file inside a hidden folder (which includes `.claude/worktrees/<name>` after
+an agent [moved into a worktree](Git-Worktrees#when-an-agent-moves-into-a-worktree)), or one
+sitting directly in a broad folder such as your home folder or `/tmp` (the page may read the
+files in its own folder tree, so move it into a folder of its own). The raw file routes still
+serve HTML as a download only.
 
 Text previews are capped at the first 500 lines, fetched as a partial read, so clicking a
 one-gigabyte log does not try to paint one.
@@ -144,8 +161,8 @@ session uses: one `realpath` plus `stat` probe for the file and the workspace ro
 streamed `cat` (or a slice of it, so video seeking works). Symlinks are resolved on the host
 that can resolve them, the size cap applies to the remote size before a byte is requested,
 and an unreachable host answers 502 rather than pretending the file is missing. Nothing is
-ever copied onto the Codeman host, and a same-named local file is never served under a
-remote name.
+ever copied onto the Codeman host, apart from the diffs the [edit history](#edit-history)
+stores, and a same-named local file is never served under a remote name.
 
 Not available over ssh, and said so with a 400 instead of a misleading 404: editing in
 place, Office previews and generated thumbnails (both need the bytes on the server's disk),
@@ -154,25 +171,38 @@ their workspace is bind-mounted at the same path.
 
 ## The path picker
 
-For choosing a path rather than typing one. It appears in two places:
+For choosing a path rather than typing one. It appears in these places:
 
 - **Browse** in **Add Case → Link Existing**.
+- **Browse** in **Add Case → Create New**, under **Create in a custom folder**.
+- **Browse** in **Add Case → Clone Repo**, under **Clone into a custom folder**.
+- **Browse** on the folder fields of **Add Case → Docker**.
 - The **📁 Path** key on the mobile keyboard bar.
 
-It browses one directory at a time and can show hidden entries on request. The current
-folder is an editable field: type or paste a path and press Enter (or **Go**) to jump
-straight there, and a full file path lands in its folder with that file selected. The
-**Sort** control orders each listing by name or by modified time (newest first is the
-quick way to the file an agent just wrote), with folders always ahead of files; the
-choice is remembered per device. The picker inserts the path into your prompt
-**without** pressing Enter, so nothing is submitted by accident. Its sibling **⌫ All**
-key clears the unsent prompt, and never sends the agent's `/clear` command.
+It browses one directory at a time and can show hidden entries on request (the Docker
+**Container Workdir** picker always lists them). The current folder is an editable
+field: type or paste a path and press Enter (or **Go**) to jump straight there, and a
+full file path lands in its folder with that file selected. The **Sort** control orders
+each listing by name or by modified time (newest first is the quick way to the file an
+agent just wrote), with folders always ahead of files; the choice is remembered per
+device. A **Browse** button fills the field beside it. The **📁 Path** key inserts the
+path into your prompt **without** pressing Enter, so nothing is submitted by accident.
+Its sibling **⌫ All** key clears the unsent prompt, and never sends the agent's `/clear`
+command.
+
+In the **Link Existing**, **Create New** (custom folder) and **Clone Repo** (custom folder)
+pickers, **+📁** (New folder) makes a folder inside the folder you are viewing and selects
+it. Names use letters, numbers, spaces and `_ - . ~` (not starting with a dot or `~`). The
+cases folder is refused, since every folder there is already a case: pick a folder outside
+it, or make the case with **Add Case → Create New** or **Clone Repo** (no custom folder).
 
 This is a separate file-serving surface from the viewer, with its own rules: it allowlists
 your home directory, the cases directory, and anything in `CODEMAN_FILE_PICKER_ROOTS`, and
 blocks sensitive trees. In multi-user mode a non-admin gets only their own user space as a
 root, because per-user spaces live inside the home directory and a home-directory root would
-expose everyone.
+expose everyone. The Docker **Container Workdir** picker lists the inside of the container
+instead, read-only, so these host rules do not apply to it; it is admin-only in multi-user
+mode.
 
 ## Files into a session
 
@@ -271,6 +301,69 @@ BatchMode stops a prompt, not a write. The
 data comes from `GET /api/sessions/:id/git-status`, `GET /api/sessions/:id/git-diff` and, on that
 click or the interval you turned on, `POST /api/sessions/:id/git-fetch`
 (see the [API reference](https://github.com/Ark0N/Codeman/blob/master/docs/api-reference.md)).
+
+## Edit history
+
+The Git panel shows what is different now. The edit history shows what the agent did, one edit
+at a time, including edits that were later undone or committed. Turn on **App Settings → Header &
+Panels → Header → Edit history** (per device, off by default) and a clock button appears in the
+header next to Attachments. It is not shown on phones.
+
+Click it for a draggable window listing the active session's edits, newest first:
+
+- One row per Edit or Write, with `new` for a file the agent created, `edit` otherwise,
+  and the lines added and removed. **Click a row** to see that edit's diff inline, coloured like the
+  Git panel; a diff over 64 KB is cut short. **Click the path** to open the file in the preview.
+- Edits made by subagents carry a chip with the subagent's task; hover it for the agent type and
+  its worktree branch. **Main agent only** hides them. **Group by file** puts the edits under
+  their file, with the totals on the file's row.
+- Images an agent produced with a shell command (a render, a plot, a screenshot) appear as rows with
+  a thumbnail: a `.png`, `.jpg`, `.gif`, `.webp`, `.avif` or `.svg` path named in the command or
+  its output counts when the file's modification time falls within that command's run. Images the
+  agent sent you count as well. Images outside the workspace and SVGs show no thumbnail. Click one
+  to open it in the preview.
+- **Load older** reads further back in the conversation, in the main agent's transcript and the
+  subagents' alike (up to three transcripts per click; with more, they take turns).
+- After `/clear` or a resume, the edits of the earlier conversation stay listed, and the window
+  first catches up on the ones it had not read yet. **Load older** then goes back within the new
+  conversation.
+
+It works for Claude sessions, local and remote (SSH). Docker sessions, other CLIs' sessions and
+tmux sessions opened outside Codeman say so instead.
+A remote session's images show no thumbnail (each would be one more SSH read); click one to
+preview it. A remote host that is asleep is never woken for the history: the window shows the
+stored edits with the SSH error on top.
+
+How it reads:
+
+- **Only while you look.** The history is read from the session's Claude transcript when you open
+  the window, and again after each tool call that can change files and at the end of each turn,
+  while it stays open on that session (a remote session at the end of each turn only: its host
+  sends no tool events). A closed window reads nothing, and Codeman does no work in the
+  background for sessions nobody looks at.
+- **The transcript is found through the session's hooks.** Each prompt tells Codeman where the
+  session's transcript is. Right after a server restart, before the next prompt, Codeman looks in
+  the session's `CLAUDE_CONFIG_DIR` if you set one for it in Codeman, else in the default config
+  directory. A `CLAUDE_CONFIG_DIR` set outside Codeman (in a shell profile or a wrapper script)
+  is only known after the next prompt; until then the window says "No transcript found for this
+  session yet". A remote session's transcript is looked up on its host over SSH: the
+  conversation its Claude writes now, else the most recently written of the one the window
+  showed last and the session's own, under the remote user's `~/.claude`, or under
+  `CLAUDE_CONFIG_DIR` when the host sets it for every SSH command (`.zshenv`,
+  `/etc/environment`); one set only in `.profile`, `.bash_profile` or `.zshrc` is not seen.
+- **The history is stored, and it holds secrets.** Every diff an agent wrote is copied to
+  `~/.codeman/edit-history/<session-id>.json`, including API keys or `.env` contents it edited. The file is
+  readable by your user only, capped at 500 edits and 4 MiB of diff text per session (the oldest
+  are dropped), never part of search, blocked from every file route, and deleted when you delete
+  the session (a file left behind, by a crash for instance, goes at the next start). A pinned session you kill keeps its record and its history until you unpin and
+  delete it.
+- **Images go through the existing file routes.** A thumbnail inside the workspace uses the File
+  Viewer's route. An image outside it opens like any clicked path outside the workspace (no
+  notification, same file-type allowlist and sensitive-file blocklist). No new route serves a file.
+
+The data comes from `GET /api/sessions/:id/edits`, `GET /api/sessions/:id/edits/:entryId` and
+`POST /api/sessions/:id/edits/older` (see the
+[API reference](https://github.com/Ark0N/Codeman/blob/master/docs/api-reference.md)).
 
 ## Gotchas
 

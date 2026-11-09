@@ -12,9 +12,13 @@
 
 import { describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { STOCK_CLIS } from '../src/config/cli-registry/stock.js';
+import { CLI_INSTALLED_MARKER } from '../src/utils/cli-executable-resolver.js';
+import { ARCHIVE_INSTALL_MARKER } from '../src/web/self-update.js';
 
 const INSTALL_SH = fileURLToPath(new URL('../install.sh', import.meta.url));
 const SOURCE = readFileSync(INSTALL_SH, 'utf-8');
@@ -369,6 +373,396 @@ describe('install.sh AI CLI install menu', () => {
   });
 });
 
+describe('install.sh --ai-cli answers the menu up front', () => {
+  // The desktop app installs with no terminal, so the agent is chosen in its window and
+  // arrives as a flag. Everything here runs the real functions in a real bash, with
+  // detection pointed at nothing, every trusted command rewritten to record which entry
+  // ran, and no tty, which is what the app's child process has.
+  const DRIVER = `
+    set -euo pipefail
+    export CODEMAN_INSTALL_SH_LIB=1
+    . "$1"
+    set +e
+    parse_flags "\${@:2}" || exit 9
+    set -e
+    k=0; while [[ $k -lt \${#CLI_ALL_BINS[@]} ]]; do CLI_ALL_BINS[$k]="codeman-test-no-such-bin-$k"; k=$((k + 1)); done
+    k=0; while [[ $k -lt \${#CLI_ALL_PATHS[@]} ]]; do CLI_ALL_PATHS[$k]="/nonexistent/codeman-test/$k"; k=$((k + 1)); done
+    k=0; while [[ $k -lt \${#CLI_INSTALL_CMD_TRUSTED[@]} ]]; do
+      if [[ -n "\${CLI_INSTALL_CMD_TRUSTED[$k]}" ]]; then
+        if [[ "\${KEEP_BREW:-}" == "1" && "\${CLI_INSTALL_CMD_TRUSTED[$k]}" == brew\\ * ]]; then :; else
+          CLI_INSTALL_CMD_TRUSTED[$k]="echo RAN=\${CLI_IDS[$k]}"
+        fi
+      fi
+      k=$((k + 1))
+    done
+    CLI_DETECT_DONE=""
+    detect_all_clis
+    NONINTERACTIVE=\${FORCE_NONINTERACTIVE:-0}
+    DOWNLOADER=curl
+    has_tty() { return 1; }
+    offer_ai_cli_install
+    echo "REACHED THE STEP AFTER THE MENU"
+  `;
+
+  function drive(args: string[], env: Record<string, string> = {}) {
+    const result = spawnSync('bash', ['-c', DRIVER, 'bash', INSTALL_SH, ...args], {
+      encoding: 'utf-8',
+      timeout: 30_000,
+      env: { ...process.env, ...env },
+    });
+    const stdout = result.stdout ?? '';
+    // Anchored: the skip hints print each command's text, so `echo RAN=x` there ran nothing.
+    const ran = [...stdout.matchAll(/^RAN=(.+)$/gm)].map((m) => m[1]);
+    return { status: result.status, stdout, stderr: result.stderr ?? '', ran };
+  }
+
+  it('none installs nothing and carries on, even with CODEMAN_NONINTERACTIVE', () => {
+    const run = drive(['--ai-cli', 'none'], { FORCE_NONINTERACTIVE: '1' });
+    expect(run.stdout, run.stderr).toContain('REACHED THE STEP AFTER THE MENU');
+    expect(run.ran).toEqual([]);
+    expect(run.stderr).toContain('Skipping AI CLI install');
+  });
+
+  it('a named CLI runs that entry and no other, without the menu and without a terminal', () => {
+    const run = drive(['--ai-cli=codex']);
+    expect(run.ran).toEqual(['codex']);
+    expect(run.stdout).not.toContain('Which AI CLI');
+    expect(run.status).toBe(1); // The stand-in command leaves no binary: the gate below still holds.
+    expect(run.stderr).toContain('The selected AI CLI failed to install');
+  });
+
+  it('takes the same answer from CODEMAN_AI_CLI', () => {
+    expect(drive([], { CODEMAN_AI_CLI: 'gemini' }).ran).toEqual(['gemini']);
+  });
+
+  it('a CLI this host cannot install warns and carries on, never installing another', () => {
+    const run = drive(['--no-admin', '--ai-cli', 'omp'], { KEEP_BREW: '1' });
+    if (process.platform === 'darwin') {
+      expect(run.ran).toEqual([]);
+      expect(run.stderr).toContain('omp cannot be installed automatically here');
+      expect(run.stdout).toContain('REACHED THE STEP AFTER THE MENU');
+    } else {
+      expect(run.ran).toEqual(['omp']); // Linux installs omp with curl, not brew.
+    }
+  });
+
+  it('deepseek has no command to run, so it warns and carries on', () => {
+    const run = drive(['--ai-cli', 'deepseek']);
+    expect(run.ran).toEqual([]);
+    expect(run.stderr).toContain('deepseek cannot be installed automatically here');
+    expect(run.stdout).toContain('REACHED THE STEP AFTER THE MENU');
+  });
+
+  it.each([['cluade'], ['shell'], ['--yes']])('refuses %s before anything runs', (id) => {
+    const run = drive([`--ai-cli=${id}`]);
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toContain('Unknown AI CLI');
+    expect(run.ran).toEqual([]);
+  });
+
+  it('a bare run with no terminal and no answer is still refused by the guard', () => {
+    const run = drive([]);
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain('No interactive terminal');
+    expect(run.ran).toEqual([]);
+  });
+});
+
+describe('install.sh preflight', () => {
+  function preflight(args: string[], env: Record<string, string> = {}) {
+    const home = mkdtempSync(join(tmpdir(), 'codeman-preflight-'));
+    try {
+      const result = spawnSync('bash', [INSTALL_SH, 'preflight', ...args], {
+        encoding: 'utf-8',
+        timeout: 30_000,
+        env: { ...process.env, HOME: home, ...env },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      return { stdout: result.stdout, home };
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  }
+
+  it('prints one JSON object in the shape the desktop app reads', () => {
+    const { stdout } = preflight(['--no-admin']);
+    const found = JSON.parse(stdout);
+    expect(found.schema).toBe(1);
+    expect(found.noAdmin).toBe(true);
+    expect(typeof found.blocker).toBe('string');
+    expect(Object.keys(found.needs).sort()).toEqual(['git', 'node', 'tmux']);
+    for (const key of ['node', 'tmux', 'git']) expect(typeof found.needs[key]).toBe('boolean');
+    // Exactly what src/gui_install.rs deserializes, or the app calls the answer unreadable.
+    for (const cli of found.clis) {
+      expect(Object.keys(cli).sort()).toEqual(['docs', 'id', 'installable', 'installed', 'label']);
+    }
+  });
+
+  it('lists every agent of the catalogue, in its order, and never the shell', () => {
+    const ids = JSON.parse(preflight(['--no-admin']).stdout).clis.map((c: { id: string }) => c.id);
+    const agents = STOCK_CLIS.filter((c) => c.discovery.binaries.length > 0).sort((a, b) => a.order - b.order);
+    expect(ids).toEqual(agents.map((c) => c.id));
+  });
+
+  it('never calls an installed CLI installable, and agrees with the menu on the rest', () => {
+    for (const cli of JSON.parse(preflight(['--no-admin']).stdout).clis) {
+      if (cli.installed) expect(cli.installable, cli.id).toBe(false);
+    }
+    const deepseek = JSON.parse(preflight(['--no-admin']).stdout).clis.find((c: { id: string }) => c.id === 'deepseek');
+    if (!deepseek.installed) expect(deepseek.installable).toBe(false); // A launcher alone cannot drive a pane.
+  });
+
+  it('writes nothing into the home folder', () => {
+    const home = mkdtempSync(join(tmpdir(), 'codeman-preflight-'));
+    try {
+      const result = spawnSync('bash', [INSTALL_SH, 'preflight', '--no-admin'], {
+        encoding: 'utf-8',
+        timeout: 30_000,
+        env: { ...process.env, HOME: home },
+      });
+      expect(result.status).toBe(0);
+      expect(readdirSync(home)).toEqual([]);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('json_string survives what a path or a message can hold', () => {
+    const driver = `
+      export CODEMAN_INSTALL_SH_LIB=1
+      . "$1"
+      set +e
+      json_string "$2"
+    `;
+    const text = 'quote " back\\slash tab\t line\nfeed bell\u0007 é ✓';
+    const result = spawnSync('bash', ['-c', driver, 'bash', INSTALL_SH, text], { encoding: 'utf-8', timeout: 30_000 });
+    expect(JSON.parse(result.stdout)).toBe(text.replace('\u0007', ''));
+  });
+});
+
+describe('install.sh agent, one AI CLI and nothing else', () => {
+  // The real subcommand in a real bash, with detection pointed at nothing and every
+  // trusted command rewritten: LEAVES names the binary a stand-in install leaves
+  // behind (on PATH, in the run's own folder), FOUND is a CLI already here.
+  const DRIVER = `
+    set -euo pipefail
+    export CODEMAN_INSTALL_SH_LIB=1
+    . "$1"
+    set +e
+    parse_flags "\${@:2}" || exit 9
+    set -e
+    bin=$(mktemp -d); trap 'rm -rf "$bin"' EXIT; export PATH="$bin:$PATH"
+    k=0; while [[ $k -lt \${#CLI_ALL_BINS[@]} ]]; do CLI_ALL_BINS[$k]="codeman-test-no-such-bin-$k"; k=$((k + 1)); done
+    k=0; while [[ $k -lt \${#CLI_ALL_PATHS[@]} ]]; do CLI_ALL_PATHS[$k]="/nonexistent/codeman-test/$k"; k=$((k + 1)); done
+    k=0; while [[ $k -lt \${#CLI_INSTALL_CMD_TRUSTED[@]} ]]; do
+      if [[ "\${KEEP_COMMANDS:-}" != "1" && -n "\${CLI_INSTALL_CMD_TRUSTED[$k]}" ]]; then
+        CLI_INSTALL_CMD_TRUSTED[$k]="echo RAN=\${CLI_IDS[$k]}; if [[ \${CLI_IDS[$k]} == \\"\${LEAVES:-}\\" ]]; then printf '#!/bin/sh\\n' > $bin/codeman-test-left-$k; chmod +x $bin/codeman-test-left-$k; fi"
+      fi
+      if [[ "\${CLI_IDS[$k]}" == "\${FOUND:-}" ]]; then
+        printf '#!/bin/sh\n' > "$bin/codeman-test-found"; chmod +x "$bin/codeman-test-found"
+        off=\${CLI_BIN_OFF[$k]}; CLI_ALL_BINS[$off]=codeman-test-found
+      fi
+      if [[ "\${CLI_IDS[$k]}" == "\${LEAVES:-}" ]]; then
+        off=\${CLI_BIN_OFF[$k]}; CLI_ALL_BINS[$off]=codeman-test-left-$k
+      fi
+      k=$((k + 1))
+    done
+    if [[ -n "\${NO_NPM:-}" ]]; then check_npm() { return 1; }; fi
+    CLI_DETECT_DONE=""
+    agent_subcommand
+    echo "REACHED THE END"
+  `;
+
+  function agent(args: string[], env: Record<string, string> = {}) {
+    const result = spawnSync('bash', ['-c', DRIVER, 'bash', INSTALL_SH, ...args], {
+      encoding: 'utf-8',
+      timeout: 30_000,
+      env: { ...process.env, CODEMAN_PROGRESS: '', ...env },
+    });
+    const stdout = result.stdout ?? '';
+    const stderr = result.stderr ?? '';
+    return { status: result.status, stdout, stderr, ran: [...stdout.matchAll(/^RAN=(.+)$/gm)].map((m) => m[1]) };
+  }
+
+  /** The same, in a home folder of its own, reporting whether the marker was written. */
+  function agentInHome(args: string[], env: Record<string, string> = {}) {
+    const home = mkdtempSync(join(tmpdir(), 'codeman-agent-marker-'));
+    try {
+      mkdirSync(join(home, '.codeman'));
+      const run = agent(args, { HOME: home, ...env });
+      return { ...run, marked: existsSync(join(home, '.codeman', CLI_INSTALLED_MARKER)) };
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  }
+
+  it('tells a running server when the agent landed, and only then', () => {
+    expect(agentInHome(['--ai-cli', 'codex', '--no-admin'], { LEAVES: 'codex' }).marked).toBe(true);
+    expect(agentInHome(['--ai-cli', 'codex', '--no-admin']).marked).toBe(false);
+    // Installed by hand a minute ago, and the server may still remember it as missing.
+    expect(agentInHome(['--ai-cli', 'codex', '--no-admin'], { FOUND: 'codex' }).marked).toBe(true);
+  });
+
+  it('a home folder with no Codeman in it is no failure', () => {
+    const home = mkdtempSync(join(tmpdir(), 'codeman-agent-marker-'));
+    try {
+      const run = agent(['--ai-cli', 'codex', '--no-admin'], { HOME: home, LEAVES: 'codex' });
+      expect(run.status, run.stderr).toBe(0);
+      expect(readdirSync(home)).toEqual([]);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('writes the file the server reads', () => {
+    expect(SOURCE).toContain(`"$HOME/.codeman/${CLI_INSTALLED_MARKER}"`);
+  });
+
+  it('installs the one it was told to, and says done', () => {
+    const run = agent(['--no-admin', '--progress', '--ai-cli', 'codex'], { LEAVES: 'codex' });
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.ran).toEqual(['codex']);
+    expect(run.stderr).toContain('@@codeman phase agent');
+    expect(run.stderr).toContain('@@codeman phase done');
+  });
+
+  it('never says done when that agent did not land, even with another one here', () => {
+    const run = agent(['--no-admin', '--progress', '--ai-cli', 'codex'], { FOUND: 'copilot' });
+    expect(run.ran).toEqual(['codex']);
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain('@@codeman error Codex did not install.');
+    expect(run.stderr).not.toContain('@@codeman phase done');
+    expect(run.stdout).not.toContain('REACHED THE END');
+  });
+
+  it('says the same with no other agent here, the way a Mac is after Skip for now', () => {
+    const run = agent(['--no-admin', '--progress', '--ai-cli', 'codex']);
+    expect(run.ran).toEqual(['codex']);
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain('@@codeman error Codex did not install.');
+    expect(run.stderr).not.toContain('re-run the installer');
+    expect(run.stderr).not.toContain('@@codeman phase done');
+  });
+
+  it('installs nothing for an agent that is here already, and that is a success', () => {
+    const run = agent(['--no-admin', '--progress', '--ai-cli', 'codex'], { FOUND: 'codex' });
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.ran).toEqual([]);
+    expect(run.stderr).toContain('@@codeman phase done');
+  });
+
+  it('names what is wrong when npm cannot be found, before running anything', () => {
+    const run = agent(['--no-admin', '--progress', '--ai-cli', 'codex'], { KEEP_COMMANDS: '1', NO_NPM: '1' });
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain('Codex installs with npm, and this run cannot find it');
+    expect(run.stderr).toContain('npm install -g @openai/codex');
+    expect(run.stderr).not.toContain('@@codeman phase done');
+  });
+
+  it('refuses an agent it cannot install, and installs no other in its place', () => {
+    const run = agent(['--no-admin', '--progress', '--ai-cli', 'deepseek'], { KEEP_COMMANDS: '1' });
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain('DeepSeek cannot be installed automatically here');
+    expect(run.stderr).not.toContain('@@codeman phase done');
+  });
+
+  it('it takes the name as a plain word, as a person would type it', () => {
+    const driver = `
+      export CODEMAN_INSTALL_SH_LIB=1
+      . "$1"
+      set +e
+      parse_flags "\${@:2}" || exit 9
+      echo "sub=$SUBCOMMAND cli=$AI_CLI_CHOICE"
+    `;
+    const parsed = (...args: string[]) =>
+      spawnSync('bash', ['-c', driver, 'bash', INSTALL_SH, ...args], { encoding: 'utf-8', timeout: 30_000 });
+    expect(parsed('agent', 'codex', '--no-admin').stdout).toContain('sub=agent cli=codex');
+    expect(parsed('agent', '--ai-cli', 'codex').stdout).toContain('sub=agent cli=codex');
+    expect(parsed('agent', 'codx').stderr).toContain('Unknown AI CLI: codx');
+    expect(parsed('agent', 'shell').stderr).toContain('Unknown AI CLI: shell');
+    expect(parsed('agent', 'codex', 'copilot').stderr).toContain('Unexpected argument: copilot');
+    expect(parsed('codex').stderr).toContain('Unexpected argument: codex');
+  });
+
+  it('wants a name, and none is not one', () => {
+    expect(agent([]).stderr).toContain('Name the AI CLI to install');
+    expect(agent(['--ai-cli', 'none']).stderr).toContain('Name the AI CLI to install');
+  });
+
+  it('leaves Codeman alone: nothing in it touches the service, the source or the build', () => {
+    const body = SOURCE.slice(
+      SOURCE.indexOf('\nagent_subcommand() {'),
+      SOURCE.indexOf('\n# Offer to install one AI CLI')
+    );
+    for (const word of ['launchctl', 'systemctl', 'setup_launchd', 'install_or_update_repo', 'npm run', 'sudo']) {
+      expect(body, word).not.toContain(word);
+    }
+    expect(body).toContain('run_offered_cli "$idx"');
+  });
+});
+
+describe('install.sh --progress, the protocol the desktop app reads', () => {
+  const CONNECT_HTML = readFileSync(
+    fileURLToPath(new URL('../packages/desktop/assets/connect.html', import.meta.url)),
+    'utf-8'
+  );
+
+  function mainBody() {
+    const start = SOURCE.indexOf('main() {');
+    const end = SOURCE.indexOf('# Phase 0: look', start);
+    return SOURCE.slice(start, end);
+  }
+
+  it('reports its phases in the order the app draws them, ending on done', () => {
+    const phases = [...mainBody().matchAll(/^\s*progress_phase (\w+)$/gm)].map((m) => m[1]);
+    const drawn = /var PHASES = \[([^\]]*)\]/.exec(CONNECT_HTML)?.[1].match(/\w+/g);
+    expect(phases).toEqual([...(drawn ?? []), 'done']);
+  });
+
+  it('reports done after the service step and before a foreground start replaces the shell', () => {
+    const main = mainBody();
+    expect(main.indexOf('progress_phase done')).toBeGreaterThan(main.indexOf('print_done_screen'));
+    expect(main.indexOf('progress_phase done')).toBeLessThan(main.indexOf('exec node'));
+  });
+
+  function driveProtocol(env: Record<string, string>) {
+    const driver = `
+      export CODEMAN_INSTALL_SH_LIB=1
+      . "$1"
+      set +e
+      progress_phase build
+      error "first
+second"
+    `;
+    return spawnSync('bash', ['-c', driver, 'bash', INSTALL_SH], {
+      encoding: 'utf-8',
+      timeout: 30_000,
+      env: { ...process.env, ...env },
+    });
+  }
+
+  it('prints protocol lines on stderr, one line each, so a $( ) capture stays clean', () => {
+    const run = driveProtocol({ CODEMAN_PROGRESS: '1' });
+    expect(run.stdout).toBe('');
+    expect(run.stderr).toContain('@@codeman phase build\n');
+    expect(run.stderr).toContain('@@codeman error first second\n');
+  });
+
+  it('says nothing of it to a person at a terminal', () => {
+    expect(driveProtocol({ CODEMAN_PROGRESS: '0' }).stderr).not.toContain('@@codeman');
+  });
+
+  it('never prints the password', () => {
+    expect(mainBody()).not.toMatch(/progress_phase.*PASSWORD/);
+    expect(fnBody('error')).not.toMatch(/PASSWORD/);
+  });
+
+  function fnBody(name: string) {
+    const start = SOURCE.indexOf(`${name}() {`);
+    return SOURCE.slice(start, SOURCE.indexOf('\n}\n', start));
+  }
+});
+
 describe('install.sh detect_all_clis and a disabled entry', () => {
   // No stock entry ships disabled today, so this is characterization rather than a regression
   // pin on real data: it drives the real function in a real bash with entry 0 fabricated
@@ -535,4 +929,575 @@ describe('install.sh review fixes for #460', () => {
 it('install.sh never contains the unauthenticated tunnel opt-in', () => {
   expect(SOURCE).not.toContain('CODEMAN_ALLOW_UNAUTHENTICATED_TUNNEL');
   expect(SOURCE).not.toContain('--allow-unauthenticated-tunnel');
+});
+
+describe('install.sh no-admin route', () => {
+  // The route that installs without administrator rights: Node.js and tmux are downloaded
+  // into the home folder, and a machine with no working git gets the source as an archive.
+  // What can go wrong here is quiet: a sudo prompt that cannot succeed, a binary unpacked
+  // before its checksum was checked, Apple's git stub opening a dialog. So each is pinned.
+  const fn = (name: string, until: string) => {
+    const start = SOURCE.indexOf(`${name}() {`);
+    expect(start, `${name}() missing`).toBeGreaterThan(-1);
+    const end = SOURCE.indexOf(until, start);
+    expect(end, `${until} missing after ${name}()`).toBeGreaterThan(start);
+    return SOURCE.slice(start, end);
+  };
+  const sectionStart = SOURCE.indexOf('# No-admin route: everything into the home folder');
+  const sectionEnd = SOURCE.indexOf('# ---- End of the no-admin route');
+  const section = SOURCE.slice(sectionStart, sectionEnd);
+  const sectionCode = section.split('\n').filter((line) => !/^\s*#/.test(line));
+
+  /** Run a snippet with install.sh sourced as a library, in a real bash. */
+  const drive = (script: string, env: NodeJS.ProcessEnv = {}) => {
+    const clean = { ...process.env, ...env };
+    for (const key of ['CODEMAN_NO_ADMIN', 'CODEMAN_TARBALL_URL', 'CODEMAN_REPO_URL', 'CODEMAN_BRANCH']) {
+      if (!(key in env)) delete clean[key];
+    }
+    const full = `set -euo pipefail\nexport CODEMAN_INSTALL_SH_LIB=1\n. "$1"\n${script}`;
+    return spawnSync('bash', ['-c', full, 'bash', INSTALL_SH], { encoding: 'utf-8', timeout: 30_000, env: clean });
+  };
+
+  it('has its section markers, in order', () => {
+    expect(sectionStart).toBeGreaterThan(-1);
+    expect(sectionEnd).toBeGreaterThan(sectionStart);
+    expect(sectionCode.length).toBeGreaterThan(100);
+  });
+
+  it('never runs sudo, Homebrew or the Xcode tools installer', () => {
+    // Command position only: the messages in this section name `brew install tmux` and
+    // `apt-get install` as things an administrator can run, which is prose.
+    const banned =
+      /(?:^|[;&|]|\b(?:if|then|else|do|while|until)\s|!\s)\s*(?:sudo|brew|ensure_sudo|run_as_root|ensure_homebrew|sudo_session_start|sudo_session_try)\b/;
+    const offenders = sectionCode.filter((line) => banned.test(line) || /xcode-select\s+--install/.test(line));
+    expect(offenders, `privileged call on the no-admin route:\n  ${offenders.join('\n  ')}`).toEqual([]);
+  });
+
+  it('pins a SHA-256 for every tmux build it can download', () => {
+    const digests = fn('tmux_build_sha256', '\n}\n');
+    for (const platform of ['linux-x86_64', 'linux-arm64', 'macos-arm64', 'macos-x86_64']) {
+      expect(digests, `no digest for ${platform}`).toMatch(new RegExp(`${platform}\\)\\s+printf '[0-9a-f]{64}'`));
+      // Every platform the name mapper can produce has a digest, and nothing else does.
+      expect(fn('userspace_tmux_platform', '\n}\n')).toContain(`printf '${platform}'`);
+    }
+    expect(digests.match(/[0-9a-f]{64}/g)?.length).toBe(4);
+    // The asset name and URL are built from the same version the digests were taken for.
+    const install = fn('install_tmux_userspace', '\n}\n');
+    expect(install).toContain('name="tmux-$TMUX_BUILD_VERSION-$platform.tar.gz"');
+    expect(install).toContain('tmux-builds/releases/download/v$TMUX_BUILD_VERSION/$name');
+  });
+
+  it('checks a download before unpacking or running it', () => {
+    for (const name of ['install_node_userspace', 'install_tmux_userspace']) {
+      const body = fn(name, '\n}\n');
+      const verify = body.indexOf('verify_sha256 "$tmp/$name" "$sha"');
+      expect(verify, `${name} never verifies its download`).toBeGreaterThan(-1);
+      expect(body.indexOf('tar -xzf'), `${name} unpacks before verifying`).toBeGreaterThan(verify);
+    }
+    // An empty expected digest must never pass (a lookup that came back with nothing).
+    expect(fn('verify_sha256', '\n}\n')).toContain('[[ -n "$want" ]] || return 1');
+  });
+
+  it('never executes /usr/bin/git on a Mac before the developer tools are proven', () => {
+    // Without the Command Line Tools that path is a stub that opens Apple's install dialog.
+    const body = fn('check_git', '\n}\n');
+    const apple = body.indexOf('"$git_bin" == "/usr/bin/git"');
+    const gate = body.indexOf('xcode-select -p');
+    const run = body.indexOf('"$git_bin" --version');
+    expect(apple).toBeGreaterThan(-1);
+    expect(gate).toBeGreaterThan(apple);
+    // The Apple branch returns on its own evidence; only other gits are executed.
+    expect(body.slice(gate, run)).toMatch(/\n\s+return 1\n\s+fi\n/);
+  });
+
+  it('judges git by whether it runs', () => {
+    const result = drive(`
+      bin=$(mktemp -d); trap 'rm -rf "$bin"' EXIT
+      printf '#!/bin/sh\\nexit 127\\n' > "$bin/git"; chmod +x "$bin/git"
+      PATH="$bin:$PATH"; hash -r
+      check_git && echo "broken=present" || echo "broken=missing"
+      printf '#!/bin/sh\\nexit 0\\n' > "$bin/git"
+      check_git && echo "working=present" || echo "working=missing"
+      # A Mac whose only git is Apple's stub, with and without the developer tools.
+      uname() { echo Darwin; }
+      command() { if [[ "$1" == "-v" && "$2" == "git" ]]; then echo /usr/bin/git; else builtin command "$@"; fi; }
+      xcode-select() { return 2; }
+      check_git && echo "stub=present" || echo "stub=missing"
+      mkdir -p "$bin/dev/usr/bin"; cp "$bin/git" "$bin/dev/usr/bin/git"
+      xcode-select() { echo "$bin/dev"; }
+      check_git && echo "tools=present" || echo "tools=missing"
+    `);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain('broken=missing');
+    expect(result.stdout).toContain('working=present');
+    expect(result.stdout).toContain('stub=missing');
+    expect(result.stdout).toContain('tools=present');
+  });
+
+  it('decides the route from what the account may do, without asking for a password', () => {
+    // `sudo -v` would prompt, and a refused password is reported to the administrator.
+    expect(fn('resolve_admin_mode', '\n}\n')).not.toMatch(/sudo -v/);
+    const result = drive(`
+      [[ $EUID -ne 0 ]] || { echo "skipped=root"; exit 0; }
+      has_sudo=1
+      command() { if [[ "$1" == "-v" && "$2" == "sudo" ]]; then [[ "$has_sudo" == "1" ]]; elif [[ "$1" == "-v" && "$2" == "brew" ]]; then return 1; else builtin command "$@"; fi; }
+      groups="users"; id() { echo "$groups"; }
+      sudo_ok=1; sudo() { return "$sudo_ok"; }
+      probe() { NO_ADMIN="$1"; NO_ADMIN_REASON=""; resolve_admin_mode; echo "$2=$NO_ADMIN"; }
+      uname() { echo Linux; }
+      has_sudo=0; probe "" linux_no_sudo; has_sudo=1
+      probe "" linux_not_in_group
+      groups="users sudo"; probe "" linux_sudo_group
+      groups="users wheel"; probe "" linux_wheel_group
+      groups="users"; sudo_ok=0; probe "" linux_passwordless; sudo_ok=1
+      probe 0 forced_off
+      groups="users sudo"; probe 1 forced_on
+      uname() { echo Darwin; }
+      groups="staff everyone"; probe "" mac_standard
+      groups="staff admin"; probe "" mac_admin
+    `);
+    expect(result.status, result.stderr).toBe(0);
+    if (result.stdout.includes('skipped=root')) return;
+    for (const expected of [
+      'linux_no_sudo=1',
+      'linux_not_in_group=1',
+      'linux_sudo_group=0',
+      'linux_wheel_group=0',
+      'linux_passwordless=0',
+      'forced_off=0',
+      'forced_on=1',
+      'mac_standard=1',
+      'mac_admin=0',
+    ]) {
+      expect(result.stdout, result.stdout).toContain(expected);
+    }
+  });
+
+  it('stops before the first download when the machine cannot finish the install', () => {
+    // No compiler on Linux, or a Mac older than the tmux build supports: say so while it
+    // costs nothing, not after 50 MB of Node.js.
+    const stop = (env: Record<string, string>) => {
+      const r = drive(
+        `
+        NONINTERACTIVE=1; NO_ADMIN=1; NO_ADMIN_REASON=test
+        download() { echo "DOWNLOAD $1"; }
+        download_to_stdout() { echo "DOWNLOAD $1"; }
+        check_node() { return 1; }; check_tmux() { return 1; }; check_git() { return 0; }
+        detect_arch() { echo "$DRIVE_ARCH"; }
+        check_build_tools() { [[ "$DRIVE_TOOLS" == "1" ]]; }; missing_build_tools() { printf 'make, g++'; }
+        macos_major_version() { printf '%s' "$DRIVE_MACOS"; }
+        is_musl_libc() { [[ "$DRIVE_MUSL" == "1" ]]; }
+        ask_dependencies_no_admin "$DRIVE_OS"
+      `,
+        { DRIVE_ARCH: 'x64', DRIVE_TOOLS: '1', DRIVE_MACOS: '26', DRIVE_MUSL: '0', ...env }
+      );
+      expect(r.status, 'the installer must stop').toBe(1);
+      expect(r.stdout + r.stderr, 'something was downloaded before the stop').not.toContain('DOWNLOAD');
+      return r.stderr;
+    };
+    expect(stop({ DRIVE_OS: 'linux', DRIVE_TOOLS: '0' })).toMatch(/make, g\+\+[\s\S]*administrator/);
+    expect(stop({ DRIVE_OS: 'macos', DRIVE_ARCH: 'arm64', DRIVE_MACOS: '14' })).toMatch(/macOS 15 or newer/);
+    expect(stop({ DRIVE_OS: 'linux', DRIVE_MUSL: '1' })).toMatch(/musl/);
+    expect(stop({ DRIVE_OS: 'linux', DRIVE_ARCH: 'armv7' })).toMatch(/no Node\.js download/);
+  });
+
+  it('picks the right Node.js tarball out of SHASUMS256.txt', () => {
+    const sha = (c: string) => c.repeat(64);
+    const sums = [
+      `${sha('a')}  node-v22.23.4-aix-ppc64.tar.gz`,
+      `${sha('b')}  node-v22.23.4-darwin-arm64.tar.gz`,
+      `${sha('c')}  node-v22.23.4-darwin-arm64.tar.xz`,
+      `${sha('d')}  node-v22.23.4-linux-x64-musl.tar.gz`,
+      `${sha('e')}  node-v22.23.4-linux-x64.tar.gz`,
+      `nothex  node-v22.23.4-linux-arm64.tar.gz`,
+    ].join('\n');
+    const result = drive(
+      `
+      printf '%s\\n' "$SUMS" | pick_node_tarball linux-x64
+      printf '%s\\n' "$SUMS" | pick_node_tarball darwin-arm64
+      printf '%s\\n' "$SUMS" | pick_node_tarball linux-arm64 || echo "arm64=refused"
+      printf '%s\\n' "$SUMS" | pick_node_tarball linux-s390x || echo "s390x=none"
+    `,
+      { SUMS: sums }
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain(`${sha('e')} node-v22.23.4-linux-x64.tar.gz`);
+    expect(result.stdout).toContain(`${sha('b')} node-v22.23.4-darwin-arm64.tar.gz`);
+    expect(result.stdout).not.toContain('musl');
+    // A line whose checksum is not 64 hex digits is not a checksum to trust.
+    expect(result.stdout).toContain('arm64=refused');
+    expect(result.stdout).toContain('s390x=none');
+  });
+
+  it('refuses a download whose checksum does not match', () => {
+    const result = drive(`
+      f=$(mktemp); trap 'rm -f "$f"' EXIT
+      printf 'codeman' > "$f"
+      good=$(sha256_file "$f")
+      echo "len=\${#good}"
+      verify_sha256 "$f" "$good" && echo "match=ok"
+      verify_sha256 "$f" "\${good%?}x" && echo "tampered=accepted" || echo "tampered=refused"
+      verify_sha256 "$f" "" && echo "empty=accepted" || echo "empty=refused"
+    `);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain('len=64');
+    expect(result.stdout).toContain('match=ok');
+    expect(result.stdout).toContain('empty=refused');
+    // The last digit swapped for a character no digest contains.
+    expect(result.stdout).toContain('tampered=refused');
+  });
+
+  it('installs from an archive without git, then replaces that install beside itself', () => {
+    const scratch = mkdtempSync(join(tmpdir(), 'codeman-archive-install-'));
+    try {
+      const make = (version: string) => {
+        const tree = join(scratch, `src-${version}`, `Codeman-${version}`);
+        mkdirSync(join(tree, 'src'), { recursive: true });
+        writeFileSync(join(tree, 'package.json'), `{ "version": "${version}" }\n`);
+        writeFileSync(join(tree, 'src', `only-in-${version}.ts`), '');
+        const tarball = join(scratch, `${version}.tar.gz`);
+        const tar = spawnSync('tar', ['-czf', tarball, '-C', join(scratch, `src-${version}`), `Codeman-${version}`]);
+        expect(tar.status, String(tar.stderr)).toBe(0);
+        return tarball;
+      };
+      const first = make('1.0.0');
+      const second = make('2.0.0');
+      const app = join(scratch, 'app');
+      const script = `
+        LOG_FILE=/dev/null
+        check_git() { return 1; }
+        download() { cp "\${1#file://}" "$2"; }
+        run_step() { shift; "$@"; }
+        install_or_update_repo
+        echo "staging=[$SOURCE_STAGING] cwd=$(pwd)"
+        finish_source_swap
+        echo "after=$(pwd)"
+      `;
+      const run = (tarball: string) =>
+        drive(script, { CODEMAN_INSTALL_DIR: app, CODEMAN_TARBALL_URL: `file://${tarball}`, HOME: scratch });
+
+      // First install: straight into the install directory, marked as an archive install.
+      const fresh = run(first);
+      expect(fresh.status, fresh.stderr).toBe(0);
+      expect(fresh.stdout).toContain('staging=[]');
+      expect(readFileSync(join(app, 'package.json'), 'utf-8')).toContain('1.0.0');
+      expect(existsSync(join(app, ARCHIVE_INSTALL_MARKER))).toBe(true);
+
+      // Second run: the new tree is built BESIDE the old one, which stays whole until the swap.
+      writeFileSync(join(app, 'built-by-1.0.0'), '');
+      const update = run(second);
+      expect(update.status, update.stderr).toBe(0);
+      expect(update.stdout).toContain(`staging=[${app}.new] cwd=${app}.new`);
+      expect(update.stdout).toContain(`after=${app}`);
+      expect(readFileSync(join(app, 'package.json'), 'utf-8')).toContain('2.0.0');
+      // A whole replacement: what the old version had and the new one dropped is gone.
+      expect(existsSync(join(app, 'src', 'only-in-1.0.0.ts'))).toBe(false);
+      expect(existsSync(join(app, 'built-by-1.0.0'))).toBe(false);
+      expect(existsSync(join(app, ARCHIVE_INSTALL_MARKER))).toBe(true);
+      expect(existsSync(`${app}.new`)).toBe(false);
+      expect(existsSync(`${app}.old`)).toBe(false);
+
+      // A trailing slash on the setting must not put the staging folder inside the install.
+      const slashed = drive(script, {
+        CODEMAN_INSTALL_DIR: `${app}/`,
+        CODEMAN_TARBALL_URL: `file://${first}`,
+        HOME: scratch,
+      });
+      expect(slashed.status, slashed.stderr).toBe(0);
+      expect(slashed.stdout).toContain(`staging=[${app}.new] cwd=${app}.new`);
+      expect(readFileSync(join(app, 'package.json'), 'utf-8')).toContain('1.0.0');
+      expect(existsSync(`${app}.new`)).toBe(false);
+      expect(existsSync(`${app}.old`)).toBe(false);
+
+      // A folder that is neither a checkout nor one of ours is never written into.
+      const foreign = join(scratch, 'foreign');
+      mkdirSync(foreign);
+      writeFileSync(join(foreign, 'notes.txt'), 'mine');
+      const refused = drive(script, {
+        CODEMAN_INSTALL_DIR: foreign,
+        CODEMAN_TARBALL_URL: `file://${first}`,
+        HOME: scratch,
+      });
+      expect(refused.status).toBe(1);
+      expect(refused.stderr).toContain('is not a Codeman install');
+      expect(readFileSync(join(foreign, 'notes.txt'), 'utf-8')).toBe('mine');
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
+
+  it('downloads from a subcommand that never ran the full flow', () => {
+    // DOWNLOADER used to be set only by main(), so `install.sh cloudflared` (and now the
+    // update of an archive install) died inside download() on an unbound variable.
+    const result = drive(`
+      unset DOWNLOADER
+      curl() { echo "FETCH $*"; }
+      wget() { echo "FETCH $*"; }
+      download https://example.invalid/a /tmp/never-written
+      unset DOWNLOADER
+      download_to_stdout https://example.invalid/b
+    `);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toMatch(/FETCH .*example\.invalid\/a/);
+    expect(result.stdout).toMatch(/FETCH .*example\.invalid\/b/);
+  });
+
+  it('builds the archive URL from the repository and branch, on GitHub only', () => {
+    const url = (env: NodeJS.ProcessEnv) => drive('source_tarball_url || echo REFUSED', env).stdout.trim();
+    expect(url({})).toBe('https://github.com/Ark0N/Codeman/archive/master.tar.gz');
+    expect(url({ CODEMAN_REPO_URL: 'https://github.com/someone/fork.git', CODEMAN_BRANCH: 'feat/x' })).toBe(
+      'https://github.com/someone/fork/archive/feat/x.tar.gz'
+    );
+    expect(url({ CODEMAN_REPO_URL: 'https://gitlab.com/someone/fork.git' })).toBe('REFUSED');
+    expect(url({ CODEMAN_REPO_URL: 'git@github.com:someone/fork.git' })).toBe('REFUSED');
+    expect(url({ CODEMAN_TARBALL_URL: 'https://mirror.example/codeman.tar.gz' })).toBe(
+      'https://mirror.example/codeman.tar.gz'
+    );
+  });
+
+  it('shares the archive marker name with the in-app updater', () => {
+    // install.sh writes it, src/web/self-update.ts reads it to tell such an install how to
+    // update. A rename on one side would send archive installs back to the npm advice.
+    expect(SOURCE).toContain(`SOURCE_MARKER="${ARCHIVE_INSTALL_MARKER}"`);
+  });
+
+  it('treats a completed archive install as an install: quiet update on a re-run', () => {
+    const dispatch = SOURCE.slice(SOURCE.indexOf('\nparse_flags "$@"'));
+    expect(dispatch).toMatch(
+      /-f "\$INSTALL_DIR\/\.install-complete" \]\] && \[\[ -d "\$INSTALL_DIR\/\.git" \|\| -f "\$INSTALL_DIR\/\$SOURCE_MARKER" \]\]/
+    );
+    const update = fn('update', '\nuninstall() {');
+    expect(update).toContain('! -f "$INSTALL_DIR/$SOURCE_MARKER"');
+    // The swap happens only after the build has succeeded.
+    expect(update.indexOf('finish_source_swap')).toBeGreaterThan(update.indexOf('npm run build'));
+    const main = fn(
+      'main',
+      '\n# ----------------------------------------------------------------------------\n# Phase 0'
+    );
+    expect(main.indexOf('finish_source_swap')).toBeGreaterThan(main.indexOf('npm run build'));
+    expect(main.indexOf('finish_source_swap')).toBeLessThan(main.indexOf('install_symlink'));
+  });
+
+  it('documents --no-admin where people look for flags, and resolves the route before any work', () => {
+    expect(fn('usage', '\n}\n')).toContain('--no-admin');
+    const dispatch = SOURCE.slice(SOURCE.indexOf('\nparse_flags "$@"'));
+    expect(dispatch.indexOf('resolve_admin_mode')).toBeGreaterThan(-1);
+    expect(dispatch.indexOf('resolve_admin_mode')).toBeLessThan(dispatch.lastIndexOf('case "$SUBCOMMAND" in'));
+    expect(dispatch.indexOf('adopt_userspace_runtime')).toBeLessThan(dispatch.indexOf('resolve_admin_mode'));
+  });
+
+  it('puts the downloaded runtime on the LaunchAgent PATH', () => {
+    // The agent's PATH is a fixed list (Homebrew, /usr/local, ~/.local/bin, the system). A
+    // Node.js in the home folder is outside it, and so is everything `npm install -g` puts
+    // beside that Node.js: the AI CLIs, whose launchers start with `#!/usr/bin/env node`.
+    // A machine with a real LaunchDaemon makes the function stand down, so skip there.
+    if (existsSync('/Library/LaunchDaemons/com.codeman.web.plist')) return;
+    const home = mkdtempSync(join(tmpdir(), 'codeman-agent-path-'));
+    const result = drive(
+      `
+      mkdir -p "$RUNTIME_DIR/node/bin" "$RUNTIME_DIR/bin" "$HOME/.local/bin"
+      printf '#!/bin/sh\n' > "$RUNTIME_DIR/node/bin/node"; chmod +x "$RUNTIME_DIR/node/bin/node"
+      printf '#!/bin/sh\n' > "$RUNTIME_DIR/bin/tmux"; chmod +x "$RUNTIME_DIR/bin/tmux"
+      ln -s "$RUNTIME_DIR/node/bin/node" "$HOME/.local/bin/node"
+      PATH="$HOME/.local/bin:$PATH"; hash -r
+      launchctl() { return 0; }
+      sleep() { :; }
+      BIND_HOST=127.0.0.1
+      setup_launchd_service >/dev/null 2>&1
+      cat "$HOME/Library/LaunchAgents/com.codeman.web.plist"
+    `,
+      { HOME: home }
+    );
+    rmSync(home, { recursive: true, force: true });
+    expect(result.status, result.stderr).toBe(0);
+    const path = /<key>PATH<\/key>\s*<string>([^<]*)<\/string>/.exec(result.stdout)?.[1] ?? '';
+    const dirs = path.split(':');
+    expect(dirs).toContain(`${home}/.codeman/runtime/node/bin`);
+    expect(dirs).toContain(`${home}/.codeman/runtime/bin`);
+    expect(dirs).toContain(`${home}/.local/bin`);
+    expect(dirs).toContain('/usr/bin');
+    expect(new Set(dirs).size, `duplicate PATH entries: ${path}`).toBe(dirs.length);
+    expect(result.stdout).toContain(`<string>${home}/.local/bin/node</string>`);
+  });
+
+  it('links only into its own runtime, and removes only its own links', () => {
+    // ~/.local/bin is the user's folder: a tmux or node they put there is never replaced on
+    // install and never deleted on uninstall.
+    const home = mkdtempSync(join(tmpdir(), 'codeman-links-'));
+    const result = drive(
+      `
+      mkdir -p "$HOME/.local/bin" "$RUNTIME_DIR/bin"
+      touch "$RUNTIME_DIR/bin/tmux" "$RUNTIME_DIR/bin/node"
+      printf 'mine' > "$HOME/.local/bin/tmux"
+      link_into_local_bin "$RUNTIME_DIR/bin/tmux" tmux && echo "foreign=replaced" || echo "foreign=kept"
+      link_into_local_bin "$RUNTIME_DIR/bin/node" node && echo "fresh=linked"
+      link_into_local_bin "$RUNTIME_DIR/bin/node" node && echo "ours=relinked"
+      echo "tmux=$(cat "$HOME/.local/bin/tmux") node=$(readlink "$HOME/.local/bin/node")"
+    `,
+      { HOME: home }
+    );
+    rmSync(home, { recursive: true, force: true });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain('foreign=kept');
+    expect(result.stdout).toContain('fresh=linked');
+    expect(result.stdout).toContain('ours=relinked');
+    expect(result.stdout).toMatch(/tmux=mine node=.*\/\.codeman\/runtime\/bin\/node/);
+
+    const body = fn('uninstall', '\nusage() {');
+    const rm = body.indexOf('rm -f "$symlink_dir/$runtime_tool"');
+    expect(rm).toBeGreaterThan(-1);
+    expect(body.slice(body.lastIndexOf('if [[', rm), rm)).toContain('== "$RUNTIME_DIR/"*');
+  });
+
+  it('says the rights were not confirmed, and names the way back to sudo, when it chose this route itself', () => {
+    // A sudoers entry cannot be read without a probe that reports to the administrator, so an
+    // account listed by name, with a password, lands on this route too. It must not be told it
+    // may not use sudo, and every place that ends or sums up the route must name the override.
+    const stops = `
+      detect_arch() { echo x64; }
+      download() { echo "DOWNLOAD $1"; }; download_to_stdout() { echo "DOWNLOAD $1"; }
+      check_node() { return 1; }; check_tmux() { return 1; }; check_git() { return 0; }
+      missing_build_tools() { printf 'make'; }; is_musl_libc() { return 1; }
+      ts_cmd() { return 1; }; check_tailscale() { return 1; }
+      CLI_IDS=(); TS_STATE=""; MISSING_PKGS=""; EXISTING_FOUND=""; EXISTING_VERSION=""
+      section() { echo "== $1"; }
+      NONINTERACTIVE=1
+      section blocker; check_build_tools() { return 1; }; (ask_dependencies_no_admin linux) 2>&1 || true
+      check_build_tools() { return 0; }
+      section declined; prompt_yes_no() { return 1; }; (ask_dependencies_no_admin linux) 2>&1 || true
+      section ensure_sudo; (ensure_sudo) 2>&1 || true
+      section operator; (ensure_tailscale_operator) 2>&1 || true
+      section summary; (print_preflight_summary linux x64 ubuntu) 2>&1
+      NONINTERACTIVE=0
+      section tailscale; (offer_install_tailscale) 2>&1 || true
+    `;
+    const sections = (stdout: string) =>
+      Object.fromEntries(
+        stdout
+          .split(/^== /m)
+          .slice(1)
+          .map((part) => [part.slice(0, part.indexOf('\n')), part])
+      );
+    const detected = drive(`
+      [[ $EUID -ne 0 ]] || { echo "skipped=root"; exit 0; }
+      uname() { echo Linux; }
+      command() { if [[ "$1" == "-v" && "$2" == "sudo" ]]; then return 0; else builtin command "$@"; fi; }
+      id() { echo users; }
+      sudo() { return 1; }
+      NO_ADMIN=""; resolve_admin_mode
+      echo "route=$NO_ADMIN reason=$NO_ADMIN_REASON"
+      ${stops}
+    `);
+    expect(detected.status, detected.stderr).toBe(0);
+    if (detected.stdout.includes('skipped=root')) return;
+    expect(detected.stdout).toMatch(/route=1 reason=.*could not confirm/);
+    expect(detected.stdout).not.toContain('may not use sudo');
+    const parts = sections(detected.stdout);
+    for (const name of ['blocker', 'declined', 'ensure_sudo', 'operator', 'summary', 'tailscale']) {
+      expect(parts[name], `${name}: ${detected.stdout}`).toContain('CODEMAN_NO_ADMIN=0');
+    }
+
+    // Asked for, or sudo really tried: there is no way back to name.
+    for (const reason of ['--no-admin', 'sudo is not installed', 'sudo was refused']) {
+      const other = drive(`
+        uname() { echo Linux; }
+        NO_ADMIN=1; NO_ADMIN_REASON="${reason}"
+        ${stops}
+      `);
+      expect(other.status, other.stderr).toBe(0);
+      expect(other.stdout, reason).not.toContain('CODEMAN_NO_ADMIN=0');
+    }
+  });
+
+  it('proves a downloaded tmux and cloudflared in the home folder, not in the temp folder', () => {
+    // /tmp is commonly mounted noexec on the shared hosts this route is for. The stand-in
+    // below refuses to run from TMPDIR the way such a mount does (126, not a shell error).
+    const home = mkdtempSync(join(tmpdir(), 'codeman-noexec-'));
+    try {
+      const noexec = join(home, 'noexec-tmp');
+      const fake = join(home, 'fake');
+      mkdirSync(noexec);
+      mkdirSync(fake);
+      for (const tool of ['tmux', 'cloudflared']) {
+        writeFileSync(join(fake, tool), `#!/bin/sh\ncase "$0" in "${noexec}"/*) exit 126 ;; esac\necho ok\n`, {
+          mode: 0o755,
+        });
+      }
+      const tarball = join(home, 'tmux.tar.gz');
+      const tar = spawnSync('tar', ['-czf', tarball, '-C', fake, 'tmux']);
+      expect(tar.status, String(tar.stderr)).toBe(0);
+      const result = drive(
+        `
+        run_step() { shift; "$@"; }
+        ensure_on_path() { :; }
+        tmux_build_sha256() { sha256_file "$DRIVE_FAKE/../tmux.tar.gz"; }
+        download() { case "$1" in *tmux*) cp "$DRIVE_FAKE/../tmux.tar.gz" "$2" ;; *) cp "$DRIVE_FAKE/cloudflared" "$2" ;; esac; }
+        (install_tmux_userspace linux x64) && echo "tmux=installed"
+        (install_cloudflared_userspace linux x64) && echo "cloudflared=installed"
+        ls -A "$RUNTIME_DIR" | tr '\n' ' '; echo
+        ls -A "$HOME/.local" | tr '\n' ' '; echo
+        ls -A "$HOME/.local/bin" | tr '\n' ' '; echo
+      `,
+        { HOME: home, TMPDIR: noexec, DRIVE_FAKE: fake }
+      );
+      expect(result.stderr).not.toContain('does not run');
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain('tmux=installed');
+      expect(result.stdout).toContain('cloudflared=installed');
+      expect(existsSync(join(home, '.codeman/runtime/bin/tmux'))).toBe(true);
+      expect(existsSync(join(home, '.local/bin/cloudflared'))).toBe(true);
+      // Nothing left beside them: the listings hold the final names and nothing else.
+      const [runtime, local, bin] = result.stdout.trim().split('\n').slice(-3);
+      expect(runtime.trim()).toBe('bin');
+      expect(local.trim()).toBe('bin');
+      expect(bin.trim().split(' ').sort()).toEqual(['cloudflared', 'tmux']);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('survives an environment with no USER', () => {
+    // docker run -u gives a process no USER, and set -u turns a message that prints it into a
+    // crash. The no-admin route reaches several such lines, and such a container is its first home.
+    const result = drive(
+      `
+      uname() { echo Linux; }
+      NO_ADMIN=1; NO_ADMIN_REASON=test; NONINTERACTIVE=0
+      ts_cmd() { return 1; }; check_tailscale() { return 1; }
+      (ensure_tailscale_operator) 2>&1 || true
+      (offer_install_tailscale) 2>&1 || true
+      BIND_HOST=0.0.0.0; BIND_PASSWORD=""
+      (print_security_notice) 2>&1
+    `,
+      { USER: undefined }
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout + result.stderr).not.toContain('unbound variable');
+    expect(result.stdout.match(/--operator=\S/g)?.length).toBe(2);
+  });
+
+  it('drops a trailing slash from CODEMAN_INSTALL_DIR', () => {
+    // "$INSTALL_DIR.new" must sit beside the install, and app/.new sits inside it.
+    const dir = (value: string) => drive('echo "$INSTALL_DIR"', { CODEMAN_INSTALL_DIR: value }).stdout.trim();
+    expect(dir('/x/app/')).toBe('/x/app');
+    expect(dir('/x/app//')).toBe('/x/app');
+    expect(dir('/x/app')).toBe('/x/app');
+    expect(dir('/')).toBe('/');
+  });
+
+  it('warns that removing the data directory takes a kept runtime with it', () => {
+    // The runtime lives inside ~/.codeman, so the yes to the data directory removes what the
+    // user chose to keep one prompt earlier. Read from the source, never driven: uninstall()
+    // calls `systemctl --user`, which HOME does not redirect, so a drive stops and disables
+    // the real codeman-web of whoever runs this test.
+    const body = fn('uninstall', '\nusage() {');
+    const prompt = body.indexOf('Remove data directory ($data_dir)?');
+    expect(prompt).toBeGreaterThan(-1);
+    const note = body.lastIndexOf('[[ -d "$RUNTIME_DIR" ]]', prompt);
+    expect(note, 'the kept runtime is not looked at before that prompt').toBeGreaterThan(
+      body.indexOf('Kept $RUNTIME_DIR')
+    );
+    expect(body.slice(note, prompt)).toMatch(/data_note=" .*\$RUNTIME_DIR/);
+    expect(body.slice(prompt)).toMatch(/^Remove data directory \(\$data_dir\)\?\$data_note"/);
+  });
 });

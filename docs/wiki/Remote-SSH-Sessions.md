@@ -29,10 +29,17 @@ through a jump host. Your laptop can sleep, change networks, or close, and the r
 
 Hosts are saved and reusable, so a second case on the same machine is just a path. Host
 profiles can also carry per-run-mode launch command overrides, for when the binary lives
-somewhere unusual on that host.
+somewhere unusual on that host. An override runs on the remote in your login shell, so a `$`
+in it expands there, not on the Codeman machine.
 
 The remote host needs **tmux**. Codeman probes for it when you link the host rather than
 failing later at launch.
+
+The remote login shell can be bash, zsh, dash, fish, csh or tcsh. A tcsh session reads `.tcshrc`
+and not `.login`, so set the PATH that finds `tmux` and your agent CLI in `.tcshrc`. The tmux check
+also needs a `command` executable under tcsh: macOS and the BSDs ship one, Debian and Ubuntu do
+not, so linking a tcsh host there stops at `could not verify tmux`. nushell and elvish cannot run a
+remote session at all.
 
 ## What actually runs
 
@@ -73,13 +80,19 @@ Attaching to someone else's session and closing your tab must not end their run,
 not. Several clients can attach the same remote session at different window sizes without
 clamping each other, and discovery shows a shared badge with the client count.
 
+This list holds Codeman's own sessions. A tmux session someone started by hand on the host is
+found by the home screen instead: see
+[Opened outside Codeman](The-Dashboard#opened-outside-codeman).
+
 ## Files
 
 Previews, downloads and text reads in a remote case go over the same ssh connection the
 session uses, so a clicked path opens the file on the machine the agent is on, `Range`
-seeking included. Nothing is copied to the Codeman host. Editing, Office previews,
-thumbnails, the file tree and the tail viewer are not available remotely and answer a clear
-400 rather than a misleading 404. Details in [Working With Files](Working-With-Files).
+seeking included. Nothing is copied to the Codeman host, apart from the diffs the
+[Edit history](Working-With-Files#edit-history) panel keeps, which works for remote Claude
+sessions too. Editing, Office previews, thumbnails, the file tree and the tail viewer are not
+available remotely and answer a clear 400 rather than a misleading 404. Details in
+[Working With Files](Working-With-Files).
 
 ## Security
 

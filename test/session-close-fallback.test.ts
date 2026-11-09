@@ -184,6 +184,34 @@ describe('closing the active session', () => {
   });
 });
 
+describe('closing an adopted tab', () => {
+  it('re-reads the outside-sessions list once the wrapper is gone', async () => {
+    // The home screen loads that list as soon as the tab goes, which is BEFORE the DELETE
+    // lands, so the row kept saying "Go to tab" with no tab behind it until the next poll.
+    const app = makeApp(A, [A]);
+    app.sessions.set(A, { id: A, adopt: { targetSession: 'work' } });
+    const order: string[] = [];
+    app._apiDelete = vi.fn(async () => {
+      order.push('delete');
+      return { ok: true, status: 200 };
+    });
+    app.loadForeignSessions = vi.fn(async () => void order.push('reload'));
+
+    await app.closeSession(A);
+
+    expect(order).toEqual(['delete', 'reload']);
+  });
+
+  it('leaves the list alone for a session of our own', async () => {
+    const app = makeApp(A, [A]);
+    app.loadForeignSessions = vi.fn();
+
+    await app.closeSession(A);
+
+    expect(app.loadForeignSessions).not.toHaveBeenCalled();
+  });
+});
+
 describe('closing is optimistic', () => {
   it('drops the tab and selects the next one BEFORE the server answers', async () => {
     const app = makeApp(A);

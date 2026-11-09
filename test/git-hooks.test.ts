@@ -18,6 +18,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { execFileSync, spawnSync } from 'node:child_process';
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -169,6 +170,26 @@ describe('resolveGitHooksDir (temp repos)', () => {
     const dir = join(scratch, `plain-${++counter}`);
     mkdirSync(dir);
     expect(resolveGitHooksDir(dir)).toBeNull();
+  });
+
+  it('never runs git for a directory that has no .git', () => {
+    // A source-archive or npm install. On a Mac without the Xcode Command Line Tools
+    // /usr/bin/git is a stub that opens Apple's install dialog, and postinstall calls this
+    // on every `npm install`, so "not a checkout" must be answered without spawning git.
+    const dir = join(scratch, `plain-${++counter}`);
+    const bin = join(scratch, `fakebin-${counter}`);
+    const ran = join(scratch, `git-ran-${counter}`);
+    mkdirSync(dir);
+    mkdirSync(bin);
+    writeFileSync(join(bin, 'git'), `#!/bin/sh\necho ran > "${ran}"\nexit 1\n`, { mode: 0o755 });
+    const path = process.env.PATH;
+    process.env.PATH = `${bin}:${path}`;
+    try {
+      expect(resolveGitHooksDir(dir)).toBeNull();
+    } finally {
+      process.env.PATH = path;
+    }
+    expect(existsSync(ran), 'git was executed for a directory with no .git').toBe(false);
   });
 
   it('returns null when a repo-local core.hooksPath points outside the repo', () => {

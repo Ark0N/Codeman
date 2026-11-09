@@ -25,7 +25,7 @@ Every run mode Codeman can launch — Claude Code, Terminal/Shell, OpenCode, Cod
 App Settings → Agents & CLIs → **CLI management** (`cliManagementEnabled`, default OFF; admin-only in multi-user mode) lists every entry with an installed/not-installed badge and:
 
 - toggles any entry on or off. A `kind: 'shell'` entry cannot be disabled, and the row shows no switch for it. A disabled CLI disappears from the Run menu, the welcome screen and the phone overview, and new session requests for it are rejected.
-- installs a missing **stock** CLI by running its shipped install command, after a confirm that names the exact command. Only one install per CLI runs at a time, and the command runs without any `CODEMAN_*` variable in its environment. An `npm install -g` command is pointed at `~/.local` (which every resolver searches) when the npm global prefix is not writable by the server user, for example a system node under `/usr`; a writable prefix, a prefix that does not exist yet but could be created, and an explicit `NPM_CONFIG_PREFIX` are left alone. A custom entry's install command is never executed.
+- installs a missing **stock** CLI by running its shipped install command (the entry as merged with `clis.json`, so an override of a stock entry's install command is what runs here), after a confirm that names the exact command. Only one install per CLI runs at a time, and the command runs without any `CODEMAN_*` variable in its environment. An `npm install -g` command is pointed at `~/.local` (which every resolver searches) when the npm global prefix is not writable by the server user, for example a system node under `/usr`; a writable prefix, a prefix that does not exist yet but could be created, and an explicit `NPM_CONFIG_PREFIX` are left alone. A custom entry's install command is never executed.
 - adds, edits and deletes **custom** entries (id, label, badge, binaries, launch argv). The server re-validates the whole assembled entry through `CliEntrySchema`, so the form cannot bypass the load-time rules.
 
 These are the only writes to `clis.json`. They are serialized, and a file that does not parse or has unsafe permissions is refused rather than overwritten; fix it (or `chmod 600` it) and retry. The HTTP routes are listed in `docs/api-reference.md` under *CLI management*.
@@ -57,7 +57,11 @@ interface CliEntry {
   //   (where this CLI's own chrome names the model it runs: SessionState.displayModel)
   //   .launchDefaults?: { [launchParam]: settingsKey }
   //   (synced App Settings that seed a LOCAL launch's params the caller left unset;
-  //   codex's model and reasoning effort, via src/web/launch-defaults.ts)
+  //   codex's model, reasoning effort and network access, via src/web/launch-defaults.ts)
+  //   .gates: { [name]: { minVersion, failClosed } }
+  //   (version gates a `capabilityGate` launch condition names: claude's `--name`,
+  //   codex's `--no-daemon`. Measured against THAT CLI's own version, never claude's:
+  //   resolveSessionCliVersion, so an unknown version passes no fail-closed gate)
   overlays: CliOverlays; // remote-SSH / Docker pane commands, credential store
 }
 ```
@@ -328,7 +332,7 @@ already have.
 
 Three rules, and the middle one is why the embed matters:
 
-1. **The server never executes an entry's `install.command`.** Unchanged, and still enforced by nothing executing it: the field is display text (`CliDiscovery.install.command`).
+1. **The server executes an entry's `install.command` in exactly two places, both behind a consent click that shows the literal text.** CLI management (above, `cliManagementEnabled`, the merged entry's command) and the local model install (`docs/local-models.md`: only the COMPILED stock command of a catalogue harness row, through `stockInstallCommand()`, so no `clis.json` override reaches it; no setting gates that path, the consent screen does). Both run through the one runner in `src/cli-install-runner.ts` (one install per CLI at a time, no `CODEMAN_*` in the environment, the whole process group killed on a timeout or a cancel) and both are written to the admin audit log in multi-user mode. Everywhere else the field is display text (`CliDiscovery.install.command`).
 2. **`install.sh` executes only commands embedded in itself.** Those arrive in the same file, over the same TLS fetch, in the same commit as the `curl \| bash` line that fetched the script — identical trust to the hardcoded vendor one-liners it replaces.
 3. **Nothing fetched at install time is ever executed.** There is no second code path that fetches anything after the script itself has been fetched.
 

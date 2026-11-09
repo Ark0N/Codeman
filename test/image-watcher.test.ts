@@ -97,6 +97,7 @@ describe('ImageWatcher', () => {
       watcher.watchSession('session-1', '/home/user/project');
       const [, opts] = vi.mocked(watch).mock.calls.at(-1) as unknown as [string, { ignored: (p: string) => boolean }];
       expect(opts.ignored('/home/user/project/.codeman-uploads/paste-1-ab.pdf')).toBe(true);
+      expect(opts.ignored('/home/user/project/.codeman-discord/1234-report.pdf')).toBe(true);
       expect(opts.ignored('/home/user/project/.claude-images/paste-1-ab.png')).toBe(true);
       expect(opts.ignored('/home/user/project/docs/report.pdf')).toBe(false);
     });

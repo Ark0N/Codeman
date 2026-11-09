@@ -51,6 +51,8 @@ import {
   probeGitRemote,
 } from '../../git-clone.js';
 import type { GitRemoteProbe, GitUrlParse } from '../../git-clone.js';
+import { isPathWithin } from '../../git-worktrees.js';
+import { defaultDockerWorkspaces } from './git-status-routes.js';
 import { generateClaudeMd } from '../../templates/claude-md.js';
 import { prepareNewCasePath } from '../case-path.js';
 import {
@@ -84,6 +86,7 @@ import {
   SettingsWriteRefusedError,
   settingsWriteErrorResponse,
 } from '../settings-writer.js';
+import { LinkedCasesWriteRefusedError, linkedCasesPath, mutateLinkedCases } from '../linked-cases-writer.js';
 import { isMultiUserMode } from '../../config/multiuser.js';
 import type { AuthUser } from '../../types.js';
 import { SseEvent } from '../sse-events.js';
@@ -124,7 +127,6 @@ import {
   writeRemoteHosts,
 } from '../../remote-hosts.js';
 
-const LINKED_CASES_FILE = dataPath('linked-cases.json');
 const CODEMAN_CONFIG_DIR = getDataDir();
 const SAFE_CASE_NAME = /^[a-zA-Z0-9_-]+$/;
 const DOCKER_EXPORTS_DIR = dataPath('docker-exports');
@@ -149,6 +151,10 @@ const APP_VERSION = (() => {
  */
 const LOCAL_CLONE_ADMIN_ONLY =
   'Cloning from a local path is admin-only in multi-user mode. Use a repository URL instead.';
+
+/** Refusal text for a clone at or inside a Docker case workspace (git would run its hooks on the host). */
+const DOCKER_CLONE_REFUSAL =
+  'Cloning is not available into a folder inside a Docker case workspace: a container can write there, and git would run the new repository’s hooks and filters on this machine. Clone outside the workspace and link it, or clone from inside the container.';
 
 /**
  * Whether a clone or preflight must run with git's credential helpers cleared:
@@ -206,10 +212,20 @@ function agentCreatedInfo(marker: AgentCaseMarker): NonNullable<CaseInfo['agentC
   };
 }
 
-/** Read and parse linked-cases.json, returning empty object on missing/invalid file. */
+/**
+ * Read and parse linked-cases.json, returning empty object on missing/invalid file. For reads only:
+ * every write goes through `mutateLinkedCases()`, which re-reads the file inside its own critical
+ * section and refuses one that does not parse.
+ */
 async function readLinkedCases(): Promise<Record<string, string>> {
-  return readJsonConfig<Record<string, string>>(LINKED_CASES_FILE, 'linked cases', {});
+  return readJsonConfig<Record<string, string>>(linkedCasesPath(), 'linked cases', {});
 }
+
+/** A conflict thrown from inside a `mutateLinkedCases()` callback: answered 409, nothing written. */
+function linkedConflict(message: string): Error {
+  return Object.assign(new Error(message), { conflict: true });
+}
+const isLinkedConflict = (err: unknown): boolean => (err as { conflict?: boolean }).conflict === true;
 
 /**
  * Resolve a case name to its directory path, checking linked cases first, then the
@@ -547,15 +563,11 @@ export function registerCaseRoutes(
       made.push(join(casePath, '.claude')); // before the write, so a half-written one is undone too
       await writeHooksConfig(casePath);
 
-      const codemanDir = getDataDir();
-      if (!existsSync(codemanDir)) mkdirSync(codemanDir, { recursive: true });
-      // Re-read right before writing, so a case linked since the check above is not dropped. This only
-      // narrows the window: like POST /api/cases/link, the registry write is not serialized, and two
-      // requests that both read before either writes can still lose one entry.
-      const fresh = await readLinkedCases();
-      if (fresh[name]) throw Object.assign(new Error(`Case "${name}" was just linked`), { conflict: true });
-      fresh[name] = casePath;
-      await fs.writeFile(LINKED_CASES_FILE, JSON.stringify(fresh, null, 2));
+      // The check above ran before the scaffold; a case linked since then wins and this call is undone.
+      await mutateLinkedCases((current) => {
+        if (current[name]) throw linkedConflict(`Case "${name}" was just linked`);
+        return { ...current, [name]: casePath };
+      });
 
       ctx.broadcast(SseEvent.CaseCreated, { name, path: casePath });
       return { success: true, data: { case: { name, path: casePath } } };
@@ -563,9 +575,13 @@ export function registerCaseRoutes(
       // Undo only what this call made. The whole folder if we created it, otherwise the scaffold
       // entries inside the empty folder the user picked; never anything else.
       for (const p of made.reverse()) await fs.rm(p, { recursive: true, force: true }).catch(() => undefined);
-      if ((err as { conflict?: boolean }).conflict) {
+      if (isLinkedConflict(err)) {
         reply.code(409);
         return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, getErrorMessage(err));
+      }
+      if (err instanceof LinkedCasesWriteRefusedError) {
+        reply.code(409);
+        return createErrorResponse(ApiErrorCode.CONFLICT, err.message);
       }
       reply.code(500);
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
@@ -661,7 +677,8 @@ export function registerCaseRoutes(
    * request died mid-clone still sees the case appear over SSE when git finishes.
    *
    * Deliberately NOT admin-gated in multi-user mode: unlike `/api/cases/link`,
-   * this writes only inside the caller's own `resolveCasesDir`. Two things would
+   * this writes only inside the caller's own `resolveCasesDir`, EXCEPT with a `path` (a custom folder,
+   * registered as a linked case in the shared registry), which is admin-only like Link Existing. Two things would
    * otherwise read through that boundary: a `local`-transport source (refused for
    * non-admins) and the server account's git credential helpers, which every user
    * shares (cleared for non-admins, see `cloneWithoutCredentialHelpers`).
@@ -686,7 +703,7 @@ export function registerCaseRoutes(
         warnings: string[];
       }>
     > => {
-      const { name, repository, ref, shallow, description } = parseBody(CloneCaseSchema, req.body);
+      const { name, repository, ref, shallow, description, path: customPath } = parseBody(CloneCaseSchema, req.body);
       const user = getAuthUser(req);
 
       const parsed = parseGitRepositoryUrl(repository);
@@ -705,8 +722,59 @@ export function registerCaseRoutes(
         );
       }
 
+      // A custom folder writes outside the cases directory and registers the path in the shared,
+      // ownerless linked-cases registry, so it carries the same bar as POST /api/cases/link.
+      if (customPath !== undefined) {
+        const denied = adminOnly(req, reply);
+        if (denied) return denied;
+      }
+
       const casesDir = resolveCasesDir(user);
-      const casePath = validatePathWithinBase(name, casesDir);
+      let casePath: string | null;
+      let intoEmptyDir = false;
+      if (customPath !== undefined) {
+        const prepared = await prepareNewCasePath(customPath, {
+          home: homedir(),
+          dataDir: getDataDir(),
+          casesDirs: [...new Set([casesDir, resolveCasesDir()])],
+          casesDirAdvice: 'clone there without a custom folder',
+        });
+        if (!prepared.ok) {
+          reply.code(
+            prepared.code === 'UNREACHABLE'
+              ? 422
+              : prepared.code === 'NOT_FOUND'
+                ? 404
+                : prepared.code === 'EXISTS'
+                  ? 409
+                  : 400
+          );
+          return createErrorResponse(
+            prepared.code === 'UNREACHABLE'
+              ? ApiErrorCode.OPERATION_FAILED
+              : prepared.code === 'NOT_FOUND'
+                ? ApiErrorCode.NOT_FOUND
+                : prepared.code === 'EXISTS'
+                  ? ApiErrorCode.ALREADY_EXISTS
+                  : ApiErrorCode.INVALID_INPUT,
+            prepared.code === 'EXISTS'
+              ? `${customPath} already has files in it. The clone target must be empty or not exist yet.`
+              : prepared.reason
+          );
+        }
+        intoEmptyDir = prepared.existedEmpty;
+        casePath = prepared.path;
+        // The same folder listed as a local case in the cases dir would make deleting it remove files.
+        if (existsSync(join(casesDir, name))) {
+          reply.code(409);
+          return createErrorResponse(
+            ApiErrorCode.ALREADY_EXISTS,
+            'A case with this name already exists in codeman-cases.'
+          );
+        }
+      } else {
+        casePath = validatePathWithinBase(name, casesDir);
+      }
       if (!casePath) return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case path');
 
       // Reject a duplicate name across EVERY case kind before invoking git, so a
@@ -715,8 +783,14 @@ export function registerCaseRoutes(
       const linkedCases = await readLinkedCases();
       const dockerCases = await readDockerCases(CODEMAN_CONFIG_DIR);
       const remoteCases = await readRemoteCases(CODEMAN_CONFIG_DIR);
+      const linkedAs = Object.entries(linkedCases).find(([, p]) => p === casePath)?.[0];
+      if (linkedAs && customPath !== undefined) {
+        reply.code(409);
+        return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, `That folder is already the case "${linkedAs}"`);
+      }
       if (
-        existsSync(casePath) ||
+        // A custom folder was judged by prepareNewCasePath (an existing empty one is fine).
+        (customPath === undefined && existsSync(casePath)) ||
         linkedCases[name] ||
         dockerCases.some((item) => item.name === name) ||
         remoteCases.some((item) => item.name === name)
@@ -724,16 +798,47 @@ export function registerCaseRoutes(
         return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, 'Case already exists');
       }
 
-      // git creates the leaf, not necessarily the case space above it.
+      // git creates the leaf, not necessarily the case space above it (a custom folder's parent
+      // already exists: prepareNewCasePath refused a missing one).
+      if (customPath === undefined) {
+        try {
+          mkdirSync(casesDir, { recursive: true });
+        } catch (err) {
+          return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
+        }
+      }
+
+      // git runs the new repository's hooks and filters on THIS machine once the clone finishes, and a container
+      // with the workspace bind-mounted can write both while it fetches. Like git status, fetch and worktrees,
+      // never clone at or inside a Docker case workspace. Fails closed when the Docker case list cannot be read.
       try {
-        mkdirSync(casesDir, { recursive: true });
-      } catch (err) {
-        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
+        // Probed first (#516): a case's workspace can sit on a mount that stopped answering, and an unbounded
+        // realpath there would hold this request and a threadpool worker. Such a root is judged as spelled.
+        const roots = await Promise.all(
+          (await defaultDockerWorkspaces()).map(async (root) =>
+            (await probePathKind(root, { pastCap: true })) === 'unknown'
+              ? resolve(root)
+              : fs.realpath(root).catch(() => resolve(root))
+          )
+        );
+        // A custom folder is already symlink-resolved; the default one is judged through its real cases dir.
+        const dest =
+          customPath !== undefined ? casePath : join(await fs.realpath(casesDir).catch(() => casesDir), name);
+        if (roots.some((root) => isPathWithin(dest, root))) {
+          return createErrorResponse(ApiErrorCode.INVALID_INPUT, DOCKER_CLONE_REFUSAL);
+        }
+      } catch {
+        reply.code(503);
+        return createErrorResponse(
+          ApiErrorCode.OPERATION_FAILED,
+          'Could not read the Docker case list, so Codeman cannot tell whether that folder is a Docker case workspace. Try again.'
+        );
       }
 
       const clone = await cloneRepository({
         repository: parsed.repository,
         destination: casePath,
+        ...(intoEmptyDir ? { intoEmptyDir: true } : {}),
         withoutCredentialHelpers: cloneWithoutCredentialHelpers(req),
         ...(ref ? { ref } : {}),
         ...(shallow ? { shallow: true } : {}),
@@ -792,6 +897,26 @@ export function registerCaseRoutes(
         // The clone itself succeeded: keep the case and report the scaffolding
         // problem, rather than deleting a tree the user just waited for.
         warnings.push(`Case scaffolding was incomplete: ${getErrorMessage(err)}`);
+      }
+
+      if (customPath !== undefined) {
+        // The name was checked before git ran, which can take minutes. Checked again where the entry is
+        // written, so of two clones that claimed one name only the first to finish links it.
+        try {
+          await mutateLinkedCases((current) => {
+            if (current[name]) throw linkedConflict(`Case "${name}" was linked while the clone ran`);
+            return { ...current, [name]: casePath };
+          });
+        } catch (err) {
+          // The clone itself succeeded: keep the folder (the user waited for it) and say where it is.
+          const conflict = isLinkedConflict(err);
+          const refused = err instanceof LinkedCasesWriteRefusedError;
+          reply.code(conflict || refused ? 409 : 500);
+          return createErrorResponse(
+            conflict ? ApiErrorCode.ALREADY_EXISTS : refused ? ApiErrorCode.CONFLICT : ApiErrorCode.OPERATION_FAILED,
+            `Cloned into ${casePath} but could not register the case (${getErrorMessage(err)}). Use Link Existing to add it.`
+          );
+        }
       }
 
       ctx.broadcast(SseEvent.CaseCreated, { name, path: casePath });
@@ -1598,28 +1723,17 @@ export function registerCaseRoutes(
       return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, 'A case with this name already exists in codeman-cases.');
     }
 
-    // Load existing linked cases
-    const linkedCases = await readLinkedCases();
-
-    // Check if name is already linked
-    if (linkedCases[name]) {
-      return createErrorResponse(
-        ApiErrorCode.ALREADY_EXISTS,
-        `Case "${name}" is already linked to ${linkedCases[name]}`
-      );
-    }
-
-    // Save the linked case
-    linkedCases[name] = expandedPath;
+    // The name check and the write are one step, so two links of one name cannot both succeed.
     try {
-      const codemanDir = getDataDir();
-      if (!existsSync(codemanDir)) {
-        mkdirSync(codemanDir, { recursive: true });
-      }
-      await fs.writeFile(LINKED_CASES_FILE, JSON.stringify(linkedCases, null, 2));
+      await mutateLinkedCases((current) => {
+        if (current[name]) throw linkedConflict(`Case "${name}" is already linked to ${current[name]}`);
+        return { ...current, [name]: expandedPath };
+      });
       ctx.broadcast(SseEvent.CaseLinked, { name, path: expandedPath });
       return { success: true, data: { case: { name, path: expandedPath } } };
     } catch (err) {
+      if (isLinkedConflict(err)) return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, getErrorMessage(err));
+      if (err instanceof LinkedCasesWriteRefusedError) return createErrorResponse(ApiErrorCode.CONFLICT, err.message);
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
     }
   });
@@ -1700,13 +1814,19 @@ export function registerCaseRoutes(
     // must not unlink one either; skip so control falls through to their local delete.
     const linkedCases = await readLinkedCases();
     if (linkedCases[name] && (!isMultiUserMode() || isAdmin(req))) {
-      delete linkedCases[name];
       try {
-        await fs.writeFile(LINKED_CASES_FILE, JSON.stringify(linkedCases, null, 2));
+        // Removes this one entry from the registry as it is now, keeping any linked since the read above.
+        await mutateLinkedCases((current) => {
+          if (!Object.hasOwn(current, name)) return undefined;
+          const next = { ...current };
+          delete next[name];
+          return next;
+        });
         ctx.broadcast(SseEvent.CaseDeleted, { name, type: 'unlinked' });
         await forgetCaseDefault();
         return { success: true, data: { name } };
       } catch (err) {
+        if (err instanceof LinkedCasesWriteRefusedError) return createErrorResponse(ApiErrorCode.CONFLICT, err.message);
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
       }
     }
@@ -1892,7 +2012,6 @@ export function registerCaseRoutes(
           stopped++;
         }
         if (moveFolder) await moveCaseFolder(oldPath, newPath);
-        const originalLinks = isLinked ? await readLinkedCases() : undefined;
         // The settings.json values this rename replaced, set only once it wrote them. A failure puts back
         // these keys alone, so a settings save that landed in between is kept.
         let settingsUndo: Record<string, unknown> | undefined;
@@ -1912,16 +2031,19 @@ export function registerCaseRoutes(
               settingsUndo = Object.fromEntries(keys.map((k) => [k, before[k]]));
             }
           }
-          if (originalLinks) {
-            const links = { ...originalLinks };
-            delete links[name];
-            links[newName] = newPath;
-            try {
-              await fs.writeFile(LINKED_CASES_FILE, JSON.stringify(links, null, 2));
-            } catch (err) {
-              await fs.writeFile(LINKED_CASES_FILE, JSON.stringify(originalLinks, null, 2)).catch(() => {});
-              throw err;
-            }
+          if (isLinked) {
+            // Checked again where the entry is written: the checks above ran before the sessions were
+            // stopped and the folder moved. A failed write leaves the registry as it was.
+            await mutateLinkedCases((current) => {
+              if (current[newName]) throw new CaseRenameError('EXISTS', `A case named "${newName}" already exists`);
+              if (current[name] !== oldPath) {
+                throw new CaseRenameError('BUSY', `Case "${name}" was changed while it was being renamed`);
+              }
+              const links = { ...current };
+              delete links[name];
+              links[newName] = newPath;
+              return links;
+            });
           }
         } catch (err) {
           // The folder moved but the registries did not follow: put settings.json and the folder back
@@ -1965,6 +2087,9 @@ export function registerCaseRoutes(
               ? ApiErrorCode.CONFLICT
               : ApiErrorCode.OPERATION_FAILED;
         return fail(status, code, err.message, { renameCode: err.code, stoppedSessions: stopped });
+      }
+      if (err instanceof LinkedCasesWriteRefusedError) {
+        return fail(409, ApiErrorCode.CONFLICT, err.message, { stoppedSessions: stopped });
       }
       return fail(500, ApiErrorCode.OPERATION_FAILED, getErrorMessage(err), { stoppedSessions: stopped });
     }

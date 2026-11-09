@@ -67,15 +67,23 @@ configured, `PUT`/`DELETE /api/model-endpoints/:id` update or remove one.
 Endpoint management is admin-only in multi-user mode, same as remote/docker
 hosts — these are machine-level infra, not per-user settings.
 
-**Context length is discovered too, opportunistically and safely.** The plain
-`GET /v1/models` response has no context-window field. Discovery only ever
-looks for one for a model llama-swap's own response already reports
+**Context length is discovered too, opportunistically and safely.** Older
+servers state no context-window field in the plain `GET /v1/models`
+response at all; current llama-swap states one per model (both
+`context_length` and `context_window`) and gateways like Bifrost pass
+`context_window` through: that listed figure is the *lowest*-precedence
+source, used only when neither probe below answers, and because llama-swap
+documents it as the PER-SLOT window, a model whose figure comes from the
+listing is recorded with a slot count of 1 so the slot check never divides a
+per-slot figure a second time. The probes are only ever looked for on a model
+llama-swap's own response already reports
 `status.value === "loaded"` for — never for an unloaded one, because
 llama-swap treats `?model=` as a routing hint and asking about a model that
 isn't loaded risks triggering an actual (slow, GPU-swapping) load as a side
 effect of what should be read-only discovery. A server with no `status` field
-on any entry at all (not llama-swap) gets no context-length enrichment,
-rather than guessing. A model's previously-learned context length survives a
+on any entry at all (not llama-swap) gets no launch-command/`/props`
+enrichment, only whatever its listings state, rather than guessing. A
+model's previously-learned context length survives a
 later cycle where it wasn't the loaded one; it's dropped only once the model
 disappears from the endpoint's list entirely. Stored per model in
 `modelContextLengths` and applied automatically (see "Applying a model to a
@@ -192,31 +200,65 @@ saved default, not just confirming it.
 
 The modal promotes exactly one row to the top of the list rather than
 always showing raw discovery order, so the zero-wait choice is the one
-under your thumb:
+under your thumb. Three kinds of knowledge feed that promotion, best
+evidence first, and the first one that answers wins:
 
-- **"Currently loaded"** — a model from this host's own list that
+- **"Currently loaded"** is a model from this host's own list that
   llama-swap reports `ready` right now, queried via
   `GET /api/model-endpoints/:id/running-status`. Bounded client-side to
   ~800ms (`Promise.race`), on top of the route's own 5s server-side
   timeout, so an endpoint that is asleep or firewalled cannot leave the
   modal invisible for the full 5s after the Run menu has already closed.
-- **"Last used"** — shown only when nothing is currently loaded: the model
-  actually launched last for this exact (harness, endpoint) pair, read
-  from the per-device `codeman:customModelLastUsed:<mode>:<endpointId>`
-  localStorage key. Written by `_runCustomModelEntryViaRestart` (claude)
-  and `_quickStartWithCustomModelConfirm` (every one-shot launch; the
+- **"In use by a session"** is the fallback for every endpoint that
+  cannot report its own loaded model, which is every server except
+  llama-swap: a bare llama.cpp, Ollama, vLLM, and a gateway such as
+  Bifrost fronting a whole fleet all answer `isLlamaSwap: false`.
+  `_getCustomModelInUseBySession` walks `this.sessions` for one of your own
+  sessions whose `customModel.endpointId` is this host, newest
+  `createdAt` wins, and promotes its model. A live session is first-hand
+  evidence of a model in use on the endpoint, because Codeman put it
+  there, so it earns the promotion and the tag says where the knowledge
+  came from. Two fences keep it honest: it reads only `customModel`,
+  never `displayModel` (display text scraped off a CLI footer, so a
+  terminal that merely printed a similar string must not mark a row),
+  and a session with `status: 'stopped'`, a null `pid` (its PTY exited,
+  the same live-pane test keep-warm applies) or a recorded `paneExit`
+  does not count, since nothing is on the endpoint any more. Sessions on other
+  endpoints, and models the host no longer discovers, are skipped.
+- **"Last used"** appears only when neither of the above answers: the
+  model actually launched last for this exact (harness, endpoint) pair,
+  read from the per-device localStorage key
+  `codeman:customModelLastUsed:<mode>:<endpointId>`. That key is per CLI
+  on purpose, so it can only
+  ever promote the CLI that launched there before, which is why a gateway
+  box with no session running shows plain discovery order for the other
+  CLIs. Written by `_runCustomModelEntryViaRestart` (claude) and
+  `_quickStartWithCustomModelConfirm` (every one-shot launch; the
   `runCustomModelEntry` entry point itself only dispatches between the
-  two) only once the model is actually applied, never on the mere click —
+  two) only once the model is actually applied, never on the mere click:
   declining the context-window warning means this exact model cannot work
-  with this CLI at all, so promoting it next time would be actively wrong,
-  not just premature.
+  with this CLI at all, so promoting it next time would be actively
+  wrong, not just premature.
 
-Neither tag reorders anything past that one promoted row. The "Default"
+No promotion reorders anything past that one promoted row. The "Default"
 pill is a separate span, not a third value of the same slot: a promoted
 row that is also the endpoint's `defaultModelId` shows both tags (on a
 single-purpose GPU box that is the common case, and an exclusive slot
 silently dropped the Default marking for exactly that row), and a row
 with neither promotion nor default shows no tag at all.
+
+When nothing is known about any row, `#customModelPickUnknown` says so
+out loud instead of leaving an alphabetical wall that reads as the app
+ignoring the question. It shows when the probe answered
+`isLlamaSwap: false`, which the route gives for every failure it
+catches, so one answer covers a server that cannot report and an
+endpoint that is down or refused alike; the line's wording therefore
+claims only that nothing was reported. A probe that never got any
+answer (`_getCustomModelRunningStatus` resolving `null`, Codeman's own
+request failed or the client-side bound won) keeps the line hidden.
+Like its sibling no-matches line it needs an
+explicit `[hidden]` rule scoped to `#customModelPickModal`, because
+`.form-hint`'s `display: block` outranks the UA `[hidden]` rule.
 
 **How the launch itself applies the endpoint depends on the harness.** For
 opencode, Codex, Gemini, Pi, Grok, DeepSeek and OMP (`runCustomModelEntry` →
@@ -286,6 +328,15 @@ hot-swap. A Claude session is relaunched with `--resume <conversation> ||
 grok are relaunched with the `--model` value that selects the injected
 provider (`custom/<modelId>` for pi and omp, `codeman-custom` for grok),
 since for those three the config file alone does not switch the model.
+**Codex is relaunched with `--model <modelId>` too**, the bare selected id
+(not a provider selector): the launch param forces the session onto the
+model its generated `config.toml` already selected, so a launch-time model
+carried over from App Settings can never override the injected selection.
+That launch arg must satisfy the codex entry's `model-plain-colon` token
+pattern (a leading letter or digit, then letters, digits and `._-:/`, per
+`stock.ts`), so an id outside that shape, e.g. LM Studio's
+`org/model@q4_k_m`, is refused with a 400 at apply time now, where a
+`config.toml` alone used to carry it.
 **Remote (SSH) and Docker sessions are refused** (400) for now: their restart
 reattaches the durable remote/in-container tmux rather than relaunching the
 agent, so the selection would report success and change nothing.
@@ -293,14 +344,16 @@ agent, so the selection would report success and change nothing.
 **Claude gets two more env vars when known/applicable, both declared on its
 registry entry (`contextLengthVar`/`configDirVar`), not hardcoded here:**
 
-- `CLAUDE_CODE_MAX_CONTEXT_TOKENS` is set to `modelId`'s discovered context
-  length (see the discovery section above) whenever one is known. Without
+- `CLAUDE_CODE_MAX_CONTEXT_TOKENS` is set to `modelId`'s context length:
+  the discovered figure (see the discovery section above), falling back to
+  the endpoint's user-set `defaultContextLength`, whenever one is known.
+  Without
   it, Claude Code assumes a large (200k) window for any unrecognized custom
   model id and never compacts, which reliably overflows a much smaller real
   local context — confirmed live: a stock ~33.7K-token system prompt against
   a 16384-token llama-swap model failed with `exceeds the available context
-size`. No entry for the model in `modelContextLengths` means the var is
-  simply omitted, never a guess. ⚠️ **This var only affects when Claude
+size`. Neither a `modelContextLengths` entry nor a `defaultContextLength`
+  for the model means the var is simply omitted, never a guess. ⚠️ **This var only affects when Claude
   Code compacts conversation _history_ — it cannot fix a model whose real
   context is smaller than Claude Code's own fixed per-turn overhead**
   (system prompt + tool schemas, empirically ~36.4K tokens, confirmed live
@@ -331,7 +384,10 @@ size`. No entry for the model in `modelContextLengths` means the var is
   included), user-level agents and commands, and the MCP servers configured
   in `~/.claude.json` — none of those are symlinked back, only `projects` is.
   A fine trade for "point this session at my local llama.cpp," but worth
-  knowing before it surprises you mid-session.
+  knowing before it surprises you mid-session. A session on its own
+  `CLAUDE_CONFIG_DIR` links `projects` from that directory instead, so its
+  conversation, and what the endpoint run adds to it, stay on its own account
+  across an apply and a clear.
 
 **That isolated directory needed one more fix to actually be usable
 non-interactively.** An otherwise-empty `CLAUDE_CONFIG_DIR` has none of a
@@ -441,15 +497,17 @@ Both apply routes (the restart route and the one-shot `POST
 /api/quick-start`) now check for this **before** launching or restarting
 anything, gated on the CLI's registry entry declaring a `contextLengthVar`
 (currently only claude — the check is a no-op for every other CLI by
-construction, never a hardcoded mode check). If the model's discovered
-context (`modelContextLengths`, from discovery above) is below
-`CLAUDE_MIN_SAFE_CONTEXT_TOKENS` (40000, comfortably above the measured
+construction, never a hardcoded mode check). If the model's context (the
+discovered figure from `modelContextLengths`, or the endpoint's
+`defaultContextLength` when discovery never learned one for that model) is
+below `CLAUDE_MIN_SAFE_CONTEXT_TOKENS` (40000, comfortably above the measured
 ~36.4K overhead), the response is `{requiresContextWarning: true, modelId,
 contextLength, minSafeContextTokens}` (plus `slotCount` when the model runs more than one parallel slot) instead of applying — nothing is
-restarted or created yet. A context length that was never discovered at
-all skips the check entirely (nothing to compare, so it fails open rather
-than warning on every model an endpoint hasn't reported a size for).
-The same warning fires when the context divided across the model's parallel slots (`contextLength / slotCount`) is below the floor, because Claude Code sends several 40K-token requests at once and the slots share one pool. Retrying with `confirmedContext: true` launches anyway (the legacy `confirmed: true` still means both questions).
+restarted or created yet. A model with neither a discovered figure nor a
+`defaultContextLength` skips the check entirely (nothing to compare, so it
+fails open rather than warning on every model an endpoint hasn't reported a
+size for).
+The same warning fires when the context divided across the model's parallel slots (`contextLength / slotCount`) is below the floor, because Claude Code sends several 40K-token requests at once and the slots share one pool. ⚠️ `defaultContextLength` is the model's whole window, never a per-slot figure, so a default small enough to split under the slot count trips that slot division exactly like a discovered figure does. Retrying with `confirmedContext: true` launches anyway (the legacy `confirmed: true` still means both questions).
 
 The Run-menu picker shows this as an in-app modal
 (`#customModelContextWarningModal`, matching the llama-swap conflict
@@ -480,13 +538,31 @@ id, model and injected key NAMES are persisted, the values are re-derived
 from the endpoint store on recovery, and the pane keeps running against the
 endpoint in between because tmux retains its environment.
 
-⚠️ Clearing removes injected keys **by name**, and `CLAUDE_CONFIG_DIR` is one
-of the names claude's selection injects — so a session that ALSO had
-`CLAUDE_CONFIG_DIR` set through the generic `envOverrides` field (the
-per-client-account case) loses that override on clear too, and silently
-falls back to the server's default Claude account. If you route a session
-to a specific account this way, re-apply the override after clearing a
-custom-model selection from it.
+A value the session set itself under an injected key comes back when the
+selection goes, on a clear or a switch to another endpoint. That is what
+keeps a session on its own `DSH_HOME`, `CODEX_HOME` or `GROK_HOME`, and on
+its own account through `CLAUDE_CONFIG_DIR` (the per-client-account case).
+
+The launch model goes the same way: a clear relaunches on the model the session
+was created with, or with none if it was created without one. A session an
+older build launched straight onto an endpoint saved that endpoint's model in
+its config, so its clear still relaunches on that id.
+
+⚠️ Across a Codeman restart only the home directory comes back, and only as
+an absolute path. The selection overwrote the tmux `setenv` that held it, so
+its record in `state.json` keeps that one path (`ownEnv`), and a non-granted
+owner loses it at recovery like any other privileged override. Any other own
+value can be a credential and stays in memory: a session that set its own
+`GEMINI_API_KEY`, picked an endpoint and then outlived a restart falls back to
+the server's key on clear. A selection saved by an older build has no such
+record, so its first clear still falls back to the server's default.
+
+⚠️ That record only exists when the selection was made before the restart. An
+own `DSH_HOME`, `CODEX_HOME` or `GROK_HOME` on a session with no selection is
+not persisted at all (a session's overrides keep only `CLAUDE_CODE_*` and
+`CLAUDE_CONFIG_DIR`), so a Codeman restart leaves nothing to record: an
+endpoint picked after it, and cleared later, falls back to the server's
+default. `CLAUDE_CONFIG_DIR` does not have this gap.
 
 **New sessions always default back to the harness's native backend.** A
 custom-endpoint selection is a per-session choice, never a sticky global
@@ -526,7 +602,12 @@ for '<id>' not found. Defaulting to fallback metadata...` on launch —
   and fabricating a fake catalog entry would mean copying the _shape_ of
   OpenAI's own proprietary schema (their per-model system-prompt content
   included) for a warning that doesn't otherwise affect behavior — not
-  something to build into discovery.
+  something to build into discovery. ⚠️ The fallback-metadata warning is
+  NOT about the context window going un-overridden. Codex does now get a
+  real context-window override: when a figure is known the generated
+  `config.toml` sets the top-level `model_context_window` to it and
+  `model_auto_compact_token_limit` to 75% of it (floored), so Codex
+  compacts at that point instead of trusting its fallback guess.
 - **Gemini** — fails with `Invalid auth method selected`, traced to an
   undocumented `GATEWAY` auth path gemini-cli selects once
   `GOOGLE_GEMINI_BASE_URL` is set. Unresolved after real investigation
@@ -541,20 +622,85 @@ for '<id>' not found. Defaulting to fallback metadata...` on launch —
   `POST <baseUrl>/chat/completions` 404s against llama-swap while
   `POST <baseUrl>/v1/chat/completions` succeeds; the harness's own error
   template (`DeepSeek API error (HTTP ${status})`) matches the originally
-  reported symptom exactly. `customModelInjection`'s new `appendV1Suffix`
-  (deepseek's entry only — claude/gemini must NOT get it, since claude was
-  already confirmed working against the raw `baseUrl`) fixes it by writing
-  `DEEPSEEK_BASE_URL` with `/v1` appended. Not yet re-run end-to-end with a
-  real `dsh` binary (no install available in this environment) — the fix
-  is source-confirmed and live-verified at the HTTP level, but a real
-  "hello world" reply through `dsh` itself is still outstanding before
-  calling this fully verified like the harnesses above.
+  reported symptom exactly. The fix is no longer the original env redirect:
+  deepseek's `customModelInjection` is a `configDir` recipe: a per-session
+  `DSH_HOME` holding only a generated `cordis.patch.yml` that declares a
+  `codeman-custom` `openai-completions` provider (the base URL gets the `/v1`
+  suffix from the shared `renderConfigFile` step every file template goes
+  through), so the installed profile keeps supplying the transport; the
+  recipe's `linkFromRealHome` field symlinks `profiles`, `sessions` and
+  `settings.yaml` back out of the real dsh home so installed bundles,
+  transcripts and user settings all survive the redirect (missing
+  directory entries are created first: a home that has never run a
+  turn would otherwise get a dangling link whose every write through
+  it failed with ENOENT). **Verified end-to-end against a real dsh
+  install by the maintainer** (dsh 0.1.1-rc.2, dsh-TUI 0.10.0-beta.1):
+  `--dump-config` shows the three patched rows, the TUI boots on the
+  chosen model, and a prompt reaches the endpoint as
+  `POST /v1/chat/completions` with the right model, the bearer key and
+  `max_tokens: 8192`; the reply renders and the context window shows in
+  the footer. What such a session SHARES with the real home is
+  exactly the linked entries: `profiles/`, `sessions/`,
+  `settings.yaml`. The last is shared only until the session writes
+  it: dsh saves settings with a temp file and a rename
+  (`writeFileAtomic` in `@deepseek-ai/dsh-atomic-write`), which replaces
+  the symlink, so the first `/settings` change inside such a session
+  never reaches `~/.dsh/settings.yaml` and is deleted with the session's
+  directory on clear or close. Everything else in the generated `DSH_HOME` is
+  isolated: `storages/` (dsh-TUI's persisted `/model` choice and
+  workspace state), `.agent-presets` and `.env`. Two consequences of
+  the generated home-level file follow: the user's own home-level
+  `cordis.patch.yml` does NOT apply in such a session (the generated
+  file replaces it; profile-level patch files reached through the
+  linked `profiles/` still compose), and the generated patch REPLACES
+  the `llm-pi-ai` provider row's whole `config` for the session. Note
+  too that it likewise REPLACES the `dsh-tui` row's whole `config`, so
+  a profile-level `effort`/`preset` does not apply.
 - **Antigravity** — no known custom-endpoint mechanism at all; unsupported.
 
 See the confidence table in `custom-model-endpoints-plan.md` for the full detail behind
 each result. `scripts/test-local-llm-harnesses.ts` is the standalone script
 used to check a harness against a real endpoint outside the web UI
 entirely; see its own `--help` for usage.
+
+## The endpoint store has one writer
+
+`~/.codeman/custom-model-hosts.json` is written only through `mutateCustomModelHosts()`
+(`src/custom-model-hosts-writer.ts`): the create, update, delete and discover routes, the
+five-minute re-discovery sweep and the local model install all go through it.
+
+- **One at a time.** Changes run on one queue, and the check a route makes ("this id is
+  free", "this endpoint still exists") runs in the same step as its write. Before, each
+  writer read the file, changed its copy and wrote it back on its own, all through one temp
+  file name: a route and the sweep, or two requests sent together, could lose each other's
+  change or fail outright.
+- **Atomic.** A temp file with a random name beside the target, then a rename. Mode 0600.
+- **A file that does not parse is refused, not replaced.** The writing routes answer
+  `409 CONFLICT` with the fix (repair or delete the file, or restore it from a config
+  backup) and leave it byte for byte. Before, such a file read as an empty list, and the next
+  save replaced every stored endpoint and its API key with one record. The message never
+  quotes the file, which holds keys.
+
+The one direct writer left is config-backup restore, which must work on a file that does
+not parse.
+
+## The endpoint of the model on this Mac
+
+Installing a local model from Codeman ([local-models.md](local-models.md)) saves one endpoint
+with the reserved id `local-ollama` and the label "This Mac". It shows up in the list and in
+the Run menu like any other endpoint. Three things are different:
+
+- A new endpoint cannot be given the id `local-ollama`.
+- While it is the endpoint the install manages, it cannot be edited or deleted here, and
+  "Discover" answers its stored model list without asking the runtime. Its model list must
+  stay the one model the install checked, and its address the port of the runtime Codeman
+  supervises. Change or remove it in the local model window.
+- A session is started on it only while Codeman's own runtime is running and the model is
+  still the one that was installed (its digest is compared). Otherwise the launch answers
+  with one sentence.
+
+An endpoint with that id that somebody made by hand, with no model installed by Codeman, is
+an ordinary endpoint: it can be edited and deleted as before.
 
 ## Security note
 

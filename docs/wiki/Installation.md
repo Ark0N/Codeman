@@ -25,7 +25,8 @@ curl -fsSL https://getcodeman.com/install | bash
 
 This installs Node.js, tmux and a build toolchain if they are missing (node-pty ships no
 Linux prebuild, so it compiles from source), clones Codeman into `~/.codeman/app`, and
-builds it.
+builds it. On a Mac, the [Codeman app](#on-a-mac-the-codeman-app) can run this installer
+for you, with no Terminal.
 
 It starts by printing what it found (git, Node, tmux, build tools, agent CLIs, Tailscale,
 an existing install), then asks everything it needs up front, then does the work
@@ -78,6 +79,8 @@ install.sh uninstall    # remove (offers to undo a rename it performed)
 install.sh tailscale    # retrofit Tailscale access onto an existing install
 install.sh name [<n>]   # rename this machine on your tailnet (default codeman-<hostname>)
 install.sh cloudflared  # install cloudflared for the in-app Cloudflare tunnel
+install.sh preflight    # print what is on this machine as JSON; changes nothing
+install.sh agent <id>   # install one agent CLI and nothing else, also next to a running Codeman
 ```
 
 **Flags** answer the questions from the command line and pipe through `bash -s --`:
@@ -94,13 +97,73 @@ the name, `--service` / `--run` / `--no-start` the last one. `--yes` takes every
 `--port <n>` moves Codeman off 3000; the service file and the serve mapping follow it. On an
 existing install, `--port` and `--password` re-run the setup so the service file picks them up,
 and a re-run with `--lan` or `--tailscale` keeps the password the service already has.
+`--ai-cli <id>` answers the agent menu that appears when no agent CLI is found, with no
+terminal needed (`--ai-cli claude`, `--ai-cli codex`, ...), and `--ai-cli none` skips it.
+To add an agent later, `install.sh agent codex` installs that one and changes nothing else:
+it does not touch Codeman or its service, and an agent that is already there is left alone.
+Codeman Desktop does the same from *Add a coding agent*. A running Codeman notices the new
+agent at once; reload an open page to see it.
 
 **Automation and CI**: with no terminal attached, any step that would change the system
 aborts with instructions instead of running silently. Set `CODEMAN_NONINTERACTIVE=1` to
-approve those steps. `CODEMAN_TAILSCALE=1` preselects the Tailscale answer, and never
+approve those steps. With nothing else said, that also installs the first agent CLI of the
+catalogue when none is found; `--ai-cli` (or `CODEMAN_AI_CLI`) says which one, or none.
+`CODEMAN_TAILSCALE=1` preselects the Tailscale answer, and never
 installs Tailscale itself non-interactively; a non-interactive run never renames the
 machine and never starts a service. Everything the unattended steps print goes to
 `~/.codeman/install.log`, and the last lines of it are shown when a step fails.
+
+### Without administrator rights
+
+Codeman itself always lived in your home directory. What used `sudo` (or Homebrew on a
+Mac) were the things it needs first. On an account that has no administrator rights the
+installer says so in its summary (`Admin  not used (...)`) and gets those another way:
+
+| Needed                  | With administrator rights    | Without                                                                                                                             |
+| ----------------------- | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Node.js 22              | system package or Homebrew   | The official tarball from nodejs.org, checked against the `SHASUMS256.txt` published beside it, unpacked to `~/.codeman/runtime/node`. |
+| tmux                    | system package or Homebrew   | The tmux project's own build ([tmux-builds](https://github.com/tmux/tmux-builds)), checked against a SHA-256 pinned in the installer, in `~/.codeman/runtime/bin`. |
+| git                     | system package or Xcode tools | Not installed. Without a working git, the source is downloaded as an archive instead of cloned.                                     |
+| Build toolchain (Linux) | system package               | Cannot be supplied. See below.                                                                                                      |
+
+This route is taken by itself when `sudo` is not installed, when the account is outside the
+`sudo`, `wheel` and `admin` groups and `sudo` will not run without a password, when the
+`sudo` password is refused, and on a Mac for an account that is not an administrator and
+has no Homebrew it can write to.
+`--no-admin` (or `CODEMAN_NO_ADMIN=1`) forces it on an account that does have the rights;
+`CODEMAN_NO_ADMIN=0` switches the detection off. Nothing on this route runs `sudo`,
+Homebrew or the Xcode tools installer.
+
+The group check cannot see a sudoers entry, so an account that sudoers lists by name, with
+a password, takes this route too. The summary then reads `could not confirm that this
+account may use sudo`, and to use `sudo` anyway:
+
+```bash
+curl -fsSL https://getcodeman.com/install | CODEMAN_NO_ADMIN=0 bash
+```
+
+What to know about it:
+
+- **Linux needs make, a C++ compiler and python3 to be there already.** node-pty compiles
+  from source on Linux, and a compiler is a system package. The installer checks this
+  before it downloads anything and names what is missing. macOS needs no compiler.
+- **The tmux download needs macOS 15 or newer** (and x86_64 or arm64 on either system).
+  On an older Mac an administrator has to install tmux once (`brew install tmux`); the
+  rest then works without one.
+- **An install without git updates by re-running the install line**, not from App
+  Settings. The re-run builds the new version beside the old one and swaps it in only
+  after the build succeeded, so a failed download or build leaves the install as it was.
+  Once the machine has a working git, the next re-run turns the install into a normal
+  clone and in-app updates work again. On a Mac, "a working git" means the Xcode Command
+  Line Tools are installed: without them `/usr/bin/git` only opens Apple's install dialog,
+  and the installer never runs it.
+- **Tailscale works where it is already installed and your account may configure it.** On
+  Linux, installing it, logging in and granting serve rights each need an administrator
+  (`sudo tailscale set --operator=$USER`, once). Local network and this-machine access
+  need nothing, and `install.sh cloudflared` puts `cloudflared` in `~/.local/bin`.
+- `node`, `npm`, `npx` and `tmux` are linked from `~/.local/bin`, and
+  `~/.codeman/runtime/node/bin` is added to your PATH, so a CLI installed with
+  `npm install -g` is found as well.
 
 ## Route B: npm
 
@@ -144,17 +207,92 @@ See [Contributing](Contributing) for the rest of the development loop.
 ## Route D: Docker Compose
 
 Codeman itself can run in a container and spawn Docker cases as sibling containers through
-the host's Docker socket. Copy `docker/.env.example` to `docker/.env`, set
-`CODEMAN_PASSWORD`, then:
+the host's Docker socket. You need Docker with the Compose v2 plugin (2.27.2 or newer), and
+an account that can use Docker without sudo (on Linux, the `docker` group). Then, on Linux:
 
 ```bash
+git clone https://github.com/Ark0N/Codeman.git && cd Codeman
 bash docker/Start-Codeman.sh
 ```
 
+The first run asks for a data folder, a port and a password. Enter takes each default,
+including a generated password, shown on your terminal and kept in `docker/.env`. It then
+writes that file, builds the image (a few minutes the first time) and ends on the URL once
+Codeman answers. The image
+already includes Claude Code, Codex, Gemini CLI and OpenCode: start a session and log the CLI
+in once, and the login is kept in the data folder.
+
 Run the script again after updating rather than a plain `docker compose up`, so the rebuilt
 image, the refreshed volumes and the entrypoint arrive together. The full guide, including
-storage and networking options, is
+Unraid, storage and networking options, is
 [`docker/README.md`](https://github.com/Ark0N/Codeman/blob/master/docker/README.md).
+
+## On a Mac: the Codeman app
+
+[Download Codeman.dmg](https://github.com/Ark0N/Codeman/releases/latest/download/Codeman.dmg):
+one universal app for Apple Silicon and Intel, macOS 11.3 or later.
+
+A small native app that opens Codeman in its own window. Its first screen has two tabs:
+
+- **This Mac** looks for Codeman here and offers what fits: *Open Codeman* when it runs,
+  *Start Codeman* when it is installed but stopped, *Install Codeman on this Mac* when it is
+  not there. It also lists the Codeman servers of yours that already run on this Mac (one
+  started by hand in a terminal, say) and offers to connect to those; it never starts a
+  second one next to them. Install runs [the installer](#route-a-the-installer-recommended)
+  for you, with no Terminal and no administrator password: it asks which coding agent to
+  install (only when the Mac has none, and *Skip for now* is there) and who may reach
+  Codeman (this Mac only, or the local network with a password), then shows the install as
+  a checklist. *Add a coding agent* on this tab (*Add a Coding Agent to This Mac…* in the app menu) installs one later.
+- **Another machine** connects to Codeman by address, a tailnet name included, and keeps
+  the password in the Keychain. *Codeman is not installed there yet?* opens Terminal and
+  runs the installer on that machine over SSH.
+
+On a MacBook Pro with a PROLED XDR display, whose lid logo lights up,
+**View > Blink Apple Logo** blinks the logo by what your agents are doing, with a style of
+your own for working, for waiting for you and for needing permission. All three are off
+until you choose, and the menu only exists on such a Mac.
+
+### First launch
+
+1. Open `Codeman.dmg` and drag Codeman into Applications.
+2. Open Codeman from Applications. macOS asks once whether to open an app downloaded from
+   the internet: click **Open**.
+3. On macOS 15 and later, the first connection to an address on your local network (a LAN
+   IP, a `.local` name) makes macOS ask whether Codeman may use the local network, and that
+   first attempt can fail while the question is open: connect again after answering. If
+   you denied it, turn Codeman on in **System Settings > Privacy & Security > Local
+   Network**.
+
+What to know about it:
+
+- **Quitting the app does not stop Codeman.** An install from the app runs Codeman as a
+  LaunchAgent that starts at login, so agents keep working with the window closed, and a
+  browser or phone reaches it as before.
+- **Codeman's page needs the WebKit of Safari 16.4.** The app starts on macOS 11.3, but
+  Codeman itself needs macOS 13.3 or later, or macOS 11 or 12 with Safari 16.4 or later
+  installed. On an older WebKit the app says so and does not connect.
+- **The install from the app needs macOS 15, or a tmux that is already there.** tmux comes
+  from the tmux project's own builds, which need macOS 15. On an older Mac without tmux the
+  app offers Terminal instead, where Homebrew installs it (that takes an administrator once).
+- **The install from the app reaches as far as the local network.** Tailscale needs its own
+  login and setup, which the installer does at a terminal: choose *Install in Terminal
+  instead*, or run `install.sh tailscale` afterwards.
+- **Self-signed HTTPS is refused.** A server started with `codeman web --https` uses a
+  self-signed certificate, which macOS's WebKit rejects. Use `http://127.0.0.1:3000` for a
+  server on this Mac. For another machine, serve Codeman through `tailscale serve`
+  (`https://<machine>.<tailnet>.ts.net` has a real certificate) or a reverse proxy with a
+  real certificate.
+- **The Codeman it installs is an ordinary installer install,** made on the
+  [route without administrator rights](#without-administrator-rights), so
+  [Updating](#updating) and [Uninstalling](#uninstalling) below apply to it.
+- **The app does not update itself yet.** Download the new `Codeman.dmg` and drag it over
+  the old copy.
+- **Deleting the app leaves Codeman running.** The app's own settings are in
+  `~/Library/Application Support/Codeman/`, and its saved passwords in the Keychain under
+  *Codeman Desktop*.
+
+Everything else, including how to build it yourself:
+[`packages/desktop/README.md`](https://github.com/Ark0N/Codeman/blob/master/packages/desktop/README.md).
 
 ## Installing an agent CLI
 
@@ -194,6 +332,7 @@ If the dashboard loads and **+ New Session** opens, you are done. Continue to
 | Path                    | What                                                                                             |
 | ----------------------- | ------------------------------------------------------------------------------------------------ |
 | `~/.codeman/app`        | The installed code (installer route only).                                                        |
+| `~/.codeman/runtime`    | Node.js and tmux, when the installer downloaded them instead of using system packages ([no administrator rights](#without-administrator-rights)). |
 | `~/.codeman/`           | All state: `state.json`, settings, session history, push keys, TLS certs. See [Core Concepts](Core-Concepts). |
 | `~/codeman-cases/`      | Cases created from scratch. Linked cases stay wherever they already are.                          |
 | `~/.codeman/web.log`    | Log for a detached (`-d`) server.                                                                 |
@@ -217,9 +356,10 @@ Full detail, including logs and the self-updater, is in
 | Install route | How to update                                                     |
 | ------------- | ----------------------------------------------------------------- |
 | Installer     | Re-run the one-liner, or **App Settings → System → Updates** in the UI. |
+| Installer, without git | Re-run the one-liner. The in-app updater says so instead of offering an update. |
 | npm           | `npm update -g aicodeman`                                          |
 | git clone     | `git pull && npm install && npm run build`, then restart.          |
-| Docker Compose | Re-run `Start-Codeman.sh`. The in-app updater works too, and refuses a release that changes the container definition until you re-run the script. |
+| Docker Compose | `git pull`, then re-run `Start-Codeman.sh`. The in-app updater works too, and refuses a release that changes the container definition until you re-run the script. |
 
 The in-app updater covers git-clone installs supervised by systemd or launchd. It restarts
 the process that is running it, so the actual work happens in a detached script and the
@@ -232,8 +372,12 @@ install.sh uninstall            # installer route
 npm uninstall -g aicodeman      # npm route
 ```
 
-Neither removes `~/.codeman/` or `~/codeman-cases/`. Delete those by hand if you want the
-state and your case folders gone as well, and check `~/codeman-cases/` first: linked cases
+The installer route asks before it removes `~/.codeman/runtime` (the Node.js and tmux it
+downloaded, if any), and keeps it by default when you installed CLIs there with
+`npm install -g`. That folder is inside `~/.codeman/`, so saying yes to the data directory
+question that follows removes it even if you kept it a step earlier, and the question says
+so. By default neither route removes `~/.codeman/` or `~/codeman-cases/`. Delete those by hand
+if you want the state and your case folders gone as well, and check `~/codeman-cases/` first: linked cases
 point at directories you already had, but cases created from scratch have their only copy
 there.
 

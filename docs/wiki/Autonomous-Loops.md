@@ -32,7 +32,7 @@ The shape of it:
 - The loop ends when the agent signals completion, when the iteration cap is reached, or
   when you stop it.
 
-Start it from **Session Options → Ralph / Todo**, or from the wizard on the welcome screen.
+Start it from **Session Options → Ralph / Todo**.
 
 | Setting                | What it does                                                             |
 | ---------------------- | ------------------------------------------------------------------------ |

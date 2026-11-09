@@ -85,8 +85,10 @@ In the browser this means:
 
 The operations that act on the whole server are admin actions too: updating Codeman,
 opening the multi-display window, regenerating the tunnel QR code (it clears every user's
-pending QR login) and cleaning up stale session state. **Revoke All** signs a regular user
-out of their own logins only, and the tunnel panel lists only their own.
+pending QR login) and cleaning up stale session state. So is the **Opened outside Codeman**
+block on the home screens, which shows everyone's processes and opens a shell as the server's
+account. **Revoke All** signs a regular user out of their own logins only, and the tunnel
+panel lists only their own.
 
 Per-user server settings are not part of this version.
 
@@ -99,6 +101,7 @@ Non-admins get tighter defaults, and lifting them is an explicit per-user grant:
 | Claude runs in `auto` permission mode | Anthropic's classifier-guarded mode instead of skip-prompts.           |
 | Raw shell sessions require a grant  | A plain shell is unmediated machine access.                              |
 | Skip-permissions requires a grant   | Same reasoning.                                                          |
+| Codex **Allow network access** requires a grant | It lets a sandboxed command reach any host, Codeman's own API included. |
 | Cron `launchCommand` requires a grant | It is an arbitrary command on a schedule.                              |
 | Pi project trust defaults to off    | Trust makes Pi execute repo-local TypeScript.                            |
 

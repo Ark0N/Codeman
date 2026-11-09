@@ -94,9 +94,11 @@ describe('Session Options modal structure', () => {
     expect(modal.match(/<button[^>]*data-tab="git"[^>]*>/)?.[0]).not.toContain('data-claude-only');
     const open = methodBody('openSessionOptions(sessionId)');
     expect(open).toContain('.set-rail-item[data-tab="git"]');
-    // Remote and Docker sessions answer 'unsupported' on both git routes and the scheduler never fetches them,
-    // so the entry goes the same way the Claude-only ones do.
-    expect(open).toMatch(/gitTabBtn\.style\.display = session\.remote \|\| session\.docker \? 'none' : ''/);
+    // Remote, Docker and adopted sessions answer 'unsupported' on both git routes and the scheduler never fetches
+    // them, so the entry goes the same way the Claude-only ones do.
+    expect(open).toMatch(
+      /gitTabBtn\.style\.display = session\.remote \|\| session\.docker \|\| session\.adopt \? 'none' : ''/
+    );
   });
 
   it('makes the Git rows inert while a session follows the app, the way the keep-warm rows go inert', () => {
@@ -150,6 +152,10 @@ describe('Session Options modal structure', () => {
     const open = methodBody('openSessionOptions(sessionId)');
     expect(open).toContain("getElementById('modalSessionPath')");
     expect(open).toContain('session.workingDir');
-    expect(methodBody('async copySessionPath()')).toContain('_copyText(session.workingDir)');
+    // An adopted session's workingDir is the neutral wrapper folder, so the row shows where the pane was.
+    expect(open).toContain('session.adopt?.paneCurrentPath || session.workingDir');
+    const copy = methodBody('async copySessionPath()');
+    expect(copy).toContain('session?.adopt?.paneCurrentPath || session?.workingDir');
+    expect(copy).toContain('_copyText(path)');
   });
 });

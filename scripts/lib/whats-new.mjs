@@ -19,8 +19,12 @@ export function versionSection(changelog, version) {
 
 // Bold phrases the release notes use as group labels rather than as the headline of a change:
 // "**Fixes.**" heads the list of fixes, "**Fixes applied while landing.**" the review fixes.
-const SECTION_LABELS =
+// Shared with release-notes.mjs, so the toast and the release page agree on what is a headline.
+export const SECTION_LABELS =
   /^(?:thanks\b.*|fixes|fixes applied while landing|docs|docs and tests|new features|also in this release)$/i;
+
+/** A bold lead-in without its closing punctuation. */
+export const cleanLead = (text) => text.replace(/[\s.:]+$/, '').trim();
 
 /** Bold lead-ins at the start of a paragraph or bullet, cleaned for display. */
 export function extractHighlights(section) {
@@ -30,7 +34,7 @@ export function extractHighlights(section) {
     // ("- d18deed: **Lead.** text"), which is the shape every changesets-bot release has.
     const m = /^\s*(?:[-*]\s+)?(?:[0-9a-f]{7,40}:\s+)?\*\*([^*]{3,120})\*\*/.exec(line);
     if (!m) continue;
-    const text = m[1].replace(/[\s.:]+$/, '').trim();
+    const text = cleanLead(m[1]);
     if (!text || SECTION_LABELS.test(text)) continue;
     if (!out.includes(text)) out.push(text);
   }

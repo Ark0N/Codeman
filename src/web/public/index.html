@@ -216,6 +216,13 @@
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
           <span class="attachment-history-badge" id="attachmentHistoryBadge" style="display:none;">0</span>
         </button>
+        <!-- Edit history of the active session (edit-history-ui.js), next to Attachments: both show
+             what the session produced, and the panel opens right below. Optional and per-device
+             (App Settings → Header & Panels → Header, default OFF): hidden by its marker class,
+             never on phones (mobile.css). -->
+        <button type="button" class="btn-icon-header btn-edit-history btn-edit-history--hidden" id="editHistoryBtn" aria-expanded="false" aria-controls="editHistoryPanel" title="Edit history" aria-label="Open edit history" onclick="app.toggleEditHistoryPanel()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>
+        </button>
         <button class="btn-icon-header btn-file-viewer" onclick="app.toggleFileBrowserButton()" title="File Viewer" aria-label="Open file viewer" aria-expanded="false"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path class="icon-folder-closed" d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><g class="icon-folder-open"><path d="M3 17V7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v1.5"/><path d="M3 17l2.3-5.4A2 2 0 0 1 7.2 10.5H20a1.5 1.5 0 0 1 1.4 2l-1.9 5.2A2 2 0 0 1 17.6 19H5a2 2 0 0 1-2-2z"/></g></svg></button>
         <button class="btn-icon-header btn-multimonitor btn-multimonitor--hidden" onclick="app.launchMultiMonitor()" title="Open Codeman across all displays" aria-label="Open Codeman across all displays"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="4" width="13" height="9" rx="1.5"/><rect x="11" y="9" width="11" height="8" rx="1.5"/></svg></button>
         <button class="btn-icon-header btn-split btn-split--hidden" onclick="app.openSplitPicker(event)" title="Split: open a second session beside this one" aria-label="Split: open a second session beside this one" aria-pressed="false"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/></svg></button>
@@ -503,6 +510,17 @@
                it sits under them as a quiet link; settings-ui.js rewrites its
                contents on every state change and owns its inline display. -->
           <div class="welcome-actions">
+            <!-- A model that runs on the Mac the server runs on (local-model-ui.js).
+                 The first thing on the start screen, above the launchers, in the size of
+                 the primary button. A sibling of the launcher slot and never inside it (renderWelcomeCliActions empties that slot on every
+                 state change). Ships `hidden`: only that module reveals it, once the
+                 server has answered for a Mac. It opens the chooser window
+                 (#localModelModal) and the module writes its label through its own
+                 translator call, hence data-i18n-skip. -->
+            <button type="button" class="welcome-chip welcome-local-model" id="welcomeLocalModelBtn" data-i18n-skip hidden onclick="app.openLocalModelWindow()">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9.5 2.5v3.5M14.5 2.5v3.5M9.5 18v3.5M14.5 18v3.5M2.5 9.5H6M2.5 14.5H6M18 9.5h3.5M18 14.5h3.5"/></svg>
+              <span class="welcome-label" id="welcomeLocalModelLabel">Run a local model</span>
+            </button>
             <div class="welcome-cli-actions" id="welcomeCliActions"></div>
             <button type="button" class="welcome-tunnel-link" id="welcomeTunnelBtn" style="display: none;" onclick="app.toggleTunnelFromWelcome()">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
@@ -576,8 +594,13 @@
             </div>
             <div class="history-list" id="historyList"></div>
           </div>
+          <!-- Sessions a human started outside Codeman (foreign-sessions.js).
+               Hidden until a scan finds one; never rendered empty on a fresh
+               install, where an empty block reads as a broken feature. -->
+          <div class="welcome-foreign">
+            <div class="foreign-sessions" id="foreignSessions" hidden></div>
+          </div>
           <p class="welcome-hint">Or click Run to start</p>
-          <button class="welcome-ralph-link" onclick="app.showRalphWizard()">Start Ralph Loop &rarr;</button>
         </div>
       </div>
 
@@ -610,6 +633,11 @@
           <button class="btn-icon-sm" onclick="app.closeFileBrowserPanel()" title="Close">&times;</button>
         </div>
       </div>
+      <div class="file-browser-root" id="fileBrowserRoot" hidden>
+        <span class="file-browser-root-label" id="fileBrowserRootLabel"></span>
+        <span class="file-browser-root-name" id="fileBrowserRootName" data-i18n-skip></span>
+        <button type="button" class="file-browser-root-switch" id="fileBrowserRootSwitch" onclick="app.toggleFileBrowserRoot()">Session folder</button>
+      </div>
       <div class="file-browser-search">
         <input type="text" id="fileBrowserSearch" placeholder="Filter files..." oninput="app.filterFileBrowser(this.value)">
       </div>
@@ -631,6 +659,22 @@
       </div>
       <div class="git-status-body" id="gitStatusBody" data-i18n-skip></div>
       <div class="git-status-footer" id="gitStatusFooter" data-i18n-skip></div>
+    </div>
+
+    <!-- Edit history panel (edit-history-ui.js): every file edit the active session's agents made. -->
+    <div class="edit-history-panel" id="editHistoryPanel" role="dialog" aria-label="Edit history">
+      <div class="edit-history-header">
+        <span class="edit-history-title">Edit history <span class="edit-history-count" id="editHistoryCount" data-i18n-skip></span></span>
+        <div class="edit-history-actions">
+          <button class="btn-icon-sm" onclick="app.refreshEditHistory()" title="Refresh" aria-label="Refresh edit history">&#x21BB;</button>
+          <button class="btn-icon-sm" onclick="app.closeEditHistoryPanel()" title="Close" aria-label="Close edit history">&times;</button>
+        </div>
+      </div>
+      <div class="edit-history-controls">
+        <label class="edit-history-toggle"><input type="checkbox" id="editHistoryGroupToggle" onchange="app.setEditHistoryGrouped(this.checked)"><span>Group by file</span></label>
+        <label class="edit-history-toggle"><input type="checkbox" id="editHistoryMainOnlyToggle" onchange="app.setEditHistoryMainOnly(this.checked)"><span>Main agent only</span></label>
+      </div>
+      <div class="edit-history-body" id="editHistoryBody" data-i18n-skip></div>
     </div>
 
     <!-- File Preview Overlay -->
@@ -1033,6 +1077,20 @@
         </div>
         <div class="modal-body">
           <p class="form-hint" id="customModelPickHint"></p>
+          <!-- Case-insensitive filter over the rendered rows (app.filterCustomModelPick):
+               a display layer only, the rows themselves are never re-rendered. Reset on every
+               open and focused only on non-touch devices, same in-memory rule as the rail's
+               search box. -->
+          <input type="search" id="customModelPickSearch" class="session-sidebar-filter-input custom-model-pick-search"
+            placeholder="Search models" aria-label="Search models"
+            autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search"
+            oninput="app.filterCustomModelPick(this.value)">
+          <p class="form-hint custom-model-pick-no-matches" id="customModelPickNoMatches" role="status" hidden>No models match</p>
+          <!-- Shown only when no row carries a loaded/in-use/last-used mark AND the
+               running-status probe answered `isLlamaSwap: false` (see
+               _openCustomModelPickModal): it says out loud WHY nothing is marked, in the user's language, rather than leaving an
+               alphabetical wall that looks like the question was ignored. -->
+          <p class="form-hint custom-model-pick-unknown" id="customModelPickUnknown" role="status" hidden>Nothing is marked: this endpoint did not report which model it has loaded, and none of your running sessions uses one. Pick the model to launch.</p>
           <div id="customModelPickList" class="run-mode-custom-models"></div>
         </div>
       </div>
@@ -1792,11 +1850,11 @@
           <p class="modal-session-name" id="closeConfirmSessionName"></p>
         </div>
         <div class="close-options">
-          <button class="close-option" onclick="app.confirmCloseSession(false)">
-            <span class="close-option-title">Remove Tab</span>
-            <span class="close-option-desc">Tmux session keeps running in background</span>
+          <button class="close-option" onclick="app.confirmCloseSession(false)" id="closeConfirmKeepBtn">
+            <span class="close-option-title" id="closeConfirmKeepTitle">Remove Tab</span>
+            <span class="close-option-desc" id="closeConfirmKeepDesc">Tmux session keeps running in background</span>
           </button>
-          <button class="close-option close-option-danger" onclick="app.confirmCloseSession(true)">
+          <button class="close-option close-option-danger" onclick="app.confirmCloseSession(true)" id="closeConfirmKillBtn">
             <span class="close-option-title" id="closeConfirmKillTitle">Kill Tmux & Claude Code</span>
             <span class="close-option-desc">Terminate the session completely</span>
           </button>
@@ -2191,6 +2249,7 @@
                     <label class="set-chip" data-preview="header" data-preview-order="5"><input type="checkbox" id="appSettingsShowAwayDigestButton"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></svg><span>Away Digest</span></label>
                     <label class="set-chip" data-preview="header" data-preview-order="6"><input type="checkbox" id="appSettingsShowSessionButton"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg><span>Session Manager</span></label>
                     <label class="set-chip" data-preview="header" data-preview-order="9"><input type="checkbox" id="appSettingsShowAttachmentsButton"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg><span>Attachments</span></label>
+                    <label class="set-chip" data-search="edit history edits changed files diffs" data-preview="header" data-preview-order="9.5"><input type="checkbox" id="appSettingsShowEditHistory"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg><span>Edit history</span></label>
                     <label class="set-chip" data-preview="header" data-preview-order="10"><input type="checkbox" id="appSettingsShowFileViewerButton"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span>File Viewer</span></label>
                     <label class="set-chip" data-preview="header" data-preview-order="11"><input type="checkbox" id="appSettingsShowMultiMonitorButton"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="4" width="13" height="9" rx="1.5"/><rect x="11" y="9" width="11" height="8" rx="1.5"/></svg><span>Multi-monitor</span></label>
                     <label class="set-chip" data-search="split pane side by side two sessions" data-preview="header" data-preview-order="11.5"><input type="checkbox" id="appSettingsShowSplitButton"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/></svg><span>Split</span></label>
@@ -2792,6 +2851,10 @@
                         <input type="text" id="customModelHostBaseUrl" class="set-input" placeholder="http://192.168.1.50:8080">
                       </div>
                       <div class="set-row has-field">
+                        <div class="set-row-text"><span class="set-row-label">Default context length (tokens)</span><span class="set-row-desc">Used for models whose size cannot be discovered. The model's whole window; the Claude floor check divides it by any stored slot count. Leave empty to let each CLI assume its own default.</span></div>
+                        <input type="number" id="customModelHostDefaultContextLength" class="set-input" min="1" max="100000000" step="1" placeholder="131072">
+                      </div>
+                      <div class="set-row has-field">
                         <div class="set-row-text"><span class="set-row-label">API key</span><span class="set-row-desc">Optional. Left blank on edit keeps the existing key.</span></div>
                         <input type="password" id="customModelHostApiKey" class="set-input" autocomplete="new-password">
                       </div>
@@ -2810,6 +2873,28 @@
                         <button type="button" class="btn-toolbar btn-sm" onclick="app.saveCustomModelHostFromEditor()">Save</button>
                         <button type="button" class="btn-toolbar btn-sm" onclick="app.closeCustomModelHostEditor()">Cancel</button>
                       </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- The model that runs on the Mac the server runs on (local-model-ui.js). One row:
+                   the state in a few words, written by the module from GET /api/local-model
+                   through its own translator call (hence data-i18n-skip on the text and on the
+                   button), and a button that opens the chooser window (#localModelModal), where
+                   everything happens. The module shows the group only once the server has
+                   answered for a Mac: it hides it for a server on another system (the title
+                   and hint are about "this Mac"), while the first request is in flight, and
+                   for a non-admin in multi-user mode (the routes are admin-only). Not gated on
+                   the endpoints toggle above: an install switches that on itself. -->
+              <div class="set-group" id="localModelGroup">
+                <div class="set-group-head"><h4>Model on this Mac</h4></div>
+                <p class="set-group-hint">Run a coding model on the Mac that Codeman runs on. No account and no API key.</p>
+                <div class="set-group-body">
+                  <div class="set-row" data-search="local model mac apple silicon memory llm offline install download ollama">
+                    <div class="set-row-text" id="localModelSettings" data-i18n-skip aria-live="polite"></div>
+                    <div class="set-row-actions">
+                      <button type="button" class="btn-toolbar btn-sm" id="localModelSettingsOpen" data-i18n-skip onclick="app.openLocalModelWindow()">Open</button>
                     </div>
                   </div>
                 </div>
@@ -2888,7 +2973,7 @@
                   <div class="set-row" data-search="agent skill codeman api workers codex gemini opencode pi grok deepseek omp antigravity">
                     <div class="set-row-text">
                       <span class="set-row-label">Codeman Agent Skill</span>
-                      <span class="set-row-desc">Write Codeman's agent skill into each new session's folder, where that CLI looks for skills, so the agent in it can start workers in any installed CLI, send them prompts and wait for results. Every CLI except Pi and a plain shell.</span>
+                      <span class="set-row-desc">Write Codeman's agent skill into each new session's folder, where that CLI looks for skills, so the agent in it can start workers in any installed CLI, send them prompts and wait for results. Every CLI except Pi, GitHub Copilot and a plain shell. On by default. The copy ignores itself in git, so your repository never lists it as a new file. Off stops new copies but removes none: <code>codeman skill uninstall --case &lt;name&gt;</code> does that.</span>
                     </div>
                     <label class="switch switch-sm"><input type="checkbox" id="appSettingsAgentSkill"><span class="slider"></span></label>
                   </div>
@@ -3002,6 +3087,13 @@
                       <span class="set-row-desc">Start new Codex sessions with --dangerously-bypass-approvals-and-sandbox.</span>
                     </div>
                     <label class="switch switch-sm"><input type="checkbox" id="appSettingsCodexDangerouslyBypassApprovals"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row" data-search="codex network access sandbox loopback codeman skill orchestrate spawn">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Allow network access</span>
+                      <span class="set-row-desc">Lets commands in Codex's workspace-write sandbox use the network, which the Codeman skill needs to reach this server. Those commands can then call Codeman's API, which can start a session outside the sandbox with no approval prompt, even when a password is set. So with this on, Codex's sandbox does not contain a prompt-injected command: treat it as close to Bypass. Applies to every new local Codex session, not scheduled jobs. It does not change Codex's sandbox mode: a folder Codex runs read-only (one it does not trust) keeps the network closed and asks per command.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsCodexNetworkAccess"><span class="slider"></span></label>
                   </div>
                   <div class="set-row" data-search="codex animations status effects">
                     <div class="set-row-text">
@@ -3232,6 +3324,97 @@
                     </span>
                   </div>
                   <div id="webhookResult" class="set-note" style="display:none" data-i18n-skip></div>
+                </div>
+              </div>
+              <div class="set-group" id="discordGroup" style="display:none">
+                <div class="set-group-head"><h4>Discord (two-way, one thread per tab)</h4><span class="set-scope">server</span></div>
+                <div class="set-group-body">
+                  <div class="set-row" data-search="discord bot thread reply phone notification blocked">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Talk to your sessions from Discord</span>
+                      <span class="set-row-desc">Posts alerts into a thread per tab and types your reply in that thread into the tab. Only the user IDs listed below can reply. Setup (bot, least-privilege permissions) is in docs/discord-bridge.md. This group has its own Save button.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="discordEnabled"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row has-field">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Bot token</span>
+                      <span class="set-row-desc" id="discordTokenHint">Nothing saved yet.</span>
+                    </div>
+                    <input type="password" id="discordToken" class="set-input" autocomplete="off" spellcheck="false" placeholder="Bot token from the Developer Portal">
+                  </div>
+                  <div class="set-row has-field">
+                    <div class="set-row-text"><span class="set-row-label">Guild (server) ID</span></div>
+                    <input type="text" id="discordGuildId" class="set-input" autocomplete="off" spellcheck="false" inputmode="numeric">
+                  </div>
+                  <div class="set-row has-field">
+                    <div class="set-row-text"><span class="set-row-label">Parent channel ID</span><span class="set-row-desc">Threads are created inside this channel.</span></div>
+                    <input type="text" id="discordParentChannelId" class="set-input" autocomplete="off" spellcheck="false" inputmode="numeric">
+                  </div>
+                  <div class="set-row has-field">
+                    <div class="set-row-text"><span class="set-row-label">Allowed user IDs</span><span class="set-row-desc">Comma separated. Only these Discord users can reply into a session.</span></div>
+                    <input type="text" id="discordAllowedUserIds" class="set-input" autocomplete="off" spellcheck="false">
+                  </div>
+                  <div class="set-row has-field">
+                    <div class="set-row-text"><span class="set-row-label">Create threads</span></div>
+                    <select id="discordThreadCreation" class="set-select">
+                      <option value="lazy">On the first alert</option>
+                      <option value="onSessionStart">For every new tab</option>
+                    </select>
+                  </div>
+                  <div class="set-row has-field">
+                    <div class="set-row-text"><span class="set-row-label">When a tab is deleted</span><span class="set-row-desc">Deleting a thread needs the Manage Threads permission on the channel.</span></div>
+                    <select id="discordOnSessionDelete" class="set-select">
+                      <option value="keep">Keep the thread</option>
+                      <option value="archive">Archive the thread</option>
+                      <option value="delete">Delete the thread</option>
+                    </select>
+                  </div>
+                  <div class="set-row has-field">
+                    <div class="set-row-text"><span class="set-row-label">Stale threads</span><span class="set-row-desc">Threads this bot made that no tab uses any more, checked after startup and then daily. This includes threads that &quot;When a tab is deleted&quot; kept or archived. Threads under an hour old are skipped. Use one channel per Codeman.</span></div>
+                    <select id="discordStaleThreads" class="set-select">
+                      <option value="keep">Leave them</option>
+                      <option value="archive">Archive them</option>
+                      <option value="delete">Delete them</option>
+                    </select>
+                  </div>
+                  <div class="set-row has-field">
+                    <div class="set-row-text"><span class="set-row-label">@ ping</span></div>
+                    <select id="discordPingMode" class="set-select">
+                      <option value="off">Never</option>
+                      <option value="critical">Critical events only</option>
+                      <option value="all">Every post</option>
+                    </select>
+                  </div>
+                  <div class="set-row">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Tell Claude how to reach you</span>
+                      <span class="set-row-desc">Adds a short note about the codeman notify command to Claude's system prompt at launch, for when it is blocked on something only you can do. Nothing appears in the conversation. Local tabs only: remote and Docker tabs have no codeman command.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="discordStartupHint"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row has-field">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Which events</span>
+                      <span class="set-row-desc">"Needs attention" skips the routine "response complete" message.</span>
+                    </div>
+                    <select id="discordScope" class="set-select">
+                      <option value="attention">Needs attention</option>
+                      <option value="all">Everything</option>
+                    </select>
+                  </div>
+                  <div class="set-row">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Save and test</span>
+                      <span class="set-row-desc">Send test saves first, then posts to the parent channel.</span>
+                    </div>
+                    <span>
+                      <button class="btn-toolbar btn-sm btn-primary" id="discordSaveBtn" onclick="app.saveDiscord()">Save</button>
+                      <button class="btn-toolbar btn-sm" id="discordTestBtn" onclick="app.testDiscord()">Send test</button>
+                      <button class="btn-toolbar btn-sm" id="discordClearBtn" onclick="app.clearDiscord()" style="display:none">Remove token</button>
+                    </span>
+                  </div>
+                  <div id="discordResult" class="set-note" style="display:none" data-i18n-skip></div>
                 </div>
               </div>
             </section>
@@ -3494,6 +3677,27 @@
       </div>
     </div>
 
+    <!-- The local model window (local-model-ui.js): choose a model, confirm the sizes,
+         watch the download, start a session. Opened by the welcome button and by the
+         row in App Settings > Models; placed AFTER #appSettingsModal so it stacks above
+         it when opened from there. The module fills the body from GET /api/local-model
+         through its own translator call (model, agent and chip names are someone
+         else's text), hence data-i18n-skip on the body; the title and the close button
+         are static and go through the page translator. -->
+    <div class="modal" id="localModelModal" role="dialog" aria-modal="true" aria-labelledby="localModelModalTitle">
+      <div class="modal-backdrop" onclick="app.closeLocalModelWindow()"></div>
+      <div class="modal-content local-model-window">
+        <div class="modal-header">
+          <h3 id="localModelModalTitle">Run a model on this Mac</h3>
+          <button class="modal-close" onclick="app.closeLocalModelWindow()" aria-label="Close">&times;</button>
+        </div>
+        <div class="modal-body lm-body" id="localModelWindowBody" data-i18n-skip></div>
+        <!-- The buttons of the current screen. Outside the body, so they keep their
+             place while the body changes and scrolls. -->
+        <div class="lm-foot-slot" id="localModelWindowFoot" data-i18n-skip></div>
+      </div>
+    </div>
+
     <!-- Shortcut Overlay Modal -->
     <div class="modal shortcut-overlay-modal" id="shortcutOverlayModal" tabindex="-1">
       <div class="modal-backdrop" onclick="app.closeShortcutOverlay()"></div>
@@ -3654,7 +3858,19 @@
             <div class="form-row">
               <label>Case Name</label>
               <input type="text" id="cloneCaseName" placeholder="repo" pattern="[a-zA-Z0-9_-]+" autocomplete="off" autocapitalize="off" spellcheck="false" oninput="app.onCloneNameEdited()">
-              <span class="form-hint">Filled in from the URL. Cloned into ~/codeman-cases/&lt;name&gt;, so deleting the case deletes this working tree.</span>
+              <span class="form-hint" id="cloneCaseNameHint">Filled in from the URL. Cloned into ~/codeman-cases/&lt;name&gt;, so deleting the case deletes this working tree.</span>
+            </div>
+            <div class="form-row" id="cloneCustomPathToggleRow">
+              <label class="checkbox-row"><input type="checkbox" id="cloneCustomPathToggle" onchange="app.toggleCloneCustomPath()"> 📁 Clone into a custom folder</label>
+              <span class="form-hint">By default the clone goes under ~/codeman-cases. Choose a folder instead and the repository is cloned into a subfolder of it named after the case, the same way it goes under ~/codeman-cases; it is listed like any other case, and deleting the case only unlinks it (your files stay).</span>
+            </div>
+            <div class="form-row" id="cloneCustomPathRow" style="display:none">
+              <label>Parent Folder</label>
+              <div class="path-input-group">
+                <input type="text" id="cloneCasePath" placeholder="~/projects" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" oninput="app.updateCloneCasePathPreview()">
+                <button type="button" class="btn path-input-browse" onclick="app.openCloneCasePathPicker()">Browse&hellip;</button>
+              </div>
+              <span class="form-hint" id="cloneCasePathPreview">Pick the folder the repository should be cloned inside. It goes into a subfolder named after the case.</span>
             </div>
             <div class="form-row">
               <label>Branch or Tag (optional)</label>
@@ -4519,7 +4735,10 @@
   <script defer src="webview-tabs.js"></script>
   <script defer src="mobile-overview.js"></script>
   <script defer src="home-sessions.js"></script>
+  <script defer src="foreign-sessions.js"></script>
   <script defer src="git-status-ui.js"></script>
+  <script defer src="edit-history-ui.js"></script>
+  <script defer src="local-model-ui.js"></script>
   <script defer src="entrance-animations.js"></script>
   <script defer src="ralph-wizard.js"></script>
   <script defer src="api-client.js"></script>

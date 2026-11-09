@@ -25,9 +25,12 @@
  * | tools        | ActiveBashTool, ImageDetectedEvent                                    | In-memory, broadcast via SSE                   |
  * | teams        | TeamConfig, TeamMember, TeamTask, InboxMessage, PaneInfo              | `~/.claude/teams/`, `~/.claude/tasks/` → `GET /api/teams` |
  * | push         | PushSubscriptionRecord, VapidKeys, WebhookConfig, WebhookStatus, WebhookResult | `~/.codeman/push-keys.json`, `~/.codeman/push-subscriptions.json`, `~/.codeman/webhook.json` |
+ * | discord      | DiscordConfig, DiscordResult, DiscordStatus, DiscordGatewayState      | `~/.codeman/discord.json` → `GET`/`PUT /api/discord` |
  * | plan         | PlanItem, PlanTaskStatus, TddPhase                                    | In-memory → `GET /api/sessions/:id/plan/tasks` |
  * | orchestrator | OrchestratorState, OrchestratorPlan, OrchestratorConfig, OrchestratorPersistState | `~/.codeman/state.json` → `GET /api/orchestrator/status` |
  * | mcp-sync     | McpSyncResult, McpSyncTargetResult                                    | Other CLIs' own config files → `GET`/`POST /api/mcp-sync` |
+ * | local-model  | HardwareFacts, LocalModelCatalog, Candidate, Recommendation, RecommendOptions, LOCAL_MODEL_LABELS | In-memory only (nothing persisted) → `GET /api/local-model` |
+ * | local-model-install | LocalModelStatus, LocalModelInstallView, LocalModelStateFile, LocalModelRuntimePin, LOCAL_MODEL_INSTALL_LABELS | `~/.codeman/local-model.json` → `GET /api/local-model` and its install verbs |
  *
  * ## Cross-domain relationship map
  *
@@ -65,6 +68,7 @@ export * from './run-summary.js';
 export * from './tools.js';
 export * from './teams.js';
 export * from './push.js';
+export * from './discord.js';
 export * from './plan.js';
 export * from './orchestrator.js';
 export * from './update.js';
@@ -73,4 +77,7 @@ export * from './search.js';
 export * from './user.js';
 export * from './webview.js';
 export * from './intent.js';
+export * from './foreign-tmux.js';
 export * from './mcp-sync.js';
+export * from './local-model.js';
+export * from './local-model-install.js';

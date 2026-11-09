@@ -10,9 +10,9 @@
  * cli-registry changes" requirement it was written against.
  */
 
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { homedir, platform } from 'node:os';
-import { join, dirname } from 'node:path';
+import { join, dirname, isAbsolute } from 'node:path';
 import { dataPath } from './config/instance.js';
 import type { CliEntry } from './config/cli-registry/types.js';
 import {
@@ -30,23 +30,97 @@ export function customModelConfigDir(sessionId: string): string {
  * Writes a `ConfigDirInjection`'s files under `baseDir` and returns the full
  * envOverrides object a caller should merge into the session/process env
  * (the dir-redirect var plus any `extraEnv` the config file references by
- * name). Never touches anything outside `baseDir` — the caller is
- * responsible for choosing an isolated directory (never the user's real
- * `~/.codex`, `~/.pi`, etc.).
+ * name). The generated files stay under `baseDir`, but a recipe that declares
+ * `linkFromRealHome` additionally links (and, for missing directory targets,
+ * creates) entries in the CLI's REAL home: the caller is still responsible
+ * for choosing an isolated `baseDir` (never the user's real `~/.codex`,
+ * `~/.pi`, etc.), it is just no longer the only directory touched.
  *
  * pi and omp embed the API key literally in the file, so the tree is written
  * 0700/0600 like every other secret-bearing file under `~/.codeman`; the chmod
  * covers a re-apply onto a file that already exists (`mode` only applies at
  * creation).
  */
-export function applyConfigDirInjection(baseDir: string, injection: ConfigDirInjection): Record<string, string> {
+export function applyConfigDirInjection(
+  baseDir: string,
+  injection: ConfigDirInjection,
+  /**
+   * The value this SESSION's own env overrides set for `injection.dirEnvVar`, when it
+   * set one: a user who relocated the CLI's real home (an allowlisted key like
+   * DSH_HOME) must have their state linked from THAT directory, not the server's.
+   */
+  sessionHomeOverride?: string
+): Record<string, string> {
   for (const file of injection.files) {
     const filePath = join(baseDir, file.relPath);
     mkdirSync(dirname(filePath), { recursive: true, mode: 0o700 });
     writeFileSync(filePath, file.content, { encoding: 'utf8', mode: 0o600 });
     chmodSync(filePath, 0o600);
   }
+  linkRealHomeEntries(baseDir, injection, sessionHomeOverride);
   return { [injection.dirEnvVar]: baseDir, ...injection.extraEnv };
+}
+
+/**
+ * Symlinks the registry recipe's `linkFromRealHome` entries out of the CLI's real home
+ * into the otherwise-isolated `baseDir`, so redirecting `dirEnvVar` moves only the
+ * generated config file and not the state that has to survive the session (deepseek:
+ * the `sessions` transcript root `removeConfigDir` would otherwise delete, the `profiles`
+ * bundles the patch composes over, and `settings.yaml`). Declared per entry in stock.ts:
+ * this consumer is recipe-driven and names no CLI itself.
+ *
+ * Home resolution: the session's own override first (unless it IS `baseDir`, a re-apply
+ * onto a session already holding a previous injection's value must not self-link), then
+ * the server's environment, then the recipe's `realHomeFallback`. Only ABSOLUTE values
+ * are considered: a set-but-relative `DSH_HOME`-style home resolves against the CLI's
+ * cwd, and joining it here would mkdir/symlink under the SERVER's working directory and
+ * leave relative links that dangle. No home resolvable =
+ * no links, same best-effort posture as `linkSharedProjectsDir()`.
+ */
+function linkRealHomeEntries(baseDir: string, injection: ConfigDirInjection, sessionHomeOverride?: string): void {
+  const names = injection.linkFromRealHome;
+  if (!names || names.length === 0) return;
+  const absoluteOnly = (value: string | undefined): string | undefined =>
+    value && isAbsolute(value) ? value : undefined;
+  const fromSession = sessionHomeOverride?.trim();
+  const realHome =
+    absoluteOnly(fromSession && fromSession !== baseDir ? fromSession : undefined) ||
+    absoluteOnly(process.env[injection.dirEnvVar]?.trim()) ||
+    (injection.realHomeFallback ? join(homedir(), injection.realHomeFallback) : undefined);
+  if (!realHome) return;
+  const dirs = new Set(injection.linkFromRealHomeDirs ?? []);
+  for (const name of names) {
+    linkRealHomeEntry(join(realHome, name), join(baseDir, name), dirs.has(name));
+  }
+}
+
+function linkRealHomeEntry(target: string, link: string, isDir: boolean): void {
+  // lstat, never existsSync: existsSync is false for a DANGLING link, and recovery
+  // re-applies on every restart, so the second pass would try to recreate the link and
+  // throw EEXIST. lstat answers for real entries, good links and dangling links alike.
+  try {
+    if (lstatSync(link)) return; // already linked (idempotent re-apply) or a real dir wrote one
+  } catch {
+    // ENOENT: nothing is here yet, the only state in which a link gets created
+  }
+  if (!existsSync(target)) {
+    if (!isDir) return; // missing FILE target: skip, never plant a dangling file link
+    // Missing DIRECTORY target: a dangling directory link is not inert, since the CLI's own
+    // recursive mkdir THROUGH it fails ENOENT on every turn (dsh writing under
+    // `$DSH_HOME/sessions` on a fresh/relocated home). Create it first, 0700, exactly
+    // what dsh itself does on a first turn.
+    try {
+      mkdirSync(target, { recursive: true, mode: 0o700 });
+    } catch {
+      return; // e.g. the target's parent refuses writes: no link rather than a dangling one
+    }
+  }
+  try {
+    symlinkSync(target, link, platform() === 'win32' ? 'junction' : 'dir');
+  } catch {
+    // best-effort only: a platform that refuses symlinks keeps the documented
+    // side effect for this session rather than failing the whole apply over it
+  }
 }
 
 /**
@@ -61,22 +135,30 @@ function realClaudeConfigDir(): string {
 }
 
 /**
- * Symlinks `<isolatedDir>/projects` back to the real, shared `~/.claude/projects`, so an
- * isolated `CLAUDE_CONFIG_DIR` (used to keep an injected API key away from a stored OAuth
- * session — see `configDirVar` on customModelInjection) doesn't also blind the response
- * viewer, subagent windows, and Read My Mind for that session (docs/wiki/Agent-CLIs.md).
- * Best-effort: a platform that refuses symlinks (unprivileged Windows without a junction
- * fallback working, e.g.) just keeps the pre-existing documented side effect instead of
- * failing the whole custom-model apply over a nice-to-have.
+ * Symlinks `<isolatedDir>/projects` back to the session's own config dir when it set one,
+ * else the real, shared `~/.claude/projects`, so an isolated `CLAUDE_CONFIG_DIR` (used to
+ * keep an injected API key away from a stored OAuth session, see `configDirVar` on
+ * customModelInjection) doesn't also blind the response viewer, subagent windows, and Read
+ * My Mind for that session (docs/wiki/Agent-CLIs.md). Best-effort: a platform that refuses
+ * symlinks (unprivileged Windows without a junction fallback working, e.g.) just keeps the
+ * pre-existing documented side effect instead of failing the whole custom-model apply over
+ * a nice-to-have.
+ *
+ * The own dir matters beyond that: the resume pin looks in `<isolatedDir>/projects`, so the
+ * server's tree would hide the conversation on apply and keep the endpoint's transcript out
+ * of the own dir's sight on clear. Same absolute-only and no-self-link rules as
+ * `linkRealHomeEntries()`, and a relative value of the server's own gets no link, since
+ * joining it would create `projects` under the server's working directory.
+ *
+ * ⚠️ The link target is a user-chosen path and `linkRealHomeEntry()` probes and creates it
+ * synchronously: every caller of `applyCustomModelInjection` passes a lookup that went
+ * through `guardSessionConfigDirHome()` first (rule #516).
  */
-function linkSharedProjectsDir(isolatedDir: string): void {
-  const link = join(isolatedDir, 'projects');
-  if (existsSync(link)) return; // already linked (idempotent re-apply) or real dir wrote one
-  try {
-    symlinkSync(join(realClaudeConfigDir(), 'projects'), link, platform() === 'win32' ? 'junction' : 'dir');
-  } catch {
-    // best-effort only — response viewer/subagent windows go blind for this session instead
-  }
+function linkSharedProjectsDir(isolatedDir: string, sessionConfigDir?: string): void {
+  const own = sessionConfigDir?.trim();
+  const configDir = own && own !== isolatedDir && isAbsolute(own) ? own : realClaudeConfigDir();
+  if (!isAbsolute(configDir)) return;
+  linkRealHomeEntry(join(configDir, 'projects'), join(isolatedDir, 'projects'), true);
 }
 
 /**
@@ -227,6 +309,8 @@ export interface AppliedCustomModel {
   envKeys: string[];
   configDir?: string;
   launchModel?: string;
+  /** The env key among `envKeys` that moves the CLI's home, see `CustomModelBookkeeping`. */
+  homeEnvVar?: string;
 }
 
 /**
@@ -250,7 +334,13 @@ export function applyCustomModelInjection(
    * trust-dialog seed, and only when provided (boot recovery, which has no reason to
    * re-answer a dialog that already fired once, omits it rather than re-deriving it).
    */
-  workingDir?: string
+  workingDir?: string,
+  /**
+   * Reads one env var from the SESSION's own env overrides (single-key on purpose: the
+   * map carries credentials). Resolves the CLI's real home from the session's value before
+   * the server's: `linkFromRealHome` for the `configDir` kind, `projects` for `configDirVar`.
+   */
+  sessionEnvLookup?: (envVar: string) => string | undefined
 ): AppliedCustomModel | undefined {
   const injection = buildCustomModelInjection(entry, endpoint, modelId, contextLength);
   if (injection.kind === 'unsupported') return undefined;
@@ -265,7 +355,7 @@ export function applyCustomModelInjection(
     if (injection.configDirVar) {
       configDir = customModelConfigDir(sessionId);
       mkdirSync(configDir, { recursive: true, mode: 0o700 });
-      linkSharedProjectsDir(configDir);
+      linkSharedProjectsDir(configDir, sessionEnvLookup?.(injection.configDirVar));
       if (injection.apiKeyTrustFile && injection.apiKey) {
         seedApiKeyTrustFile(configDir, injection.apiKeyTrustFile, injection.apiKey);
       }
@@ -280,9 +370,16 @@ export function applyCustomModelInjection(
       envKeys: Object.keys(envOverrides),
       configDir,
       launchModel: injection.launchModel,
+      homeEnvVar: injection.configDirVar,
     };
   }
   const configDir = customModelConfigDir(sessionId);
-  const envOverrides = applyConfigDirInjection(configDir, injection);
-  return { envOverrides, envKeys: Object.keys(envOverrides), configDir, launchModel: injection.launchModel };
+  const envOverrides = applyConfigDirInjection(configDir, injection, sessionEnvLookup?.(injection.dirEnvVar));
+  return {
+    envOverrides,
+    envKeys: Object.keys(envOverrides),
+    configDir,
+    launchModel: injection.launchModel,
+    homeEnvVar: injection.dirEnvVar,
+  };
 }

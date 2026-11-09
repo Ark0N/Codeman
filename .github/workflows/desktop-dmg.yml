@@ -1,0 +1,399 @@
+name: macOS app
+
+# Builds Codeman.app (Apple Silicon + Intel), signs it with the Developer ID,
+# has Apple notarize the app and the DMG, and attaches Codeman.dmg and
+# Codeman.dmg.sha256 to a Codeman release. The asset name never changes, so
+# https://github.com/Ark0N/Codeman/releases/latest/download/Codeman.dmg always
+# serves the newest app.
+#
+# Release calls this when npm took a Codeman release, with tag codeman@<version>,
+# and it builds the release commit. By hand, once this file is on master:
+#   gh workflow run desktop-dmg.yml                          # dry run of master: artifacts only
+#   gh workflow run desktop-dmg.yml --ref <branch>           # dry run of a branch that carries this file
+#   gh workflow run desktop-dmg.yml -f tag=codeman@1.50.0    # rebuild that tag, replace its Codeman.dmg
+# Only a run on master (or Release itself) attaches anything; every run leaves
+# the signed Codeman.dmg as an artifact on its run page. A rebuild takes only a
+# Codeman release tag whose commit is on master ("Check the tag", in build and
+# in sign).
+#
+# A dispatch runs its ref's copy of this file with the secrets, as every
+# repository secret reaches anyone with write access. A GitHub Environment
+# limited to master would not narrow the rebuild path (the job's ref is master
+# while it runs the tag's scripts) and would refuse the branch dry run above;
+# the tag check is what keeps a rebuild on master's history.
+#
+# Three jobs, so no job that holds a secret runs code from a crate:
+# - build runs cargo, and with it the build script of every crate in
+#   Cargo.lock. It has a read-only token and nothing else: no secret, no cache.
+# - sign gets the built app as an artifact and runs only Apple's tools and this
+#   repository's scripts on it. It alone holds the signing and notary secrets.
+# - attach has the one token that can write to a release, and no secret.
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Release to attach Codeman.dmg to (codeman@x.y.z); empty attaches nothing
+        type: string
+        required: false
+        default: ''
+    secrets:
+      MACOS_CERT_P12:
+        description: The Developer ID Application certificate with its private key, a base64 .p12
+        required: true
+      MACOS_CERT_PASSWORD:
+        description: The .p12's password
+        required: true
+      APPLE_ID:
+        description: Apple ID of the developer team, for the notary service
+        required: true
+      APPLE_APP_PASSWORD:
+        description: An app-specific password for that Apple ID
+        required: true
+      APPLE_TEAM_ID:
+        description: The team ID the certificate belongs to
+        required: true
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to rebuild and attach to, e.g. codeman@1.50.0. Empty: dry run, artifacts only'
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+env:
+  # What the macos-26 image and the Mac mini that built every tested DMG both ran
+  # on 2026-11-08. Move it deliberately, together with desktop-ci.yml; Cargo.toml's
+  # rust-version is the floor.
+  RUST_TOOLCHAIN: '1.99.1'
+  # The commit to build: a rebuild by hand builds the tag it attaches to; Release
+  # (a push to master) and a dry run build the commit they ran on.
+  BUILD_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.tag != '' && format('refs/tags/{0}', inputs.tag) || github.sha }}
+
+jobs:
+  build:
+    name: Build Codeman.app
+    runs-on: macos-26
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ env.BUILD_REF }}
+          persist-credentials: false
+
+      # A rebuild by hand builds the tag it names, and sign then runs that tag's
+      # scripts with the Developer ID key unlocked. So the tag must be a Codeman
+      # release (another package's tag would put Codeman.dmg on its release), and
+      # its commit must be on master's history, where those scripts were reviewed.
+      # aicodeman@ is the tag a failed rename leaves (Release's retag step).
+      # A tag can move between jobs, so build and sign each check their own
+      # checkout. Inline on purpose: a script from the checkout would be the
+      # tag's own code. Kept the same as the step in sign.
+      - name: Check the tag
+        if: github.event_name == 'workflow_dispatch' && inputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          TAG_RE='^(ai)?codeman@[0-9]+\.[0-9]+\.[0-9]+$'
+          if ! [[ $TAG =~ $TAG_RE ]]; then
+            echo "::error::The tag input is not a Codeman release tag (codeman@x.y.z)"
+            exit 1
+          fi
+          SHA=$(git rev-parse HEAD)
+          # behind: an ancestor of master's tip; identical: the tip itself.
+          STATUS=$(gh api "repos/$GITHUB_REPOSITORY/compare/master...$SHA" --jq .status)
+          case "$STATUS" in
+            behind | identical) echo "$TAG ($SHA) is on master's history" ;;
+            *)
+              echo "::error::$TAG ($SHA) is not on master's history (compare says $STATUS)"
+              exit 1
+              ;;
+          esac
+
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal \
+            --target aarch64-apple-darwin --target x86_64-apple-darwin
+          rustup default "$RUST_TOOLCHAIN"
+          rustc --version
+          cargo --version
+
+      # A release installs Codeman from getcodeman.com/install and master. A test
+      # build bakes another installer in at compile time (option_env! in setup.rs),
+      # so neither variable may reach cargo here, and setup.rs's tests pin the default.
+      - name: Unit tests
+        working-directory: packages/desktop
+        run: |
+          unset CODEMAN_DESKTOP_INSTALLER_URL CODEMAN_DESKTOP_INSTALL_BRANCH
+          cargo test --locked
+
+      - name: Bundle Codeman.app (signed ad hoc)
+        working-directory: packages/desktop
+        run: |
+          unset CODEMAN_DESKTOP_INSTALLER_URL CODEMAN_DESKTOP_INSTALL_BRANCH SIGN_IDENTITY
+          ./scripts/bundle-macos.sh --universal
+
+      - name: Check the build
+        working-directory: packages/desktop
+        run: |
+          BIN=dist/Codeman.app/Contents/MacOS/codeman-desktop
+          lipo "$BIN" -verify_arch arm64 x86_64
+          codesign --verify --strict dist/Codeman.app
+          strings -a "$BIN" > "$RUNNER_TEMP/strings.txt"
+          if grep -E 'raw\.githubusercontent\.com|test/desktop-' "$RUNNER_TEMP/strings.txt"; then
+            echo "::error::A test installer URL or branch is baked into the app"
+            exit 1
+          fi
+          grep -q 'https://getcodeman.com/install' "$RUNNER_TEMP/strings.txt"
+
+      # ditto keeps the bundle's modes, symlinks and extended attributes; an
+      # artifact of the bare folder would not (upload-artifact sets every file to
+      # 644). The artifact is a zip around this zip: download-artifact unpacks the
+      # outer one and leaves the ditto zip as it was.
+      - name: Archive Codeman.app
+        run: |
+          mkdir -p "$RUNNER_TEMP/unsigned"
+          ditto -c -k --sequesterRsrc --keepParent packages/desktop/dist/Codeman.app "$RUNNER_TEMP/unsigned/Codeman.app.zip"
+
+      - name: Upload the unsigned app
+        uses: actions/upload-artifact@v7
+        with:
+          name: codeman-app-unsigned
+          path: ${{ runner.temp }}/unsigned/Codeman.app.zip
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
+
+  sign:
+    name: Sign and notarize
+    needs: build
+    runs-on: macos-26
+    # Two notary submissions; each usually takes minutes, and sign-macos.sh
+    # gives each at most 45.
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    steps:
+      # For sign-macos.sh, make-dmg.sh and macos/entitlements.plist only. Nothing
+      # here builds or runs code from the app or its crates.
+      - name: Checkout repo
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ env.BUILD_REF }}
+          persist-credentials: false
+
+      # The same check as in build, on this job's own checkout, before anything
+      # here touches a secret. Kept the same as the step in build.
+      - name: Check the tag
+        if: github.event_name == 'workflow_dispatch' && inputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          TAG_RE='^(ai)?codeman@[0-9]+\.[0-9]+\.[0-9]+$'
+          if ! [[ $TAG =~ $TAG_RE ]]; then
+            echo "::error::The tag input is not a Codeman release tag (codeman@x.y.z)"
+            exit 1
+          fi
+          SHA=$(git rev-parse HEAD)
+          # behind: an ancestor of master's tip; identical: the tip itself.
+          STATUS=$(gh api "repos/$GITHUB_REPOSITORY/compare/master...$SHA" --jq .status)
+          case "$STATUS" in
+            behind | identical) echo "$TAG ($SHA) is on master's history" ;;
+            *)
+              echo "::error::$TAG ($SHA) is not on master's history (compare says $STATUS)"
+              exit 1
+              ;;
+          esac
+
+      - name: Download the unsigned app
+        uses: actions/download-artifact@v8
+        with:
+          name: codeman-app-unsigned
+          path: ${{ runner.temp }}/unsigned
+
+      # The build job ran every crate's build script, so its zip is checked before
+      # this job, which holds the secrets, unpacks it: entries only under
+      # Codeman.app/ (and the __MACOSX/ folder where ditto keeps attributes), no
+      # "..", and no symlink, which the app never has and which could point an
+      # unpack or a later write outside the app.
+      - name: Unpack Codeman.app
+        run: |
+          ZIP="$RUNNER_TEMP/unsigned/Codeman.app.zip"
+          ENTRIES=$(zipinfo -1 "$ZIP")
+          LISTING=$(zipinfo "$ZIP")
+          if printf '%s\n' "$ENTRIES" | grep -vE '^(Codeman\.app|__MACOSX)/' \
+            || printf '%s\n' "$ENTRIES" | grep -E '(^|/)\.\.(/|$)' \
+            || printf '%s\n' "$LISTING" | grep '^l'; then
+            echo "::error::The build artifact holds an entry outside Codeman.app, a '..' or a symlink"
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/app"
+          ditto -x -k "$ZIP" "$RUNNER_TEMP/app"
+          if [ -n "$(find "$RUNNER_TEMP/app" -type l)" ]; then
+            echo "::error::The unpacked app holds a symlink"
+            exit 1
+          fi
+          test -x "$RUNNER_TEMP/app/Codeman.app/Contents/MacOS/codeman-desktop"
+
+      # A keychain of its own under RUNNER_TEMP, with a random password, holds the
+      # Developer ID key for the length of this job. The last step deletes it and
+      # the decoded .p12, whatever happened before. All five secrets are checked
+      # here, so a missing one stops the job before any work.
+      - name: Signing keychain
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          for name in MACOS_CERT_P12 MACOS_CERT_PASSWORD APPLE_ID APPLE_APP_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!name}" ]; then
+              echo "::error::The repository secret $name is empty or not set"
+              exit 1
+            fi
+          done
+          KEYCHAIN="$RUNNER_TEMP/codeman-signing.keychain-db"
+          P12="$RUNNER_TEMP/codeman-signing.p12"
+          trap 'rm -f "$P12"' EXIT
+          KEYCHAIN_PASSWORD=$(openssl rand -hex 32)
+          echo "::add-mask::$KEYCHAIN_PASSWORD"
+
+          # Line breaks out first: an encoder that wraps its output (GNU base64
+          # without -w0) leaves some that macOS's base64 refuses.
+          printf '%s' "$MACOS_CERT_P12" | tr -d '\r\n ' | base64 --decode > "$P12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          # Locks after six hours, not after the default five idle minutes, which
+          # a notarization wait can outlast.
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$P12" -k "$KEYCHAIN" -f pkcs12 -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+          rm -f "$P12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" > /dev/null
+          # First on the search list, ahead of the runner's own keychains.
+          SEARCH=()
+          while IFS= read -r line; do
+            line=${line#*\"}
+            line=${line%\"*}
+            if [ -n "$line" ]; then SEARCH+=("$line"); fi
+          done < <(security list-keychains -d user)
+          security list-keychains -d user -s "$KEYCHAIN" "${SEARCH[@]}"
+
+          # The identity by its SHA-1 hash, which no other certificate can match.
+          IDENTITIES=$(security find-identity -v -p codesigning "$KEYCHAIN")
+          MATCHES=$(printf '%s\n' "$IDENTITIES" | grep '"Developer ID Application: ' || true)
+          COUNT=$(printf '%s' "$MATCHES" | grep -c . || true)
+          if [ "$COUNT" != 1 ]; then
+            printf '%s\n' "$IDENTITIES"
+            echo "::error::MACOS_CERT_P12 holds $COUNT valid Developer ID Application identities; it needs exactly one"
+            exit 1
+          fi
+          HASH=$(printf '%s\n' "$MATCHES" | awk '{ print $2 }')
+          IDENTITY=$(printf '%s\n' "$MATCHES" | sed 's/^[^"]*"\(.*\)"$/\1/')
+          case "$IDENTITY" in
+            *"($APPLE_TEAM_ID)") ;;
+            *)
+              echo "::error::The certificate in MACOS_CERT_P12 ($IDENTITY) is not one of team APPLE_TEAM_ID"
+              exit 1
+              ;;
+          esac
+          echo "Signing as $IDENTITY ($HASH)"
+          echo "SIGN_IDENTITY=$HASH" >> "$GITHUB_ENV"
+
+      # The notary login goes to notarytool on its command line (sign-macos.sh's
+      # APPLE_ID path), in this job only, which already holds the signing key.
+      - name: Sign, notarize and staple
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: packages/desktop/scripts/sign-macos.sh "$RUNNER_TEMP/app/Codeman.app" "$RUNNER_TEMP/out"
+
+      # A dry run's result: codeman-dmg on the run page (gh run download <run-id>
+      # -n codeman-dmg). attach takes it from here too.
+      - name: Upload Codeman.dmg
+        uses: actions/upload-artifact@v7
+        with:
+          name: codeman-dmg
+          path: |
+            ${{ runner.temp }}/out/Codeman.dmg
+            ${{ runner.temp }}/out/Codeman.dmg.sha256
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: true
+
+      - name: Remove the signing keychain
+        if: always()
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/codeman-signing.keychain-db"
+          if [ -e "$KEYCHAIN" ]; then
+            security delete-keychain "$KEYCHAIN" || true
+          fi
+          rm -f "$KEYCHAIN" "$RUNNER_TEMP/codeman-signing.p12"
+
+  attach:
+    name: Attach to the release
+    needs: sign
+    # Release runs on pushes to master, so github.ref is master both there and for
+    # a rebuild started by hand on master. A dry run from any other branch, or a
+    # fork, attaches nothing.
+    if: inputs.tag != '' && github.ref == 'refs/heads/master' && github.repository == 'Ark0N/Codeman'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Download Codeman.dmg
+        uses: actions/download-artifact@v8
+        with:
+          name: codeman-dmg
+          path: out
+
+      - name: Upload to the release
+        id: upload
+        working-directory: out
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_TAG: ${{ inputs.tag }}
+        run: |
+          sha256sum -c Codeman.dmg.sha256
+          TAG=$REQUESTED_TAG
+          # Release's retag step ignores its own errors, so a release whose rename to
+          # codeman@ failed still carries the tag changesets gave it.
+          if ! gh release view "$TAG" -R "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            case "$TAG" in
+              codeman@*) TAG="aicodeman@${TAG#codeman@}" ;;
+            esac
+            gh release view "$TAG" -R "$GITHUB_REPOSITORY" > /dev/null
+            echo "::warning::Attaching to $TAG: there is no release $REQUESTED_TAG"
+          fi
+          gh release upload "$TAG" Codeman.dmg Codeman.dmg.sha256 --clobber -R "$GITHUB_REPOSITORY"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Check the download links
+        working-directory: out
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.upload.outputs.tag }}
+        run: |
+          EXPECTED=$(cut -d' ' -f1 Codeman.dmg.sha256)
+          check() {
+            curl -fsSL --retry 6 --retry-delay 10 --retry-all-errors -o "$RUNNER_TEMP/served.dmg" "$1"
+            echo "$EXPECTED  $RUNNER_TEMP/served.dmg" | sha256sum -c --quiet -
+            echo "$1 serves this build"
+          }
+          check "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/Codeman.dmg"
+          LATEST=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)
+          if [ "$LATEST" = "$TAG" ]; then
+            check "https://github.com/$GITHUB_REPOSITORY/releases/latest/download/Codeman.dmg"
+          else
+            echo "::warning::Latest is $LATEST, so releases/latest/download/Codeman.dmg does not serve $TAG"
+          fi

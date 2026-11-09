@@ -212,6 +212,59 @@ function loadApp(fetchImpl: (url: string, init?: { body?: string }) => unknown) 
   return { app, elements, keyHandlers, fetch: context.fetch as ReturnType<typeof vi.fn> };
 }
 
+describe('guarded attachment registration results', () => {
+  it.each(['svg', 'markdown', 'avif', 'bmp', 'ico', 'zip'])(
+    'names a rejected workspace .%s path without describing it as external',
+    async (extension) => {
+      const { app } = loadApp(async () => ({
+        ok: false,
+        status: 400,
+        json: async () => ({ error: 'Unsupported attachment type' }),
+      }));
+      const path = `/home/joe/wiki/out/system architecture.${extension}`;
+      const result = await Object.getPrototypeOf(app)._registerExternalPreview.call(app, path, 's1');
+      expect(result.status).toBe(400);
+      expect(result.error).toContain(path);
+      expect(result.error).not.toContain('outside the session workspace');
+    }
+  );
+
+  it('retains the external-file explanation for a rejected external type', async () => {
+    const { app } = loadApp(async () => ({
+      ok: false,
+      status: 400,
+      json: async () => ({ error: 'Unsupported attachment type' }),
+    }));
+    const result = await Object.getPrototypeOf(app)._registerExternalPreview.call(
+      app,
+      '/mnt/data/system architecture.svg',
+      's1'
+    );
+    expect(result.error).toBe(
+      'Cannot preview .svg from outside the session workspace (images, video, audio, PDF, Office documents and text files only).'
+    );
+  });
+
+  it.each([404, 403, 500, 503])('preserves HTTP %s for the activation decision', async (status) => {
+    const { app, fetch } = loadApp(async () => ({
+      ok: false,
+      status,
+      json: async () => ({ error: 'Cannot read file' }),
+    }));
+    const result = await Object.getPrototypeOf(app)._registerExternalPreview.call(app, '/mnt/data/a.conf', 's1');
+    expect(result).toEqual({ error: 'Cannot read file', status });
+    expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({ path: '/mnt/data/a.conf', notify: false });
+  });
+
+  it('does not turn a connection failure into a missing file', async () => {
+    const { app } = loadApp(async () => {
+      throw new Error('Connection lost');
+    });
+    const result = await Object.getPrototypeOf(app)._registerExternalPreview.call(app, '/mnt/data/a.conf', 's1');
+    expect(result).toEqual({ error: 'Connection lost' });
+  });
+});
+
 const LISTING = {
   folderId: 'fld_1',
   path: '/mnt/raid1/styleframes',

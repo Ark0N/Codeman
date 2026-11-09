@@ -77,7 +77,9 @@ Turning on either starts the watcher.
 
 **Last Response** (header button, opt-in) renders the agent's last answer as scrollable text
 rather than terminal output. It exists mostly for phones, where reading a long answer in a
-terminal viewport is painful. **More** loads additional context.
+terminal viewport is painful. **More** loads additional context. Persian, Arabic and Hebrew
+answers read right to left here, which the terminal cannot do, while code and the file paths
+it links stay left to right.
 
 ## After the fact
 

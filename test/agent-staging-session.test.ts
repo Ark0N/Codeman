@@ -3,6 +3,7 @@ import { expect, it, vi } from 'vitest';
 import { formatPaneSnapshot } from '../src/tmux-manager.js';
 import { Session } from '../src/session.js';
 import { promptSha256 } from '../src/agent-staging.js';
+import type { SessionAdopt } from '../src/types/session.js';
 it('fences writes and reused-pid pane lifecycles without persisting prompt content', async () => {
   let screen = '› \n  GPT-6-Luna default · ~/case\n';
   const mux = {
@@ -541,4 +542,38 @@ it('stages through a real session whose first post-write capture is the torn fra
   } finally {
     await session.stop(false);
   }
+});
+
+it('offers no guarded input on an adopted pane, however much it looks like a composer', () => {
+  // Stage and submit type a prompt on an agent's behalf, here into a pane a human is using.
+  const screen = '\u203a \n  GPT-6-Luna default \u00b7 ~/case\n';
+  const mux = {
+    isAvailable: () => true,
+    capturePaneBuffer: (
+      _name: string,
+      _pane?: string,
+      opts?: { capturedGeometry?: { cols: number; rows: number } }
+    ) => {
+      if (opts) opts.capturedGeometry = { cols: 100, rows: 20 };
+      return formatPaneSnapshot(screen.trimEnd().split('\n'), { cols: 100, rows: 20, cursorX: 2, cursorY: 0 });
+    },
+    sendInput: async () => true,
+  };
+  const build = (adopt?: SessionAdopt) =>
+    new Session({
+      workingDir: '/tmp',
+      mode: 'codex',
+      mux,
+      adopt,
+      muxSession: { muxName: 'codeman-test', sessionId: 'test', createdAt: 1, pid: 12345 },
+    } as unknown as ConstructorParameters<typeof Session>[0]);
+  expect(build().guardedInputSnapshot()).not.toBeNull();
+  expect(
+    build({
+      location: 'local',
+      socketPath: '/tmp/tmux-1000/default',
+      targetSession: 'work',
+      viewSession: 'codeman-view-00000000',
+    }).guardedInputSnapshot()
+  ).toBeNull();
 });

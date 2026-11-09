@@ -586,6 +586,8 @@ html.mobile-init .file-browser-panel {
   .btn-icon-header.btn-away-digest,
   .btn-icon-header.btn-session-manager,
   .btn-icon-header.btn-file-viewer,
+  /* Edit history: a desktop panel; phones never show the button (opt-in, default OFF anyway). */
+  .btn-icon-header.btn-edit-history,
   /* Approvals bell: phones answer from the overview's NEEDS YOU rows instead
      (inline approve/deny in mobile-overview.js); the bell would only crowd the
      header it was designed to stay out of. */
@@ -1845,14 +1847,44 @@ html.mobile-init .file-browser-panel {
     margin-bottom: 0.75rem;
   }
 
-  .welcome-ralph-link {
-    display: block;
-    margin: 0.75rem auto 0;
-  }
-
   .welcome-hint {
     font-size: 0.7rem;
     margin-top: 0.75rem;
+  }
+
+  /* Run a model on this Mac (local-model-ui.js). The welcome button is only
+     reached with the phone overview switched off; it takes the chips' finger
+     size from `.welcome-chip` above. The window is full-screen like every
+     modal here: its own width rule in styles.css is more specific than the
+     full-screen `.modal-content` rule above, so the size is restated. */
+  .modal-content.local-model-window {
+    width: 100%;
+    max-width: 100%;
+    height: 100%;
+    max-height: 100%;
+  }
+
+  .local-model-window > .lm-body {
+    padding: 1rem;
+  }
+
+  /* The window fills the screen, so its actions sit at the bottom, under the thumb. */
+  .local-model-window > .lm-foot-slot {
+    padding: 0 1rem calc(1rem + var(--safe-area-bottom));
+  }
+
+  /* The short screens (progress, paused, a failure, installed, nothing fits)
+     hold a few lines. On a screen this tall they sit right above the buttons,
+     where the eye and the thumb already are, not at the top with half a
+     screen of nothing between the two. */
+  .local-model-window > .lm-body:is(
+      [data-screen='progress'],
+      [data-screen='paused'],
+      [data-screen='failed'],
+      [data-screen='installed'],
+      [data-screen='none']
+    ) {
+    justify-content: flex-end;
   }
 
   /* Ralph wizard responsive */
@@ -3473,6 +3505,47 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
   .subagent-dropdown-trigger:focus + .subagent-dropdown-menu {
     display: block;
   }
+
+  /* Press feedback for the touch bars. The pressed look is transform + filter,
+     never a background or a shadow: the skin block (html:not([data-skin="og"]),
+     specificity 0,2,1) and the per-run-mode colors own the background and its
+     hover rules own box-shadow, so a background or shadow :active lost to them
+     on every non-og skin. Nothing on these buttons sets transform or filter
+     (the base .btn-toolbar:active nudge sits at lower specificity), so one rule
+     reads the same on all of them. 80ms so a quick tap shows the press at all,
+     on the press's own properties rather than `all`. */
+  .toolbar .btn-toolbar,
+  .btn-voice-mobile,
+  .btn-attach-mobile,
+  .btn-settings-mobile,
+  .accessory-btn {
+    -webkit-tap-highlight-color: transparent;
+    transition: transform 80ms ease, filter 80ms ease, background-color 80ms ease, border-color 80ms ease;
+  }
+
+  .toolbar .btn-toolbar:active,
+  .btn-voice-mobile:active,
+  .btn-attach-mobile-wrap:active .btn-attach-mobile,
+  .btn-settings-mobile:active,
+  .accessory-btn:active {
+    transform: scale(0.94);
+    filter: brightness(1.25);
+  }
+
+  /* Light skins darken on press instead of brightening (white on white reads as nothing). */
+  html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) :is(.toolbar .btn-toolbar:active, .btn-voice-mobile:active, .btn-attach-mobile-wrap:active .btn-attach-mobile, .btn-settings-mobile:active, .accessory-btn:active) {
+    filter: brightness(0.9);
+  }
+}
+
+@media (hover: none) and (pointer: coarse) and (prefers-reduced-motion: reduce) {
+  .toolbar .btn-toolbar:active,
+  .btn-voice-mobile:active,
+  .btn-attach-mobile-wrap:active .btn-attach-mobile,
+  .btn-settings-mobile:active,
+  .accessory-btn:active {
+    transform: none;
+  }
 }
 
 @media (max-width: 599px) {
@@ -4174,6 +4247,18 @@ html[data-session-list="sidebar"] .session-sidebar .session-tab .tab-close {
   }
 }
 
+/* Foreign sessions block inside the phone overview (foreign-sessions.js).
+   The desktop block sits inside the welcome column; here it is a full-width
+   section between CURRENT and PAST, so it only needs the surrounding spacing:
+   every row style is shared with styles.css on purpose. */
+.mobile-foreign-sessions {
+  margin: 0.75rem 0.75rem 0;
+}
+
+.mobile-foreign-sessions .foreign-list {
+  max-height: none;
+}
+
 /* Folding devices, tabletop pose: cap the response viewer to the bottom
    segment. Twin of the rule at the end of styles.css, needed here because the
    phone block (under 600px) above sets `max-height: 92dvh` on the same selector at the same
@@ -4204,5 +4289,70 @@ html[data-session-list="sidebar"] .session-sidebar .session-tab .tab-close {
     min-height: 55vh;
     -webkit-overflow-scrolling: touch;
     touch-action: pan-x pan-y;
+  }
+}
+
+/* Run a model on this Mac (local-model-ui.js), under 560px: each model row
+   becomes two lines (name and tag, then speed and download size), the bar
+   stays full width and the buttons go full width under the foot's sentence. */
+@media (max-width: 559px) {
+  .lm-list {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    column-gap: 0.7rem;
+  }
+
+  .lm-caption-speed,
+  .lm-caption-size {
+    display: none;
+  }
+
+  .lm-model {
+    row-gap: 0.1rem;
+    padding-top: 0.5rem;
+    padding-bottom: 0.5rem;
+  }
+
+  .lm-radio {
+    grid-row: 1;
+    grid-column: 1;
+  }
+
+  .lm-model-name {
+    grid-row: 1;
+    grid-column: 2;
+  }
+
+  .lm-model-tag {
+    grid-row: 1;
+    grid-column: 3;
+    justify-content: flex-end;
+  }
+
+  .lm-model-speed {
+    grid-row: 2;
+    grid-column: 2;
+    text-align: start;
+  }
+
+  .lm-model-size {
+    grid-row: 2;
+    grid-column: 3;
+  }
+
+  .lm-foot {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.8rem;
+  }
+
+  /* The main action on top, the way back under it. */
+  .lm-buttons {
+    flex-direction: column-reverse;
+    margin-inline-start: 0;
+  }
+
+  .local-model-window .wt-btn.lm-btn {
+    min-height: 44px;
+    font-size: 0.88rem;
   }
 }

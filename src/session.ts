@@ -29,7 +29,8 @@
  */
 
 import { EventEmitter } from 'node:events';
-import { basename } from 'node:path';
+import { basename, isAbsolute } from 'node:path';
+import { realpath } from 'node:fs/promises';
 import { execSync, execFileSync } from 'node:child_process';
 import { v4 as uuidv4 } from 'uuid';
 import * as pty from 'node-pty';
@@ -64,6 +65,7 @@ import {
   type SessionNameSource,
   type SessionWriteOptions,
   type PaneExit,
+  type SessionAdopt,
   type PromptCacheStatus,
   type StatusLineExporter,
   type KeepWarmStatus,
@@ -71,6 +73,9 @@ import {
 import type { GitFetchStatus } from './git-fetch.js';
 import { resolveAndClaimOmpSessionId } from './utils/omp-session-resolver.js';
 import { claudeTranscriptExists } from './utils/claude-transcript.js';
+import { probePathKind } from './utils/bounded-path-probe.js';
+import type { LiveWorktree } from './live-worktree.js';
+import { PATH_PROBE_TIMEOUT_MS, WORKSPACE_REALPATH_RETRY_MS } from './config/path-probe.js';
 import { matchesPattern } from './config/cli-registry/patterns.js';
 import { probeDockerCliVersion } from './docker-hosts.js';
 import { probeRemoteCliVersion } from './remote-hosts.js';
@@ -274,8 +279,8 @@ function getModeLabel(mode: SessionMode): string {
  *
  * Only such a CLI needs its version probed at session start — probing one with no gates
  * would spawn a `--version` subprocess whose answer nothing reads. Today that is claude
- * (the `--name` flag, gated at 2.1.224), which is why the probe used to be written as
- * `mode === 'claude'`.
+ * (the `--name` flag, gated at 2.1.224) and codex (`--no-daemon`, gated at 0.162.0). The
+ * probe used to be written as `mode === 'claude'`, when claude was the only one.
  */
 function cliNeedsVersionProbe(mode: SessionMode): boolean {
   return Object.keys(getCli(mode)?.capabilities.gates ?? {}).length > 0;
@@ -301,23 +306,21 @@ function cliExportsTruecolor(mode: SessionMode): boolean {
  * Codex, Claude Code, and Gemini are known, controlled (Ink/React) TUIs that
  * repaint via cursor positioning, so dropping the alt-screen switch is safe —
  * content stays in the normal buffer. Excluded: `shell` (arbitrary programs like
- * vim/less/htop legitimately need the alt screen), `opencode` (its own MIDDLE strip,
- * isMuxMouseStripMode), `pi` (below) and `grok` (a fullscreen alt-screen TUI with
+ * vim/less/htop legitimately need the alt screen), `opencode`, `copilot` and `pi` (their own
+ * MIDDLE strip, isMuxMouseStripMode) and `grok` (a fullscreen alt-screen TUI with
  * mouse support). Keep parity with the replay-side strip (`stripReplayBuffer` in
  * session-routes.ts); the table in `CliCapabilities.altScreen` is pinned for every
  * stock CLI in test/claude-scrollback-strip.test.ts.
  *
  * ⚠️ Being excluded here does NOT preserve the alt screen. Every excluded mode
- * falls through to isMuxAltScreenOnlyStripMode(), which strips the alt-screen
- * toggles too whenever the session is tmux-backed, and pi/opencode ALWAYS are
- * (both refuse the direct-PTY fallback). What exclusion actually buys is the rest
- * of the full strip: `\x1b[3J` and the mouse-tracking DECSETs survive. That is the
- * real reason pi is out: its default TUI renders into the MAIN screen with
- * terminal-owned scrollback and is mouse-aware, so it is a `3J`/mouse consumer in
- * a way an Ink TUI repainting in place is not. Consequence to know before
- * debugging it: pi's runtime-switchable fullscreen TUI (`/settings`, 0.84.0+)
- * still gets its `?1049h` stripped and paints into the main buffer, exactly like
- * vim inside a tmux `shell` session.
+ * falls through to isMuxMouseStripMode() or isMuxAltScreenOnlyStripMode(), which
+ * strip the alt-screen toggles too whenever the session is tmux-backed, and
+ * pi/opencode ALWAYS are (both refuse the direct-PTY fallback). What exclusion
+ * actually buys is the rest of the full strip: `\x1b[3J` survives, and for the
+ * narrow strip the mouse-tracking DECSETs too. pi (fullscreen by default since
+ * 1.0.0) is a mouse-aware TUI like opencode and copilot, so it takes the mouse
+ * strip (isMuxMouseStripMode): a drag selects locally and `cliMouseTracking`
+ * keeps the wheel working across a buffer replay.
  */
 export function isAltScreenStripMode(mode: SessionMode): boolean {
   return getCli(mode)?.capabilities.altScreen === 'strip-full';
@@ -398,6 +401,21 @@ const DOCKER_CLI_VERSION_PROBE_DELAY_MS = 3000;
 /** Delay before the over-ssh Claude CLI version probe (keeps session start off the ssh round-trip). */
 const REMOTE_CLI_VERSION_PROBE_DELAY_MS = 3000;
 
+/** Whether absolute `path` is `root` or lies under it (a lexical compare). */
+function isSameOrUnder(path: string, root: string): boolean {
+  return path === root || path.startsWith(root === '/' ? '/' : `${root}/`);
+}
+
+/**
+ * Rewrite `path` from under `from` to the same place under `to`; a path not at or
+ * under `from` comes back unchanged. Exported for unit testing.
+ */
+export function rebasePath(path: string, from: string, to: string): string {
+  if (path === from) return to;
+  if (path.startsWith(`${from}/`)) return to + path.slice(from.length);
+  return path;
+}
+
 /**
  * Ask tmux for the current window geometry of `muxName` so a re-attaching PTY
  * client can spawn at the same size and avoid the resize-flicker / scrollback
@@ -431,10 +449,25 @@ export function queryTmuxWindowSize(muxName: string, socket: string): { cols: nu
   return { cols: DEFAULT_PTY_COLS, rows: DEFAULT_PTY_ROWS };
 }
 
-export function resolveMuxAttachCwd(workingDir: string, remote?: SessionRemote, docker?: SessionDocker): string {
+export function resolveMuxAttachCwd(
+  workingDir: string,
+  remote?: SessionRemote,
+  docker?: SessionDocker,
+  adopt?: SessionAdopt
+): string {
   // Remote and docker sessions run the CLI elsewhere (ssh / docker exec); the LOCAL
   // wrapper pane never needs the workspace as its cwd, so launch it in /tmp.
-  return remote || docker ? '/tmp' : workingDir;
+  //
+  // ⚠️ An ADOPTED session needs the same treatment and does NOT get it from the
+  // two checks above: its connection facts live on `adopt.docker`/`adopt.remote`,
+  // so `session.docker` is undefined even for an in-container adoption. Its pane
+  // only attaches, so no folder on this host means anything to it. Measured against
+  // a real container, when `workingDir` still held the foreign pane's cwd: the local
+  // PTY spawn inherited `/workspace/pythonserver`, and the session came up with
+  // `pid: null` and a blank terminal while the wrapper tmux session and the
+  // in-container grouped view had both been created successfully, so it looked
+  // half-alive rather than failed.
+  return remote || docker || adopt ? '/tmp' : workingDir;
 }
 
 /**
@@ -474,6 +507,18 @@ export class GuardedInputBusyError extends Error {
   constructor() {
     super('A guarded submit is in progress on this session; nothing was written. Retry the input.');
     this.name = 'GuardedInputBusyError';
+  }
+}
+
+/**
+ * The session's launch guard refused the start of a new agent process
+ * (`Session.setLaunchGuard()`). Its message is the sentence for the user. A typed error, so a
+ * start that was refused is told apart from a tmux failure and never falls back to a direct PTY.
+ */
+export class LaunchRefusedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'LaunchRefusedError';
   }
 }
 
@@ -744,6 +789,23 @@ export class Session extends EventEmitter {
    */
   private _paneExit: PaneExit | null = null;
   /**
+   * The pane's live directory, from the pane-exit watcher's read. Runtime-only:
+   * serialized by toState() but never restored by the constructor.
+   */
+  private _paneCwd: string | undefined;
+  /** See {@link liveWorktree}. */
+  private _liveWorktree: LiveWorktree | undefined;
+  /**
+   * `workingDir` with symlinks resolved, so a pane reading (tmux reads the
+   * process cwd, always the resolved path) can be put back into `workingDir`'s
+   * spelling. `undefined` until the first resolution settles; `null` when there
+   * is nothing to translate (no symlink in the path) or it could not be resolved.
+   */
+  private _workspaceRealPath: string | null | undefined;
+  private _workspaceRealPathPending = false;
+  /** When a resolution that met an unreachable folder may be tried again (0 = never). */
+  private _workspaceRealPathRetryAt = 0;
+  /**
    * How many starts, attaches or relaunches are running for this session's
    * pane. While one is, a dead-pane reading may describe a pane that is being
    * revived on purpose, so the exited-agent sweep leaves the session alone
@@ -830,6 +892,12 @@ export class Session extends EventEmitter {
   // config dir) without guessing what it once wrote. Persisted disk-only (`__customModel`).
   private _customModel: CustomModelBookkeeping | undefined;
 
+  // Asked right before a NEW agent process is started for this session (a fresh pane, the
+  // respawn of a dead one, a restart in place), never for an attach to an agent that runs.
+  // Resolves with the sentence that refuses the start, or undefined. Set by the web layer
+  // (`WebServer.setupSessionListeners()`); this file does not know who asks or why.
+  private _launchGuard: (() => Promise<string | undefined>) | null = null;
+
   // Env keys a retired custom-model selection injected that the NEXT respawn must
   // `tmux setenv -u`. Deleting a key from `_envOverrides` alone does nothing to the
   // tmux session, which keeps every `setenv` and hands it to `respawn-pane`, so the
@@ -846,6 +914,11 @@ export class Session extends EventEmitter {
   // Docker execution metadata, present when this session runs inside a container via
   // local tmux + `docker exec`. The container is per-CASE (shared by sibling sessions).
   private readonly _docker?: SessionDocker;
+
+  // Adoption metadata, present when this session is a WRAPPER around a tmux
+  // session a human started outside Codeman. Its presence is the single switch
+  // that disables everything Codeman can only do to a process it launched.
+  private readonly _adopt?: SessionAdopt;
 
   // Owning username in multi-user mode (undefined in single-user). Stamped at create
   // from req.authUser and round-tripped through recovery like _remote/_docker.
@@ -972,6 +1045,8 @@ export class Session extends EventEmitter {
       remote?: SessionRemote;
       /** Docker execution metadata for sessions launched inside a container via local tmux. */
       docker?: SessionDocker;
+      /** Adoption metadata for a wrapper around a human-started tmux session. */
+      adopt?: SessionAdopt;
       /** Owning username (multi-user mode); undefined in single-user. */
       owner?: string;
       /** Session that spawned this one — tab lineage decoration, resolved by the caller. */
@@ -1142,6 +1217,7 @@ export class Session extends EventEmitter {
     this._tmuxHistoryLimit = config.tmuxHistoryLimit ?? DEFAULT_TMUX_HISTORY_LIMIT;
     this._remote = config.remote;
     this._docker = config.docker;
+    this._adopt = config.adopt;
     this._owner = config.owner;
     this._discoveredMuxSession = config.discoveredMuxSession === true;
     // Restored so a record that says the agent exited survives a server restart
@@ -1302,6 +1378,25 @@ export class Session extends EventEmitter {
     return this._remote;
   }
 
+  /** Adoption metadata when this session wraps a human-started tmux session. */
+  get adopt(): SessionAdopt | undefined {
+    return this._adopt;
+  }
+
+  /**
+   * Is this a wrapper around a tmux session Codeman did not start?
+   *
+   * ⚠️ Deliberately NOT folded into `isExternalCliMode()`. That predicate answers
+   * "does this CLI render its own TUI", which is about the PROTOCOL. This one
+   * answers "did we launch the process", which is about AUTHORITY: an adopted
+   * session can be `mode: 'claude'` and still have no hooks installed, no
+   * `envOverrides`, no effort and no `--session-id` we chose. Conflating the two
+   * would silently grant claude-shaped automation over a process we do not own.
+   */
+  get isAdopted(): boolean {
+    return this._adopt !== undefined;
+  }
+
   /**
    * `deepSeekConfig.statusReporting` verbatim: `undefined` when the caller sent
    * none (i.e. ON), `false` when the user disarmed the status bridge for this
@@ -1328,6 +1423,28 @@ export class Session extends EventEmitter {
   get deepSeekHomeOverride(): string | undefined {
     const value = this._envOverrides?.DSH_HOME;
     return value && value.trim() ? value.trim() : undefined;
+  }
+
+  /**
+   * One env var from this session's overrides, for internal path resolution only
+   * (custom-model injection linking an isolated config dir back to a path that must
+   * survive lives in). Single-key lookup by design, like `deepSeekHomeOverride`: the
+   * map can hold provider credentials and stays off the public `SessionState`.
+   */
+  envOverrideValue(key: string): string | undefined {
+    const value = this._envOverrides?.[key];
+    return value && value.trim() ? value.trim() : undefined;
+  }
+
+  /**
+   * What the SESSION itself set for `key`, same single-key rule. `envOverrideValue()` answers
+   * with whatever the map holds, which under a selection is the injected value: a re-apply
+   * resolving the CLI's real home must read the session's own home, or none.
+   */
+  ownEnvValue(key: string): string | undefined {
+    const selection = this._customModel;
+    const value = selection?.envKeys.includes(key) ? selection.ownEnv?.[key] : this._envOverrides?.[key];
+    return value?.trim() || undefined;
   }
 
   /** Owning username in multi-user mode, else undefined. */
@@ -1395,13 +1512,20 @@ export class Session extends EventEmitter {
   /**
    * True when a tmux pane's death would mean THIS session's agent has exited.
    *
-   * Four shapes fail the test, and each would otherwise publish a death that is
+   * Five shapes fail the test, and each would otherwise publish a death that is
    * not the agent's. A direct-PTY session owns no pane at all. A remote SSH
    * session's local pane holds the ssh client, whose death means a transport
    * drop OR an exit, which is the ambiguity PR #355 was about. A docker case's
    * local pane holds a `docker exec` into the container's own tmux.
    *
-   * The fourth is a session rebuilt from the socket. Absent `remote`/`docker`
+   * ⚠️ An ADOPTED session is the same shape for a different reason: its pane runs
+   * `tmux attach` to a session a human started, never the agent. That attach exiting
+   * with 0 says the connection ended or its owner closed the foreign session; neither
+   * means this session finished, and neither is Codeman's to clear the tab for. Without
+   * this, the clean-exit sweep (`pane-exit-sweep.ts`) would close someone else's live
+   * session's tab the moment they detached from it themselves.
+   *
+   * The fifth is a session rebuilt from the socket. Absent `remote`/`docker`/`adopt`
    * normally means "this is local", but on a discovered record it only means
    * "Codeman never found the metadata": the synthetic `restored-<fragment>` id
    * matches no `state.json` entry, so a remote session rediscovered after
@@ -1410,7 +1534,7 @@ export class Session extends EventEmitter {
    */
   private get paneExitApplies(): boolean {
     if (this._discoveredMuxSession) return false;
-    return this._useMux && this._muxSession !== null && !this._remote && !this._docker;
+    return this._useMux && this._muxSession !== null && !this._remote && !this._docker && !this._adopt;
   }
 
   /** What Codeman last observed of this pane's agent, or undefined for UNKNOWN. */
@@ -1483,6 +1607,119 @@ export class Session extends EventEmitter {
     this._guardedPaneRevision++;
     this.setPaneExit(undefined);
     if (this._muxSession) this._mux?.clearPaneExit?.(this._muxSession.muxName);
+  }
+
+  /** The pane's live working directory, when the pane read has reported one. */
+  get paneCwd(): string | undefined {
+    return this._paneCwd;
+  }
+
+  /**
+   * Record the pane's live directory. Returns whether it CHANGED, so the caller
+   * broadcasts only on a real transition.
+   *
+   * Scoped by {@link paneExitApplies}, the same rule as the exit reading: a
+   * remote session's local pane runs the ssh client and a docker case's runs a
+   * `docker exec`, so their pane directory is a host directory the agent was
+   * never in, and a direct-PTY or rediscovered session has no pane Codeman can
+   * vouch for. A relative value is refused rather than stored.
+   *
+   * tmux reads the pane's directory from the process cwd, which is always the
+   * resolved path, while `workingDir` keeps the spelling the case was created
+   * with. A workspace reached through a symlink would otherwise read as outside
+   * itself, and the browser's preview routing (a lexical compare against
+   * `workingDir`) would send every relative link to the attachment route. So a
+   * reading at or under the workspace's resolved path is written back in
+   * `workingDir`'s spelling. Until that resolution has settled, only a reading
+   * lexically inside `workingDir` is accepted.
+   */
+  setPaneCwd(next: string | undefined): boolean {
+    let resolved = this.paneExitApplies && next?.startsWith('/') ? next : undefined;
+    if (resolved !== undefined) {
+      if (
+        this._workspaceRealPath === undefined ||
+        (this._workspaceRealPathRetryAt !== 0 && Date.now() >= this._workspaceRealPathRetryAt)
+      ) {
+        this._resolveWorkspaceRealPath();
+      }
+      if (this._workspaceRealPath === undefined) {
+        // The workspace's resolved path is not known yet. A reading outside
+        // `workingDir` could be the workspace itself seen through its symlink, so
+        // it waits for the next tick rather than mis-route links for one.
+        if (!isSameOrUnder(resolved, this._workspaceSpelling())) return false;
+      } else if (this._workspaceRealPath !== null) {
+        resolved = rebasePath(resolved, this._workspaceRealPath, this._workspaceSpelling());
+      }
+    }
+    if (resolved === this._paneCwd) return false;
+    this._paneCwd = resolved;
+    return true;
+  }
+
+  /**
+   * The git worktree that {@link paneCwd} is in, when there is one (`live-worktree.ts`): a linked
+   * worktree inside `workingDir`, or, for an outside answer, a linked worktree or the repository's
+   * main worktree (from a session started in a linked one).
+   * The Files panel lists it instead of the main checkout. Runtime-only, like `paneCwd`. One inside
+   * `workingDir` is never a confinement root: it is judged lexically when the pane moves, and the
+   * listing route re-checks the real folder on every request. One outside it (`outside: true`) is
+   * a second root for the file routes, re-checked on every request the same way.
+   */
+  get liveWorktree(): LiveWorktree | undefined {
+    return this._liveWorktree;
+  }
+
+  /** Record the result of a worktree lookup. Returns whether it CHANGED, so the caller broadcasts only then. */
+  setLiveWorktree(next: LiveWorktree | undefined): boolean {
+    if (next?.path === this._liveWorktree?.path) return false;
+    this._liveWorktree = next;
+    return true;
+  }
+
+  /** `workingDir` without a trailing separator (the root stays `/`). */
+  private _workspaceSpelling(): string {
+    return this.workingDir.length > 1 ? this.workingDir.replace(/\/+$/, '') : this.workingDir;
+  }
+
+  /**
+   * Resolve `workingDir`'s symlinks in the background for {@link setPaneCwd}.
+   *
+   * Bounded: the folder can sit on a network mount that stopped answering, so it
+   * is probed with `probePathKind()` first and the `realpath()` is raced against
+   * the same timeout. An `unknown` probe, a failed or slow `realpath()` leave no
+   * translation and allow one more try after `WORKSPACE_REALPATH_RETRY_MS`; a
+   * folder that is absent or not a directory is settled for good.
+   */
+  private _resolveWorkspaceRealPath(): void {
+    if (this._workspaceRealPathPending) return;
+    this._workspaceRealPathPending = true;
+    const spelling = this._workspaceSpelling();
+    void (async () => {
+      let real: string | null = null;
+      let retry = false;
+      try {
+        const kind = await probePathKind(spelling);
+        if (kind === 'unknown') {
+          retry = true;
+        } else if (kind === 'directory') {
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          const answer = await Promise.race([
+            realpath(spelling).catch(() => undefined),
+            new Promise<undefined>((resolveTimeout) => {
+              timer = setTimeout(() => resolveTimeout(undefined), PATH_PROBE_TIMEOUT_MS);
+              timer.unref?.();
+            }),
+          ]).finally(() => clearTimeout(timer));
+          if (answer === undefined) retry = true;
+          else if (answer !== spelling && answer !== '/') real = answer;
+        }
+      } catch {
+        retry = true;
+      }
+      this._workspaceRealPath = real;
+      this._workspaceRealPathRetryAt = retry ? Date.now() + WORKSPACE_REALPATH_RETRY_MS : 0;
+      this._workspaceRealPathPending = false;
+    })();
   }
 
   /**
@@ -1847,6 +2084,22 @@ export class Session extends EventEmitter {
     }
   }
 
+  /**
+   * Sets what is asked before a new agent process is started for this session (see
+   * `_launchGuard`). The first user is the model Codeman runs on this Mac: an agent is not
+   * started on it while its runtime is down or its model changed. `null` removes it.
+   */
+  setLaunchGuard(guard: (() => Promise<string | undefined>) | null): void {
+    this._launchGuard = guard;
+  }
+
+  /** Throws the guard's sentence (`LaunchRefusedError`) when a new agent process must not be started now. */
+  private async _assertLaunchAllowed(): Promise<void> {
+    if (!this._launchGuard) return;
+    const refusal = await this._launchGuard();
+    if (refusal) throw new LaunchRefusedError(refusal);
+  }
+
   // Custom Model Endpoint Profiles (docs/custom-model-endpoints-plan.md) — public-safe
   // subset only (never envKeys/configDir/launchModel, the bookkeeping for setCustomModel).
   get customModel(): CustomModelSelection | undefined {
@@ -1857,21 +2110,38 @@ export class Session extends EventEmitter {
 
   /**
    * The full selection incl. bookkeeping, for state.json ONLY (`__customModel`, the
-   * same disk-only convention as `getEnvOverridesForPersist()`). Carries no env values,
-   * so nothing secret lands on disk; recovery re-derives them from the endpoint store.
+   * same disk-only convention as `getEnvOverridesForPersist()`). Carries no injected env
+   * values, so nothing secret lands on disk; recovery re-derives them from the endpoint store.
    * Without this a Codeman restart left the pane on the custom endpoint (tmux keeps
    * its `setenv`s) while `customModel` came back undefined, so the state was wrong and
    * clearing had nothing to unset. Must NOT be included in any API-bound serializer.
+   *
+   * The one value it does carry is the session's own home directory (`ownEnv`, narrowed to
+   * `homeEnvVar`), a path like `configDir` beside it: the selection overwrote the tmux
+   * `setenv` that held it, so without this a clear after a restart would lose it. Any other
+   * entry of `ownEnv` may be a credential and stays in memory, and so does a `homeEnvVar`
+   * value that is not an absolute path: the registry types that name as any env var, so a
+   * `clis.json` override can point it at a credential.
    */
   getCustomModelForPersist(): CustomModelBookkeeping | undefined {
-    return this._customModel ? { ...this._customModel, envKeys: [...this._customModel.envKeys] } : undefined;
+    if (!this._customModel) return undefined;
+    const { ownEnv, ...selection } = this._customModel;
+    const { homeEnvVar } = selection;
+    const ownHome = homeEnvVar ? ownEnv?.[homeEnvVar] : undefined;
+    return {
+      ...selection,
+      envKeys: [...selection.envKeys],
+      ...(homeEnvVar && ownHome && isAbsolute(ownHome) ? { ownEnv: { [homeEnvVar]: ownHome } } : {}),
+    };
   }
 
   /**
    * Update this session's custom-model selection and merge the endpoint's injected env
    * vars into `_envOverrides` — first UNDOING whatever the previous selection injected
-   * (removing exactly those env keys), so switching endpoints, or clearing back to the
-   * harness's native cloud default, never leaves a stale key behind. Synchronous and
+   * (removing exactly those env keys, and putting back a value the session had set under
+   * one itself), so switching endpoints, or clearing back to the harness's native cloud
+   * default, never leaves a stale key behind and never loses the session's own `DSH_HOME`
+   * or `CLAUDE_CONFIG_DIR`. Synchronous and
    * side-effect-free beyond mutating state, matching `setNice`/`setColor` above — this
    * class does no file IO, so it reports the PREVIOUS `configDir` (if any) for the
    * caller to clean up on disk (custom-model-injection.ts's configDir kind).
@@ -1881,7 +2151,12 @@ export class Session extends EventEmitter {
    * `_buildRespawnPaneOptions().unsetEnvKeys`): the tmux session inherits every
    * `setenv` into `respawn-pane`, so dropping them from the map alone would relaunch
    * the CLI still pointed at the old endpoint — and for the `configDir` kinds, at a
-   * `HOME`/`CODEX_HOME`/`GROK_HOME` the caller has just deleted.
+   * `HOME`/`CODEX_HOME`/`GROK_HOME` the caller has just deleted. A key put back stays out
+   * of that queue: `applyEnvOverrides()` writes its value over the injected one.
+   *
+   * `next.ownEnv` is for recovery, which states the session's own values itself: after a
+   * restart `_envOverrides` holds what the previous run injected (`CLAUDE_CONFIG_DIR` is
+   * persisted), and reading those as the session's own would pin it to a deleted directory.
    */
   setCustomModel(
     next: CustomModelBookkeeping | undefined,
@@ -1890,13 +2165,30 @@ export class Session extends EventEmitter {
     const previousConfigDir = this._customModel?.configDir;
     const removedEnvKeys: string[] = [];
     if (this._customModel) {
+      const previousOwnEnv = this._customModel.ownEnv ?? {};
       for (const key of this._customModel.envKeys) {
         if (this._envOverrides) delete this._envOverrides[key];
         removedEnvKeys.push(key);
-        this._pendingEnvUnsets.add(key);
+        const own = previousOwnEnv[key];
+        if (own) {
+          this._envOverrides = { ...(this._envOverrides ?? {}), [key]: own };
+          this._pendingEnvUnsets.delete(key);
+        } else {
+          this._pendingEnvUnsets.add(key);
+        }
       }
     }
-    this._customModel = next ? { ...next, envKeys: [...next.envKeys] } : undefined;
+    // Read after the undo, so a switch between endpoints carries the own values across. An
+    // empty value is skipped: `applyEnvOverrides()` never set one, so it has nothing to
+    // restore, and the injected key still has to be unset.
+    const ownEnv: Record<string, string> = { ...next?.ownEnv };
+    if (!next?.ownEnv) {
+      for (const key of Object.keys(envOverrides ?? {})) {
+        const own = this._envOverrides?.[key];
+        if (own) ownEnv[key] = own;
+      }
+    }
+    this._customModel = next ? { ...next, envKeys: [...next.envKeys], ownEnv } : undefined;
     if (envOverrides && Object.keys(envOverrides).length > 0) {
       this._envOverrides = { ...(this._envOverrides ?? {}), ...envOverrides };
       // A key the new selection sets again does not need an unset (applyEnvOverrides
@@ -2162,8 +2454,13 @@ export class Session extends EventEmitter {
       pid: this.pid,
       status: this._status,
       workingDir: this.workingDir,
+      paneCwd: this._paneCwd,
+      // The wire keeps `liveWorktree` inside `workingDir` only; an outside answer rides its own field.
+      liveWorktree: this._liveWorktree?.outside ? undefined : this._liveWorktree,
+      outsideWorktree: this._liveWorktree?.outside ? this._liveWorktree : undefined,
       remote: this._remote,
       docker: this._docker,
+      adopt: this._adopt,
       owner: this._owner,
       parentSessionId: this._parentSessionId,
       currentTaskId: this._currentTaskId,
@@ -2377,6 +2674,8 @@ export class Session extends EventEmitter {
     let respawnedResumeId: string | undefined;
     if (this._muxSession && mux.isPaneDead(this._muxSession.muxName)) {
       console.log('[Session] Dead pane detected, respawning:', this._muxSession.muxName);
+      // A new agent process: asked first (see `_launchGuard`). A refusal leaves the pane as it is.
+      await this._assertLaunchAllowed();
       // Confirmed dead — safe to resolve/pin now (see `_pinOmpRespawnId()`).
       // `options.respawnPaneOptions` was built eagerly before this dead-pane
       // check ran, so it still carries the pre-pin ompConfig; rebuild it.
@@ -2431,6 +2730,8 @@ export class Session extends EventEmitter {
           this._resumeSessionId = pinned;
         }
       }
+      // A new agent process: asked first (see `_launchGuard`).
+      await this._assertLaunchAllowed();
       this._muxSession = await mux.createSession(options.createSessionOptions);
       console.log('[Session] Created mux session:', this._muxSession.muxName);
       // No extra sleep — createSession() already waits for tmux readiness
@@ -2457,7 +2758,7 @@ export class Session extends EventEmitter {
           name: 'xterm-256color',
           cols: ptyCols,
           rows: ptyRows,
-          cwd: resolveMuxAttachCwd(this.workingDir, this._remote, this._docker),
+          cwd: resolveMuxAttachCwd(this.workingDir, this._remote, this._docker, this._adopt),
           // COD-75: a CLI that declares `export COLORTERM=truecolor` gets it on the ATTACH
           // client too. Both sides read the same registry entry, which is what stops the
           // attach client and the tmux session from disagreeing — they used to be two
@@ -2550,6 +2851,9 @@ export class Session extends EventEmitter {
       return false;
     }
 
+    // A new agent process: asked first (see `_launchGuard`). A refusal rejects, and the pane
+    // keeps what runs in it.
+    await this._assertLaunchAllowed();
     this._pinOmpRespawnId();
     const newPid = await mux.respawnPane(await this._buildRespawnPaneOptionsWithResumePin());
     if (!newPid) {
@@ -2610,6 +2914,7 @@ export class Session extends EventEmitter {
       historyLimit: this._tmuxHistoryLimit,
       remote: this._remote,
       docker: this._docker,
+      adopt: this._adopt,
       owner: this._owner,
     };
     return this._withCustomModelLaunchModel(options);
@@ -2692,7 +2997,7 @@ export class Session extends EventEmitter {
     if (entry?.launch.chain !== 'fallback') return options;
 
     const resumeIdPattern = entry.launch.params?.resumeId;
-    const configDir = this._claudeConfigDir();
+    const configDir = this.claudeConfigDir();
     const chainTail = this._claudeSessionChain[this._claudeSessionChain.length - 1];
     const candidates = [chainTail, options.resumeSessionId, this.id].filter((v): v is string => !!v);
     for (const candidate of candidates) {
@@ -2714,8 +3019,11 @@ export class Session extends EventEmitter {
     return options;
   }
 
-  /** The session's Claude config dir when it has been relocated (#255), else undefined. */
-  private _claudeConfigDir(): string | undefined {
+  /**
+   * The session's Claude config dir when it has been relocated (#255), else undefined.
+   * Public for the edit history reader, which looks for the transcript there.
+   */
+  claudeConfigDir(): string | undefined {
     // Trimmed like `claudeProjectsDir()` trims the process-wide override: the
     // envOverrides schema validates keys only, and a whitespace-only value would
     // otherwise resolve to a relative path and read "no transcript" for everything.
@@ -2724,16 +3032,17 @@ export class Session extends EventEmitter {
 
   /**
    * Force the custom-model selection's `launchModel` (pi/omp `custom/<id>`, grok's
-   * `[model.<name>]` block name) onto the CLI's `model` launch param. Where that param
+   * `[model.<name>]` block name, codex's bare selected id) onto the CLI's `model`
+   * launch param. Where that param
    * lives is registry DATA — the entry's `legacyConfigField` (`piConfig`, `grokConfig`,
    * ...) or the top-level `model` for an entry that declares none — so this stays a
-   * generic reader rather than a branch per CLI. Applied on the OPTIONS only: the stored
-   * `<Mode>Config` keeps whatever model the user chose at create, which is exactly what a
-   * later clear must fall back to.
+   * generic reader rather than a branch per CLI. Applied on the OPTIONS only, on both the
+   * respawn and the create path: the stored `<Mode>Config` keeps whatever model the user
+   * chose at create, which is exactly what a later clear must fall back to.
    */
-  private _withCustomModelLaunchModel(
-    options: import('./mux-interface.js').RespawnPaneOptions
-  ): import('./mux-interface.js').RespawnPaneOptions {
+  private _withCustomModelLaunchModel<
+    T extends import('./mux-interface.js').RespawnPaneOptions | import('./mux-interface.js').CreateSessionOptions,
+  >(options: T): T {
     const launchModel = this._customModel?.launchModel;
     if (!launchModel) return options;
     const entry = getCli(this.mode);
@@ -2861,7 +3170,7 @@ export class Session extends EventEmitter {
     // redraws overwrite only the cells they target, so non-erased rows keep
     // their content. Gated to Codex/Claude/Gemini (isAltScreenStripMode).
     //
-    // Every OTHER mode (shell/antigravity/pi/grok/deepseek/omp) gets the NARROW strip
+    // Every OTHER mode (shell/antigravity/grok/deepseek/omp) gets the NARROW strip
     // when it is tmux-backed: alt-screen toggles only, because the sequence that breaks
     // scrollback there is tmux's own client-side smcup at attach, not anything the
     // program in the pane emitted (issue #205, see isMuxAltScreenOnlyStripMode).
@@ -2942,6 +3251,26 @@ export class Session extends EventEmitter {
     this.emit('output', data);
   }
 
+  /**
+   * End a start that cannot reach an adopted session's wrapper.
+   *
+   * ⚠️ Never the direct-PTY fallback. What that starts is a NEW process on THIS host
+   * (`claude --dangerously-skip-permissions`, or a server-account shell) in the neutral
+   * `/tmp`, under a tab still carrying the foreign session's name, so someone who opened an
+   * ssh or container session would end up typing into this machine. `_useMux` stays on, so
+   * the next start, which is what selecting the tab sends, tries the wrapper again.
+   *
+   * The `error` event is what the tab shows: the browser's re-attach does not read the
+   * route's answer.
+   */
+  private _failAdoptedStart(err: unknown): never {
+    const message = `Could not attach to ${this._adopt?.targetSession}: ${getErrorMessage(err)}`;
+    console.error(`[Session] ${message}`);
+    this._status = 'stopped';
+    this.emit('error', message);
+    throw new Error(message);
+  }
+
   async startInteractive(): Promise<void> {
     if (this.ptyProcess) {
       throw new Error('Session already has a running process');
@@ -2987,8 +3316,10 @@ export class Session extends EventEmitter {
     // wheel-forwarding to Claude's own transcript (the only route to history in
     // repaint/alt-screen mode; issue #154). Remote sessions run claude on
     // another host, so a local probe wouldn't reflect their version; they get
-    // their own over-ssh probe below. Cached process-wide, best-effort.
-    if (cliNeedsVersionProbe(this.mode) && !this._remote && !this._docker && !this._cliVersion) {
+    // their own over-ssh probe below. Cached process-wide, best-effort. An adopted
+    // session's agent is a process someone else started, possibly elsewhere, so
+    // the local binary says nothing about it either.
+    if (cliNeedsVersionProbe(this.mode) && !this._remote && !this._docker && !this._adopt && !this._cliVersion) {
       const probedVersion = resolveSessionCliVersion(this.mode);
       if (probedVersion) {
         this._cliVersion = probedVersion;
@@ -3063,7 +3394,7 @@ export class Session extends EventEmitter {
         const { isRestored, respawnedResumeId, respawnedDeadPane } = await this._setupOrAttachMuxSession({
           // Single source of truth shared with reattachRemote() (COD-108).
           respawnPaneOptions: this._buildRespawnPaneOptions(),
-          createSessionOptions: {
+          createSessionOptions: this._withCustomModelLaunchModel({
             sessionId: this.id,
             workingDir: this.workingDir,
             mode: this.mode,
@@ -3091,8 +3422,9 @@ export class Session extends EventEmitter {
             historyLimit: this._tmuxHistoryLimit,
             remote: this._remote,
             docker: this._docker,
+            adopt: this._adopt,
             owner: this._owner,
-          },
+          }),
           spawnErrLabel: 'mux attachment',
         });
 
@@ -3175,6 +3507,10 @@ export class Session extends EventEmitter {
           this._armPaneSettle(true);
         }
       } catch (err) {
+        // A refused launch is an answer, not a tmux failure: it must not fall through to
+        // the direct PTY below, which would start the very process that was refused.
+        if (err instanceof LaunchRefusedError) throw err;
+        if (this._adopt) this._failAdoptedStart(err);
         console.error('[Session] Failed to create mux session, falling back to direct PTY:', err);
         this._useMux = false;
         this._muxSession = null;
@@ -3194,6 +3530,9 @@ export class Session extends EventEmitter {
       if (getCli(this.mode)?.capabilities.requiresMux) {
         throw new Error(`${getModeLabel(this.mode)} sessions require tmux. Direct PTY fallback is not supported.`);
       }
+      if (this._adopt) this._failAdoptedStart(new Error('tmux is not available'));
+      // A new agent process on this path too: asked first (see `_launchGuard`).
+      await this._assertLaunchAllowed();
       try {
         // Pass --session-id to use the SAME ID as the Codeman session
         // This ensures subagents can be directly matched to the correct tab.
@@ -3400,6 +3739,14 @@ export class Session extends EventEmitter {
     // Stopped: the kill itself produces PTY output, and the buffer tail still holds the
     // dialog, so without this a deleted session kept "answering" it for several seconds.
     if (this._trustDialogAccepted || this._isStopped) return;
+    // ⚠️ Never answer a dialog in someone else's pane. An adopted session wraps a
+    // claude the human started, and this scan reads the pane and SENDS KEYS for 90
+    // seconds after `startInteractive()`, which boot recovery re-runs for every
+    // wrapper, so it is not a one-time window at adoption.
+    if (this._adopt) {
+      this._trustDialogAccepted = true;
+      return;
+    }
     const now = Date.now();
     if (now - this._interactiveStartedAt > TRUST_DIALOG_WINDOW_MS) {
       this._trustDialogAccepted = true; // window closed; anything matching now is not the dialog
@@ -4156,6 +4503,7 @@ export class Session extends EventEmitter {
             historyLimit: this._tmuxHistoryLimit,
             remote: this._remote,
             docker: this._docker,
+            adopt: this._adopt,
             owner: this._owner,
           },
           createSessionOptions: {
@@ -4168,6 +4516,7 @@ export class Session extends EventEmitter {
             historyLimit: this._tmuxHistoryLimit,
             remote: this._remote,
             docker: this._docker,
+            adopt: this._adopt,
             owner: this._owner,
           },
           spawnErrLabel: 'shell mux attachment',
@@ -4175,7 +4524,10 @@ export class Session extends EventEmitter {
 
         // For NEW sessions: clear by sending 'clear' command to the shell
         // For RESTORED sessions: don't clear - we want to see the existing output
-        if (!isRestored) {
+        // ⚠️ Never for an ADOPTED one: this pane is someone else's, so the write would land
+        // on their half-typed command and submit it (measured), or in whatever is reading
+        // stdin. `shell` is also the mode of anything the classifier cannot name.
+        if (!isRestored && !this._adopt) {
           setTimeout(() => {
             if (this.ptyProcess) {
               this._terminalBuffer.clear();
@@ -4184,6 +4536,9 @@ export class Session extends EventEmitter {
           }, 100);
         }
       } catch (err) {
+        // As in startInteractive(): a refused launch never falls back to a direct PTY.
+        if (err instanceof LaunchRefusedError) throw err;
+        if (this._adopt) this._failAdoptedStart(err);
         console.error('[Session] Failed to create mux session, falling back to direct PTY:', err);
         this._useMux = false;
         this._muxSession = null;
@@ -4192,6 +4547,7 @@ export class Session extends EventEmitter {
 
     // Fallback to direct PTY if mux is not used
     if (!this.ptyProcess) {
+      if (this._adopt) this._failAdoptedStart(new Error('tmux is not available'));
       try {
         this.ptyProcess = spawnPtyWithHelperRepair(() =>
           pty.spawn(shell, [], {
@@ -4278,6 +4634,8 @@ export class Session extends EventEmitter {
     prompt: string,
     options?: { model?: string; onProgress?: (info: { tokens?: number; status?: string }) => void }
   ): Promise<{ result: string; cost: number }> {
+    // ⚠️ A one-shot `claude -p` is a new local process in `/tmp`, never the agent in that pane.
+    if (this._adopt) throw new Error('One-shot prompts are not available for adopted sessions');
     if (this.guardedInputHeld) {
       this._guardedInputRevision++;
       throw new Error('Guarded submission in progress');
@@ -4928,6 +5286,7 @@ export class Session extends EventEmitter {
       (!allowLease && this.guardedInputHeld) ||
       this.remote ||
       this.docker ||
+      this._adopt ||
       this.paneExit ||
       !this._muxSession
     )

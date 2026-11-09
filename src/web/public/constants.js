@@ -281,6 +281,11 @@ function resolveTabRailKeyboardWidth(input = {}) {
 // the gap is what tells the user there is more strip to swipe to.
 const TAB_SCROLL_REVEAL_PX = 16;
 
+// Narrowest room beside the toolbar the L-shaped header strip trims its first
+// tab into (`_syncTabStripCorner()`, app.js). Less than this keeps the plain
+// wrap: a tab squeezed further shows its number and buttons but no name.
+const TAB_CORNER_MIN_FIRST_TAB = 120;
+
 // Phone/tablet tab-strip scroll policy (issue #257). Those breakpoints scroll
 // the strip horizontally (desktop wraps to a second row instead and never
 // scrolls), so the active tab can sit entirely outside the visible slice with
@@ -2106,7 +2111,7 @@ function computeRewriteScrollLine(input) {
  * a `/g` regex, so {@link absoluteFilePathPattern} mints a fresh one per call.
  */
 const FILE_PATH_LINK_PATTERN =
-  /(\/(?:home|Users|tmp|var|private|opt|mnt|srv|media|data|workspace)\/[^\s"'<>|;&\n\x00-\x1f]*\.(?:log|txt|json|markdown|md|ya?ml|csv|tsv|xml|sh|py|tsx|ts|jsx|js|mjs|cjs|css|html?|toml|ini|sql|diff|patch|png|jpe?g|gif|webp|avif|bmp|ico|svg|pdf|docx|pptx|xlsx|zip|mp4|webm|mov|m4v|ogv|mp3|wav))\b/g;
+  /(\/(?:home|Users|tmp|var|private|opt|mnt|srv|media|data|workspace)\/[^\s"'<>|;&\n\x00-\x1f]*\.(?:log|txt|json|markdown|md|ya?ml|csv|tsv|xml|sh|py|tsx|ts|jsx|js|mjs|cjs|css|html?|toml|ini|conf|sql|diff|patch|png|jpe?g|gif|webp|avif|bmp|ico|svg|pdf|docx|pptx|xlsx|zip|mp4|webm|mov|m4v|ogv|mp3|wav))\b/g;
 
 /** A fresh, zero-state instance of {@link FILE_PATH_LINK_PATTERN}. */
 function absoluteFilePathPattern() {
@@ -2159,14 +2164,14 @@ function previewsInFileViewer(filePath) {
  * {@link findFilePathLinks}.
  */
 const RELATIVE_FILE_PATH_LINK_PATTERN =
-  /(^|[\s"'`(\[{<>=,])((?![^\s"'`<>|;&()[\]{}=,\n\x00-\x1f]*:\/\/)(?:~\/|[^\s"'`<>|;&()[\]{}=,\/~\n\x00-\x1f])[^\s"'`<>|;&()[\]{}=,\n\x00-\x1f]*\.(?:log|txt|json|markdown|md|ya?ml|csv|tsv|xml|sh|py|tsx|ts|jsx|js|mjs|cjs|css|html?|toml|ini|sql|diff|patch|png|jpe?g|gif|webp|avif|bmp|ico|svg|pdf|docx|pptx|xlsx|zip|mp4|webm|mov|m4v|ogv|mp3|wav))\b/g;
+  /(^|[\s"'`(\[{<>=,])((?![^\s"'`<>|;&()[\]{}=,\n\x00-\x1f]*:\/\/)(?:~\/|[^\s"'`<>|;&()[\]{}=,\/~\n\x00-\x1f])[^\s"'`<>|;&()[\]{}=,\n\x00-\x1f]*\.(?:log|txt|json|markdown|md|ya?ml|csv|tsv|xml|sh|py|tsx|ts|jsx|js|mjs|cjs|css|html?|toml|ini|conf|sql|diff|patch|png|jpe?g|gif|webp|avif|bmp|ico|svg|pdf|docx|pptx|xlsx|zip|mp4|webm|mov|m4v|ogv|mp3|wav))\b/g;
 
 /** The `(?:log|txt|…)` extension group, read off the rooted pattern so it cannot drift. */
 const FILE_LINK_EXTENSION_GROUP = /\\\.(\(\?:[^()]*\))\)\\b$/.exec(FILE_PATH_LINK_PATTERN.source)[1];
 
 /**
  * Every linkable file path in `text`, sorted by position. Spaced candidates
- * reserve their whole span first, even when unlinkable; rooted, `~/`, relative
+ * reserve their whole span first, including paths bounded by parentheses, even when unlinkable; rooted, `~/`, relative
  * and folder detectors then skip reserved spans, earlier matches and URLs.
  *
  * The one entry point for both consumers (terminal link provider, response
@@ -2195,19 +2200,26 @@ function findFilePathLinks(text) {
   // A path with spaces is taken whole, or the span it covers links nothing
   // (spacedFilePathOnLine). Either way no detector below may cut a fragment out of it.
   const reserved = [];
+  const isReserved = (index, length) =>
+    reserved.some((r) => index < r.index + r.path.length && r.index < index + length);
+  const reserve = (spaced, index) => {
+    if (!spaced) return;
+    const start = index + spaced.index;
+    if (inUrl(start, spaced.path.length) || isReserved(start, spaced.path.length)) return;
+    reserved.push({ index: start, path: spaced.path });
+    if (spaced.link) found.push({ path: spaced.path, index: start });
+  };
   let lineStart = 0;
   for (const line of value.split('\n')) {
-    const spaced = spacedFilePathOnLine(line);
-    if (spaced && !inUrl(lineStart + spaced.index, spaced.path.length)) {
-      const index = lineStart + spaced.index;
-      reserved.push({ index, path: spaced.path });
-      if (spaced.link) found.push({ path: spaced.path, index });
+    reserve(spacedFilePathOnLine(line), lineStart);
+    // Parentheses bound an inline path just as a whole line bounds a standalone path.
+    const parenthesised = /\(([^()\r\n]{1,1000})\)/g;
+    while ((match = parenthesised.exec(line)) !== null) {
+      if (opensBashCall(line, match.index)) continue;
+      reserve(spacedFilePathOnLine(match[1], { parenthesised: true }), lineStart + match.index + 1);
     }
     lineStart += line.length + 1;
   }
-  const isReserved = (index, length) =>
-    reserved.some((r) => index < r.index + r.path.length && r.index < index + length);
-
   const absolute = absoluteFilePathPattern();
   while ((match = absolute.exec(value)) !== null) {
     if (!inUrl(match.index, match[1].length) && !isReserved(match.index, match[1].length)) {
@@ -2236,13 +2248,28 @@ const SPACED_FILE_PATH_LABEL_PATTERN =
   /^(?:path|files?|saved (?:to|as)|wrote|written to|output|created|location|attachment):[ \t]*$/i;
 
 /**
+ * True when the `(` at `open` starts a `Bash(` tool row, which holds a command rather than
+ * a path: `Bash(/tmp/a.out input.txt)` is a program and its argument, so the parentheses do
+ * not bound one spaced path and the ordinary detectors keep the row. Only `Bash(`: the path
+ * tools (`Read(`, `Update(`, `Write(`) do hold a path, spaces included.
+ *
+ * @param {string} text
+ * @param {number} open Index of the `(`.
+ * @returns {boolean}
+ */
+function opensBashCall(text, open) {
+  return /(?:^|\W)Bash\($/.test(text.slice(Math.max(0, open - 5), open + 1));
+}
+
+/**
  * A file path WITH SPACES on one line, or null.
  *
  * Every path pattern ends a path at whitespace, so `/mnt/c/OneDrive - Contoso/a.docx`
  * linked `/mnt/c/OneDrive` plus a relative `Contoso/a.docx`, two links to the
  * wrong targets. A space is only safe inside a path where the line itself bounds
- * the path, so a spaced path is recognised in exactly these shapes:
+ * the path or a parenthesised group bounds it, so a spaced path is recognised in these shapes:
  *
+ *   Updated (/mnt/c/My Docs/report.docx)   inside parentheses in prose
  *   /mnt/c/My Docs/report.docx              the whole line is the path
  *   - /mnt/c/My Docs/report.docx            after a list marker (`-`, `*`, `•`, `1.`, `2)`)
  *   Saved to: 03 Attachments/Build SIPOC Design/plan.pptx      after a path label (SPACED_FILE_PATH_LABEL_PATTERN)
@@ -2256,7 +2283,7 @@ const SPACED_FILE_PATH_LABEL_PATTERN =
  * it ends on a known extension, a rooted one has a directory before its first
  * space, no earlier word holds an extension (`a.md,`, `a.ts#L12`) or ends in `/`,
  * and none holds a `:` and a digit (`a.ts:42`, a line suffix ends the path). Later words cannot start a new
- * `/`, `~/`, `./` or `../` path, no earlier word ends in `:`, is an arrow or has
+ * `/`, `~/`, `./` or `../` path, no earlier word ends in `:` (or `,` inside parentheses), is an arrow or has
  * no letter or digit (a prompt glyph such as `❯` or `$`; a bare `-` is kept), and
  * a run of spaces (a column gap) is refused, so two paths on a line are never
  * merged. A relative candidate whose only `/` word is its last is prose after the
@@ -2278,9 +2305,10 @@ const SPACED_FILE_PATH_LABEL_PATTERN =
  * Linear: one bounded prefix match, then string scans.
  *
  * @param {string} line One line, no newline.
+ * @param {{parenthesised?: boolean}} [options] Refuse comma-separated lists inside parentheses only.
  * @returns {{path: string, index: number, link: boolean} | null}
  */
-function spacedFilePathOnLine(line) {
+function spacedFilePathOnLine(line, options = {}) {
   const text = String(line || '');
   const prefix = /^[ \t]*((?:\d{1,3}[.)]|[-*•])[ \t]+)?((?:[A-Za-z][\w-]{0,30}(?: [\w-]{1,30}){0,3}):[ \t]+)?/.exec(text);
   const index = prefix[0].length;
@@ -2304,6 +2332,7 @@ function spacedFilePathOnLine(line) {
   }
   for (const word of words.slice(0, -1)) {
     if (word.endsWith('/') || word.endsWith(':') || /^(?:—|–|→|=>|->|<-|=)$/.test(word)) return null;
+    if (options.parenthesised && word.endsWith(',')) return null;
     // A shell prompt that prints its working directory in full (`/home/me/proj$ cat
     // notes.md`; WSL's `/mnt/c/...` is outside `$HOME`) is a command line too, and so is
     // one whose directory has a space in it (`/mnt/c/My Docs$ ls notes.md`): the `$`
@@ -2395,6 +2424,31 @@ function resolveLinkedFilePath(filePath, workingDir) {
     else parts.push(part);
   }
   return `/${parts.join('/')}`;
+}
+
+/**
+ * The directory a RELATIVE path printed for a session is relative TO.
+ *
+ * `workingDir` is recorded once at create time and never follows a `cd`, so it
+ * stops describing where a shell (or an agent that changed directory) really
+ * is. `session.paneCwd` is the pane's live `#{pane_current_path}`, published by the
+ * server from its pane read. It only changes which BASE a relative path joins;
+ * the result is then routed like any other path, so a target outside the
+ * workspace still goes through the attachment routes.
+ *
+ * Remote and Docker sessions are excluded (the server never sends them a paneCwd,
+ * and this checks again): their local pane runs the ssh / docker-exec CLIENT,
+ * so its directory says nothing about the agent. An unknown paneCwd falls back to
+ * `workingDir`.
+ *
+ * @param {{workingDir?: string, paneCwd?: string, remote?: unknown, docker?: unknown}} [session]
+ * @returns {string|undefined}
+ */
+function relativeResolutionBase(session) {
+  if (!session) return undefined;
+  const paneCwd = session.paneCwd;
+  if (!session.remote && !session.docker && typeof paneCwd === 'string' && paneCwd.startsWith('/')) return paneCwd;
+  return session.workingDir;
 }
 
 /**
@@ -2557,9 +2611,10 @@ const pathFirstSegment = (path) => path.replace(/^(?:\.?\/)+/, '').split('/')[0]
  * top directory the broken token did (the next entry of a listing).
  */
 function pathContinuation(prevText, nextText) {
-  const tail = /[^\s"'<>|;&]+$/.exec(String(prevText || '').replace(/\s+$/, ''))?.[0] || '';
-  if (!tail.includes('/') || !/[\w\-.~+@%/]$/.test(tail) || PATH_TOKEN_ENDS_WITH_EXTENSION.test(tail)) return null;
+  const previous = String(prevText || '').trimEnd();
   const next = String(nextText || '').replace(/^\s+/, '');
+  const tail = /[^\s"'<>|;&]+$/.exec(previous)?.[0] || '';
+  if (!tail.includes('/') || !/[\w\-.~+@%/]$/.test(tail) || PATH_TOKEN_ENDS_WITH_EXTENSION.test(tail)) return null;
   const head = /^[^\s"'<>|;&]+/.exec(next)?.[0] || '';
   if (!head || PATH_TOKEN_STARTS_NEW_PATH.test(head) || PATH_TOKEN_STARTS_EXPLICIT_RELATIVE.test(head)) return null;
   // A listing (`git ls-files`, `find`, `ls -R`) puts one path per row, so `src/components`
@@ -2586,7 +2641,9 @@ function pathContinuation(prevText, nextText) {
  * A following logical line is glued on (its indent dropped, cell mapping kept
  * exact) when {@link pathContinuation} says it carries the path on and the row it
  * broke off is at least as long as the row it continues on. Bounded by the same
- * `maxRows` as the logical line.
+ * `maxRows` as the logical line. Hard breaks concatenate without inserting spaces.
+ * An ambiguous parenthesised filename also carries `pathAlternatives` for a
+ * guarded lookup on activation; its text and cell mapping remain unchanged.
  *
  * @returns Same shape as {@link terminalLogicalLine}; null when the row does not exist.
  */
@@ -2607,6 +2664,7 @@ function terminalPathLine(buffer, row, cols, maxRows) {
   /** `first` and the lines a path carries on into, stopping at the last confirmed join. */
   const extend = (first) => {
     const parts = [first];
+    const alternatives = [];
     let text = first.text;
     let rows = rowsOf(first);
     let confirmed = 1;
@@ -2616,25 +2674,41 @@ function terminalPathLine(buffer, row, cols, maxRows) {
       const kind = continues(parts[parts.length - 1], next, text);
       if (!kind) break;
       parts.push(next);
+      if (kind === 'join') {
+        const opening = text.lastIndexOf('(');
+        const closing = next.text.indexOf(')');
+        if (opening >= 0 && closing > 0 && !opensBashCall(text, opening)) {
+          const before = text.slice(opening + 1);
+          const after = next.text.slice(0, closing).trimStart();
+          const spaced = spacedFilePathOnLine(`${before} ${after}`, { parenthesised: true });
+          if (!before.includes(')') && !/[/-]$/.test(before) && !after.includes('/') && spaced?.link) {
+            alternatives.push({ path: before.slice(spaced.index) + after, spacedPath: spaced.path });
+          }
+        }
+      }
       text += next.text.replace(/^\s+/, '');
       rows += rowsOf(next);
       if (kind === 'join') confirmed = parts.length;
     }
-    return parts.slice(0, confirmed);
+    return { parts: parts.slice(0, confirmed), alternatives };
   };
 
-  // The hovered row may be the second or third line of a broken path: walk back
-  // to where it could start, then let the forward pass decide what really joins.
+  // A middle fragment may have no slash, so only a forward pass from its
+  // rooted start can confirm a path spanning three or more rows.
+  let extended = extend(base);
   let first = base;
   let rows = rowsOf(base);
   while (first.startRow > 0) {
     const prev = lineAt(first.startRow - 1);
-    if (!prev || rows + rowsOf(prev) > bound || !continues(prev, first, prev.text)) break;
+    if (!prev || rows + rowsOf(prev) > bound) break;
     first = prev;
     rows += rowsOf(prev);
+    const tail = /[^\s"'<>|;&]+$/.exec(first.text.trimEnd())?.[0] || '';
+    if (!tail.includes('/')) continue;
+    const candidate = extend(first);
+    if (candidate.parts[candidate.parts.length - 1].endRow >= base.startRow) extended = candidate;
   }
-  let parts = extend(first);
-  if (parts[parts.length - 1].endRow < base.startRow) parts = extend(base);
+  const { parts, alternatives } = extended;
   if (parts.length === 1) return parts[0];
 
   const segments = [];
@@ -2659,7 +2733,14 @@ function terminalPathLine(buffer, row, cols, maxRows) {
     }
     return -1;
   };
-  return { startRow: parts[0].startRow, endRow: parts[parts.length - 1].endRow, text, offsetToCell, cellToOffset };
+  return {
+    startRow: parts[0].startRow,
+    endRow: parts[parts.length - 1].endRow,
+    text,
+    offsetToCell,
+    cellToOffset,
+    ...(alternatives.length ? { pathAlternatives: alternatives } : {}),
+  };
 }
 
 /**
@@ -2915,7 +2996,14 @@ function terminalLinkLine(buffer, row, cols, maxRows) {
     for (const s of segments) if (s.row === targetRow && (!seg || s.colStart <= targetCol)) seg = s;
     return seg ? seg.textStart + Math.max(0, targetCol - seg.colStart) : -1;
   };
-  return { startRow, endRow: lastRow, text, offsetToCell, cellToOffset };
+  return {
+    startRow,
+    endRow: lastRow,
+    text,
+    offsetToCell,
+    cellToOffset,
+    ...(base.pathAlternatives ? { pathAlternatives: base.pathAlternatives } : {}),
+  };
 }
 
 /**
@@ -4025,6 +4113,7 @@ if (typeof window !== 'undefined') {
     absoluteFilePathPattern,
     findFilePathLinks,
     resolveLinkedFilePath,
+    relativeResolutionBase,
     previewsInFileViewer,
     FILE_PREVIEW_EXTENSIONS,
     rendersAsPage,
