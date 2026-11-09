@@ -8,6 +8,17 @@ see [§7 Build log](#7-build-log-what-actually-happened) for what shipped, what 
 verification round found, and the two items that genuinely remain open (§2.4's footgun
 guard and the Part 3 deferrals).
 
+**Update 2026-11-08 (1.50.0)**: `agentSkillEnabled` is now **on by default** (owner decision:
+"enable the codeman skill by default"), the flip §2.2 planned for after dogfooding. An absent
+key means on in both readers (server `getAgentSkillEnabled()` and the App Settings switch, both
+`!== false`); an explicit false is off. Existing installs that stored off are switched on once at
+the first 1.50.0 start (every App Settings Save up to 1.49.0 wrote `false`); turning it off
+afterwards sticks (`src/web/agent-skill-default-migration.ts`, a "Behaviour change" in the
+release notes). To keep users' repositories clean, every managed copy
+now carries a `.gitignore` of `*` (written once with `wx`, removed by uninstall only when it is
+the last file left). Turning the setting off still sweeps nothing. The sections below record the
+original default-off decision as it was made.
+
 **Date**: 2026-08-08
 **Scope**: Part 1 (agent skill) and Part 2 (wait primitives) were specified and built.
 Parts 3 to 5 are captured so they are not lost, but remain deliberately deferred.
@@ -119,7 +130,7 @@ Install paths, in order of how a user gets it:
 
 Setting name: `agentSkillEnabled`. Synced (not per-device), since it changes on-disk case
 content rather than display. Default: **ON after the dogfooding phase, OFF in the first
-release**. Rationale for starting OFF: Claude Code loads every skill's name and description
+release** (flipped to ON in 1.50.0, see the Status update at the top). Rationale for starting OFF: Claude Code loads every skill's name and description
 into context on every turn, so an always-on skill has a small permanent token cost, and we
 should measure that we are buying something with it first.
 
@@ -543,6 +554,7 @@ without the wait endpoints, so the wait work goes first.
 1. ✅ `skills/` at the repo root: accepted (built that way; the install one-liner depends on it).
 2. ✅ `agentSkillEnabled` default: **OFF** for the first release, per §2.2's rationale (skills
    cost context on every turn; measure before defaulting on). Flip later if dogfooding earns it.
+   **Flipped to ON in 1.50.0** (2026-11-08), with the copy made self-ignoring in git.
 3. ✅ Both: global install via `npx skills add` / `codeman skill install`, AND per-case
    auto-injection behind the (default-off) setting. Injection is add-only at session create and
    marker-guarded, so a user-authored copy is never touched.
@@ -681,9 +693,9 @@ Built to the §2.6 file list, mirroring the statusLine mechanism throughout:
 | ----- | ----- |
 | `applyAgentSkill(casePath, enabled)` + `installAgentSkillInto` / `removeAgentSkillFrom` | `src/hooks-config.ts` |
 | `codeman skill install` / `skill uninstall` (`--global` default, `--case <name>`) | `src/cli.ts` |
-| `agentSkillEnabled` (SYNCED, default OFF) | `schemas.ts` (`SettingsUpdateSchema`), `getAgentSkillEnabled()` on `ConfigPort`/`server.ts`, checkbox in `index.html` + `settings-ui.js` |
+| `agentSkillEnabled` (SYNCED, default OFF; ON since 1.50.0) | `schemas.ts` (`SettingsUpdateSchema`), `getAgentSkillEnabled()` on `ConfigPort`/`server.ts`, checkbox in `index.html` + `settings-ui.js`; the one-time 1.50.0 boot migration of a stored false in `src/web/agent-skill-default-migration.ts` |
 | Injection call sites (Claude mode only) | `POST /api/sessions` next to `refreshStaleCodemanHooks`; `POST /api/quick-start` after the case-create/self-heal blocks (local + docker cases; remote skipped, its path lives on another host) |
-| Tests | `test/agent-skill.test.ts` (10 unit), `test/quick-start.test.ts` (real server: default-off, PUT accepts key, injection on create, shell-mode skipped) |
+| Tests | `test/agent-skill.test.ts` (unit, incl. the self-ignoring `.gitignore` against real git since 1.50.0), `test/quick-start.test.ts` (real server: default-off at first, default-on since 1.50.0 incl. a partial PUT and an explicit false, injection on create, shell-mode skipped), `test/agent-skill-setting-ui.test.ts` (the App Settings switch reads an absent key as on, and a device blob holding the old false follows the server), `test/agent-skill-default-migration.test.ts` (the boot migration: once per data dir, marker outside settings.json) |
 
 Decisions worth keeping:
 

@@ -62,6 +62,7 @@ import { homedir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { gitNonInteractiveEnv, isSafeGitRef, sanitizeGitOutput } from './git-clone.js';
 import { isInsideAny, isUnrelatedAncestor } from './git-workspace-status.js';
+import { gitMissingError, gitSpawnAllowed } from './utils/git-availability.js';
 
 // ─── Limits ──────────────────────────────────────────────────────────────────
 
@@ -371,6 +372,11 @@ const READ_ONLY_GIT_OPTIONS = ['--no-optional-locks', '-c', 'core.fsmonitor=fals
  */
 export const runWorktreeGit: WorktreeGitRunner = (cwd, args, opts) =>
   new Promise<WorktreeGitResult>((resolveRun) => {
+    // Never Apple's placeholder git on a Mac without developer tools: answered as "git is not installed".
+    if (!gitSpawnAllowed()) {
+      resolveRun({ code: null, stdout: '', stderr: '', timedOut: false, spawnError: String(gitMissingError()) });
+      return;
+    }
     let child: ReturnType<typeof spawn>;
     try {
       child = spawn('git', args, {

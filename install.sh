@@ -20,6 +20,10 @@
 #   --no-admin                      Never use sudo or Homebrew: download Node.js and tmux into
 #                                   the home folder instead (chosen by itself when this account
 #                                   has no administrator rights)
+#   --ai-cli <id>|none              Which AI CLI to install when none is found, without the menu
+#                                   (the ids are the keys of the catalogue below)
+#   --progress                      Also print machine-readable progress lines (for the
+#                                   desktop app; see progress_phase)
 #   --help, -h                      Print this text
 #
 # Environment variables:
@@ -49,6 +53,8 @@
 #   CODEMAN_TARBALL_URL       - Source archive (.tar.gz) to install from when no
 #                               working git is available (default: the GitHub
 #                               archive of CODEMAN_REPO_URL at CODEMAN_BRANCH)
+#   CODEMAN_AI_CLI            - Same as --ai-cli
+#   CODEMAN_PROGRESS=1        - Same as --progress
 #
 # Subcommands:
 #   install.sh update       - Update an existing install
@@ -57,6 +63,7 @@
 #   install.sh name [<n>]   - Rename this machine on your tailnet (default: codeman-<hostname>)
 #   install.sh status       - Print the URLs, the QR code and how to manage the service
 #   install.sh cloudflared  - Install cloudflared for the in-app Cloudflare tunnel
+#   install.sh preflight    - Print what is on this machine as JSON; changes nothing
 
 set -euo pipefail
 
@@ -165,6 +172,12 @@ ASSUME_YES="0"
 # Set by parse_flags when a flag asks to change how an existing install is
 # reached or run, so a bare re-run takes the full flow instead of a quiet update.
 RECONFIGURE="0"
+# --ai-cli / CODEMAN_AI_CLI: answers the AI CLI menu, with a catalogue id or
+# "none". Empty means ask. Consent comes with the flag, so unlike the
+# CODEMAN_NONINTERACTIVE default it installs exactly what was named.
+AI_CLI_CHOICE="${CODEMAN_AI_CLI:-}"
+# --progress / CODEMAN_PROGRESS=1: see progress_phase.
+PROGRESS="${CODEMAN_PROGRESS:-0}"
 SUBCOMMAND=""
 SUBCOMMAND_ARG=""
 # Answers to question 3 (choose_launch_mode): LAUNCH_CHOICE 1/2/3 as above,
@@ -272,6 +285,24 @@ warn() {
 
 error() {
     echo -e "${RED}Error:${NC} $1" >&2
+    if [[ "$PROGRESS" == "1" ]]; then
+        printf '@@codeman error %s\n' "${1//$'\n'/ }" >&2
+    fi
+}
+
+# progress_phase <name>: tell the desktop app which part of the install has
+# begun. The protocol is one line, `@@codeman phase <name>`, for each of
+# runtime, agent, source, packages, build, service and done, always in that
+# order, and `@@codeman error <text>` for each error() above. A phase runs until
+# the next one starts; a run that ends without `done` failed. A phase with
+# nothing to do may be skipped. The app ignores a name it does not know, so a
+# new phase needs no new app, but `done` must stay the last thing main() reports.
+# On stderr, because this can be reached inside a $( ) that captures stdout.
+progress_phase() {
+    if [[ "$PROGRESS" == "1" ]]; then
+        printf '@@codeman phase %s\n' "$1" >&2
+    fi
+    return 0
 }
 
 die() {
@@ -748,6 +779,17 @@ cli_catalog_names() {
     printf '%s' "$out"
 }
 
+# "claude, opencode, codex, ...": the ids --ai-cli takes.
+cli_catalog_ids() {
+    local i out=""
+    for ((i = 0; i < ${#CLI_IDS[@]}; i++)); do
+        [[ "${CLI_ENABLED[$i]}" == "1" ]] || continue
+        [[ "${CLI_BIN_LEN[$i]}" -gt 0 ]] || continue
+        out="${out:+$out, }${CLI_IDS[$i]}"
+    done
+    printf '%s' "$out"
+}
+
 # The "install one yourself" hints: every enabled CLI that is not installed,
 # showing the trusted install command. An entry with no install command gets
 # its docs URL instead of being silently omitted, which is what used to
@@ -785,6 +827,129 @@ cli_catalog_print_install_hints() {
 # the first time a hint is printed.
 cli_catalog_select_platform
 
+# cli_index <id>: print the catalogue index of an enabled CLI that has a binary
+# to look for. Fails for anything else, `shell` included.
+cli_index() {
+    local i
+    for ((i = 0; i < ${#CLI_IDS[@]}; i++)); do
+        if [[ "${CLI_IDS[$i]}" == "$1" ]] && [[ "${CLI_ENABLED[$i]}" == "1" ]] && [[ "${CLI_BIN_LEN[$i]}" -gt 0 ]]; then
+            printf '%s' "$i"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# cli_offerable <index>: can this run install that entry by itself? 0 = yes,
+# 1 = no, 2 = no, only because its command needs curl and this host has wget.
+# One rule for the menu, for --ai-cli and for `preflight`, so what the desktop
+# app lists is exactly what the menu would. detect_all_clis must have run.
+#
+# ⚠️ The registry's install commands are a MIX: some call `curl` directly
+# (vendor one-liners), others are `npm install -g …`, which never needed curl
+# at all. A wget-only host used to lose the WHOLE menu over this, including
+# every npm entry: the two literals this replaced went through
+# download_to_stdout and so honoured `wget`, and CODEMAN_NONINTERACTIVE=1
+# silently stopped defaulting to Claude Code as documented. So this is decided
+# per entry: only a command that actually starts with `curl ` is curl-dependent.
+# Rewriting curl to wget inside a string about to be executed is the wrong
+# instinct either way; the ones we can't run, we show as a hint.
+cli_offerable() {
+    local i="$1"
+    [[ "${CLI_ENABLED[$i]}" == "1" ]] || return 1
+    [[ "${CLI_BIN_LEN[$i]}" -gt 0 ]] || return 1
+    [[ -z "${CLI_FOUND_PATH[$i]}" ]] || return 1
+    [[ -n "${CLI_INSTALL_CMD_TRUSTED[$i]}" ]] || return 1
+    if [[ "${DOWNLOADER:-}" != "curl" ]] && [[ "${CLI_INSTALL_CMD_TRUSTED[$i]}" == curl\ * ]]; then
+        return 2
+    fi
+    # Same reasoning for a Homebrew command: it cannot run where there is no
+    # Homebrew, and the no-admin route never installs one.
+    if [[ "${CLI_INSTALL_CMD_TRUSTED[$i]}" == brew\ * ]] && { [[ "$NO_ADMIN" == "1" ]] || ! command -v brew &>/dev/null; }; then
+        return 1
+    fi
+    return 0
+}
+
+# Tell a running Codeman to look again: it remembers a missing CLI for up to 5
+# minutes (cliResolveRetryDelayMs), and its Run button reads that memory. The name
+# is CLI_INSTALLED_MARKER in src/utils/cli-executable-resolver.ts. With no data
+# folder there is no Codeman to tell, which is why a failure here is not one.
+mark_cli_installed() {
+    touch "$HOME/.codeman/cli-installed" 2>/dev/null || true
+    return 0
+}
+
+# run_offered_cli <index>: run the trusted command of one entry and look again
+# at what is installed. What that means is the caller's to judge.
+run_offered_cli() {
+    local idx="$1"
+    info "Installing ${CLI_LABELS[$idx]}..."
+    # </dev/null: under `curl | bash` a child that reads stdin would
+    # consume the rest of this script.
+    bash -c "${CLI_INSTALL_CMD_TRUSTED[$idx]}" </dev/null || true
+    hash -r 2>/dev/null || true
+    CLI_DETECT_DONE=""
+    detect_all_clis
+    if [[ -n "${CLI_FOUND_PATH[$idx]}" ]]; then
+        success "${CLI_LABELS[$idx]} installed at ${CLI_FOUND_PATH[$idx]}"
+        mark_cli_installed
+    else
+        warn "${CLI_LABELS[$idx]} installation failed."
+    fi
+    return 0
+}
+
+# install_offered_cli <index>: the same during an install, where a chosen CLI
+# that leaves no CLI at all behind is fatal.
+install_offered_cli() {
+    run_offered_cli "$1"
+    if [[ "$CLI_FOUND_COUNT" -eq 0 ]]; then
+        die "The selected AI CLI failed to install. Install one manually and re-run the installer."
+    fi
+    return 0
+}
+
+# Install one AI CLI and nothing else (`install.sh agent <id>`): how the desktop
+# app adds an agent once Codeman is here, also over a running server, which this
+# never touches. It judges the run itself, because install_offered_cli cannot: its
+# gate is fatal only when NO CLI is left, and here another one usually is, so a
+# failed install would report success, and its message is about re-running the
+# installer. A CLI that is here already is a success, and installs nothing.
+agent_subcommand() {
+    if [[ -z "$AI_CLI_CHOICE" || "$AI_CLI_CHOICE" == "none" ]]; then
+        die "Name the AI CLI to install: install.sh agent <id> (one of: $(cli_catalog_ids))."
+    fi
+    check_curl_or_wget || die "curl or wget is required but neither is installed. Please install one first."
+    detect_all_clis
+    progress_phase agent
+
+    local idx offerable=0
+    idx=$(cli_index "$AI_CLI_CHOICE")
+    if [[ -n "${CLI_FOUND_PATH[$idx]}" ]]; then
+        success "${CLI_LABELS[$idx]} is already installed at ${CLI_FOUND_PATH[$idx]}"
+        mark_cli_installed
+        progress_phase done
+        return 0
+    fi
+    cli_offerable "$idx" || offerable=$?
+    if [[ "$offerable" -ne 0 ]]; then
+        die "${CLI_LABELS[$idx]} cannot be installed automatically here. See ${CLI_DOCS[$idx]:-its documentation}."
+    fi
+    # What this run sees is a login shell's PATH at best: a Node.js that only an
+    # interactive profile loads (nvm in .zshrc) is not on it.
+    if [[ "${CLI_INSTALL_CMD_TRUSTED[$idx]}" == npm\ * ]] && ! check_npm; then
+        die "${CLI_LABELS[$idx]} installs with npm, and this run cannot find it. Run this in a terminal instead: ${CLI_INSTALL_CMD_TRUSTED[$idx]}"
+    fi
+
+    run_offered_cli "$idx"
+    if [[ -z "${CLI_FOUND_PATH[$idx]}" ]]; then
+        die "${CLI_LABELS[$idx]} did not install. You can run its installer yourself: ${CLI_INSTALL_CMD_TRUSTED[$idx]}"
+    fi
+    progress_phase done
+    return 0
+}
+
 # Offer to install one AI CLI from the catalogue, or let the user skip.
 #
 # Split out of main() so the bash 3.2 CI step and test/install-sh-invariants.test.ts
@@ -798,7 +963,10 @@ offer_ai_cli_install() {
     local i
     echo ""
     warn "No AI CLI found. Codeman needs at least one: $(cli_catalog_names)."
-    headless_guard "install an AI CLI (curl | bash from its vendor)"
+    # --ai-cli is the consent the guard otherwise looks for at a terminal.
+    if [[ -z "$AI_CLI_CHOICE" ]]; then
+        headless_guard "install an AI CLI (curl | bash from its vendor)"
+    fi
     echo ""
 
     # The menu is built from the catalogue: every enabled CLI that is not
@@ -810,35 +978,37 @@ offer_ai_cli_install() {
     # ⚠️ TRUST BOUNDARY: the command executed comes from CLI_INSTALL_CMD_TRUSTED,
     # the only array the generated block above writes and the only one the
     # installer ever runs or displays — see cli_catalog_select_platform.
-    #
-    # ⚠️ The registry's install commands are a MIX: some call `curl` directly
-    # (vendor one-liners), others are `npm install -g …`, which never needed
-    # curl at all. A wget-only host used to lose the WHOLE menu over this,
-    # including every npm entry — the two literals this replaced went through
-    # download_to_stdout and so honoured `wget`, and CODEMAN_NONINTERACTIVE=1
-    # silently stopped defaulting to Claude Code as documented. Filter per
-    # entry instead: only a command that actually starts with `curl ` is
-    # curl-dependent, so only THOSE are held back on a wget-only host.
-    # Rewriting curl to wget inside a string about to be executed is the
-    # wrong instinct either way — the ones we can't run, we show as a hint.
     local -a offer_idx=()
-    local curl_only_skipped=0
+    local curl_only_skipped=0 offerable
     for ((i = 0; i < ${#CLI_IDS[@]}; i++)); do
-        [[ "${CLI_ENABLED[$i]}" == "1" ]] || continue
-        [[ "${CLI_BIN_LEN[$i]}" -gt 0 ]] || continue
-        [[ -z "${CLI_FOUND_PATH[$i]}" ]] || continue
-        [[ -n "${CLI_INSTALL_CMD_TRUSTED[$i]}" ]] || continue
-        if [[ "${DOWNLOADER:-}" != "curl" ]] && [[ "${CLI_INSTALL_CMD_TRUSTED[$i]}" == curl\ * ]]; then
-            curl_only_skipped=$((curl_only_skipped + 1))
-            continue
-        fi
-        # Same reasoning for a Homebrew command: it cannot run where there is no
-        # Homebrew, and the no-admin route never installs one.
-        if [[ "${CLI_INSTALL_CMD_TRUSTED[$i]}" == brew\ * ]] && { [[ "$NO_ADMIN" == "1" ]] || ! command -v brew &>/dev/null; }; then
-            continue
-        fi
-        offer_idx[${#offer_idx[@]}]=$i
+        offerable=0
+        cli_offerable "$i" || offerable=$?
+        case "$offerable" in
+            0) offer_idx[${#offer_idx[@]}]=$i ;;
+            2) curl_only_skipped=$((curl_only_skipped + 1)) ;;
+        esac
     done
+
+    # The answer was given up front: never the menu, and never a different CLI
+    # than the one named. A name this host cannot install (parse_flags already
+    # refused a typo) warns and carries on, the same as Skip.
+    if [[ -n "$AI_CLI_CHOICE" ]]; then
+        local named="" entry
+        if [[ "$AI_CLI_CHOICE" != "none" ]]; then
+            named=$(cli_index "$AI_CLI_CHOICE") || named=""
+            for entry in ${offer_idx[@]+"${offer_idx[@]}"}; do
+                if [[ "$entry" == "$named" ]]; then
+                    install_offered_cli "$named"
+                    return 0
+                fi
+            done
+            warn "$AI_CLI_CHOICE cannot be installed automatically here. Codeman will run, but sessions need a CLI to drive."
+        else
+            warn "Skipping AI CLI install. Codeman will run, but sessions need a CLI to drive."
+        fi
+        cli_catalog_print_install_hints
+        return 0
+    fi
 
     if [[ "$curl_only_skipped" -gt 0 ]]; then
         warn "curl is not available, so $curl_only_skipped install command(s) that need it were left out of the menu below (still shown as hints if you skip)."
@@ -888,22 +1058,7 @@ offer_ai_cli_install() {
             warn "Skipping AI CLI install. Codeman will run, but sessions need a CLI to drive."
             cli_catalog_print_install_hints
         else
-            idx="${offer_idx[$((cli_choice - 1))]}"
-            info "Installing ${CLI_LABELS[$idx]}..."
-            # </dev/null: under `curl | bash` a child that reads stdin would
-            # consume the rest of this script.
-            bash -c "${CLI_INSTALL_CMD_TRUSTED[$idx]}" </dev/null || true
-            hash -r 2>/dev/null || true
-            CLI_DETECT_DONE=""
-            detect_all_clis
-            if [[ -n "${CLI_FOUND_PATH[$idx]}" ]]; then
-                success "${CLI_LABELS[$idx]} installed at ${CLI_FOUND_PATH[$idx]}"
-            else
-                warn "${CLI_LABELS[$idx]} installation failed."
-            fi
-            if [[ "$CLI_FOUND_COUNT" -eq 0 ]]; then
-                die "The selected AI CLI failed to install. Install one manually and re-run the installer."
-            fi
+            install_offered_cli "${offer_idx[$((cli_choice - 1))]}"
         fi
     fi
 }
@@ -2033,7 +2188,8 @@ run_step() {
         success "$label ($(fmt_elapsed $((SECONDS - start))))"
         return 0
     fi
-    error "$label failed (exit $rc). Last lines of $LOG_FILE:"
+    error "$label failed (exit $rc)."
+    echo "Last lines of $LOG_FILE:" >&2
     tail -n 25 "$LOG_FILE" 2>/dev/null | sed 's/^/    /' >&2
     return "$rc"
 }
@@ -3723,6 +3879,7 @@ main() {
     # ========================================================================
     # Ask everything up front, so the build afterwards can run unattended
     # ========================================================================
+    progress_phase runtime
     ask_dependencies "$os" "$distro"
 
     # AI CLI: needs a human choice AND node (installed just above), so it sits
@@ -3732,6 +3889,7 @@ main() {
     CLI_DETECT_DONE=""
     detect_all_clis
     if [[ "$CLI_FOUND_COUNT" -eq 0 ]]; then
+        progress_phase agent
         offer_ai_cli_install
     fi
 
@@ -3746,8 +3904,11 @@ main() {
     # ========================================================================
     info "Installing Codeman to $INSTALL_DIR (a few minutes; you can leave this running)"
     INSTALL_STARTED="1"
+    progress_phase source
     install_or_update_repo
+    progress_phase packages
     npm_install_deps
+    progress_phase build
     run_step "Building Codeman" npm run build || exit 1
     finish_source_swap
     install_symlink
@@ -3758,6 +3919,7 @@ main() {
     # (symlinks, PATH, launch menu) instead of silently "updating".
     date -u +%Y-%m-%dT%H:%M:%SZ > "$INSTALL_DIR/.install-complete"
 
+    progress_phase service
     local service_ok="true"
     if [[ "$LAUNCH_CHOICE" == "2" ]]; then
         if [[ "$SERVICE_TYPE" == "launchd" ]]; then
@@ -3782,6 +3944,7 @@ main() {
     # Security notice: last informational block so it stays visible (when not
     # auto-launching below; if we exec, the server prints the same notice anyway).
     print_security_notice
+    progress_phase done
 
     # Run now in foreground (must be last: exec replaces the shell)
     if [[ "$LAUNCH_CHOICE" == "1" ]]; then
@@ -4520,6 +4683,65 @@ uninstall() {
     echo ""
 }
 
+# json_string <text>: <text> as one JSON string. Control characters that JSON
+# has no short form for are dropped; nothing printed here needs them.
+json_string() {
+    local text
+    text=$(printf '%s' "$1" | LC_ALL=C tr -d '\000-\010\013\014\016-\037')
+    text="${text//\\/\\\\}"
+    text="${text//\"/\\\"}"
+    text="${text//$'\t'/\\t}"
+    text="${text//$'\r'/\\r}"
+    text="${text//$'\n'/\\n}"
+    printf '"%s"' "$text"
+}
+
+json_bool() {
+    if [[ "$1" == "1" ]]; then printf 'true'; else printf 'false'; fi
+}
+
+# What is on this machine and what an install would do here, as one JSON object
+# on stdout: the desktop app shows its install choices from this. Prompts for
+# nothing, changes nothing, and never runs sudo beyond resolve_admin_mode's
+# `sudo -n`. With --no-admin, `blocker` is why that route cannot finish here
+# (empty when it can). `clis` lists the same entries as the AI CLI menu, with
+# the same rule for `installable`, plus the ones already installed.
+#
+# `schema` is bumped only when a field changes meaning: the app is released on
+# its own, and refuses a number it does not know.
+preflight_subcommand() {
+    local os arch need_node="0" need_tmux="0" need_git="0" blocker="" i first="1"
+    os=$(detect_os)
+    arch=$(detect_arch)
+    check_curl_or_wget || die "curl or wget is required but neither is installed. Please install one first."
+    check_node || need_node="1"
+    check_tmux || need_tmux="1"
+    check_git || need_git="1"
+    detect_all_clis
+    if [[ "$NO_ADMIN" == "1" ]]; then
+        blocker=$(no_admin_blocker "$os" "$arch" "$need_node" "$need_tmux")
+    fi
+
+    printf '{"schema":1,"os":%s,"arch":%s,"noAdmin":%s,"blocker":%s' \
+        "$(json_string "$os")" "$(json_string "$arch")" "$(json_bool "$NO_ADMIN")" "$(json_string "$blocker")"
+    printf ',"needs":{"node":%s,"tmux":%s,"git":%s},"clis":[' \
+        "$(json_bool "$need_node")" "$(json_bool "$need_tmux")" "$(json_bool "$need_git")"
+    for ((i = 0; i < ${#CLI_IDS[@]}; i++)); do
+        [[ "${CLI_ENABLED[$i]}" == "1" ]] || continue
+        [[ "${CLI_BIN_LEN[$i]}" -gt 0 ]] || continue
+        local installable="0" installed="0"
+        if cli_offerable "$i"; then installable="1"; fi
+        [[ -z "${CLI_FOUND_PATH[$i]}" ]] || installed="1"
+        [[ "$first" == "1" ]] || printf ','
+        first="0"
+        printf '{"id":%s,"label":%s,"installed":%s,"installable":%s,"docs":%s}' \
+            "$(json_string "${CLI_IDS[$i]}")" "$(json_string "${CLI_LABELS[$i]}")" \
+            "$(json_bool "$installed")" "$(json_bool "$installable")" "$(json_string "${CLI_DOCS[$i]}")"
+    done
+    printf ']}\n'
+    return 0
+}
+
 usage() {
     cat << 'EOF'
 Codeman installer
@@ -4536,6 +4758,8 @@ Flags
   --port <n>                      Port Codeman listens on (default 3000)
   --no-admin                      Never use sudo or Homebrew: Node.js and tmux go into the
                                   home folder (chosen by itself without administrator rights)
+  --ai-cli <id>|none              Which AI CLI to install when none is found, without the menu
+  --progress                      Also print machine-readable progress lines
   --help, -h                      This text
 
 Subcommands
@@ -4545,11 +4769,13 @@ Subcommands
   name [<n>]    Rename this machine on your tailnet (default: codeman-<hostname>)
   status        Print the URLs, the QR code and how to manage the service
   cloudflared   Install cloudflared for the in-app Cloudflare tunnel
+  preflight     Print what is on this machine as JSON; changes nothing
+  agent <id>    Install one AI CLI and nothing else, also next to a running Codeman
 
 Environment: CODEMAN_NONINTERACTIVE=1, CODEMAN_INSTALL_DIR, CODEMAN_HOST,
 CODEMAN_PASSWORD, CODEMAN_PORT, CODEMAN_TAILSCALE=1, CODEMAN_TAILSCALE_NAME,
 CODEMAN_SKIP_SYSTEMD=1, CODEMAN_NODE_VERSION, CODEMAN_REPO_URL, CODEMAN_BRANCH,
-CODEMAN_NO_ADMIN=1 or 0, CODEMAN_TARBALL_URL.
+CODEMAN_NO_ADMIN=1 or 0, CODEMAN_TARBALL_URL, CODEMAN_AI_CLI, CODEMAN_PROGRESS=1.
 EOF
 }
 
@@ -4577,6 +4803,12 @@ parse_flags() {
             --no-start)    LAUNCH_PRESET="3" ;;
             --yes|-y)      ASSUME_YES="1" ;;
             --no-admin)    NO_ADMIN="1" ;;
+            --ai-cli)
+                shift
+                [[ $# -gt 0 ]] || die "--ai-cli needs a value (a catalogue id, or none)"
+                AI_CLI_CHOICE="$1" ;;
+            --ai-cli=*)    AI_CLI_CHOICE="${1#--ai-cli=}" ;;
+            --progress)    PROGRESS="1" ;;
             --password)
                 shift
                 [[ $# -gt 0 ]] || die "--password needs a value"
@@ -4588,13 +4820,15 @@ parse_flags() {
                 CODEMAN_PORT="$1"; export CODEMAN_PORT; RECONFIGURE="1" ;;
             --port=*)      CODEMAN_PORT="${1#--port=}"; export CODEMAN_PORT; RECONFIGURE="1" ;;
             --help|-h)     usage; exit 0 ;;
-            update|uninstall|tailscale|name|status|cloudflared)
+            update|uninstall|tailscale|name|status|cloudflared|preflight|agent)
                 [[ -z "$SUBCOMMAND" ]] || die "Only one subcommand at a time ($SUBCOMMAND and $1 given)."
                 SUBCOMMAND="$1" ;;
             -*)            die "Unknown option: $1 (see --help)" ;;
             *)
                 if [[ "$SUBCOMMAND" == "name" && -z "$SUBCOMMAND_ARG" ]]; then
                     SUBCOMMAND_ARG="$1"
+                elif [[ "$SUBCOMMAND" == "agent" && -z "$AI_CLI_CHOICE" ]]; then
+                    AI_CLI_CHOICE="$1"
                 else
                     die "Unexpected argument: $1 (see --help)"
                 fi ;;
@@ -4603,6 +4837,9 @@ parse_flags() {
     done
     if [[ -n "${CODEMAN_PORT:-}" ]] && ! [[ "$CODEMAN_PORT" =~ ^[0-9]+$ && "$CODEMAN_PORT" -ge 1 && "$CODEMAN_PORT" -le 65535 ]]; then
         die "Invalid port: $CODEMAN_PORT"
+    fi
+    if [[ -n "$AI_CLI_CHOICE" && "$AI_CLI_CHOICE" != "none" ]] && ! cli_index "$AI_CLI_CHOICE" >/dev/null; then
+        die "Unknown AI CLI: $AI_CLI_CHOICE (use none, or one of: $(cli_catalog_ids))"
     fi
     return 0
 }
@@ -4628,6 +4865,8 @@ case "$SUBCOMMAND" in
     name)        setup_name_subcommand ;;
     status)      status_subcommand ;;
     cloudflared) cloudflared_subcommand ;;
+    preflight)   preflight_subcommand ;;
+    agent)       agent_subcommand ;;
     *)
         # Only a COMPLETED install re-runs as a quiet update. A partial one
         # (clone succeeded but build/menu never finished) lacks the marker and

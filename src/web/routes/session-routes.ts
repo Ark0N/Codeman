@@ -82,6 +82,7 @@ import {
   CustomModelSelectionSchema,
 } from '../schemas.js';
 import { readCustomModelHosts, resolveCustomModelContextLength } from '../../custom-model-hosts.js';
+import { getLocalModelService } from '../../local-model/install-job.js';
 import { applyCustomModelInjection, removeConfigDir } from '../../custom-model-injection-apply.js';
 import { buildCustomModelInjection } from '../../custom-model-injection.js';
 import {
@@ -978,8 +979,8 @@ export function _paneDeathWatcherCount(): number {
  *
  * `applyAgentSkill` declines two shapes rather than writing through them ('foreign':
  * an unmarked skills/codeman the user authored; 'symlink': the skill dir or its
- * parent is a link). Both were silent: the user flips `agentSkillEnabled` on, nothing
- * appears in the case, and there is nowhere to look for why. The ordinary outcomes
+ * parent is a link). Both were silent: `agentSkillEnabled` is on (the default since
+ * 1.50.0), nothing appears in the case, and there is nowhere to look for why. The ordinary outcomes
  * ('installed'/'refreshed'/'unchanged') stay unlogged since they would print on every
  * single session create.
  *
@@ -1003,7 +1004,7 @@ async function injectAgentSkill(casePath: string, dir: AgentSkillDir): Promise<v
       );
     } else if (result === 'symlink') {
       console.warn(
-        `[agent-skill] not injected: ${skillDir} (or its parent) is a symlink, refusing to write through it. Replace it with a real directory to let Codeman install the skill.`
+        `[agent-skill] not injected: ${skillDir}, its parent or its reference folder is a symlink, refusing to write through it. Replace it with a real directory to let Codeman install the skill.`
       );
     }
   } catch (err: unknown) {
@@ -1787,6 +1788,11 @@ export function registerSessionRoutes(
     if (!endpoint) {
       return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Model endpoint not found');
     }
+    // The model Codeman runs on this Mac: only while its own runtime is up, and only the model
+    // that was installed, with the digest stored then (undefined for every other endpoint).
+    // Before anything is written or restarted.
+    const localModelRefusal = await getLocalModelService().launchRefusalMessage(endpoint.id, body.modelId);
+    if (localModelRefusal) return createErrorResponse(ApiErrorCode.OPERATION_FAILED, localModelRefusal);
     // Discovery's per-model figure wins; the endpoint's user-set default covers models
     // whose size discovery could not determine (a gateway that states none, say). With
     // neither, the existing "no override, CLI assumes its own default" behaviour stands.
@@ -4777,6 +4783,11 @@ export function registerSessionRoutes(
       const cmHosts = await readCustomModelHosts(CODEMAN_CONFIG_DIR);
       const cmEndpoint = cmHosts.find((h) => h.id === customModel.endpointId);
       if (!cmEndpoint) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Model endpoint not found');
+      // See the dedicated route: the model Codeman runs on this Mac is launched only while its
+      // own runtime is up and its digest is the one stored at install time. Before any
+      // confirmation is asked for and before a session exists.
+      const cmLocalModelRefusal = await getLocalModelService().launchRefusalMessage(cmEndpoint.id, customModel.modelId);
+      if (cmLocalModelRefusal) return createErrorResponse(ApiErrorCode.OPERATION_FAILED, cmLocalModelRefusal);
       // Per-model discovery figure first, user-set endpoint default second, nothing third
       // (see the dedicated route's own comment above).
       const cmContextLength = resolveCustomModelContextLength(cmEndpoint, customModel.modelId);

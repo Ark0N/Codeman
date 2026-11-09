@@ -1471,11 +1471,13 @@ export const SettingsUpdateSchema = z
     ultracodeFloatingWindows: z.boolean().optional(),
     imageWatcherEnabled: z.boolean().optional(),
     /**
-     * Inject the Codeman agent skill (`skills/codeman`) into `<case>/.claude/skills/`
-     * on Claude session create, so an agent inside the session can drive the API
-     * (see docs/agent-control-plan.md §2). SYNCED, default OFF: every skill's
-     * name+description costs context on every turn, so it is opt-in. Injection is
-     * add-only at create; a marker keeps user-authored copies untouched.
+     * Inject the Codeman agent skill (`skills/codeman`) into each new session's case, in
+     * the directory its CLI scans for skills (`capabilities.agentSkillDir`), so an agent
+     * inside the session can drive the API (see docs/agent-control-plan.md §2). SYNCED,
+     * default ON since 1.50.0: an absent key is on, only an explicit false is off, and a
+     * false stored by 1.49.0 or earlier is switched on once at the first 1.50.0 start
+     * (agent-skill-default-migration.ts). Injection is add-only at create; a marker keeps
+     * user-authored copies untouched.
      */
     agentSkillEnabled: z.boolean().optional(),
     /**
@@ -2467,6 +2469,43 @@ export const CustomModelHostSchema = z.object({
   // discovery never writes it. Same bound as the modelContextLengths values above.
   defaultContextLength: z.number().int().positive().max(MAX_DISCOVERED_CONTEXT_TOKENS).optional(),
 });
+
+// ---------- Local model install (src/web/routes/local-model-routes.ts) ----------
+
+/**
+ * A model id as the local model catalogue writes it: `name:tag`, lowercase, no slash. The
+ * same pattern as `LOCAL_MODEL_ID_PATTERN` in config/local-model-catalog.ts, repeated here as
+ * a request-shape check: without a slash an id can never name another registry host. The
+ * real gate is the route's own lookup of the id in what the server offers.
+ */
+const localModelId = z
+  .string()
+  .max(200)
+  .regex(/^[a-z0-9][a-z0-9._-]*:[a-z0-9][a-z0-9._-]*$/, 'Invalid model id');
+
+/** POST /api/local-model/install: the row the person chose and the size they confirmed. */
+export const LocalModelInstallSchema = z
+  .object({
+    modelId: localModelId,
+    cli: z
+      .string()
+      .max(64)
+      .regex(/^[a-z0-9][a-z0-9_-]*$/, 'Invalid coding agent id'),
+    context: z.number().int().positive().max(MAX_DISCOVERED_CONTEXT_TOKENS),
+    acknowledgedBytes: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  })
+  .strict();
+
+/** POST /api/local-model/resume. The body may be empty. */
+export const LocalModelResumeSchema = z.object({ newPort: z.boolean().optional() }).strict();
+
+/** POST /api/local-model/runtime. */
+export const LocalModelRuntimeSchema = z
+  .object({ action: z.enum(['start', 'stop']), newPort: z.boolean().optional() })
+  .strict();
+
+/** DELETE /api/local-model. The body may be empty. */
+export const LocalModelRemoveSchema = z.object({ removeModel: z.boolean().optional() }).strict();
 
 /**
  * A shell-safe bare word, mirroring `config/cli-registry/schema.ts`'s own `shellToken` —

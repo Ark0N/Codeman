@@ -41,6 +41,7 @@ import { createRequire } from 'node:module';
 import { dataPath } from '../config/instance.js';
 import { LAUNCHD_LABEL, SYSTEMD_UNIT } from '../config/service-names.js';
 import { EXEC_TIMEOUT_MS } from '../config/exec-timeout.js';
+import { gitSpawnAllowed } from '../utils/git-availability.js';
 import type {
   EnvironmentBlocker,
   EnvironmentGate,
@@ -429,6 +430,8 @@ export function reconcileUpdateOnBoot(now = Date.now()): void {
 
 /** Run a command, returning trimmed stdout, or null on any error. */
 function tryExec(cmd: string, args: string[], cwd?: string, timeout = EXEC_TIMEOUT_MS): string | null {
+  // Never Apple's placeholder git on a Mac without developer tools (utils/git-availability.ts).
+  if (cmd === 'git' && !gitSpawnAllowed()) return null;
   try {
     return execFileSync(cmd, args, { cwd, encoding: 'utf-8', timeout, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
   } catch {

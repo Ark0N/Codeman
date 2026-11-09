@@ -7,7 +7,7 @@
  * The routes read the process-wide `approvalInbox` singleton, so every test
  * drains it in afterEach; a leaked pending item would bleed into the next test.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyCookie from '@fastify/cookie';
 import { registerApprovalRoutes } from '../../src/web/routes/approval-routes.js';
@@ -285,6 +285,10 @@ describe('approval routes', () => {
   });
 
   describe('staleness sweep on GET /api/approvals', () => {
+    /** Past the delay `notePrompt` waits before it judges a new dialog. */
+    const pastTheDelay = () => vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 3_100);
+    afterEach(() => vi.restoreAllMocks());
+
     it('resolves an item whose dialog left the pane, and tells the other clients', async () => {
       const resolved: Array<Record<string, unknown>> = [];
       await postHook(harness, 'permission_prompt', { tool_name: 'Bash' });
@@ -294,9 +298,22 @@ describe('approval routes', () => {
       // the pane knows. The dialog is gone from the frame the next capture sees.
       approvalInbox.onResolved = (info) => resolved.push({ ...info });
       session.terminalBuffer = 'claude> back at the composer';
+      pastTheDelay();
 
       expect(await listApprovals(harness)).toHaveLength(0);
       expect(resolved).toEqual([expect.objectContaining({ resolution: 'resolved_in_terminal' })]);
+    });
+
+    it('leaves a dialog too new to judge, however often it is listed', async () => {
+      // The hook beat Ink's paint: the frame still shows the turn, which alone
+      // would count as proof that no dialog is up.
+      session.terminalBuffer = '✻ Actualizing… (13s · esc to interrupt)';
+      await postHook(harness, 'permission_prompt', { tool_name: 'Bash' });
+      expect(await listApprovals(harness)).toHaveLength(1);
+      expect(await listApprovals(harness)).toHaveLength(1);
+
+      pastTheDelay();
+      expect(await listApprovals(harness)).toHaveLength(0);
     });
 
     it('keeps an item whose dialog is still on screen', async () => {

@@ -215,7 +215,9 @@ Yes. Codeman ships an agent skill that lets an agent inside a session drive the 
 list sessions, spawn workers in any installed CLI, send prompts, and block until a worker's
 turn finishes. Install it once with `codeman skill install` or the Claude Code plugin, then
 ask in plain English, for example *"use codeman to start 5 claude workers, one per TODO
-item"*. The web UI setting that injects it into every new session's case is off by default.
+item"*. Since 1.50.0 Codeman also injects it into every new session's case by default, so an
+agent inside Codeman usually has it already (App Settings → Agents & CLIs → **Codeman Agent
+Skill** turns that off).
 
 See [The Codeman Skill](Codeman-Skill), with recordings of real runs, and
 [Driving Codeman From An Agent](Driving-Codeman-From-An-Agent) for the other routes.

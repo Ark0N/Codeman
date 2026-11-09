@@ -12,11 +12,12 @@
 
 import { describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { STOCK_CLIS } from '../src/config/cli-registry/stock.js';
+import { CLI_INSTALLED_MARKER } from '../src/utils/cli-executable-resolver.js';
 import { ARCHIVE_INSTALL_MARKER } from '../src/web/self-update.js';
 
 const INSTALL_SH = fileURLToPath(new URL('../install.sh', import.meta.url));
@@ -370,6 +371,396 @@ describe('install.sh AI CLI install menu', () => {
     expect(run.stdout).not.toContain('REACHED THE STEP AFTER THE MENU');
     expect(run.status).toBe(1);
   });
+});
+
+describe('install.sh --ai-cli answers the menu up front', () => {
+  // The desktop app installs with no terminal, so the agent is chosen in its window and
+  // arrives as a flag. Everything here runs the real functions in a real bash, with
+  // detection pointed at nothing, every trusted command rewritten to record which entry
+  // ran, and no tty, which is what the app's child process has.
+  const DRIVER = `
+    set -euo pipefail
+    export CODEMAN_INSTALL_SH_LIB=1
+    . "$1"
+    set +e
+    parse_flags "\${@:2}" || exit 9
+    set -e
+    k=0; while [[ $k -lt \${#CLI_ALL_BINS[@]} ]]; do CLI_ALL_BINS[$k]="codeman-test-no-such-bin-$k"; k=$((k + 1)); done
+    k=0; while [[ $k -lt \${#CLI_ALL_PATHS[@]} ]]; do CLI_ALL_PATHS[$k]="/nonexistent/codeman-test/$k"; k=$((k + 1)); done
+    k=0; while [[ $k -lt \${#CLI_INSTALL_CMD_TRUSTED[@]} ]]; do
+      if [[ -n "\${CLI_INSTALL_CMD_TRUSTED[$k]}" ]]; then
+        if [[ "\${KEEP_BREW:-}" == "1" && "\${CLI_INSTALL_CMD_TRUSTED[$k]}" == brew\\ * ]]; then :; else
+          CLI_INSTALL_CMD_TRUSTED[$k]="echo RAN=\${CLI_IDS[$k]}"
+        fi
+      fi
+      k=$((k + 1))
+    done
+    CLI_DETECT_DONE=""
+    detect_all_clis
+    NONINTERACTIVE=\${FORCE_NONINTERACTIVE:-0}
+    DOWNLOADER=curl
+    has_tty() { return 1; }
+    offer_ai_cli_install
+    echo "REACHED THE STEP AFTER THE MENU"
+  `;
+
+  function drive(args: string[], env: Record<string, string> = {}) {
+    const result = spawnSync('bash', ['-c', DRIVER, 'bash', INSTALL_SH, ...args], {
+      encoding: 'utf-8',
+      timeout: 30_000,
+      env: { ...process.env, ...env },
+    });
+    const stdout = result.stdout ?? '';
+    // Anchored: the skip hints print each command's text, so `echo RAN=x` there ran nothing.
+    const ran = [...stdout.matchAll(/^RAN=(.+)$/gm)].map((m) => m[1]);
+    return { status: result.status, stdout, stderr: result.stderr ?? '', ran };
+  }
+
+  it('none installs nothing and carries on, even with CODEMAN_NONINTERACTIVE', () => {
+    const run = drive(['--ai-cli', 'none'], { FORCE_NONINTERACTIVE: '1' });
+    expect(run.stdout, run.stderr).toContain('REACHED THE STEP AFTER THE MENU');
+    expect(run.ran).toEqual([]);
+    expect(run.stderr).toContain('Skipping AI CLI install');
+  });
+
+  it('a named CLI runs that entry and no other, without the menu and without a terminal', () => {
+    const run = drive(['--ai-cli=codex']);
+    expect(run.ran).toEqual(['codex']);
+    expect(run.stdout).not.toContain('Which AI CLI');
+    expect(run.status).toBe(1); // The stand-in command leaves no binary: the gate below still holds.
+    expect(run.stderr).toContain('The selected AI CLI failed to install');
+  });
+
+  it('takes the same answer from CODEMAN_AI_CLI', () => {
+    expect(drive([], { CODEMAN_AI_CLI: 'gemini' }).ran).toEqual(['gemini']);
+  });
+
+  it('a CLI this host cannot install warns and carries on, never installing another', () => {
+    const run = drive(['--no-admin', '--ai-cli', 'omp'], { KEEP_BREW: '1' });
+    if (process.platform === 'darwin') {
+      expect(run.ran).toEqual([]);
+      expect(run.stderr).toContain('omp cannot be installed automatically here');
+      expect(run.stdout).toContain('REACHED THE STEP AFTER THE MENU');
+    } else {
+      expect(run.ran).toEqual(['omp']); // Linux installs omp with curl, not brew.
+    }
+  });
+
+  it('deepseek has no command to run, so it warns and carries on', () => {
+    const run = drive(['--ai-cli', 'deepseek']);
+    expect(run.ran).toEqual([]);
+    expect(run.stderr).toContain('deepseek cannot be installed automatically here');
+    expect(run.stdout).toContain('REACHED THE STEP AFTER THE MENU');
+  });
+
+  it.each([['cluade'], ['shell'], ['--yes']])('refuses %s before anything runs', (id) => {
+    const run = drive([`--ai-cli=${id}`]);
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toContain('Unknown AI CLI');
+    expect(run.ran).toEqual([]);
+  });
+
+  it('a bare run with no terminal and no answer is still refused by the guard', () => {
+    const run = drive([]);
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain('No interactive terminal');
+    expect(run.ran).toEqual([]);
+  });
+});
+
+describe('install.sh preflight', () => {
+  function preflight(args: string[], env: Record<string, string> = {}) {
+    const home = mkdtempSync(join(tmpdir(), 'codeman-preflight-'));
+    try {
+      const result = spawnSync('bash', [INSTALL_SH, 'preflight', ...args], {
+        encoding: 'utf-8',
+        timeout: 30_000,
+        env: { ...process.env, HOME: home, ...env },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      return { stdout: result.stdout, home };
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  }
+
+  it('prints one JSON object in the shape the desktop app reads', () => {
+    const { stdout } = preflight(['--no-admin']);
+    const found = JSON.parse(stdout);
+    expect(found.schema).toBe(1);
+    expect(found.noAdmin).toBe(true);
+    expect(typeof found.blocker).toBe('string');
+    expect(Object.keys(found.needs).sort()).toEqual(['git', 'node', 'tmux']);
+    for (const key of ['node', 'tmux', 'git']) expect(typeof found.needs[key]).toBe('boolean');
+    // Exactly what src/gui_install.rs deserializes, or the app calls the answer unreadable.
+    for (const cli of found.clis) {
+      expect(Object.keys(cli).sort()).toEqual(['docs', 'id', 'installable', 'installed', 'label']);
+    }
+  });
+
+  it('lists every agent of the catalogue, in its order, and never the shell', () => {
+    const ids = JSON.parse(preflight(['--no-admin']).stdout).clis.map((c: { id: string }) => c.id);
+    const agents = STOCK_CLIS.filter((c) => c.discovery.binaries.length > 0).sort((a, b) => a.order - b.order);
+    expect(ids).toEqual(agents.map((c) => c.id));
+  });
+
+  it('never calls an installed CLI installable, and agrees with the menu on the rest', () => {
+    for (const cli of JSON.parse(preflight(['--no-admin']).stdout).clis) {
+      if (cli.installed) expect(cli.installable, cli.id).toBe(false);
+    }
+    const deepseek = JSON.parse(preflight(['--no-admin']).stdout).clis.find((c: { id: string }) => c.id === 'deepseek');
+    if (!deepseek.installed) expect(deepseek.installable).toBe(false); // A launcher alone cannot drive a pane.
+  });
+
+  it('writes nothing into the home folder', () => {
+    const home = mkdtempSync(join(tmpdir(), 'codeman-preflight-'));
+    try {
+      const result = spawnSync('bash', [INSTALL_SH, 'preflight', '--no-admin'], {
+        encoding: 'utf-8',
+        timeout: 30_000,
+        env: { ...process.env, HOME: home },
+      });
+      expect(result.status).toBe(0);
+      expect(readdirSync(home)).toEqual([]);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('json_string survives what a path or a message can hold', () => {
+    const driver = `
+      export CODEMAN_INSTALL_SH_LIB=1
+      . "$1"
+      set +e
+      json_string "$2"
+    `;
+    const text = 'quote " back\\slash tab\t line\nfeed bell\u0007 é ✓';
+    const result = spawnSync('bash', ['-c', driver, 'bash', INSTALL_SH, text], { encoding: 'utf-8', timeout: 30_000 });
+    expect(JSON.parse(result.stdout)).toBe(text.replace('\u0007', ''));
+  });
+});
+
+describe('install.sh agent, one AI CLI and nothing else', () => {
+  // The real subcommand in a real bash, with detection pointed at nothing and every
+  // trusted command rewritten: LEAVES names the binary a stand-in install leaves
+  // behind (on PATH, in the run's own folder), FOUND is a CLI already here.
+  const DRIVER = `
+    set -euo pipefail
+    export CODEMAN_INSTALL_SH_LIB=1
+    . "$1"
+    set +e
+    parse_flags "\${@:2}" || exit 9
+    set -e
+    bin=$(mktemp -d); trap 'rm -rf "$bin"' EXIT; export PATH="$bin:$PATH"
+    k=0; while [[ $k -lt \${#CLI_ALL_BINS[@]} ]]; do CLI_ALL_BINS[$k]="codeman-test-no-such-bin-$k"; k=$((k + 1)); done
+    k=0; while [[ $k -lt \${#CLI_ALL_PATHS[@]} ]]; do CLI_ALL_PATHS[$k]="/nonexistent/codeman-test/$k"; k=$((k + 1)); done
+    k=0; while [[ $k -lt \${#CLI_INSTALL_CMD_TRUSTED[@]} ]]; do
+      if [[ "\${KEEP_COMMANDS:-}" != "1" && -n "\${CLI_INSTALL_CMD_TRUSTED[$k]}" ]]; then
+        CLI_INSTALL_CMD_TRUSTED[$k]="echo RAN=\${CLI_IDS[$k]}; if [[ \${CLI_IDS[$k]} == \\"\${LEAVES:-}\\" ]]; then printf '#!/bin/sh\\n' > $bin/codeman-test-left-$k; chmod +x $bin/codeman-test-left-$k; fi"
+      fi
+      if [[ "\${CLI_IDS[$k]}" == "\${FOUND:-}" ]]; then
+        printf '#!/bin/sh\n' > "$bin/codeman-test-found"; chmod +x "$bin/codeman-test-found"
+        off=\${CLI_BIN_OFF[$k]}; CLI_ALL_BINS[$off]=codeman-test-found
+      fi
+      if [[ "\${CLI_IDS[$k]}" == "\${LEAVES:-}" ]]; then
+        off=\${CLI_BIN_OFF[$k]}; CLI_ALL_BINS[$off]=codeman-test-left-$k
+      fi
+      k=$((k + 1))
+    done
+    if [[ -n "\${NO_NPM:-}" ]]; then check_npm() { return 1; }; fi
+    CLI_DETECT_DONE=""
+    agent_subcommand
+    echo "REACHED THE END"
+  `;
+
+  function agent(args: string[], env: Record<string, string> = {}) {
+    const result = spawnSync('bash', ['-c', DRIVER, 'bash', INSTALL_SH, ...args], {
+      encoding: 'utf-8',
+      timeout: 30_000,
+      env: { ...process.env, CODEMAN_PROGRESS: '', ...env },
+    });
+    const stdout = result.stdout ?? '';
+    const stderr = result.stderr ?? '';
+    return { status: result.status, stdout, stderr, ran: [...stdout.matchAll(/^RAN=(.+)$/gm)].map((m) => m[1]) };
+  }
+
+  /** The same, in a home folder of its own, reporting whether the marker was written. */
+  function agentInHome(args: string[], env: Record<string, string> = {}) {
+    const home = mkdtempSync(join(tmpdir(), 'codeman-agent-marker-'));
+    try {
+      mkdirSync(join(home, '.codeman'));
+      const run = agent(args, { HOME: home, ...env });
+      return { ...run, marked: existsSync(join(home, '.codeman', CLI_INSTALLED_MARKER)) };
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  }
+
+  it('tells a running server when the agent landed, and only then', () => {
+    expect(agentInHome(['--ai-cli', 'codex', '--no-admin'], { LEAVES: 'codex' }).marked).toBe(true);
+    expect(agentInHome(['--ai-cli', 'codex', '--no-admin']).marked).toBe(false);
+    // Installed by hand a minute ago, and the server may still remember it as missing.
+    expect(agentInHome(['--ai-cli', 'codex', '--no-admin'], { FOUND: 'codex' }).marked).toBe(true);
+  });
+
+  it('a home folder with no Codeman in it is no failure', () => {
+    const home = mkdtempSync(join(tmpdir(), 'codeman-agent-marker-'));
+    try {
+      const run = agent(['--ai-cli', 'codex', '--no-admin'], { HOME: home, LEAVES: 'codex' });
+      expect(run.status, run.stderr).toBe(0);
+      expect(readdirSync(home)).toEqual([]);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('writes the file the server reads', () => {
+    expect(SOURCE).toContain(`"$HOME/.codeman/${CLI_INSTALLED_MARKER}"`);
+  });
+
+  it('installs the one it was told to, and says done', () => {
+    const run = agent(['--no-admin', '--progress', '--ai-cli', 'codex'], { LEAVES: 'codex' });
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.ran).toEqual(['codex']);
+    expect(run.stderr).toContain('@@codeman phase agent');
+    expect(run.stderr).toContain('@@codeman phase done');
+  });
+
+  it('never says done when that agent did not land, even with another one here', () => {
+    const run = agent(['--no-admin', '--progress', '--ai-cli', 'codex'], { FOUND: 'copilot' });
+    expect(run.ran).toEqual(['codex']);
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain('@@codeman error Codex did not install.');
+    expect(run.stderr).not.toContain('@@codeman phase done');
+    expect(run.stdout).not.toContain('REACHED THE END');
+  });
+
+  it('says the same with no other agent here, the way a Mac is after Skip for now', () => {
+    const run = agent(['--no-admin', '--progress', '--ai-cli', 'codex']);
+    expect(run.ran).toEqual(['codex']);
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain('@@codeman error Codex did not install.');
+    expect(run.stderr).not.toContain('re-run the installer');
+    expect(run.stderr).not.toContain('@@codeman phase done');
+  });
+
+  it('installs nothing for an agent that is here already, and that is a success', () => {
+    const run = agent(['--no-admin', '--progress', '--ai-cli', 'codex'], { FOUND: 'codex' });
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.ran).toEqual([]);
+    expect(run.stderr).toContain('@@codeman phase done');
+  });
+
+  it('names what is wrong when npm cannot be found, before running anything', () => {
+    const run = agent(['--no-admin', '--progress', '--ai-cli', 'codex'], { KEEP_COMMANDS: '1', NO_NPM: '1' });
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain('Codex installs with npm, and this run cannot find it');
+    expect(run.stderr).toContain('npm install -g @openai/codex');
+    expect(run.stderr).not.toContain('@@codeman phase done');
+  });
+
+  it('refuses an agent it cannot install, and installs no other in its place', () => {
+    const run = agent(['--no-admin', '--progress', '--ai-cli', 'deepseek'], { KEEP_COMMANDS: '1' });
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain('DeepSeek cannot be installed automatically here');
+    expect(run.stderr).not.toContain('@@codeman phase done');
+  });
+
+  it('it takes the name as a plain word, as a person would type it', () => {
+    const driver = `
+      export CODEMAN_INSTALL_SH_LIB=1
+      . "$1"
+      set +e
+      parse_flags "\${@:2}" || exit 9
+      echo "sub=$SUBCOMMAND cli=$AI_CLI_CHOICE"
+    `;
+    const parsed = (...args: string[]) =>
+      spawnSync('bash', ['-c', driver, 'bash', INSTALL_SH, ...args], { encoding: 'utf-8', timeout: 30_000 });
+    expect(parsed('agent', 'codex', '--no-admin').stdout).toContain('sub=agent cli=codex');
+    expect(parsed('agent', '--ai-cli', 'codex').stdout).toContain('sub=agent cli=codex');
+    expect(parsed('agent', 'codx').stderr).toContain('Unknown AI CLI: codx');
+    expect(parsed('agent', 'shell').stderr).toContain('Unknown AI CLI: shell');
+    expect(parsed('agent', 'codex', 'copilot').stderr).toContain('Unexpected argument: copilot');
+    expect(parsed('codex').stderr).toContain('Unexpected argument: codex');
+  });
+
+  it('wants a name, and none is not one', () => {
+    expect(agent([]).stderr).toContain('Name the AI CLI to install');
+    expect(agent(['--ai-cli', 'none']).stderr).toContain('Name the AI CLI to install');
+  });
+
+  it('leaves Codeman alone: nothing in it touches the service, the source or the build', () => {
+    const body = SOURCE.slice(
+      SOURCE.indexOf('\nagent_subcommand() {'),
+      SOURCE.indexOf('\n# Offer to install one AI CLI')
+    );
+    for (const word of ['launchctl', 'systemctl', 'setup_launchd', 'install_or_update_repo', 'npm run', 'sudo']) {
+      expect(body, word).not.toContain(word);
+    }
+    expect(body).toContain('run_offered_cli "$idx"');
+  });
+});
+
+describe('install.sh --progress, the protocol the desktop app reads', () => {
+  const CONNECT_HTML = readFileSync(
+    fileURLToPath(new URL('../packages/desktop/assets/connect.html', import.meta.url)),
+    'utf-8'
+  );
+
+  function mainBody() {
+    const start = SOURCE.indexOf('main() {');
+    const end = SOURCE.indexOf('# Phase 0: look', start);
+    return SOURCE.slice(start, end);
+  }
+
+  it('reports its phases in the order the app draws them, ending on done', () => {
+    const phases = [...mainBody().matchAll(/^\s*progress_phase (\w+)$/gm)].map((m) => m[1]);
+    const drawn = /var PHASES = \[([^\]]*)\]/.exec(CONNECT_HTML)?.[1].match(/\w+/g);
+    expect(phases).toEqual([...(drawn ?? []), 'done']);
+  });
+
+  it('reports done after the service step and before a foreground start replaces the shell', () => {
+    const main = mainBody();
+    expect(main.indexOf('progress_phase done')).toBeGreaterThan(main.indexOf('print_done_screen'));
+    expect(main.indexOf('progress_phase done')).toBeLessThan(main.indexOf('exec node'));
+  });
+
+  function driveProtocol(env: Record<string, string>) {
+    const driver = `
+      export CODEMAN_INSTALL_SH_LIB=1
+      . "$1"
+      set +e
+      progress_phase build
+      error "first
+second"
+    `;
+    return spawnSync('bash', ['-c', driver, 'bash', INSTALL_SH], {
+      encoding: 'utf-8',
+      timeout: 30_000,
+      env: { ...process.env, ...env },
+    });
+  }
+
+  it('prints protocol lines on stderr, one line each, so a $( ) capture stays clean', () => {
+    const run = driveProtocol({ CODEMAN_PROGRESS: '1' });
+    expect(run.stdout).toBe('');
+    expect(run.stderr).toContain('@@codeman phase build\n');
+    expect(run.stderr).toContain('@@codeman error first second\n');
+  });
+
+  it('says nothing of it to a person at a terminal', () => {
+    expect(driveProtocol({ CODEMAN_PROGRESS: '0' }).stderr).not.toContain('@@codeman');
+  });
+
+  it('never prints the password', () => {
+    expect(mainBody()).not.toMatch(/progress_phase.*PASSWORD/);
+    expect(fnBody('error')).not.toMatch(/PASSWORD/);
+  });
+
+  function fnBody(name: string) {
+    const start = SOURCE.indexOf(`${name}() {`);
+    return SOURCE.slice(start, SOURCE.indexOf('\n}\n', start));
+  }
 });
 
 describe('install.sh detect_all_clis and a disabled entry', () => {

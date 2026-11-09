@@ -12,17 +12,34 @@
  * connect time, redirects included — a save-time hostname check alone would
  * let `models.example` resolve to 169.254.169.254 later. The endpoint is
  * admin-configured, so this is defence in depth rather than the only gate.
+ *
+ * Every write of `custom-model-hosts.json` goes through `mutateCustomModelHosts()`
+ * (src/custom-model-hosts-writer.ts): the four writing routes and the re-discovery sweep run
+ * one at a time, each check ("the id is free", "the record still exists") inside the same
+ * serialized step as its write, and a file that does not parse is refused with 409 rather than
+ * overwritten. They used to read, change and write on their own, through one shared temp file
+ * name: a route and the sweep could tear the file, and the next writer then saved a list that
+ * held only its own record.
+ *
+ * The local model install (src/local-model/) keeps ONE record here under a reserved id
+ * (`LOCAL_MODEL_ENDPOINT_ID`). A new endpoint may not take that id. While the record is the
+ * managed one (`isManagedLocalEndpoint()`: the local model state file records it as ours) it
+ * is not edited, deleted or re-discovered from here: its `models` must stay the one model the
+ * install checked, and its `baseUrl` the port of the runtime Codeman supervises. It is changed
+ * and removed through the local model routes.
  */
 
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { ApiErrorCode, createErrorResponse, type ApiResponse } from '../../types.js';
+import { ApiErrorCode, createErrorResponse, LOCAL_MODEL_INSTALL_LABELS, type ApiResponse } from '../../types.js';
 import { isAdmin, parseBody, readJsonConfig, SETTINGS_PATH } from '../route-helpers.js';
 import { isMultiUserMode } from '../../config/multiuser.js';
 import { getDataDir } from '../../config/instance.js';
 import { isBlockedWebviewUrl } from '../webview-egress-policy.js';
 import { egressBlockedReason, webviewFetch } from '../webview-egress.js';
 import { CustomModelHostSchema, MAX_DISCOVERED_CONTEXT_TOKENS } from '../schemas.js';
-import { readCustomModelHosts, writeCustomModelHosts, type CustomModelHost } from '../../custom-model-hosts.js';
+import { readCustomModelHosts, type CustomModelHost } from '../../custom-model-hosts.js';
+import { customModelHostsWriteErrorResponse, mutateCustomModelHosts } from '../../custom-model-hosts-writer.js';
+import { isLocalModelEndpointId, isManagedLocalEndpoint } from '../../local-model/connect.js';
 import type { CliEntry } from '../../config/cli-registry/types.js';
 
 const CODEMAN_CONFIG_DIR = getDataDir();
@@ -795,20 +812,30 @@ export async function refreshAllCustomModelHosts(): Promise<void> {
   const hosts = await readCustomModelHosts(dataDir);
   for (const host of hosts) {
     if (isBlockedWebviewUrl(host.baseUrl)) continue;
+    // The local model's own record keeps the one model its install checked: whatever else the
+    // runtime lists (a model somebody pulled through its port) must not become launchable.
+    if (await isManagedLocalEndpoint(host.id)) continue;
     let result: DiscoveryResult;
     try {
       result = await discoverModels(host);
     } catch {
       continue; // unreachable this cycle — try again next tick, not fatal to the sweep
     }
-    // Re-read + splice by id rather than reusing the array captured above: an
-    // admin editing or deleting an endpoint via the API mid-sweep must win,
-    // not be silently overwritten by a refresh that started before their change.
-    const current = await readCustomModelHosts(dataDir);
-    const index = current.findIndex((item) => item.id === host.id);
-    if (index === -1) continue; // deleted mid-sweep
-    current[index] = applyDiscoveredModels(current[index], result);
-    await writeCustomModelHosts(dataDir, current);
+    // Spliced by id inside the serialized writer, onto the list as it is THEN, rather than
+    // the array captured above: an admin editing or deleting an endpoint via the API mid-sweep
+    // must win, not be silently overwritten by a refresh that started before their change.
+    try {
+      await mutateCustomModelHosts<void>((current) => {
+        const index = current.findIndex((item) => item.id === host.id);
+        if (index === -1) return { result: undefined }; // deleted mid-sweep
+        current[index] = applyDiscoveredModels(current[index], result);
+        return { hosts: current, result: undefined };
+      }, dataDir);
+    } catch {
+      // A file that must not be overwritten (it does not parse) refuses every write of this
+      // sweep the same way. The writer logged why; nothing more can be saved this cycle.
+      return;
+    }
   }
 }
 
@@ -897,6 +924,18 @@ export async function detectCustomModelSwapDisplacements(
   return displacements;
 }
 
+/** A write the serialized writer refused (the file does not parse) is 409 with the fix; any other failure stays in the envelope. */
+function refusedHostsWrite(err: unknown, reply: { code: (n: number) => unknown }): ApiResponse<never> {
+  const response = customModelHostsWriteErrorResponse(err);
+  if (!response.success && response.errorCode === ApiErrorCode.CONFLICT) reply.code(409);
+  return response;
+}
+
+/** The answer to an edit or a delete of the record the local model install manages. */
+function managedEndpointRefusal(): ApiResponse<never> {
+  return createErrorResponse(ApiErrorCode.INVALID_INPUT, LOCAL_MODEL_INSTALL_LABELS.endpointManaged);
+}
+
 export function registerCustomModelRoutes(app: FastifyInstance): void {
   app.get('/api/model-endpoints', async (req): Promise<RedactedHost[]> => {
     if (isMultiUserMode() && !isAdmin(req)) return [];
@@ -913,12 +952,19 @@ export function registerCustomModelRoutes(app: FastifyInstance): void {
     }
     const badDefault = invalidDefaultModel(host);
     if (badDefault) return badDefault;
-    const hosts = await readCustomModelHosts(CODEMAN_CONFIG_DIR);
-    if (hosts.some((item) => item.id === host.id)) {
-      return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, 'Model endpoint already exists');
+    if (isLocalModelEndpointId(host.id)) {
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, LOCAL_MODEL_INSTALL_LABELS.endpointIdReserved);
     }
-    await writeCustomModelHosts(CODEMAN_CONFIG_DIR, [...hosts, host]);
-    return { success: true, data: { host: redactApiKey(host) } };
+    try {
+      return await mutateCustomModelHosts<ApiResponse<{ host: RedactedHost }>>((hosts) => {
+        if (hosts.some((item) => item.id === host.id)) {
+          return { result: createErrorResponse(ApiErrorCode.ALREADY_EXISTS, 'Model endpoint already exists') };
+        }
+        return { hosts: [...hosts, host], result: { success: true, data: { host: redactApiKey(host) } } };
+      }, CODEMAN_CONFIG_DIR);
+    } catch (err) {
+      return refusedHostsWrite(err, reply);
+    }
   });
 
   app.put('/api/model-endpoints/:id', async (req, reply): Promise<ApiResponse<{ host: RedactedHost }>> => {
@@ -931,26 +977,37 @@ export function registerCustomModelRoutes(app: FastifyInstance): void {
     }
     const badDefault = invalidDefaultModel(incoming);
     if (badDefault) return badDefault;
-    const hosts = await readCustomModelHosts(CODEMAN_CONFIG_DIR);
-    const index = hosts.findIndex((item) => item.id === id);
-    if (index === -1) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Model endpoint not found');
-    const host = applyDiscoveredFields(applyStoredApiKey(incoming, hosts[index]), hosts[index]);
-    const next = [...hosts];
-    next[index] = host;
-    await writeCustomModelHosts(CODEMAN_CONFIG_DIR, next);
-    return { success: true, data: { host: redactApiKey(host) } };
+    if (await isManagedLocalEndpoint(id)) return managedEndpointRefusal();
+    try {
+      return await mutateCustomModelHosts<ApiResponse<{ host: RedactedHost }>>((hosts) => {
+        const index = hosts.findIndex((item) => item.id === id);
+        if (index === -1) return { result: createErrorResponse(ApiErrorCode.NOT_FOUND, 'Model endpoint not found') };
+        const host = applyDiscoveredFields(applyStoredApiKey(incoming, hosts[index]), hosts[index]);
+        const next = [...hosts];
+        next[index] = host;
+        return { hosts: next, result: { success: true, data: { host: redactApiKey(host) } } };
+      }, CODEMAN_CONFIG_DIR);
+    } catch (err) {
+      return refusedHostsWrite(err, reply);
+    }
   });
 
   app.delete('/api/model-endpoints/:id', async (req, reply): Promise<ApiResponse<{ id: string }>> => {
     const denied = adminOnly(req, reply);
     if (denied) return denied;
     const { id } = req.params as { id: string };
-    const hosts = await readCustomModelHosts(CODEMAN_CONFIG_DIR);
-    await writeCustomModelHosts(
-      CODEMAN_CONFIG_DIR,
-      hosts.filter((item) => item.id !== id)
-    );
-    return { success: true, data: { id } };
+    if (await isManagedLocalEndpoint(id)) return managedEndpointRefusal();
+    try {
+      return await mutateCustomModelHosts<ApiResponse<{ id: string }>>((hosts) => {
+        const next = hosts.filter((item) => item.id !== id);
+        // Nothing to take out: the file is left as it is, and the answer is the same.
+        return next.length === hosts.length
+          ? { result: { success: true, data: { id } } }
+          : { hosts: next, result: { success: true, data: { id } } };
+      }, CODEMAN_CONFIG_DIR);
+    } catch (err) {
+      return refusedHostsWrite(err, reply);
+    }
   });
 
   app.post(
@@ -966,18 +1023,30 @@ export function registerCustomModelRoutes(app: FastifyInstance): void {
       if (isBlockedWebviewUrl(host.baseUrl)) {
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Endpoint base URL is not allowed');
       }
+      // The local model's own record is not probed: it lists the one model its install checked,
+      // and that list is the answer.
+      if (await isManagedLocalEndpoint(id)) return { success: true, data: { models: host.models ?? [] } };
+      let result: DiscoveryResult;
       try {
-        const result = await discoverModels(host);
-        const next = [...hosts];
-        next[index] = applyDiscoveredModels(host, result);
-        await writeCustomModelHosts(CODEMAN_CONFIG_DIR, next);
-        return { success: true, data: { models: result.models } };
+        result = await discoverModels(host);
       } catch (err) {
         const blocked = egressBlockedReason(err);
         return createErrorResponse(
           ApiErrorCode.OPERATION_FAILED,
           blocked ? `Endpoint refused: ${blocked}` : `Could not reach endpoint: ${describeFetchError(err)}`
         );
+      }
+      try {
+        // Onto the record as it is NOW: the probe above took a moment, and an edit made
+        // meanwhile must not be replaced by the copy read before it.
+        return await mutateCustomModelHosts<ApiResponse<{ models: string[] }>>((current) => {
+          const at = current.findIndex((item) => item.id === id);
+          if (at === -1) return { result: createErrorResponse(ApiErrorCode.NOT_FOUND, 'Model endpoint not found') };
+          current[at] = applyDiscoveredModels(current[at], result);
+          return { hosts: current, result: { success: true, data: { models: result.models } } };
+        }, CODEMAN_CONFIG_DIR);
+      } catch (err) {
+        return refusedHostsWrite(err, reply);
       }
     }
   );

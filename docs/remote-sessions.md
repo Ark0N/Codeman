@@ -705,3 +705,16 @@ session-create flow, or via the per-host **"Discover existing sessions"** button
   Key Pattern.
 - `docs/security-architecture.md` — overall network/auth model.
 - COD-104 (tmux prereq + durable launch), COD-105 (discover + attach, detach-not-kill ownership), COD-107 (shell-safe connection args).
+
+
+### Discord attachment upload exception
+
+Remote session file previews and ordinary remote writes remain read-only. Opted-in
+Discord Full mode may write an incoming attachment only under the originating
+session workspace’s `.codeman-discord/` directory. Every SSH invocation uses
+`buildSshConnectionArgs()` under `remote-ssh-limiter.ts`; remote paths are
+`shellescape`d tokens. Workspace and path-component checks, symlink refusal, size
+caps and cancellation rechecks apply before transfer and installation. Notifications
+mode never performs this remote write. Missing remote `python3` is reported as an
+actionable attachment-transfer error in the thread. This exception ships with the
+Files part of the Discord review series.

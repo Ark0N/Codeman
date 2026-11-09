@@ -174,10 +174,13 @@ describe('Session Management', () => {
 
   describe('POST /api/sessions', () => {
     it('should create a new session', async () => {
+      // Under the test HOME, never the machine's real `/tmp`: a create writes the workspace
+      // hooks and the agent skill (on by default) into its working dir.
+      const workingDir = mkdtempSync(join(TEST_HOME, 'work-'));
       const response = await fetch(`${baseUrl}/api/sessions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workingDir: '/tmp' }),
+        body: JSON.stringify({ workingDir }),
       });
 
       const data = await response.json();
@@ -185,7 +188,7 @@ describe('Session Management', () => {
       expect(data.success).toBe(true);
       expect(data.data.session).toBeDefined();
       expect(data.data.session.id).toBeDefined();
-      expect(data.data.session.workingDir).toBe('/tmp');
+      expect(data.data.session.workingDir).toBe(workingDir);
       expect(data.data.session.status).toBe('idle');
     });
   });
@@ -353,49 +356,63 @@ describe('Agent skill injection (agentSkillEnabled)', () => {
     }
   });
 
-  it('does not inject by default, accepts the setting via PUT, then injects on quick-start', async () => {
-    // 1. Default OFF: a claude quick-start creates the case without the skill.
-    const offCase = 'test-skill-off-' + Date.now();
-    createdCases.push(offCase);
-    const offResponse = await fetch(`${baseUrl}/api/quick-start`, {
+  // The tests below run in order against one server and one settings.json: absent key
+  // (on), a partial PUT that omits it (still on), then an explicit false (off).
+  const skillDirOf = (caseName: string) => join(CASES_DIR, caseName, '.claude', 'skills', 'codeman');
+
+  async function quickStart(prefix: string, mode?: string): Promise<string> {
+    const caseName = `${prefix}-${Date.now()}`;
+    createdCases.push(caseName);
+    const response = await fetch(`${baseUrl}/api/quick-start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ caseName: offCase }),
+      body: JSON.stringify(mode ? { caseName, mode } : { caseName }),
     });
-    const offData = await offResponse.json();
-    expect(offData.success).toBe(true);
-    expect(existsSync(join(CASES_DIR, offCase, '.claude', 'skills', 'codeman'))).toBe(false);
+    expect((await response.json()).success).toBe(true);
+    return caseName;
+  }
 
-    // 2. The `.strict()` settings schema accepts the new synced key.
-    const putResponse = await fetch(`${baseUrl}/api/settings`, {
+  async function putSettings(body: Record<string, unknown>): Promise<void> {
+    const response = await fetch(`${baseUrl}/api/settings`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agentSkillEnabled: true }),
+      body: JSON.stringify(body),
     });
-    const putData = await putResponse.json();
-    expect(putData.success).toBe(true);
-
-    // 3. The server's settings read is cached ~2s; outwait it so the create sees the toggle.
+    expect((await response.json()).success).toBe(true);
+    // The server's settings read is cached ~2s; outwait it so the next create sees the change.
     await new Promise((resolve) => setTimeout(resolve, 2100));
+  }
 
-    // 4. Quick-start now injects the marker-carrying skill into the new case.
-    const onCase = 'test-skill-on-' + Date.now();
-    createdCases.push(onCase);
-    const onResponse = await fetch(`${baseUrl}/api/quick-start`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ caseName: onCase }),
-    });
-    const onData = await onResponse.json();
-    expect(onData.success).toBe(true);
+  /** What settings.json holds, read back through GET /api/settings (enveloped or not). */
+  async function storedSettings(): Promise<Record<string, unknown>> {
+    const body = (await (await fetch(`${baseUrl}/api/settings`)).json()) as Record<string, unknown>;
+    const settings = (body.success === true ? body.data : body) as Record<string, unknown>;
+    // Not vacuous: every quick-start above records the case it used.
+    expect(settings).toHaveProperty('lastUsedCase');
+    return settings;
+  }
 
-    const skillDir = join(CASES_DIR, onCase, '.claude', 'skills', 'codeman');
+  it('injects by default: a settings.json without the key means on', async () => {
+    const caseName = await quickStart('test-skill-default');
+    // A quick-start writes lastUsedCase, never this key.
+    expect(await storedSettings()).not.toHaveProperty('agentSkillEnabled');
+
     const { readFileSync } = await import('node:fs');
-    const skillMd = readFileSync(join(skillDir, 'SKILL.md'), 'utf-8');
+    const skillMd = readFileSync(join(skillDirOf(caseName), 'SKILL.md'), 'utf-8');
     expect(skillMd.startsWith('---\nname: codeman')).toBe(true);
     expect(skillMd).toContain('<!-- codeman-managed-agent-skill');
-    expect(existsSync(join(skillDir, 'reference', 'endpoints.md'))).toBe(true);
-    expect(existsSync(join(skillDir, 'reference', 'recipes.md'))).toBe(true);
+    expect(existsSync(join(skillDirOf(caseName), 'reference', 'endpoints.md'))).toBe(true);
+    expect(existsSync(join(skillDirOf(caseName), 'reference', 'recipes.md'))).toBe(true);
+    // The copy ignores itself in git, so the default leaves a repository's status clean.
+    expect(readFileSync(join(skillDirOf(caseName), '.gitignore'), 'utf-8')).toBe('*\n');
+  }, 30000);
+
+  it('a partial settings PUT that omits the key keeps it on', async () => {
+    await putSettings({ autoNameSessions: false });
+    expect(await storedSettings()).not.toHaveProperty('agentSkillEnabled');
+
+    const caseName = await quickStart('test-skill-partial');
+    expect(existsSync(join(skillDirOf(caseName), 'SKILL.md'))).toBe(true);
   }, 30000);
 
   it('does not inject for shell-mode quick-start even when enabled', async () => {
@@ -410,4 +427,15 @@ describe('Agent skill injection (agentSkillEnabled)', () => {
     expect(data.success).toBe(true);
     expect(existsSync(join(CASES_DIR, shellCase, '.claude', 'skills', 'codeman'))).toBe(false);
   });
+
+  it('an explicit false turns it off, and a later partial PUT leaves it off', async () => {
+    // The `.strict()` settings schema accepts the synced key.
+    await putSettings({ agentSkillEnabled: false });
+    await putSettings({ autoNameSessions: true });
+    expect((await storedSettings()).agentSkillEnabled).toBe(false);
+
+    const caseName = await quickStart('test-skill-off');
+    expect(existsSync(join(CASES_DIR, caseName))).toBe(true);
+    expect(existsSync(skillDirOf(caseName))).toBe(false);
+  }, 30000);
 });

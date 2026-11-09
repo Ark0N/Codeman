@@ -1,4 +1,5 @@
 /** Native Discord controls. Tokens bind actor, origin, configuration and exact conversation. */
+import { getCli } from './config/cli-registry/registry.js';
 import { createHash, randomUUID } from 'node:crypto';
 import {
   activityFromHistory,
@@ -342,7 +343,13 @@ export class DiscordNativeUi {
       ),
     ];
     const suggestion =
-      s.mode === 'claude' && s.ready && !s.working && !s.pending && !s.exited ? s.promptSuggestion : undefined;
+      getCli(s.mode)?.capabilities.nativeSettingsProfile === 'claude-tui' &&
+      s.ready &&
+      !s.working &&
+      !s.pending &&
+      !s.exited
+        ? s.promptSuggestion
+        : undefined;
     const conversation = s.conversation,
       inputRevision = s.inputRevision;
     if (suggestion && conversation && inputRevision) {

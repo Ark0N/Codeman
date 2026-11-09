@@ -251,6 +251,7 @@ describe('terminal link provider with cell-wrapped paths', () => {
       _openTerminalUrl: proto._openTerminalUrl,
       _resolveLinkedFilePath: proto._resolveLinkedFilePath,
       _isExternalPreviewPath: () => false,
+      _isOutsideWorktreePath: () => false,
       registerFilePathLinkProvider: proto.registerFilePathLinkProvider,
     };
     app.registerFilePathLinkProvider.call(app);

@@ -8,7 +8,10 @@
  * been bypassed.
  * Port: N/A (app.inject, no real port needed)
  */
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
+import { readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { dataPath, getDataDir } from '../../src/config/instance.js';
+import { customModelHostsPath, readCustomModelHosts, type CustomModelHost } from '../../src/custom-model-hosts.js';
 import { registerCustomModelRoutes } from '../../src/web/routes/custom-model-routes.js';
 import { webviewFetch } from '../../src/web/webview-egress.js';
 import { createRouteTestHarness, type RouteTestHarness } from './_route-test-utils.js';
@@ -524,10 +527,9 @@ describe('context-length discovery from the /v1/models listing', () => {
       defaultContextLength: 65536,
     });
     fetchMock.mockResolvedValue(
-      new Response(
-        JSON.stringify({ data: [{ id: 're-listed', context_length: 32768 }, { id: 'untouched' }] }),
-        { status: 200 }
-      )
+      new Response(JSON.stringify({ data: [{ id: 're-listed', context_length: 32768 }, { id: 'untouched' }] }), {
+        status: 200,
+      })
     );
 
     await app.inject({ method: 'POST', url: '/api/model-endpoints/ep-ctx-keep/discover-models' });
@@ -578,5 +580,280 @@ describe('defaultContextLength (the user-set fallback discovery never overwrites
       expect(res.json().success, String(defaultContextLength)).toBe(false);
       expect(res.json().errorCode, String(defaultContextLength)).toBe('INVALID_INPUT');
     }
+  });
+});
+
+describe('every write goes through the serialized writer', () => {
+  const HOSTS = () => customModelHostsPath(getDataDir());
+
+  beforeEach(() => {
+    rmSync(HOSTS(), { force: true });
+  });
+
+  afterEach(() => {
+    fetchMock.mockReset();
+    rmSync(HOSTS(), { force: true });
+    vi.restoreAllMocks();
+  });
+
+  it('ten creates sent at once all land (each used to read, change and write on its own)', async () => {
+    const { app } = await setup();
+    const ids = Array.from({ length: 10 }, (_, i) => `burst${i}`);
+    const responses = await Promise.all(
+      ids.map((id) =>
+        app.inject({
+          method: 'POST',
+          url: '/api/model-endpoints',
+          payload: { id, label: id, baseUrl: 'http://localhost:8200', apiKey: `sk-${id}` },
+        })
+      )
+    );
+    for (const res of responses) expect(res.json().success).toBe(true);
+    const stored = await readCustomModelHosts(getDataDir());
+    expect(stored.map((host) => host.id).sort()).toEqual([...ids].sort());
+    // Every key survived: none of the writes replaced the list with its own record.
+    for (const host of stored) expect(host.apiKey).toBe(`sk-${host.id}`);
+  });
+
+  it('two creates of one id sent at once: one is stored, the other is told it exists', async () => {
+    const { app } = await setup();
+    const create = (label: string) =>
+      app.inject({
+        method: 'POST',
+        url: '/api/model-endpoints',
+        payload: { id: 'race', label, baseUrl: 'http://localhost:8201' },
+      });
+    const [first, second] = await Promise.all([create('one'), create('two')]);
+    expect([first.json().success, second.json().success].sort()).toEqual([false, true]);
+    expect([first.json().errorCode, second.json().errorCode]).toContain('ALREADY_EXISTS');
+    const stored = await readCustomModelHosts(getDataDir());
+    expect(stored).toHaveLength(1);
+  });
+
+  it('a discovery that takes a moment does not undo an edit made while it ran', async () => {
+    const { app } = await setup();
+    await app.inject({
+      method: 'POST',
+      url: '/api/model-endpoints',
+      payload: { id: 'slow', label: 'Before', baseUrl: 'http://localhost:8202' },
+    });
+    let answer: (response: Response) => void = () => {};
+    fetchMock.mockImplementation(
+      (async () => new Promise<Response>((resolve) => (answer = resolve))) as unknown as typeof webviewFetch
+    );
+    const discovering = app.inject({ method: 'POST', url: '/api/model-endpoints/slow/discover-models' });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
+
+    // The endpoint is renamed while the probe is still out.
+    const renamed = await app.inject({
+      method: 'PUT',
+      url: '/api/model-endpoints/slow',
+      payload: { label: 'After', baseUrl: 'http://localhost:8202' },
+    });
+    expect(renamed.json().success).toBe(true);
+
+    answer(new Response(JSON.stringify({ data: [{ id: 'qwen3' }] }), { status: 200 }));
+    expect((await discovering).json()).toEqual({ success: true, data: { models: ['qwen3'] } });
+
+    const [stored] = await readCustomModelHosts(getDataDir());
+    // Both changes are there: the new name and the discovered list.
+    expect(stored.label).toBe('After');
+    expect(stored.models).toEqual(['qwen3']);
+  });
+
+  it('an endpoint deleted while its discovery ran stays deleted', async () => {
+    const { app } = await setup();
+    await app.inject({
+      method: 'POST',
+      url: '/api/model-endpoints',
+      payload: { id: 'gone', label: 'Gone', baseUrl: 'http://localhost:8203' },
+    });
+    let answer: (response: Response) => void = () => {};
+    fetchMock.mockImplementation(
+      (async () => new Promise<Response>((resolve) => (answer = resolve))) as unknown as typeof webviewFetch
+    );
+    const discovering = app.inject({ method: 'POST', url: '/api/model-endpoints/gone/discover-models' });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    await app.inject({ method: 'DELETE', url: '/api/model-endpoints/gone' });
+    answer(new Response(JSON.stringify({ data: [{ id: 'qwen3' }] }), { status: 200 }));
+    expect((await discovering).json()).toMatchObject({ success: false, errorCode: 'NOT_FOUND' });
+    expect(await readCustomModelHosts(getDataDir())).toEqual([]);
+  });
+
+  it('deleting an id that is not saved leaves the file as it is', async () => {
+    const { app } = await setup();
+    await app.inject({
+      method: 'POST',
+      url: '/api/model-endpoints',
+      payload: { id: 'keep', label: 'Keep', baseUrl: 'http://localhost:8204' },
+    });
+    const before = { text: readFileSync(HOSTS(), 'utf8'), mtime: statSync(HOSTS()).mtimeMs };
+    const res = await app.inject({ method: 'DELETE', url: '/api/model-endpoints/never-saved' });
+    expect(res.json()).toEqual({ success: true, data: { id: 'never-saved' } });
+    expect(readFileSync(HOSTS(), 'utf8')).toBe(before.text);
+    expect(statSync(HOSTS()).mtimeMs).toBe(before.mtime);
+  });
+
+  describe('a store that does not parse', () => {
+    const BROKEN = '[{"id":"mine","label":"Mine","baseUrl":"http://localhost:9","apiKey":"sk-keep-me"},';
+
+    beforeEach(() => {
+      writeFileSync(HOSTS(), BROKEN);
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+    });
+
+    it.each([
+      ['create', 'POST', '/api/model-endpoints', { id: 'new', label: 'New', baseUrl: 'http://localhost:8205' }],
+      ['update', 'PUT', '/api/model-endpoints/mine', { label: 'Renamed', baseUrl: 'http://localhost:8205' }],
+      ['delete', 'DELETE', '/api/model-endpoints/mine', undefined],
+    ] as const)(
+      '%s is refused with 409 and the file is left byte for byte (it used to be replaced by one record)',
+      async (_label, method, url, payload) => {
+        const { app } = await setup();
+        const res = await app.inject({ method, url, ...(payload ? { payload } : {}) });
+        expect(res.statusCode).toBe(409);
+        expect(res.json()).toMatchObject({ success: false, errorCode: 'CONFLICT' });
+        expect(res.json().error).toContain('custom-model-hosts.json');
+        // The refusal never repeats the file, which holds a key.
+        expect(res.body).not.toContain('sk-keep-me');
+        expect(readFileSync(HOSTS(), 'utf8')).toBe(BROKEN);
+      }
+    );
+
+    it('reading still answers an empty list, as before', async () => {
+      const { app } = await setup();
+      expect((await app.inject({ method: 'GET', url: '/api/model-endpoints' })).json()).toEqual([]);
+    });
+  });
+});
+
+describe('the endpoint the local model install manages', () => {
+  const HOSTS = () => customModelHostsPath(getDataDir());
+  const STATE = () => dataPath('local-model.json');
+
+  const RECORD: CustomModelHost = {
+    id: 'local-ollama',
+    label: 'This Mac',
+    baseUrl: 'http://127.0.0.1:11435',
+    authStyle: 'bearer',
+    models: ['qwen3.6:35b-a3b'],
+    defaultModelId: 'qwen3.6:35b-a3b',
+    defaultContextLength: 131072,
+  };
+
+  /** The state file of an installed model whose connection is the record above. */
+  function markManaged(): void {
+    writeFileSync(
+      STATE(),
+      JSON.stringify({
+        schema: 1,
+        state: 'installed',
+        model: { id: 'qwen3.6:35b-a3b', label: 'Qwen3.6 35B-A3B', context: 131072 },
+        cli: { id: 'opencode', label: 'OpenCode' },
+        runtime: { version: '0.40.15', port: 11435, enabled: true },
+        connection: { endpointId: 'local-ollama', flagWasEnabled: false },
+      })
+    );
+  }
+
+  beforeEach(() => {
+    rmSync(STATE(), { force: true });
+    writeFileSync(HOSTS(), JSON.stringify([RECORD]));
+  });
+
+  afterEach(() => {
+    fetchMock.mockReset();
+    rmSync(STATE(), { force: true });
+    rmSync(HOSTS(), { force: true });
+  });
+
+  it('a new endpoint may not take the reserved id, whether or not a model is installed', async () => {
+    rmSync(HOSTS(), { force: true });
+    const { app } = await setup();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/model-endpoints',
+      payload: { id: 'local-ollama', label: 'Mine', baseUrl: 'http://127.0.0.1:11434' },
+    });
+    expect(res.json()).toEqual({
+      success: false,
+      error: 'This endpoint id is reserved for the model Codeman runs on this Mac. Pick another id.',
+      errorCode: 'INVALID_INPUT',
+    });
+    expect(await readCustomModelHosts(getDataDir())).toEqual([]);
+  });
+
+  it('while it is managed it is not edited: its port stays the runtime Codeman supervises', async () => {
+    markManaged();
+    const { app } = await setup();
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/model-endpoints/local-ollama',
+      payload: { label: 'This Mac', baseUrl: 'http://192.168.1.99:11434' },
+    });
+    expect(res.json()).toEqual({
+      success: false,
+      error:
+        'This endpoint belongs to the model Codeman runs on this Mac. Change or remove it in the local model window.',
+      errorCode: 'INVALID_INPUT',
+    });
+    expect(await readCustomModelHosts(getDataDir())).toEqual([RECORD]);
+  });
+
+  it('while it is managed it is not deleted from here: the runtime would keep running without it', async () => {
+    markManaged();
+    const { app } = await setup();
+    const res = await app.inject({ method: 'DELETE', url: '/api/model-endpoints/local-ollama' });
+    expect(res.json()).toMatchObject({ success: false, errorCode: 'INVALID_INPUT' });
+    expect(await readCustomModelHosts(getDataDir())).toEqual([RECORD]);
+  });
+
+  it('while it is managed a discovery answers the one model the install checked and asks the runtime nothing', async () => {
+    markManaged();
+    const { app } = await setup();
+    const res = await app.inject({ method: 'POST', url: '/api/model-endpoints/local-ollama/discover-models' });
+    expect(res.json()).toEqual({ success: true, data: { models: ['qwen3.6:35b-a3b'] } });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(await readCustomModelHosts(getDataDir())).toEqual([RECORD]);
+  });
+
+  it('it is listed like any other endpoint', async () => {
+    markManaged();
+    const { app } = await setup();
+    const list = (await app.inject({ method: 'GET', url: '/api/model-endpoints' })).json();
+    expect(list).toEqual([{ ...RECORD, apiKeySet: false }]);
+  });
+
+  it('a record with that id that nobody installed (made by hand) can still be edited and deleted by its owner', async () => {
+    // No state file: this feature wrote nothing, so the record is the person's own.
+    const { app } = await setup();
+    const update = await app.inject({
+      method: 'PUT',
+      url: '/api/model-endpoints/local-ollama',
+      payload: { label: 'My own Ollama', baseUrl: 'http://127.0.0.1:11434' },
+    });
+    expect(update.json().success).toBe(true);
+    expect((await readCustomModelHosts(getDataDir()))[0].label).toBe('My own Ollama');
+    const del = await app.inject({ method: 'DELETE', url: '/api/model-endpoints/local-ollama' });
+    expect(del.json()).toEqual({ success: true, data: { id: 'local-ollama' } });
+    expect(await readCustomModelHosts(getDataDir())).toEqual([]);
+  });
+
+  it('any other endpoint is edited and deleted as before while a model is installed', async () => {
+    markManaged();
+    const { app } = await setup();
+    await app.inject({
+      method: 'POST',
+      url: '/api/model-endpoints',
+      payload: { id: 'office', label: 'Office', baseUrl: 'http://localhost:8210' },
+    });
+    const update = await app.inject({
+      method: 'PUT',
+      url: '/api/model-endpoints/office',
+      payload: { label: 'Office GPU', baseUrl: 'http://localhost:8210' },
+    });
+    expect(update.json().data.host.label).toBe('Office GPU');
+    await app.inject({ method: 'DELETE', url: '/api/model-endpoints/office' });
+    expect(await readCustomModelHosts(getDataDir())).toEqual([RECORD]);
   });
 });

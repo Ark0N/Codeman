@@ -342,6 +342,25 @@ escapes the session working directory (`..`, absolute paths, and symlinks that
 resolve outside). The realpath‑before‑check ordering closes the validation‑time
 TOCTOU window.
 
+A local session has one more root while its agent works in a git worktree of the
+same repository OUTSIDE its folder (published as `outsideWorktree`). An absolute path inside
+that worktree is confined to it by `validateLocalSessionFilePath()`, and only while the
+worktree folder still `realpath`s to the path recorded for it. The edit route
+(`PUT /api/sessions/:id/file-content`) uses the same check, so a file in that worktree can be
+written as well as read. Codeman records such a
+worktree only after the session's own repository vouches for it, and never `/`, the
+home folder or above, a folder holding the working directory, or a folder at, inside or
+around a Docker case workspace (`src/live-worktree.ts`). It also refuses a folder that is
+itself a sensitive folder such as `.ssh`, and `validateLocalSessionFilePath()` never serves a
+file from the worktree that `isSensitivePath()` blocklists. In multi-user mode a regular
+owner's session also needs the owner's folder rule (their own space or the working directory);
+an admin's does not. It follows nothing while attachment workspace confinement is on, and
+nothing at, inside or around a blocked attachment tree. Codeman judges these rules when the pane
+changes directory, and the routes judge confinement and the blocked trees again on every request,
+so turning confinement on or blocking the folder stops serving it at once. The multi-user rule is
+judged only when the pane changes directory. On every request the routes also check that the
+folder still resolves to its recorded path. A relative path is still confined to the working directory alone.
+
 | Route | Cap | Notes |
 |-------|-----|-------|
 | `file-content` | 10 MB | text preview |
@@ -593,6 +612,15 @@ Opt-in and off by default: the server POSTs the Web Push events (permission prom
 - **The URL is a bearer secret** (anyone holding a Slack or Discord webhook URL can post as it). It lives in `~/.codeman/webhook.json` (0600, tmp+rename), is kept out of `settings.json` (which every logged-in user reads through `GET /api/settings`), is never returned (`GET /api/webhook` gives scheme + host only), and never appears in a log line, a delivery result or an error message.
 - **Discord bridge** (`src/discord-bridge.ts`, [setup](discord-bridge.md)): the bot token lives in `~/.codeman/discord.json` (0600, tmp+rename) and is never returned by the Discord routes, logged or put in an error, and the attachment, folder and download routes refuse the file. A session whose folder is the home directory can still read it through its own file viewer, which serves that workspace without the blocklist. Inbound replies are typed into a session only from `allowedUserIds`, in the configured guild, inside a thread the bridge created; anything else is dropped unread. A reply becomes one printable line plus Enter, capped at 1000 characters and one per second per tab. Posts send `allowed_mentions` limited to the allowlisted ids, so agent output cannot ping a server. **Files:** an attachment is fetched only from Discord's own HTTPS hosts (no redirects followed), at most 5 per reply and 8 MB each, saved 0600 under `<tab folder>/.codeman-discord/` with the name reduced to `[A-Za-z0-9._-]`; a file a CLI sends must be a regular file whose real path (symlinks followed) lies inside its own tab's folder and is not on the attachment blocklist (`isBlockedAttachmentPath`, since a tab's folder can be the home directory), which stops a sensitive file being uploaded by mistake, and remote sessions send and receive none. A received file is untrusted content to whatever opens it. **What the checks do not stop:** the agent runs as the same OS user, so the path check prevents accidental uploads, not a determined agent that pastes a file's contents into the message. **What leaves the machine:** a permission or question alert sends the rendered screen (whatever the agent printed), and a finished turn or an error sends the CLI's whole last message, read from its transcript (up to 8 posts of 1,900 characters). `idle_prompt` is a warning, so with the default scope every Claude turn left unanswered for a minute is posted, and with **Which events** set to Everything every turn end is; treat the Discord server as holding that output. **Multi-user:** the bridge is one allowlist for the whole server, so an allowlisted Discord account can type into every user's sessions; only an admin can configure it. **Startup hint:** a fixed text (no user input) is added to Claude's system prompt; no other CLI is sent it. The bridge only dials out (REST and the gateway WebSocket), so it needs no inbound exposure. A Discord account on the allowlist can drive agents that run shell commands: it needs 2FA.
 - **It carries session data to a third party.** Titles and bodies include session names, tool names and error text, all agent- or user-controlled, so Discord gets `allowed_mentions: { parse: [] }` and Slack's `& < >` are escaped: agent output cannot ping a channel. In multi-user mode all three routes are admin-only and the channel is instance-wide: it receives every user's session events, the same reach an admin's own Web Push has, which means non-admins' session details leave the box at the admin's choice.
+
+## 10d. The model on this Mac (local model install)
+
+Opt-in by a click, macOS only, admin-only in multi-user mode on every verb. The server downloads one pinned runtime build, runs it as its own child, pulls one model into it, installs the coding agent when it is missing, and saves one endpoint record. Source: `src/local-model/`, routes in `src/web/routes/local-model-routes.ts`. Guide: [`local-models.md`](local-models.md).
+
+- **Supply chain: a compiled pin.** The runtime's URL, size and sha256 are a constant in `src/local-model/runtime.ts` that no file, setting or request can change; the archive is hashed while it streams and compared BEFORE anything is unpacked, a mismatch deletes it, and only `/usr/bin/tar` unpacks it into a folder under the data dir. The model comes from the runtime's own registry under the name the catalogue pins; the digest the runtime reports after the pull is stored, and a model whose digest changed under that name is refused at the next start.
+- **A loopback port without a login.** The runtime listens on `127.0.0.1:<port>` (chosen once from 11435) with no authentication, like every model server of its kind: any program of any account on the Mac, and any web page served from `localhost`, can use it and change its models. What limits that: the endpoint record lists ONE model and the discovery sweep leaves it alone, the digest is compared before an agent is started on it (every start path, see the guide), and a listener on the port that is not our own child (judged by the stored pid's command line, never by the port alone) is reported as `port-in-use` and never signalled. An open session keeps calling the port while the runtime is stopped, which is why Stop and a port change are refused while one uses the model.
+- **A second install path for a coding agent, without `cliManagementEnabled`.** The job runs the COMPILED stock install command of a catalogue harness row (never a `clis.json` override, never a custom entry) through the same runner as CLI management, only after the consent screen showed the literal command, and writes the admin audit entry (`cli_install`, `via: 'local-model'`). The installer runs as the server's user with the same reach as every other spawn.
+- **The runtime's own files stay inside `~/.codeman/local-model/`**: its private HOME (so no `~/.ollama` is created), its model store and its unpacked folder; its environment is an allowlist (no `CODEMAN_*`). Remove deletes only inside that folder, refuses a folder that is a symbolic link, and ends the runtime (ours by its command line) before any file goes.
 
 ---
 

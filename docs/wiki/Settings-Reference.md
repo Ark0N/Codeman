@@ -193,6 +193,26 @@ attached.
 section to the Run dropdown, for pointing a harness at your own OpenAI-compatible server
 instead of its native cloud backend. See [Custom Model Endpoints](Custom-Model-Endpoints).
 
+**Model on this Mac** is not a setting: it is the state of a model Codeman can run for you
+on the Mac the server runs on, with a button that opens the local model window. The same
+window opens from the **Run a local model** button on the welcome screen. It shows that
+Mac's chip, memory and free disk space, a bar for how much of the memory the selected model
+takes, and the models that fit, each with one tag (Best fit, Tight, Slow, Small model, or
+"Tested on a Mac like this"), a speed and a download size. **Install on this Mac** asks you
+to confirm the sizes once, then downloads a model runtime and the model into
+`~/.codeman/local-model`, checks that the model loads and can call a tool, installs the
+coding agent if it is missing, and ends on **Start a session**. No account, no API key and
+no administrator password. You can close the window while it downloads, cancel and continue
+later; after a Codeman restart an unfinished install waits for you to press Continue. Once a
+model is installed the window offers Start a session, Stop or Start, and Remove. Installing
+switches **Custom model endpoints** on and saves one endpoint named "This Mac"; Remove takes
+the endpoint away again and switches the setting back off if nothing else uses it. A Mac
+that can only run a small model is told so in plain words, and a Mac with too little memory,
+too little free disk space or an Intel processor is told why nothing is offered. The group
+is not shown when the server runs on Linux or Windows, and in multi-user mode only an admin
+sees it. The "Mac" is always the machine the server runs on, not the device you are reading
+on. Details: [Custom Model Endpoints](Custom-Model-Endpoints#a-model-that-runs-on-this-mac).
+
 ### Agents & CLIs
 
 | Setting                          | Notes                                                                                        |
@@ -202,7 +222,7 @@ instead of its native cloud backend. See [Custom Model Endpoints](Custom-Model-E
 | Ralph / Todo Tracker             | Enables the Ralph loop surfaces.                                                               |
 | Agent Teams                      | Experimental teams. Also needs the CLI's own environment flag.                                 |
 | Pin tab names on the CLI         | Launches every Claude session with `--name` set to its tab name, so Claude Code's prompt label and `/resume` list match your tabs. Claude then stops generating its own titles for those sessions, and a rename in Codeman holds only until the next turn. Synced, off by default; applies from the next session start or respawn. |
-| Codeman Agent Skill              | Under **All agent CLIs**. Injects the agent skill into each new session's case, where that session's CLI looks for skills (every CLI except Pi and a plain shell). Off by default. See [The Codeman Skill](Codeman-Skill). |
+| Codeman Agent Skill              | Under **All agent CLIs**. Injects the agent skill into each new session's case, where that session's CLI looks for skills (every CLI except Pi, GitHub Copilot and a plain shell). On by default since 1.50.0; existing installs that stored off are switched on once at the first 1.50.0 start, and turning it off afterwards sticks. The copy ignores itself in git, so your repository never lists it. Off stops new copies but removes none (`codeman skill uninstall --case <name>` does). See [The Codeman Skill](Codeman-Skill). |
 | Remote auto-reconnect            | Reattaches dropped remote SSH sessions. On by default.                                         |
 | Nice priority / value            | Runs agent processes at a lower CPU priority.                                                  |
 | Default Codex model              | Model for new local Codex sessions; empty uses Codex's own config. Letters, digits, `.` `_` `-` `/` only. |

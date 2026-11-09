@@ -78,7 +78,7 @@ export async function answerPendingApproval(
   if (item.nativeQuestion) {
     const native = item.nativeQuestion;
     if (
-      session.mode !== 'claude' ||
+      getCli(session.mode)?.capabilities.nativeSettingsProfile !== 'claude-tui' ||
       native.state !== 'pending' ||
       answer.action !== 'option' ||
       !native.dialog.choices.some((o) => o.n === answer.option)
@@ -173,8 +173,9 @@ export function registerApprovalRoutes(app: FastifyInstance, ctx: SessionPort): 
       // conservative rule the answer path uses (`verifyStillAnswerable`): only
       // an item whose original frame parsed options can be resolved this way, so
       // an unreadable capture keeps the alert rather than dropping it. Resolving
-      // here broadcasts `approval:resolved`, so the other devices clear too.
-      return approvalInbox.verifyStillAnswerable(item.id);
+      // here broadcasts `approval:resolved`, so the other devices clear too. A
+      // dialog too new to judge is left alone (`sweepForList`).
+      return approvalInbox.sweepForList(item.id);
     });
     return { success: true, data: { approvals } };
   });

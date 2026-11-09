@@ -1847,14 +1847,44 @@ html.mobile-init .file-browser-panel {
     margin-bottom: 0.75rem;
   }
 
-  .welcome-ralph-link {
-    display: block;
-    margin: 0.75rem auto 0;
-  }
-
   .welcome-hint {
     font-size: 0.7rem;
     margin-top: 0.75rem;
+  }
+
+  /* Run a model on this Mac (local-model-ui.js). The welcome button is only
+     reached with the phone overview switched off; it takes the chips' finger
+     size from `.welcome-chip` above. The window is full-screen like every
+     modal here: its own width rule in styles.css is more specific than the
+     full-screen `.modal-content` rule above, so the size is restated. */
+  .modal-content.local-model-window {
+    width: 100%;
+    max-width: 100%;
+    height: 100%;
+    max-height: 100%;
+  }
+
+  .local-model-window > .lm-body {
+    padding: 1rem;
+  }
+
+  /* The window fills the screen, so its actions sit at the bottom, under the thumb. */
+  .local-model-window > .lm-foot-slot {
+    padding: 0 1rem calc(1rem + var(--safe-area-bottom));
+  }
+
+  /* The short screens (progress, paused, a failure, installed, nothing fits)
+     hold a few lines. On a screen this tall they sit right above the buttons,
+     where the eye and the thumb already are, not at the top with half a
+     screen of nothing between the two. */
+  .local-model-window > .lm-body:is(
+      [data-screen='progress'],
+      [data-screen='paused'],
+      [data-screen='failed'],
+      [data-screen='installed'],
+      [data-screen='none']
+    ) {
+    justify-content: flex-end;
   }
 
   /* Ralph wizard responsive */
@@ -4259,5 +4289,70 @@ html[data-session-list="sidebar"] .session-sidebar .session-tab .tab-close {
     min-height: 55vh;
     -webkit-overflow-scrolling: touch;
     touch-action: pan-x pan-y;
+  }
+}
+
+/* Run a model on this Mac (local-model-ui.js), under 560px: each model row
+   becomes two lines (name and tag, then speed and download size), the bar
+   stays full width and the buttons go full width under the foot's sentence. */
+@media (max-width: 559px) {
+  .lm-list {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    column-gap: 0.7rem;
+  }
+
+  .lm-caption-speed,
+  .lm-caption-size {
+    display: none;
+  }
+
+  .lm-model {
+    row-gap: 0.1rem;
+    padding-top: 0.5rem;
+    padding-bottom: 0.5rem;
+  }
+
+  .lm-radio {
+    grid-row: 1;
+    grid-column: 1;
+  }
+
+  .lm-model-name {
+    grid-row: 1;
+    grid-column: 2;
+  }
+
+  .lm-model-tag {
+    grid-row: 1;
+    grid-column: 3;
+    justify-content: flex-end;
+  }
+
+  .lm-model-speed {
+    grid-row: 2;
+    grid-column: 2;
+    text-align: start;
+  }
+
+  .lm-model-size {
+    grid-row: 2;
+    grid-column: 3;
+  }
+
+  .lm-foot {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.8rem;
+  }
+
+  /* The main action on top, the way back under it. */
+  .lm-buttons {
+    flex-direction: column-reverse;
+    margin-inline-start: 0;
+  }
+
+  .local-model-window .wt-btn.lm-btn {
+    min-height: 44px;
+    font-size: 0.88rem;
   }
 }

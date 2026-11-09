@@ -9,6 +9,12 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/Ark0N/Codeman/releases/latest/download/Codeman.dmg"><img src="https://img.shields.io/badge/%E4%B8%8B%E8%BD%BD_Mac_%E7%89%88-Codeman.dmg-2f6fe0?style=for-the-badge&logo=apple&logoColor=white&labelColor=000000" alt="下载 Mac 版 Codeman（Codeman.dmg）" width="281"></a>
+  <br>
+  <sub>原生 Mac 应用：已签名并经过 Apple 公证，支持 Apple 芯片和 Intel，macOS 11.3 或更高版本。<a href="#在-mac-上codeman-应用">它能做什么</a></sub>
+</p>
+
+<p align="center">
   <a href="README.md">English</a> &bull; <strong>简体中文</strong>
 </p>
 
@@ -21,7 +27,6 @@
   <a href="https://github.com/Ark0N/Codeman/stargazers"><img src="https://img.shields.io/github/stars/Ark0N/Codeman?style=flat-square&color=eab308" alt="GitHub stars"></a>
   <a href="https://github.com/Ark0N/Codeman/graphs/contributors"><img src="https://img.shields.io/github/contributors/Ark0N/Codeman?style=flat-square&color=3b82f6" alt="Contributors"></a>
   <a href="https://github.com/Ark0N/Codeman/commits/master"><img src="https://img.shields.io/github/commit-activity/t/Ark0N/Codeman?style=flat-square&color=1e3a5f" alt="Total commits"></a>
-  <a href="https://github.com/NipunaRanasinghe/awesome-ai-agents"><img src="https://img.shields.io/badge/Featured_in-Awesome_AI_Agents-2ea44f?style=flat-square" alt="Featured in Awesome AI Agents"></a>
 </p>
 
 <p align="center">
@@ -44,6 +49,8 @@ codeman web
 ```
 
 安装器在每次系统改动前都会先询问；重跑同一条命令即可原地更新。详见[快速开始 — 安装](#快速开始--安装)。
+
+在 Mac 上可以不用终端：[下载 Codeman.dmg](https://github.com/Ark0N/Codeman/releases/latest/download/Codeman.dmg)，这个应用会替你安装 Codeman、打开已在运行的 Codeman，或者连接另一台机器上的 Codeman。详见[在 Mac 上：Codeman 应用](#在-mac-上codeman-应用)。
 
 - **一个仪表盘，十个 CLI**：每个会话可选 [Claude Code、OpenCode、Codex、Antigravity、Gemini、Pi、Grok、DeepSeek、OMP 或 GitHub Copilot](#更多特性)（外加普通 shell），在本机、[Docker 容器](#隔离的-docker-会话)或 [SSH 远程主机](#远程-ssh-会话)上运行，你自己的仪表盘也能作为 [Web 标签页](#更多特性)并排打开
 - **真正的手机友好**：[触控优化的终端](#移动端优化的-web-ui)，即时本地回显、二维码登录、滑动导航与推送通知
@@ -98,6 +105,21 @@ bash docker/Start-Codeman.sh
 首次运行会问三个问题（数据目录、端口、密码；回车即采用默认值，包括自动生成的密码），替你写好 `docker/.env`，构建镜像，并在 Codeman 响应后给出访问地址。镜像已内置 Claude Code、Codex、Gemini CLI 和 OpenCode。Codeman 自己跑在容器里，并通过宿主机的 socket 把 Docker 案例作为并列容器拉起。更新时请使用 **App Settings → Updates**，或者先 `git pull` 再跑一次这个脚本，而不是直接 `docker compose up`，这样重建的镜像、刷新的卷和新的入口脚本会一起就位。Unraid、直接的 Compose 命令、存储与网络选项见 [Docker 部署指南](docker/README.md)（英文）。
 
 详见下文[多用户模式](#多用户模式可选启用)。
+
+### 在 Mac 上：Codeman 应用
+
+**[下载 Codeman.dmg](https://github.com/Ark0N/Codeman/releases/latest/download/Codeman.dmg)** · 同一个通用应用，适用于 Apple 芯片和 Intel · macOS 11.3 或更高版本
+
+一个小巧的原生应用，在它自己的窗口里打开 Codeman。在还没有 Codeman 的 Mac 上，它会替你安装，不用终端，也不需要管理员密码，用一张清单显示安装进度；如果这台 Mac 上还没有编程智能体，它还会提出帮你装一个。在已经运行 Codeman 的 Mac 上，它会找到服务器并打开；服务器停着时则替你启动。在 **Another machine** 下，它可以连接你的 Mac mini、家用服务器或 tailnet 上的 Codeman，密码保存在钥匙串里，还能通过 SSH 在那台机器上开始安装。在配备 PROLED XDR 显示屏、机盖 Apple 标志会发光的 MacBook Pro 上，**View > Blink Apple Logo** 会让标志按智能体在做的事闪烁：工作中、等你回复、需要权限各用一种你自己选的样式；在你选定之前，三种都保持关闭。这个应用用 Rust 写成，套在 macOS 自带的 WebKit 外面，不捆绑浏览器，所以下载不到 5 MB。
+
+打开 `Codeman.dmg`，把 Codeman 拖进「应用程序」文件夹，再从那里打开。macOS 会问一次是否打开这个从互联网下载的应用：点**打开**。
+
+- **退出应用不会停止 Codeman。** 通过应用安装的 Codeman 以 LaunchAgent 的形式运行，登录时自动启动，所以关掉窗口后智能体照样工作，浏览器和手机也和以前一样能访问它。
+- **Codeman 的页面需要 Safari 16.4 的 WebKit。** 应用本身在 macOS 11.3 上就能启动，但 Codeman 需要 macOS 13.3 或更高版本，或者装有 Safari 16.4 或更高版本的 macOS 11 或 12。WebKit 更旧时，应用会说明原因，并且不会连接。
+- **在应用里安装需要 macOS 15，或者机器上已有 tmux。** tmux 来自 tmux 项目自己的构建，而这些构建需要 macOS 15。在没有 tmux 的旧 Mac 上，应用会改为提供终端安装方式，由 Homebrew 在终端里安装 tmux（这需要管理员操作一次）。
+- **更新。** 应用暂时不会自我更新：下载新的 `Codeman.dmg`，拖过去覆盖旧的那份即可。
+
+首次启动、已知限制以及如何自行构建：见 wiki 的 [Installation](https://github.com/Ark0N/Codeman/wiki/Installation#on-a-mac-the-codeman-app)（英文）和 [packages/desktop/README.md](packages/desktop/README.md)（英文）。
 
 <details>
 <summary><strong>让它在后台一直运行</strong></summary>
@@ -775,13 +797,15 @@ Web UI 仍是主要界面；完整指南见 **[docs/tui.md](docs/tui.md)**（英
 
 #### 第 1 步：安装
 
+通常什么都不用装：从 1.50.0 起，每个新会话都会在自己的文件夹里、在它的 CLI 查找技能的位置拿到这个技能（即下表的 Web UI 一行，默认开启）。这份副本会让 git 忽略它自己，所以你的仓库永远不会把它列为新文件。其他方式适用于 pi，或者你想要一份不依赖这个设置的副本的情况。
+
 | 方式             | 命令                                                       | 范围                                                                                       |
 | ---------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
 | Skills CLI       | `npx skills add Ark0N/Codeman --skill codeman -g`          | 全局，任何支持技能的智能体都能用（[skills.sh](https://skills.sh)）；给 pi 装技能就用这个方式 |
 | Claude Code 插件 | `/plugin marketplace add Ark0N/Codeman`，然后 `/plugin install codeman@codeman` | 全局，通过 Claude Code 自带的插件管理器；`/plugin update codeman` 跟随新版本。与 `codeman skill install` 二选一：两者都装会让技能出现两次（`codeman` 和 `codeman:codeman`） |
 | 内置 CLI         | `codeman skill install`                                    | 全局（`~/.claude/skills/codeman`），给那些从 npm 安装、从未克隆过仓库的用户                |
 | 内置 CLI         | `codeman skill install --case <name> [--mode <mode>]`      | 仅一个 case；`--mode codex`（或任何其他运行模式）会把它写到那个 CLI 查找技能的位置          |
-| Web UI           | App Settings → Agents & CLIs → All agent CLIs → **Codeman Agent Skill** | 每次创建会话时自动注入到 case 里该会话的 CLI 查找技能的位置：Claude Code 是 `.claude/skills/`，Codex、Gemini CLI、OpenCode、Antigravity、Grok、DeepSeek 和 OMP 是 `.agents/skills/`；pi 除外，因为它的项目级技能会触发信任提示（`agentSkillEnabled`，跨设备同步，默认关闭） |
+| Web UI           | App Settings → Agents & CLIs → All agent CLIs → **Codeman Agent Skill** | 每次创建会话时自动注入到 case 里该会话的 CLI 查找技能的位置：Claude Code 是 `.claude/skills/`，Codex、Gemini CLI、OpenCode、Antigravity、Grok、DeepSeek 和 OMP 是 `.agents/skills/`；pi 除外，因为它的项目级技能会触发信任提示（`agentSkillEnabled`，跨设备同步，从 1.50.0 起**默认开启**；同时装了插件的 Claude Code 会把技能列出两次，两个都能用，嫌重复就去掉其中一个） |
 
 `codeman skill uninstall [--case <name>]` 可以撤销 CLI 安装（带 `--case` 时，删除该 case 里所有由 Codeman 管理的副本，不论它在哪个 CLI 的目录里），并且绝不会碰你自己写的 `skills/codeman`。
 
@@ -848,7 +872,7 @@ deleted 9f2d8e5f, aff9c691, be9f1f15    标签消失
 - **它会自我门禁。** 它在 Codeman 管理的会话里工作。不在这样的会话里（`CODEMAN_MUX` 未设置）时，它只会离线读取已保存的 Codex 对话（`codeman history read`），其他一律拒绝，也从不去猜 API 地址，所以全局安装对无关的 Claude Code 会话没有任何代价。
 - **它刻意保守。** 未经提示，它只会拉起会话、给它们发提示，并删除**它在同一段对话里自己创建的**会话（按精确 id，经由一个拒绝删除智能体自身会话的失败即关闭守卫）。删除 case（会抹掉一个真实的代码目录）、批量杀会话、改动 respawn/ralph/cron/orchestrator 以及写设置，都需要你开口并指名目标。
 
-⚠️ 把 `agentSkillEnabled` 关回去**不会删掉已经注入的副本**（在创建时做清扫，会把技能从共用同一个工作区的其他活动会话脚下抽走）。要删就按 case 删：`codeman skill uninstall --case <name>`。
+⚠️ 从 1.50.0 起，Web UI 注入**默认开启**。`settings.json` 里没有 `agentSkillEnabled` 这个键就表示开启。已经存了关闭的旧安装，会在第一次启动 1.50.0 时被打开一次（1.49.0 及更早版本每次保存 App Settings 都会写入旧默认值 `false`，不管你有没有动过这个开关）；之后你再把它关掉，就会一直保持关闭。把它关掉**不会删掉已经注入的副本**（在创建时做清扫，会把技能从共用同一个工作区的其他活动会话脚下抽走）。要删就按 case 删：`codeman skill uninstall --case <name>`。
 
 ---
 

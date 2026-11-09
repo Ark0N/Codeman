@@ -9,6 +9,12 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/Ark0N/Codeman/releases/latest/download/Codeman.dmg"><img src="https://img.shields.io/badge/Download_for_Mac-Codeman.dmg-2f6fe0?style=for-the-badge&logo=apple&logoColor=white&labelColor=000000" alt="Download Codeman for Mac (Codeman.dmg)" width="354"></a>
+  <br>
+  <sub>The native Mac app: signed and notarized, Apple Silicon and Intel, macOS 11.3 or later. <a href="#on-a-mac-the-codeman-app">What it does</a></sub>
+</p>
+
+<p align="center">
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-1e3a5f?style=flat-square" alt="License: MIT"></a>
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-22%2B-22c55e?style=flat-square&logo=node.js&logoColor=white" alt="Node.js 22+"></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-5.9-3b82f6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript 5.9"></a>
@@ -17,7 +23,6 @@
   <a href="https://github.com/Ark0N/Codeman/stargazers"><img src="https://img.shields.io/github/stars/Ark0N/Codeman?style=flat-square&color=eab308" alt="GitHub stars"></a>
   <a href="https://github.com/Ark0N/Codeman/graphs/contributors"><img src="https://img.shields.io/github/contributors/Ark0N/Codeman?style=flat-square&color=3b82f6" alt="Contributors"></a>
   <a href="https://github.com/Ark0N/Codeman/commits/master"><img src="https://img.shields.io/github/commit-activity/t/Ark0N/Codeman?style=flat-square&color=1e3a5f" alt="Total commits"></a>
-  <a href="https://github.com/NipunaRanasinghe/awesome-ai-agents"><img src="https://img.shields.io/badge/Featured_in-Awesome_AI_Agents-2ea44f?style=flat-square" alt="Featured in Awesome AI Agents"></a>
 </p>
 
 <p align="center">
@@ -42,6 +47,8 @@ codeman web
 ```
 
 The installer asks before every system change, and re-running the same line updates in place. Full details: [Quick Start - Installation](#quick-start---installation).
+
+On a Mac you can skip the terminal: [download Codeman.dmg](https://github.com/Ark0N/Codeman/releases/latest/download/Codeman.dmg), and the app installs Codeman for you, opens the one already running, or connects to one on another machine. More in [On a Mac: the Codeman app](#on-a-mac-the-codeman-app).
 
 - **One dashboard, ten CLIs** - run [Claude Code, OpenCode, Codex, Antigravity, Gemini, Pi, Grok, DeepSeek, OMP, or GitHub Copilot](#more-features) per session (plus plain shell), locally, [in Docker](#isolated-docker-sessions), or [over SSH](#remote-ssh-sessions), with your own dashboards open as [web tabs](#more-features) beside them
 - **Truly phone-friendly** - a [touch-optimized terminal](#mobile-optimized-web-ui) with instant local echo, QR login, swipe navigation, and push notifications
@@ -96,6 +103,21 @@ bash docker/Start-Codeman.sh
 ```
 
 The first run asks three questions (data folder, port, password; Enter takes the default, including a generated password), writes `docker/.env` for you, builds the image and ends on the URL once Codeman answers. The image already includes Claude Code, Codex, Gemini CLI and OpenCode. Codeman runs in a container and spawns Docker cases as sibling containers through the host socket. To update, use **App Settings → Updates**, or `git pull` and run the script again rather than a plain `docker compose up`, so the rebuilt image, refreshed volumes and entrypoint arrive together. See the [Docker deployment guide](docker/README.md) for Unraid, direct Compose commands, storage and networking options.
+
+### On a Mac: the Codeman app
+
+**[Download Codeman.dmg](https://github.com/Ark0N/Codeman/releases/latest/download/Codeman.dmg)** · one universal app for Apple Silicon and Intel · macOS 11.3 or later
+
+A small native app that opens Codeman in its own window. On a Mac without Codeman it installs it for you, with no Terminal and no administrator password, shows the install as a checklist, and offers to install a coding agent if the Mac has none yet. On a Mac that already runs Codeman it finds the server and opens it, or starts it when it is stopped. Under **Another machine** it connects to Codeman on your Mac mini, a home server or your tailnet, with the password kept in the Keychain, and can start an install over there through SSH. On a MacBook Pro with a PROLED XDR display, whose lid logo lights up, **View > Blink Apple Logo** blinks the logo by what your agents are doing, with a style of your own for working, for waiting for you and for needing permission; all three stay off until you choose. The app is Rust around macOS's own WebKit, not a bundled browser, so the download is under 5 MB.
+
+Open `Codeman.dmg`, drag Codeman into Applications and open it from there. macOS asks once whether to open an app downloaded from the internet: click **Open**.
+
+- **Quitting the app doesn't stop Codeman.** An install from the app runs Codeman as a LaunchAgent that starts at login, so your agents keep working with the window closed, and your browser and phone reach it as before.
+- **Codeman's page needs the WebKit of Safari 16.4.** The app starts on macOS 11.3, but Codeman itself needs macOS 13.3 or later, or macOS 11 or 12 with Safari 16.4 or later installed. On an older WebKit the app says so and does not connect.
+- **The install from the app needs macOS 15, or a tmux that is already there.** tmux comes from the tmux project's own builds, which need macOS 15. On an older Mac without tmux the app offers Terminal instead, where Homebrew installs it (that takes an administrator once).
+- **Updating.** The app doesn't update itself yet: download the new `Codeman.dmg` and drag it over the old copy.
+
+First launch, known limits and how to build it yourself: [Installation](https://github.com/Ark0N/Codeman/wiki/Installation#on-a-mac-the-codeman-app) in the wiki and [packages/desktop/README.md](packages/desktop/README.md).
 
 <details>
 <summary><strong>Keep it running in the background</strong></summary>
@@ -475,6 +497,7 @@ PTY Output → 16ms Server Batch → DEC 2026 Wrap → SSE → Client rAF → xt
 - **Open a tmux session you started by hand**: a tmux session started outside Codeman shows up on the home screen, on this machine automatically and in your Docker cases' containers or on your saved SSH hosts when you scan for them. One click opens it as a tab. Closing the tab only detaches, and Codeman will not respawn or relaunch an agent it did not start. See [Opened outside Codeman](docs/wiki/The-Dashboard.md#opened-outside-codeman).
 - **Multi-CLI** — run **Claude Code**, **OpenCode**, **Codex**, **Antigravity**, **Gemini**, **Pi**, **Grok**, **DeepSeek Harness**, **OMP**, or **GitHub Copilot CLI** per session; env-var prefixes auto-gate (`CLAUDE_CODE_*` vs `OPENCODE_*` vs `CODEX_*` vs `ANTIGRAVITY_*` vs `GEMINI_*`/`GOOGLE_*` vs `PI_*` vs `GROK_*`/`XAI_*` vs `DSH_*`/`DEEPSEEK_*` vs `OMP_*` vs `COPILOT_*`). See [`docs/opencode-integration.md`](docs/opencode-integration.md), [`docs/pi-integration.md`](docs/pi-integration.md), [`docs/grok-integration.md`](docs/grok-integration.md), [`docs/deepseek-integration.md`](docs/deepseek-integration.md) [`docs/omp-integration.md`](docs/omp-integration.md) and [`docs/copilot-integration.md`](docs/copilot-integration.md)
 - **Custom model endpoints** _(new in 1.29.0, HTTP API for now)_ — point a session's CLI at any OpenAI-compatible endpoint instead of its native backend: a local llama.cpp, llama-swap, Ollama or vLLM box, or a cloud gateway such as Azure AI Foundry or OpenRouter. Save an endpoint once (`POST /api/model-endpoints`; its models are discovered from `/v1/models`), apply it to a session (`POST /api/sessions/:id/custom-model`), and the CLI restarts in place on that endpoint. Verified live for Claude, OpenCode, Pi, Grok and OMP; Codex, Gemini and DeepSeek have documented gaps, Antigravity has no mechanism. A toolbar picker is the follow-up. See [`docs/custom-model-endpoints.md`](docs/custom-model-endpoints.md)
+- **A model on this Mac** _(experimental, new in 1.50.0)_: on a Mac with Apple silicon, **Run a local model** on the welcome screen shows which coding model fits, installs it with its runtime and a coding agent, and starts a session on it: no account, no API key, and the prompts and files of that session go to a model on this Mac, not to a cloud provider. Then mix cloud and local: through the [codeman skill](#the-agent-skill-start-here) a Claude Code session hands work to that model (`spawn_worker <name> local`, `sendmark`) and reads the answer back, so Claude plans and reviews in the cloud while the Mac does the bulk: summaries, first drafts, files that should stay here. See [`docs/local-models.md`](docs/local-models.md)
 - **Web tabs** — open Grafana, Uptime Kuma, a Vite dev server or any dashboard URL as a tab beside your sessions (Run dropdown → **Web / URL** → **Add URL**). Dashboards are proxied through Codeman's own origin, so an `http://` target works from a phone over HTTPS and through the tunnel, single-page apps route on their own paths, and a frame that reloads recovers itself. A `localhost` link an agent prints opens as a web tab automatically. See [`docs/web-tabs.md`](docs/web-tabs.md)
 - **Docker sessions** — run a case inside an isolated, hardened container. One checkbox on **Create New** spins up a container with sensible defaults and starts the agent inside it; multiple sessions share one per-case container, or attach a case to a container you already run; export a container + its workspace to a portable `.tar.gz` to move it to another machine. See [`docs/docker-cases.md`](docs/docker-cases.md)
 - **Remote SSH sessions** — point a case at another machine and run the agent there inside a durable remote tmux: survives SSH drops, auto-reconnects, and can discover + attach sessions already running on the host; file previews and downloads come over the same ssh connection. See [`docs/remote-sessions.md`](docs/remote-sessions.md)
@@ -775,13 +798,15 @@ Everything in this section also ships as an **agent skill**, [`skills/codeman`](
 
 #### Step 1: install it
 
+Usually there is nothing to install: since 1.50.0 every new session gets the skill in its folder, where its CLI looks for skills (the web UI row below, on by default). The copy ignores itself in git, so your repository never lists it as a new file. The other routes are for pi, or for a copy that does not depend on that setting.
+
 | How            | Command                                                    | Scope                                                                                      |
 | -------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
 | Skills CLI     | `npx skills add Ark0N/Codeman --skill codeman -g`          | Global, for any skills-aware agent ([skills.sh](https://skills.sh)); the way to give it to pi |
-| Claude Code plugin | `/plugin marketplace add Ark0N/Codeman` then `/plugin install codeman@codeman` | Global, through Claude Code's plugin manager; `/plugin update codeman` follows releases. Pick this OR a `codeman skill install`, not both: a Claude Code with both lists the skill twice (`codeman` and `codeman:codeman`) |
+| Claude Code plugin | `/plugin marketplace add Ark0N/Codeman` then `/plugin install codeman@codeman` | Global, through Claude Code's plugin manager; `/plugin update codeman` follows releases. Pick this OR a `codeman skill install`, not both: a Claude Code with both lists the skill twice (`codeman` and `codeman:codeman`). |
 | Bundled CLI    | `codeman skill install`                                    | Global (`~/.claude/skills/codeman`), for npm installs that never cloned the repo            |
 | Bundled CLI    | `codeman skill install --case <name> [--mode <mode>]`      | One case only; `--mode codex` (or any other run mode) writes it where that CLI looks for skills |
-| Web UI         | App Settings → Agents & CLIs → All agent CLIs → **Codeman Agent Skill** | Auto-injects into each case on session create, where that session's CLI looks: `.claude/skills/` for Claude Code, `.agents/skills/` for Codex, Gemini CLI, OpenCode, Antigravity, Grok, DeepSeek and OMP; not pi, whose project skills trigger a trust prompt (`agentSkillEnabled`, SYNCED, default off) |
+| Web UI         | App Settings → Agents & CLIs → All agent CLIs → **Codeman Agent Skill** | Auto-injects into each case on session create, where that session's CLI looks: `.claude/skills/` for Claude Code, `.agents/skills/` for Codex, Gemini CLI, OpenCode, Antigravity, Grok, DeepSeek and OMP; not pi, whose project skills trigger a trust prompt (`agentSkillEnabled`, SYNCED, **on by default** since 1.50.0; a Claude Code that also has the plugin lists the skill twice, both work, so drop one if the duplicate bothers you) |
 
 `codeman skill uninstall [--case <name>]` reverses the CLI installs (with `--case`, every Codeman-managed copy in that case, whichever CLI's directory it sits in), and never touches a `skills/codeman` you wrote yourself.
 
@@ -795,6 +820,7 @@ That is the entire interface. No curl, no endpoint names, no session ids. These 
 | _"Start a shell worker on the `myapp` case, run the test suite, tell me if it passes."_    | Spawns, waits on a split completion marker, reads back the exit code, cleans up.                          |
 | _"Spin up 3 workers for lint, typecheck and tests. Run them in parallel, report failures."_ | The fan-out flow: one session per task, all started first, then gathered as each finishes.                |
 | _"Have a claude worker on `refactor-auth` summarize `src/session.ts`, then close it."_     | Spawns, runs the readiness ladder (first-run trust dialog included), send-and-wait, reads the clean transcript answer, deletes. |
+| _"Use the local model to summarize every file in `docs/`, then check its summaries."_ | Starts a worker on the model Codeman installed on this Mac, gives it the files, reads its answer back and reviews it in the cloud. Says why instead when no local model is installed. |
 | _"Watch session w4 and tell me if it gets stuck on a permission prompt."_                  | Blocks on the `blocked` signal and surfaces the question to **you**. It never answers another session's prompt itself. |
 
 One short line is enough. Here a Claude Code lead gets `use codeman to start 5 claude workers, one per TODO item`, and five real Claude Code workers power on, shown side by side in the tile grid:
@@ -848,7 +874,7 @@ Every recipe in there was verified against a live server, and the comments recor
 - **It self-gates.** It acts inside a Codeman-managed session. Outside one (`CODEMAN_MUX` unset) it only reads saved Codex conversations offline (`codeman history read`) and refuses everything else, and it never guesses an API URL, so a global install costs an unrelated Claude Code session nothing.
 - **It is deliberately conservative.** Unprompted, it may only spawn sessions, prompt them, and delete ones **it created in that same conversation, by exact id**, through a fail-closed guard that refuses to delete the agent's own session. Deleting a case (which erases a real directory of your code), bulk kills, respawn/ralph/cron/orchestrator changes and settings writes all require you to ask, naming the target.
 
-⚠️ Turning `agentSkillEnabled` back off **does not remove already-injected copies** (a create-time sweep would yank the skill out from under other live sessions sharing that workspace). Remove them per case with `codeman skill uninstall --case <name>`.
+⚠️ The web UI injection is **on by default** since 1.50.0. A `settings.json` without the `agentSkillEnabled` key means on. Existing installs that stored off are switched on once at the first 1.50.0 start (every App Settings save on 1.49.0 or earlier wrote the old default, `false`, whether or not you touched this switch); turning it off afterwards sticks. Turning it off **does not remove already-injected copies** (a create-time sweep would yank the skill out from under other live sessions sharing that workspace). Remove them per case with `codeman skill uninstall --case <name>`.
 
 ---
 

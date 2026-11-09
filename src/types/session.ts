@@ -938,20 +938,31 @@ export interface SessionState {
    * from disk, so a restart starts blank. Absent for remote and docker sessions
    * (their local pane runs the ssh / docker-exec client) and for direct-PTY or
    * rediscovered sessions. NOT a confinement root: the file routes stay confined
-   * to `workingDir`, and a path resolved outside it goes through the attachment
-   * routes like any other out-of-workspace path.
+   * to `workingDir`, except for an absolute path inside an
+   * {@link outsideWorktree}. Any other path resolved outside `workingDir` goes
+   * through the attachment routes like any other out-of-workspace path.
    */
   paneCwd?: string;
   /**
    * The linked git worktree inside `workingDir` that the pane is in NOW, when there is one:
    * Claude Code's `.claude/worktrees/<name>`, or any other worktree of the repository under
    * the session's folder. Derived from {@link paneCwd} by `live-worktree.ts`, so it is
-   * runtime-only and absent wherever `paneCwd` is, and absent for a worktree outside
-   * `workingDir`: the file routes never serve those. NOT a confinement root; the Files panel
-   * only starts its listing here, after `GET .../files` has checked that the real folder still
-   * lies inside `workingDir`, since a symlink can replace it without moving the pane.
+   * runtime-only and absent wherever `paneCwd` is, and always a folder strictly below
+   * `workingDir`: a worktree elsewhere is reported in {@link outsideWorktree}, never here. NOT a
+   * confinement root; the Files panel only starts its listing here, after `GET .../files` has
+   * checked that the real folder still lies inside `workingDir`, since a symlink can replace it
+   * without moving the pane.
    */
   liveWorktree?: LiveWorktree;
+  /**
+   * The worktree of the session's repository outside `workingDir` that the pane is in NOW, when
+   * there is one: a linked worktree, or the repository's main worktree for a session started in a
+   * linked one. It carries `outside: true`, and its `path` is a real path that the repository
+   * itself vouched for. The file routes serve absolute paths inside it as a second root while it
+   * still resolves to that same path. Runtime-only, like {@link liveWorktree}; at most one of
+   * the two fields is set.
+   */
+  outsideWorktree?: LiveWorktree;
   /** Remote execution metadata, present when this session runs over SSH through local tmux */
   remote?: SessionRemote;
   /** Docker execution metadata, present when this session runs inside a container via local tmux + docker exec */

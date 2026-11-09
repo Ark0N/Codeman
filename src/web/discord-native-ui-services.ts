@@ -58,7 +58,7 @@ export function createDiscordNativeUiServices(deps: Deps): DiscordNativeUiServic
   const reading = new Set<string>();
   const suggestion = async (s: Session) => {
     if (
-      s.mode !== 'claude' ||
+      getCli(s.mode)?.capabilities.nativeSettingsProfile !== 'claude-tui' ||
       reading.has(s.id) ||
       s.paneExit ||
       s.guardedInputHeld ||
