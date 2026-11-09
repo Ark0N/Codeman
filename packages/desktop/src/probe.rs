@@ -2,8 +2,10 @@
 //!
 //! One `GET <server>/api/status`, five seconds at most, run off the UI thread.
 //! The answer is classified into something the connect page can explain. It is
-//! asked once per user action, never in a loop: Codeman counts a request
-//! without valid credentials against the login rate limit (10 per IP).
+//! asked on a user action, or by one of the This Mac tab's waits (for an
+//! install to bring Codeman up, for a server that is starting), which end at
+//! the first answer, never as a standing poll: Codeman counts a request without
+//! valid credentials against the login rate limit (10 per IP).
 
 use serde::Serialize;
 use std::time::Duration;
@@ -82,6 +84,16 @@ pub enum ProbeOutcome {
     },
 }
 
+impl ProbeOutcome {
+    /// The server's version, when it answered as Codeman.
+    pub fn version(&self) -> Option<String> {
+        match self {
+            ProbeOutcome::Ok { version } => Some(version.clone()),
+            _ => None,
+        }
+    }
+}
+
 /// Classify an HTTP answer to `<server>/api/status`. `request` is the URL that
 /// was asked, `location` and `retry_after` are those response headers.
 pub fn classify_response(
@@ -94,12 +106,10 @@ pub fn classify_response(
 ) -> ProbeOutcome {
     match status {
         200 => {
-            let parsed: Option<serde_json::Value> = serde_json::from_str(body).ok();
-            let version = parsed.as_ref().and_then(|v| {
-                (v.get("success")? == &serde_json::Value::Bool(true))
-                    .then(|| v.get("data")?.get("version")?.as_str().map(str::to_string))
-                    .flatten()
-            });
+            let version = serde_json::from_str::<serde_json::Value>(body)
+                .ok()
+                .filter(|v| v["success"] == true)
+                .and_then(|v| v["data"]["version"].as_str().map(str::to_string));
             match version {
                 Some(version) => ProbeOutcome::Ok { version },
                 None => ProbeOutcome::NotCodeman { status },
@@ -742,8 +752,8 @@ mod tests {
     }
 
     /// A Codeman that sends its status headers and then stalls (a blocked
-    /// event loop, a lossy link) did not answer in time. It is not "something
-    /// else on this port", which is what an empty body read as before.
+    /// event loop, a lossy link) did not answer in time: a Timeout, not
+    /// NotCodeman ("something else on this port").
     #[test]
     fn a_body_that_stalls_is_a_timeout() {
         use std::io::{Read, Write};

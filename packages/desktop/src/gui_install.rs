@@ -6,8 +6,8 @@
 //! tmux in the home folder, so nothing in it asks for a password, and the two
 //! questions only a person can answer (which coding agent, who may reach
 //! Codeman) are asked by the page and passed as flags. The Terminal route in
-//! `setup.rs` stays for what this one cannot do, a Mac older than macOS 15 with
-//! no tmux first of all.
+//! `terminal_install.rs` stays for what this one cannot do, a Mac older than
+//! macOS 15 with no tmux first of all.
 //!
 //! `prepare` downloads the installer once into a private folder and asks it
 //! what is on this Mac (`install.sh preflight`); `start` runs the same file with
@@ -100,8 +100,8 @@ impl Run {
     /// not one: it has no `--progress`.
     pub fn matches(self, command: &str) -> bool {
         let suffix = format!("/{}/{SCRIPT_FILE}", self.folder());
-        let mut words = command.split_whitespace();
-        words.any(|w| w.ends_with(&suffix)) && command.split_whitespace().any(|w| w == "--progress")
+        command.split_whitespace().any(|w| w.ends_with(&suffix))
+            && command.split_whitespace().any(|w| w == "--progress")
     }
 
     /// A process of this run, if it is running.
@@ -269,11 +269,12 @@ fn download_installer(script: &Path) -> Result<(), String> {
     if out.code == Some(0) && script.is_file() {
         return Ok(());
     }
+    const FAILED: &str = "Could not download the installer. Check the internet connection, then try again.";
     let said = out.stderr.trim();
     Err(if said.is_empty() {
-        "Could not download the installer. Check the internet connection, then try again.".to_string()
+        FAILED.to_string()
     } else {
-        format!("Could not download the installer. Check the internet connection, then try again.\n{said}")
+        format!("{FAILED}\n{said}")
     })
 }
 
@@ -571,9 +572,8 @@ pub fn follow(run: Run, stale: impl Fn() -> bool, send: impl Fn(Value)) {
             return;
         }
         let running = run.process().is_some();
-        let log = progress.feed(&read_more(&mut file, &path, &mut offset));
+        let mut log = progress.feed(&read_more(&mut file, &path, &mut offset));
         if !running || progress.done {
-            let mut log = log;
             log.extend(progress.finish());
             let cancelled = CANCELLED.load(Ordering::SeqCst);
             if progress.done {

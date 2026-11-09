@@ -22,8 +22,10 @@ muda = "0.21"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 url = "2"
-base64 = "0.22"
-dirs = "6"
+# The versions ureq and wry already pull in, so neither crate is built twice
+# (ureq builds base64 without its default SIMD engines, and so do we).
+base64 = { version = "0.23", default-features = false, features = ["std"] }
+dirs = "7"
 # The reachability probe. platform-verifier = the OS trust store, the same one
 # WKWebView uses, so the probe and the window agree on which certificates pass.
 ureq = { version = "3", features = ["platform-verifier"] }

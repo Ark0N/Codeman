@@ -9,7 +9,7 @@ macOS first: the app runs on 11.3 or later, and Codeman's own page needs the
 WebKit of Safari 16.4 (see Known limits). The same code is meant to build for
 Windows and Linux later.
 
-- **Size:** 4.6 MB for the universal `Codeman.app` (Apple Silicon + Intel), 3 MB as a `.dmg` (measured on the first build).
+- **Size:** 5.3 MB for the universal `Codeman.app` (Apple Silicon + Intel), 3.5 MB as a `.dmg` (measured 2026-11-09).
 - **Stack:** Rust with [tao](https://crates.io/crates/tao) (window and event loop),
   [wry](https://crates.io/crates/wry) (the system web view: WKWebView on macOS) and
   [muda](https://crates.io/crates/muda) (native menus), plus [objc2](https://crates.io/crates/objc2)
@@ -24,7 +24,7 @@ operating system's own web view. An Electron build of the same thing would ship
 a whole Chromium (around 150 MB). The native side only adds what a browser tab
 cannot do.
 
-## What it does (v0.1)
+## What it does
 
 | | |
 | --- | --- |
@@ -109,8 +109,9 @@ classes of wry's own delegates, so wry stays an unmodified crates.io dependency.
   base path, checked after decoding the path once, and which ones depends on
   who asks. `window.CodemanHost` (the app shell only) may open sessions,
   rendered HTML views, the raw, preview, attachment and folder file routes, the
-  path picker's preview and `api/download`. A `window.open` or `target=_blank` link, which WebKit passes
-  on from any frame without saying which, gets only the file routes and
+  path picker's preview and `api/download`. A `window.open` or `target=_blank`
+  link, which WebKit passes on from any frame without saying which, gets only
+  the file routes and
   `api/download`, the pages Codeman itself opens that way; otherwise a rendered
   HTML file could open copies of itself as top-level windows that pass for the
   app's own. Such a window does not take keyboard focus, and these windows
@@ -218,11 +219,12 @@ Codeman counts a request without valid credentials against its login rate
 limit (10 per IP, 15 minutes; a successful login resets the count), so the app
 never retries in a loop. A look at this Mac asks each Codeman server found
 here once; the app has a login only for the one at the usual address, so the
-others are asked without one. Once the server refuses the login in a challenge, the
-app sends it only once more, in the single probe that checks the refusal. If
-that probe is refused or rate limited, the connect screen comes back; the
-app does not send the refused login again. Keeping no copy of the login in WebKit has a cost here: after a server
-restart, each request that arrives without a cookie gets a 401 before the
+others are asked without one. Once the server refuses the login in a challenge,
+the app sends it only once more, in the single probe that checks the refusal.
+If that probe is refused or rate limited, the connect screen comes back; the
+app does not send the refused login again. Keeping no copy of the login in
+WebKit has a cost here: after a server restart, each request that arrives
+without a cookie gets a 401 before the
 login goes out, and those count until one succeeds. Many windows reconnecting
 at once can push a request past 10, and that request then fails with a 429
 instead of being answered. A refusal that lands while you are in another app
@@ -305,15 +307,15 @@ crosses, so the login is never on a command line.
   answers at the usual address). A password-protected one counts the
   look as a failed login, like any look at a server the app has no login for.
   *Check again* asks again.
-
 - **The logo blink rests on a private macOS interface.** Apple documents the
   setting, not the way the app reaches it, so a macOS update can take it away;
   the menu then disappears. Every change of the logo writes `LEBacklightMode`,
   from about once every two seconds (*Slow*, *Wink*) to about three times a
   second (*Fast*), which `corebrightnessd` keeps in root's preferences. The
-  setting is on or off, so these styles are rhythms of hard changes. After a blink
-  the key stays there rather than being absent as on a fresh Mac. That reads the same to macOS; `sudo defaults delete
-  com.apple.CoreBrightness LEBacklightMode` removes it. After a power cut in a
+  setting is on or off, so these styles are rhythms of hard changes. After a
+  blink the key stays there rather than being absent as on a fresh Mac. That
+  reads the same to macOS; `sudo defaults delete com.apple.CoreBrightness
+  LEBacklightMode` removes it. After a power cut in a
   dark phase the logo stays dark until the app next starts. `api/sessions` does
   not say which turns are Codeman's own, so with prompt-cache keep-warm on, a
   keep-alive turn blinks too.
@@ -335,16 +337,16 @@ crosses, so the login is never on a command line.
   `SIGN_IDENTITY` (a self-made code-signing certificate from Keychain Access
   is enough). Microphone and camera permissions are asked again for the same
   reason.
-- **Gatekeeper.** Without a Developer ID the app is signed ad hoc. A build you
-  made yourself opens normally; a copy that arrived by download or AirDrop is
+- **Gatekeeper, for a build of your own.** The `Codeman.dmg` on each GitHub
+  release is signed with a Developer ID and notarized by CI
+  (`.github/workflows/desktop-dmg.yml`), so it opens like any downloaded app.
+  A build without a Developer ID is signed ad hoc: it opens normally on the Mac
+  that built it, while a copy that arrived by download or AirDrop is
   quarantined. On macOS 15 and later, try to open it once, then click *Open
   Anyway* in System Settings > Privacy & Security (it asks for an administrator
   password). On macOS 14 and earlier, right-click it and choose *Open* once.
   Either way, `xattr -dr com.apple.quarantine /Applications/Codeman.app` on the
-  copy in Applications works too. The `Codeman.dmg` on each GitHub release is
-  signed with a Developer ID and notarized by CI
-  (`.github/workflows/desktop-dmg.yml`), so it skips all of this. To do the
-  same by hand:
+  copy in Applications works too. To sign and notarize by hand:
   `SIGN_IDENTITY="Developer ID Application: ..." NOTARY_PROFILE=<profile> ./scripts/bundle-macos.sh --universal --notarize`,
   where `scripts/sign-macos.sh` lists what it needs.
 - **Local Network permission (macOS 15 and later).** The first connection to an

@@ -13,8 +13,8 @@ const MAX_SERVERS: usize = 8;
 /// How many recovery copies of an unreadable config can sit side by side:
 /// `desktop.json.corrupt`, then `desktop.json.corrupt.1` to `.9`.
 const ASIDE_SLOTS: usize = 10;
-const MIN_WIDTH: f64 = 480.0;
-const MIN_HEIGHT: f64 = 360.0;
+pub const MIN_WIDTH: f64 = 480.0;
+pub const MIN_HEIGHT: f64 = 360.0;
 const MAX_EDGE: f64 = 20_000.0;
 
 /// Height of a standard title bar, in points.

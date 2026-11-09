@@ -270,7 +270,7 @@ const SETTLE: Duration = Duration::from_secs(3);
 const LOOK_EVERY: Duration = Duration::from_millis(250);
 
 /// What a blink needs from the machine, so its decisions can be tested.
-pub trait Logo {
+trait Logo {
     /// The current mode, None if it could not be read.
     fn mode(&self) -> Option<i64>;
     /// Set the mode; false if the daemon did not take it.
@@ -281,7 +281,7 @@ pub trait Logo {
 }
 
 /// The file that says a blink may have left the logo dark.
-pub struct Marker(Option<PathBuf>);
+struct Marker(Option<PathBuf>);
 
 impl Marker {
     fn default_location() -> Self {
@@ -363,7 +363,7 @@ fn blink(logo: &impl Logo, marker: &Marker, pattern: &[Beat], mut wait: impl FnM
 }
 
 /// Put back a logo that a blink could not finish with.
-pub fn recover(logo: &impl Logo, marker: &Marker) {
+fn recover(logo: &impl Logo, marker: &Marker) {
     if !marker.is_set() {
         return;
     }
@@ -507,25 +507,24 @@ fn spawn_child(connection: Connection) -> Option<(Connection, ChildStdin)> {
     Some((connection, stdin))
 }
 
-#[cfg(target_os = "macos")]
 pub use system::{available, blink_main, recover_at_launch, switched_off};
 
+/// No lit logo to blink outside macOS.
 #[cfg(not(target_os = "macos"))]
-pub fn available() -> bool {
-    false
-}
+mod system {
+    pub fn available() -> bool {
+        false
+    }
 
-#[cfg(not(target_os = "macos"))]
-pub fn blink_main() -> ! {
-    std::process::exit(0)
-}
+    pub fn blink_main() -> ! {
+        std::process::exit(0)
+    }
 
-#[cfg(not(target_os = "macos"))]
-pub fn recover_at_launch() {}
+    pub fn recover_at_launch() {}
 
-#[cfg(not(target_os = "macos"))]
-pub fn switched_off() -> bool {
-    false
+    pub fn switched_off() -> bool {
+        false
+    }
 }
 
 #[cfg(target_os = "macos")]
