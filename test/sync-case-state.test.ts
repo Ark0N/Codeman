@@ -262,6 +262,30 @@ describe('returning to the tab', () => {
     expect(unchanged.hidden.size).toBe(0);
   });
 
+  it('does not undo a pick or a case save made while its read was out', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const { app, select, store } = makeApp({ syncCaseState: true }, async (_url, init) => {
+      if (init?.method === 'PUT') return { body: { success: true, data: {} } };
+      await gate; // the server read this copy before the pick and the save below reached it
+      return env({
+        syncCaseState: true,
+        lastPickedCase: 'alpha',
+        caseSettings: { beta: { agentTeams: false, opusContext1m: true } },
+      });
+    });
+    const refresh = app._syncCaseStateFromServer();
+    await settle();
+    select.value = 'beta';
+    await app.saveLastUsedCase('beta');
+    app.saveCaseSettings('beta', entry);
+    await app._caseSyncChain;
+    release();
+    await refresh;
+    expect(select.value).toBe('beta');
+    expect(JSON.parse(store.get('caseSettings_beta')!)).toEqual(entry);
+  });
+
   it('asks for nothing on a tab return while this device has sync off', async () => {
     const { app, select, calls } = makeApp({}, () => env({ syncCaseState: true, lastUsedCase: 'beta' }));
     await app._syncCaseStateFromServer();

@@ -5282,7 +5282,7 @@ Object.assign(CodemanApp.prototype, {
         // installs that had saved `false` (agent-skill-default-migration.ts).
         if (!('agentSkillEnabled' in appSettings)) delete merged.agentSkillEnabled;
         this.saveAppSettingsToStorage(merged);
-        this._applyServerCaseSettings(settings);
+        this._applyServerCaseSettings?.(settings);
 
         // Apply notification prefs from server if present (only if localStorage has none)
         if (notificationPreferences && this.notificationManager) {

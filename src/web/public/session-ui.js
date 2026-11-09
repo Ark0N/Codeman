@@ -3775,11 +3775,13 @@ Object.assign(CodemanApp.prototype, {
     if (this.loadAppSettingsFromStorage?.()?.syncCaseState !== true) return;
     const seq = (this._caseSyncRefresh = (this._caseSyncRefresh || 0) + 1);
     try {
-      await this._caseSyncChain; // this device's own saves land first, so the copy read next includes them
+      const chain = this._caseSyncChain;
+      await chain; // this device's own saves land first, so the copy read next includes them
       const res = await fetch('/api/settings');
       if (!res.ok) return;
       const server = (await res.json())?.data ?? null;
       if (seq !== this._caseSyncRefresh || !server) return; // a newer refresh owns the answer
+      if (this._caseSyncChain !== chain) return; // a save or pick made while the read was out is newer than it
       this._adoptServerCaseSyncPreference(server);
       if (server.syncCaseState !== true) return;
       this._applyServerCaseSettings(server);
