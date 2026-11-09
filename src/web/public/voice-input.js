@@ -573,6 +573,7 @@ const ClaudeVoiceProvider = {
  */
 const VoiceInput = {
   SILENCE_TIMEOUT_SECONDS: Object.freeze([0, 3, 6, 15, 30]),
+  WEB_SPEECH_INSTANT_END_MS: 1000, // an empty run shorter than this counts toward the retry cap
   recognition: null,
   isRecording: false,
   supported: false,
@@ -589,8 +590,9 @@ const VoiceInput = {
   _webSpeechRestartTimer: null,
   _activeProvider: null, // 'claude' | 'deepgram' | 'webspeech' | null
   _recordingStartedAt: 0, // timestamp when recording started
-  _retryCount: 0, // consecutive empty Web Speech API runs
+  _retryCount: 0, // consecutive Web Speech runs that ended empty right after starting
   _hasReceivedResult: false, // whether this native recognition run received speech
+  _webSpeechRunStartedAt: 0, // when the current native recognition run was started
   _durationInterval: null, // timer for updating elapsed time display
   _analyser: null, // AudioContext analyser for level meter
   _analyserSource: null, // MediaStreamSource for level meter
@@ -700,9 +702,13 @@ const VoiceInput = {
     // Single-utterance mode keeps refinements provisional; onend resumes the mic
     // while our own silence deadline controls the overall dictation session.
     // Android tablets in desktop-site mode may identify as touch-capable Linux.
+    // ChromeOS also reports Linux but says CrOS, so it keeps continuous mode.
+    // A Linux laptop with a touchscreen still matches; single-utterance works
+    // there too, with one native restart per phrase.
+    const ua = navigator.userAgent || '';
     this._webSpeechSingleUtterance = navigator.userAgentData?.platform === 'Android'
-      || /Android/i.test(navigator.userAgent || '')
-      || (navigator.maxTouchPoints > 0 && /Linux/i.test(navigator.platform || ''));
+      || /Android/i.test(ua)
+      || (navigator.maxTouchPoints > 0 && /Linux/i.test(navigator.platform || '') && !/CrOS/.test(ua));
     this.recognition.continuous = !this._webSpeechSingleUtterance;
     this.recognition.interimResults = true;
     this.recognition.lang = 'en-US';
@@ -884,6 +890,7 @@ const VoiceInput = {
     this._showPreview('Listening...');
     this._startDurationTimer();
     try {
+      this._webSpeechRunStartedAt = Date.now();
       this.recognition.start();
     } catch (e) {
       // InvalidStateError = already started — ignore. Other errors = genuine failure.
@@ -950,12 +957,6 @@ const VoiceInput = {
       ClaudeVoiceProvider._cleanup();
     } else if (this._activeProvider === 'deepgram') {
       DeepgramProvider.stop();
-    } else if (this._activeProvider === 'webspeech') {
-      // Stop the mic stream we opened for the level meter
-      if (this._webSpeechStream) {
-        this._webSpeechStream.getTracks().forEach(t => t.stop());
-        this._webSpeechStream = null;
-      }
     }
     this._activeProvider = null;
 
@@ -1030,8 +1031,12 @@ const VoiceInput = {
       return;
     }
 
+    // Only a run that ends empty right after start() counts toward the cap: that
+    // is a recognizer that cannot listen. A silent run of normal length is the
+    // engine's own no-speech window, and 30 s or Manual must outlast many of them.
     const empty = !this._hasReceivedResult;
-    this._retryCount = empty ? this._retryCount + 1 : 0;
+    const instant = empty && Date.now() - this._webSpeechRunStartedAt < this.WEB_SPEECH_INSTANT_END_MS;
+    this._retryCount = instant ? this._retryCount + 1 : 0;
     if (this._retryCount > 2) {
       this.stop(true);
       return;
@@ -1048,6 +1053,7 @@ const VoiceInput = {
         this._webSpeechRestartTimer = null;
         if (!this.isRecording || this._webSpeechStopping) return;
         this._hasReceivedResult = false;
+        this._webSpeechRunStartedAt = Date.now();
         try { this.recognition.start(); } catch (_e) { this.stop(true); }
       };
       // A broken or unavailable recognizer must not spin forever in Manual mode.
@@ -1420,10 +1426,6 @@ const VoiceInput = {
     this._activeProvider = null;
     this._stopDurationTimer();
     this._stopLevelMeter();
-    if (this._webSpeechStream) {
-      this._webSpeechStream.getTracks().forEach(t => t.stop());
-      this._webSpeechStream = null;
-    }
     if (this.previewEl) {
       this.previewEl.remove();
       this.previewEl = null;

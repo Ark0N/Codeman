@@ -1,8 +1,7 @@
 // Real Chromium rendering/input; native Android/Windows recognition is simulated.
 import { readFileSync } from 'node:fs';
-import assert from 'node:assert/strict';
 import { chromium, type Browser } from 'playwright';
-import { beforeAll, afterAll, it } from 'vitest';
+import { afterAll, beforeAll, expect, it } from 'vitest';
 const source = readFileSync(new URL('../src/web/public/voice-input.js', import.meta.url), 'utf8');
 const styles = readFileSync(new URL('../src/web/public/styles.css', import.meta.url), 'utf8');
 let browser: Browser;
@@ -46,7 +45,7 @@ it.each([
       `\nwindow.voice=VoiceInput;VoiceInput._getDeepgramConfig=()=>({provider:'webspeech',insertMode:'compose',silenceTimeout:0});document.getElementById('mic').onclick=()=>VoiceInput.toggle();`,
   });
   await page.click('#mic');
-  assert.equal(await page.evaluate(() => (window as any).voice.recognition.continuous), platform === 'Windows');
+  expect(await page.evaluate(() => (window as any).voice.recognition.continuous)).toBe(platform === 'Windows');
   await page.evaluate(() => (window as any).voice.recognition.onsoundstart());
   await page.waitForFunction(() => document.querySelectorAll('.voice-level-bar.active').length > 0);
   const counts = new Set();
@@ -54,7 +53,7 @@ it.each([
     await page.waitForTimeout(90);
     counts.add(await page.locator('.voice-level-bar.active').count());
   }
-  assert.ok(counts.size > 1, 'speech bars must animate');
+  expect(counts.size, 'speech bars must animate').toBeGreaterThan(1);
   await page.evaluate(() => (window as any).voice.recognition.onsoundend());
   await page.waitForFunction(() => document.querySelectorAll('.voice-level-bar.active').length === 0);
   await page.evaluate(() => {
@@ -63,13 +62,10 @@ it.each([
       voice.recognition.partial(text);
     voice.recognition.final('one two three four five');
   });
-  assert.equal(
-    await page.evaluate(() => (window as any).voice._previewTextNode.textContent),
-    'one two three four five'
-  );
+  expect(await page.evaluate(() => (window as any).voice._previewTextNode.textContent)).toBe('one two three four five');
   await page.click('#mic');
   await page.waitForFunction(() => document.querySelector('textarea')?.value === 'one two three four five');
-  assert.equal(await page.evaluate(() => (window as any).voice.isRecording), false);
+  expect(await page.evaluate(() => (window as any).voice.isRecording)).toBe(false);
   await page.click('#mic');
   await page.evaluate(() => {
     const voice = (window as any).voice;
@@ -79,7 +75,7 @@ it.each([
   });
   await page.click('#mic');
   await page.waitForFunction(() => document.querySelector('textarea')?.value === 'go go go go');
-  assert.equal(await page.evaluate(() => (window as any).micRequests), 0);
-  assert.deepEqual(errors, []);
+  expect(await page.evaluate(() => (window as any).micRequests)).toBe(0);
+  expect(errors).toEqual([]);
   await page.close();
 });

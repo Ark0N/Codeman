@@ -10,6 +10,8 @@ function load(silenceTimeout?: unknown, overrides: Record<string, unknown> = {})
   vi.useRealTimers();
   vi.useFakeTimers();
   const context = vm.createContext({
+    // The context's own Date ignores fake timers; run lengths must follow them.
+    Date,
     setTimeout,
     clearTimeout,
     setInterval,
@@ -241,12 +243,13 @@ describe('Claude utterances and teardown', () => {
 });
 
 describe('empty browser recognition runs', () => {
-  it('backs off and stops after repeated empty ends instead of a tight restart loop', () => {
+  it('backs off and stops after repeated instant empty ends instead of a tight restart loop', () => {
     const voice = load(0)[2];
     voice.isRecording = true;
     voice._activeProvider = 'webspeech';
     voice.recognition = { start: vi.fn() };
     voice.stop = vi.fn();
+    voice._webSpeechRunStartedAt = Date.now();
     voice._onWebSpeechEnd();
     expect(voice.recognition.start).not.toHaveBeenCalled();
     vi.advanceTimersByTime(250);
@@ -266,6 +269,7 @@ describe('empty browser recognition runs', () => {
     voice.recognition = { start: vi.fn() };
     voice._showPreview = vi.fn();
     voice.stop = vi.fn();
+    voice._webSpeechRunStartedAt = Date.now();
     voice._onWebSpeechEnd();
     vi.advanceTimersByTime(250);
     voice._onWebSpeechResult({ results: [[{ transcript: 'a real phrase' }]] });
@@ -289,6 +293,46 @@ describe('empty browser recognition runs', () => {
     voice.stop();
     vi.advanceTimersByTime(10000);
     expect(voice.recognition.start).not.toHaveBeenCalled();
+    expect(voice.isRecording).toBe(false);
+  });
+
+  function speakThenFallSilent(setting: number) {
+    const voice = load(setting)[2];
+    for (const method of ['_showPreview', '_stopDurationTimer', '_stopLevelMeter', '_updateButtons', '_hidePreview'])
+      voice[method] = vi.fn();
+    voice._insertText = vi.fn();
+    voice.recognition = { start: vi.fn(), stop: vi.fn(), abort: vi.fn() };
+    voice.isRecording = true;
+    voice._activeProvider = 'webspeech';
+    voice._webSpeechRunStartedAt = Date.now();
+    voice._resetSilenceTimeout();
+    voice._onWebSpeechResult({ results: [Object.assign([{ transcript: 'one phrase' }], { isFinal: true })] });
+    voice._onWebSpeechEnd();
+    // Each silent run lasts the engine's whole no-speech window, then backs off.
+    const silentRun = () => {
+      vi.advanceTimersByTime(6000);
+      voice._onWebSpeechEnd();
+      vi.advanceTimersByTime(250);
+    };
+    return { voice, silentRun };
+  }
+  it.each([30, 0])('keeps listening through silent 6 s runs with setting %s', (setting) => {
+    const { voice, silentRun } = speakThenFallSilent(setting);
+    for (let run = 0; run < 4; run++) silentRun();
+    expect(voice.isRecording).toBe(true);
+    expect(voice._retryCount).toBe(0);
+    expect(voice.recognition.start).toHaveBeenCalledTimes(5);
+    expect(voice._insertText).not.toHaveBeenCalled();
+  });
+  it('ends 30 s dictation at its deadline, not at the third silent run', () => {
+    const { voice, silentRun } = speakThenFallSilent(30);
+    for (let run = 0; run < 4; run++) silentRun();
+    // 25 s of silence so far; the deadline fires at 30 s and waits for the final.
+    vi.advanceTimersByTime(30000 - 4 * 6250 - 1);
+    expect(voice.isRecording).toBe(true);
+    vi.advanceTimersByTime(1);
+    voice._onWebSpeechEnd();
+    expect(voice._insertText).toHaveBeenCalledExactlyOnceWith('one phrase');
     expect(voice.isRecording).toBe(false);
   });
 });

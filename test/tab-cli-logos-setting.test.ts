@@ -125,7 +125,7 @@ async function boot(device: Device = 'desktop', stored?: Settings) {
        };
        var KeyboardHandler = {}, SwipeHandler = {}, DeepgramProvider = {}, NotificationManager = function () {};
        var KeyboardAccessoryBar = { setMode() {} };
-       var VoiceInput = { _getDeepgramConfig: () => ({}), _saveDeepgramConfig() {}, refreshClaudeStatus: () => Promise.resolve() };
+       var VoiceInput = { SILENCE_TIMEOUT_SECONDS: [0, 3, 6, 15, 30], _getDeepgramConfig: () => ({}), _saveDeepgramConfig() {}, refreshClaudeStatus: () => Promise.resolve() };
        var FocusTrap = function () { this.activate = () => {}; this.deactivate = () => {}; };
        var DEFAULT_VOICE_KEYTERMS = '';`,
       ...SCRIPTS,
