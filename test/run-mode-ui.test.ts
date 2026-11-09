@@ -1107,6 +1107,7 @@ describe('case selector refresh', () => {
       { name: 'kept-case', path: '/tmp/kept-case' },
     ];
     app.showToast = vi.fn();
+    app.loadAppSettingsFromStorage = () => ({}); // saveLastUsedCase asks whether case sync is on
 
     // deleteCase re-renders the case-manage list, whose path label goes through
     // _shortenHomePath. That method lives in terminal-ui.js, which this harness
