@@ -4,6 +4,7 @@ use muda::accelerator::{Accelerator, Code, Modifiers};
 use muda::{AboutMetadata, CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 
 use crate::config::Config;
+use crate::keep_awake::{self, HelperState, Mode};
 use crate::logo::{self, BlinkStyle, Signal};
 use crate::{APP_NAME, VERSION};
 
@@ -32,6 +33,77 @@ pub struct AppMenu {
     pub logo_switch: Option<CheckMenuItem>,
     /// One item per state and style, empty without the switch.
     pub logo_styles: Vec<(Signal, BlinkStyle, CheckMenuItem)>,
+    /// None where the app cannot keep the Mac awake (a build for another OS).
+    pub keep_awake: Option<KeepAwakeMenu>,
+}
+
+/// App menu > Keep This Mac Awake: Off / While Agents Work / Always, then on a
+/// MacBook Only When Plugged In and With the Lid Closed…, then one status line.
+pub struct KeepAwakeMenu {
+    pub modes: Vec<(Mode, CheckMenuItem)>,
+    /// Only on a Mac with a lid: a desktop Mac always runs on mains and cannot close.
+    pub ac_only: Option<CheckMenuItem>,
+    /// Ticked = the helper is in and asked for. Ticking or unticking it asks for the
+    /// administrator password (install, remove), hence the ellipsis.
+    pub lid: Option<CheckMenuItem>,
+    /// What it does right now (keep_awake::status_line). Not clickable.
+    pub status: MenuItem,
+}
+
+impl KeepAwakeMenu {
+    /// The lid item as the helper now is: ticked only while it is installed and on.
+    pub fn show_helper(&self, state: HelperState, lid_on: bool) {
+        if let Some(item) = &self.lid {
+            item.set_checked(lid_on && state == HelperState::Installed);
+        }
+    }
+}
+
+fn build_keep_awake(config: &Config) -> muda::Result<(Submenu, KeepAwakeMenu)> {
+    let settings = config.keep_awake;
+    let submenu = Submenu::new("Keep This Mac Awake", true);
+    let mut modes = Vec::new();
+    for mode in Mode::ALL {
+        let item = CheckMenuItem::with_id(mode.menu_id(), mode.label(), true, settings.mode == mode, None);
+        submenu.append(&item)?;
+        modes.push((mode, item));
+    }
+    let (mut ac_only, mut lid) = (None, None);
+    if keep_awake::has_lid() {
+        let state =
+            keep_awake::request_path().map_or(HelperState::Missing, |request| keep_awake::helper_state(&request));
+        let ac = CheckMenuItem::with_id(
+            keep_awake::AC_ONLY_ID,
+            "Only When Plugged In",
+            true,
+            settings.ac_only,
+            None,
+        );
+        let lid_item = CheckMenuItem::with_id(
+            keep_awake::LID_ID,
+            "With the Lid Closed\u{2026}",
+            true,
+            settings.lid && state == HelperState::Installed,
+            None,
+        );
+        submenu.append_items(&[&PredefinedMenuItem::separator(), &ac, &lid_item])?;
+        (ac_only, lid) = (Some(ac), Some(lid_item));
+    }
+    let initial = match settings.mode {
+        Mode::Off => keep_awake::OFF_TEXT,
+        _ => keep_awake::NO_SERVER_TEXT,
+    };
+    let status = MenuItem::new(initial, false, None);
+    submenu.append_items(&[&PredefinedMenuItem::separator(), &status])?;
+    Ok((
+        submenu,
+        KeepAwakeMenu {
+            modes,
+            ac_only,
+            lid,
+            status,
+        },
+    ))
 }
 
 pub fn build_menu(config: &Config) -> muda::Result<AppMenu> {
@@ -70,6 +142,15 @@ pub fn build_menu(config: &Config) -> muda::Result<AppMenu> {
             &PredefinedMenuItem::quit(None),
         ],
     )?;
+    // Right under "Add a Coding Agent to This Mac…".
+    let keep_awake = match keep_awake::available() {
+        true => {
+            let (submenu, items) = build_keep_awake(config)?;
+            app_menu.insert(&submenu, 4)?;
+            Some(items)
+        }
+        false => None,
+    };
     // Without these items Cmd+C / Cmd+V do nothing inside a WKWebView.
     let edit = Submenu::with_items(
         "Edit",
@@ -172,5 +253,6 @@ pub fn build_menu(config: &Config) -> muda::Result<AppMenu> {
         start_fullscreen,
         logo_switch,
         logo_styles,
+        keep_awake,
     })
 }

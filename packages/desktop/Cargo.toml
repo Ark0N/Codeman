@@ -50,6 +50,7 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "NSGeometry",
     "NSObject",
     "NSOperation",
+    "NSProcessInfo",
     "NSRange",
     "NSSet",
     "NSString",

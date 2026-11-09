@@ -222,6 +222,13 @@ pub fn content_size(window: &tao::window::Window) -> Option<(f64, f64)> {
     imp::content_size(window)
 }
 
+/// An app-modal message with an OK button, for something the user asked the app
+/// itself to do that failed. Main thread only; does nothing elsewhere.
+#[cfg(target_os = "macos")]
+pub fn show_message(title: &str, detail: &str) {
+    imp::show_message(title, detail);
+}
+
 #[cfg(target_os = "macos")]
 mod imp {
     use std::cell::{Cell, RefCell};
@@ -454,6 +461,17 @@ mod imp {
         if catch_unwind(AssertUnwindSafe(done)).is_err() {
             eprintln!("codeman-desktop: the cookies-cleared callback panicked");
         }
+    }
+
+    pub(super) fn show_message(title: &str, detail: &str) {
+        let Some(mtm) = MainThreadMarker::new() else {
+            return;
+        };
+        let alert = NSAlert::new(mtm);
+        alert.setMessageText(&NSString::from_str(title));
+        alert.setInformativeText(&NSString::from_str(detail));
+        let _ = alert.addButtonWithTitle(&NSString::from_str("OK"));
+        alert.runModal();
     }
 
     pub(super) fn content_size(window: &tao::window::Window) -> Option<(f64, f64)> {
