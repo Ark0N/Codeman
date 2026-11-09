@@ -188,11 +188,11 @@ describe('returning to the tab', () => {
     expect(app._caseStateSyncOn()).toBe(false);
   });
 
-  it('starts following when another device turned sync on', async () => {
-    const { app, select, settings } = makeApp({}, () => env({ syncCaseState: true, lastUsedCase: 'beta' }));
+  it('asks for nothing on a tab return while this device has sync off', async () => {
+    const { app, select, calls } = makeApp({}, () => env({ syncCaseState: true, lastUsedCase: 'beta' }));
     await app._syncCaseStateFromServer();
-    expect(settings.syncCaseState).toBe(true);
-    expect(select.value).toBe('beta');
+    expect(calls).toEqual([]);
+    expect(select.value).toBe('alpha');
   });
 
   it('does nothing for a read-only identity', async () => {

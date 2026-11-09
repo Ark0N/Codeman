@@ -3759,6 +3759,9 @@ Object.assign(CodemanApp.prototype, {
   /** On returning to the tab: take the other devices' case options and selected case, if the server has sync on. */
   async _syncCaseStateFromServer() {
     if (this._settingsReadOnly?.()) return;
+    // Off on this device: no request on every tab return. Turning it on elsewhere is learned from the
+    // next settings load; turning it off elsewhere still reaches a device whose cached switch is on.
+    if (this.loadAppSettingsFromStorage().syncCaseState !== true) return;
     const seq = (this._caseSyncRefresh = (this._caseSyncRefresh || 0) + 1);
     try {
       await this._caseSyncChain; // this device's own saves land first, so the copy read next includes them

@@ -1145,10 +1145,14 @@ export function registerSystemRoutes(
       if (settings.tunnelEnabled === true && !tunnelEnableAuthorized) delete settingsToStore.tunnelEnabled;
       // caseSettings merges per case inside the serialised writer, so two devices saving different cases both land.
       const { caseSettings: incomingCases, ...plainSettings } = settingsToStore;
+      // The map is read and written only while syncCaseState is on, so a PUT that carries it with the setting off
+      // (as stored, or as this same PUT sets it) leaves the stored map alone.
       const { before: existing, after } = await mutateSettingsFile((current) => ({
         ...current,
         ...plainSettings,
-        ...(incomingCases ? { caseSettings: mergeCaseSettings(current.caseSettings, incomingCases as never) } : {}),
+        ...(incomingCases && (plainSettings.syncCaseState ?? current.syncCaseState) === true
+          ? { caseSettings: mergeCaseSettings(current.caseSettings, incomingCases as never) }
+          : {}),
       }));
       const merged = after ?? { ...existing, ...plainSettings };
 

@@ -64,6 +64,17 @@ describe('shared case options', () => {
     expect(readSettings().caseSettings).toEqual({ alpha: on, beta: off, gamma: on });
   });
 
+  it('ignores a caseSettings PUT while syncCaseState is off, and takes one that turns it on', async () => {
+    seed({ syncCaseState: false, caseSettings: { kept: off } });
+    expect((await send('PUT', '/api/settings', { caseSettings: { alpha: on } })).status).toBe(200);
+    expect(readSettings().caseSettings).toEqual({ kept: off });
+    seed({});
+    await send('PUT', '/api/settings', { caseSettings: { alpha: on } });
+    expect(readSettings().caseSettings).toBeUndefined();
+    await send('PUT', '/api/settings', { syncCaseState: true, caseSettings: { alpha: on } });
+    expect(readSettings().caseSettings).toEqual({ alpha: on });
+  });
+
   it('keeps the other cases when one is saved again, and every other setting', async () => {
     seed({ syncCaseState: true, lastUsedCase: 'x', caseSettings: { alpha: on, beta: off } });
     await send('PUT', '/api/settings', { caseSettings: { alpha: off } });
