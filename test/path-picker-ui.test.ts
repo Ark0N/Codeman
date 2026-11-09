@@ -169,6 +169,15 @@ describe('mobile filesystem picker actions', () => {
     expect(keyboardSource).toContain('pre.textContent = content');
   });
 
+  it('supports pinch zoom, pan, and explicit zoom controls in image previews', () => {
+    expect(keyboardSource).toContain("entry.previewKind === 'image'");
+    expect(keyboardSource).toContain("listen(image, 'pointerdown'");
+    expect(keyboardSource).toContain("listen(image, 'pointermove'");
+    expect(keyboardSource).toContain("listen(image, 'dblclick'");
+    expect(keyboardSource).toContain('data-zoom="fit"');
+    expect(keyboardSource).toContain('this._previewImageCleanup?.()');
+  });
+
   it('inserts a selected path into the editable local-echo prompt without sending it', () => {
     const appendText = vi.fn();
     const sendInput = vi.fn();
