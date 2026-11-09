@@ -3799,6 +3799,9 @@ Object.assign(CodemanApp.prototype, {
       const downloadBtn = !isDir
         ? `<a class="file-tree-download" href="${escapeHtml(CodemanBase.url(`/api/sessions/${encodeURIComponent(owner)}/file-raw?path=${encodeURIComponent(node.path)}&download=true`))}" title="Download" onclick="event.stopPropagation()">&#x2B07;</a>`
         : '';
+      const deleteBtn = !isDir
+        ? `<button class="file-tree-delete" title="Delete" aria-label="Delete ${escapeHtml(node.name)}" onclick="event.stopPropagation(); app.deleteFileFromBrowser(decodeURIComponent('${encodeURIComponent(owner)}'), decodeURIComponent('${encodeURIComponent(node.path)}'))">&times;</button>`
+        : '';
 
       html.push(`
         <div class="file-tree-item" data-path="${escapeHtml(node.path)}" data-type="${escapeHtml(node.type)}" data-depth="${depth}">
@@ -3807,6 +3810,7 @@ Object.assign(CodemanApp.prototype, {
           <span class="${nameClass}">${escapeHtml(node.name)}</span>
           ${sizeStr}
           ${downloadBtn}
+          ${deleteBtn}
         </div>
       `);
 
@@ -3981,6 +3985,9 @@ Object.assign(CodemanApp.prototype, {
           const downloadBtn = !isDir
             ? `<a class="file-tree-download" href="${escapeHtml(CodemanBase.url(`/api/sessions/${ownerPath}/file-raw?path=${encodeURIComponent(match.path)}&download=true`))}" title="Download" onclick="event.stopPropagation()">&#x2B07;</a>`
             : '';
+          const deleteBtn = !isDir
+            ? `<button class="file-tree-delete" title="Delete" aria-label="Delete ${escapeHtml(match.name)}" onclick="event.stopPropagation(); app.deleteFileFromBrowser(decodeURIComponent('${encodeURIComponent(ownerSessionId)}'), decodeURIComponent('${encodeURIComponent(match.path)}'))">&times;</button>`
+            : '';
           return `
             <div class="file-tree-item" data-path="${escapeHtml(match.path)}" data-type="${escapeHtml(match.type)}" data-owner="${escapeHtml(ownerSessionId)}">
               <span class="file-tree-expand"></span>
@@ -3988,6 +3995,7 @@ Object.assign(CodemanApp.prototype, {
               <span class="${nameClass}">${escapeHtml(match.name)}</span>
               ${sizeStr}
               ${downloadBtn}
+              ${deleteBtn}
             </div>
           `;
         })
@@ -4009,6 +4017,24 @@ Object.assign(CodemanApp.prototype, {
     if (statusEl) {
       const count = data.matchCount === undefined ? matches.length : data.matchCount;
       statusEl.textContent = `${count} ${count === 1 ? 'match' : 'matches'}${data.truncated ? ' (truncated)' : ''}`;
+    }
+  },
+
+  async deleteFileFromBrowser(sessionId, filePath) {
+    if (!sessionId || !filePath) return;
+    if (!window.confirm(`Delete ${filePath}?`)) return;
+    try {
+      const response = await fetch(
+        `/api/sessions/${encodeURIComponent(sessionId)}/files?path=${encodeURIComponent(filePath)}`,
+        { method: 'DELETE' },
+      );
+      const result = await response.json().catch(() => null);
+      if (!response.ok || !result?.success) throw new Error(result?.error || 'Delete failed');
+      this.showToast(`Deleted: ${filePath}`, 'success');
+      await this.loadFileBrowser(sessionId, { force: true });
+    } catch (error) {
+      console.error('File browser delete failed:', error);
+      this.showToast(error?.message || 'Delete failed', 'error');
     }
   },
 

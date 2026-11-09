@@ -2000,6 +2000,48 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
     };
   });
 
+  // Delete a regular file from the current session workspace. The same
+  // confinement and sensitive-path checks used by previews apply here.
+  app.delete('/api/sessions/:id/files', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const { path: filePath } = req.query as { path?: string };
+    const session = findSessionOrFail(ctx, id, req);
+    if (session.remote) {
+      reply.code(400);
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Deleting is not supported for remote (SSH) sessions');
+    }
+    if (!filePath) {
+      reply.code(400);
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing path parameter');
+    }
+    const validated = validateSessionFilePath(session.workingDir, filePath);
+    if (!validated) {
+      reply.code(404);
+      return createErrorResponse(ApiErrorCode.NOT_FOUND, 'File not found');
+    }
+    const { resolvedPath, relativePath } = validated;
+    const guard = await loadAttachmentGuardConfig();
+    if (
+      isSensitivePath(resolvedPath) ||
+      isBlockedAttachmentPath(resolvedPath, guard.blockedTrees) ||
+      isDeniedEditRelativePath(relativePath)
+    ) {
+      reply.code(403);
+      return createErrorResponse(ApiErrorCode.FORBIDDEN, 'Deleting this file is blocked');
+    }
+    const stat = await fs.lstat(resolvedPath).catch(() => undefined);
+    if (!stat) {
+      reply.code(404);
+      return createErrorResponse(ApiErrorCode.NOT_FOUND, 'File not found');
+    }
+    if (!stat.isFile()) {
+      reply.code(400);
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Only regular files can be deleted');
+    }
+    await fs.unlink(resolvedPath);
+    return { success: true, data: { path: filePath } };
+  });
+
   // Get file content for preview (File Browser)
   app.get('/api/sessions/:id/file-content', async (req) => {
     const { id } = req.params as { id: string };
