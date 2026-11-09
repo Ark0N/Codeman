@@ -135,3 +135,23 @@ The text explains `codeman notify "message" --urgent`. `codeman` is on the PATH 
 | Posts arrive but replies do nothing | Message Content Intent is off, or your user ID is not in the allowlist   |
 | Thread is not deleted               | The bot lacks Manage Threads on the parent channel                       |
 | Nothing arrives on the phone        | Check the Discord app's notification setting for the server              |
+
+## Delivery retries and restarts
+
+Authorized inbound message IDs are durably claimed before attachment or terminal
+writes. Transport acceptance is recorded as input accepted, not task completion.
+An interrupted or unconfirmed input is never replayed automatically. A corrupt,
+unsafe or full delivery journal pauses new input rather than forgetting old IDs.
+
+Versioned full-text responses record each outbound part and its payload
+fingerprint separately. A retry skips confirmed parts; an ambiguous part pauses
+that response rather than reporting it delivered or resending it blindly. REST
+retries use one enforced nonce and respect Discord's actual retry delay. Thread
+creation is not retried after an ambiguous network failure. An identical automatic
+notification without a source version also pauses after uncertain delivery; a
+separate, different notification can still proceed. Explicit deliberate notices
+remain distinct user requests.
+
+`discord-delivery.json` is bounded, mode 0600 metadata with seven-day retention.
+It contains IDs, hashes and fixed state/reason codes, not prompts, response text,
+attachment bytes or credentials.

@@ -1,3 +1,5 @@
+import { createHash, randomUUID } from 'node:crypto';
+import { DiscordDeliveryJournal } from './discord-delivery.js';
 /**
  * @fileoverview Two-way Discord bridge: one thread per tab, alerts out, replies typed back in.
  *
@@ -22,7 +24,6 @@
 
 import { existsSync, mkdirSync } from 'node:fs';
 import fs from 'node:fs/promises';
-import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { probePathKind } from './utils/bounded-path-probe.js';
 import { DISCORD_RECEIVED_DIR } from './web/paste-image-gc.js';
@@ -354,6 +355,8 @@ export function isDiscordCdnUrl(raw: string): boolean {
 }
 
 export interface DiscordPost {
+  nonce?: string;
+  enforce_nonce?: boolean;
   content: string;
   allowed_mentions: { parse: string[]; users: string[] };
 }
@@ -420,6 +423,7 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
 
 /** A failure with a reason worth showing as it is (unlike a network error, whose text is not). */
 class BridgeProblem extends Error {}
+class UncertainDiscordDelivery extends BridgeProblem {}
 
 export async function readDiscordConfig(configDir: string): Promise<DiscordConfig> {
   try {
@@ -490,7 +494,8 @@ export class DiscordHttpError extends Error {
   constructor(
     readonly status: number,
     /** Discord's own error code (10003 unknown channel, 50001 missing access ...). */
-    readonly code?: number
+    readonly code?: number,
+    readonly retryAfterMs?: number
   ) {
     super(`Discord HTTP ${status}${code ? ` (code ${code})` : ''}`);
   }
@@ -504,24 +509,54 @@ export class DiscordApi {
     private readonly sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms))
   ) {}
 
-  async request<T = unknown>(method: string, path: string, body?: unknown, retried = false): Promise<T | null> {
+  async request<T = unknown>(
+    method: string,
+    path: string,
+    body?: unknown,
+    attempt = 0,
+    current?: () => boolean,
+    deferRateLimit = false
+  ): Promise<T | null> {
+    if (current && !current()) return null;
     const isForm = typeof FormData !== 'undefined' && body instanceof FormData;
-    const res = await this.fetchImpl(new URL(`${API}${path}`), {
-      method,
-      headers: {
-        Authorization: `Bot ${this.token()}`,
-        // A form body sets its own multipart Content-Type (with the boundary).
-        ...(isForm ? {} : { 'Content-Type': 'application/json' }),
-        'User-Agent': 'DiscordBot (https://github.com/Ark0N/Codeman, 1)',
-      },
-      body: body === undefined ? undefined : isForm ? (body as FormData) : JSON.stringify(body),
-      redirect: 'manual',
-      signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
-    });
-    if (res.status === 429 && !retried) {
-      const j = (await res.json().catch(() => ({}))) as { retry_after?: number };
-      await this.sleep(Math.min(Math.max((j.retry_after ?? 1) * 1000, 100), 10_000));
-      return this.request<T>(method, path, body, true);
+    const payload = isForm ? JSON.parse(String((body as FormData).get('payload_json') ?? '{}')) : body;
+    const retrySafe = method !== 'POST' || !!(payload as DiscordPost | undefined)?.enforce_nonce;
+    let res: Response;
+    try {
+      res = await this.fetchImpl(new URL(`${API}${path}`), {
+        method,
+        headers: {
+          Authorization: `Bot ${this.token()}`,
+          // A form body sets its own multipart Content-Type (with the boundary).
+          ...(isForm ? {} : { 'Content-Type': 'application/json' }),
+          'User-Agent': 'DiscordBot (https://github.com/Ark0N/Codeman, 1)',
+        },
+        body: body === undefined ? undefined : isForm ? (body as FormData) : JSON.stringify(body),
+        redirect: 'manual',
+        signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
+      });
+    } catch (err) {
+      // Creating a thread/channel has no idempotency key: a lost response must not create a duplicate.
+      if (!retrySafe || attempt >= 2) throw err;
+      await this.sleep(500 * 2 ** attempt);
+      return this.request<T>(method, path, body, attempt + 1, current, deferRateLimit);
+    }
+    if (res.status === 429) {
+      const j = (await res.json().catch(() => ({}))) as { retry_after?: number; code?: number };
+      const headerSeconds = Number(res.headers.get('retry-after'));
+      const seconds = Math.max(
+        typeof j.retry_after === 'number' && Number.isFinite(j.retry_after) && j.retry_after > 0 ? j.retry_after : 0,
+        Number.isFinite(headerSeconds) && headerSeconds > 0 ? headerSeconds : 0
+      );
+      const delay = seconds > 0 ? Math.max(seconds * 1000, 100) : 1000;
+      // Never retry earlier than Discord permits. A longer wait is surfaced instead of blocking a session chain.
+      if (deferRateLimit || attempt >= 2 || delay > 30_000) throw new DiscordHttpError(429, j.code, delay);
+      await this.sleep(delay);
+      return this.request<T>(method, path, body, attempt + 1, current, deferRateLimit);
+    }
+    if (res.status >= 500 && retrySafe && attempt < 2) {
+      await this.sleep(500 * 2 ** attempt);
+      return this.request<T>(method, path, body, attempt + 1, current, deferRateLimit);
     }
     if (!res.ok) {
       const j = (await res.json().catch(() => ({}))) as { code?: number };
@@ -535,14 +570,28 @@ export class DiscordApi {
     // type 11 = public thread. A week of inactivity before Discord archives it.
     return this.request('POST', `/channels/${parentId}/threads`, { name, type: 11, auto_archive_duration: 10080 });
   }
-  post(channelId: string, p: DiscordPost): Promise<{ id: string } | null> {
-    return this.request('POST', `/channels/${channelId}/messages`, p);
+  post(channelId: string, p: DiscordPost, current?: () => boolean): Promise<{ id: string } | null> {
+    return this.request(
+      'POST',
+      `/channels/${channelId}/messages`,
+      { ...p, nonce: p.nonce ?? randomUUID().replaceAll('-', '').slice(0, 24), enforce_nonce: true },
+      0,
+      current
+    );
   }
-  postWithFile(channelId: string, p: DiscordPost, file: DiscordFile): Promise<{ id: string } | null> {
+  postWithFile(
+    channelId: string,
+    p: DiscordPost,
+    file: DiscordFile,
+    current?: () => boolean
+  ): Promise<{ id: string } | null> {
     const form = new FormData();
-    form.append('payload_json', JSON.stringify(p));
+    form.append(
+      'payload_json',
+      JSON.stringify({ ...p, nonce: p.nonce ?? randomUUID().replaceAll('-', '').slice(0, 24), enforce_nonce: true })
+    );
     form.append('files[0]', new Blob([Buffer.from(file.data)]), safeAttachmentName(file.name));
-    return this.request('POST', `/channels/${channelId}/messages`, form);
+    return this.request('POST', `/channels/${channelId}/messages`, form, 0, current);
   }
   rename(threadId: string, name: string): Promise<unknown> {
     return this.request('PATCH', `/channels/${threadId}`, { name });
@@ -854,10 +903,17 @@ export class DiscordBridge {
   private last: DiscordResult | null = null;
   private readonly api: DiscordApi;
   private readonly now: () => number;
+  private readonly deliveries: DiscordDeliveryJournal;
+  private stopped = false;
 
   constructor(private readonly deps: DiscordBridgeDeps) {
     this.now = deps.now ?? Date.now;
+    this.deliveries = new DiscordDeliveryJournal(deps.configDir, this.now);
     this.api = new DiscordApi(() => this.cfg.token, deps.fetchImpl, deps.sleep);
+  }
+
+  recentDeliveries() {
+    return this.deliveries.recent();
   }
 
   get lastResult(): DiscordResult | null {
@@ -958,6 +1014,7 @@ export class DiscordBridge {
 
   /** (Re)read the config and start or stop the gateway to match. Call at boot and after a save. */
   async reload(): Promise<void> {
+    this.stopped = false;
     this.cfg = await readDiscordConfig(this.deps.configDir);
     // The thread map is read once, by whoever gets here first; everyone else waits for that read. A second
     // read finishing later would replace the map and drop threads made in between.
@@ -997,6 +1054,7 @@ export class DiscordBridge {
   }
 
   stop(): void {
+    this.stopped = true;
     clearInterval(this.sweepTimer);
     this.sweepTimer = undefined;
     this.gateway?.stop();
@@ -1096,14 +1154,16 @@ export class DiscordBridge {
       for (const [k, v] of this.lastSent) if (t - v > DEDUPE_WINDOW_MS) this.lastSent.delete(k);
     }
     let chunks: string[] = [];
-    // Remembered only once the first post is out: a failed post must leave the message to be sent again.
+    // Confirm every durable response part independently; ambiguous output is not replayed.
     let posted: string | undefined;
+    let fullDeliveryVersion: string | undefined;
     if (msg.fullText) {
       try {
         const got = await withTimeout(msg.fullText(), FULL_TEXT_TIMEOUT_MS);
         const text = got?.text.trim();
         const sid = msg.sessionId;
         if (text && sid) {
+          fullDeliveryVersion = got?.version;
           // Keyed on the text and the turn it came from, so a later turn that ends on the same words is posted.
           const key = `${got?.version ?? ''}\u0000${text}`;
           msg = { ...msg, tail: undefined };
@@ -1117,6 +1177,12 @@ export class DiscordBridge {
       }
     }
     const post = buildPost(msg, this.cfg, explicitUrgent);
+    const deliveryKey =
+      opts.deliberate || !posted
+        ? randomUUID()
+        : createHash('sha256')
+            .update(JSON.stringify([msg.event, msg.sessionId, fullDeliveryVersion ?? posted]))
+            .digest('hex');
     // One post when the head and the first part fit together, the rest follow without a ping.
     if (chunks.length > 0 && post.content.length + 1 + chunks[0].length <= MAX_CONTENT) {
       post.content += `\n${chunks.shift()}`;
@@ -1131,7 +1197,22 @@ export class DiscordBridge {
         if (typeof thread !== 'string') return (this.last = thread);
         target = thread;
       }
-      const send = (to: string) => (msg.file ? this.api.postWithFile(to, post, msg.file) : this.api.post(to, post));
+      const scope = JSON.stringify(this.cfg);
+      const current = (to: string) =>
+        !this.stopped &&
+        this.cfg.enabled &&
+        scope === JSON.stringify(this.cfg) &&
+        (!msg.sessionId || this.threads[msg.sessionId] === to);
+      const send = (to: string) =>
+        this.deliverPost(
+          to,
+          post,
+          msg.file,
+          msg.sessionId,
+          deliveryKey + ':0',
+          () => current(to),
+          !posted && !opts.deliberate
+        );
       if (posted && msg.sessionId) {
         claimed = { sid: msg.sessionId, before: this.lastFull.get(msg.sessionId) };
         this.lastFull.set(msg.sessionId, posted);
@@ -1149,10 +1230,20 @@ export class DiscordBridge {
           throw err;
         }
       }
-      // Parts 2 to 8 are best effort on purpose: the first post, which carries the title, is what is reported.
-      for (const part of chunks) await this.say(this.threads[msg.sessionId ?? ''] ?? target, part);
+      // Every part is confirmed separately; a trailing failure must not report full delivery.
+      for (const [i, part] of chunks.entries())
+        await this.deliverPost(
+          this.threads[msg.sessionId ?? ''] ?? target,
+          { content: part, allowed_mentions: { parse: [], users: [] } },
+          undefined,
+          msg.sessionId,
+          deliveryKey + ':' + (i + 1),
+          () => current(this.threads[msg.sessionId ?? ''] ?? target)
+        );
       return (this.last = { ok: true, at: this.now() });
     } catch (err) {
+      if (prev === undefined) this.lastSent.delete(key);
+      else this.lastSent.set(key, prev);
       if (claimed) {
         if (claimed.before === undefined) this.lastFull.delete(claimed.sid);
         else this.lastFull.set(claimed.sid, claimed.before);
@@ -1233,6 +1324,72 @@ export class DiscordBridge {
     else if (this.cfg.onSessionDelete === 'archive') await this.api.archive(thread).catch(() => undefined);
   }
 
+  private async deliverPost(
+    channelId: string,
+    post: DiscordPost,
+    file: DiscordFile | undefined,
+    sessionId: string | undefined,
+    key: string,
+    current?: () => boolean,
+    checkUnversioned = false
+  ): Promise<unknown> {
+    const id = createHash('sha256').update(`${this.cfg.guildId}:${channelId}:${key}`).digest('hex');
+    const hash = createHash('sha256').update(
+      JSON.stringify({
+        post,
+        file: Array.isArray(file) ? file.map((f) => [f.name, f.data.byteLength]) : file?.name,
+      })
+    );
+    if (Array.isArray(file)) for (const f of file) hash.update(f.data);
+    else if (file) hash.update(file.data);
+    const payloadHash = hash.digest('hex');
+    if (
+      checkUnversioned &&
+      (await this.deliveries.uncertainPayload(payloadHash, { sessionId, channelId, guildId: this.cfg.guildId }))
+    )
+      throw new UncertainDiscordDelivery(
+        'An identical notification has uncertain delivery; review it before resending'
+      );
+    const claim = await this.deliveries.claim({
+      id,
+      direction: 'outbound',
+      sessionId,
+      channelId,
+      guildId: this.cfg.guildId,
+      payloadHash,
+    });
+    if (!claim.fresh && claim.record.payloadHash !== payloadHash)
+      throw new BridgeProblem('Response formatting changed since the previous delivery; review it before resending');
+    if (!claim.fresh && claim.record.state === 'delivered') return { id: claim.record.messageId };
+    if (!claim.fresh && ['uncertain', 'submitting'].includes(claim.record.state)) {
+      throw new BridgeProblem('Previous Discord delivery is uncertain; it will not be replayed automatically');
+    }
+    await this.deliveries.update(id, 'submitting');
+    if (current && !current()) {
+      await this.deliveries.update(id, 'failed', 'scope_changed');
+      throw new BridgeProblem('Discord destination changed');
+    }
+    const payload = { ...post, nonce: id.slice(0, 24), enforce_nonce: true };
+    try {
+      const result = file
+        ? await this.api.postWithFile(channelId, payload, file, current)
+        : await this.api.post(channelId, payload, current);
+      if (!result?.id) throw new BridgeProblem('Discord did not confirm delivery');
+      await this.deliveries.annotate(id, { messageId: result.id });
+      await this.deliveries.update(id, 'delivered');
+      return result;
+    } catch (err) {
+      const refused = err instanceof DiscordHttpError && err.status < 500;
+      await this.deliveries.update(
+        id,
+        refused ? 'failed' : 'uncertain',
+        refused ? 'discord_refused' : 'delivery_uncertain'
+      );
+      if (!refused) throw new UncertainDiscordDelivery('Discord delivery was not confirmed');
+      throw err;
+    }
+  }
+
   private say(channelId: string, content: string): Promise<unknown> {
     return this.api.post(channelId, { content, allowed_mentions: { parse: [], users: [] } }).catch(() => undefined);
   }
@@ -1302,8 +1459,26 @@ export class DiscordBridge {
     const sessionId = Object.keys(this.threads).find((k) => this.threads[k] === m.channel_id);
     if (!sessionId) return;
     const t = this.now();
+    const scope = JSON.stringify(this.cfg);
+    const current = () =>
+      !this.stopped &&
+      this.cfg.enabled &&
+      scope === JSON.stringify(this.cfg) &&
+      this.threads[sessionId] === m.channel_id;
+    const deliveryId = createHash('sha256')
+      .update(JSON.stringify([m.guild_id, m.channel_id, m.id]))
+      .digest('hex');
+    const claim = await this.deliveries.claim({
+      id: deliveryId,
+      direction: 'inbound',
+      sessionId,
+      channelId: m.channel_id,
+      guildId: m.guild_id!,
+    });
+    if (!claim.fresh) return;
     const prev = this.lastReply.get(sessionId);
     if (prev !== undefined && t - prev < REPLY_MIN_INTERVAL_MS) {
+      await this.deliveries.update(deliveryId, 'failed', 'rate_limited');
       // Too soon after the last reply: say it was not typed, instead of dropping it silently.
       await this.api.react(m.channel_id, m.id, '⏳').catch(() => undefined);
       return;
@@ -1313,6 +1488,7 @@ export class DiscordBridge {
       return;
     }
     this.lastReply.set(sessionId, t);
+    if (!current()) return;
     const saved = await this.saveAttachments(sessionId, m);
     const text = sanitiseReply(m.content ?? '', saved.paths);
     if (!text) {
@@ -1322,11 +1498,22 @@ export class DiscordBridge {
     if (saved.refused) await this.say(m.channel_id, saved.refused);
     // A lone digit answers a dialog by itself: an Enter after it would land on whatever comes next.
     const keys = /^\d\r$/.test(text) && this.deps.awaitingChoice?.(sessionId) ? text.slice(0, -1) : text;
+    if (!current() || this.deps.agentExited?.(sessionId)) {
+      await this.deliveries.update(deliveryId, 'failed', 'scope_changed');
+      return;
+    }
+    await this.deliveries.update(deliveryId, 'submitting');
+    if (!current() || this.deps.agentExited?.(sessionId)) {
+      await this.deliveries.update(deliveryId, 'failed', 'scope_changed');
+      return;
+    }
     const ok = await this.deps.sendInput(sessionId, keys).catch(() => false);
+    await this.deliveries.update(deliveryId, ok ? 'input_accepted' : 'uncertain', ok ? undefined : 'input_uncertain');
     const reply = ok
       ? this.api.react(m.channel_id, m.id, '✅')
       : this.api.post(m.channel_id, {
-          content: 'That tab is gone, so nothing was typed.',
+          content:
+            'Input was not confirmed. Check the terminal before retrying; it will not be replayed automatically.',
           allowed_mentions: { parse: [], users: [] },
         });
     await reply.catch(() => undefined);

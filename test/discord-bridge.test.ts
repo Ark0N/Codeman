@@ -1,3 +1,4 @@
+let deliveryTestSequence = 900000000000000000n;
 // @vitest-environment node
 /**
  * @fileoverview Discord bridge: pure rules, the 0600 store, the REST client, the gateway state
@@ -432,7 +433,7 @@ describe('DiscordBridge', () => {
 
   describe('replies', () => {
     const reply = (over: Record<string, unknown> = {}) => ({
-      id: 'm1',
+      id: String(deliveryTestSequence++),
       channel_id: THREAD,
       guild_id: GUILD,
       content: 'press y',
@@ -482,12 +483,12 @@ describe('DiscordBridge', () => {
       b.stop();
     });
 
-    it('says so in the thread when the tab is gone', async () => {
+    it('reports unconfirmed input without claiming nothing was typed', async () => {
       sendInput.mockResolvedValueOnce(false);
       const b = await ready();
       await b.onGatewayMessage(reply());
       expect(posts[0].method).toBe('POST');
-      expect(String(posts[0].body?.content)).toMatch(/gone/);
+      expect(String(posts[0].body?.content)).toMatch(/not confirmed/);
       b.stop();
     });
   });
@@ -1028,7 +1029,7 @@ describe('files', () => {
 
 describe('DiscordBridge files and startup hint', () => {
   const reply = (over: Record<string, unknown> = {}) => ({
-    id: '555555555555555555',
+    id: String(deliveryTestSequence++),
     channel_id: THREAD,
     guild_id: GUILD,
     content: '',
@@ -1088,8 +1089,9 @@ describe('DiscordBridge files and startup hint', () => {
 
   it('saves an attachment under .codeman-discord and types its path, even with no text', async () => {
     const b = await make();
-    await b.onGatewayMessage(reply());
-    const dest = join(work, '.codeman-discord', '555555555555555555-shot_one.png');
+    const message = reply();
+    await b.onGatewayMessage(message);
+    const dest = join(work, '.codeman-discord', `${message.id}-shot_one.png`);
     expect(readFileSync(dest)).toEqual(Buffer.from([7, 8, 9]));
     expect(statSync(dest).mode & 0o777).toBe(0o600);
     expect(sent).toEqual([['s1', `[attached: ${dest}]\r`]]);
