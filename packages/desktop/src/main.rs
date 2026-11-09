@@ -110,8 +110,7 @@ enter it again (a single-user Codeman accepts the right password at once), or wa
 const KEYCHAIN_UNREADABLE: &str = "The saved password could not be read from the Keychain. Enter it again.";
 const PAGE_KEEPS_STOPPING: &str = "Codeman's page stopped twice in a row, so it was closed. Connect again.";
 const LOGO_SWITCHED_OFF: &str = "The Apple logo is switched off on this Mac, so it cannot blink.";
-const LOGO_DRIVEN_ELSEWHERE: &str =
-    "LogoLight is driving the Apple logo, so Codeman leaves it alone. Quit LogoLight to see your agents on it.";
+const LOGO_DRIVEN_ELSEWHERE: &str = "An older LogoLight is driving the Apple logo, so Codeman leaves it alone. Update LogoLight to 1.3 or later (or quit it) to see your agents on it.";
 /// What a download's toast calls a file whose name is not known.
 const UNNAMED_FILE: &str = "the file";
 const START_REFUSED: &str = "Codeman can only be started here for an http://127.0.0.1 or http://localhost address.";
