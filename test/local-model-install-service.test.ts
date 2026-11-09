@@ -1938,6 +1938,57 @@ describe('view()', () => {
     await h.service.cancel();
   });
 
+  it('a view whose read began while the job ran shows how the job ended, never paused', async () => {
+    // The window polls every second, so a read of the state file can be under way while the
+    // job writes its last state and lets go. That read returns the old `installing`, and
+    // settling it with no job in this process read it as an interrupted job: the window (and
+    // the e2e test, under CI load) saw `paused` with Resume for one tick instead of `failed`.
+    const slow = {
+      read: undefined as undefined | (() => Promise<LocalModelStateFile>),
+      hold: undefined as undefined | Promise<void>,
+      entered: undefined as undefined | (() => void),
+    };
+    const h = setup({
+      overrides: {
+        readState: async () => {
+          const snapshot = await slow.read!();
+          const hold = slow.hold;
+          slow.hold = undefined;
+          if (hold) {
+            slow.entered?.();
+            await hold;
+          }
+          return snapshot;
+        },
+      },
+    });
+    slow.read = h.store.readState;
+    let failVerify!: () => void;
+    const verifying = new Promise<void>((resolve) => (failVerify = resolve));
+    h.deps.verifyModel.mockImplementationOnce(async () => {
+      await verifying;
+      return { ok: false, code: 'no-tool-call' } as never;
+    });
+
+    await h.service.install(REQUEST, ADMIN);
+    await vi.waitFor(() => expect(h.deps.verifyModel).toHaveBeenCalled());
+
+    // A view starts reading while the job is still in the verify step...
+    let releaseRead!: () => void;
+    slow.hold = new Promise<void>((resolve) => (releaseRead = resolve));
+    const entered = new Promise<void>((resolve) => (slow.entered = resolve));
+    const viewing = h.service.view();
+    await entered;
+    // ...the job fails, writes it and ends while that read is still out...
+    failVerify();
+    await h.service.idle();
+    expect(h.store.get().state).toBe('failed');
+    // ...and only then does the read come back, with the file as it was before.
+    releaseRead();
+    const view = await viewing;
+    expect(view).toMatchObject({ state: 'failed', step: 'verify', error: { code: 'no-tool-call' } });
+  });
+
   it('names the model to try next only when the catalogue still has it', async () => {
     const state: LocalModelStateFile = {
       ...jobAt('verify', 'paused'),

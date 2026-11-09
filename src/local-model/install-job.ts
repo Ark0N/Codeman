@@ -1053,9 +1053,16 @@ class LocalModelServiceImpl implements LocalModelService {
     return progress ? { ...next, progress } : next;
   }
 
-  /** The stored state as a view or a verb must see it: settled, unless a verb is just starting a job. */
+  /**
+   * The stored state as a view or a verb must see it: settled, unless a verb is just starting a
+   * job. A job writes its last state BEFORE it lets go of `this.job`, so when the job ended while
+   * this read was out, the read may hold the `installing` from before that write; it is read
+   * again rather than settled, or it would show as an interrupted (`paused`) job for a tick.
+   */
   private async currentState(): Promise<LocalModelStateFile> {
-    const state = await this.deps.readState();
+    const jobAtRead = this.job;
+    let state = await this.deps.readState();
+    if (jobAtRead && !this.job) state = await this.deps.readState();
     return this.jobStarting ? state : this.settled(state);
   }
 
