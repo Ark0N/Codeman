@@ -254,12 +254,12 @@ until you choose, and the menu only exists on such a Mac.
 
 **Codeman > Keep This Mac Awake** stops the Mac from going to sleep while your agents work
 on it (**While Agents Work**, plus 5 minutes after the last one stops), or for as long as
-the app is open (**Always While Codeman Is Open**). It is off until you choose, only acts
-for a Codeman running on this Mac, needs no password, and ends when the app quits. On a
-MacBook it pauses on battery unless you untick **Only on Power Adapter**, and **Also With
-the Lid Closed…** keeps a closed MacBook awake too: that one asks for your administrator
-password once to install a small helper, never acts on battery, and **Remove the Lid
-Helper…** takes it out again.
+the app is open (**Always**). It is off until you choose, only acts for a Codeman running
+on this Mac, needs no password, and ends when the app quits. On a MacBook it pauses on
+battery unless you untick **Only When Plugged In**, and **With the Lid Closed…** keeps a
+closed MacBook awake too: ticking it asks for your administrator password to install a
+small helper, unticking it asks again and removes the helper, and it never acts on
+battery.
 
 ### First launch
 

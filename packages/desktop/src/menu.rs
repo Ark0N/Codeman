@@ -34,35 +34,25 @@ pub struct AppMenu {
     pub keep_awake: Option<KeepAwakeMenu>,
 }
 
-/// App menu > Keep This Mac Awake.
+/// App menu > Keep This Mac Awake: Off / While Agents Work / Always, then on a
+/// MacBook Only When Plugged In and With the Lid Closed…, then one status line.
 pub struct KeepAwakeMenu {
     pub modes: Vec<(Mode, CheckMenuItem)>,
     /// Only on a Mac with a lid: a desktop Mac always runs on mains and cannot close.
     pub ac_only: Option<CheckMenuItem>,
+    /// Ticked = the helper is in and asked for. Ticking or unticking it asks for the
+    /// administrator password (install, remove), hence the ellipsis.
     pub lid: Option<CheckMenuItem>,
-    pub remove_helper: Option<MenuItem>,
     /// What it does right now (keep_awake::status_line). Not clickable.
     pub status: MenuItem,
 }
 
 impl KeepAwakeMenu {
-    /// The lid items as the helper now is. The lid item ends in an ellipsis while
-    /// choosing it asks for the administrator password first.
+    /// The lid item as the helper now is: ticked only while it is installed and on.
     pub fn show_helper(&self, state: HelperState, lid_on: bool) {
         if let Some(item) = &self.lid {
-            item.set_text(lid_label(state));
             item.set_checked(lid_on && state == HelperState::Installed);
         }
-        if let Some(item) = &self.remove_helper {
-            item.set_enabled(state != HelperState::Missing);
-        }
-    }
-}
-
-fn lid_label(state: HelperState) -> &'static str {
-    match state {
-        HelperState::Installed => "Also With the Lid Closed",
-        _ => "Also With the Lid Closed\u{2026}",
     }
 }
 
@@ -75,32 +65,26 @@ fn build_keep_awake(config: &Config) -> muda::Result<(Submenu, KeepAwakeMenu)> {
         submenu.append(&item)?;
         modes.push((mode, item));
     }
-    let (mut ac_only, mut lid, mut remove_helper) = (None, None, None);
+    let (mut ac_only, mut lid) = (None, None);
     if keep_awake::has_lid() {
         let state =
             keep_awake::request_path().map_or(HelperState::Missing, |request| keep_awake::helper_state(&request));
         let ac = CheckMenuItem::with_id(
             keep_awake::AC_ONLY_ID,
-            "Only on Power Adapter",
+            "Only When Plugged In",
             true,
             settings.ac_only,
             None,
         );
         let lid_item = CheckMenuItem::with_id(
             keep_awake::LID_ID,
-            lid_label(state),
+            "With the Lid Closed\u{2026}",
             true,
             settings.lid && state == HelperState::Installed,
             None,
         );
-        let remove = MenuItem::with_id(
-            keep_awake::REMOVE_HELPER_ID,
-            "Remove the Lid Helper\u{2026}",
-            state != HelperState::Missing,
-            None,
-        );
-        submenu.append_items(&[&PredefinedMenuItem::separator(), &ac, &lid_item, &remove])?;
-        (ac_only, lid, remove_helper) = (Some(ac), Some(lid_item), Some(remove));
+        submenu.append_items(&[&PredefinedMenuItem::separator(), &ac, &lid_item])?;
+        (ac_only, lid) = (Some(ac), Some(lid_item));
     }
     let initial = match settings.mode {
         Mode::Off => keep_awake::OFF_TEXT,
@@ -114,7 +98,6 @@ fn build_keep_awake(config: &Config) -> muda::Result<(Submenu, KeepAwakeMenu)> {
             modes,
             ac_only,
             lid,
-            remove_helper,
             status,
         },
     ))

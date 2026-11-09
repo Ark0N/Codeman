@@ -1138,28 +1138,41 @@ impl App {
         self.sync_keep_awake();
     }
 
-    /// Choosing the lid item asks for the administrator password first while the
-    /// helper is missing or from another version; the setting goes on once it is in.
+    /// The lid item is the helper: ticking it installs the helper behind the
+    /// administrator prompt (unless this version's is already in), unticking it removes
+    /// it behind another. The setting changes only once the prompt's command ran, so a
+    /// cancelled or failed prompt leaves the item as it was.
     fn toggle_keep_awake_lid(&mut self) {
-        let Some(items) = &self.menu.keep_awake else {
+        use keep_awake::HelperState;
+        let Some(wanted) = self
+            .menu
+            .keep_awake
+            .as_ref()
+            .and_then(|items| items.lid.as_ref())
+            .map(|item| item.is_checked())
+        else {
             return;
         };
-        let Some(item) = &items.lid else {
-            return;
+        let state =
+            keep_awake::request_path().map_or(HelperState::Missing, |request| keep_awake::helper_state(&request));
+        let prompt = match (wanted, state) {
+            _ if self.lid_helper_busy => None,
+            (true, HelperState::Installed) | (false, HelperState::Missing) => {
+                self.config.keep_awake.lid = wanted;
+                self.config_dirty = true;
+                None
+            }
+            (install, _) => Some(install),
         };
-        let state = keep_awake::request_path().map_or(keep_awake::HelperState::Missing, |request| {
-            keep_awake::helper_state(&request)
-        });
-        if !item.is_checked() || state == keep_awake::HelperState::Installed {
-            self.config.keep_awake.lid = item.is_checked();
-            self.config_dirty = true;
+        // The click flipped the item already. Until a prompt's command ran it shows
+        // what is true.
+        if let Some(items) = &self.menu.keep_awake {
             items.show_helper(state, self.config.keep_awake.lid);
-            self.sync_keep_awake();
-            return;
         }
-        // Not on until the helper is in.
-        item.set_checked(false);
-        self.run_lid_helper(true);
+        match prompt {
+            Some(install) => self.run_lid_helper(install),
+            None => self.sync_keep_awake(),
+        }
     }
 
     fn run_lid_helper(&mut self, install: bool) {
@@ -1229,7 +1242,6 @@ impl App {
         match id {
             keep_awake::AC_ONLY_ID => self.toggle_keep_awake_ac_only(),
             keep_awake::LID_ID => self.toggle_keep_awake_lid(),
-            keep_awake::REMOVE_HELPER_ID => self.run_lid_helper(false),
             menu_id::SWITCH => self.show_connect_page(None, true),
             menu_id::ADD_AGENT => self.add_agent(),
             menu_id::RELOAD => self.reload_focused(),

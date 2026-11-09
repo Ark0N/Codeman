@@ -22,10 +22,15 @@
 //!
 //! When it holds is the user's pick: **While Agents Work** (an agent at work, and for
 //! `GRACE` after the last one stopped, so the gap between two turns or a reply from
-//! the phone does not let the Mac drop off), or **Always While Codeman Is Open**. Only
-//! for a Codeman on this Mac: keeping this Mac awake does nothing for agents that run
-//! on another machine. Only on the power adapter unless the user says otherwise (a
+//! the phone does not let the Mac drop off), or **Always** (while the app is open).
+//! Only for a Codeman on this Mac: keeping this Mac awake does nothing for agents that
+//! run on another machine. Only when plugged in unless the user says otherwise (a
 //! MacBook only), and the lid never on battery, whatever the setting.
+//!
+//! The menu is kept short on purpose: three modes, then on a MacBook two check items
+//! (Only When Plugged In, With the Lid Closed…). The lid item IS the helper: ticking it
+//! installs the helper behind the administrator prompt, unticking it removes it behind
+//! another, so no separate "remove" item and no helper left behind unasked.
 //!
 //! It lives in the app, so it ends with the app: Codeman's LaunchAgent keeps the server
 //! running after the app quits, but nothing keeps the Mac awake then.
@@ -74,17 +79,16 @@ const REQUEST_FILE: &str = "keep-awake-lid.pid";
 
 pub const AC_ONLY_ID: &str = "keep-awake-ac-only";
 pub const LID_ID: &str = "keep-awake-lid";
-pub const REMOVE_HELPER_ID: &str = "keep-awake-remove-helper";
 
 /// The status line while nothing is watched.
-pub const OFF_TEXT: &str = "Off: this Mac sleeps as usual";
-pub const NO_SERVER_TEXT: &str = "Starts when Codeman on this Mac is open";
+pub const OFF_TEXT: &str = "Sleeps as usual";
+pub const NO_SERVER_TEXT: &str = "Waiting for Codeman on this Mac";
 
 /// What macOS shows in the administrator prompt (`with prompt`). No double quote or
 /// backslash: they would end the AppleScript string (`applescript` refuses them).
 const INSTALL_PROMPT: &str = "Codeman wants to install a small helper that keeps this Mac awake with the lid \
 closed while your agents work. It only acts on the power adapter, and only while the Codeman app asks it to.";
-const REMOVE_PROMPT: &str = "Codeman wants to remove its lid helper.";
+const REMOVE_PROMPT: &str = "Codeman wants to remove its lid helper, so this Mac sleeps again when the lid closes.";
 
 /// When the Mac is kept awake.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -104,7 +108,7 @@ impl Mode {
         match self {
             Mode::Off => "Off",
             Mode::WhileWorking => "While Agents Work",
-            Mode::Always => "Always While Codeman Is Open",
+            Mode::Always => "Always",
         }
     }
 
@@ -202,14 +206,14 @@ impl Status {
     fn text(self) -> &'static str {
         match self {
             Status::Off => OFF_TEXT,
-            Status::Remote => "Nothing to keep awake: this Codeman runs on another machine",
-            Status::OnBattery => "Paused on battery power",
-            Status::NoAnswer => "Codeman does not answer, so this Mac may sleep",
-            Status::Refused => "Codeman refused the login, so the agents cannot be seen",
-            Status::Idle => "No agent is working, so this Mac may sleep",
-            Status::Working => "Awake: agents are working",
-            Status::Recently => "Awake: an agent worked in the last 5 minutes",
-            Status::Always => "Awake while Codeman is open",
+            Status::Remote => "Sleeps as usual: Codeman runs on another machine",
+            Status::OnBattery => "Paused: on battery",
+            Status::NoAnswer => "Paused: Codeman does not answer",
+            Status::Refused => "Paused: Codeman refused the login",
+            Status::Idle => "Sleeps as usual: no agent working",
+            Status::Working => "Awake: agents working",
+            Status::Recently => "Awake: an agent finished in the last 5 minutes",
+            Status::Always => "Awake: Codeman is open",
         }
     }
 }
@@ -256,15 +260,15 @@ pub fn status_line(decision: Decision, settings: Settings, facts: Facts, covered
     // Asked for, but missing or from another version of the app (an update that
     // changed the script, a removal by hand): the lid item offers the install again.
     let lid = if !facts.helper {
-        "the lid helper needs installing again"
+        "not with the lid closed: turn it on again"
     } else if facts.on_battery {
         "not with the lid closed on battery"
     } else if covered == Some(true) {
-        "also with the lid closed"
+        "lid closed too"
     } else {
-        "the lid helper has not answered yet"
+        "lid closed in a moment"
     };
-    format!("{text}; {lid}")
+    format!("{text}, {lid}")
 }
 
 /// Whether `server` is this Mac: a loopback address or `localhost`, or an address
@@ -1313,14 +1317,11 @@ mod tests {
         let lid = Settings { lid: true, ..WORK };
         let ready = Facts { helper: true, ..HERE };
         let line = |settings, facts, covered| status_line(decide(settings, facts), settings, facts, covered);
-        assert_eq!(line(WORK, HERE, None), "Awake: agents are working");
-        assert_eq!(
-            line(lid, ready, Some(true)),
-            "Awake: agents are working; also with the lid closed"
-        );
+        assert_eq!(line(WORK, HERE, None), "Awake: agents working");
+        assert_eq!(line(lid, ready, Some(true)), "Awake: agents working, lid closed too");
         assert_eq!(
             line(lid, ready, Some(false)),
-            "Awake: agents are working; the lid helper has not answered yet"
+            "Awake: agents working, lid closed in a moment"
         );
         let battery = Facts {
             on_battery: true,
@@ -1329,19 +1330,19 @@ mod tests {
         let anywhere = Settings { ac_only: false, ..lid };
         assert_eq!(
             line(anywhere, battery, None),
-            "Awake: agents are working; not with the lid closed on battery"
+            "Awake: agents working, not with the lid closed on battery"
         );
         // Asked for, but no helper (an update changed it): the line says so.
         assert_eq!(
             line(lid, HERE, None),
-            "Awake: agents are working; the lid helper needs installing again"
+            "Awake: agents working, not with the lid closed: turn it on again"
         );
         // Not held: nothing about the lid.
         let idle = Facts {
             agents: Agents::Idle,
             ..ready
         };
-        assert_eq!(line(lid, idle, None), "No agent is working, so this Mac may sleep");
+        assert_eq!(line(lid, idle, None), "Sleeps as usual: no agent working");
     }
 
     #[test]
@@ -1623,28 +1624,25 @@ mod tests {
     fn the_worker_holds_while_agents_work_and_lets_go_after_the_grace() {
         let mut rig = rig(true);
         rig.watch(WORK);
-        assert_eq!(
-            rig.look_at(0).as_deref(),
-            Some("No agent is working, so this Mac may sleep")
-        );
+        assert_eq!(rig.look_at(0).as_deref(), Some("Sleeps as usual: no agent working"));
         assert_eq!(
             rig.mac.last_hold(),
             Some(Hold::Watching),
             "App Nap off while it watches"
         );
         rig.answer(vec![seen(true)]);
-        assert_eq!(rig.look_at(2).as_deref(), Some("Awake: agents are working"));
+        assert_eq!(rig.look_at(2).as_deref(), Some("Awake: agents working"));
         assert_eq!(rig.mac.last_hold(), Some(Hold::Holding));
         rig.answer(vec![seen(false)]);
         assert_eq!(
             rig.look_at(4).as_deref(),
-            Some("Awake: an agent worked in the last 5 minutes")
+            Some("Awake: an agent finished in the last 5 minutes")
         );
         assert_eq!(rig.mac.last_hold(), Some(Hold::Holding));
         assert_eq!(rig.look_at(200), None, "unchanged: nothing to report");
         assert_eq!(
             rig.look_at(2 + GRACE.as_secs()).as_deref(),
-            Some("No agent is working, so this Mac may sleep")
+            Some("Sleeps as usual: no agent working")
         );
         assert_eq!(rig.mac.last_hold(), Some(Hold::Watching));
     }
@@ -1660,7 +1658,7 @@ mod tests {
         assert_eq!(rig.mac.last_hold(), Some(Hold::Holding));
         assert_eq!(
             rig.look_at(GRACE.as_secs()).as_deref(),
-            Some("Codeman does not answer, so this Mac may sleep")
+            Some("Paused: Codeman does not answer")
         );
         assert_eq!(rig.mac.last_hold(), Some(Hold::Watching));
     }
@@ -1670,10 +1668,7 @@ mod tests {
         let mut rig = rig(true);
         rig.watch(WORK);
         rig.answer(vec![Poll::Refused]);
-        assert_eq!(
-            rig.look_at(0).as_deref(),
-            Some("Codeman refused the login, so the agents cannot be seen")
-        );
+        assert_eq!(rig.look_at(0).as_deref(), Some("Paused: Codeman refused the login"));
         rig.look_at(2);
         rig.look_at(4);
         assert_eq!(*rig.asked.borrow(), 1);
@@ -1693,7 +1688,7 @@ mod tests {
     fn always_holds_without_asking_the_server() {
         let mut rig = rig(true);
         rig.watch(ALWAYS);
-        assert_eq!(rig.look_at(0).as_deref(), Some("Awake while Codeman is open"));
+        assert_eq!(rig.look_at(0).as_deref(), Some("Awake: Codeman is open"));
         assert_eq!(rig.mac.last_hold(), Some(Hold::Holding));
         assert_eq!(*rig.asked.borrow(), 0);
     }
@@ -1705,7 +1700,7 @@ mod tests {
         assert!(!rig.worker.ticking());
         assert_eq!(
             rig.look_at(0).as_deref(),
-            Some("Nothing to keep awake: this Codeman runs on another machine")
+            Some("Sleeps as usual: Codeman runs on another machine")
         );
         assert_eq!(*rig.asked.borrow(), 0);
         assert!(rig.mac.0.borrow().holds.is_empty());
@@ -1717,7 +1712,7 @@ mod tests {
         rig.watch(ALWAYS);
         rig.look_at(0);
         rig.mac.0.borrow_mut().battery = true;
-        assert_eq!(rig.look_at(2).as_deref(), Some("Paused on battery power"));
+        assert_eq!(rig.look_at(2).as_deref(), Some("Paused: on battery"));
         assert_eq!(rig.mac.last_hold(), Some(Hold::None));
         rig.mac.0.borrow_mut().battery = false;
         rig.look_at(4);
@@ -1732,7 +1727,7 @@ mod tests {
         rig.watch(Settings { lid: true, ..ALWAYS });
         assert_eq!(
             rig.look_at(0).as_deref(),
-            Some("Awake while Codeman is open; also with the lid closed")
+            Some("Awake: Codeman is open, lid closed too")
         );
         assert_eq!(rig.mac.0.borrow().writes, 1);
         rig.look_at(10);
@@ -1753,7 +1748,7 @@ mod tests {
         rig.mac.0.borrow_mut().battery = true;
         assert_eq!(
             rig.look_at(32).as_deref(),
-            Some("Awake while Codeman is open; not with the lid closed on battery")
+            Some("Awake: Codeman is open, not with the lid closed on battery")
         );
         assert_eq!(rig.mac.0.borrow().clears, 1);
         // Nothing to watch: everything let go.
@@ -1800,7 +1795,7 @@ mod tests {
         run(&rx, worker, &|generation, line| {
             lines.borrow_mut().push((generation, line))
         });
-        assert_eq!(lines.into_inner(), vec![(2, "Awake while Codeman is open".to_owned())]);
+        assert_eq!(lines.into_inner(), vec![(2, "Awake: Codeman is open".to_owned())]);
         assert_eq!(mac.last_hold(), Some(Hold::None), "the end lets go");
     }
 }
