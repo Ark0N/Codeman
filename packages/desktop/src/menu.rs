@@ -16,6 +16,7 @@ pub mod menu_id {
     pub const ADD_AGENT: &str = "add-agent";
     pub const RELOAD: &str = "reload";
     pub const START_FULLSCREEN: &str = "start-fullscreen";
+    pub const LOGO_BLINK: &str = "logo-blink";
     pub const DEVTOOLS: &str = "devtools";
     pub const HELP_DOCS: &str = "help-docs";
     pub const HELP_GITHUB: &str = "help-github";
@@ -26,8 +27,10 @@ pub struct AppMenu {
     pub window_menu: Submenu,
     pub help_menu: Submenu,
     pub start_fullscreen: CheckMenuItem,
-    /// One item per state and style. Empty on a Mac without a lit logo, which has no
+    /// The one switch for the logo. None on a Mac without a lit logo, which has no
     /// such menu.
+    pub logo_switch: Option<CheckMenuItem>,
+    /// One item per state and style, empty without the switch.
     pub logo_styles: Vec<(Signal, BlinkStyle, CheckMenuItem)>,
 }
 
@@ -110,10 +113,19 @@ pub fn build_menu(config: &Config) -> muda::Result<AppMenu> {
             ),
         ],
     )?;
-    // Only a Mac with a lit Apple logo has this menu at all.
+    // Only a Mac with a lit Apple logo has these items at all: the switch, and the
+    // style for each state behind it.
     let mut logo_styles = Vec::new();
+    let mut logo_switch = None;
     if logo::available() {
-        let submenu = Submenu::new("Blink Apple Logo", true);
+        let switch = CheckMenuItem::with_id(
+            menu_id::LOGO_BLINK,
+            "Blink Apple Logo",
+            true,
+            config.logo_blink.enabled,
+            None,
+        );
+        let submenu = Submenu::new("Apple Logo Blink Styles", true);
         for signal in Signal::ALL {
             let group = Submenu::new(signal.label(), true);
             for style in BlinkStyle::ALL {
@@ -128,7 +140,9 @@ pub fn build_menu(config: &Config) -> muda::Result<AppMenu> {
             submenu.append(&group)?;
         }
         // Right under "Always Open in Full Screen", before the separator.
-        view.insert(&submenu, 4)?;
+        view.insert(&switch, 4)?;
+        view.insert(&submenu, 5)?;
+        logo_switch = Some(switch);
     }
     let window_menu = Submenu::with_items(
         "Window",
@@ -156,6 +170,7 @@ pub fn build_menu(config: &Config) -> muda::Result<AppMenu> {
         window_menu,
         help_menu,
         start_fullscreen,
+        logo_switch,
         logo_styles,
     })
 }

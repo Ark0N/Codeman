@@ -110,6 +110,8 @@ enter it again (a single-user Codeman accepts the right password at once), or wa
 const KEYCHAIN_UNREADABLE: &str = "The saved password could not be read from the Keychain. Enter it again.";
 const PAGE_KEEPS_STOPPING: &str = "Codeman's page stopped twice in a row, so it was closed. Connect again.";
 const LOGO_SWITCHED_OFF: &str = "The Apple logo is switched off on this Mac, so it cannot blink.";
+const LOGO_DRIVEN_ELSEWHERE: &str =
+    "LogoLight is driving the Apple logo, so Codeman leaves it alone. Quit LogoLight to see your agents on it.";
 /// What a download's toast calls a file whose name is not known.
 const UNNAMED_FILE: &str = "the file";
 const START_REFUSED: &str = "Codeman can only be started here for an http://127.0.0.1 or http://localhost address.";
@@ -1030,34 +1032,63 @@ impl App {
         }
     }
 
-    /// The logo is watched while any style is chosen and a server is open.
+    /// The logo is watched while the switch is on, a state has a style and a
+    /// server is open.
     fn sync_logo_watch(&mut self) {
         let styles = self.config.logo_blink;
         let phase = self.phase.borrow();
-        let server = phase.loaded().filter(|_| styles.any() && logo::available());
+        let server = phase.loaded().filter(|_| styles.active() && logo::available());
         self.logo_watch
             .sync(server.map(|url| (url.as_str(), self.auth.as_deref(), styles)));
     }
 
     fn choose_logo_blink(&mut self, signal: Signal, style: BlinkStyle) {
-        // A click flips the item it landed on, the chosen one included, so all
-        // of that state's are set.
-        for (item_signal, item_style, item) in &self.menu.logo_styles {
-            if *item_signal == signal {
-                item.set_checked(*item_style == style);
-            }
-        }
-        let was_off = !self.config.logo_blink.any();
+        let was_active = self.config.logo_blink.active();
         self.config.logo_blink.set(signal, style);
+        // Picking a style is asking for the logo to show it.
+        if style != BlinkStyle::Off {
+            self.config.logo_blink.enabled = true;
+        }
+        self.logo_blink_changed(was_active);
+    }
+
+    /// The one switch. Turned on with every state off, it brings the recommended
+    /// styles, so that on always shows something.
+    fn toggle_logo_blink(&mut self) {
+        let was_active = self.config.logo_blink.active();
+        let on = !self.config.logo_blink.enabled;
+        self.config.logo_blink.enabled = on;
+        if on && !self.config.logo_blink.any_style() {
+            self.config.logo_blink = logo::BlinkStyles::RECOMMENDED;
+        }
+        self.logo_blink_changed(was_active);
+    }
+
+    fn logo_blink_changed(&mut self, was_active: bool) {
+        // A click flips the item it landed on, so every item is set from the
+        // settings, the clicked one included.
+        let styles = self.config.logo_blink;
+        if let Some(switch) = &self.menu.logo_switch {
+            switch.set_checked(styles.enabled);
+        }
+        for (signal, style, item) in &self.menu.logo_styles {
+            item.set_checked(styles.get(*signal) == *style);
+        }
         self.config_dirty = true;
         self.sync_logo_watch();
-        // Only from off: with a style running, a dark logo may be our own.
-        if was_off && style != BlinkStyle::Off && logo::switched_off() {
-            if let Some(main) = self.windows.get(&self.main_id) {
-                let _ = main
-                    .webview
-                    .evaluate_script(&assets::toast_script(LOGO_SWITCHED_OFF, "warning"));
-            }
+        // Only from off: with a blink running, a dark logo may be our own.
+        if was_active || !styles.active() {
+            return;
+        }
+        let warning = if logo::switched_off() {
+            LOGO_SWITCHED_OFF
+        } else if logo::driven_elsewhere() {
+            LOGO_DRIVEN_ELSEWHERE
+        } else {
+            return;
+        };
+        if let Some(main) = self.windows.get(&self.main_id) {
+            let _ = main.webview.evaluate_script(&assets::toast_script(warning, "warning"));
         }
     }
 
@@ -1070,6 +1101,7 @@ impl App {
             menu_id::SWITCH => self.show_connect_page(None, true),
             menu_id::ADD_AGENT => self.add_agent(),
             menu_id::RELOAD => self.reload_focused(),
+            menu_id::LOGO_BLINK => self.toggle_logo_blink(),
             menu_id::START_FULLSCREEN => {
                 let value = self.menu.start_fullscreen.is_checked();
                 self.config.start_fullscreen = value;

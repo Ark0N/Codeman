@@ -44,9 +44,10 @@ pub struct Config {
     pub auto_connect: bool,
     /// Always open in full screen (otherwise the last state is restored).
     pub start_fullscreen: bool,
-    /// What the lit Apple logo does for each state of the agents (logo.rs). The
-    /// menu only shows on a Mac that has one. A value this version does not know
-    /// reads as off: a bad style must not make the whole file unreadable.
+    /// Whether the lit Apple logo shows what the agents are doing, and its style
+    /// for each state (logo.rs). The menu only shows on a Mac that has one. A
+    /// value this version does not know reads as off: a bad style must not make
+    /// the whole file unreadable.
     #[serde(deserialize_with = "lenient_blink")]
     pub logo_blink: BlinkStyles,
     /// Anything that is not a whole frame reads as None: a bad frame must not
@@ -415,9 +416,12 @@ mod tests {
         use crate::logo::BlinkStyle;
         let mut c = Config::default();
         assert_eq!(c.logo_blink, BlinkStyles::default());
-        c.logo_blink.needs_you = BlinkStyle::Alarm;
+        assert!(!c.logo_blink.enabled, "off until the user turns it on");
+        c.logo_blink.enabled = true;
+        c.logo_blink.needs_you = BlinkStyle::Wink;
         let text = serde_json::to_string(&c).unwrap();
-        assert!(text.contains(r#""needsYou":"alarm""#), "{text}");
+        assert!(text.contains(r#""needsYou":"wink""#), "{text}");
+        assert!(text.contains(r#""enabled":true"#), "{text}");
         assert_eq!(serde_json::from_str::<Config>(&text).unwrap().logo_blink, c.logo_blink);
         for bad in [
             r#"{"logoBlink":3}"#,
@@ -434,6 +438,7 @@ mod tests {
         use crate::logo::BlinkStyle;
         let c: Config = serde_json::from_str(r#"{"logoBlink":"heartbeat"}"#).unwrap();
         assert_eq!(c.logo_blink.working, BlinkStyle::Heartbeat);
+        assert!(c.logo_blink.enabled);
     }
 
     #[test]
