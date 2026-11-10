@@ -1,5 +1,40 @@
 # aicodeman
 
+## 1.50.1
+
+### Patch Changes
+
+- e06257c: ### Thanks
+  - @opticon454 for syncing case options and the picked case across devices, over five review rounds (#732).
+  - @ludovicfourrage for dictation that survives a thinking pause and the Android dictation fixes, over three review rounds (#705).
+  - @johoja12 for the log viewer reconnect fix (#720).
+  - @shenlvkang-collab for the image zoom (#608) and the Files panel delete button (#529), both carried forward in #791 and #792, and for the foldable phone report (#702).
+
+  **A MacBook keeps working with the lid closed (#795).** The Codeman app for Mac has a new menu, Codeman > Keep This Mac Awake: Off, While Agents Work (and 5 minutes after the last one stops) or Always. It only acts for a Codeman running on this Mac, and pauses on battery unless you untick Only When Plugged In. On a MacBook, With the Lid Closed… keeps a closed Mac awake on its power adapter. It asks for your administrator password once and installs a small helper; unticking it removes the helper. Behaviour change: while it keeps watch for a Codeman on this Mac, closing the Codeman window hides the app instead of quitting it, so the Mac stays awake; click the Dock icon to bring it back, and quit with Cmd+Q (#800). With no server open, or one on another machine, closing the window still quits.
+
+  **The lid logo breathes while agents work (#794).** The Apple logo blink from 1.50.0 now has one switch, View > Blink Apple Logo. It breathes while agents work, blinks for a yellow tab and flashes for a red one: the more it moves, the more it needs you. It now moves on the logo's own hardware fades, so a blink no longer writes a system setting. Styles you picked in 1.50.0 are kept.
+
+  **The logo keeps blinking with the lid closed (#801).** While the Mac stays awake behind a closed lid on its power adapter (Keep This Mac Awake > With the Lid Closed…, or an external display), the logo goes on showing your agents, and the keyboard stays dark. macOS keeps the logo dark under a closed lid, so the app tells the logo the lid is open, the way LogoLight 1.3.1 does. A line under View > Apple Logo Blink Styles says what the closed lid did last: blinking, or why not. On battery nothing changes: the Mac sleeps when you close it.
+
+  **Codeman and LogoLight take turns on the logo (#802).** With LogoLight 1.3 or later running, LogoLight steps aside while Codeman shows its agents on the logo, and takes the logo back afterwards. Until now Codeman left the logo alone whenever LogoLight ran. An older LogoLight still keeps the logo, and Codeman tells you to update it when you turn the switch on.
+
+  **Dictation survives a thinking pause (#705).** A new Voice setting, Stop after silence, sets how long a pause may last before dictation stops: the provider's default, 3, 6, 15 or 30 seconds, or Manual. Claude dictation keeps going from one sentence to the next until you press Stop, and keeps your last words. On Chrome for Android, words are no longer repeated or lost at the end. Behaviour change: on iOS Safari dictation no longer stops after 750 ms without new words; it stops at the silence deadline like everywhere else.
+
+  **Sync cases across devices (#732).** A new setting, off by default, keeps each case's Agent Teams and Opus 1M options on the server instead of in each browser. When you come back to a tab, the case picker follows the case you last picked on another device.
+
+  **Delete a file from the Files panel (#792).** File rows in the Files panel, tree and search results, have a delete button that asks first. Symbolic links, `.git`, sensitive files and remote or adopted sessions are refused.
+
+  **Zoom the path picker's image preview (#791).** Pinch and drag on a phone, the mouse wheel or a trackpad on a desktop, double-click for 2x, or the zoom buttons. A small image now shows at its own size instead of stretched.
+
+  **Fixes.**
+  - **The phone overview appears on a fold (#790).** Folding a phone, or narrowing a window below 600px, left the welcome screen up when the page had loaded wide. Refs #702.
+  - **The log viewer stops reconnecting after a startup error (#720).** A refused path, a missing or too large file, the stream limit or a failed tail made the floating log viewer reconnect every few seconds.
+  - **The local model install view no longer flashes Paused at the end.** A view read while the install job finished could show the job as paused.
+
+  **Fixes applied while landing.** #720 keeps the browser's own retry after a network error before the stream connects. The Mac app's window-close change (#800) came from checking #795 against how people quit the app. #705: the green Send button now stays up for the words saved when dictation is cut off by a reconnect, and the API reference says what a voice transcript frame holds.
+
+  **Docs and tests.** Both READMEs have a Download for Mac button at the top. The Mac app's code was reorganised into smaller modules (#789) with no change in behaviour.
+
 ## 1.50.0
 
 ### Minor Changes

@@ -1,13 +1,13 @@
 {
-  "version": "1.50.0",
+  "version": "1.50.1",
   "highlights": [
-    "Codeman for Mac (#763)",
-    "Your MacBook's Apple logo blinks with your agents (#781)",
-    "Install from the app, with no Terminal and no password (#773)",
-    "The Files panel follows a worktree outside the session's folder (#780)",
-    "A coding model that runs on your Mac (#784, experimental)",
-    "Claude in the cloud, a model on your Mac (#784, experimental)",
-    "Ralph starts from Session Options (#783)",
-    "The Codeman agent skill is on by default (#787)"
+    "A MacBook keeps working with the lid closed (#795)",
+    "The lid logo breathes while agents work (#794)",
+    "The logo keeps blinking with the lid closed (#801)",
+    "Codeman and LogoLight take turns on the logo (#802)",
+    "Dictation survives a thinking pause (#705)",
+    "Sync cases across devices (#732)",
+    "Delete a file from the Files panel (#792)",
+    "Zoom the path picker's image preview (#791)"
   ]
 }
