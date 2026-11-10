@@ -487,6 +487,8 @@ describe('needBytes', () => {
   it('states the need of every stock row at its largest context', () => {
     expect(Object.fromEntries(STOCK.models.map((m) => [m.id, needBytes(m, m.contexts[0])]))).toEqual({
       'qwen3.5:9b-q4_k_m': 11_380_487_246,
+      // 0.92 GB under the other two 9B builds: it has no vision projector.
+      'ornith:9b-q4_k_m': 10_458_772_264,
       'mimo-v2.6:9b-q4_k_m': 11_380_472_729,
       'north-mini-code-1.0:q4_k_m': 25_999_848_864,
       // At its own window of 131072 tokens: 18.2 GB + 0.9 GB of K/V cache + 2.6 GB.
@@ -656,6 +658,7 @@ describe('the MacBook Pro (Mac17,13: Apple M5 Pro, 48 GB)', () => {
       ['qwen3.6:35b-a3b-mtp-q4_k_m', 262144, 'good', 'ok', 41.8, undefined],
       ['north-mini-code-1.0:q4_k_m', 262144, 'good', 'ok', 41.8, undefined],
       ['mimo-v2.6:9b-q4_k_m', 131072, 'good', 'ok', 28.6, 'small'],
+      ['ornith:9b-q4_k_m', 131072, 'good', 'ok', 28.6, 'small'],
       ['qwen3.5:9b-q4_k_m', 131072, 'good', 'ok', 28.6, 'small'],
       // The dense models compute to 2.95 x 3.07 = 9.1 tokens per second on this chip (5.2 in
       // 8 bits): slow, so they come after every fast model, in the order of their rank.
@@ -704,6 +707,7 @@ describe('the MacBook Pro (Mac17,13: Apple M5 Pro, 48 GB)', () => {
       ['muse-glimmer:30b-q4_k_m', 'unknown'],
       ['north-mini-code-1.0:q4_k_m', 'unknown'],
       ['mimo-v2.6:9b-q4_k_m', 'unknown'],
+      ['ornith:9b-q4_k_m', 'unknown'],
       ['qwen3.5:9b-q4_k_m', 'unknown'],
     ]);
   });
@@ -711,34 +715,57 @@ describe('the MacBook Pro (Mac17,13: Apple M5 Pro, 48 GB)', () => {
 
 describe('the Mac mini (Mac16,10: Apple M4, 16 GB)', () => {
   /**
-   * Expected: verdict `none` (reason `memory`) on the estimated budget, and `limited` with
-   * MiMo V2.6 9B (a GGUF build) at 65,536 tokens, a TIGHT fit, once the runtime measured its
-   * budget.
+   * Expected: `limited` with Ornith 1.0 9B at 65,536 tokens, a TIGHT fit, on the estimated
+   * budget, and MiMo V2.6 9B at 65,536 tokens, also tight, once the runtime measured its budget.
    *
-   * Why. The estimated budget is 9.67 GiB (10.4 GB: 2/3 of 16 GiB minus 1). The 9B on
-   * llama.cpp needs 6.55 GB of weights + 1.14 GB for a q8_0 K/V cache of 65,536 tokens +
-   * 2.55 GB beside them (its recurrent state live and in 8 context checkpoints, the runner, and
-   * the 1 GiB prompt cache the runtime allows) = 10.2 GB: 0.987 of the estimate, just past the
-   * 0.98 a tight fit may reach. The runtime measured 11.8 GiB on this Mac; the 6 GiB reserve
-   * leaves 10 GiB (10.7 GB) of it, and the same 10.2 GB is 0.954 of that.
+   * Why. The estimated budget is 9.67 GiB (10.4 GB: 2/3 of 16 GiB minus 1). A 9B on llama.cpp
+   * needs its weights + 1.14 GB for a q8_0 K/V cache of 65,536 tokens + 2.55 GB beside them (its
+   * recurrent state live and in 8 context checkpoints, the runner, and the 1 GiB prompt cache
+   * the runtime allows). MiMo and its base are 6.55 GB (a vision projector of 0.92 GB
+   * included): 10.2 GB, 0.987 of the estimate, just past the 0.98 a tight fit may reach. The
+   * Ornith build has no projector, 5.63 GB: 9.3 GB, 0.898 of the estimate. The runtime measured
+   * 11.8 GiB on this Mac; the 6 GiB reserve leaves 10 GiB (10.7 GB) of it, which admits all
+   * three, and the rank puts MiMo first.
    *
-   * Every figure of this row is computed from the model's architecture, none was measured
-   * (`needSource: 'estimated'`), so this Mac is on the edge either way. Only a run of the 9B on
-   * it settles which side.
+   * Every figure of these rows is computed from the model's architecture, none was measured
+   * (`needSource: 'estimated'`), and no 9B was ever run on such a Mac by us.
    */
-  it('gets no model on the estimated budget: the 9B needs 0.987 of it', async () => {
+  it('gets Ornith 1.0 9B at 65536 tokens on the estimated budget, tight: the other 9B builds need 0.987 of it', async () => {
     const hw = await macMini();
     expect(hw.chip).toBe('Apple M4');
     expect(hw.memClassGb).toBe(16);
 
     const result = recommend(hw, STOCK, ALL_INSTALLED);
 
-    expect(result).toMatchObject({ verdict: 'none', reason: 'memory', budgetSource: 'estimated' });
-    expect(result.headline).toEqual({ text: LOCAL_MODEL_LABELS.noneMemory, vars: { memory: '16' } });
-    expect(result.pick).toBeUndefined();
+    expect(result).toMatchObject({ verdict: 'limited', budgetSource: 'estimated' });
+    expect(result.headline).toEqual({ text: LOCAL_MODEL_LABELS.headlineLimited });
+    expect(result.notes).toEqual([{ text: LOCAL_MODEL_LABELS.noteUntested }]);
     // floor(17,179,869,184 x 2/3) - 1 GiB.
     expect(result.budgetBytes).toBe(10_379_504_298);
     expect(result.budgetGb).toBe('10.4');
+    expect(result.pick).toMatchObject({
+      modelId: 'ornith:9b-q4_k_m',
+      modelLabel: 'Ornith 1.0 9B',
+      license: 'MIT',
+      context: 65536,
+      cli: 'opencode',
+      // 5,629,110,568 + 17,408 x 65,536 + 2,547,960,320.
+      needBytes: 9_317_921_576,
+      needGb: '9.3',
+      memory: { modelBytes: 8_177_070_888, contextBytes: 1_140_850_688, peakBytes: 0 },
+      downloadGb: '5.6',
+      budgetShare: 0.898,
+      fit: 'tight',
+      // 9.3 x 120 / 100.
+      speed: 'ok',
+      tokensPerSecond: 11.2,
+      tested: false,
+      needSource: 'estimated',
+      tag: { kind: 'best-tight', label: 'Best fit, tight' },
+    });
+    // It is the only model that fits, and only at this context: at 131072 it needs 10.5 GB.
+    expect(order(result)).toEqual(['ornith:9b-q4_k_m@65536']);
+    expect(modelFitsBudget(hw, STOCK, 'ornith:9b-q4_k_m', 131072)).toBe(false);
     const nineB = stockModel('mimo-v2.6:9b-q4_k_m');
     // 6,550,811,033 + 17,408 x 65,536 + 2,547,960,320.
     expect(needBytes(nineB, 65536)).toBe(10_239_622_041);
@@ -746,7 +773,7 @@ describe('the Mac mini (Mac16,10: Apple M4, 16 GB)', () => {
     expect(needBytes(nineB, 65536) / result.budgetBytes).toBeLessThan(0.99);
   });
 
-  it('would need 11.4 GB at 131072 tokens, more than the whole budget', async () => {
+  it('would need 11.4 GB for MiMo at 131072 tokens, more than the whole budget', async () => {
     const hw = await macMini();
     const nineB = stockModel('mimo-v2.6:9b-q4_k_m');
     const budget = deviceBudget(hw).budgetBytes;
@@ -756,7 +783,7 @@ describe('the Mac mini (Mac16,10: Apple M4, 16 GB)', () => {
     expect(modelFitsBudget(hw, STOCK, 'mimo-v2.6:9b-q4_k_m', 65536)).toBe(false);
   });
 
-  it('gets a small model with the budget its runtime measured: the 9B at 65536 tokens, tight', async () => {
+  it('gets MiMo with the budget its runtime measured: at 65536 tokens, tight', async () => {
     // The runtime reported 11.8 GiB here; the 6 GiB reserve leaves 10 GiB (10.7 GB) of it.
     const result = recommend(await macMini(), STOCK, ALL_INSTALLED, { measuredTotalBytes: MACMINI_MEASURED_TOTAL });
     expect(result).toMatchObject({
@@ -785,13 +812,20 @@ describe('the Mac mini (Mac16,10: Apple M4, 16 GB)', () => {
       needSource: 'estimated',
       tag: { kind: 'best-tight', label: 'Best fit, tight' },
     });
-    // Its base model, the same figures, is the one alternative.
-    expect(order(result)).toEqual(['mimo-v2.6:9b-q4_k_m@65536', 'qwen3.5:9b-q4_k_m@65536']);
+    // The other two 9B builds follow by rank. The Ornith build is small enough for 131072
+    // tokens here (10.5 GB, 0.974), and a model is listed at the largest context it fits at.
+    expect(order(result)).toEqual([
+      'mimo-v2.6:9b-q4_k_m@65536',
+      'ornith:9b-q4_k_m@131072',
+      'qwen3.5:9b-q4_k_m@65536',
+    ]);
   });
 
   it('gets the same with Claude Code as its only coding agent, which also needs 65536 tokens', async () => {
     const hw = await macMini();
-    expect(recommend(hw, STOCK, [fact('claude')])).toMatchObject({ verdict: 'none', reason: 'memory' });
+    const estimated = recommend(hw, STOCK, [fact('claude')]);
+    expect(estimated.verdict).toBe('limited');
+    expect(estimated.pick).toMatchObject({ modelId: 'ornith:9b-q4_k_m', context: 65536, cli: 'claude' });
     const measured = recommend(hw, STOCK, [fact('claude')], { measuredTotalBytes: MACMINI_MEASURED_TOTAL });
     expect(measured.verdict).toBe('limited');
     expect(measured.pick).toMatchObject({ modelId: 'mimo-v2.6:9b-q4_k_m', context: 65536, cli: 'claude' });
@@ -803,12 +837,13 @@ describe('every memory size, with the stock catalogue', () => {
   // size. A change of a catalogue row or of a threshold that moves one of these answers has to
   // change this table on purpose. docs/local-models.md has the same table for people.
   const EXPECTED: [soldGb: number, chip: string, answer: string][] = [
-    // The smallest need at 65536 tokens is 10.2 GB; the budget is 2.1 GB.
+    // The smallest need at 65536 tokens is 9.3 GB; the budget is 2.1 GB.
     [8, 'Apple M2', 'none memory'],
-    // The 9B needs 10.2 GB at 65536 tokens, 0.987 of the 10.4 GB estimate: just out. A runtime
-    // that measured the budget a real 16 GB Mac measured admits it (see the Mac mini above).
-    [16, 'Apple M4', 'none memory'],
-    [16, 'Apple M1', 'none memory'],
+    // The 9B build without a vision projector needs 9.3 GB at 65536 tokens, 0.898 of the 10.4 GB
+    // estimate. The other two need 10.2 GB, 0.987: just out, until a runtime measures what a
+    // real 16 GB Mac measured (see the Mac mini above). On an M1 (68 GB/s) a 9B is slow: 6.3.
+    [16, 'Apple M4', 'limited ornith:9b-q4_k_m@65536 tight ok'],
+    [16, 'Apple M1', 'limited ornith:9b-q4_k_m@65536 tight slow'],
     // 11.4 GB at 131072 tokens, 0.964 of 11.8 GB, and nothing of 12 billion fits: `limited`.
     [18, 'Apple M3 Pro', 'limited mimo-v2.6:9b-q4_k_m@131072 tight ok'],
     // On a base chip with 100 GB/s the 9B computes to 9.3 tokens per second: slow.
@@ -861,15 +896,15 @@ describe('every memory size, with the stock catalogue', () => {
     expect(result.headline).toEqual({ text: LOCAL_MODEL_LABELS.noneMemory, vars: { memory: '8' } });
     // The smallest model a harness can work with needs more than four times the budget.
     const smallest = Math.min(...STOCK.models.map((m) => needBytes(m, 65536)));
-    expect(formatGb(smallest)).toBe('10.2');
+    expect(formatGb(smallest)).toBe('9.3');
     expect(smallest / result.budgetBytes).toBeGreaterThan(4);
   });
 
-  it('gives no model to 8 and 16 GB, a small model to every Mac of 18 and 24 GB, and every Mac from 36 GB a model of 27 billion or more', () => {
+  it('gives no model to 8 GB, a small model to every Mac from 16 to 24 GB, and every Mac from 36 GB a model of 27 billion or more', () => {
     for (const hw of SWEEP) {
       const result = recommend(hw, STOCK, ALL_INSTALLED);
       const label = `${hw.memClassGb} GB ${hw.chip}`;
-      if (hw.memClassGb <= 16) expect(result.reason, label).toBe('memory');
+      if (hw.memClassGb <= 8) expect(result.reason, label).toBe('memory');
       else if (hw.memClassGb <= 24) {
         expect(result.verdict, label).toBe('limited');
         expect(result.pick?.paramsB, label).toBe(9);
@@ -2125,8 +2160,12 @@ describe('the measured budget, end to end', () => {
     const stepped = order(estimated).filter((entry, index) => order(measured)[index] !== entry);
     expect(stepped).toEqual(['qwen3.8:27b-q8_0@65536']);
     expect(order(measured)).toContain('qwen3.8:27b-q8_0@131072');
-    expect(rows(estimated).map((c) => c.budgetShare)).toEqual([0.957, 0.767, 0.692, 0.303, 0.303, 0.853, 0.975, 0.576]);
-    expect(rows(measured).map((c) => c.budgetShare)).toEqual([0.895, 0.717, 0.647, 0.283, 0.283, 0.798, 0.976, 0.539]);
+    expect(rows(estimated).map((c) => c.budgetShare)).toEqual([
+      0.957, 0.767, 0.692, 0.303, 0.278, 0.303, 0.853, 0.975, 0.576,
+    ]);
+    expect(rows(measured).map((c) => c.budgetShare)).toEqual([
+      0.895, 0.717, 0.647, 0.283, 0.26, 0.283, 0.798, 0.976, 0.539,
+    ]);
     for (const candidate of rows(measured)) {
       expect(candidate.budgetShare).toBeCloseTo(candidate.needBytes / MACBOOK_MEASURED_TOTAL, 3);
     }
