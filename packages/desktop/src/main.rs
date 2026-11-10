@@ -832,11 +832,7 @@ impl App {
                     self.to_connect_page(msg);
                 }
             }
-            UserEvent::LogoLidStatus(line) => {
-                if let Some(item) = &self.menu.logo_lid {
-                    item.set_text(line);
-                }
-            }
+            UserEvent::LogoLidStatus(line) => self.show_lid_status(line),
             UserEvent::ServerStartDone {
                 generation,
                 url,
@@ -1054,6 +1050,20 @@ impl App {
         let server = phase.loaded().filter(|_| styles.active() && logo::available());
         self.logo_watch
             .sync(server.map(|url| (url.as_str(), self.auth.as_deref(), styles)));
+        drop(phase);
+        self.show_lid_status(logo::lid_status_line());
+    }
+
+    /// The line under the logo's styles: what the closed lid did last, or that
+    /// nothing watches it now.
+    fn show_lid_status(&self, line: String) {
+        if let Some(item) = &self.menu.logo_lid {
+            if self.logo_watch.watching() {
+                item.set_text(line);
+            } else {
+                item.set_text(logo::LID_NOT_WATCHED);
+            }
+        }
     }
 
     fn choose_logo_blink(&mut self, signal: Signal, style: BlinkStyle) {

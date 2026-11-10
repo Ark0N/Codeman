@@ -253,8 +253,8 @@ With the lid closed the daemon tells every module so (`ClamshellUpdate` 1), and 
 target is then 0 whatever `DisplayLogicalState` says; the same goes while the display sleeps
 (`DisplayPowerStateEvent` WillSleep or DidSleep). A client's `ClamshellUpdate` reaches the
 same modules, which is how LogoLight measured it on the real Mac with an external display.
-So while the lid sensor (`AppleClamshellState`) says closed, the built-in display is off and
-the Mac is on its power adapter (on battery a closed MacBook sleeps, and a dark wake must not
+So while the lid sensor (`AppleClamshellState`) says closed (it wins over a display list that
+still shows the built-in display awake) and the Mac is on its power adapter (on battery a closed MacBook sleeps, and a dark wake must not
 light the logo in a bag), the child writes `ClamshellUpdate` 0 and then 1 to each keyboard
 alone at the start of every cycle: said again each time, because the daemon repeats the real
 lid state whenever a display or a keyboard comes up, and handles a closing lid a moment after
@@ -265,9 +265,11 @@ Unblank, which a held level needs), then writes DidSleep (only if DidWake was wr
 other display is on) and `ClamshellUpdate` 1, since normal for a closed lid is dark; the
 marker covers a child killed in between. When the lid opens, the daemon tells every module
 itself and nothing is written. What the closed lid did last (blinking, blinking once the
-display was told awake, stayed dark, or not tried and why) goes to a file next to
-`desktop.json` (`logo-lid`, with the readings behind it on its second line), and the app
-shows its first line as **Lid Closed: …** under View > Apple Logo Blink Styles.
+display was told awake, stayed dark, nothing to show with no agent at work, not tried and why,
+or that the Mac went to sleep, which the child sees as wall-clock time that passed while its
+monotonic clock stood still) goes to a file next to `desktop.json` (`logo-lid`, with the
+readings behind it on its second line), and the app shows its first line as **Lid Closed: …**
+under View > Apple Logo Blink Styles, or says nothing watches the lid while no child runs.
 
 The app must not end with the logo dark, and the release profile has `panic = "abort"`, so no
 cleanup code of the app can be relied on. So all of it runs as this same binary with

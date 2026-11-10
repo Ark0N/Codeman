@@ -520,6 +520,14 @@ pub enum LidStatus {
     OnBattery,
     NoKeyboards,
     NoLidSensor,
+    /// No agent is working (and none waits for you): nothing to show.
+    Idle,
+    SwitchedOff,
+    LogoLight,
+    /// The logo refused a change, or the marker could not be written.
+    Refused,
+    /// The Mac slept: with the lid closed, the lid helper did not keep it awake.
+    Slept,
 }
 
 impl LidStatus {
@@ -531,6 +539,11 @@ impl LidStatus {
             LidStatus::OnBattery => "not tried, on battery",
             LidStatus::NoKeyboards => "not tried, no keyboard to keep dark",
             LidStatus::NoLidSensor => "not tried, the lid sensor could not be read",
+            LidStatus::Idle => "nothing to show, no agent at work",
+            LidStatus::SwitchedOff => "not tried, the logo is switched off",
+            LidStatus::LogoLight => "not tried, LogoLight has the logo",
+            LidStatus::Refused => "not tried, the logo refused a change",
+            LidStatus::Slept => "the Mac went to sleep",
         }
     }
 }
@@ -672,7 +685,7 @@ impl<'a, L: Logo> Fader<'a, L> {
         if !self.touched && self.keyboards.is_none() {
             return true;
         }
-        let awake = self.logo.display_awake();
+        let awake = seen(self.logo);
         let reachable = awake || self.lid_open;
         // A fade toward lit may be a held one, or still under way at its own
         // duration: turn it round without moving, so relighting is a change.
@@ -745,7 +758,7 @@ fn blink(logo: &impl Logo, marker: &Marker, moves: &[Move], mut wait: impl FnMut
     let mut next = 0;
     'blink: loop {
         let step = moves[next % moves.len()];
-        let awake = logo.display_awake();
+        let awake = seen(logo);
         // Every cycle starts with a fall: the moment to check that the logo is
         // still the agents' and can be seen.
         if !step.lit {
@@ -815,6 +828,13 @@ fn blink(logo: &impl Logo, marker: &Marker, moves: &[Move], mut wait: impl FnMut
         marker.clear();
     }
     ended
+}
+
+/// The built-in display can be seen: it is on, and the lid sensor does not say
+/// closed. A closed lid counts as closed even when the display list still has the
+/// built-in display awake.
+fn seen(logo: &impl Logo) -> bool {
+    logo.display_awake() && logo.lid_closed() != Some(true)
 }
 
 /// What a closed lid has shown during one blink.
@@ -926,7 +946,7 @@ pub fn recover(logo: &impl Logo, marker: &Marker, legacy: &Marker) {
         fader.touched = true;
         // A child killed with the lid closed may have told the logo it is open,
         // and the display that it woke.
-        let under_the_lid = !logo.display_awake() && logo.lid_closed() == Some(true);
+        let under_the_lid = logo.lid_closed() == Some(true);
         fader.lid_open = under_the_lid;
         fader.display_woken = under_the_lid;
         if fader.restore() {
@@ -969,6 +989,10 @@ trait Signals {
     fn wait(&mut self, time: Duration) -> bool;
     fn activity(&self) -> Activity;
     fn now(&self) -> Instant;
+    /// The Mac slept since this was last asked.
+    fn slept(&mut self) -> bool {
+        false
+    }
 }
 
 /// The child's life: show what the agents are doing, until the app goes away. A
@@ -977,16 +1001,42 @@ trait Signals {
 fn watch(logo: &impl Logo, marker: &Marker, styles: BlinkStyles, signals: &mut impl Signals) {
     let mut settled = Settled::new(BlinkStyle::Off, signals.now());
     let mut declined = false;
+    // What the menu line was last told from here, and when the lid is next read.
+    let mut said: Option<LidStatus> = None;
+    let mut look_at_lid = signals.now();
     loop {
         if signals.wait(LOOK_EVERY) {
             return;
         }
+        if signals.slept() {
+            logo.lid_status(LidStatus::Slept);
+            said = Some(LidStatus::Slept);
+        }
         let style = settled.update(styles.pick(signals.activity()), signals.now());
         if style == BlinkStyle::Off {
             declined = false;
-            continue;
         }
-        if declined {
+        if style == BlinkStyle::Off || declined {
+            // No blink runs: if the lid is closed, the menu line says why.
+            if signals.now() >= look_at_lid {
+                look_at_lid = signals.now() + NOT_LIT_RECHECK;
+                if logo.lid_closed() == Some(true) {
+                    let why = if style == BlinkStyle::Off {
+                        LidStatus::Idle
+                    } else if logo.mode() != Some(MODE_AUTO) {
+                        LidStatus::SwitchedOff
+                    } else if logo.driven_elsewhere() {
+                        LidStatus::LogoLight
+                    } else {
+                        LidStatus::Refused
+                    };
+                    if said != Some(why) && said != Some(LidStatus::Slept) {
+                        logo.lid_status(why);
+                        note(logo, why.text());
+                    }
+                    said = Some(why);
+                }
+            }
             continue;
         }
         let mut app_gone = false;
@@ -1001,6 +1051,9 @@ fn watch(logo: &impl Logo, marker: &Marker, styles: BlinkStyles, signals: &mut i
                     app_gone = true;
                     return true;
                 }
+                if signals.slept() {
+                    logo.lid_status(LidStatus::Slept);
+                }
                 if settled.update(styles.pick(signals.activity()), signals.now()) != style {
                     return true;
                 }
@@ -1010,6 +1063,9 @@ fn watch(logo: &impl Logo, marker: &Marker, styles: BlinkStyles, signals: &mut i
             return;
         }
         declined = ended == Ended::Declined;
+        // The blink may have said something since: say it again once it ends.
+        said = None;
+        look_at_lid = signals.now();
     }
 }
 
@@ -1028,6 +1084,11 @@ pub struct Watcher {
 }
 
 impl Watcher {
+    /// A child runs.
+    pub fn watching(&self) -> bool {
+        self.current.is_some()
+    }
+
     /// Watch this server with this login in these styles, or nothing. A child
     /// for anything else ends first: its pipe closes with the old value. It is
     /// back to normal well before the next child looks, which takes `SETTLE`.
@@ -1076,13 +1137,16 @@ fn lid_status_path() -> Option<PathBuf> {
     dirs::config_dir().map(|dir| dir.join("Codeman").join("logo-lid"))
 }
 
+/// The line under View > Blink Apple Logo while no child runs.
+pub const LID_NOT_WATCHED: &str = "Lid Closed: not watched (Blink Apple Logo off, or no server open)";
+
 /// The line under View > Blink Apple Logo.
 pub fn lid_status_line() -> String {
     let last = lid_status_path()
         .and_then(|path| std::fs::read_to_string(path).ok())
         .and_then(|text| text.lines().next().map(str::to_owned))
         .filter(|line| !line.is_empty());
-    format!("Lid Closed: {}", last.as_deref().unwrap_or("not tried yet"))
+    format!("Lid Closed: {}", last.as_deref().unwrap_or("not closed yet"))
 }
 
 /// Calls `changed` with the line whenever the child writes a new one. A thread
@@ -1542,11 +1606,25 @@ mod system {
     struct Live {
         pipe_closed: Receiver<()>,
         activity: Arc<Mutex<Activity>>,
+        slept: bool,
     }
+
+    /// More wall-clock time than this, past the monotonic time, in one wait means
+    /// the Mac slept: `Instant` stops while it sleeps, the wall clock does not.
+    const SLEPT_GAP: Duration = Duration::from_secs(10);
 
     impl Signals for Live {
         fn wait(&mut self, time: Duration) -> bool {
-            !matches!(self.pipe_closed.recv_timeout(time), Err(RecvTimeoutError::Timeout))
+            let (wall, monotonic) = (std::time::SystemTime::now(), Instant::now());
+            let gone = !matches!(self.pipe_closed.recv_timeout(time), Err(RecvTimeoutError::Timeout));
+            if wall.elapsed().unwrap_or_default() > monotonic.elapsed() + SLEPT_GAP {
+                self.slept = true;
+            }
+            gone
+        }
+
+        fn slept(&mut self) -> bool {
+            std::mem::take(&mut self.slept)
         }
 
         fn activity(&self) -> Activity {
@@ -1618,7 +1696,11 @@ mod system {
         let found = activity.clone();
         std::thread::spawn(move || poll_until_refused(poller, &found));
 
-        let mut signals = Live { pipe_closed, activity };
+        let mut signals = Live {
+            pipe_closed,
+            activity,
+            slept: false,
+        };
         watch(&logo, &Marker::default_location(), styles, &mut signals);
         std::process::exit(0)
     }
@@ -2501,6 +2583,29 @@ mod tests {
     }
 
     #[test]
+    fn the_lid_sensor_wins_over_a_display_list_that_still_has_the_display() {
+        let logo = FakeLogo::new(MODE_AUTO);
+        let (marker, _) = temp_marker("lid-sensor");
+        run_until(&logo, &marker, BlinkStyle::Calm, secs(40), |logo, now| {
+            if now >= secs(10) && logo.lid.get() != Some(true) {
+                // The sensor says closed; the display list still shows the display.
+                logo.lid.set(Some(true));
+                logo.told_open.set(false);
+            }
+        });
+        let since = logo.writes_since(secs(10));
+        let told = since
+            .iter()
+            .position(|w| *w == W::Lid(true))
+            .expect("told the lid is open");
+        assert!(
+            !since[told..].contains(&W::Keyboards(true)),
+            "no keyboard lit under the lid"
+        );
+        assert_eq!(logo.statuses(), [LidStatus::Blinking]);
+    }
+
+    #[test]
     fn recover_darkens_a_logo_a_killed_child_left_lit_under_the_closed_lid() {
         let logo = FakeLogo::new(MODE_AUTO);
         let (marker, path) = temp_marker("lid-killed");
@@ -2526,6 +2631,11 @@ mod tests {
             LidStatus::OnBattery,
             LidStatus::NoKeyboards,
             LidStatus::NoLidSensor,
+            LidStatus::Idle,
+            LidStatus::SwitchedOff,
+            LidStatus::LogoLight,
+            LidStatus::Refused,
+            LidStatus::Slept,
         ] {
             let text = status.text();
             assert!(
@@ -2592,6 +2702,8 @@ mod tests {
         now: Rc<Cell<Duration>>,
         spans: Vec<(u64, u64, Activity)>,
         app_gone_at: u64,
+        /// When the Mac is found to have slept, once.
+        slept_at: Option<u64>,
     }
 
     impl Script {
@@ -2606,6 +2718,7 @@ mod tests {
                 now: logo.now.clone(),
                 spans: spans.to_vec(),
                 app_gone_at,
+                slept_at: None,
             }
         }
 
@@ -2631,6 +2744,62 @@ mod tests {
         fn now(&self) -> Instant {
             self.start + self.now.get()
         }
+
+        fn slept(&mut self) -> bool {
+            let due = self.slept_at.is_some_and(|at| self.elapsed_ms() >= at);
+            if due {
+                self.slept_at = None;
+            }
+            due
+        }
+    }
+
+    #[test]
+    fn with_the_lid_closed_and_no_agent_at_work_the_line_says_so() {
+        let logo = FakeLogo::new(MODE_AUTO);
+        logo.close_the_lid();
+        let (marker, _) = temp_marker("watch-lid-idle");
+        let mut script = Script::new(&logo, &[], 20_000);
+        watch(&logo, &marker, WORK, &mut script);
+        assert_eq!(logo.statuses(), [LidStatus::Idle]);
+        assert_eq!(logo.writes(), []);
+    }
+
+    #[test]
+    fn with_the_lid_closed_a_declined_blink_says_why() {
+        for (mode, elsewhere, why) in [
+            (MODE_OFF, false, LidStatus::SwitchedOff),
+            (MODE_AUTO, true, LidStatus::LogoLight),
+        ] {
+            let logo = FakeLogo::new(mode);
+            logo.elsewhere.set(elsewhere);
+            logo.close_the_lid();
+            let (marker, _) = temp_marker("watch-lid-declined");
+            let mut script = Script::new(&logo, &[(0, 30_000)], 30_000);
+            watch(&logo, &marker, WORK, &mut script);
+            // Idle while the work settles, then the reason.
+            assert_eq!(logo.statuses(), [LidStatus::Idle, why]);
+        }
+    }
+
+    #[test]
+    fn a_sleep_is_the_line_too() {
+        let logo = FakeLogo::new(MODE_AUTO);
+        let (marker, _) = temp_marker("watch-slept");
+        let mut script = Script::new(&logo, &[], 20_000);
+        script.slept_at = Some(5_000);
+        watch(&logo, &marker, WORK, &mut script);
+        assert_eq!(logo.statuses(), [LidStatus::Slept]);
+    }
+
+    #[test]
+    fn work_then_rest_under_the_closed_lid_reads_blinking_then_idle() {
+        let logo = FakeLogo::new(MODE_AUTO);
+        logo.close_the_lid();
+        let (marker, _) = temp_marker("watch-lid-work");
+        let mut script = Script::new(&logo, &[(0, 30_000)], 50_000);
+        watch(&logo, &marker, WORK, &mut script);
+        assert_eq!(logo.statuses(), [LidStatus::Idle, LidStatus::Blinking, LidStatus::Idle]);
     }
 
     const CYCLE_MS: u64 = (CALM[0].lit.as_millis() + CALM[0].dark.as_millis()) as u64;
