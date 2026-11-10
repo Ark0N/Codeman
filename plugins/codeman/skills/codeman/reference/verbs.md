@@ -383,16 +383,15 @@ recovered by submitting it with `{"input":"\r"}`.
 only when the workspace actually has them, see [§5.1](#51-where-to-spawn)) **and for
 `deepseek`** — the one external CLI that reports its own lifecycle, so its `stop` is a
 real end-of-turn signal rather than a guess. On
-`shell`/`opencode`/`codex`/`gemini`/`antigravity`/`pi`/`grok`/`copilot`, requesting them explicitly is a
+`shell`/`opencode`/`codex`/`gemini`/`antigravity`/`pi`/`grok`/`omp`/`copilot`, requesting them explicitly is a
 400 (except `blocked` on `codex`, which Codeman reads off its screen when an approval,
 question or trust dialog is up; a wait for it answers at once if one already is), and
 lifecycle transitions there are coarse (a short shell command may emit **no**
 `idle` transition at all, verified live), so synchronize those with markers.
 
-`omp` sits in between: its approval dialogs DO reach Codeman (Codeman installs a hook into
-the workspace that reports them, so the tab alert, notification and Approvals Inbox all
-work), but `stop`/`idle_prompt` are still read off its screen — an explicit wait for either
-is still a 400. Treat an omp pane's end-of-turn as guessed, same as the list above.
+`blocked` also works on a local `omp` session: Codeman installs a hook module into its
+workspace that reports omp's approval dialogs (the inbox item is alert-only, so answer in
+the pane). `stop` stays a 400 there, so wait on `idle` or a marker for end-of-turn.
 
 ⚠️ A dsh session can still refuse them for a per-SESSION reason: `statusReporting:
 false` at create time disarms the bridge, and an explicit `until=stop` is then a 400

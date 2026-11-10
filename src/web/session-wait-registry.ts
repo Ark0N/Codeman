@@ -295,15 +295,38 @@ export function sessionHookOptions(session: {
 
 /**
  * Whether `blocked` can ever fire for this session: its CLI reports it through hooks
- * (`hooksAvailableForMode()`), or Codeman reads the dialogs it blocks on off its screen
- * (`capabilities.workDetect.blockedLine`, codex). The screen half needs no per-session
- * facts: a remote or Docker pane is still a local tmux pane showing the CLI's screen
- * (their nested tmux runs with `status off`, so nothing is drawn below the CLI).
+ * (`hooksAvailableForMode()`), through an approval-only hook module
+ * (`approvalHookAvailableForMode()`, omp), or Codeman reads the dialogs it blocks on off
+ * its screen (`capabilities.workDetect.blockedLine`, codex). The screen half needs no
+ * per-session facts: a remote or Docker pane is still a local tmux pane showing the CLI's
+ * screen (their nested tmux runs with `status off`, so nothing is drawn below the CLI).
  *
  * ⚠️ Says nothing about `stop`. A screen shows a dialog; it never says a turn ended.
  */
 export function blockedSignalAvailable(mode: SessionMode, options: HookCapabilityOptions = {}): boolean {
-  return hooksAvailableForMode(mode, options) || !!getCli(mode)?.capabilities.workDetect?.blockedLine;
+  return (
+    hooksAvailableForMode(mode, options) ||
+    approvalHookAvailableForMode(mode, options) ||
+    !!getCli(mode)?.capabilities.workDetect?.blockedLine
+  );
+}
+
+/**
+ * Whether this session reports its approval dialogs, and ONLY those, through a hook
+ * module Codeman installed into its workspace (`capabilities.approvalHookFile`, omp).
+ *
+ * Deliberately separate from `hooksAvailableForMode()`: its consumers read a yes as
+ * "this CLI has Claude's full hook set", so `stop` would be accepted and never fire, and
+ * the inbox would offer Approve/Deny keystrokes it cannot verify. A yes HERE means
+ * `blocked` can fire and a dialog opens an alert-only inbox item, nothing more.
+ *
+ * Per-session like the supervised bridge: the module is installed only into a LOCAL
+ * workspace Codeman created the session in, so an adopted pane, a remote attach and a
+ * Docker case (`deepSeekBridgeUnreachable`, set for both) never have one.
+ */
+export function approvalHookAvailableForMode(mode: SessionMode, options: HookCapabilityOptions = {}): boolean {
+  if (options.adopted || options.deepSeekBridgeUnreachable) return false;
+  return !!getCli(mode)?.capabilities.approvalHookFile;
 }
 
 /** Outcome of resolving a caller-supplied wait target against a session's mode. */

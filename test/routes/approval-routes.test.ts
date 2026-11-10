@@ -13,6 +13,7 @@ import fastifyCookie from '@fastify/cookie';
 import { registerApprovalRoutes } from '../../src/web/routes/approval-routes.js';
 import { registerHookEventRoutes } from '../../src/web/routes/hook-event-routes.js';
 import { approvalInbox } from '../../src/web/approval-inbox.js';
+import { sessionWaits } from '../../src/web/session-wait-registry.js';
 import { raiseScreenBlocked } from '../../src/web/screen-blocked.js';
 import { installRouteErrorHandler } from '../../src/web/route-error-handler.js';
 import { httpStatusForErrorCode, type ApiErrorCode } from '../../src/types.js';
@@ -519,6 +520,85 @@ describe('approval routes: supervised-hook (DeepSeek) alert-only items', () => {
     expect(session.writeBuffer).toEqual([]);
     // Item stays pending — it is an alert, not a failed answer.
     expect(await listApprovals(harness)).toHaveLength(1);
+  });
+});
+
+describe('approval routes: approval-only hook module (omp) alert-only items', () => {
+  let harness: RouteTestHarness;
+  let session: MockSession;
+
+  beforeEach(async () => {
+    harness = await createEnvelopeHarness();
+    session = harness.ctx.sessions.get(SESSION_ID)!;
+    session.mode = 'omp';
+    // A Claude-shaped frame on purpose: even when the capture parses into options, an
+    // omp item must stay alert-only, because omp's composer takes the keystroke.
+    session.terminalBuffer = PERMISSION_DIALOG;
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    for (const item of approvalInbox.listPending()) {
+      approvalInbox.resolveForSession(item.sessionId, 'dismissed');
+    }
+    approvalInbox.onPending = approvalInbox.onUpdated = approvalInbox.onResolved = undefined;
+    await harness.app.close();
+  });
+
+  it('creates an answerInTerminal item and omits approvalId from push', async () => {
+    await postHook(harness, 'permission_prompt', { tool_name: 'bash', message: 'restricted folder' });
+    const approvals = await listApprovals(harness);
+    expect(approvals).toHaveLength(1);
+    expect(approvals[0]).toMatchObject({
+      sessionId: SESSION_ID,
+      kind: 'permission',
+      toolName: 'bash',
+      message: 'restricted folder',
+      answerInTerminal: true,
+    });
+    const push = harness.ctx.sendPushNotifications.mock.calls.find((c) => c[0] === 'hook:permission_prompt');
+    expect(push?.[1]).toBeDefined();
+    expect(push?.[1]).not.toHaveProperty('approvalId');
+  });
+
+  it('refuses Approve with a terminal-only error and writes nothing into the pane', async () => {
+    await postHook(harness, 'permission_prompt', { tool_name: 'bash' });
+    const [item] = await listApprovals(harness);
+    for (const payload of [{ action: 'approve' }, { action: 'deny' }, { action: 'option', option: 1 }]) {
+      const res = await harness.app.inject({ method: 'POST', url: `/api/approvals/${item.id}/answer`, payload });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toMatch(/answered in the terminal/i);
+    }
+    expect(session.writeBuffer).toEqual([]);
+    expect(await listApprovals(harness)).toHaveLength(1);
+  });
+
+  it('resolves the item on elicitation_complete', async () => {
+    await postHook(harness, 'permission_prompt', { tool_name: 'bash' });
+    await postHook(harness, 'elicitation_complete', { tool_name: 'bash', approved: true });
+    expect(await listApprovals(harness)).toHaveLength(0);
+  });
+
+  it('wakes a blocked waiter, and never a stop waiter', async () => {
+    const notify = vi.spyOn(sessionWaits, 'notifySignal');
+    await postHook(harness, 'permission_prompt', { tool_name: 'bash' });
+    await postHook(harness, 'stop', {});
+    expect(notify.mock.calls).toEqual([[SESSION_ID, 'blocked']]);
+  });
+
+  it('drops events the module never sends (stop, idle_prompt) instead of opening items', async () => {
+    await postHook(harness, 'idle_prompt', {});
+    expect(await listApprovals(harness)).toHaveLength(0);
+    await postHook(harness, 'permission_prompt', { tool_name: 'bash' });
+    // A forged stop must not clear a real pending dialog either.
+    await postHook(harness, 'stop', {});
+    expect(await listApprovals(harness)).toHaveLength(1);
+  });
+
+  it('opens nothing for a remote omp session, where no module was installed', async () => {
+    (session as unknown as { remote: unknown }).remote = { host: 'box' };
+    await postHook(harness, 'permission_prompt', { tool_name: 'bash' });
+    expect(await listApprovals(harness)).toHaveLength(0);
   });
 });
 

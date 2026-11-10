@@ -1661,9 +1661,11 @@ const DEEPSEEK: CliEntry = {
 };
 
 // OMP (`omp`, omp.sh). The plainest entry in the catalog after opencode: no permission
-// flags at all — omp reads its model routing and hooks from `~/.omp/agent`, so the CLI's
-// own config governs and there is deliberately nothing bypass-shaped to clamp. Its only
-// privileged surface is a pair of ENV keys (see privilegedEnvKeys below).
+// flags at all — omp reads its model routing, approval mode and user hooks from
+// `~/.omp/agent`, so the CLI's own config governs and there is deliberately nothing
+// bypass-shaped to clamp. The one thing Codeman adds is a project hook module that
+// reports approval dialogs (`approvalHookFile` below). Its only privileged surface is a
+// pair of ENV keys (see privilegedEnvKeys below).
 const OMP: CliEntry = {
   id: 'omp' as CliEntry['id'],
   label: 'OMP',
@@ -1745,17 +1747,15 @@ const OMP: CliEntry = {
     // omp emits REAL approval events (`tool_approval_requested` / `tool_approval_resolved`),
     // so an omp pane can report a pending dialog first-hand instead of by inference.
     // Codeman installs the hook module named by `approvalHookFile` into
-    // `<workspace>/.claude/hooks/pre/` when a session is created; it forwards those two
-    // events to /api/hook-event as `permission_prompt` / `elicitation_complete`, the same
-    // names claude's settings block sends, so the tab alert, the desktop notification and
-    // the Approvals Inbox work unchanged.
-    // ⚠️ 'always' rather than 'supervised': the report comes from a hook Codeman owns and
-    // installs (like claude's), not from a supervised-CLI status bridge.
-    // ⚠️ Only approvals are reported. `stop`/`idle_prompt` still come from `workDetect`
-    // below, which stays the source of truth for whether an omp pane is working or idle.
-    hooks: 'always',
-    // The hook module Codeman writes for this CLI. Declared as data so the session-create
-    // path asks "does this CLI declare a hook file?" instead of branching on an id.
+    // `<workspace>/.claude/hooks/pre/` when a session is created (both create paths); it
+    // forwards those two events to /api/hook-event as `permission_prompt` /
+    // `elicitation_complete`, so the tab alert, the desktop notification and an ALERT-ONLY
+    // Approvals Inbox item (answer in the terminal) work.
+    // ⚠️ `hooks` stays 'none' (inherited from agentDefaults): that value means Claude's full
+    // hook set (`stop`, `idle_prompt`, answerable dialogs, `.claude/settings.local.json`),
+    // and omp has none of it. `approvalHookFile` is the separate, narrower capability;
+    // `approvalHookAvailableForMode()` is its predicate. Idle stays screen-read via
+    // `workDetect` below.
     approvalHookFile: 'codeman-approval.ts',
     // Fullscreen alt-screen TUI, same shape as antigravity/grok: only the
     // tmux-attach-time smcup strip, not Ink's full erase-scrollback+DECSET strip.
@@ -1778,7 +1778,8 @@ const OMP: CliEntry = {
       promptGlyph: '╰─',
       workingLine: '[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] [0-9hms ]+> |⎋ Working',
     },
-    // No permission prompts and no bypass flag, so nothing config-shaped to clamp — the
+    // No permission FLAGS (omp's approval mode lives in its own config, `tools.approvalMode`)
+    // and no bypass flag, so nothing config-shaped to clamp — the
     // whole privileged surface here is env-shaped.
     privilegedParams: [],
     // Where omp resolves its auth from. No known concrete exfiltration path today (omp

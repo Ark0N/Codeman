@@ -1090,6 +1090,19 @@ export function registerSessionRoutes(
   /** Test seam: inject a registry with fake IO instead of the real TCP/WoL probes. */
   options: { remoteWake?: RemoteWakeRegistry } = {}
 ): RemoteWakeRegistry {
+  /**
+   * Install the approval hook MODULE a CLI declares (`capabilities.approvalHookFile`,
+   * omp) into a LOCAL workspace, so its approval dialogs raise an alert. Shared by
+   * POST /api/sessions and POST /api/quick-start so the two cannot drift; callers own
+   * the remote/Docker/named-workspace conditions and call it only after the launch
+   * pre-flight. Gated on `workspaceHooksEnabled` like Claude's block. Best-effort: a
+   * failure here must not fail the create.
+   */
+  const installApprovalHook = async (mode: SessionMode, workspace: string): Promise<void> => {
+    const fileName = getCli(mode)?.capabilities.approvalHookFile;
+    if (!fileName || !(await ctx.getWorkspaceHooksEnabled())) return;
+    await applyApprovalHookFile(workspace, fileName).catch(() => {});
+  };
   // Wake-on-LAN for sleeping remote hosts (see remote-wake.ts). One registry per
   // route registration (= one web server) — the same shape as the process-wide
   // `sessionWaits` singleton, but without the global.
@@ -1332,18 +1345,6 @@ export function registerSessionRoutes(
       await applyWorkspaceHooks(workingDir, await ctx.getWorkspaceHooksEnabled());
     }
 
-    // A CLI whose hooks are MODULES rather than a settings.local.json block (omp) needs
-    // its hook file installed into the workspace, so its approval dialogs raise the same
-    // alert a claude pane does. Registry-driven: `approvalHookFile` names the file, so no
-    // call site branches on a CLI id. Same local-workspace and `workspaceHooksEnabled`
-    // gate as claude's block; best-effort, because a failure here must not block a create.
-    const approvalHookFile = getCli(body.mode ?? 'claude')?.capabilities.approvalHookFile;
-    if (!remote && body.workingDir && approvalHookFile) {
-      if (await ctx.getWorkspaceHooksEnabled()) {
-        await applyApprovalHookFile(workingDir, approvalHookFile).catch(() => {});
-      }
-    }
-
     // Refuse up front if the requested CLI cannot start, rather than spawning a pane that
     // dies on `command not found`. The message comes from the resolver, so it names where
     // resolution actually looked (server PATH, login shell, the entry's search dirs); a
@@ -1363,6 +1364,13 @@ export function registerSessionRoutes(
       if (cliLaunchError) {
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, cliLaunchError);
       }
+    }
+
+    // Approval hook module (omp): after the pre-flight, like the agent skill below, so a
+    // CLI that cannot start leaves nothing in the workspace. Same remote and
+    // named-workingDir conditions as the hooks above.
+    if (!remote && body.workingDir) {
+      await installApprovalHook(body.mode ?? 'claude', workingDir);
     }
 
     // Agent skill (docs/agent-control-plan.md §2): ADD-ONLY on create, same shared-
@@ -4641,6 +4649,13 @@ export function registerSessionRoutes(
       } else {
         await refreshStaleCodemanHooks(workspacePath).catch(() => {});
       }
+    }
+
+    // Approval hook module (omp), for a new AND an existing case. The launch pre-flight
+    // above has passed. Local only: a remote case path lives on another host, and a Docker
+    // pane cannot reach the loopback API (`approvalHookAvailableForMode()` answers no there).
+    if (!remote && !docker) {
+      await installApprovalHook(mode, workspacePath);
     }
 
     // Agent skill injection (docs/agent-control-plan.md §2): ADD-ONLY on create,
