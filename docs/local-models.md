@@ -333,7 +333,8 @@ install does; a checked model is never deleted that way.
 ## Stop, Start, Remove
 
 - **Stop** stops the runtime and keeps it from starting at the next boot. **Start** undoes
-  that.
+  that, and so does a switch to another model or the install of one: the job starts the
+  runtime, and the model it ends on is in use.
 - **Remove** stops the runtime, removes the endpoint record, switches the setting off again
   only when this feature switched it on and no other endpoint is saved, and deletes the
   runtime and its private home. The downloaded models (all of them) are deleted only when

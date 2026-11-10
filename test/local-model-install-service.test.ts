@@ -3046,6 +3046,31 @@ describe('use: the switch to a checked model', () => {
     expect(h.store.get().state).toBe('installed');
   });
 
+  it('a switch or a new model from a stopped model starts the runtime and undoes the Stop', async () => {
+    const stopped: LocalModelStateFile = { ...TWO_MODELS, runtime: { ...INSTALLED.runtime!, enabled: false } };
+    const switched = setup({ state: stopped, runtimeOnDisk: true, agentInstalled: true });
+    await switched.service.boot();
+    expect(switched.supervisor.start).not.toHaveBeenCalled();
+    await switched.service.use({ modelId: GPT.id }, ADMIN);
+    await switched.service.idle();
+    // The model is in use and running now, so it starts with the server again, like after Start.
+    expect(switched.store.get()).toMatchObject({ state: 'installed', runtime: { enabled: true } });
+    expect((await switched.service.view()).running).toBe(true);
+
+    const added = setup({ state: { ...INSTALLED, runtime: { ...INSTALLED.runtime!, enabled: false } } });
+    added.world.runtimeOnDisk = true;
+    added.world.agentInstalled = true;
+    await added.service.boot();
+    await added.service.install(ADD_GPT, ADMIN);
+    await added.service.idle();
+    expect(added.store.get()).toMatchObject({ state: 'installed', model: { id: GPT.id }, runtime: { enabled: true } });
+
+    // A switch that was refused changed nothing: the model stays stopped.
+    const refused = setup({ state: stopped, runtimeOnDisk: true, agentInstalled: true });
+    await refused.service.use({ modelId: 'someone-else:7b' }, ADMIN);
+    expect(refused.store.get().runtime?.enabled).toBe(false);
+  });
+
   it('Cancel pauses a switch like any job, and Resume goes on with it', async () => {
     const h = setup({
       state: TWO_MODELS,

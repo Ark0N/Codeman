@@ -1955,6 +1955,7 @@ class LocalModelServiceImpl implements LocalModelService {
         steps: jobSteps({ agentInstalled: harness.installed }),
       });
       if (refused) return refused;
+      await this.undoStop();
       this.forgetStore();
       void this.deps
         .audit({
@@ -2015,6 +2016,7 @@ class LocalModelServiceImpl implements LocalModelService {
         cli,
       });
       if (refused) return refused;
+      await this.undoStop();
       this.forgetStore();
       void this.deps
         .audit({
@@ -2181,6 +2183,19 @@ class LocalModelServiceImpl implements LocalModelService {
       }
       return (await this.beginJob(actor, { type: 'resume' })) ?? this.answer();
     });
+  }
+
+  /**
+   * A job that starts from a model the person had stopped runs the runtime, and that model is
+   * then in use: the Stop is undone, like Start undoes it, so the runtime starts with the
+   * server again. Without this the model would be running now and stay down after a restart.
+   */
+  private async undoStop(): Promise<void> {
+    await this.record((current) =>
+      current.runtime && !current.runtime.enabled
+        ? { ...current, runtime: { ...current.runtime, enabled: true } }
+        : undefined
+    );
   }
 
   /** 409 `sessions-open` while live sessions use a connection of ours, else `undefined`. */
