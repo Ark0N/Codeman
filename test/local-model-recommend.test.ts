@@ -489,6 +489,8 @@ describe('needBytes', () => {
       'qwen3.5:9b-q4_k_m': 11_380_487_246,
       'mimo-v2.6:9b-q4_k_m': 11_380_472_729,
       'north-mini-code-1.0:q4_k_m': 25_999_848_864,
+      // At its own window of 131072 tokens: 18.2 GB + 0.9 GB of K/V cache + 2.6 GB.
+      'muse-glimmer:30b-q4_k_m': 21_646_509_900,
       'qwen3.6:35b-a3b-mtp-q4_k_m': 28_808_554_317,
       'qwen3.6:35b-a3b': 35_955_462_956,
       'qwen3.8:27b-q8_0': 44_292_142_594,
@@ -544,6 +546,9 @@ describe('the fit grade', () => {
 // ---------- 2. The two real Macs ----------
 
 describe('the MacBook Pro (Mac17,13: Apple M5 Pro, 48 GB)', () => {
+  /** The same Mac without the probe: 48 GiB and the chip are all the fit and the speed depend on. */
+  const hw48 = mac(48, 'Apple M5 Pro');
+
   /**
    * Expected: Qwen3.6 35B-A3B at 131,072 tokens with OpenCode, a TIGHT fit, 67.7 tokens per
    * second, "Recommended for this Mac".
@@ -642,7 +647,7 @@ describe('the MacBook Pro (Mac17,13: Apple M5 Pro, 48 GB)', () => {
     expect(result.notes).toEqual([]);
   });
 
-  it('lists four other models that fit, each at the largest context it fits at, the fast ones first', async () => {
+  it('lists every other model that fits, each at the largest context it fits at, the fast ones first', async () => {
     const result = recommend(await macbook(), STOCK, ALL_INSTALLED);
     expect(
       result.alternatives.map((c) => [c.modelId, c.context, c.fit, c.speed, c.tokensPerSecond ?? null, c.tag?.kind])
@@ -652,15 +657,19 @@ describe('the MacBook Pro (Mac17,13: Apple M5 Pro, 48 GB)', () => {
       ['north-mini-code-1.0:q4_k_m', 262144, 'good', 'ok', 41.8, undefined],
       ['mimo-v2.6:9b-q4_k_m', 131072, 'good', 'ok', 28.6, 'small'],
       ['qwen3.5:9b-q4_k_m', 131072, 'good', 'ok', 28.6, 'small'],
+      // The dense models compute to 2.95 x 3.07 = 9.1 tokens per second on this chip (5.2 in
+      // 8 bits): slow, so they come after every fast model, in the order of their rank.
+      ['qwen3.8:27b-mtp-q4_k_m', 262144, 'tight', 'slow', 9.1, 'tight'],
+      ['qwen3.8:27b-q8_0', 65536, 'tight', 'slow', 5.2, 'tight'],
+      ['muse-glimmer:30b-q4_k_m', 131072, 'good', 'slow', 9.1, 'slow'],
     ]);
     // Only the tested row rests on a measurement of that model.
-    expect(result.alternatives.map((c) => c.needSource)).toEqual(['estimated', 'estimated', 'estimated', 'estimated']);
-    // The dense 27B fits too (32.1 GB at 262144) but computes to 2.95 x 3.07 = 9.1 tokens per
-    // second here: slow, so it ranks after four fast models and is not listed.
-    expect(modelFitsBudget(await macbook(), STOCK, 'qwen3.8:27b-mtp-q4_k_m', 262144)).toBe(true);
-    expect(order(result).some((entry) => entry.startsWith('qwen3.8:27b'))).toBe(false);
+    expect(new Set(result.alternatives.map((c) => c.needSource))).toEqual(new Set(['estimated']));
+    // Every model of the catalogue that fits is on the list: nothing is cut off after four.
+    const fitting = STOCK.models.filter((m) => m.contexts.some((ctx) => modelFitsBudget(hw48, STOCK, m.id, ctx)));
+    expect(rows(result).map((c) => c.modelId).sort()).toEqual(fitting.map((m) => m.id).sort());
     // The 122B fits at no context.
-    expect(order(result).some((entry) => entry.startsWith('ornith'))).toBe(false);
+    expect(order(result).some((entry) => entry.startsWith('ornith-1.5'))).toBe(false);
   });
 
   it('would get the same model as "Best fit", with the estimated speed, had nobody tested it', async () => {
@@ -692,7 +701,10 @@ describe('the MacBook Pro (Mac17,13: Apple M5 Pro, 48 GB)', () => {
       ['qwen3.8:27b-mtp-q4_k_m', 'unknown'],
       ['qwen3.8:27b-q8_0', 'unknown'],
       ['qwen3.6:35b-a3b-mtp-q4_k_m', 'unknown'],
+      ['muse-glimmer:30b-q4_k_m', 'unknown'],
       ['north-mini-code-1.0:q4_k_m', 'unknown'],
+      ['mimo-v2.6:9b-q4_k_m', 'unknown'],
+      ['qwen3.5:9b-q4_k_m', 'unknown'],
     ]);
   });
 });
@@ -803,10 +815,13 @@ describe('every memory size, with the stock catalogue', () => {
     [24, 'Apple M3', 'limited mimo-v2.6:9b-q4_k_m@131072 good slow'],
     [24, 'Apple M4', 'limited mimo-v2.6:9b-q4_k_m@131072 good ok'],
     [24, 'Apple M4 Pro', 'limited mimo-v2.6:9b-q4_k_m@131072 good ok'],
-    // North Mini Code needs 23.2 GB at 65536 tokens: 1.06 of the 21.8 GB estimate. A runtime
-    // that measures about 3/4 of the memory admits it (see below).
-    [32, 'Apple M4', 'limited mimo-v2.6:9b-q4_k_m@131072 good ok'],
-    [32, 'Apple M1 Max', 'limited mimo-v2.6:9b-q4_k_m@131072 good ok'],
+    // Muse Glimmer 30B fits at 65536 tokens: 21.2 GB, 0.970 of the 21.8 GB estimate. So a 32 GB
+    // Mac is no small-model Mac (`ok`). The model is dense: on a base chip it computes to 3.5
+    // tokens per second and the fast 9B stays the pick, on a Max chip (11.8) it is the pick.
+    // North Mini Code needs 23.2 GB at 65536 tokens, 1.06 of the estimate: a runtime that
+    // measures about 3/4 of the memory admits it (see below).
+    [32, 'Apple M4', 'ok mimo-v2.6:9b-q4_k_m@131072 good ok'],
+    [32, 'Apple M1 Max', 'ok muse-glimmer:30b-q4_k_m@65536 tight ok'],
     // A Max chip runs the dense 27B fast enough (12.1); an M3 Max (300 GB/s) does not (8.9),
     // and takes the 35B-A3B as a GGUF build, whose memory does not grow after it loaded. Both
     // at 131072 tokens, 0.966 and 0.971 of the budget.
@@ -850,14 +865,21 @@ describe('every memory size, with the stock catalogue', () => {
     expect(smallest / result.budgetBytes).toBeGreaterThan(4);
   });
 
-  it('gives no model to 8 and 16 GB, a small model to every Mac from 18 to 32 GB, and every larger one a model of 27 billion or more', () => {
+  it('gives no model to 8 and 16 GB, a small model to every Mac of 18 and 24 GB, and every Mac from 36 GB a model of 27 billion or more', () => {
     for (const hw of SWEEP) {
       const result = recommend(hw, STOCK, ALL_INSTALLED);
       const label = `${hw.memClassGb} GB ${hw.chip}`;
       if (hw.memClassGb <= 16) expect(result.reason, label).toBe('memory');
-      else if (hw.memClassGb <= 32) {
+      else if (hw.memClassGb <= 24) {
         expect(result.verdict, label).toBe('limited');
         expect(result.pick?.paramsB, label).toBe(9);
+      } else if (hw.memClassGb === 32) {
+        // A model of 30 billion fits, so the Mac is not `limited`. It is dense: the pick only
+        // where it is not slow (a chip this file knows is fast, or one it knows nothing about).
+        expect(result.verdict, label).toBe('ok');
+        expect(rows(result).map((c) => c.modelId), label).toContain('muse-glimmer:30b-q4_k_m');
+        expect(result.pick?.paramsB, label).toBe(hw.chip === 'Apple M4' ? 9 : 29.6);
+        if (hw.chip === 'Apple M4') expect(result.notes[0], label).toEqual({ text: LOCAL_MODEL_LABELS.noteSmallPick });
       } else {
         expect(result.verdict, label).toBe('ok');
         expect(result.pick?.paramsB, label).toBeGreaterThanOrEqual(27);
@@ -1620,11 +1642,13 @@ describe('the ranking', () => {
     expect(result.pick).toMatchObject({ context: 1024, fit: 'tight', budgetShare: 0.92 });
   });
 
-  it('lists each model once, never the pick again, and at most four alternatives', () => {
-    expect(MAX_ALTERNATIVES).toBe(4);
-    // Seven models fit a 128 GB Mac; the pick plus four are shown.
+  it('lists each model once, never the pick again, and every model that fits', () => {
+    // The bound is above what either catalogue holds, so nothing that fits is cut off.
+    expect(MAX_ALTERNATIVES).toBe(11);
+    for (const [, catalog] of BOTH) expect(catalog.models.length - 1).toBeLessThanOrEqual(MAX_ALTERNATIVES);
+    // Seven models fit a 128 GB Mac: the pick and all six others are shown.
     const result = recommend(mac(128, 'Apple M5 Ultra'), RULES, ALL_INSTALLED);
-    expect(result.alternatives).toHaveLength(4);
+    expect(result.alternatives).toHaveLength(6);
     const ids = rows(result).map((c) => c.modelId);
     expect(new Set(ids).size).toBe(ids.length);
     for (const [, catalog] of BOTH) {
@@ -1633,8 +1657,25 @@ describe('the ranking', () => {
         const sweptIds = rows(swept).map((c) => c.modelId);
         expect(new Set(sweptIds).size).toBe(sweptIds.length);
         expect(swept.alternatives.length).toBeLessThanOrEqual(MAX_ALTERNATIVES);
+        // Every model that fits at a context a harness works at is on the list (the sweep's
+        // Macs have 500 GB of free disk, so none is left out for room).
+        const fitting = catalog.models.filter((m) =>
+          m.contexts.some((ctx) => ctx >= 65536 && modelFitsBudget(hw, catalog, m.id, ctx))
+        );
+        expect([...sweptIds].sort(), `${hw.memClassGb} GB ${hw.chip}`).toEqual(fitting.map((m) => m.id).sort());
       }
     }
+  });
+
+  it('still cuts a list longer than the bound, and the install can only take what is listed', () => {
+    // Fourteen models that all fit: the pick and MAX_ALTERNATIVES others, best rank first.
+    const many = catalogOf(
+      Array.from({ length: 14 }, (_, index) => modelNeeding(`m${index + 1}:x`, GIB, { rank: index + 1 }))
+    );
+    const result = recommend(HUNDRED_GIB_MAC, many, [fact('alpha')]);
+    expect(rows(result)).toHaveLength(1 + MAX_ALTERNATIVES);
+    expect(rows(result)[0].modelId).toBe('m14:x');
+    expect(rows(result).at(-1)?.modelId).toBe('m3:x');
   });
 });
 
@@ -2064,6 +2105,8 @@ describe('what each row of the chooser carries', () => {
       'qwen3.5:9b-q8_0': 'estimated',
       'qwen3.5:9b': 'estimated',
       'gpt-oss:20b': 'estimated',
+      // Slow on this chip, so it was the sixth row: listed since the list holds every model.
+      'qwen3.8:27b-q8_0': 'estimated',
     });
   });
 });
@@ -2075,10 +2118,15 @@ describe('the measured budget, end to end', () => {
     const measured = recommend(hw, STOCK, ALL_INSTALLED, { measuredTotalBytes: MACBOOK_MEASURED_TOTAL });
     expect([estimated.budgetSource, estimated.budgetGb]).toEqual(['estimated', '37.6']);
     expect([measured.budgetSource, measured.budgetGb]).toEqual(['measured', '40.2']);
-    // The same rows in the same order; only the share of each changes.
-    expect(order(measured)).toEqual(order(estimated));
-    expect(rows(estimated).map((c) => c.budgetShare)).toEqual([0.957, 0.767, 0.692, 0.303, 0.303]);
-    expect(rows(measured).map((c) => c.budgetShare)).toEqual([0.895, 0.717, 0.647, 0.283, 0.283]);
+    // The same models in the same order. The share of each changes, and one model steps up a
+    // context: the 27B in 8 bits fits 65536 tokens under the estimate (0.975) and 131072 under
+    // what the runtime reported (0.976).
+    expect(rows(measured).map((c) => c.modelId)).toEqual(rows(estimated).map((c) => c.modelId));
+    const stepped = order(estimated).filter((entry, index) => order(measured)[index] !== entry);
+    expect(stepped).toEqual(['qwen3.8:27b-q8_0@65536']);
+    expect(order(measured)).toContain('qwen3.8:27b-q8_0@131072');
+    expect(rows(estimated).map((c) => c.budgetShare)).toEqual([0.957, 0.767, 0.692, 0.303, 0.303, 0.853, 0.975, 0.576]);
+    expect(rows(measured).map((c) => c.budgetShare)).toEqual([0.895, 0.717, 0.647, 0.283, 0.283, 0.798, 0.976, 0.539]);
     for (const candidate of rows(measured)) {
       expect(candidate.budgetShare).toBeCloseTo(candidate.needBytes / MACBOOK_MEASURED_TOTAL, 3);
     }

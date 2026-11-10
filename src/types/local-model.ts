@@ -577,10 +577,10 @@ export interface Recommendation {
   /** Present exactly when `verdict` is `ok` or `limited`. */
   pick?: Candidate;
   /**
-   * The next models that fit and have room on the disk (at most four), best first: tested
-   * before not tested, then ok before unknown before slow speed, then the higher model rank.
-   * Each is at the largest context it fits at, with the best harness that can run it there.
-   * Empty when `verdict` is `none`.
+   * Every other model that fits and has room on the disk (`MAX_ALTERNATIVES` is above what the
+   * catalogue holds), best first: tested before not tested, then ok before unknown before
+   * slow speed, then the higher model rank. Each is at the largest context it fits at, with
+   * the best harness that can run it there. Empty when `verdict` is `none`.
    */
   alternatives: Candidate[];
   /** `DeviceBudget.budgetBytes`. 0 when no budget is computed: not macOS, or a Mac without Apple silicon. */

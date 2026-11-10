@@ -31,6 +31,7 @@ import {
   LocalModelCatalogSchema,
   STOCK_LOCAL_MODEL_CATALOG,
 } from '../src/config/local-model-catalog.js';
+import { MAX_ALTERNATIVES } from '../src/local-model/recommend.js';
 import {
   RUNTIME_CTX_CHECKPOINTS,
   RUNTIME_HOST_PROMPT_CACHE_MIB,
@@ -63,9 +64,10 @@ const GIB = 1024 * MIB;
 
 /**
  * The architecture of every model the stock catalogue lists, read from its config.json on
- * Hugging Face (2026-11-08): full-attention layers, their K/V heads and head size, and the
- * layers whose cache does not grow with the context (Gated DeltaNet layers with their value
- * and key heads, or sliding-window layers with their window). Fine-tunes share their base's.
+ * Hugging Face (2026-11-08; Muse Glimmer on 2026-11-10): full-attention layers, their K/V heads
+ * and head size, and the layers whose cache does not grow with the context (Gated DeltaNet
+ * layers with their value and key heads, or sliding-window layers with their window).
+ * Fine-tunes share their base's.
  */
 const ARCHITECTURES = {
   'Qwen3.5-9B': { attentionLayers: 8, kvHeads: 4, headDim: 256, linear: { layers: 24, vHeads: 32, kHeads: 16 } },
@@ -78,6 +80,8 @@ const ARCHITECTURES = {
     linear: { layers: 36, vHeads: 64, kHeads: 16 },
   },
   'North-Mini-Code-1.0': { attentionLayers: 13, kvHeads: 4, headDim: 128, sliding: { layers: 36, window: 4096 } },
+  // 52 layers, three in four on a sliding window (the GGUF header's `sliding_window_pattern`).
+  'Muse-Glimmer-30B': { attentionLayers: 13, kvHeads: 2, headDim: 128, sliding: { layers: 39, window: 2048 } },
 } as const;
 
 type ArchitectureName = keyof typeof ARCHITECTURES;
@@ -86,7 +90,8 @@ type Architecture = (typeof ARCHITECTURES)[ArchitectureName];
 /**
  * Which architecture each stock row runs, and how many tokens the runtime drafts per step with
  * its multi-token-prediction layer: 0 when the GGUF has none (`nextn_predict_layers` in the GGUF
- * header, read on 2026-11-08 from the first bytes of each model layer), else the tag's own
+ * header, read on 2026-11-08 from the first bytes of each model layer; on 2026-11-10 for the
+ * Muse Glimmer row), else the tag's own
  * `draft_num_predict` (its params layer) or the runtime's default of 4 when the tag sets none.
  * Prediction costs a cache for that layer and one rollback copy of the recurrent state per
  * drafted token (see the catalogue header). A row the catalogue gains must be added here, or the
@@ -96,6 +101,8 @@ const ROW_ARCHITECTURE: Record<string, { architecture: ArchitectureName; draftTo
   'qwen3.5:9b-q4_k_m': { architecture: 'Qwen3.5-9B', draftTokens: 0 },
   'mimo-v2.6:9b-q4_k_m': { architecture: 'Qwen3.5-9B', draftTokens: 0 },
   'north-mini-code-1.0:q4_k_m': { architecture: 'North-Mini-Code-1.0', draftTokens: 0 },
+  // No prediction layer; the tags with a separate draft model (`-dflash`) are not listed.
+  'muse-glimmer:30b-q4_k_m': { architecture: 'Muse-Glimmer-30B', draftTokens: 0 },
   // Its params layer sets `draft_num_predict` 2.
   'qwen3.6:35b-a3b-mtp-q4_k_m': { architecture: 'Qwen3.6-35B-A3B', draftTokens: 2 },
   'qwen3.6:35b-a3b': { architecture: 'Qwen3.6-35B-A3B', draftTokens: 0 },
@@ -183,20 +190,21 @@ describe('the stock catalogue', () => {
     expect(getLocalModelCatalog()).toBe(first);
   });
 
-  it('lists eight models, by rank, and none of those set aside in the header', () => {
+  it('lists nine models, by rank, and none of those set aside in the header', () => {
     expect(models.map((m) => m.id)).toEqual([
       'qwen3.5:9b-q4_k_m',
       'mimo-v2.6:9b-q4_k_m',
       'north-mini-code-1.0:q4_k_m',
+      'muse-glimmer:30b-q4_k_m',
       'qwen3.6:35b-a3b-mtp-q4_k_m',
       'qwen3.6:35b-a3b',
       'qwen3.8:27b-q8_0',
       'qwen3.8:27b-mtp-q4_k_m',
       'ornith-1.5:122b',
     ]);
-    expect(models.map((m) => m.rank)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(models.map((m) => m.rank)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
     const setAside =
-      /^(bonsai-2|gpt-oss|flint|lfm2\.5|laguna|qwen3\.8-flash-next|qwen3\.5:122b)|^ornith-1\.5:(9b|35b|397b)/;
+      /^(bonsai-2|gpt-oss|flint|lfm2\.5|laguna|qwen3\.8-flash-next|qwen3\.5:(122b|4b)|ripple-preview|nemotron-3\.5-super|qwen3-coder-next)|^ornith-1\.5:(9b|35b|397b)|^ornith:(9b|35b)|^muse-glimmer:.*(mlx|dflash)/;
     expect(models.filter((m) => setAside.test(m.id)).map((m) => m.id)).toEqual([]);
     // The plain 9B and 27B tags are MLX builds on a Mac: their GGUF builds are listed instead.
     for (const plain of ['qwen3.5:9b', 'mimo-v2.6:9b', 'qwen3.8:27b']) {
@@ -209,6 +217,7 @@ describe('the stock catalogue', () => {
       'qwen3.5:9b-q4_k_m': 'llamacpp',
       'mimo-v2.6:9b-q4_k_m': 'llamacpp',
       'north-mini-code-1.0:q4_k_m': 'llamacpp',
+      'muse-glimmer:30b-q4_k_m': 'llamacpp',
       'qwen3.6:35b-a3b-mtp-q4_k_m': 'llamacpp',
       // Manifest lists: a Mac takes the MLX child.
       'qwen3.6:35b-a3b': 'mlx',
@@ -224,6 +233,8 @@ describe('the stock catalogue', () => {
       'qwen3.5:9b-q4_k_m': 6_550_825_550,
       'mimo-v2.6:9b-q4_k_m': 6_550_811_033,
       'north-mini-code-1.0:q4_k_m': 18_593_967_008,
+      // Fetched on 2026-11-10: 16.76 GB of weights and a 1.40 GB projector.
+      'muse-glimmer:30b-q4_k_m': 18_157_010_252,
       'qwen3.6:35b-a3b-mtp-q4_k_m': 22_621_314_381,
       // The MLX child of the list, and the total of a real pull on a Mac, byte for byte.
       'qwen3.6:35b-a3b': 23_105_798_956,
@@ -256,6 +267,8 @@ describe('the stock catalogue', () => {
       'qwen3.5:9b-q4_k_m': [9, 'Apache-2.0'],
       'mimo-v2.6:9b-q4_k_m': [9, 'MIT'],
       'north-mini-code-1.0:q4_k_m': [30, 'Apache-2.0'],
+      // The card's total: a 27.9B language model and a vision encoder.
+      'muse-glimmer:30b-q4_k_m': [29.6, 'Apache-2.0'],
       'qwen3.6:35b-a3b-mtp-q4_k_m': [35, 'Apache-2.0'],
       'qwen3.6:35b-a3b': [35, 'Apache-2.0'],
       'qwen3.8:27b-q8_0': [27.8, 'Apache-2.0'],
@@ -281,6 +294,8 @@ describe('the stock catalogue', () => {
       'mimo-v2.6:9b-q4_k_m': 9.3,
       // The 35B-A3B's llama.cpp figure: both have 3 billion active parameters.
       'north-mini-code-1.0:q4_k_m': 13.6,
+      // The dense 27B's figure: the weights of the two are the same size.
+      'muse-glimmer:30b-q4_k_m': 2.95,
       // 54.5 on 400 GB/s with llama.cpp.
       'qwen3.6:35b-a3b-mtp-q4_k_m': 13.6,
       // 67.8 on 400 GB/s with MLX.
@@ -300,6 +315,13 @@ describe('the stock catalogue', () => {
       { cli: 'claude', minContext: 65536, rank: 2, slowFirstTurn: true },
       { cli: 'pi', minContext: 32768, rank: 1, gated: true },
     ]);
+  });
+
+  it('holds no more models than one window lists: the pick and MAX_ALTERNATIVES others', () => {
+    // recommend() cuts the list at MAX_ALTERNATIVES. While the catalogue stays under it, a Mac
+    // is shown every model that fits and the install accepts every one of them. A catalogue
+    // that outgrows the bound must fail here, so the bound is raised (or kept) on purpose.
+    expect(models.length - 1).toBeLessThanOrEqual(MAX_ALTERNATIVES);
   });
 
   it('names the oldest macOS and its schema version', () => {
@@ -351,6 +373,8 @@ describe('the memory figures of the stock rows: each row has its own', () => {
       'mimo-v2.6:9b-q4_k_m': [17_408, 2_547_960_320, 0],
       // The sliding window x (1 live + 8 checkpoints) + 1.0 GB + 1 GiB.
       'north-mini-code-1.0:q4_k_m': [14_144, 3_698_117_120, 0],
+      // The same rule: 39 layers x 2,560 cells x 544 bytes = 54,312,960 per copy.
+      'muse-glimmer:30b-q4_k_m': [7_072, 2_562_558_464, 0],
       // State x (1 live + 2 rollback copies + 8 checkpoints) + 1.0 GB + 1 GiB; the prediction
       // layer's cache in f16 per token. The 27B rows below draft 4 tokens: 4 rollback copies.
       'qwen3.6:35b-a3b-mtp-q4_k_m': [12_928, 2_798_242_304, 0],
