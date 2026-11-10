@@ -40,7 +40,7 @@ cannot do.
 | **Links** | On Codeman's own pages (the dashboard and session windows), a link to another site opens in your default browser, also on `⌘`-click or a middle click. Pages can send at most 3 links to the browser at once, then 1 per second. Inside a rendered HTML preview or a web tab, a plain link to another site does nothing, while one that asks for a new window (`target="_blank"`, `window.open`) opens in your default browser within the same budget (see Known limits). |
 | **Downloads** | Codeman's Download links, and downloads Codeman opens in a new window, save the file to `~/Downloads` whatever its type, and a toast in Codeman names the file. Files the web view cannot display are saved the same way. |
 | **A page that stops** | When the web content process of a window ends (a WebKit crash, or macOS taking the process back under memory pressure), the window loads its page again instead of staying blank. A second time within 30 seconds, the main window goes back to the connect screen and a pop-out closes, so a page that cannot stay up never becomes a reload loop. |
-| **Apple logo** | On a MacBook Pro with a PROLED XDR display, the lit Apple logo on the lid says what the agents are doing. **View > Blink Apple Logo** is the one switch, off until you turn it on. The more the logo moves, the more it needs you: it breathes (a slow fade out and back in) while agents work, blinks every two seconds for a yellow tab and flashes three times, then rests, for a red one. Each state can take another style under **View > Apple Logo Blink Styles**: Off, Breathe, Calm, Slow, Wink, Heartbeat, Fast, or Alarm. Picking a style turns the switch on, and turning the switch on with every state off brings back the recommended three (Breathe, Calm, Alarm). When several states hold, the most urgent one with a style shows: red, then yellow, then work. Styles chosen in 1.50.0 are kept, with the switch on if any of them was. The menu only exists on a Mac with that logo. No password is needed. Shell tabs do not count. The app asks the server every two seconds, and a change has to hold for three seconds before the logo follows it, so an agent between two turns does not flicker it. It keeps working while the window is hidden, and with any Codeman server. The logo moves on its own hardware fades, the ones [LogoLight](https://github.com/Ark0N/LogoLight) uses, so a blink writes no setting, and a logo you switched off yourself stays off. While LogoLight runs, Codeman leaves the logo to it. While the app is closed nothing blinks. With the lid closed it just goes on while the Mac stays awake on its power adapter (**Keep This Mac Awake > With the Lid Closed…**, or an external display): macOS keeps the logo dark under a closed lid, so the app tells the logo the lid is open and the keyboard that it is closed, which stays dark, as LogoLight's *Lit with Lid Closed* does, and, with no display on, that the display is awake. The light sensor is covered then, so the logo glows as it would in a dark room. The line under **Apple Logo Blink Styles** says what the closed lid did last (blinking, or why not). On battery, and while the display only sleeps with the lid open, the blink pauses and writes nothing. |
+| **Apple logo** | On a MacBook Pro with a PROLED XDR display, the lit Apple logo on the lid says what the agents are doing. **View > Blink Apple Logo** is the one switch, off until you turn it on. The more the logo moves, the more it needs you: it breathes (a slow fade out and back in) while agents work, blinks every two seconds for a yellow tab and flashes three times, then rests, for a red one. Each state can take another style under **View > Apple Logo Blink Styles**: Off, Breathe, Calm, Slow, Wink, Heartbeat, Fast, or Alarm. Picking a style turns the switch on, and turning the switch on with every state off brings back the recommended three (Breathe, Calm, Alarm). When several states hold, the most urgent one with a style shows: red, then yellow, then work. Styles chosen in 1.50.0 are kept, with the switch on if any of them was. The menu only exists on a Mac with that logo. No password is needed. Shell tabs do not count. The app asks the server every two seconds, and a change has to hold for three seconds before the logo follows it, so an agent between two turns does not flicker it. It keeps working while the window is hidden, and with any Codeman server. The logo moves on its own hardware fades, the ones [LogoLight](https://github.com/Ark0N/LogoLight) uses, so a blink writes no setting, and a logo you switched off yourself stays off. While LogoLight runs, Codeman leaves the logo to it. While the app is closed nothing blinks. With the lid closed it just goes on while the Mac stays awake on its power adapter (**Keep This Mac Awake > With the Lid Closed…**, or an external display): macOS keeps the logo dark under a closed lid, so the app tells the logo the lid is open and the keyboard that it is closed, which stays dark, as LogoLight's *Lit with Lid Closed* does. The light sensor is covered then, so the logo glows as it would in a dark room. The line under **Apple Logo Blink Styles** says what the closed lid did last (blinking, or why not). On battery, and while the display only sleeps with the lid open, the blink pauses and writes nothing. |
 | **Window** | Size, position and full-screen state are remembered. A saved window that hangs off the screen it opens on (it was last on a larger display that is gone, say) is pulled back on and shrunk to fit; one whose title bar is on no screen at all opens at the default size instead. Clicking the Dock icon brings back a minimized window. |
 
 ## Build (on a Mac)
@@ -250,26 +250,40 @@ while their fall is still under way and never quite reach dark, and a long one (
 Slow's, the breath's rest) times its light from when the rise starts.
 
 With the lid closed the daemon tells every module so (`ClamshellUpdate` 1), and the logo's
-target is then 0 whatever `DisplayLogicalState` says; the same goes while the display sleeps
-(`DisplayPowerStateEvent` WillSleep or DidSleep). A client's `ClamshellUpdate` reaches the
-same modules, which is how LogoLight measured it on the real Mac with an external display.
-So while the lid sensor (`AppleClamshellState`) says closed (it wins over a display list that
-still shows the built-in display awake) and the Mac is on its power adapter (on battery a closed MacBook sleeps, and a dark wake must not
-light the logo in a bag), the child writes `ClamshellUpdate` 0 and then 1 to each keyboard
-alone at the start of every cycle: said again each time, because the daemon repeats the real
-lid state whenever a display or a keyboard comes up, and handles a closing lid a moment after
-the sensor. If the first rise does not move the logo within 1.5 s and no other display is on,
-the display sleeps, so the child also writes `DisplayPowerStateEvent` 2 (DidWake). Ending a
-blink with the lid closed hands the logo back to normal (the automatic duration, then
-Unblank, which a held level needs), then writes DidSleep (only if DidWake was written and no
-other display is on) and `ClamshellUpdate` 1, since normal for a closed lid is dark; the
+target is then 0 whatever `DisplayLogicalState` says. A client's `ClamshellUpdate` reaches the
+same modules, and LogoLight measured on the real MacBook what follows from that, first with an
+external display and, for its 1.3.1, on a Mac kept awake with none:
+- Kept awake with the lid closed and no other display, the built-in display stays online and
+  `CGDisplayIsAsleep` says 0. So the lid sensor (`AppleClamshellState` on `IOPMrootDomain`)
+  decides that the logo is out of sight, not the display list.
+- Once the daemon has handled the lid (`CBClamshellState` reads 1, a moment after the sensor),
+  `ClamshellUpdate` 0 relights the logo and fades work as with the lid open. The child then
+  writes `ClamshellUpdate` 1 to each keyboard alone, which stays dark, and to each display in
+  `CBDisplayList` alone (`setProperty:withKey:andDisplay:`): told the lid is open, True Tone
+  adapts an external display to the covered light sensor and tints it warm and dim.
+- The daemon sends the real lid state again when a display or a keyboard comes up. Every beat
+  ends lit, so a logo found dark at the start of the next one is told again.
+- `DisplayPowerStateEvent` is never written. A client's DidSleep keeps the logo dark, with the
+  lid open too, until someone writes DidWake.
+
+The child does this only on the power adapter (on battery a closed MacBook sleeps, and a dark
+wake must not light the logo in a bag) and only with every keyboard reachable. The first rise
+has to move the logo within 1.5 s. If it does not, the logo is told again, three times in a
+row and then every half minute, and the menu line says it stayed dark. Ending a blink with the
+lid closed hands the logo back to normal (the automatic duration, then Unblank, which a held
+level needs) and then writes `ClamshellUpdate` 1, since normal for a closed lid is dark; the
 marker covers a child killed in between. When the lid opens, the daemon tells every module
-itself and nothing is written. What the closed lid did last (blinking, blinking once the
-display was told awake, stayed dark, nothing to show with no agent at work, not tried and why,
-or that the Mac went to sleep, which the child sees as wall-clock time that passed while its
-monotonic clock stood still) goes to a file next to `desktop.json` (`logo-lid`, with the
-readings behind it on its second line), and the app shows its first line as **Lid Closed: …**
-under View > Apple Logo Blink Styles, or says nothing watches the lid while no child runs.
+itself and nothing is written. What the closed lid did last (blinking, stayed dark, nothing to
+show with no agent at work, not tried and why, or that the Mac went to sleep under it, which
+the child sees as wall-clock time that passed while its monotonic clock stood still) goes to a
+file next to `desktop.json` (`logo-lid`, with the readings behind it on its second line), and
+the app shows its first line as **Lid Closed: …** under View > Apple Logo Blink Styles, or
+says nothing watches the lid while no child runs.
+
+Whether the Mac stays awake under the lid is not the logo's business: Keep This Mac Awake's
+lid helper does that (`pmset disablesleep`, which holds the Mac at full wake), or LogoLight's
+own Lit with Lid Closed, or an external display. An assertion against system sleep alone would
+not do: LogoLight saw the Mac enter a dark wake with it, where the logo stays dark.
 
 The app must not end with the logo dark, and the release profile has `panic = "abort"`, so no
 cleanup code of the app can be relied on. So all of it runs as this same binary with
@@ -353,15 +367,13 @@ crosses, so the login is never on a command line.
   the logo the same way and is not LogoLight is not recognised, and the two
   fight. `api/sessions` does not say which turns are Codeman's own, so with
   prompt-cache keep-warm on, a keep-alive turn blinks too.
-- **Blinking with the lid closed has not been seen on a real MacBook yet.**
-  LogoLight measured the lid override with an external display attached. With
-  none, the Mac kept awake by the lid helper, the display sleeps, and the app
-  also tells the logo the display woke (`DisplayPowerStateEvent`), which nobody
-  has tried: it reaches every module the way `ClamshellUpdate` does, and what it
-  does to anything but the logo is not known. If neither moves the logo, the
-  menu line says "stayed dark". Not checked either, by LogoLight or here: whether
-  telling the display the lid is open changes anything on an external display,
-  or the built-in display's brightness when the lid opens again.
+- **Blinking with the lid closed has not been seen from this app on a real
+  MacBook yet.** The method is LogoLight's, which its author saw working on the
+  real lid, on power with no display attached (LogoLight 1.3.1). This app's own
+  run of it, with the Mac kept awake by the lid helper, has not been watched. If
+  the logo does not move, the menu line says "stayed dark". Not checked either,
+  by LogoLight or here: the built-in display's brightness when the lid opens
+  again, and an Apple display with its own light sensor.
 - **Self-signed HTTPS is refused.** A server started with `codeman web --https`
   uses a self-signed certificate, and WKWebView rejects it (wry has no trust
   override). Use `http://127.0.0.1:3000` for a server on this Mac. For another
