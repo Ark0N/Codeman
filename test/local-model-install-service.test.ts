@@ -13,7 +13,9 @@
  * Cancel in every step; Resume; a job a server restart interrupted comes back paused and
  * waits for a click; every failure is a state with a code and a next step; the coding agent
  * install (the stock command, the audit line, the resolver caches forgotten, still missing is
- * a failure); the digest that refuses a changed model; the runtime verbs; Remove.
+ * a failure); the digest that refuses a changed model; the runtime verbs; Remove; and the
+ * library: a second model beside the first, the switch between checked models, the delete of
+ * one model, what a stopped job leaves to go back to, and the two cached listings of the view.
  *
  * Port: N/A (nothing listens).
  */
@@ -259,6 +261,10 @@ function setup(
     running: false,
     gaveUp: false,
     pid: 5000,
+    /** What the runtime lists on disk. Default: the model of the state, as it was pulled. */
+    tags: undefined as { name: string; size: number; digest: string }[] | undefined,
+    /** What the model store takes on disk. */
+    storeBytes: 0,
   };
   const calls: string[] = [];
 
@@ -325,14 +331,20 @@ function setup(
       { name: 'qwen3.6:35b-a3b', size: 26_300_000_000, sizeVram: 26_300_000_000, contextLength: 32768 },
     ]),
     getRuntimeVersion: vi.fn(async () => '0.40.15' as string | undefined),
-    deleteModel: vi.fn(async () => {
+    deleteModel: vi.fn(async (_target: unknown, _id: string) => {
       calls.push('deleteModel');
       return true;
+    }),
+    listTags: vi.fn(async () => {
+      if (world.tags) return world.tags;
+      const model = store.get().model;
+      return model ? [{ name: model.id, size: PULL_BYTES, digest: DIGEST }] : [];
     }),
     removePartialModelBlobs: vi.fn(async () => {
       calls.push('removePartialModelBlobs');
       return 0;
     }),
+    measureModelStore: vi.fn(async () => world.storeBytes),
     checkDeveloperTools: vi.fn(async () => 'missing' as const),
     stockInstallCommand: vi.fn((id: string) => (id === FACTS[0].cli ? INSTALL_COMMAND : undefined)),
     tryBeginCliInstall: vi.fn((): (() => void) | null => () => {
@@ -470,7 +482,7 @@ describe('a job from the click to installed', () => {
       port: 11435,
       loaded: { context: 131072, memoryBytes: 26_300_000_000, memoryGb: '26.3', onGpu: true },
       endpointId: 'local-ollama',
-      actions: ['start-session', 'stop', 'remove'],
+      actions: ['start-session', 'stop', 'install', 'remove'],
       folder: '/data/local-model',
       runtime: { version: '0.40.15', installed: true, downloadBytes: 0 },
     });
@@ -699,6 +711,8 @@ describe('one job at a time', () => {
     const jobRunning = { ok: false, status: 409, conflict: { reason: 'job-running' } };
     expect(await h.service.install(REQUEST, ADMIN)).toMatchObject(jobRunning);
     expect(await h.service.resume({}, ADMIN)).toMatchObject(jobRunning);
+    expect(await h.service.use({ modelId: 'gpt-oss:20b' }, ADMIN)).toMatchObject(jobRunning);
+    expect(await h.service.deleteLibraryModel({ modelId: 'gpt-oss:20b' }, ADMIN)).toMatchObject(jobRunning);
     expect(await h.service.runtime({ action: 'stop' })).toMatchObject(jobRunning);
     expect(await h.service.remove({}, [])).toMatchObject(jobRunning);
     expect(h.deps.ensureRuntimeInstalled).toHaveBeenCalledTimes(1);
@@ -718,7 +732,7 @@ describe('one job at a time', () => {
     expect(h.deps.ensureRuntimeInstalled).toHaveBeenCalledTimes(1);
   });
 
-  it('install while a model is installed is 409 already-installed: remove it first', async () => {
+  it('an install of the model that is in use, at its context, is 409 already-installed', async () => {
     const h = setup({ state: INSTALLED });
     expect(await h.service.install(REQUEST, ADMIN)).toEqual({
       ok: false,
@@ -1073,7 +1087,11 @@ describe('boot with a model installed', () => {
     // The pid of the child that runs now replaces the stored one.
     expect(h.store.get().runtime?.pid).toBe(5000);
     const view = await h.service.view();
-    expect(view).toMatchObject({ state: 'installed', running: true, actions: ['start-session', 'stop', 'remove'] });
+    expect(view).toMatchObject({
+      state: 'installed',
+      running: true,
+      actions: ['start-session', 'stop', 'install', 'remove'],
+    });
     expect(view).not.toHaveProperty('error');
   });
 
@@ -1107,7 +1125,7 @@ describe('boot with a model installed', () => {
     await h.service.boot();
     expect(h.supervisor.start).not.toHaveBeenCalled();
     const view = await h.service.view();
-    expect(view).toMatchObject({ state: 'installed', running: false, actions: ['start', 'remove'] });
+    expect(view).toMatchObject({ state: 'installed', running: false, actions: ['start', 'install', 'remove'] });
     // A stopped runtime is not an error.
     expect(view).not.toHaveProperty('error');
   });
@@ -1124,7 +1142,7 @@ describe('boot with a model installed', () => {
       message: { text: 'The model on this Mac changed since it was installed. Remove it and install it again.' },
       next: 'remove',
     });
-    expect(view.actions).toEqual(['stop', 'remove']);
+    expect(view.actions).toEqual(['stop', 'install', 'remove']);
     expect(h.store.get().state).toBe('installed');
     expect(h.store.get()).not.toHaveProperty('error');
   });
@@ -1140,7 +1158,7 @@ describe('boot with a model installed', () => {
       message: { text: 'Port {port} is in use by another program.', vars: { port: '11435' } },
       next: 'other-port',
     });
-    expect(view.actions).toEqual(['start', 'remove']);
+    expect(view.actions).toEqual(['start', 'install', 'remove']);
   });
 
   it('never throws, whatever the runtime does', async () => {
@@ -1536,7 +1554,7 @@ describe('launchRefusal: the digest and the runtime decide whether a session sta
       'The model on this Mac changed since it was installed. Remove it and install it again.'
     );
     // And the window stops offering a session.
-    expect((await h.service.view()).actions).toEqual(['stop', 'remove']);
+    expect((await h.service.view()).actions).toEqual(['stop', 'install', 'remove']);
   });
 
   it('a digest with the sha256 prefix some listings add is the same digest', async () => {
@@ -1602,7 +1620,7 @@ describe('launchRefusal: the digest and the runtime decide whether a session sta
   it('only the model that was installed and checked may be started on the managed endpoint', async () => {
     const h = await installed();
     expect(await h.service.launchRefusalMessage('local-ollama', 'someone-else:7b')).toBe(
-      'Only Qwen3.6 35B-A3B is installed on this Mac. Remove it and install another model first.'
+      'Only Qwen3.6 35B-A3B is in use on this Mac. Switch models in the local model window first.'
     );
   });
 
@@ -1641,7 +1659,7 @@ describe('the runtime verbs', () => {
     expect(stopped.ok && stopped.view).toMatchObject({
       state: 'installed',
       running: false,
-      actions: ['start', 'remove'],
+      actions: ['start', 'install', 'remove'],
     });
     expect(h.supervisor.stop).toHaveBeenCalledTimes(1);
     expect(h.store.get().runtime?.enabled).toBe(false);
@@ -1652,7 +1670,10 @@ describe('the runtime verbs', () => {
     expect(next.supervisor.start).not.toHaveBeenCalled();
 
     const started = await h.service.runtime({ action: 'start' });
-    expect(started.ok && started.view).toMatchObject({ running: true, actions: ['start-session', 'stop', 'remove'] });
+    expect(started.ok && started.view).toMatchObject({
+      running: true,
+      actions: ['start-session', 'stop', 'install', 'remove'],
+    });
     expect(h.store.get().runtime?.enabled).toBe(true);
   });
 
@@ -1747,10 +1768,13 @@ describe('Remove', () => {
         unpackedGb: '0.6',
       },
       folder: '/data/local-model',
+      library: [],
+      // Measured again after the Remove: the store is empty here.
+      store: { bytes: 0, gb: '0.0' },
       actions: ['install'],
     });
     expect(h.store.get()).toMatchObject({ schema: 1, state: 'idle' });
-    for (const key of ['model', 'cli', 'runtime', 'connection', 'loaded'])
+    for (const key of ['model', 'cli', 'runtime', 'connection', 'loaded', 'library'])
       expect(h.store.get()).not.toHaveProperty(key);
     expect(h.deps.audit).toHaveBeenCalledWith({
       admin: 'root',
@@ -2342,7 +2366,7 @@ describe('an installed model whose runtime does not start', () => {
     h.world.startResult = { ok: false, code: 'runtime-start-failed', detail: 'spawn ENOENT' };
     await h.service.boot();
     const view = await h.service.view();
-    expect(view).toMatchObject({ state: 'installed', running: false, actions: ['start', 'remove'] });
+    expect(view).toMatchObject({ state: 'installed', running: false, actions: ['start', 'install', 'remove'] });
     expect(view.error).toEqual({
       code: 'runtime-start-failed',
       message: { text: 'The runtime did not start on this Mac.' },
@@ -2396,7 +2420,11 @@ describe('a later build with another runtime pin', () => {
     // The stored version stays what runs, so the next start finds it again.
     expect(h.store.get().runtime?.version).toBe(OLD);
     const view = await h.service.view();
-    expect(view).toMatchObject({ state: 'installed', running: true, actions: ['start-session', 'stop', 'remove'] });
+    expect(view).toMatchObject({
+      state: 'installed',
+      running: true,
+      actions: ['start-session', 'stop', 'install', 'remove'],
+    });
     expect(view.error).toBeUndefined();
     // A NEW install would still download the pinned build.
     expect(view.runtime).toMatchObject({ version: OLLAMA_RUNTIME_PIN.version, installed: false });
@@ -2637,5 +2665,665 @@ describe('Stop and "Use another port" while live sessions use the model', () => 
     await expect(h.service.runtime({ action: 'start', newPort: true })).rejects.toThrow('ENOSPC');
     expect(h.deps.moveLocalEndpoint).not.toHaveBeenCalled();
     expect(h.store.get().runtime?.port).toBe(11435);
+  });
+});
+
+// ---------- The library ----------
+
+const GPT = { id: 'gpt-oss:20b', label: 'GPT-OSS 20B', context: 131072 };
+const GPT_BYTES = 13_793_441_427;
+const QWEN_ENTRY = {
+  id: 'qwen3.6:35b-a3b',
+  label: 'Qwen3.6 35B-A3B',
+  context: 131072,
+  digest: DIGEST,
+  bytes: PULL_BYTES,
+  cli: { id: 'opencode', label: 'OpenCode' },
+};
+const GPT_ENTRY = {
+  id: GPT.id,
+  label: GPT.label,
+  context: 65536,
+  digest: DIGEST,
+  bytes: GPT_BYTES,
+  cli: { id: 'opencode', label: 'OpenCode' },
+};
+/** Two checked models, the Qwen one in use. */
+const TWO_MODELS: LocalModelStateFile = { ...INSTALLED, library: [QWEN_ENTRY, GPT_ENTRY] };
+const BOTH_TAGS = [
+  { name: QWEN_ENTRY.id, size: PULL_BYTES, digest: DIGEST },
+  { name: GPT_ENTRY.id, size: GPT_BYTES, digest: DIGEST },
+];
+const ADD_GPT: LocalModelInstallRequest = {
+  modelId: GPT.id,
+  cli: 'opencode',
+  context: GPT.context,
+  acknowledgedBytes: GPT_BYTES + RUNTIME_BYTES,
+};
+
+describe('the first install starts the library', () => {
+  it('the model that passed its check is the one checked model, with its digest, size and coding agent', async () => {
+    const h = setup();
+    await installAndWait(h.service);
+    expect(h.store.get().library).toEqual([{ ...QWEN_ENTRY, verifiedAt: new Date(1_000_000).toISOString() }]);
+    const view = await h.service.view();
+    expect(view.library).toEqual([
+      {
+        id: QWEN_ENTRY.id,
+        label: QWEN_ENTRY.label,
+        context: 131072,
+        sizeBytes: PULL_BYTES,
+        sizeGb: '23.1',
+        active: true,
+        verified: true,
+        status: 'ready',
+        actions: [],
+      },
+    ]);
+  });
+
+  it('the entry is written when the check passes, before the coding agent is installed', async () => {
+    const h = setup({
+      overrides: {
+        runInstallCommand: vi.fn(async () => ({ code: 1, output: 'no network\n', timedOut: false, aborted: false })),
+      },
+    });
+    await installAndWait(h.service);
+    expect(h.store.get()).toMatchObject({ state: 'failed', step: 'agent', library: [{ id: QWEN_ENTRY.id }] });
+    // It is the model of the stopped job: Resume goes on with it, so no switch is offered.
+    const view = await h.service.view();
+    expect(view.library.map((row) => row.actions)).toEqual([[]]);
+    expect(view.actions).toEqual(['resume', 'install', 'remove']);
+  });
+
+  it('a size the runtime does not report falls back to what the pull counted', async () => {
+    const h = setup();
+    h.world.tags = [];
+    await installAndWait(h.service);
+    expect(h.store.get().library?.[0].bytes).toBe(PULL_BYTES);
+  });
+});
+
+describe('adding a model to an installed one', () => {
+  it('downloads, checks and connects it, and keeps the earlier model in the library', async () => {
+    const h = setup({ state: INSTALLED, runtimeOnDisk: true, agentInstalled: true });
+    await h.service.boot();
+    h.calls.length = 0;
+    h.world.tags = BOTH_TAGS;
+
+    const started = await h.service.install(ADD_GPT, ADMIN);
+    expect(started.ok && started.view.state).toBe('installing');
+    await h.service.idle();
+
+    expect(h.calls).toEqual([
+      'ensureRuntimeInstalled',
+      'supervisor.start',
+      'supervisor.start',
+      'pullModel',
+      'supervisor.start',
+      'verifyModel',
+      'supervisor.start',
+      'connectLocalModel',
+    ]);
+    // Nothing of the earlier model was deleted: it was checked, and it stays.
+    expect(h.deps.deleteModel).not.toHaveBeenCalled();
+    expect(h.deps.removePartialModelBlobs).not.toHaveBeenCalled();
+    // The runtime is started for the new model's context.
+    expect(h.supervisor.start).toHaveBeenLastCalledWith(
+      expect.objectContaining({ port: 11435, contextLength: 131072 })
+    );
+    // The one endpoint record is rewritten for the new model; it stays ours.
+    expect(h.deps.connectLocalModel).toHaveBeenCalledWith({
+      port: 11435,
+      modelId: GPT.id,
+      context: GPT.context,
+      ours: true,
+      flagWasEnabled: false,
+    });
+    expect(h.store.get()).toMatchObject({
+      state: 'installed',
+      model: { id: GPT.id, context: GPT.context, digest: DIGEST },
+      connection: { endpointId: 'local-ollama', flagWasEnabled: false },
+      library: [QWEN_ENTRY, { id: GPT.id, context: GPT.context, digest: DIGEST, bytes: GPT_BYTES }],
+    });
+    expect(h.store.get()).not.toHaveProperty('replacedModelId');
+
+    const view = await h.service.view();
+    expect(view.model).toEqual({ id: GPT.id, label: GPT.label });
+    expect(view.library.map((row) => [row.id, row.active, row.status, row.actions])).toEqual([
+      [GPT.id, true, 'ready', []],
+      [QWEN_ENTRY.id, false, 'ready', ['use', 'delete']],
+    ]);
+    expect(view.actions).toEqual(['start-session', 'stop', 'install', 'use', 'delete-model', 'remove']);
+    // Only the model in use may be launched.
+    expect(await h.service.launchRefusalMessage('local-ollama', GPT.id)).toBeUndefined();
+    expect(await h.service.launchRefusalMessage('local-ollama', QWEN_ENTRY.id)).toBe(
+      'Only GPT-OSS 20B is in use on this Mac. Switch models in the local model window first.'
+    );
+  });
+
+  it('is refused while live sessions use the model, before anything is asked or started', async () => {
+    const h = setup({ state: INSTALLED, runtimeOnDisk: true, agentInstalled: true });
+    await h.service.boot();
+    h.calls.length = 0;
+    const refused = await h.service.install(ADD_GPT, ADMIN, ['w1-app', 'w2-api']);
+    expect(refused).toMatchObject({
+      ok: false,
+      status: 409,
+      conflict: {
+        reason: 'sessions-open',
+        sessions: ['w1-app', 'w2-api'],
+        message: { text: LOCAL_MODEL_INSTALL_LABELS.conflictSessionsOpen, vars: { sessions: 'w1-app, w2-api' } },
+      },
+    });
+    expect(h.calls).toEqual([]);
+    expect(h.deps.readHardware).not.toHaveBeenCalled();
+    expect(h.store.get().state).toBe('installed');
+  });
+
+  it('a first install is not held up by sessions elsewhere: no connection of ours exists yet', async () => {
+    const h = setup();
+    const started = await h.service.install(REQUEST, ADMIN, ['w1-app']);
+    expect(started.ok).toBe(true);
+    await h.service.cancel();
+  });
+
+  it('the model in use at ANOTHER context is an install like any other: it is checked again at that context', async () => {
+    const h = setup({ state: INSTALLED, runtimeOnDisk: true, agentInstalled: true });
+    h.deps.recommend.mockReturnValue({
+      ...recommendation(true),
+      pick: candidate('qwen3.6:35b-a3b', 'Qwen3.6 35B-A3B', 65536, PULL_BYTES, true),
+    });
+    await h.service.boot();
+    const started = await h.service.install({ ...REQUEST, context: 65536 }, ADMIN);
+    expect(started.ok).toBe(true);
+    await h.service.idle();
+    expect(h.store.get()).toMatchObject({
+      state: 'installed',
+      model: { id: 'qwen3.6:35b-a3b', context: 65536 },
+      library: [{ id: 'qwen3.6:35b-a3b', context: 65536 }],
+    });
+    expect(h.store.get().library).toHaveLength(1);
+  });
+
+  it('a job that stops leaves the earlier model to go back to, and no session until then', async () => {
+    const h = setup({ state: INSTALLED, runtimeOnDisk: true, agentInstalled: true });
+    await h.service.boot();
+    h.world.tags = BOTH_TAGS;
+    h.deps.verifyModel.mockResolvedValueOnce({ ok: false, code: 'no-tool-call' } as never);
+    await h.service.install(ADD_GPT, ADMIN);
+    await h.service.idle();
+
+    expect(h.store.get()).toMatchObject({ state: 'failed', step: 'verify', model: { id: GPT.id } });
+    // The endpoint record still names the earlier model, and nothing may be started on it.
+    expect(await h.service.launchRefusal('local-ollama')).toEqual({
+      code: 'job-unfinished',
+      message: { text: LOCAL_MODEL_INSTALL_LABELS.errJobUnfinished },
+      next: 'retry',
+    });
+    expect(await h.service.launchRefusalMessage('local-ollama', QWEN_ENTRY.id)).toBe(
+      'The model on this Mac is being changed and is not ready. Finish or undo that in the local model window first.'
+    );
+    const view = await h.service.view();
+    expect(view.actions).toEqual(['resume', 'install', 'use', 'delete-model', 'remove']);
+    expect(view.library.map((row) => [row.id, row.status, row.actions])).toEqual([
+      [QWEN_ENTRY.id, 'ready', ['use', 'delete']],
+      // Downloaded and not checked: the model of the stopped job, so nothing is offered on it.
+      [GPT.id, 'unverified', []],
+    ]);
+
+    // The way back. The model that never passed its check goes: it is what the job left behind.
+    h.calls.length = 0;
+    const back = await h.service.use({ modelId: QWEN_ENTRY.id }, ADMIN);
+    expect(back.ok).toBe(true);
+    await h.service.idle();
+    expect(h.deps.deleteModel).toHaveBeenCalledWith(expect.anything(), GPT.id, expect.anything());
+    expect(h.calls).toContain('removePartialModelBlobs');
+    expect(h.store.get()).toMatchObject({ state: 'installed', model: { id: QWEN_ENTRY.id, digest: DIGEST } });
+    expect(h.store.get()).not.toHaveProperty('replacedModelId');
+    expect(h.store.get()).not.toHaveProperty('error');
+    expect(await h.service.launchRefusalMessage('local-ollama', QWEN_ENTRY.id)).toBeUndefined();
+  });
+});
+
+describe('use: the switch to a checked model', () => {
+  it('loads and checks it again, connects it, and downloads nothing', async () => {
+    const h = setup({ state: TWO_MODELS, runtimeOnDisk: true, agentInstalled: true });
+    await h.service.boot();
+    h.calls.length = 0;
+    h.world.tags = BOTH_TAGS;
+
+    const started = await h.service.use({ modelId: GPT.id }, ADMIN);
+    expect(started.ok && started.view).toMatchObject({
+      state: 'installing',
+      step: 'verify',
+      steps: ['verify', 'connect'],
+      model: { id: GPT.id, label: GPT.label },
+      context: 65536,
+    });
+    await h.service.idle();
+
+    expect(h.calls).toEqual([
+      'recheckCliInstalled',
+      'supervisor.start',
+      'verifyModel',
+      'supervisor.start',
+      'connectLocalModel',
+    ]);
+    expect(h.deps.pullModel).not.toHaveBeenCalled();
+    expect(h.deps.ensureRuntimeInstalled).not.toHaveBeenCalled();
+    expect(h.deps.deleteModel).not.toHaveBeenCalled();
+    // The runtime is restarted for the context the model was checked with.
+    expect(h.supervisor.start).toHaveBeenLastCalledWith(expect.objectContaining({ contextLength: 65536 }));
+    expect(h.deps.verifyModel).toHaveBeenCalledWith(expect.anything(), GPT.id, 65536, expect.anything());
+    expect(h.deps.connectLocalModel).toHaveBeenCalledWith(
+      expect.objectContaining({ modelId: GPT.id, context: 65536, ours: true })
+    );
+    expect(h.store.get()).toMatchObject({
+      state: 'installed',
+      model: { id: GPT.id, context: 65536, digest: DIGEST },
+      cli: { id: 'opencode', label: 'OpenCode' },
+      library: [QWEN_ENTRY, { id: GPT.id, digest: DIGEST }],
+    });
+    expect(h.deps.audit).toHaveBeenCalledWith({
+      admin: 'root',
+      action: 'local_model_use',
+      target: GPT.id,
+      ip: '127.0.0.1',
+      detail: { cli: 'opencode', context: 65536 },
+    });
+  });
+
+  it('is refused for a model that is not one of the checked ones, and for the one in use', async () => {
+    const h = setup({ state: TWO_MODELS, runtimeOnDisk: true, agentInstalled: true });
+    await h.service.boot();
+    h.calls.length = 0;
+    expect(await h.service.use({ modelId: 'someone-else:7b' }, ADMIN)).toEqual({
+      ok: false,
+      status: 400,
+      message: { text: LOCAL_MODEL_INSTALL_LABELS.refusedNotInLibrary },
+    });
+    expect(await h.service.use({ modelId: QWEN_ENTRY.id }, ADMIN)).toMatchObject({
+      ok: false,
+      status: 409,
+      conflict: { reason: 'already-installed' },
+    });
+    expect(h.calls).toEqual([]);
+    expect(h.store.get().state).toBe('installed');
+  });
+
+  it('is refused while live sessions use the model', async () => {
+    const h = setup({ state: TWO_MODELS, runtimeOnDisk: true, agentInstalled: true });
+    await h.service.boot();
+    h.calls.length = 0;
+    expect(await h.service.use({ modelId: GPT.id }, ADMIN, ['w1-app'])).toMatchObject({
+      ok: false,
+      status: 409,
+      conflict: { reason: 'sessions-open', sessions: ['w1-app'] },
+    });
+    expect(h.calls).toEqual([]);
+  });
+
+  it('is 409 wrong-state where there is nothing to switch: idle', async () => {
+    const h = setup();
+    expect(await h.service.use({ modelId: GPT.id }, ADMIN)).toMatchObject({
+      ok: false,
+      status: 409,
+      conflict: { reason: 'wrong-state' },
+    });
+  });
+
+  it('a model whose digest is no longer the stored one is not loaded: model-changed, and the way back stays', async () => {
+    const h = setup({ state: TWO_MODELS, runtimeOnDisk: true, agentInstalled: true });
+    await h.service.boot();
+    h.world.tags = [BOTH_TAGS[0], { ...BOTH_TAGS[1], digest: 'ffff00000000' }];
+    h.deps.readModelDigest.mockImplementation(async (_target: unknown, id: string) =>
+      id === GPT.id ? 'ffff00000000' : DIGEST
+    );
+    h.calls.length = 0;
+    await h.service.use({ modelId: GPT.id }, ADMIN);
+    await h.service.idle();
+
+    expect(h.deps.verifyModel).not.toHaveBeenCalled();
+    expect(h.deps.connectLocalModel).not.toHaveBeenCalled();
+    const view = await h.service.view();
+    expect(view.state).toBe('failed');
+    expect(view.error).toMatchObject({
+      code: 'model-changed',
+      detail: 'The runtime reports another digest for the model.',
+    });
+    expect(view.library.map((row) => [row.id, row.status, row.actions])).toEqual([
+      [QWEN_ENTRY.id, 'ready', ['use', 'delete']],
+      [GPT.id, 'changed', []],
+    ]);
+    // The changed model stays a library entry until the person deletes it; it is never deleted as a leftover.
+    await h.service.use({ modelId: QWEN_ENTRY.id }, ADMIN);
+    await h.service.idle();
+    expect(h.deps.deleteModel).not.toHaveBeenCalled();
+    expect(h.store.get()).toMatchObject({ state: 'installed', model: { id: QWEN_ENTRY.id } });
+  });
+
+  it('a model the runtime no longer lists is model-changed too, said as that', async () => {
+    const h = setup({ state: TWO_MODELS, runtimeOnDisk: true, agentInstalled: true });
+    await h.service.boot();
+    h.deps.readModelDigest.mockImplementation(async (_target: unknown, id: string) =>
+      id === GPT.id ? undefined : DIGEST
+    );
+    await h.service.use({ modelId: GPT.id }, ADMIN);
+    await h.service.idle();
+    expect((await h.service.view()).error).toMatchObject({
+      code: 'model-changed',
+      detail: 'The runtime no longer lists the model.',
+    });
+  });
+
+  it('takes the coding agent the model was checked with when it is installed, else the one of the state', async () => {
+    const pi = { id: 'pi', label: 'Pi' };
+    const state: LocalModelStateFile = { ...TWO_MODELS, library: [QWEN_ENTRY, { ...GPT_ENTRY, cli: pi }] };
+    const withPi = setup({ state, runtimeOnDisk: true });
+    withPi.deps.recheckCliInstalled.mockImplementation(async () => true);
+    await withPi.service.boot();
+    await withPi.service.use({ modelId: GPT.id }, ADMIN);
+    await withPi.service.idle();
+    expect(withPi.store.get().cli).toEqual(pi);
+
+    const withoutPi = setup({ state, runtimeOnDisk: true });
+    withoutPi.deps.recheckCliInstalled.mockImplementation((async (id: string) => id === 'opencode') as never);
+    await withoutPi.service.boot();
+    await withoutPi.service.use({ modelId: GPT.id }, ADMIN);
+    await withoutPi.service.idle();
+    expect(withoutPi.store.get().cli).toEqual({ id: 'opencode', label: 'OpenCode' });
+  });
+
+  it('with no coding agent of the two installed it is refused, in one sentence, and nothing starts', async () => {
+    const h = setup({ state: TWO_MODELS, runtimeOnDisk: true, agentInstalled: false });
+    await h.service.boot();
+    expect(await h.service.use({ modelId: GPT.id }, ADMIN)).toEqual({
+      ok: false,
+      status: 400,
+      message: { text: LOCAL_MODEL_INSTALL_LABELS.refusedAgentMissing, vars: { cli: 'OpenCode' } },
+    });
+    expect(h.store.get().state).toBe('installed');
+  });
+
+  it('Cancel pauses a switch like any job, and Resume goes on with it', async () => {
+    const h = setup({
+      state: TWO_MODELS,
+      runtimeOnDisk: true,
+      agentInstalled: true,
+      overrides: {
+        verifyModel: vi
+          .fn()
+          .mockImplementationOnce(async (_t: unknown, _id: string, _c: number, signal?: AbortSignal) => {
+            await untilAborted(signal);
+            return { ok: false as const, code: 'cancelled' as const };
+          })
+          .mockResolvedValue({
+            ok: true as const,
+            loaded: { context: 65536, sizeBytes: 15_000_000_000, sizeVramBytes: 15_000_000_000 },
+          }),
+      },
+    });
+    await h.service.boot();
+    await h.service.use({ modelId: GPT.id }, ADMIN);
+    await vi.waitFor(() => expect(h.deps.verifyModel).toHaveBeenCalled());
+    const paused = await h.service.cancel();
+    expect(paused.ok && paused.view).toMatchObject({ state: 'paused', step: 'verify', steps: ['verify', 'connect'] });
+    await h.service.resume({}, ADMIN);
+    await h.service.idle();
+    expect(h.store.get()).toMatchObject({ state: 'installed', model: { id: GPT.id } });
+  });
+});
+
+describe('deleteLibraryModel: one model out of the store', () => {
+  async function twoModelsRunning() {
+    const h = setup({ state: TWO_MODELS, runtimeOnDisk: true, agentInstalled: true });
+    await h.service.boot();
+    h.world.tags = [...BOTH_TAGS];
+    h.deps.deleteModel.mockImplementation(async (_target: unknown, id: string) => {
+      h.calls.push('deleteModel');
+      h.world.tags = (h.world.tags ?? []).filter((tag) => tag.name !== id);
+      return true;
+    });
+    h.calls.length = 0;
+    return h;
+  }
+
+  it('deletes it through the runtime, drops its entry and writes the audit line', async () => {
+    const h = await twoModelsRunning();
+    const result = await h.service.deleteLibraryModel({ modelId: GPT.id }, ADMIN);
+    expect(h.deps.deleteModel).toHaveBeenCalledTimes(1);
+    expect(h.deps.deleteModel).toHaveBeenCalledWith({ baseUrl: 'http://127.0.0.1:11435' }, GPT.id, expect.anything());
+    expect(h.store.get().library).toEqual([QWEN_ENTRY]);
+    expect(h.store.get().state).toBe('installed');
+    // The answer is the view after the delete: the runtime was asked again.
+    expect(result.ok && result.view.library.map((row) => row.id)).toEqual([QWEN_ENTRY.id]);
+    expect(h.deps.audit).toHaveBeenCalledWith({
+      admin: 'root',
+      action: 'local_model_delete',
+      target: GPT.id,
+      ip: '127.0.0.1',
+      detail: { verified: true, bytes: GPT_BYTES },
+    });
+    // Nothing else of the feature was touched.
+    expect(h.calls).toEqual(['deleteModel']);
+  });
+
+  it('refuses the model in use: switch first, or remove', async () => {
+    const h = await twoModelsRunning();
+    expect(await h.service.deleteLibraryModel({ modelId: QWEN_ENTRY.id }, ADMIN)).toEqual({
+      ok: false,
+      status: 409,
+      conflict: {
+        reason: 'model-active',
+        message: { text: LOCAL_MODEL_INSTALL_LABELS.conflictModelActive, vars: { model: 'Qwen3.6 35B-A3B' } },
+      },
+    });
+    expect(h.deps.deleteModel).not.toHaveBeenCalled();
+  });
+
+  it('refuses while the runtime is down or does not answer: only the runtime deletes a model', async () => {
+    const stopped = setup({ state: TWO_MODELS });
+    expect(await stopped.service.deleteLibraryModel({ modelId: GPT.id }, ADMIN)).toMatchObject({
+      ok: false,
+      status: 409,
+      conflict: { reason: 'runtime-not-running', message: { text: LOCAL_MODEL_INSTALL_LABELS.errRuntimeNotRunning } },
+    });
+    const silent = await twoModelsRunning();
+    silent.deps.getRuntimeVersion.mockResolvedValue(undefined);
+    expect(await silent.service.deleteLibraryModel({ modelId: GPT.id }, ADMIN)).toMatchObject({
+      ok: false,
+      status: 409,
+      conflict: { reason: 'runtime-not-running' },
+    });
+    expect(silent.deps.deleteModel).not.toHaveBeenCalled();
+    expect(silent.store.get().library).toHaveLength(2);
+  });
+
+  it('refuses a name that is neither a checked model nor one the runtime lists, and anything that is not name:tag', async () => {
+    const h = await twoModelsRunning();
+    const refused = { ok: false, status: 400, message: { text: LOCAL_MODEL_INSTALL_LABELS.refusedNotOnThisMac } };
+    expect(await h.service.deleteLibraryModel({ modelId: 'someone-else:7b' }, ADMIN)).toEqual(refused);
+    for (const modelId of ['../../etc/passwd', '/Users/me/models', 'hf.co/someone/model:Q4', 'NoTag', '']) {
+      expect(await h.service.deleteLibraryModel({ modelId }, ADMIN)).toEqual(refused);
+    }
+    expect(h.deps.deleteModel).not.toHaveBeenCalled();
+  });
+
+  it('is 409 wrong-state in idle: there is no runtime to ask', async () => {
+    const h = setup();
+    expect(await h.service.deleteLibraryModel({ modelId: GPT.id }, ADMIN)).toMatchObject({
+      ok: false,
+      status: 409,
+      conflict: { reason: 'wrong-state' },
+    });
+  });
+
+  it('a runtime that does not delete it: said as that, and the entry stays', async () => {
+    const h = await twoModelsRunning();
+    h.deps.deleteModel.mockResolvedValue(false);
+    expect(await h.service.deleteLibraryModel({ modelId: GPT.id }, ADMIN)).toEqual({
+      ok: false,
+      status: 500,
+      message: { text: LOCAL_MODEL_INSTALL_LABELS.deleteFailed, vars: { model: 'GPT-OSS 20B' } },
+    });
+    expect(h.store.get().library).toEqual([QWEN_ENTRY, GPT_ENTRY]);
+    expect(h.deps.audit).not.toHaveBeenCalled();
+  });
+
+  it('a model the runtime lists and Codeman never checked can be deleted too', async () => {
+    const h = await twoModelsRunning();
+    h.world.tags = [...BOTH_TAGS, { name: 'leftover:9b', size: 6_000_000_000, digest: 'aa' }];
+    const before = await h.service.view();
+    expect(before.library.find((row) => row.id === 'leftover:9b')).toMatchObject({
+      status: 'unverified',
+      sizeGb: '6.0',
+      actions: ['delete'],
+    });
+    const result = await h.service.deleteLibraryModel({ modelId: 'leftover:9b' }, ADMIN);
+    expect(result.ok && result.view.library.map((row) => row.id)).toEqual([QWEN_ENTRY.id, GPT.id]);
+    expect(h.store.get().library).toEqual([QWEN_ENTRY, GPT_ENTRY]);
+    expect(h.deps.audit).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'local_model_delete', detail: { verified: false, bytes: 6_000_000_000 } })
+    );
+  });
+
+  it('a checked model the runtime no longer lists: its entry is dropped once the runtime says it is gone', async () => {
+    const h = await twoModelsRunning();
+    h.world.tags = [BOTH_TAGS[0]];
+    const result = await h.service.deleteLibraryModel({ modelId: GPT.id }, ADMIN);
+    expect(result.ok).toBe(true);
+    // Asked of the runtime all the same: its "not found" is what says the model is gone.
+    expect(h.deps.deleteModel).toHaveBeenCalledWith(expect.anything(), GPT.id, expect.anything());
+    expect(h.store.get().library).toEqual([QWEN_ENTRY]);
+  });
+
+  it('works from a stopped job too, for any model but the one of that job', async () => {
+    const state: LocalModelStateFile = {
+      ...jobAt('verify', 'paused'),
+      model: { ...GPT },
+      library: [QWEN_ENTRY],
+      connection: { endpointId: 'local-ollama', flagWasEnabled: false },
+    };
+    const h = setup({ state, runtimeOnDisk: true });
+    h.world.running = true;
+    h.world.tags = BOTH_TAGS;
+    expect(await h.service.deleteLibraryModel({ modelId: GPT.id }, ADMIN)).toMatchObject({
+      ok: false,
+      conflict: { reason: 'model-active' },
+    });
+    const result = await h.service.deleteLibraryModel({ modelId: QWEN_ENTRY.id }, ADMIN);
+    expect(result.ok).toBe(true);
+    expect(h.store.get().library).toEqual([]);
+    expect(h.store.get().state).toBe('paused');
+  });
+});
+
+describe('the model store in idle: what an earlier Remove kept', () => {
+  it('shows what it takes, offers Remove, and Remove with the models frees it', async () => {
+    const h = setup();
+    h.world.storeBytes = PULL_BYTES;
+    const view = await h.service.view();
+    expect(view).toMatchObject({
+      state: 'idle',
+      library: [],
+      store: { bytes: PULL_BYTES, gb: '23.1' },
+      actions: ['install', 'remove'],
+    });
+
+    h.deps.removeLocalModelFiles.mockImplementation(async () => {
+      h.calls.push('removeLocalModelFiles');
+      h.world.storeBytes = 0;
+    });
+    const removed = await h.service.remove({ removeModel: true }, [], ADMIN);
+    expect(h.deps.removeLocalModelFiles).toHaveBeenCalledWith({ models: true, paths: PATHS });
+    expect(removed.ok && removed.view).toMatchObject({
+      state: 'idle',
+      store: { bytes: 0, gb: '0.0' },
+      actions: ['install'],
+    });
+  });
+
+  it('Remove that keeps the models leaves them there: the next view says how much', async () => {
+    const h = setup({ state: TWO_MODELS, runtimeOnDisk: true });
+    h.world.storeBytes = PULL_BYTES + GPT_BYTES;
+    const removed = await h.service.remove({}, [], ADMIN);
+    expect(removed.ok && removed.view).toMatchObject({
+      state: 'idle',
+      library: [],
+      store: { bytes: PULL_BYTES + GPT_BYTES, gb: '36.9' },
+      actions: ['install', 'remove'],
+    });
+    expect(h.store.get()).not.toHaveProperty('library');
+  });
+});
+
+describe('the view does not ask the runtime or the disk on every poll', () => {
+  it('reads the list and the store once, then again only when they are stale', async () => {
+    const h = setup({ state: TWO_MODELS, runtimeOnDisk: true });
+    await h.service.boot();
+    h.world.tags = BOTH_TAGS;
+    h.deps.listTags.mockClear();
+    for (let i = 0; i < 5; i++) await h.service.view();
+    expect(h.deps.listTags).toHaveBeenCalledTimes(1);
+    expect(h.deps.measureModelStore).toHaveBeenCalledTimes(1);
+
+    // Five seconds on: the list is read again, in the background. The view does not wait for
+    // a runtime that is slow to answer: it is built from the list it has.
+    h.world.clock += 5_000;
+    let answer: (tags: typeof BOTH_TAGS) => void = () => {};
+    h.deps.listTags.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+    const stale = await h.service.view();
+    expect(stale.library.map((row) => row.status)).toEqual(['ready', 'ready']);
+    await vi.waitFor(() => expect(h.deps.listTags).toHaveBeenCalledTimes(2));
+    // A second poll while that read is out starts no second one.
+    await h.service.view();
+    expect(h.deps.listTags).toHaveBeenCalledTimes(2);
+    answer([BOTH_TAGS[0]]);
+    await vi.waitFor(async () =>
+      expect((await h.service.view()).library.map((row) => row.status)).toEqual(['ready', 'missing'])
+    );
+    expect(h.deps.measureModelStore).toHaveBeenCalledTimes(1);
+
+    // Thirty seconds on: the store is measured again.
+    h.world.clock += 30_000;
+    await h.service.view();
+    await vi.waitFor(() => expect(h.deps.measureModelStore).toHaveBeenCalledTimes(2));
+  });
+
+  it('a runtime that does not answer keeps the last list: no model reads as missing for a moment', async () => {
+    const h = setup({ state: TWO_MODELS, runtimeOnDisk: true });
+    await h.service.boot();
+    h.world.tags = BOTH_TAGS;
+    await h.service.view();
+    h.deps.getRuntimeVersion.mockResolvedValue(undefined);
+    h.deps.listTags.mockClear();
+    h.world.clock += 5_000;
+    await h.service.view();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(h.deps.listTags).not.toHaveBeenCalled();
+    expect((await h.service.view()).library.map((row) => row.status)).toEqual(['ready', 'ready']);
+  });
+
+  it('a stopped runtime is not asked at all, and offers no delete', async () => {
+    const h = setup({ state: { ...TWO_MODELS, runtime: { ...INSTALLED.runtime!, enabled: false } } });
+    await h.service.boot();
+    const view = await h.service.view();
+    expect(h.deps.listTags).not.toHaveBeenCalled();
+    expect(view.library.map((row) => [row.id, row.sizeGb, row.actions])).toEqual([
+      [QWEN_ENTRY.id, '23.1', []],
+      [GPT.id, '13.8', ['use']],
+    ]);
+  });
+
+  it('a listing or a measurement that fails is not an error of the view', async () => {
+    const h = setup({ state: TWO_MODELS, runtimeOnDisk: true });
+    await h.service.boot();
+    h.deps.listTags.mockRejectedValue(new Error('socket hang up'));
+    h.deps.measureModelStore.mockRejectedValue(new Error('EIO'));
+    const view = await h.service.view();
+    expect(view.state).toBe('installed');
+    expect(view).not.toHaveProperty('store');
+    expect(view.library.map((row) => row.id)).toEqual([QWEN_ENTRY.id, GPT.id]);
   });
 });

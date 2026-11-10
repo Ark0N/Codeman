@@ -554,6 +554,12 @@ export interface Candidate {
   installBytes: number;
   /** `installBytes` as decimal GB text, no unit. */
   installGb: string;
+  /**
+   * Set by the route, never by `recommend()`: this model at this context is a checked model of
+   * the library on this Mac (`LocalModelInstallView.library`). `active`: it is the model in
+   * use. `ready`: `POST /api/local-model/use` switches to it, and nothing is downloaded.
+   */
+  library?: 'active' | 'ready';
 }
 
 /**

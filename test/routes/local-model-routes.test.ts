@@ -155,6 +155,7 @@ const IDLE_VIEW: LocalModelInstallView = {
   developerTools: 'missing',
   runtime: { version: '0.40.15', installed: false, downloadBytes: 185971671, downloadGb: '0.2', unpackedGb: '0.6' },
   folder: '/Users/me/.codeman/local-model',
+  library: [],
   actions: ['install'],
 };
 
@@ -182,6 +183,8 @@ function fakeService(): ServiceMock {
     launchRefusalMessage: vi.fn(async () => undefined),
     recommendOptions: vi.fn(async () => ({ runtimeDownloadBytes: 185971671 })),
     install: vi.fn(async () => OK_RESULT),
+    use: vi.fn(async () => OK_RESULT),
+    deleteLibraryModel: vi.fn(async () => OK_RESULT),
     cancel: vi.fn(async () => OK_RESULT),
     resume: vi.fn(async () => OK_RESULT),
     runtime: vi.fn(async () => OK_RESULT),
@@ -555,6 +558,13 @@ describe('the install verbs', () => {
   /** Every verb as a request, with a body the route accepts. */
   const VERBS = [
     { name: 'install', method: 'POST', url: '/api/local-model/install', payload: INSTALL_BODY },
+    { name: 'use', method: 'POST', url: '/api/local-model/use', payload: { modelId: 'qwen3.8:27b' } },
+    {
+      name: 'deleteLibraryModel',
+      method: 'DELETE',
+      url: '/api/local-model/models',
+      payload: { modelId: 'qwen3.8:27b' },
+    },
     { name: 'cancel', method: 'POST', url: '/api/local-model/cancel', payload: undefined },
     { name: 'resume', method: 'POST', url: '/api/local-model/resume', payload: {} },
     { name: 'runtime', method: 'POST', url: '/api/local-model/runtime', payload: { action: 'stop' } },
@@ -654,7 +664,18 @@ describe('the install verbs', () => {
       const f = fakes();
       const { app } = await harness(f.deps, { username: 'alice', role: 'admin' });
       await app.inject({ method: 'POST', url: '/api/local-model/install', payload: INSTALL_BODY });
-      expect(f.service.install).toHaveBeenCalledWith(INSTALL_BODY, { username: 'alice', ip: '127.0.0.1' });
+      expect(f.service.install).toHaveBeenCalledWith(INSTALL_BODY, { username: 'alice', ip: '127.0.0.1' }, []);
+    });
+
+    it('hands the service the names of the live sessions on the model: another model would take the runtime from them', async () => {
+      const f = fakes();
+      const { app } = await harness(f.deps, undefined, [
+        { name: 'w1-app', customModel: { endpointId: 'local-ollama' } },
+        { name: 'w2-app' },
+        { name: 'w3-lib', customModel: { endpointId: 'office-gpu' } },
+      ]);
+      await app.inject({ method: 'POST', url: '/api/local-model/install', payload: INSTALL_BODY });
+      expect(f.service.install.mock.calls[0][2]).toEqual(['w1-app']);
     });
 
     it('a row the server does not offer is a 400 with the service own sentence, as text and as data', async () => {
@@ -921,6 +942,177 @@ describe('the install verbs', () => {
       const res = await app.inject({ method: 'DELETE', url: '/api/local-model', payload: { path: '/' } });
       expect(res.statusCode).toBe(400);
       expect(f.service.remove).not.toHaveBeenCalled();
+    });
+  });
+});
+
+describe('the library verbs', () => {
+  const SESSIONS: SessionLike[] = [
+    { name: 'w1-app', customModel: { endpointId: 'local-ollama' } },
+    { name: 'w2-app' },
+    { name: 'w3-lib', customModel: { endpointId: 'office-gpu' } },
+  ];
+
+  describe('POST /api/local-model/use', () => {
+    it('hands the service the model, who asked and the live sessions on the model', async () => {
+      const f = fakes();
+      const { app } = await harness(f.deps, { username: 'alice', role: 'admin' }, SESSIONS);
+      await app.inject({ method: 'POST', url: '/api/local-model/use', payload: { modelId: 'gpt-oss:20b' } });
+      expect(f.service.use).toHaveBeenCalledWith({ modelId: 'gpt-oss:20b' }, { username: 'alice', ip: '127.0.0.1' }, [
+        'w1-app',
+      ]);
+    });
+
+    it('a model that is not one of the checked ones is a 400 with the sentence, as text and as data', async () => {
+      const f = fakes();
+      f.service.use.mockResolvedValue({
+        ok: false,
+        status: 400,
+        message: { text: LOCAL_MODEL_INSTALL_LABELS.refusedNotInLibrary },
+      });
+      const { app } = await harness(f.deps);
+      const res = await app.inject({ method: 'POST', url: '/api/local-model/use', payload: { modelId: 'x:1b' } });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toEqual({
+        success: false,
+        error: 'This model is not one of the checked models on this Mac.',
+        errorCode: 'INVALID_INPUT',
+        data: { message: { text: 'This model is not one of the checked models on this Mac.' } },
+      });
+    });
+
+    it.each([
+      ['no body', undefined],
+      ['no model', {}],
+      ['a path', { modelId: '../../etc/passwd' }],
+      ['another registry', { modelId: 'hf.co/someone/model:Q4' }],
+      ['a member it does not know', { modelId: 'gpt-oss:20b', context: 65536 }],
+    ])('refuses %s before the service is asked', async (_name, payload) => {
+      const f = fakes();
+      const { app } = await harness(f.deps);
+      const res = await app.inject({ method: 'POST', url: '/api/local-model/use', ...(payload ? { payload } : {}) });
+      expect(res.statusCode).toBe(400);
+      expect(f.service.use).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('DELETE /api/local-model/models', () => {
+    it('hands the service the model name and who asked', async () => {
+      const f = fakes();
+      const { app } = await harness(f.deps, { username: 'alice', role: 'admin' });
+      await app.inject({ method: 'DELETE', url: '/api/local-model/models', payload: { modelId: 'gpt-oss:20b' } });
+      expect(f.service.deleteLibraryModel).toHaveBeenCalledWith(
+        { modelId: 'gpt-oss:20b' },
+        { username: 'alice', ip: '127.0.0.1' }
+      );
+      // The whole installation is another route: it was not asked.
+      expect(f.service.remove).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['no body', undefined],
+      ['a path', { modelId: '/Users/me/.codeman/local-model/models' }],
+      ['a path that climbs', { modelId: '../../etc/passwd' }],
+      ['a name with a slash', { modelId: 'library/qwen3.8:27b' }],
+      ['a name without a tag', { modelId: 'qwen3.8' }],
+      ['a path member', { modelId: 'gpt-oss:20b', path: '/' }],
+    ])('takes a model name and nothing else: refuses %s', async (_name, payload) => {
+      const f = fakes();
+      const { app } = await harness(f.deps);
+      const res = await app.inject({
+        method: 'DELETE',
+        url: '/api/local-model/models',
+        ...(payload ? { payload } : {}),
+      });
+      expect(res.statusCode).toBe(400);
+      expect(f.service.deleteLibraryModel).not.toHaveBeenCalled();
+    });
+
+    it('the model in use: 409 with the reason and the sentence', async () => {
+      const f = fakes();
+      f.service.deleteLibraryModel.mockResolvedValue({
+        ok: false,
+        status: 409,
+        conflict: {
+          reason: 'model-active',
+          message: { text: LOCAL_MODEL_INSTALL_LABELS.conflictModelActive, vars: { model: 'Qwen3.8 27B' } },
+        },
+      });
+      const { app } = await harness(f.deps);
+      const res = await app.inject({
+        method: 'DELETE',
+        url: '/api/local-model/models',
+        payload: { modelId: 'qwen3.8:27b' },
+      });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toEqual({
+        success: false,
+        error: 'Qwen3.8 27B is the model in use. Switch to another model first, or remove the local model.',
+        errorCode: 'CONFLICT',
+        data: {
+          reason: 'model-active',
+          message: {
+            text: '{model} is the model in use. Switch to another model first, or remove the local model.',
+            vars: { model: 'Qwen3.8 27B' },
+          },
+        },
+      });
+    });
+
+    it('a runtime that did not delete it: 500 with the sentence, as text and as data', async () => {
+      const f = fakes();
+      f.service.deleteLibraryModel.mockResolvedValue({
+        ok: false,
+        status: 500,
+        message: { text: LOCAL_MODEL_INSTALL_LABELS.deleteFailed, vars: { model: 'GPT-OSS 20B' } },
+      });
+      const { app } = await harness(f.deps);
+      const res = await app.inject({
+        method: 'DELETE',
+        url: '/api/local-model/models',
+        payload: { modelId: 'gpt-oss:20b' },
+      });
+      expect(res.statusCode).toBe(500);
+      expect(res.json()).toEqual({
+        success: false,
+        error: 'GPT-OSS 20B could not be deleted from this Mac.',
+        errorCode: 'OPERATION_FAILED',
+        data: { message: { text: '{model} could not be deleted from this Mac.', vars: { model: 'GPT-OSS 20B' } } },
+      });
+    });
+  });
+
+  describe('GET /api/local-model marks the rows that are already on this Mac', () => {
+    it('the model in use and a model a switch can take, at the context they were checked with', async () => {
+      const second = { ...OK.pick!, modelId: 'gpt-oss:20b', modelLabel: 'GPT-OSS 20B', context: 65536 };
+      const third = { ...OK.pick!, modelId: 'mimo-v2.6:9b-q4_k_m', modelLabel: 'MiMo V2.6 9B' };
+      const f = fakes(MAC, { ...OK, alternatives: [second, third] });
+      const row = (id: string, context: number, active: boolean) => ({
+        id,
+        label: id,
+        context,
+        active,
+        verified: true,
+        status: 'ready' as const,
+        actions: active ? [] : ['use' as const],
+      });
+      f.service.view.mockResolvedValue({
+        ...IDLE_VIEW,
+        state: 'installed',
+        library: [row(OK.pick!.modelId, OK.pick!.context, true), row('gpt-oss:20b', 65536, false)],
+        actions: ['start-session', 'stop', 'install', 'use', 'remove'],
+      });
+      const data = (await get(f.deps)).json().data;
+      expect(data.recommendation.pick.library).toBe('active');
+      expect(data.recommendation.alternatives[0].library).toBe('ready');
+      expect(data.recommendation.alternatives[1]).not.toHaveProperty('library');
+      // What recommend() answered is not written to.
+      expect(OK.pick).not.toHaveProperty('library');
+    });
+
+    it('with nothing on this Mac no row carries the mark', async () => {
+      const data = (await get(fakes().deps)).json().data;
+      expect(data.recommendation.pick).not.toHaveProperty('library');
     });
   });
 });

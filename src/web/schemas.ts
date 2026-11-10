@@ -2505,6 +2505,12 @@ export const LocalModelRuntimeSchema = z
 /** DELETE /api/local-model. The body may be empty. */
 export const LocalModelRemoveSchema = z.object({ removeModel: z.boolean().optional() }).strict();
 
+/** POST /api/local-model/use: a checked model of the library to switch to. */
+export const LocalModelUseSchema = z.object({ modelId: localModelId }).strict();
+
+/** DELETE /api/local-model/models: one model of the store, by its name. Never a path. */
+export const LocalModelDeleteSchema = z.object({ modelId: localModelId }).strict();
+
 /**
  * A shell-safe bare word, mirroring `config/cli-registry/schema.ts`'s own `shellToken` —
  * duplicated rather than imported, since the REAL safety boundary for anything built from

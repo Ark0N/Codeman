@@ -18,6 +18,10 @@
  *    screen, and a 409 `size-changed` shows the new total and sends that one next;
  *  - the poll: once a second while the window is open, never after it closes, and a tick that
  *    moved only the download leaves the buttons in place;
+ *  - the models on this Mac: the list with its sizes, the state of each row, "Use" (a switch
+ *    with no confirm screen), "Delete" (asked once, in the row), "Add a model" (the chooser,
+ *    where a row that is on this Mac already is switched to), the way back from a stopped job,
+ *    and what an earlier Remove left on disk;
  *  - every payload string lands as text: an `<img onerror>` in a model, agent or chip name, an
  *    error's detail, a session name, a folder or a command creates no element;
  *  - a button exists only for an action the server lists.
@@ -48,6 +52,7 @@ import type {
   LocalModelConflict,
   LocalModelErrorCode,
   LocalModelInstallView,
+  LocalModelLibraryRow,
   LocalModelMessage,
   LocalModelStatus,
   NoneReason,
@@ -383,10 +388,25 @@ function install(over: Partial<LocalModelInstallView> = {}): LocalModelInstallVi
     developerTools: 'present',
     runtime: RUNTIME_MISSING,
     folder: FOLDER,
+    library: [],
     actions: ['install'],
     ...over,
   };
 }
+
+/** The installed model as the row of the library it is: in use, checked, with nothing to do on it. */
+const QWEN_ROW: LocalModelLibraryRow = {
+  id: 'qwen3.6:35b-a3b',
+  label: 'Qwen3.6 35B-A3B',
+  context: 131072,
+  sizeBytes: 23105798956,
+  sizeGb: '23.1',
+  active: true,
+  verified: true,
+  status: 'ready',
+  actions: [],
+};
+const STORE_ONE = { bytes: 23105798956, gb: '23.1' };
 
 /** The members a job carries from `installing` on. */
 const JOB: Partial<LocalModelInstallView> = {
@@ -453,7 +473,9 @@ const INSTALLED = status(
     running: true,
     endpointId: 'local-ollama',
     loaded: { context: 131072, memoryBytes: 26300000000, memoryGb: '26.3', onGpu: true },
-    actions: ['start-session', 'stop', 'remove'],
+    library: [QWEN_ROW],
+    store: STORE_ONE,
+    actions: ['start-session', 'stop', 'install', 'remove'],
   }
 );
 const STOPPED = status(
@@ -464,7 +486,9 @@ const STOPPED = status(
     running: false,
     endpointId: 'local-ollama',
     loaded: { context: 131072, memoryBytes: 26300000000, memoryGb: '26.3', onGpu: true },
-    actions: ['start', 'remove'],
+    library: [QWEN_ROW],
+    store: STORE_ONE,
+    actions: ['start', 'install', 'remove'],
   }
 );
 
@@ -1705,6 +1729,8 @@ describe('an installed model', () => {
     // row's own estimate, so the two figures are never read as a contradiction.
     expect(texts(body, '.lm-aside')).toEqual([
       'Runs with OpenCode. Context 131,072 tokens. Takes 26.3 GB of memory now, and up to about 36 GB at its peak, with all of the context in use. All of it is on the GPU.',
+      // Under the list of models: what the downloads take on disk.
+      'Downloaded models use 23.1 GB on this Mac.',
     ]);
     expect(buttons(body)).toEqual(['Remove', 'Stop', 'Start a session']);
     // One main action.
@@ -2367,5 +2393,538 @@ describe('an installed model whose runtime did not start', () => {
     press(page.body, 'Start');
     await settle();
     expect(verbs(app)).toEqual([['POST', '/api/local-model/runtime', { action: 'start' }]]);
+  });
+});
+
+// ---------- The models on this Mac ----------
+
+const GPT_ROW: LocalModelLibraryRow = {
+  id: 'gpt-oss:20b',
+  label: 'GPT-OSS 20B',
+  context: 65536,
+  sizeBytes: 13793441427,
+  sizeGb: '13.8',
+  active: false,
+  verified: true,
+  status: 'ready',
+  actions: ['use', 'delete'],
+};
+const STORE_TWO = { bytes: 36899240383, gb: '36.9' };
+
+/** Two models on this Mac, the Qwen one in use and running. */
+const TWO = status(
+  { budgetBytes: 40157944217, budgetGb: '40.2', budgetSource: 'measured' },
+  {
+    ...INSTALLED.install,
+    library: [QWEN_ROW, GPT_ROW],
+    store: STORE_TWO,
+    actions: ['start-session', 'stop', 'install', 'use', 'delete-model', 'remove'],
+  }
+);
+
+/** The buttons of the rows of the list (not the buttons of the screen), by their label. */
+const rowButtons = (page: Mounted) => texts(page.body, '.lm-lib-row .lm-lib-actions:not(.lm-lib-actions-away) button');
+
+function pressIn(page: Mounted, selector: string, label: string) {
+  const found = [...page.frame.querySelectorAll<HTMLButtonElement>(`${selector} button`)].find(
+    (el) => el.textContent === label
+  );
+  expect(found, `no button "${label}" in ${selector}`).toBeTruthy();
+  found!.click();
+}
+
+describe('the models on this Mac', () => {
+  it('lists the one installed model with its context, its state and its size on disk, and offers another', async () => {
+    const page = mount();
+    await opened(page, INSTALLED);
+    const { body } = page;
+    expect(texts(body, '.lm-lib-caption-label')).toEqual(['Models on this Mac']);
+    expect(texts(body, '.lm-lib-caption-size')).toEqual(['On disk']);
+    expect(texts(body, '.lm-lib-label')).toEqual(['Qwen3.6 35B-A3B']);
+    expect(texts(body, '.lm-lib-meta')).toEqual(['131,072 tokens']);
+    expect(texts(body, '.lm-lib-tag .lm-tag')).toEqual(['In use']);
+    expect(texts(body, '.lm-lib-size')).toEqual(['23.1 GB']);
+    // The model in use wears the selected look, and nothing can be done ON it here.
+    expect(body.querySelector('.lm-lib-row')!.classList.contains('lm-lib-row-on')).toBe(true);
+    expect(rowButtons(page)).toEqual([]);
+    expect(texts(body, '.lm-lib-foot button')).toEqual(['Add a model']);
+    // A real list for assistive technology, named by its caption.
+    const list = body.querySelector('.lm-lib-list')!;
+    expect(list.getAttribute('role')).toBe('list');
+    expect(list.getAttribute('aria-labelledby')).toBe('localModelLibraryLabel');
+    expect(body.querySelectorAll('[role="listitem"]')).toHaveLength(1);
+    // The screen scrolls from its top: it is no short screen any more.
+    expect(body.dataset.long).toBe('true');
+    // The buttons of the screen are what they were.
+    expect(buttons(body)).toEqual(['Remove', 'Stop', 'Start a session']);
+  });
+
+  it('two models: the one in use first, the other with Use and Delete, and what both take on disk', async () => {
+    const page = mount();
+    await opened(page, TWO);
+    const { body } = page;
+    expect(texts(body, '.lm-lib-label')).toEqual(['Qwen3.6 35B-A3B', 'GPT-OSS 20B']);
+    expect(texts(body, '.lm-lib-meta')).toEqual(['131,072 tokens', '65,536 tokens']);
+    expect(texts(body, '.lm-lib-tag .lm-tag')).toEqual(['In use', 'Ready']);
+    expect(texts(body, '.lm-lib-size')).toEqual(['23.1 GB', '13.8 GB']);
+    expect(rowButtons(page)).toEqual(['Use', 'Delete']);
+    // A short label on screen, the model's name for a screen reader.
+    const [use, remove] = [...body.querySelectorAll('.lm-lib-row .lm-lib-actions button')];
+    expect(use.getAttribute('aria-label')).toBe('Use GPT-OSS 20B');
+    expect(remove.getAttribute('aria-label')).toBe('Delete GPT-OSS 20B');
+    // Quiet buttons: the screen keeps its one main action, and nothing here is red yet.
+    expect(body.querySelectorAll('.lm-library .wt-btn-primary, .lm-library .wt-btn-danger')).toHaveLength(0);
+    expect(texts(body, '.lm-lib-notes .lm-aside')).toEqual(['Downloaded models use 36.9 GB on this Mac.']);
+  });
+
+  it('a row has a button only for an action the server lists for THAT row', async () => {
+    const page = mount();
+    const rows: LocalModelLibraryRow[] = [
+      QWEN_ROW,
+      { ...GPT_ROW, actions: ['use'] },
+      { ...GPT_ROW, id: 'a:1b', label: 'A', status: 'changed', actions: ['delete'] },
+      { ...GPT_ROW, id: 'b:1b', label: 'B', status: 'missing', actions: ['delete'] },
+      { ...GPT_ROW, id: 'c:1b', label: 'C', context: undefined, verified: false, status: 'unverified', actions: [] },
+      { id: 'd:1b', label: 'D', active: false, verified: false, status: 'unverified', actions: ['delete'] },
+    ];
+    await opened(page, status({}, { ...TWO.install, library: rows }));
+    const perRow = [...page.body.querySelectorAll('.lm-lib-row')].map((row) => [
+      row.querySelector('.lm-lib-label')!.textContent,
+      row.querySelector('.lm-tag')!.textContent,
+      texts(row, '.lm-lib-actions button').join('+'),
+    ]);
+    expect(perRow).toEqual([
+      ['Qwen3.6 35B-A3B', 'In use', ''],
+      ['GPT-OSS 20B', 'Ready', 'Use'],
+      ['A', 'Changed', 'Delete'],
+      ['B', 'Missing', 'Delete'],
+      ['C', 'Not checked', ''],
+      ['D', 'Not checked', 'Delete'],
+    ]);
+    // A row without a context or a size prints neither: no "undefined", no empty unit.
+    const last = [...page.body.querySelectorAll('.lm-lib-row')].at(-1)!;
+    expect(last.querySelector('.lm-lib-meta')).toBeNull();
+    expect(last.querySelector('.lm-lib-size')!.textContent).toBe('');
+    expect(page.body.textContent).not.toContain('undefined');
+    // Each state has a colour of its own.
+    expect([...page.body.querySelectorAll('.lm-lib-tag .lm-tag')].map((tag) => tag.className)).toEqual([
+      'lm-tag lm-tag-inuse',
+      'lm-tag lm-tag-ready',
+      'lm-tag lm-tag-changed',
+      'lm-tag lm-tag-missing',
+      'lm-tag lm-tag-unverified',
+      'lm-tag lm-tag-unverified',
+    ]);
+  });
+
+  it('Use switches at once: no confirm screen, and the screen says a switch is running', async () => {
+    const page = mount();
+    const switching: LocalModelInstallView = {
+      ...TWO.install,
+      state: 'installing',
+      step: 'verify',
+      steps: ['verify', 'connect'],
+      model: { id: 'gpt-oss:20b', label: 'GPT-OSS 20B' },
+      context: 65536,
+      library: [
+        { ...QWEN_ROW, active: false },
+        { ...GPT_ROW, actions: [] },
+      ],
+      actions: ['cancel'],
+    };
+    const { app } = await opened(page, TWO, () => ok(switching));
+    pressIn(page, '.lm-lib-row', 'Use');
+    await settle();
+    expect(verbs(app)).toEqual([['POST', '/api/local-model/use', { modelId: 'gpt-oss:20b' }]]);
+    expect(page.body.dataset.screen).toBe('progress');
+    expect(texts(page.body, '.lm-title')).toEqual(['Switching to GPT-OSS 20B']);
+    // Nothing is downloaded: no download bar, and the two steps of a switch.
+    expect(page.body.querySelector('.lm-meter')).toBeNull();
+    expect(texts(page.body, '.lm-step-label')).toEqual(['Loading and checking', 'Connecting']);
+    expect(texts(page.body, '.lm-aside')).toEqual([
+      'You can close this window. The switch continues while Codeman is running.',
+    ]);
+    expect(buttons(page.body)).toEqual(['Cancel']);
+  });
+
+  it('a switch that is refused keeps the screen and prints the server sentence with the session names', async () => {
+    const page = mount();
+    const { app } = await opened(page, TWO, () =>
+      conflict({
+        reason: 'sessions-open',
+        message: { text: LOCAL_MODEL_INSTALL_LABELS.conflictSessionsOpen, vars: { sessions: 'w1-app, w2-api' } },
+        sessions: ['w1-app', 'w2-api'],
+      })
+    );
+    pressIn(page, '.lm-lib-row', 'Use');
+    await settle();
+    expect(page.body.dataset.screen).toBe('installed');
+    expect(texts(page.body, '.lm-notice-text')).toEqual([
+      'Sessions are still using this model: w1-app, w2-api. Close them first.',
+    ]);
+    expect(verbs(app)).toHaveLength(1);
+    expect(rowButtons(page)).toEqual(['Use', 'Delete']);
+  });
+
+  it('Delete asks once, in the row, and sends nothing until the red button is pressed', async () => {
+    const page = mount();
+    const after: LocalModelInstallView = {
+      ...TWO.install,
+      library: [QWEN_ROW],
+      store: STORE_ONE,
+      actions: ['start-session', 'stop', 'install', 'remove'],
+    };
+    const { app } = await opened(page, TWO, () => ok(after));
+    pressIn(page, '.lm-lib-row', 'Delete');
+    await settle();
+    expect(verbs(app)).toEqual([]);
+    const ask = page.body.querySelector('.lm-lib-ask')!;
+    expect(texts(ask, '.lm-lead')).toEqual(['Delete GPT-OSS 20B from this Mac?']);
+    expect(texts(ask, '.lm-aside')).toEqual(['This frees 13.8 GB.']);
+    expect(texts(ask, 'button')).toEqual(['Cancel', 'Delete']);
+    // Red only here, in its own question.
+    expect(page.frame.querySelectorAll('.wt-btn-danger')).toHaveLength(1);
+    expect(ask.querySelector('.wt-btn-danger')!.textContent).toBe('Delete');
+    // The question sits right under the row it is about. That row's own buttons keep their
+    // room (the sizes must not jump) and are out of reach: unseen, disabled, hidden from a reader.
+    const asked = ask.previousElementSibling!;
+    expect(asked.querySelector('.lm-lib-label')!.textContent).toBe('GPT-OSS 20B');
+    expect(rowButtons(page)).toEqual([]);
+    const away = asked.querySelector('.lm-lib-actions')!;
+    expect(away.classList.contains('lm-lib-actions-away')).toBe(true);
+    expect(away.getAttribute('aria-hidden')).toBe('true');
+    expect([...away.querySelectorAll('button')].every((button) => button.disabled)).toBe(true);
+    // The focus is on the safe answer.
+    expect((page.document.activeElement as HTMLElement).textContent).toBe('Cancel');
+
+    pressIn(page, '.lm-lib-ask', 'Cancel');
+    await settle();
+    expect(page.body.querySelector('.lm-lib-ask')).toBeNull();
+    expect(rowButtons(page)).toEqual(['Use', 'Delete']);
+    expect(verbs(app)).toEqual([]);
+    // Back on the button that asked.
+    expect((page.document.activeElement as HTMLElement).dataset.lmKey).toBe('delete:gpt-oss:20b');
+
+    pressIn(page, '.lm-lib-row', 'Delete');
+    await settle();
+    pressIn(page, '.lm-lib-ask', 'Delete');
+    await settle();
+    expect(verbs(app)).toEqual([['DELETE', '/api/local-model/models', { modelId: 'gpt-oss:20b' }]]);
+    expect(texts(page.body, '.lm-lib-label')).toEqual(['Qwen3.6 35B-A3B']);
+    expect(page.body.querySelector('.lm-lib-ask')).toBeNull();
+    expect(texts(page.body, '.lm-lib-notes .lm-aside')).toEqual(['Downloaded models use 23.1 GB on this Mac.']);
+  });
+
+  it('a delete the server refuses leaves the row and prints why', async () => {
+    const page = mount();
+    await opened(page, TWO, () =>
+      conflict({
+        reason: 'model-active',
+        message: { text: LOCAL_MODEL_INSTALL_LABELS.conflictModelActive, vars: { model: 'GPT-OSS 20B' } },
+      })
+    );
+    pressIn(page, '.lm-lib-row', 'Delete');
+    await settle();
+    pressIn(page, '.lm-lib-ask', 'Delete');
+    await settle();
+    expect(texts(page.body, '.lm-notice-text')).toEqual([
+      'GPT-OSS 20B is the model in use. Switch to another model first, or remove the local model.',
+    ]);
+    expect(texts(page.body, '.lm-lib-label')).toEqual(['Qwen3.6 35B-A3B', 'GPT-OSS 20B']);
+  });
+
+  it('the Delete question of a row and the Remove question are never open together', async () => {
+    const page = mount();
+    await opened(page, TWO);
+    pressIn(page, '.lm-lib-row', 'Delete');
+    await settle();
+    expect(page.body.querySelector('.lm-lib-ask')).not.toBeNull();
+    press(page.body, 'Remove');
+    await settle();
+    expect(page.frame.querySelector('.lm-remove')).not.toBeNull();
+    expect(page.frame.querySelector('.lm-lib-ask')).toBeNull();
+  });
+
+  it('with the runtime stopped a row offers no delete, and one line says how to get it', async () => {
+    const page = mount();
+    const stopped = status(
+      {},
+      {
+        ...STOPPED.install,
+        library: [QWEN_ROW, { ...GPT_ROW, actions: ['use'] }],
+        store: STORE_TWO,
+        actions: ['start', 'install', 'use', 'remove'],
+      }
+    );
+    await opened(page, stopped);
+    expect(rowButtons(page)).toEqual(['Use']);
+    expect(texts(page.body, '.lm-lib-notes .lm-aside')).toEqual([
+      'Downloaded models use 36.9 GB on this Mac.',
+      'Press Start to delete a single model.',
+    ]);
+    // With one model there is no single model to delete, so the line is not there.
+    const one = mount();
+    await opened(one, STOPPED);
+    expect(one.body.textContent).not.toContain('Press Start to delete');
+  });
+
+  it('the screen that ends an install says one thing: no list, one button', async () => {
+    const page = mount();
+    const { app, serve } = await opened(page, INSTALLING);
+    serve(TWO);
+    await app.loadLocalModel({ force: true });
+    expect(page.body.dataset.screen).toBe('installed');
+    expect(page.body.querySelector('.lm-library')).toBeNull();
+    expect(page.body.dataset.long).toBe('false');
+    expect(buttons(page.body)).toEqual(['Start a session']);
+  });
+
+  it('"Add a model" opens the chooser on an installed model, and Back returns to it', async () => {
+    const page = mount();
+    const { app } = await opened(page, TWO);
+    pressIn(page, '.lm-lib-foot', 'Add a model');
+    await settle();
+    expect(page.body.dataset.screen).toBe('choose');
+    expect(page.body.querySelectorAll('[role="radio"]').length).toBeGreaterThan(1);
+    expect(buttons(page.body)).toEqual(['Back', 'Install on this Mac']);
+    press(page.body, 'Back');
+    await settle();
+    expect(page.body.dataset.screen).toBe('installed');
+    expect(verbs(app)).toEqual([]);
+    // No button without the server offering an install (no row fits, or it is not listed).
+    const none = mount();
+    await opened(none, status({}, { ...TWO.install, actions: ['start-session', 'stop', 'remove'] }));
+    expect(texts(none.body, '.lm-lib-foot button')).toEqual([]);
+  });
+
+  it('in the chooser a model that is on this Mac says so, and is switched to without a download', async () => {
+    const page = mount();
+    const answer = status(
+      {
+        pick: { ...PICK, library: 'active' },
+        alternatives: [{ ...ALT_SLOW, library: 'ready' }, ALT_SMALL],
+      },
+      TWO.install
+    );
+    const { app } = await opened(page, answer, () => ok({ ...TWO.install, state: 'installing', step: 'verify' }));
+    pressIn(page, '.lm-lib-foot', 'Add a model');
+    await settle();
+    const rows = [...page.body.querySelectorAll('.lm-model')];
+    const tagsOf = (row: Element) => texts(row, '.lm-tag');
+    // The model in use: its own tag beside the server's, and nothing to do with it here.
+    expect(tagsOf(rows[0])).toContain('In use');
+    const primary = () => page.frame.querySelector<HTMLButtonElement>('.lm-buttons .wt-btn-primary')!;
+    expect(primary().textContent).toBe('In use');
+    expect(primary().disabled).toBe(true);
+
+    // A model that is on this Mac and checked: one click switches to it.
+    const ready = rows.find((row) => tagsOf(row).includes('On this Mac'))!;
+    expect(ready).toBeTruthy();
+    (ready as HTMLElement).click();
+    await settle();
+    expect(primary().textContent).toBe('Use this model');
+    expect(primary().disabled).toBe(false);
+    primary().click();
+    await settle();
+    expect(verbs(app)).toEqual([['POST', '/api/local-model/use', { modelId: ALT_SLOW.modelId }]]);
+    // No confirm screen was shown on the way.
+    expect(page.body.dataset.screen).toBe('progress');
+  });
+
+  it('in the chooser a model that is not on this Mac is installed the usual way, with its sizes confirmed', async () => {
+    const page = mount();
+    const answer = status({ pick: { ...PICK, library: 'active' }, alternatives: [ALT_SMALL] }, TWO.install);
+    const { app } = await opened(page, answer, () => ok({ ...TWO.install, state: 'installing', step: 'model' }));
+    pressIn(page, '.lm-lib-foot', 'Add a model');
+    await settle();
+    const other = [...page.body.querySelectorAll<HTMLElement>('.lm-model')].find(
+      (row) => row.dataset.modelId === ALT_SMALL.modelId
+    )!;
+    other.click();
+    await settle();
+    press(page.body, 'Install on this Mac');
+    await settle();
+    expect(page.body.dataset.screen).toBe('confirm');
+    press(page.body, 'Download and install');
+    await settle();
+    expect(verbs(app)).toEqual([
+      [
+        'POST',
+        '/api/local-model/install',
+        {
+          modelId: ALT_SMALL.modelId,
+          cli: ALT_SMALL.harnesses[0].cli,
+          context: ALT_SMALL.context,
+          acknowledgedBytes: ALT_SMALL.installBytes,
+        },
+      ],
+    ]);
+  });
+
+  it('a job that stopped beside a checked model shows the way back to that model', async () => {
+    const back: LocalModelLibraryRow = { ...QWEN_ROW, active: false, actions: ['use', 'delete'] };
+    for (const first of [
+      status(
+        {},
+        { ...PAUSED.install, library: [back], actions: ['resume', 'install', 'use', 'delete-model', 'remove'] }
+      ),
+      status(
+        {},
+        {
+          ...failed('no-tool-call', { model: 'GPT-OSS 20B' }).install,
+          library: [back],
+          actions: ['resume', 'install', 'use', 'delete-model', 'remove'],
+        }
+      ),
+    ]) {
+      const page = mount();
+      const { app } = await opened(page, first, () => ok({ ...TWO.install, state: 'installing', step: 'verify' }));
+      expect(texts(page.body, '.lm-lib-label')).toEqual(['Qwen3.6 35B-A3B']);
+      expect(texts(page.body, '.lm-lib-tag .lm-tag')).toEqual(['Ready']);
+      expect(rowButtons(page)).toEqual(['Use', 'Delete']);
+      // No "Add a model" here: the job's own buttons offer another model.
+      expect(texts(page.body, '.lm-lib-foot button')).toEqual([]);
+      pressIn(page, '.lm-lib-row', 'Use');
+      await settle();
+      expect(verbs(app)).toEqual([['POST', '/api/local-model/use', { modelId: 'qwen3.6:35b-a3b' }]]);
+    }
+  });
+
+  it('a first job that stopped has nothing to go back to, and shows no list', async () => {
+    const page = mount();
+    // Its own model is on disk and checked, with nothing offered on it: Resume goes on with it.
+    await opened(page, status({}, { ...PAUSED.install, library: [{ ...QWEN_ROW, active: false }] }));
+    expect(page.body.querySelector('.lm-library')).toBeNull();
+    expect(page.body.dataset.long).toBe('false');
+    const stopped = mount();
+    await opened(stopped, failed('load-failed', { model: 'Qwen3.6 35B-A3B' }));
+    expect(stopped.body.querySelector('.lm-library')).toBeNull();
+  });
+
+  it('a paused switch says so, and waits', async () => {
+    const page = mount();
+    await opened(
+      page,
+      status({}, { ...PAUSED.install, step: 'verify', steps: ['verify', 'connect'], progress: undefined })
+    );
+    expect(texts(page.body, '.lm-title')).toEqual(['The switch to Qwen3.6 35B-A3B is paused']);
+    expect(texts(page.body, '.lm-aside')).toEqual(['The switch waits until you continue.']);
+    expect(page.body.querySelector('.lm-meter')).toBeNull();
+  });
+
+  it('the App Settings row names a switch as a switch', async () => {
+    const page = mount();
+    const job = { ...JOB, steps: ['verify', 'connect'] as LocalModelInstallView['steps'], step: 'verify' as const };
+    for (const [state, text] of [
+      ['installing', 'Switching to Qwen3.6 35B-A3B'],
+      ['paused', 'The switch to Qwen3.6 35B-A3B is paused'],
+      ['failed', 'The switch to Qwen3.6 35B-A3B stopped'],
+    ] as const) {
+      const app = page.newApp(ok(status({}, { ...job, state, actions: [] })));
+      await app.loadLocalModel({ force: true });
+      expect(texts(page.row, '.set-row-label')).toEqual([text]);
+    }
+  });
+});
+
+describe('what an earlier Remove left on disk', () => {
+  const LEFT = status({}, { store: STORE_ONE, actions: ['install', 'remove'] });
+
+  it('the chooser says what the downloads still take, and deletes them after one question', async () => {
+    const page = mount();
+    const { app } = await opened(page, LEFT, () => ok(install({ store: { bytes: 0, gb: '0.0' } })));
+    expect(texts(page.body, '.lm-leftovers .lm-aside')).toEqual([
+      'Models from an earlier install still use 23.1 GB on this Mac.',
+    ]);
+    pressIn(page, '.lm-leftovers', 'Delete them');
+    await settle();
+    expect(verbs(app)).toEqual([]);
+    expect(texts(page.body, '.lm-leftovers .lm-lead')).toEqual(['Delete the downloaded models from this Mac?']);
+    expect(texts(page.body, '.lm-leftovers .lm-lib-ask .lm-aside')).toEqual(['This frees 23.1 GB.']);
+    expect(page.body.querySelector('.lm-leftovers .wt-btn-danger')!.textContent).toBe('Delete');
+    pressIn(page, '.lm-leftovers', 'Cancel');
+    await settle();
+    expect(texts(page.body, '.lm-leftovers button')).toEqual(['Delete them']);
+    pressIn(page, '.lm-leftovers', 'Delete them');
+    await settle();
+    pressIn(page, '.lm-leftovers', 'Delete');
+    await settle();
+    expect(verbs(app)).toEqual([['DELETE', '/api/local-model', { removeModel: true }]]);
+    expect(page.body.querySelector('.lm-leftovers')).toBeNull();
+    // Still the chooser: installing is what this screen is for.
+    expect(page.body.dataset.screen).toBe('choose');
+    expect(buttons(page.body)).toEqual(['Install on this Mac']);
+  });
+
+  it('is not there without something on disk, or without the server offering the removal', async () => {
+    for (const first of [
+      IDLE,
+      status({}, { store: { bytes: 0, gb: '0.0' }, actions: ['install', 'remove'] }),
+      status({}, { store: STORE_ONE, actions: ['install'] }),
+    ]) {
+      const page = mount();
+      await opened(page, first);
+      expect(page.body.querySelector('.lm-leftovers')).toBeNull();
+    }
+  });
+
+  it('shows on a Mac no model fits too: the space can still be freed', async () => {
+    const page = mount();
+    const answer = none('memory');
+    await opened(page, { ...answer, install: install({ store: STORE_ONE, actions: ['remove'] }) });
+    expect(page.body.dataset.screen).toBe('none');
+    expect(texts(page.body, '.lm-leftovers .lm-aside')).toEqual([
+      'Models from an earlier install still use 23.1 GB on this Mac.',
+    ]);
+  });
+});
+
+describe('the models on this Mac: text of someone else, another language, an unchanged answer', () => {
+  it('a model name is text, in the row, in its question and in the labels of its buttons', async () => {
+    const HOSTILE = '<img src=x onerror="window.__pwned=1">';
+    const page = mount();
+    const rows: LocalModelLibraryRow[] = [QWEN_ROW, { ...GPT_ROW, id: `evil:1b`, label: `Model ${HOSTILE}` }];
+    await opened(page, status({}, { ...TWO.install, library: rows, folder: `/tmp/${HOSTILE}` }));
+    pressIn(page, '.lm-lib-row', 'Delete');
+    await settle();
+    expect(page.document.querySelectorAll('img, script, iframe')).toHaveLength(0);
+    expect((page.win as unknown as { __pwned?: number }).__pwned).toBeUndefined();
+    expect(texts(page.body, '.lm-lib-ask .lm-lead')).toEqual([`Delete Model ${HOSTILE} from this Mac?`]);
+  });
+
+  it('is translated when the language changes, the names staying as sent', async () => {
+    const page = mount({ i18n: true });
+    page.win.CodemanI18n.start();
+    await opened(page, TWO);
+    page.win.CodemanI18n.configure({ language: 'zh-CN' });
+    await settle();
+    expect(texts(page.body, '.lm-lib-caption-label')).toEqual(['此 Mac 上的模型']);
+    expect(texts(page.body, '.lm-lib-tag .lm-tag')).toEqual(['使用中', '就绪']);
+    expect(rowButtons(page)).toEqual(['使用', '删除']);
+    expect(texts(page.body, '.lm-lib-label')).toEqual(['Qwen3.6 35B-A3B', 'GPT-OSS 20B']);
+    expect(texts(page.body, '.lm-lib-notes .lm-aside')).toEqual(['已下载的模型在此 Mac 上占用 36.9 GB。']);
+    expect(texts(page.body, '.lm-lib-foot button')).toEqual(['添加模型']);
+  });
+
+  it('a poll that changes nothing leaves the rows and their buttons in place', async () => {
+    const page = mount();
+    await opened(page, TWO);
+    const before = page.body.querySelector('.lm-lib-row .lm-lib-actions button');
+    await page.tick();
+    await page.tick();
+    expect(page.body.querySelector('.lm-lib-row .lm-lib-actions button')).toBe(before);
+  });
+
+  it('the focus stays on the row button it was on when the list is repainted', async () => {
+    const page = mount();
+    const { app, serve } = await opened(page, TWO);
+    const remove = [...page.body.querySelectorAll<HTMLButtonElement>('.lm-lib-row .lm-lib-actions button')][1];
+    remove.focus();
+    serve(status({}, { ...TWO.install, store: { bytes: 36899240384, gb: '36.9' }, port: 11436 }));
+    await app.loadLocalModel({ force: true });
+    const active = page.document.activeElement as HTMLElement;
+    expect(active.textContent).toBe('Delete');
+    expect(active.dataset.lmKey).toBe('delete:gpt-oss:20b');
+    expect(active).not.toBe(remove);
   });
 });

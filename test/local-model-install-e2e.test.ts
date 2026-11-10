@@ -345,7 +345,7 @@ describe('the install from the first GET to Remove, real modules over a fake run
       endpointId: 'local-ollama',
       folder: world.paths.root,
       loaded: { context: pick.context, onGpu: true },
-      actions: ['start-session', 'stop', 'remove'],
+      actions: ['start-session', 'stop', 'install', 'remove'],
       runtime: { installed: true, downloadBytes: 0, downloadGb: formatGb(0) },
     });
 
@@ -680,6 +680,154 @@ describe('the install from the first GET to Remove, real modules over a fake run
     expect(world.installerRuns).toBe(1);
     expect(await readCustomModelHosts(getDataDir())).toMatchObject([{ id: 'local-ollama', models: [pick.modelId] }]);
   }, 60_000);
+});
+
+describe('the library: a second model, the switch back, and the delete of one model', () => {
+  it('installs A, adds B beside it, switches back to A, and deletes B, with one model in use throughout', async () => {
+    const { app, get, settled, install: clickInstall } = await routes();
+    const hostsModels = async () =>
+      (await readCustomModelHosts(getDataDir())).find((host) => host.id === 'local-ollama')?.models;
+    const post = (url: string, payload: unknown) => app.inject({ method: 'POST', url, payload: payload as object });
+    const deleteModel = (modelId: string) =>
+      app.inject({ method: 'DELETE', url: '/api/local-model/models', payload: { modelId } });
+
+    // ---- A: the first install ----
+    world.agentInstalled = true;
+    const first = await get();
+    const a = first.recommendation.pick!;
+    const bRow = first.recommendation.alternatives[0];
+    expect(bRow).toBeDefined();
+    expect(bRow.modelId).not.toBe(a.modelId);
+    const B_DIGEST = 'b'.repeat(64);
+    world.runtime = createFakeOllama({
+      model: { id: a.modelId, bytes: a.downloadBytes },
+      contextLength: a.context,
+      otherModels: [
+        {
+          id: bRow.modelId,
+          bytes: bRow.downloadBytes,
+          digest: B_DIGEST,
+          format: 'gguf',
+          runner: 'ggml',
+          quantization: 'Q4_K_M',
+          capabilities: ['completion', 'tools'],
+        },
+      ],
+    });
+    const runtime = world.runtime;
+    expect((await clickInstall(a)).statusCode).toBe(200);
+    expect((await settled()).state).toBe('installed');
+
+    let status = await get();
+    expect(status.install.library).toEqual([
+      {
+        id: a.modelId,
+        label: a.modelLabel,
+        context: a.context,
+        sizeBytes: a.downloadBytes,
+        sizeGb: formatGb(a.downloadBytes),
+        active: true,
+        verified: true,
+        status: 'ready',
+        actions: [],
+      },
+    ]);
+    // The store of the fake runtime writes no blobs: measured, and empty.
+    expect(status.install.store).toEqual({ bytes: 0, gb: '0.0' });
+    // The chooser says the row is the model in use.
+    expect(status.recommendation.pick?.library).toBe('active');
+    expect(status.install.actions).toEqual(['start-session', 'stop', 'install', 'remove']);
+
+    // ---- B: a second model. Refused while a session uses A. ----
+    const b = [status.recommendation.pick!, ...status.recommendation.alternatives].find(
+      (row) => row.modelId === bRow.modelId
+    )!;
+    // The runtime is on disk now, so the server's total for B is the model alone.
+    expect(b.installBytes).toBe(b.downloadBytes);
+    const addB = { modelId: b.modelId, cli: 'opencode', context: b.context, acknowledgedBytes: b.installBytes };
+    world.sessions.set('s1', { name: 'w1-app', customModel: { endpointId: 'local-ollama' } });
+    const busy = await post('/api/local-model/install', addB);
+    expect(busy.statusCode).toBe(409);
+    expect(busy.json().data).toMatchObject({ reason: 'sessions-open', sessions: ['w1-app'] });
+    expect(runtime.state.pulls).toBe(1);
+    world.sessions.clear();
+
+    // The fake runtime reports the context it was "started with": B's from here on.
+    runtime.switches.ps.contextLength = b.context;
+    const started = await post('/api/local-model/install', addB);
+    expect(started.statusCode).toBe(200);
+    expect(started.json().data).toMatchObject({ state: 'installing', model: { id: b.modelId } });
+    const withB = await settled();
+    expect(withB.error).toBeUndefined();
+    expect(withB).toMatchObject({
+      state: 'installed',
+      model: { id: b.modelId, label: b.modelLabel },
+      context: b.context,
+      endpointId: 'local-ollama',
+    });
+    // Both are on disk, A was not deleted, and the ONE endpoint record lists the model in use.
+    expect(runtime.state.installed).toBe(true);
+    expect(runtime.state.others).toEqual([b.modelId]);
+    expect(await hostsModels()).toEqual([b.modelId]);
+    expect(runtime.requests.some((request) => request.path === '/api/delete')).toBe(false);
+    await vi.waitFor(async () => {
+      const library = (await get()).install.library;
+      expect(library.map((row) => [row.id, row.active, row.status, row.actions])).toEqual([
+        [b.modelId, true, 'ready', []],
+        [a.modelId, false, 'ready', ['use', 'delete']],
+      ]);
+    });
+    const stored = await readLocalModelState();
+    expect(stored.library?.map((entry) => [entry.id, entry.context, entry.digest])).toEqual([
+      [a.modelId, a.context, runtime.model.digest],
+      [b.modelId, b.context, B_DIGEST],
+    ]);
+    // Only the model in use may be launched on the endpoint.
+    expect(await world.service.launchRefusalMessage('local-ollama', b.modelId)).toBeUndefined();
+    expect(await world.service.launchRefusalMessage('local-ollama', a.modelId)).toContain('is in use on this Mac');
+
+    // ---- The model in use cannot be deleted ----
+    const active = await deleteModel(b.modelId);
+    expect(active.statusCode).toBe(409);
+    expect(active.json().data).toMatchObject({ reason: 'model-active' });
+    expect(runtime.state.others).toEqual([b.modelId]);
+
+    // ---- Back to A: nothing is downloaded ----
+    status = await get();
+    expect(status.recommendation.pick?.library ?? status.recommendation.alternatives[0].library).toBeDefined();
+    world.sessions.set('s1', { name: 'w1-app', customModel: { endpointId: 'local-ollama' } });
+    const useBusy = await post('/api/local-model/use', { modelId: a.modelId });
+    expect(useBusy.statusCode).toBe(409);
+    expect(useBusy.json().data).toMatchObject({ reason: 'sessions-open' });
+    world.sessions.clear();
+
+    runtime.switches.ps.contextLength = a.context;
+    const pullsBefore = runtime.state.pulls;
+    const switched = await post('/api/local-model/use', { modelId: a.modelId });
+    expect(switched.statusCode).toBe(200);
+    expect(switched.json().data).toMatchObject({ state: 'installing', steps: ['verify', 'connect'] });
+    const backOnA = await settled();
+    expect(backOnA.error).toBeUndefined();
+    expect(backOnA).toMatchObject({ state: 'installed', model: { id: a.modelId }, context: a.context });
+    expect(runtime.state.pulls).toBe(pullsBefore);
+    expect(await hostsModels()).toEqual([a.modelId]);
+    expect(await world.service.launchRefusalMessage('local-ollama', a.modelId)).toBeUndefined();
+
+    // ---- Delete B: through the runtime, by its name ----
+    const notOurs = await deleteModel('someone-else:7b');
+    expect(notOurs.statusCode).toBe(400);
+    const gone = await deleteModel(b.modelId);
+    expect(gone.statusCode).toBe(200);
+    expect(gone.json().data.library.map((row: { id: string }) => row.id)).toEqual([a.modelId]);
+    expect(runtime.state.others).toEqual([]);
+    expect(runtime.state.installed).toBe(true);
+    const deletes = runtime.requests.filter((request) => request.path === '/api/delete');
+    expect(deletes.map((request) => request.body)).toEqual([{ model: b.modelId }]);
+    expect((await readLocalModelState()).library?.map((entry) => entry.id)).toEqual([a.modelId]);
+    expect((await get()).install.actions).toEqual(['start-session', 'stop', 'install', 'remove']);
+    // A is in use: it can only go with the whole installation.
+    expect((await deleteModel(a.modelId)).statusCode).toBe(409);
+  });
 });
 
 describe('a server that is killed leaves its runtime running: the next server never deletes under it', () => {

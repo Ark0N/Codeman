@@ -18,6 +18,7 @@
  * | `GET /api/ps`                     | the model once a chat loaded it (`size`, `size_vram`, `context_length`) |
  * | `POST /api/pull`                  | NDJSON progress, see `FakePullSwitches`                             |
  * | `DELETE /api/delete`              | 200, or 404 for a model that is not installed                       |
+ * |                                   | (the model, or one of `otherModels`)                                |
  * | `GET /v1/models`                  | the model's id, or `data: null` when none is installed (as the real one) |
  * | `POST /v1/chat/completions`       | a plain answer, or a tool call when the request carries `tools`     |
  * | `GET /download/ollama-darwin.tgz` | a small real `.tgz` with Range support, see `FakeArchiveSwitches`   |
@@ -220,6 +221,14 @@ export interface FakeOllamaOptions {
   spawn?: Partial<FakeSpawnSwitches>;
   /** The files of the fake runtime archive, name to content. Default: one executable `ollama` script. */
   archiveFiles?: Record<string, string>;
+  /**
+   * More models the registry has beside `model`: each can be pulled (a short stream that
+   * succeeds), listed, loaded, checked and deleted on its own. The pull, chat and tool
+   * switches apply to them too, except the pull's failures and shapes, which are `model`'s.
+   */
+  otherModels?: FakeOllamaModel[];
+  /** The ids of `otherModels` that are on disk from the start. */
+  othersInstalled?: string[];
 }
 
 export interface CapturedRequest {
@@ -304,6 +313,10 @@ export interface FakeOllama {
     archiveRequests: number;
     /** Every child `spawn` made, oldest first. */
     children: FakeRuntimeChild[];
+    /** The ids of `otherModels` that are on disk: pulled, or installed from the start. */
+    others: string[];
+    /** The id of the model the last chat loaded. The runtime holds one model at a time. */
+    loadedId?: string;
   };
   /** The fake runtime archive: a real gzipped tar. */
   readonly archive: { readonly body: Buffer; readonly size: number; readonly sha256: string };
@@ -436,7 +449,26 @@ export function createFakeOllama(options: FakeOllamaOptions = {}): FakeOllama {
     pulls: 0,
     archiveRequests: 0,
     children: [],
+    others: [...(options.othersInstalled ?? [])],
   };
+  const otherModels = options.otherModels ?? [];
+  /** One of `otherModels` by its id, whether it is on disk or not. */
+  const otherModel = (id: unknown): FakeOllamaModel | undefined => otherModels.find((other) => other.id === id);
+  /** The model `id` names when it is on disk: `model` or one of the others. */
+  const onDisk = (id: unknown): FakeOllamaModel | undefined => {
+    if (id === model.id) return state.installed ? model : undefined;
+    const other = otherModel(id);
+    return other && state.others.includes(other.id) ? other : undefined;
+  };
+  const tagRow = (entry: FakeOllamaModel): Record<string, unknown> => ({
+    name: entry.id,
+    model: entry.id,
+    modified_at: '2026-11-06T15:10:02.465346347+01:00',
+    size: entry.bytes,
+    digest: entry.digest,
+    details: { ...modelDetails(), format: entry.format, context_length: 262144, runner: entry.runner },
+    capabilities: entry.capabilities,
+  });
   const requests: CapturedRequest[] = [];
   const sockets = new Set<Socket>();
   let server: Server | undefined;
@@ -475,6 +507,18 @@ export function createFakeOllama(options: FakeOllamaOptions = {}): FakeOllama {
     };
 
     if (!(await line({ status: 'pulling manifest' }))) return;
+    // One of the other models: a short stream that succeeds.
+    const other = otherModel(askedId);
+    if (other && pull.fail !== 'not-found') {
+      const layer = { status: 'pulling model', digest: 'sha256:other', total: other.bytes };
+      if (!(await line({ ...layer, completed: 0 }))) return;
+      if (!(await line({ ...layer, completed: other.bytes }))) return;
+      if (!(await line({ status: 'writing manifest' }))) return;
+      if (!state.others.includes(other.id)) state.others.push(other.id);
+      await line({ status: 'success' });
+      res.end();
+      return;
+    }
     // Not captured on a Mac: the wording of the runtime for a tag the registry does not have.
     if (pull.fail === 'not-found' || askedId !== model.id) {
       await line({ error: 'pull model manifest: file does not exist' });
@@ -528,7 +572,8 @@ export function createFakeOllama(options: FakeOllamaOptions = {}): FakeOllama {
 
   function handleChat(res: ServerResponse, body: unknown): void {
     const request = (body as { model?: unknown; tools?: unknown } | undefined) ?? {};
-    if (!state.installed || request.model !== model.id) {
+    const served = onDisk(request.model);
+    if (!served) {
       sendJson(res, 404, {
         error: {
           message: `model '${String(request.model)}' not found`,
@@ -544,7 +589,7 @@ export function createFakeOllama(options: FakeOllamaOptions = {}): FakeOllama {
       id: `chatcmpl-${chatCounter++}`,
       object: 'chat.completion',
       created: 1793968038,
-      model: model.id,
+      model: served.id,
       system_fingerprint: 'fp_ollama',
       choices: [{ index: 0, message: { role: 'assistant', ...message }, finish_reason: finishReason }],
       usage: {
@@ -563,12 +608,18 @@ export function createFakeOllama(options: FakeOllamaOptions = {}): FakeOllama {
         });
         return;
       }
-      if (switches.ps.loaded !== false) state.loaded = true;
+      if (switches.ps.loaded !== false) {
+        state.loaded = true;
+        state.loadedId = served.id;
+      }
       sendJson(res, 200, envelope({ content: 'pong' }, 'stop'));
       return;
     }
 
-    if (switches.ps.loaded !== false) state.loaded = true;
+    if (switches.ps.loaded !== false) {
+      state.loaded = true;
+      state.loadedId = served.id;
+    }
     const fn = (tools[0] as { function?: { name?: unknown; parameters?: { properties?: unknown } } }).function ?? {};
     const name = typeof fn.name === 'string' ? fn.name : 'tool';
     const properties = (fn.parameters?.properties ?? {}) as Record<string, unknown>;
@@ -648,39 +699,31 @@ export function createFakeOllama(options: FakeOllamaOptions = {}): FakeOllama {
     }
     if (path === '/api/version' && method === 'GET') return sendJson(res, 200, { version });
     if (path === '/api/tags' && method === 'GET') {
-      const models = state.installed
-        ? [
-            {
-              name: model.id,
-              model: model.id,
-              modified_at: '2026-11-06T15:10:02.465346347+01:00',
-              size: model.bytes,
-              digest: model.digest,
-              details: { ...modelDetails(), context_length: 262144, runner: model.runner },
-              capabilities: model.capabilities,
-            },
-          ]
-        : [];
+      const models = [
+        ...(state.installed ? [tagRow(model)] : []),
+        ...otherModels.filter((other) => state.others.includes(other.id)).map(tagRow),
+      ];
       return sendJson(res, 200, { models });
     }
     if (path === '/api/ps' && method === 'GET') {
-      const size = switches.ps.size ?? model.bytes + 100_000_000;
-      const models =
-        state.installed && state.loaded && switches.ps.loaded !== false
-          ? [
-              {
-                name: model.id,
-                model: model.id,
-                size,
-                digest: model.digest,
-                details: modelDetails(),
-                expires_at: '2026-11-06T15:20:09.488045+01:00',
-                size_vram: switches.ps.sizeVram ?? size,
-                context_length: switches.ps.contextLength ?? contextLength,
-                runner: model.runner,
-              },
-            ]
-          : [];
+      // The runtime holds ONE model: the one the last chat loaded.
+      const held = state.loaded && switches.ps.loaded !== false ? onDisk(state.loadedId ?? model.id) : undefined;
+      const size = switches.ps.size ?? (held ?? model).bytes + 100_000_000;
+      const models = held
+        ? [
+            {
+              name: held.id,
+              model: held.id,
+              size,
+              digest: held.digest,
+              details: modelDetails(),
+              expires_at: '2026-11-06T15:20:09.488045+01:00',
+              size_vram: switches.ps.sizeVram ?? size,
+              context_length: switches.ps.contextLength ?? contextLength,
+              runner: held.runner,
+            },
+          ]
+        : [];
       return sendJson(res, 200, { models });
     }
     if (path === '/api/pull' && method === 'POST') return handlePull(res, body);
@@ -688,20 +731,35 @@ export function createFakeOllama(options: FakeOllamaOptions = {}): FakeOllama {
       // Not captured: the answers of a delete (200 with no body, 404 with an error text).
       const asked = (body as { model?: unknown; name?: unknown } | undefined) ?? {};
       const askedId = typeof asked.model === 'string' ? asked.model : asked.name;
+      const other = otherModel(askedId);
+      if (other && state.others.includes(other.id)) {
+        state.others = state.others.filter((id) => id !== other.id);
+        if (state.loadedId === other.id) {
+          state.loaded = false;
+          state.loadedId = undefined;
+        }
+        res.writeHead(200);
+        res.end();
+        return;
+      }
       if (!state.installed || askedId !== model.id) {
         return sendJson(res, 404, { error: `model '${String(askedId)}' not found` });
       }
       state.installed = false;
       state.loaded = false;
+      state.loadedId = undefined;
       state.completedBytes = 0;
       res.writeHead(200);
       res.end();
       return;
     }
     if (path === '/v1/models' && method === 'GET') {
-      const data = state.installed
-        ? [{ id: model.id, object: 'model', created: 1793967749, owned_by: 'library' }]
-        : null;
+      const ids = [
+        ...(state.installed ? [model.id] : []),
+        ...otherModels.filter((other) => state.others.includes(other.id)).map((other) => other.id),
+      ];
+      const data =
+        ids.length > 0 ? ids.map((id) => ({ id, object: 'model', created: 1793967749, owned_by: 'library' })) : null;
       return sendJson(res, 200, { object: 'list', data });
     }
     if (path === '/v1/chat/completions' && method === 'POST') return handleChat(res, body);

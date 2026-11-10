@@ -6,15 +6,19 @@
  * |----------------------------------|-----------------------------|------------------------------------------------|
  * | `GET /api/local-model`           | none                        | `{ hardware, recommendation, catalogUpdated, install }` |
  * | `POST /api/local-model/install`  | `LocalModelInstallRequest`  | the install view; 400, 409                     |
+ * | `POST /api/local-model/use`      | `LocalModelUseRequest`      | the install view; 400, 409                     |
  * | `POST /api/local-model/cancel`   | none                        | the install view; 409                          |
  * | `POST /api/local-model/resume`   | `LocalModelResumeRequest`   | the install view; 409                          |
  * | `POST /api/local-model/runtime`  | `LocalModelRuntimeRequest`  | the install view; 409                          |
  * | `DELETE /api/local-model`        | `LocalModelRemoveRequest`   | the install view; 409                          |
+ * | `DELETE /api/local-model/models` | `LocalModelDeleteRequest`   | the install view; 400, 409, 500                |
  *
  * The GET is built from the hardware probe, the catalogue, the harness facts and the pure
  * `recommend()`, plus the `install` object of the install service
- * (`LocalModelService.view()`). Nothing is reformatted here: every size text and every
- * sentence in the payload was chosen by the modules that produced it. There is no SSE event:
+ * (`LocalModelService.view()`). The one thing joined here: a row of the recommendation that is
+ * a checked model of the library is marked (`Candidate.library`, by `markLibraryCandidates()`).
+ * Nothing is reformatted: every size text and every sentence in the payload was chosen by the
+ * modules that produced it. There is no SSE event:
  * the window polls the GET once a second while it is open.
  *
  * EXPERIMENTAL (docs/versioning-policy.md, "Experimental local model routes"): the routes and
@@ -45,9 +49,12 @@
  *    or of the endpoint store that was refused (a file that does not parse) is a 409 without
  *    `data`, with the fix.
  *  - The verbs do the work in the install service; this file only gates, parses and maps.
- *    `DELETE`, `runtime` and `resume` look at the live sessions: they hand their names to the
- *    service, which refuses a removal, a stop and a change of port while one of them still
- *    uses the model.
+ *    `DELETE /api/local-model`, `runtime`, `resume`, `install` and `use` look at the live
+ *    sessions: they hand their names to the service, which refuses a removal, a stop, a change
+ *    of port, another model and a switch while one of them still uses the model.
+ *  - `DELETE /api/local-model/models` takes a model NAME in its body, never a path: the schema
+ *    admits only `name:tag`, and the service deletes only a name of its own listing, through
+ *    the runtime.
  *  - Every dependency is injected (`LocalModelRouteDeps`), so a route test spawns nothing and
  *    does not need a Mac: it passes its own hardware, harness facts and service.
  */
@@ -83,16 +90,19 @@ import { buildHarnessFacts } from '../../local-model/harness-facts.js';
 import {
   formatInstallMessage,
   getLocalModelService,
+  markLibraryCandidates,
   type LocalModelActor,
   type LocalModelService,
   type LocalModelVerbResult,
 } from '../../local-model/install-job.js';
 import { recommend } from '../../local-model/recommend.js';
 import {
+  LocalModelDeleteSchema,
   LocalModelInstallSchema,
   LocalModelRemoveSchema,
   LocalModelResumeSchema,
   LocalModelRuntimeSchema,
+  LocalModelUseSchema,
 } from '../schemas.js';
 import { SettingsWriteRefusedError, settingsWriteErrorResponse } from '../settings-writer.js';
 
@@ -156,7 +166,7 @@ export interface LocalModelConflictResponse {
   data: LocalModelConflict;
 }
 
-/** The 400 (or 507) of a verb the service refused with a sentence: the error envelope plus that sentence as `data`. */
+/** The 400 (or 500, or 507) of a verb the service refused with a sentence: the error envelope plus that sentence as `data`. */
 export interface LocalModelRefusalResponse {
   success: false;
   /** The sentence in English, its slots filled. */
@@ -251,8 +261,12 @@ export function registerLocalModelRoutes(
         // The measured budget once the runtime reported it, and the runtime download that an
         // install would still add: what turns the estimate into the figures of the consent.
         const options = await service.recommendOptions();
-        const recommendation = resolved.recommend(hardware, catalog, harnessFacts, options);
         const install = await service.view();
+        // A row that is already a checked model on this Mac says so: choosing it is a switch.
+        const recommendation = markLibraryCandidates(
+          resolved.recommend(hardware, catalog, harnessFacts, options),
+          install
+        );
         return { success: true, data: { hardware, recommendation, catalogUpdated: catalog.updated, install } };
       } catch (err) {
         reply.code(500);
@@ -268,7 +282,17 @@ export function registerLocalModelRoutes(
     const denied = adminOnly(req, reply);
     if (denied) return denied;
     const body = parseBody(LocalModelInstallSchema, req.body);
-    return runVerb(reply, () => resolved.service().install(body, actorOf(req)));
+    // Asked at the moment of the request: another model takes the runtime from a live session.
+    const sessionNames = sessionNamesUsingEndpoint(ctx.sessions.values());
+    return runVerb(reply, () => resolved.service().install(body, actorOf(req), sessionNames));
+  });
+
+  app.post('/api/local-model/use', async (req, reply): Promise<LocalModelVerbResponse> => {
+    const denied = adminOnly(req, reply);
+    if (denied) return denied;
+    const body = parseBody(LocalModelUseSchema, req.body);
+    const sessionNames = sessionNamesUsingEndpoint(ctx.sessions.values());
+    return runVerb(reply, () => resolved.service().use(body, actorOf(req), sessionNames));
   });
 
   app.post('/api/local-model/cancel', async (req, reply): Promise<LocalModelVerbResponse> => {
@@ -302,5 +326,12 @@ export function registerLocalModelRoutes(
     // Asked at the moment of the request: a session that started a second ago counts.
     const sessionNames = sessionNamesUsingEndpoint(ctx.sessions.values());
     return runVerb(reply, () => resolved.service().remove(body, sessionNames, actorOf(req)));
+  });
+
+  app.delete('/api/local-model/models', async (req, reply): Promise<LocalModelVerbResponse> => {
+    const denied = adminOnly(req, reply);
+    if (denied) return denied;
+    const body = parseBody(LocalModelDeleteSchema, req.body);
+    return runVerb(reply, () => resolved.service().deleteLibraryModel(body, actorOf(req)));
   });
 }

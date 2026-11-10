@@ -11,7 +11,11 @@
  *    the fill follows the selection;
  *  - the selected row carries the feature's colour on its reading edge;
  *  - the welcome button is really gone while it is `hidden`, and the window paints above App
- *    Settings.
+ *    Settings;
+ *  - the models on this Mac: the sizes on disk end on one edge under their caption, a row's
+ *    buttons end on the list's edge, the sizes do not move when a row's Delete question opens,
+ *    a long list scrolls from its top (it is never cut off above the frame), and under 560px a
+ *    row is two lines with nothing running off the side.
  *
  * The REAL index.html is served with its scripts taken out and the two shipping stylesheets
  * inlined (mobile.css under the media query its `<link>` carries); the real module runs on a
@@ -124,7 +128,51 @@ const STATUS = {
     developerTools: 'present',
     runtime: { version: '0.40.15', installed: false, downloadBytes: RUNTIME, downloadGb: '0.2', unpackedGb: '0.6' },
     folder: '/Users/sam/.codeman/local-model',
+    library: [],
     actions: ['install'],
+  },
+};
+
+const libraryRow = (id: string, label: string, sizeGb: string, over: object = {}) => ({
+  id,
+  label,
+  context: 131072,
+  sizeBytes: Number(sizeGb) * 1e9,
+  sizeGb,
+  active: false,
+  verified: true,
+  status: 'ready',
+  actions: ['use', 'delete'],
+  ...over,
+});
+
+/** An installed model with two more models beside it: one checked, one the runtime lists and Codeman never checked. */
+const INSTALLED = {
+  ...STATUS,
+  install: {
+    ...STATUS.install,
+    state: 'installed',
+    running: true,
+    runtime: { version: '0.40.15', installed: true, downloadBytes: 0, downloadGb: '0.0', unpackedGb: '0.6' },
+    model: { id: 'qwen3.6:35b-a3b', label: 'Qwen3.6 35B-A3B' },
+    cli: 'opencode',
+    cliLabel: 'OpenCode',
+    context: 131072,
+    port: 11435,
+    endpointId: 'local-ollama',
+    loaded: { context: 131072, memoryBytes: 26300000000, memoryGb: '26.3', onGpu: true },
+    library: [
+      libraryRow('qwen3.6:35b-a3b', 'Qwen3.6 35B-A3B', '23.1', { active: true, actions: [] }),
+      libraryRow('qwen3.8:27b-mtp-q4_k_m', 'Qwen3.8 27B', '17.7'),
+      libraryRow('mimo-v2.6:9b-q4_k_m', 'MiMo V2.6 9B', '6.6', {
+        context: undefined,
+        verified: false,
+        status: 'unverified',
+        actions: ['delete'],
+      }),
+    ],
+    store: { bytes: 47400000000, gb: '47.4' },
+    actions: ['start-session', 'stop', 'install', 'use', 'delete-model', 'remove'],
   },
 };
 
@@ -160,7 +208,7 @@ describe('the local model window (real Chromium)', () => {
   });
 
   /** The real page at a width, the module loaded, the answer in, the window closed. */
-  async function load(width: number, height = 900) {
+  async function load(width: number, height = 900, answer: object = STATUS) {
     p = await browser.newPage({ viewport: { width, height }, deviceScaleFactor: 1 });
     // No motion: the bar is at its width as soon as it is painted, so nothing here waits on a clock.
     await p.emulateMedia({ reducedMotion: 'reduce' });
@@ -178,7 +226,7 @@ describe('the local model window (real Chromium)', () => {
       w.app = new w.CodemanApp();
       w.app._api = async () => ({ ok: true, status: 200, json: async () => ({ success: true, data: status }) });
       await w.app.loadLocalModel();
-    }, STATUS);
+    }, answer);
   }
 
   /** Two animation frames: whatever was just written is laid out and painted. */
@@ -336,6 +384,125 @@ describe('the local model window (real Chromium)', () => {
     expect(same([meter.left, button.left])).toBe(true);
     expect(same([meter.right, button.right])).toBe(true);
     expect(button.height).toBeGreaterThanOrEqual(44);
+    const overflow = await p.evaluate(() => {
+      const body = document.getElementById('localModelWindowBody')!;
+      return body.scrollWidth - body.clientWidth;
+    });
+    expect(overflow).toBeLessThanOrEqual(0);
+  });
+
+  it('the models on this Mac: sizes on one edge, a row one line, its buttons on the list edge', async () => {
+    await load(1440, 900, INSTALLED);
+    await open();
+    const rows = await boxes('.lm-lib-row');
+    expect(rows).toHaveLength(3);
+    const names = await boxes('.lm-lib-name');
+    const tags = await boxes('.lm-lib-tag');
+    const sizes = await boxes('.lm-lib-size');
+    const [caption] = await boxes('.lm-lib-caption-size');
+    expect(same(sizes.map((box) => box.right))).toBe(true);
+    expect(same([caption.right, sizes[0].right])).toBe(true);
+    expect(same(names.map((box) => box.left))).toBe(true);
+    expect(same(tags.map((box) => box.left))).toBe(true);
+    // One line a row: the name, the tag, the size and the buttons share its middle.
+    const middle = (box: Box) => (box.top + box.bottom) / 2;
+    const actions = await boxes('.lm-lib-row .lm-lib-actions');
+    for (let i = 0; i < rows.length; i++) {
+      expect(Math.abs(middle(names[i]) - middle(sizes[i]))).toBeLessThan(3);
+      expect(Math.abs(middle(tags[i]) - middle(sizes[i]))).toBeLessThan(3);
+      expect(names[i].right).toBeLessThanOrEqual(tags[i].left + 0.6);
+      expect(sizes[i].right).toBeLessThanOrEqual(actions[i].left + 0.6);
+    }
+    // The last button of a row ends where every line of the window ends: on "Add a model"'s edge.
+    const rowButtons = await boxes('.lm-lib-row .lm-lib-actions button:last-child');
+    const [add] = await boxes('.lm-lib-foot button');
+    expect(same([...rowButtons.map((box) => box.right), add.right])).toBe(true);
+    // The model in use carries the feature's colour on its reading edge; the others do not.
+    const paint = await p.evaluate(() => {
+      const probe = document.body.appendChild(document.createElement('i'));
+      probe.style.color = 'var(--lm-brand)';
+      const brand = getComputedStyle(probe).color;
+      probe.remove();
+      const edge = (sel: string) => getComputedStyle(document.querySelector(sel)!).borderLeftColor;
+      return { brand, on: edge('.lm-lib-row-on'), off: edge('.lm-lib-row:not(.lm-lib-row-on)') };
+    });
+    expect(paint.on).toBe(paint.brand);
+    expect(paint.off).not.toBe(paint.brand);
+    // The screen starts at the top of the frame, right under the header.
+    const [body] = await boxes('#localModelWindowBody');
+    const [title] = await boxes('.lm-title');
+    expect(title.top - body.top).toBeLessThan(40);
+  });
+
+  it('the Delete question opens under its row without moving the sizes', async () => {
+    await load(1440, 900, INSTALLED);
+    await open();
+    const before = await boxes('.lm-lib-size');
+    await p.click('.lm-lib-row:nth-of-type(3) .lm-lib-actions button:last-child');
+    await painted();
+    const [ask] = await boxes('.lm-lib-ask');
+    const rows = await boxes('.lm-lib-row');
+    const after = await boxes('.lm-lib-size');
+    // Sideways nothing moved; the rows after the question moved down by it.
+    expect(after.map((box) => Math.round(box.right))).toEqual(before.map((box) => Math.round(box.right)));
+    expect(ask.top).toBeGreaterThanOrEqual(rows[1].bottom - 1);
+    expect(rows[2].top).toBeGreaterThanOrEqual(ask.bottom - 1);
+    // The row's own buttons are unseen while it is asked about, and the red button is the question's.
+    const seen = await p.evaluate(() => ({
+      away: getComputedStyle(document.querySelector('.lm-lib-actions-away')!).visibility,
+      red: [...document.querySelectorAll('.local-model-window .wt-btn-danger')].map((el) => el.textContent),
+      focus: document.activeElement?.textContent,
+    }));
+    expect(seen).toEqual({ away: 'hidden', red: ['Delete'], focus: 'Cancel' });
+  });
+
+  it('a long list of models scrolls from its top: the first lines are never cut off above the frame', async () => {
+    const many = Array.from({ length: 14 }, (_unused, i) => libraryRow(`model-${i}:9b`, `Model ${i}`, '6.6'));
+    const answer = {
+      ...INSTALLED,
+      install: { ...INSTALLED.install, library: [...INSTALLED.install.library, ...many] },
+    };
+    for (const [width, height] of [
+      [1440, 900],
+      [390, 844],
+    ]) {
+      await load(width, height, answer);
+      await open();
+      const scroll = await p.evaluate(() => {
+        const body = document.getElementById('localModelWindowBody')!;
+        const title = body.querySelector('.lm-title')!.getBoundingClientRect();
+        const box = body.getBoundingClientRect();
+        return {
+          overflows: body.scrollHeight > body.clientHeight,
+          top: body.scrollTop,
+          titleInside: title.top >= box.top - 0.5,
+          sideways: body.scrollWidth - body.clientWidth,
+        };
+      });
+      expect(scroll).toEqual({ overflows: true, top: 0, titleInside: true, sideways: 0 });
+      // The buttons of the screen stay in the frame's foot, under the part that scrolls.
+      const [foot] = await boxes('#localModelWindowFoot');
+      const [win] = await boxes('.local-model-window');
+      expect(foot.bottom).toBeLessThanOrEqual(win.bottom + 0.6);
+      await p.close();
+    }
+  });
+
+  it('the models on this Mac under 560px: two lines a row, nothing off the side', async () => {
+    await load(390, 844, INSTALLED);
+    await open();
+    const names = await boxes('.lm-lib-name');
+    const tags = await boxes('.lm-lib-tag');
+    const sizes = await boxes('.lm-lib-size');
+    for (let i = 0; i < names.length; i++) {
+      // The name and its size, then the state and what can be done.
+      expect(tags[i].top).toBeGreaterThanOrEqual(names[i].bottom - 1);
+      expect(sizes[i].top).toBeLessThan(names[i].bottom);
+      expect(same([names[i].left, tags[i].left])).toBe(true);
+    }
+    expect(same(sizes.map((box) => box.right))).toBe(true);
+    const buttons = await boxes('.lm-lib-row .lm-lib-actions button');
+    for (const button of buttons) expect(button.height).toBeGreaterThanOrEqual(36);
     const overflow = await p.evaluate(() => {
       const body = document.getElementById('localModelWindowBody')!;
       return body.scrollWidth - body.clientWidth;
