@@ -184,6 +184,8 @@ enum UserEvent {
     /// install opened in Terminal, the install command copied): the message
     /// goes to the page if it is still the one choosing a server.
     ToConnectPage(serde_json::Value),
+    /// What the closed lid did with the logo last (logo::watch_lid_status).
+    LogoLidStatus(String),
 }
 
 struct ProbeDone {
@@ -400,6 +402,13 @@ fn main() {
         fullscreen_retry: wants_fullscreen.then(|| (Instant::now() + FULLSCREEN_FIRST_CHECK, 0)),
         logo_watch: logo::Watcher::default(),
     };
+
+    if app.menu.logo_lid.is_some() {
+        let lid_proxy = app.proxy.clone();
+        logo::watch_lid_status(move |line| {
+            let _ = lid_proxy.send_event(UserEvent::LogoLidStatus(line));
+        });
+    }
 
     event_loop.run(move |event, target, control_flow| app.handle(event, target, control_flow));
 }
@@ -821,6 +830,11 @@ impl App {
             UserEvent::ToConnectPage(msg) => {
                 if self.choosing() {
                     self.to_connect_page(msg);
+                }
+            }
+            UserEvent::LogoLidStatus(line) => {
+                if let Some(item) = &self.menu.logo_lid {
+                    item.set_text(line);
                 }
             }
             UserEvent::ServerStartDone {
