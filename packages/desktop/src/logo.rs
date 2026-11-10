@@ -451,6 +451,10 @@ const LID_PROOF_WAIT: Duration = Duration::from_millis(1500);
 /// How often the logo is told the lid is open, for one closed lid and the same
 /// displays on, before it is left dark.
 const LID_TRIES: u32 = 2;
+/// The fade level that counts as the logo having moved under the closed lid:
+/// above any drift of a fade held at 0, and reached in well under the proof's
+/// wait by the slowest rise (the breath's).
+const LID_MOVED: f64 = 0.01;
 /// How long a change has to hold before the logo follows it, so a server
 /// restart or an agent between two turns does not flicker it. Not below the 3 s
 /// the server waits before it judges a new dialog: a prompt that was answered
@@ -731,16 +735,20 @@ fn blink(logo: &impl Logo, marker: &Marker, moves: &[Move], mut wait: impl FnMut
         if from_dark || proving {
             // Held back until the display shows a frame: time the light from when
             // it moves, so a held-back rise lengthens the dark, not shortens the light.
-            let gate = if proving { LID_PROOF_WAIT } else { GATE_WAIT };
+            let (gate, still) = if proving {
+                (LID_PROOF_WAIT, LID_MOVED)
+            } else {
+                (GATE_WAIT, 0.0)
+            };
             let mut waited = Duration::ZERO;
-            while waited < gate && logo.factor().is_some_and(|factor| factor <= 0.0) {
+            while waited < gate && logo.factor().is_some_and(|factor| factor <= still) {
                 if wait(RISE_POLL) {
                     break 'blink;
                 }
                 waited += RISE_POLL;
             }
             if proving {
-                if logo.factor().is_some_and(|factor| factor > 0.0) {
+                if logo.factor().is_some_and(|factor| factor > LID_MOVED) {
                     lid.proven = true;
                     note(
                         logo,
@@ -796,7 +804,7 @@ fn through_the_lid<'a, L: Logo>(logo: &'a L, fader: &mut Fader<'a, L>, lid: &mut
         lid.tries = 0;
     }
     if fader.lid_open {
-        if !lid.proven || logo.factor().is_some_and(|factor| factor > 0.0) {
+        if !lid.proven || logo.factor().is_some_and(|factor| factor > LID_MOVED) {
             return true;
         }
         // Dark although its last rise lit it: the daemon told the logo the lid is
@@ -824,7 +832,9 @@ fn through_the_lid<'a, L: Logo>(logo: &'a L, fader: &mut Fader<'a, L>, lid: &mut
 /// A line on stderr about the closed lid, which `open -a Codeman --stderr <file>`
 /// keeps: how blinking under it is checked on a real Mac.
 fn note(logo: &impl Logo, text: &str) {
-    eprintln!("codeman logo: {text} ({})", logo.describe());
+    // Not eprintln!, which panics on a failed write, and the child has
+    // `panic = "abort"`: a broken stderr must not stop the blink mid-pattern.
+    let _ = writeln!(std::io::stderr().lock(), "codeman logo: {text} ({})", logo.describe());
 }
 
 /// Put back a logo that a blink could not finish with.
