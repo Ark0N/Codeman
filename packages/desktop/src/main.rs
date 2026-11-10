@@ -759,7 +759,9 @@ impl App {
             Event::UserEvent(event) => self.on_user_event(event, target),
             // A click on the Dock icon while no window is visible, which is
             // the main window minimized: tao only reports it, so bring the
-            // window back here.
+            // window back here. An app hidden by closing its window
+            // (`hide_app`) needs nothing here: AppKit unhides it, with every
+            // window as it was, before it reports the click.
             Event::Reopen {
                 has_visible_windows: false,
                 ..
@@ -835,24 +837,25 @@ impl App {
         control_flow: &mut ControlFlow,
     ) {
         match event {
+            WindowEvent::CloseRequested if id != self.main_id => self.remove_window(id),
             WindowEvent::CloseRequested => {
-                if id != self.main_id {
-                    self.remove_window(id);
-                } else if self.config.keep_awake.mode.close_hides_app() {
+                self.record_main_frame();
+                self.save_config();
+                let server = self.phase.borrow().loaded().cloned();
+                let mode = self.config.keep_awake.mode;
+                if keep_awake::available()
+                    && keep_awake::close_hides_app(mode, server.as_ref(), keep_awake::local_addresses)
+                {
                     // Keep This Mac Awake ends with the app, so closing the
-                    // window while it is on hides Codeman instead, as Cmd+H
-                    // does (full screen and pop-outs included): the Mac stays
-                    // awake, a click on the Dock icon brings it back, and
-                    // Cmd+Q still quits.
-                    self.record_main_frame();
-                    self.save_config();
+                    // window while it watches a Codeman on this Mac hides
+                    // Codeman instead, as Cmd+H does (full screen and pop-outs
+                    // included): the Mac stays awake, a click on the Dock icon
+                    // brings it back, and Cmd+Q still quits.
                     hide_app(target);
                 } else {
                     // Closing the main window quits; the server and its
                     // sessions keep running, so nothing is lost.
                     self.keep_awake.shutdown();
-                    self.record_main_frame();
-                    self.save_config();
                     *control_flow = ControlFlow::Exit;
                 }
             }

@@ -33,9 +33,9 @@
 //! another, so no separate "remove" item and no helper left behind unasked.
 //!
 //! It lives in the app, so it ends with the app: Codeman's LaunchAgent keeps the server
-//! running after the app quits, but nothing keeps the Mac awake then. So while a mode is
-//! on, closing the main window hides the app instead of quitting it
-//! (`Mode::close_hides_app`): only Cmd+Q (or Quit from the Dock) ends it.
+//! running after the app quits, but nothing keeps the Mac awake then. So while it watches
+//! a Codeman on this Mac, closing the main window hides the app instead of quitting it
+//! (`close_hides_app`): only Cmd+Q (or Quit from the Dock) ends it.
 //!
 //! The agents are asked natively, like the logo blink does (`agents`): WebKit stalls the
 //! event stream of a hidden page. A worker thread does the asking and the holding, and
@@ -124,14 +124,6 @@ impl Mode {
 
     pub fn from_menu_id(id: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|mode| mode.menu_id() == id)
-    }
-
-    /// Whether closing the main window hides the app instead of quitting it.
-    /// Keep-awake ends with the app, so while a mode is on, the red button (or
-    /// Cmd+W) must not end it: the app hides as Cmd+H does, a click on its Dock
-    /// icon brings it back, and Cmd+Q still quits.
-    pub fn close_hides_app(self) -> bool {
-        available() && self != Mode::Off
     }
 }
 
@@ -279,6 +271,29 @@ pub fn status_line(decision: Decision, settings: Settings, facts: Facts, covered
         "lid closed in a moment"
     };
     format!("{text}, {lid}")
+}
+
+/// Whether closing the main window hides the app instead of quitting it.
+/// Keep-awake ends with the app, so while it watches a Codeman on this Mac the
+/// red button (or Cmd+W) must not end it: the app hides as Cmd+H does, a click
+/// on its Dock icon brings it back, and Cmd+Q still quits. That holds while it
+/// is only paused (on battery, no agent at work, no answer), since it carries
+/// on by itself once that changes. With no server open (the connect page), or
+/// one on another machine, it keeps nothing awake, so closing the window quits.
+/// `local_addresses` is only read with a mode on and a server open.
+pub fn close_hides_app(mode: Mode, server: Option<&Url>, local_addresses: impl FnOnce() -> Vec<IpAddr>) -> bool {
+    mode != Mode::Off && server.is_some_and(|server| is_this_mac(server, &local_addresses()))
+}
+
+/// Every address of this Mac's interfaces.
+#[cfg(target_os = "macos")]
+pub fn local_addresses() -> Vec<IpAddr> {
+    system::local_addresses()
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn local_addresses() -> Vec<IpAddr> {
+    Vec::new()
 }
 
 /// Whether `server` is this Mac: a loopback address or `localhost`, or an address
@@ -944,7 +959,7 @@ mod system {
     }
 
     /// Every address of this Mac's interfaces.
-    fn local_addresses() -> Vec<IpAddr> {
+    pub(super) fn local_addresses() -> Vec<IpAddr> {
         let mut found = Vec::new();
         // SAFETY: getifaddrs fills a list that freeifaddrs frees; each ifa_addr is
         // NULL or a sockaddr whose family says which struct it is.
@@ -1232,13 +1247,23 @@ mod tests {
     }
 
     #[test]
-    fn closing_the_window_hides_the_app_only_while_a_mode_is_on() {
-        // Off quits as it always did; a mode that keeps the Mac awake must not
-        // end with the red button, since keep-awake ends with the app.
-        assert!(!Mode::Off.close_hides_app());
+    fn closing_the_window_hides_the_app_only_while_it_watches_this_mac() {
+        let own = || vec!["192.168.1.20".parse::<IpAddr>().unwrap()];
+        let unread = || -> Vec<IpAddr> { panic!("the addresses decide nothing here") };
+        let here = url("http://127.0.0.1:3000/");
+        let lan = url("http://192.168.1.20:3000/");
+        let elsewhere = url("http://192.168.1.21:3000/");
         for mode in [Mode::WhileWorking, Mode::Always] {
-            assert_eq!(mode.close_hides_app(), available(), "{mode:?}");
+            // Keep-awake ends with the app, so the red button must not end it.
+            assert!(close_hides_app(mode, Some(&here), own), "{mode:?}");
+            assert!(close_hides_app(mode, Some(&lan), own), "{mode:?}");
+            // Another machine's Codeman, or the connect page: nothing is kept
+            // awake, so closing the window quits.
+            assert!(!close_hides_app(mode, Some(&elsewhere), own), "{mode:?}");
+            assert!(!close_hides_app(mode, None, unread), "{mode:?}");
         }
+        // Off quits as it always did.
+        assert!(!close_hides_app(Mode::Off, Some(&here), unread));
     }
 
     #[test]
