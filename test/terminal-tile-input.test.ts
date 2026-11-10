@@ -741,10 +741,13 @@ describe('TerminalTile links and paste follow THIS pane', () => {
     app._handleImagePaste = paste;
     const { term } = await connectTile(app);
 
-    const handled = term.keyHandler!({ type: 'keydown', key: 'v', ctrlKey: true, code: 'KeyV' });
+    const keyEvent = { type: 'keydown', key: 'v', ctrlKey: true, code: 'KeyV' };
+    const handled = term.keyHandler!(keyEvent);
 
     expect(handled).toBe(false);
-    expect(paste).toHaveBeenCalledWith({ terminal: term, sessionId: 's-tile' });
+    // The keydown rides along so the trap can cancel it once execCommand('paste')
+    // has delivered (Firefox), instead of letting a second paste reach xterm.
+    expect(paste).toHaveBeenCalledWith({ terminal: term, sessionId: 's-tile', keyEvent });
   });
 
   it('leaves Ctrl+Shift+V (voice input) out of the paste trap', async () => {

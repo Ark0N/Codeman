@@ -349,7 +349,7 @@
         // input(framed), which onData delivers. Mirrors terminal-ui.js's own
         // Ctrl+V gate; without it xterm's default only ever pasted text.
         if ((ev.ctrlKey || ev.metaKey) && ev.key === 'v' && ev.type === 'keydown') {
-          global.app?._handleImagePaste?.({ terminal: this.terminal, sessionId: this.sessionId });
+          global.app?._handleImagePaste?.({ terminal: this.terminal, sessionId: this.sessionId, keyEvent: ev });
           return false;
         }
         // Ctrl+Z (SIGTSTP/job-control suspend), as terminal-ui.js swallows it:
