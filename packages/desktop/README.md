@@ -380,15 +380,17 @@ crosses, so the login is never on a command line.
   display next sleeps and wakes or the app next starts. Another app that drives
   the logo the same way and is not LogoLight is not recognised, and the two
   fight. The handover with a LogoLight that steps aside was checked against a
-  stand-in process and LogoLight's own tests, not yet on a real logo. `api/sessions` does not say which turns are Codeman's own, so with
+  stand-in process carrying LogoLight 1.3.1's Info.plist and against LogoLight's
+  own tests, and ran in that release candidate next to LogoLight 1.3.1; its
+  timing on a real logo was not measured. `api/sessions` does not say which turns are Codeman's own, so with
   prompt-cache keep-warm on, a keep-alive turn blinks too.
-- **Blinking with the lid closed has not been seen from this app on a real
-  MacBook yet.** The method is LogoLight's, which its author saw working on the
-  real lid, on power with no display attached (LogoLight 1.3.1). This app's own
-  run of it, with the Mac kept awake by the lid helper, has not been watched. If
-  the logo does not move, the menu line says "stayed dark". Not checked either,
-  by LogoLight or here: the built-in display's brightness when the lid opens
-  again, and an Apple display with its own light sensor.
+- **Blinking with the lid closed was seen on one MacBook Pro so far** (macOS
+  27.2, on power, a release candidate of 1.50.1 on 2026-11-10; the method is
+  LogoLight's, which its author measured for LogoLight 1.3.1). Nothing was
+  measured in that run, it was watched. Not checked, by LogoLight or here: the
+  built-in display's brightness when the lid opens again, and an Apple display
+  with its own light sensor. If the logo does not move under a closed lid, the
+  menu line says "stayed dark".
 - **Self-signed HTTPS is refused.** A server started with `codeman web --https`
   uses a self-signed certificate, and WKWebView rejects it (wry has no trust
   override). Use `http://127.0.0.1:3000` for a server on this Mac. For another
