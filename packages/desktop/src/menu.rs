@@ -33,6 +33,9 @@ pub struct AppMenu {
     pub logo_switch: Option<CheckMenuItem>,
     /// One item per state and style, empty without the switch.
     pub logo_styles: Vec<(Signal, BlinkStyle, CheckMenuItem)>,
+    /// What the closed lid did with the logo last, a line that cannot be
+    /// clicked. None without the switch.
+    pub logo_lid: Option<MenuItem>,
     /// None where the app cannot keep the Mac awake (a build for another OS).
     pub keep_awake: Option<KeepAwakeMenu>,
 }
@@ -198,6 +201,7 @@ pub fn build_menu(config: &Config) -> muda::Result<AppMenu> {
     // style for each state behind it.
     let mut logo_styles = Vec::new();
     let mut logo_switch = None;
+    let mut logo_lid = None;
     if logo::available() {
         let switch = CheckMenuItem::with_id(
             menu_id::LOGO_BLINK,
@@ -221,9 +225,12 @@ pub fn build_menu(config: &Config) -> muda::Result<AppMenu> {
             submenu.append(&group)?;
         }
         // Right under "Always Open in Full Screen", before the separator.
+        let lid = MenuItem::new(logo::lid_status_line(), false, None);
         view.insert(&switch, 4)?;
         view.insert(&submenu, 5)?;
+        view.insert(&lid, 6)?;
         logo_switch = Some(switch);
+        logo_lid = Some(lid);
     }
     let window_menu = Submenu::with_items(
         "Window",
@@ -254,5 +261,6 @@ pub fn build_menu(config: &Config) -> muda::Result<AppMenu> {
         logo_switch,
         logo_styles,
         keep_awake,
+        logo_lid,
     })
 }

@@ -111,8 +111,7 @@ enter it again (a single-user Codeman accepts the right password at once), or wa
 const KEYCHAIN_UNREADABLE: &str = "The saved password could not be read from the Keychain. Enter it again.";
 const PAGE_KEEPS_STOPPING: &str = "Codeman's page stopped twice in a row, so it was closed. Connect again.";
 const LOGO_SWITCHED_OFF: &str = "The Apple logo is switched off on this Mac, so it cannot blink.";
-const LOGO_DRIVEN_ELSEWHERE: &str =
-    "LogoLight is driving the Apple logo, so Codeman leaves it alone. Quit LogoLight to see your agents on it.";
+const LOGO_DRIVEN_ELSEWHERE: &str = "An older LogoLight is driving the Apple logo, so Codeman leaves it alone. Update LogoLight to 1.3 or later (or quit it) to see your agents on it.";
 /// What a download's toast calls a file whose name is not known.
 const UNNAMED_FILE: &str = "the file";
 const START_REFUSED: &str = "Codeman can only be started here for an http://127.0.0.1 or http://localhost address.";
@@ -197,6 +196,8 @@ enum UserEvent {
         install: bool,
         outcome: keep_awake::AdminOutcome,
     },
+    /// What the closed lid did with the logo last (logo::watch_lid_status).
+    LogoLidStatus(String),
 }
 
 struct ProbeDone {
@@ -422,6 +423,13 @@ fn main() {
         }),
         lid_helper_busy: false,
     };
+
+    if app.menu.logo_lid.is_some() {
+        let lid_proxy = app.proxy.clone();
+        logo::watch_lid_status(move |line| {
+            let _ = lid_proxy.send_event(UserEvent::LogoLidStatus(line));
+        });
+    }
 
     event_loop.run(move |event, target, control_flow| app.handle(event, target, control_flow));
 }
@@ -877,6 +885,7 @@ impl App {
                     self.to_connect_page(msg);
                 }
             }
+            UserEvent::LogoLidStatus(line) => self.show_lid_status(line),
             UserEvent::ServerStartDone {
                 generation,
                 url,
@@ -1103,6 +1112,20 @@ impl App {
         let server = phase.loaded().filter(|_| styles.active() && logo::available());
         self.logo_watch
             .sync(server.map(|url| (url.as_str(), self.auth.as_deref(), styles)));
+        drop(phase);
+        self.show_lid_status(logo::lid_status_line());
+    }
+
+    /// The line under the logo's styles: what the closed lid did last, or that
+    /// nothing watches it now.
+    fn show_lid_status(&self, line: String) {
+        if let Some(item) = &self.menu.logo_lid {
+            if self.logo_watch.watching() {
+                item.set_text(line);
+            } else {
+                item.set_text(logo::LID_NOT_WATCHED);
+            }
+        }
     }
 
     fn choose_logo_blink(&mut self, signal: Signal, style: BlinkStyle) {

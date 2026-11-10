@@ -38,6 +38,31 @@
 //! When several states hold at once the most urgent one with a style is shown:
 //! red, then yellow, then work.
 //!
+//! With the lid closed `corebrightnessd` keeps the logo dark: it tells every
+//! module the lid is closed, and the logo's target is then 0 whatever
+//! `DisplayLogicalState` says. While the Mac stays awake with the lid closed on
+//! its power adapter (Keep This Mac Awake's lid helper, LogoLight's Lit with
+//! Lid Closed, or an external display), the blink goes on, the way LogoLight
+//! does it and measured it on the real MacBook (its `docs/corebrightnessd.md`,
+//! "The lid", and its 1.3.1 for the Mac with no display attached):
+//! - Kept awake like that, the built-in display stays online and CoreGraphics
+//!   does not call it asleep, so the lid sensor (`AppleClamshellState`) is what
+//!   says the logo cannot be seen (`seen`).
+//! - Once the daemon has handled the lid (`CBClamshellState`), the logo is told
+//!   the lid is open (`ClamshellUpdate` 0), and each keyboard and each display
+//!   alone that it is closed: the keyboards stay dark, and True Tone does not
+//!   adapt an external display to the covered light sensor.
+//! - The daemon sends the real lid state again when a display or a keyboard
+//!   comes up, so a logo found dark where the blink has it lit is told again.
+//! - `DisplayPowerStateEvent` is never written: a client's DidSleep keeps the
+//!   logo dark, lid open too, until someone writes DidWake.
+//!
+//! The first rise after that has to move the logo; a blink that ends with the
+//! lid closed puts the logo back to normal and tells it the lid is closed, so it
+//! is dark as a closed lid has it. What the closed lid did last is the line
+//! under View > Apple Logo Blink Styles (`LidStatus`, through a file next to the
+//! app's settings), and each step is a line on stderr.
+//!
 //! All of this runs in a child process (this same binary with `BLINK_ARG`), for
 //! as long as the switch is on and a server is open. The app hands it the
 //! server and the login over a pipe (never on its command line, where `ps`
@@ -55,7 +80,14 @@
 //! logo, and the app's event loop gets no timers for it.
 //!
 //! Another app driving the logo the same way (LogoLight itself) would fight
-//! every fade, so while one runs the logo is left to it, as it is while the
+//! every fade. A LogoLight that says it steps aside (`LogoLightStepsAsideForCodeman`
+//! in its Info.plist) is lent the logo instead: the marker above holds the
+//! child's process ID, goes down right before the blink's first write, and
+//! comes off once the logo is back to normal, and LogoLight pauses while it
+//! names a running `codeman-desktop`. So the child waits `LOAN_GRACE` after
+//! writing it, for LogoLight to have paused, unless the last blink ended a
+//! moment ago (`LOAN_LINGER`): LogoLight is then still paused. LogoLight ships
+//! its side since 1.3.0. An older LogoLight is left the logo, as it is while the
 //! user has it switched off: the child tries again once the agents go quiet.
 
 use crate::agents::Activity;
@@ -429,6 +461,23 @@ const ALARM: &[Beat] = &[beat(120, 120), beat(120, 120), beat(120, 900)];
 /// How often to look again while the logo cannot be seen (the display sleeps,
 /// the lid is closed). Nothing is written in that time.
 const NOT_LIT_RECHECK: Duration = Duration::from_secs(2);
+/// How long the first rise under the closed lid may take to move the logo: the
+/// display-ready gate waits up to a second, and LogoLight saw that rise start
+/// 0.5 to 0.8 s after the write.
+const LID_PROOF_WAIT: Duration = Duration::from_millis(1500);
+/// The fade level that counts as the logo having moved under the closed lid:
+/// above any drift of a fade held at 0, and reached in well under the proof's
+/// wait by the slowest rise (the breath's).
+const LID_MOVED: f64 = 0.01;
+/// How many rises in a row may fail to move the logo before the closed lid is
+/// said to keep it dark.
+const LID_TRIES: u32 = 3;
+/// From then on, how many looks (`NOT_LIT_RECHECK` apart) lie between two more
+/// tries: half a minute.
+const LID_RETRY_LOOKS: u32 = 15;
+/// How many looks (`LOOK_EVERY` apart) the daemon gets to handle a lid the
+/// sensor already calls closed, before the logo is told anyway.
+const LID_HANDLED_LOOKS: u32 = 8;
 /// How long a change has to hold before the logo follows it, so a server
 /// restart or an agent between two turns does not flicker it. Not below the 3 s
 /// the server waits before it judges a new dialog: a prompt that was answered
@@ -436,6 +485,15 @@ const NOT_LIT_RECHECK: Duration = Duration::from_secs(2);
 const SETTLE: Duration = Duration::from_secs(3);
 /// How often the child looks at what the poller found, and at the pipe.
 const LOOK_EVERY: Duration = Duration::from_millis(250);
+/// How long a blink waits after writing its marker, before its first write,
+/// while a LogoLight that steps aside runs: LogoLight looks at the marker every
+/// second, and pauses its effect when it sees it.
+const LOAN_GRACE: Duration = Duration::from_secs(2);
+/// How long after a blink's end that LogoLight is surely still paused: it takes
+/// the logo back only once the marker has been gone for 1.5 s (its
+/// `LoanWatcher.returnDelay`). A blink that starts within this of the last one's
+/// end (a change of state: work, then a permission) skips the wait above.
+const LOAN_LINGER: Duration = Duration::from_secs(1);
 
 /// What a blink needs from the machine, so its decisions can be tested.
 pub trait Logo {
@@ -455,8 +513,69 @@ pub trait Logo {
     fn set_keyboards_lit(&self, lit: bool);
     /// The built-in display is on: the lid is open and the display awake.
     fn display_awake(&self) -> bool;
-    /// Another app drives the logo the same way.
+    /// Another app drives the logo the same way, and would fight a blink.
     fn driven_elsewhere(&self) -> bool;
+    /// Another app drives the logo the same way, and steps aside while the
+    /// marker says a blink runs.
+    fn steps_aside_elsewhere(&self) -> bool;
+    /// The lid is closed: the lid sensor (`AppleClamshellState`, what `ioreg -k
+    /// AppleClamshellState` shows). None if it cannot be read.
+    fn lid_closed(&self) -> Option<bool>;
+    /// `CBClamshellState`: `corebrightnessd` has handled the closed lid, a moment
+    /// after the sensor. Only a real lid change moves it, whatever `tell_lid`
+    /// said since. None if it cannot say.
+    fn lid_handled(&self) -> Option<bool>;
+    /// `ClamshellUpdate`: tell the logo the lid is open, and then each keyboard
+    /// and each display alone that it is closed (`open`), or tell everything it
+    /// is closed. False if that was not done: opening it needs the keyboards
+    /// within reach, or a keyboard would light under the closed lid.
+    fn tell_lid(&self, open: bool) -> bool;
+    /// What the closed lid did this time, for the line in the View menu.
+    fn lid_status(&self, status: LidStatus);
+    /// The Mac runs on battery. It sleeps with the lid closed then, and a dark
+    /// wake (Power Nap) must not light the logo in a bag.
+    fn on_battery(&self) -> bool;
+    /// What a line on stderr says about the logo, for a test on a real Mac.
+    fn describe(&self) -> String {
+        String::new()
+    }
+}
+
+/// What the closed lid did, as the line under View > Blink Apple Logo says it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LidStatus {
+    /// Told the lid is open, the logo moved.
+    Blinking,
+    /// It did not: macOS keeps the logo dark under this closed lid.
+    StayedDark,
+    OnBattery,
+    NoKeyboards,
+    NoLidSensor,
+    /// No agent is working (and none waits for you): nothing to show.
+    Idle,
+    SwitchedOff,
+    LogoLight,
+    /// The logo refused a change, or the marker could not be written.
+    Refused,
+    /// The Mac slept with the lid closed: nothing kept it awake.
+    Slept,
+}
+
+impl LidStatus {
+    pub fn text(self) -> &'static str {
+        match self {
+            LidStatus::Blinking => "blinking",
+            LidStatus::StayedDark => "stayed dark, macOS keeps the logo off",
+            LidStatus::OnBattery => "not tried, on battery",
+            LidStatus::NoKeyboards => "not tried, no keyboard to keep dark",
+            LidStatus::NoLidSensor => "not tried, the lid sensor could not be read",
+            LidStatus::Idle => "nothing to show, no agent at work",
+            LidStatus::SwitchedOff => "not tried, the logo is switched off",
+            LidStatus::LogoLight => "not tried, an older LogoLight has the logo",
+            LidStatus::Refused => "not tried, the logo refused a change",
+            LidStatus::Slept => "the Mac went to sleep",
+        }
+    }
 }
 
 /// Moves the logo, and keeps what cannot be read back: which way it heads, and
@@ -469,6 +588,8 @@ struct Fader<'a, L: Logo> {
     heading: Option<bool>,
     /// What the keyboards were last told, if anything.
     keyboards: Option<bool>,
+    /// The logo was told the lid is open while it is closed (`open_lid`).
+    lid_open: bool,
     /// Anything was written.
     touched: bool,
     /// Every write was taken.
@@ -481,6 +602,7 @@ impl<'a, L: Logo> Fader<'a, L> {
             logo,
             heading: None,
             keyboards: None,
+            lid_open: false,
             touched: false,
             ok: true,
         }
@@ -544,24 +666,46 @@ impl<'a, L: Logo> Fader<'a, L> {
         }
     }
 
+    /// Lets the logo move under a closed lid (`Logo::tell_lid`).
+    fn open_lid(&mut self) -> bool {
+        // A refusal has written nothing.
+        let open = self.logo.tell_lid(true);
+        self.lid_open |= open;
+        self.touched |= open;
+        open
+    }
+
+    /// Ends `open_lid`: the logo goes dark, as a closed lid has it. Once the lid
+    /// has really opened the daemon has told every module so itself, and nothing
+    /// is written.
+    fn close_lid(&mut self) {
+        if std::mem::take(&mut self.lid_open) && self.logo.lid_closed() == Some(true) {
+            self.ok &= self.logo.tell_lid(false);
+        }
+    }
+
     /// Back to normal: fully lit (when the display is on), with the automatic
-    /// fade duration. True once that is done; false while the display sleeps or
-    /// a write was refused, which keeps the marker for another try.
+    /// fade duration. With the lid closed, normal is dark: a logo told the lid is
+    /// open is handed back first (a held level would survive the lid) and then
+    /// told it is closed. True once that is done; false while the display sleeps
+    /// or a write was refused, which keeps the marker for another try.
     fn restore(&mut self) -> bool {
         if !self.touched && self.keyboards.is_none() {
             return true;
         }
-        let awake = self.logo.display_awake();
+        let awake = seen(self.logo);
+        let reachable = awake || self.lid_open;
         // A fade toward lit may be a held one, or still under way at its own
         // duration: turn it round without moving, so relighting is a change.
         if self.heading != Some(false) && self.logo.factor().unwrap_or(1.0) < LIT {
             self.turn_round(true, awake);
         }
         self.duration(0.0);
-        if awake {
+        if reachable {
             self.heading(true, awake);
         }
-        self.ok && awake
+        self.close_lid();
+        self.ok && reachable
     }
 }
 
@@ -583,9 +727,12 @@ impl Marker {
         Self::named("logo-blink")
     }
 
+    /// Writes the marker, holding this process's ID: LogoLight steps aside while
+    /// it names a running Codeman.
     fn set(&self) -> bool {
         let Some(path) = &self.0 else { return false };
-        path.parent().is_some_and(|dir| std::fs::create_dir_all(dir).is_ok()) && std::fs::write(path, b"").is_ok()
+        path.parent().is_some_and(|dir| std::fs::create_dir_all(dir).is_ok())
+            && std::fs::write(path, format!("{}\n", std::process::id())).is_ok()
     }
 
     fn clear(&self) {
@@ -609,19 +756,36 @@ enum Ended {
 
 /// Move the logo through `moves`, over and over, until `wait` reports that it is
 /// time to stop, then put it back to normal. `wait` sleeps for the given time and
-/// answers true if the blink should end. A marker that cannot be written refuses
-/// the blink: without it a child killed in a dark phase would have no way back.
-fn blink(logo: &impl Logo, marker: &Marker, moves: &[Move], mut wait: impl FnMut(Duration) -> bool) -> Ended {
-    if moves.is_empty() || logo.mode() != Some(MODE_AUTO) || logo.driven_elsewhere() || !marker.set() {
-        return Ended::Declined;
+/// answers true if the blink should end. The marker goes down right before the
+/// first write, and one that cannot be written refuses the blink: without it a
+/// child killed in a dark phase would have no way back.
+#[cfg(test)]
+fn blink(logo: &impl Logo, marker: &Marker, moves: &[Move], wait: impl FnMut(Duration) -> bool) -> Ended {
+    blink_after(logo, marker, moves, LOAN_GRACE, wait).0
+}
+
+/// `blink`, giving a LogoLight that steps aside `grace` to pause before the
+/// first write. Also answers whether the marker went down: LogoLight was then
+/// paused until this blink's end, and stays so for a moment (`LOAN_LINGER`).
+fn blink_after(
+    logo: &impl Logo,
+    marker: &Marker,
+    moves: &[Move],
+    grace: Duration,
+    mut wait: impl FnMut(Duration) -> bool,
+) -> (Ended, bool) {
+    if moves.is_empty() || logo.mode() != Some(MODE_AUTO) || logo.driven_elsewhere() {
+        return (Ended::Declined, false);
     }
     let mut fader = Fader::new(logo);
+    let mut lid = Lid::default();
     let mut ended = Ended::Stopped;
     let mut asleep = false;
+    let mut claimed = false;
     let mut next = 0;
     'blink: loop {
         let step = moves[next % moves.len()];
-        let awake = logo.display_awake();
+        let awake = seen(logo);
         // Every cycle starts with a fall: the moment to check that the logo is
         // still the agents' and can be seen.
         if !step.lit {
@@ -629,37 +793,86 @@ fn blink(logo: &impl Logo, marker: &Marker, moves: &[Move], mut wait: impl FnMut
                 ended = Ended::Declined;
                 break;
             }
-            if !awake {
+            if awake {
+                if asleep {
+                    fader.display_woke();
+                    asleep = false;
+                }
+                if std::mem::take(&mut fader.lid_open) {
+                    // The daemon told every module itself when the lid opened.
+                    note(logo, "the lid opened");
+                }
+                lid = Lid::default();
+            } else {
                 if !asleep {
                     fader.display_slept();
                     asleep = true;
                 }
-                if wait(NOT_LIT_RECHECK) {
-                    break;
+                match look_at_lid(logo, &mut fader, &mut lid) {
+                    LidLook::Go => {}
+                    LidLook::Tell => {
+                        // Telling the lid is a write, and may be the blink's first.
+                        if !claimed {
+                            if let Some(end) = claim(logo, marker, grace, &mut wait) {
+                                ended = end;
+                                break;
+                            }
+                            claimed = true;
+                        }
+                        if !fader.open_lid() {
+                            lid.report(logo, LidStatus::NoKeyboards);
+                            if wait(NOT_LIT_RECHECK) {
+                                break;
+                            }
+                            continue;
+                        }
+                        note(logo, "the lid is closed: told the logo it is open");
+                    }
+                    LidLook::Wait(time) => {
+                        if wait(time) {
+                            break;
+                        }
+                        continue;
+                    }
                 }
-                continue;
-            }
-            if asleep {
-                fader.display_woke();
-                asleep = false;
             }
         }
+        if !claimed {
+            // Only now, so a LogoLight is not paused for a blink that is waiting
+            // for the display.
+            if let Some(end) = claim(logo, marker, grace, &mut wait) {
+                ended = end;
+                break;
+            }
+            claimed = true;
+        }
+        let proving = step.lit && fader.lid_open && !lid.proven;
         let from_dark = step.lit && logo.factor().is_some_and(|factor| factor <= 0.0);
+        // With the display off the keyboards are not touched: under a closed lid
+        // they stay dark.
         fader.fade(step.lit, step.fade, awake);
         if !fader.ok {
             ended = Ended::Declined;
             break;
         }
         let mut left = step.wait;
-        if from_dark {
+        if from_dark || proving {
             // Held back until the display shows a frame: time the light from when
             // it moves, so a held-back rise lengthens the dark, not shortens the light.
+            let (gate, still) = if proving {
+                (LID_PROOF_WAIT, LID_MOVED)
+            } else {
+                (GATE_WAIT, 0.0)
+            };
             let mut waited = Duration::ZERO;
-            while waited < GATE_WAIT && logo.factor().is_some_and(|factor| factor <= 0.0) {
+            while waited < gate && logo.factor().is_some_and(|factor| factor <= still) {
                 if wait(RISE_POLL) {
                     break 'blink;
                 }
                 waited += RISE_POLL;
+            }
+            if proving {
+                lid.proved(logo, logo.factor().is_some_and(|factor| factor > LID_MOVED));
             }
             left = left.saturating_sub(START_LATENCY);
         }
@@ -671,7 +884,142 @@ fn blink(logo: &impl Logo, marker: &Marker, moves: &[Move], mut wait: impl FnMut
     if fader.restore() {
         marker.clear();
     }
-    ended
+    (ended, claimed)
+}
+
+/// Puts the marker down, right before a blink's first write, and gives a
+/// LogoLight that steps aside `grace` to see it and pause. Some if the blink
+/// ends here: the marker could not be written, or `wait` said stop.
+fn claim(logo: &impl Logo, marker: &Marker, grace: Duration, wait: &mut impl FnMut(Duration) -> bool) -> Option<Ended> {
+    if !marker.set() {
+        return Some(Ended::Declined);
+    }
+    (!grace.is_zero() && logo.steps_aside_elsewhere() && wait(grace)).then_some(Ended::Stopped)
+}
+
+/// The built-in display can be seen: it is on, and the lid sensor does not say
+/// closed. A closed lid counts as closed even when the display list still has the
+/// built-in display awake.
+fn seen(logo: &impl Logo) -> bool {
+    logo.display_awake() && logo.lid_closed() != Some(true)
+}
+
+/// What a closed lid has shown during one blink.
+#[derive(Debug, Default)]
+struct Lid {
+    /// The logo moved under it since it was last told the lid is open.
+    proven: bool,
+    /// Rises in a row that did not move it.
+    failed: u32,
+    /// Looks since the last try, once `LID_TRIES` rises failed.
+    waited: u32,
+    /// Looks at a lid the daemon has not handled yet.
+    unhandled: u32,
+    /// The last status written, so it is written once per change.
+    status: Option<LidStatus>,
+}
+
+impl Lid {
+    fn report(&mut self, logo: &impl Logo, status: LidStatus) {
+        if self.status != Some(status) {
+            self.status = Some(status);
+            logo.lid_status(status);
+            note(logo, status.text());
+        }
+    }
+
+    /// A rise under the closed lid moved the logo, or did not.
+    fn proved(&mut self, logo: &impl Logo, moved: bool) {
+        if moved {
+            self.proven = true;
+            self.failed = 0;
+            self.waited = 0;
+            self.report(logo, LidStatus::Blinking);
+        } else {
+            self.failed += 1;
+            if self.failed >= LID_TRIES {
+                self.report(logo, LidStatus::StayedDark);
+            } else {
+                note(logo, "the logo did not rise under the closed lid");
+            }
+        }
+    }
+}
+
+/// What to do about the lid at the start of a cycle with the built-in display
+/// out of sight.
+#[derive(Debug, PartialEq)]
+enum LidLook {
+    /// The logo was told the lid is open, and nothing says otherwise: blink on.
+    Go,
+    /// Tell the logo the lid is open (again), then blink on.
+    Tell,
+    /// Nothing to blink for now: look again after this long.
+    Wait(Duration),
+}
+
+/// Never while the display only sleeps (the lid is open), nor on battery. The
+/// logo is told the lid is open once the daemon has handled the closed lid, and
+/// again when it is found dark where the blink has it lit, or when a rise did
+/// not move it: a few times in a row, then every half minute.
+fn look_at_lid<'a, L: Logo>(logo: &'a L, fader: &mut Fader<'a, L>, lid: &mut Lid) -> LidLook {
+    match logo.lid_closed() {
+        Some(true) => {}
+        Some(false) => {
+            // The display sleeps with the lid open; an override ended when it opened.
+            fader.lid_open = false;
+            *lid = Lid::default();
+            return LidLook::Wait(NOT_LIT_RECHECK);
+        }
+        None => {
+            lid.report(logo, LidStatus::NoLidSensor);
+            return LidLook::Wait(NOT_LIT_RECHECK);
+        }
+    }
+    if logo.on_battery() {
+        // Unplugged under the lid: the logo goes dark, and the Mac to sleep.
+        fader.close_lid();
+        let status = lid.status;
+        *lid = Lid {
+            status,
+            ..Lid::default()
+        };
+        lid.report(logo, LidStatus::OnBattery);
+        return LidLook::Wait(NOT_LIT_RECHECK);
+    }
+    if fader.lid_open {
+        if lid.proven {
+            // Every cycle ends lit, so dark here is not the blink's doing: the
+            // daemon sent the real lid state again (a display or a keyboard came up).
+            if !logo.factor().is_some_and(|factor| factor <= LID_MOVED) {
+                return LidLook::Go;
+            }
+            note(logo, "the logo went dark under the closed lid");
+            lid.proven = false;
+        } else if lid.failed == 0 {
+            return LidLook::Go;
+        }
+    } else if logo.lid_handled() == Some(false) && lid.unhandled < LID_HANDLED_LOOKS {
+        // The daemon's own update for this lid is still to come, and would undo ours.
+        lid.unhandled += 1;
+        return LidLook::Wait(LOOK_EVERY);
+    }
+    if lid.failed >= LID_TRIES {
+        lid.waited += 1;
+        if lid.waited < LID_RETRY_LOOKS {
+            return LidLook::Wait(NOT_LIT_RECHECK);
+        }
+        lid.waited = 0;
+    }
+    LidLook::Tell
+}
+
+/// A line on stderr about the closed lid, which `open -a Codeman --stderr <file>`
+/// keeps: how blinking under it is checked on a real Mac.
+fn note(logo: &impl Logo, text: &str) {
+    // Not eprintln!, which panics on a failed write, and the child has
+    // `panic = "abort"`: a broken stderr must not stop the blink mid-pattern.
+    let _ = writeln!(std::io::stderr().lock(), "codeman logo: {text} ({})", logo.describe());
 }
 
 /// Put back a logo that a blink could not finish with.
@@ -685,6 +1033,11 @@ pub fn recover(logo: &impl Logo, marker: &Marker, legacy: &Marker) {
         let mut fader = Fader::new(logo);
         // Which way it heads is not known: `restore` turns it round first.
         fader.touched = true;
+        // A child killed with the lid closed may have told the logo it is open.
+        // With a LogoLight running the lid is its to tell: it may be lighting
+        // the logo under it (Lit with Lid Closed), and nothing here would make it
+        // tell the logo again.
+        fader.lid_open = logo.lid_closed() == Some(true) && !logo.driven_elsewhere() && !logo.steps_aside_elsewhere();
         if fader.restore() {
             marker.clear();
         }
@@ -725,6 +1078,10 @@ trait Signals {
     fn wait(&mut self, time: Duration) -> bool;
     fn activity(&self) -> Activity;
     fn now(&self) -> Instant;
+    /// The Mac slept since this was last asked.
+    fn slept(&mut self) -> bool {
+        false
+    }
 }
 
 /// The child's life: show what the agents are doing, until the app goes away. A
@@ -733,20 +1090,52 @@ trait Signals {
 fn watch(logo: &impl Logo, marker: &Marker, styles: BlinkStyles, signals: &mut impl Signals) {
     let mut settled = Settled::new(BlinkStyle::Off, signals.now());
     let mut declined = false;
+    // What the menu line was last told from here, and when the lid is next read.
+    let mut said: Option<LidStatus> = None;
+    let mut lid_look_due = signals.now();
+    // When the last blink that had its marker down ended.
+    let mut released: Option<Instant> = None;
     loop {
         if signals.wait(LOOK_EVERY) {
             return;
         }
+        if signals.slept() && logo.lid_closed() == Some(true) {
+            logo.lid_status(LidStatus::Slept);
+            said = Some(LidStatus::Slept);
+        }
         let style = settled.update(styles.pick(signals.activity()), signals.now());
         if style == BlinkStyle::Off {
             declined = false;
-            continue;
         }
-        if declined {
+        if style == BlinkStyle::Off || declined {
+            // No blink runs: if the lid is closed, the menu line says why.
+            if signals.now() >= lid_look_due {
+                lid_look_due = signals.now() + NOT_LIT_RECHECK;
+                if logo.lid_closed() == Some(true) {
+                    let why = if style == BlinkStyle::Off {
+                        LidStatus::Idle
+                    } else if logo.mode() != Some(MODE_AUTO) {
+                        LidStatus::SwitchedOff
+                    } else if logo.driven_elsewhere() {
+                        LidStatus::LogoLight
+                    } else {
+                        LidStatus::Refused
+                    };
+                    if said != Some(why) && said != Some(LidStatus::Slept) {
+                        logo.lid_status(why);
+                        note(logo, why.text());
+                    }
+                    said = Some(why);
+                }
+            }
             continue;
         }
         let mut app_gone = false;
-        let ended = blink(logo, marker, &style.moves(), |time| {
+        let grace = match released {
+            Some(at) if signals.now().duration_since(at) < LOAN_LINGER => Duration::ZERO,
+            _ => LOAN_GRACE,
+        };
+        let (ended, claimed) = blink_after(logo, marker, &style.moves(), grace, |time| {
             let deadline = signals.now() + time;
             loop {
                 let left = deadline.saturating_duration_since(signals.now());
@@ -757,6 +1146,9 @@ fn watch(logo: &impl Logo, marker: &Marker, styles: BlinkStyles, signals: &mut i
                     app_gone = true;
                     return true;
                 }
+                if signals.slept() && logo.lid_closed() == Some(true) {
+                    logo.lid_status(LidStatus::Slept);
+                }
                 if settled.update(styles.pick(signals.activity()), signals.now()) != style {
                     return true;
                 }
@@ -766,6 +1158,10 @@ fn watch(logo: &impl Logo, marker: &Marker, styles: BlinkStyles, signals: &mut i
             return;
         }
         declined = ended == Ended::Declined;
+        released = claimed.then(|| signals.now());
+        // The blink may have said something since: say it again once it ends.
+        said = None;
+        lid_look_due = signals.now();
     }
 }
 
@@ -784,6 +1180,11 @@ pub struct Watcher {
 }
 
 impl Watcher {
+    /// A child runs.
+    pub fn watching(&self) -> bool {
+        self.current.is_some()
+    }
+
     /// Watch this server with this login in these styles, or nothing. A child
     /// for anything else ends first: its pipe closes with the old value. It is
     /// back to normal well before the next child looks, which takes `SETTLE`.
@@ -826,6 +1227,40 @@ fn spawn_child(connection: Connection) -> Option<(Connection, ChildStdin)> {
     Some((connection, stdin))
 }
 
+/// Where the child leaves what the closed lid did last (`Logo::lid_status`):
+/// next to the app's settings, like the marker.
+fn lid_status_path() -> Option<PathBuf> {
+    dirs::config_dir().map(|dir| dir.join("Codeman").join("logo-lid"))
+}
+
+/// The line under View > Blink Apple Logo while no child runs.
+pub const LID_NOT_WATCHED: &str = "Lid Closed: not watched (Blink Apple Logo off, or no server open)";
+
+/// The line under View > Blink Apple Logo.
+pub fn lid_status_line() -> String {
+    let last = lid_status_path()
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|text| text.lines().next().map(str::to_owned))
+        .filter(|line| !line.is_empty());
+    format!("Lid Closed: {}", last.as_deref().unwrap_or("not seen yet"))
+}
+
+/// Calls `changed` with the line whenever the child writes a new one. A thread
+/// that reads one small file every two seconds, for the life of the app.
+pub fn watch_lid_status(changed: impl Fn(String) + Send + 'static) {
+    std::thread::spawn(move || {
+        let mut shown = lid_status_line();
+        loop {
+            std::thread::sleep(Duration::from_secs(2));
+            let line = lid_status_line();
+            if line != shown {
+                shown = line;
+                changed(shown.clone());
+            }
+        }
+    });
+}
+
 #[cfg(target_os = "macos")]
 pub use system::{available, blink_main, driven_elsewhere, recover_at_launch, switched_off};
 
@@ -854,12 +1289,13 @@ pub fn driven_elsewhere() -> bool {
 
 #[cfg(target_os = "macos")]
 mod system {
-    use super::{recover, watch, Connection, Logo, Marker, Signals, MODE_OFF};
+    use super::{recover, watch, Connection, LidStatus, Logo, Marker, Signals, MODE_OFF};
     use crate::agents::{Activity, Poll, Poller, POLL_EVERY};
     use objc2::rc::{autoreleasepool, Retained};
     use objc2::runtime::{AnyClass, AnyObject, Bool};
     use objc2::{msg_send, sel};
     use objc2_foundation::{ns_string, NSBundle, NSDictionary, NSNumber, NSString};
+    use std::ffi::{c_char, c_void};
     use std::io::Read;
     use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
     use std::sync::{Arc, Mutex, OnceLock};
@@ -876,11 +1312,36 @@ mod system {
         fn CGDisplayIsAsleep(display: u32) -> u32;
     }
 
+    #[link(name = "IOKit", kind = "framework")]
+    extern "C" {
+        fn IOPSCopyPowerSourcesInfo() -> *const c_void;
+        fn IOPSGetProvidingPowerSourceType(snapshot: *const c_void) -> *const c_void;
+        fn IOServiceMatching(name: *const c_char) -> *mut c_void;
+        fn IOServiceGetMatchingService(main_port: u32, matching: *mut c_void) -> u32;
+        fn IORegistryEntryCreateCFProperty(
+            entry: u32,
+            key: *const c_void,
+            allocator: *const c_void,
+            options: u32,
+        ) -> *const c_void;
+        fn IOObjectRelease(object: u32) -> i32;
+    }
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        fn CFRelease(object: *const c_void);
+        fn CFGetTypeID(object: *const c_void) -> usize;
+        fn CFBooleanGetTypeID() -> usize;
+        fn CFBooleanGetValue(boolean: *const c_void) -> u8;
+    }
+
     struct SystemLogo {
         client: Retained<AnyObject>,
         /// The keyboard backlights, for telling them apart from the logo. Empty if
         /// this macOS has no way to: the keyboard then dims with each dark beat.
         keyboards: Vec<u64>,
+        /// The client can tell one display alone (`setProperty:withKey:andDisplay:`).
+        per_display: bool,
     }
 
     impl SystemLogo {
@@ -908,8 +1369,29 @@ mod system {
                 } else {
                     Vec::new()
                 };
-                client.map(|client| SystemLogo { client, keyboards })
+                let per_display = class.instance_method(sel!(setProperty:withKey:andDisplay:)).is_some();
+                client.map(|client| SystemLogo {
+                    client,
+                    keyboards,
+                    per_display,
+                })
             })
+        }
+
+        /// The displays the daemon has a container for (`CBDisplayList`), read
+        /// each time since displays come and go. The IDs are CoreGraphics's.
+        fn display_ids(&self) -> Vec<u64> {
+            let Some(list) = self.property(ns_string!("CBDisplayList")) else {
+                return Vec::new();
+            };
+            let Some(list) = list.downcast_ref::<NSDictionary>() else {
+                return Vec::new();
+            };
+            // SAFETY: an NSDictionary answers objectForKey:, with nil for a key it
+            // does not have.
+            let ids: Option<Retained<AnyObject>> =
+                unsafe { msg_send![list, objectForKey: ns_string!("CBDisplayDeviceIDs")] };
+            ids.map_or(Vec::new(), |ids| numbers(&ids))
         }
 
         fn property(&self, key: &NSString) -> Option<Retained<AnyObject>> {
@@ -951,16 +1433,21 @@ mod system {
         let Some(ids): Option<Retained<AnyObject>> = (unsafe { msg_send![&*client, copyKeyboardBacklightIDs] }) else {
             return Vec::new();
         };
+        numbers(&ids)
+    }
+
+    /// The numbers in an array, or none if it is not an array.
+    fn numbers(ids: &AnyObject) -> Vec<u64> {
         // SAFETY: an array answers count and objectAtIndex: below its count; it is
         // checked to be one first.
-        let is_array: Bool = unsafe { msg_send![&*ids, isKindOfClass: AnyClass::get(c"NSArray")] };
+        let is_array: Bool = unsafe { msg_send![ids, isKindOfClass: AnyClass::get(c"NSArray")] };
         if !is_array.as_bool() {
             return Vec::new();
         }
-        let count: usize = unsafe { msg_send![&*ids, count] };
+        let count: usize = unsafe { msg_send![ids, count] };
         (0..count)
             .filter_map(|i| {
-                let id: Option<Retained<AnyObject>> = unsafe { msg_send![&*ids, objectAtIndex: i] };
+                let id: Option<Retained<AnyObject>> = unsafe { msg_send![ids, objectAtIndex: i] };
                 Some(id?.downcast_ref::<NSNumber>()?.as_u64())
             })
             .collect()
@@ -1020,6 +1507,170 @@ mod system {
         fn driven_elsewhere(&self) -> bool {
             driven_elsewhere()
         }
+
+        fn steps_aside_elsewhere(&self) -> bool {
+            steps_aside_elsewhere()
+        }
+
+        fn lid_closed(&self) -> Option<bool> {
+            lid_sensor()
+        }
+
+        fn lid_handled(&self) -> Option<bool> {
+            autoreleasepool(|_| {
+                let value = self.property(ns_string!("CBClamshellState"))?;
+                Some(value.downcast_ref::<NSNumber>()?.as_bool())
+            })
+        }
+
+        fn tell_lid(&self, open: bool) -> bool {
+            if open && self.keyboards.is_empty() {
+                return false;
+            }
+            autoreleasepool(|_| {
+                let closed = NSNumber::new_bool(true);
+                if !open {
+                    return self.set(&closed, ns_string!("ClamshellUpdate"));
+                }
+                if !self.set(&NSNumber::new_bool(false), ns_string!("ClamshellUpdate")) {
+                    return false;
+                }
+                // The answers below are not read: LogoLight's measured override
+                // does not read them either.
+                for &id in &self.keyboards {
+                    // SAFETY: the method was checked in `open` (there are keyboards
+                    // only if it exists). It takes an object, a string and a 64-bit
+                    // keyboard ID and answers a BOOL.
+                    let _: bool = unsafe {
+                        msg_send![&*self.client, setProperty: &*closed, withKey: ns_string!("ClamshellUpdate"), keyboardID: id]
+                    };
+                }
+                // Each display's own modules (brightness, True Tone) too: told the
+                // lid is open, True Tone adapts an external display to the covered
+                // light sensor. The logo's module is in no display's container.
+                if self.per_display {
+                    for id in self.display_ids() {
+                        // SAFETY: the method was checked in `open`. It takes an object,
+                        // a string and a 64-bit display ID and answers a BOOL.
+                        let _: bool = unsafe {
+                            msg_send![&*self.client, setProperty: &*closed, withKey: ns_string!("ClamshellUpdate"), andDisplay: id]
+                        };
+                    }
+                }
+                true
+            })
+        }
+
+        fn lid_status(&self, status: LidStatus) {
+            let text = format!("{} ({})\n{}\n", status.text(), clock(), self.describe());
+            if let Some(path) = super::lid_status_path() {
+                let tmp = path.with_extension("tmp");
+                // Written whole and renamed, so the app never reads half of it.
+                let written = path.parent().is_some_and(|dir| std::fs::create_dir_all(dir).is_ok())
+                    && std::fs::write(&tmp, text).is_ok();
+                if written {
+                    let _ = std::fs::rename(&tmp, &path);
+                }
+            }
+        }
+
+        fn on_battery(&self) -> bool {
+            on_battery()
+        }
+
+        fn describe(&self) -> String {
+            autoreleasepool(|_| {
+                format!(
+                    "factor {:?}, FinalNits {:?}, lid sensor {:?}, CBClamshellState {:?}, built-in display on {}, other displays on {}, displays told {:?}, on battery {}",
+                    self.pwm(ns_string!("Factor")),
+                    self.pwm(ns_string!("FinalNits")),
+                    lid_sensor(),
+                    self.lid_handled(),
+                    built_in_display_awake(),
+                    other_displays_awake(),
+                    self.per_display.then(|| self.display_ids()),
+                    on_battery()
+                )
+            })
+        }
+    }
+
+    /// The lid sensor: `AppleClamshellState` on the power management root, the
+    /// same entry Keep This Mac Awake reads to tell a MacBook.
+    fn lid_sensor() -> Option<bool> {
+        let key = NSString::from_str("AppleClamshellState");
+        // SAFETY: IOServiceMatching returns a dictionary that
+        // IOServiceGetMatchingService consumes; the service is released below.
+        // IORegistryEntryCreateCFProperty returns an owned CFTypeRef or NULL, takes
+        // the NSString as its toll-free bridged CFString, and is released here; its
+        // type is checked before it is read as a CFBoolean.
+        unsafe {
+            let matching = IOServiceMatching(c"IOPMrootDomain".as_ptr());
+            if matching.is_null() {
+                return None;
+            }
+            let root = IOServiceGetMatchingService(0, matching);
+            if root == 0 {
+                return None;
+            }
+            let value = IORegistryEntryCreateCFProperty(root, Retained::as_ptr(&key).cast(), std::ptr::null(), 0);
+            IOObjectRelease(root);
+            if value.is_null() {
+                return None;
+            }
+            let closed = (CFGetTypeID(value) == CFBooleanGetTypeID()).then(|| CFBooleanGetValue(value) != 0);
+            CFRelease(value);
+            closed
+        }
+    }
+
+    /// The local time as hours and minutes, for the status line.
+    fn clock() -> String {
+        // SAFETY: time(NULL) answers the time; localtime_r fills the struct it is
+        // given and answers NULL on failure.
+        unsafe {
+            let now = libc::time(std::ptr::null_mut());
+            let mut tm: libc::tm = std::mem::zeroed();
+            if libc::localtime_r(&now, &mut tm).is_null() {
+                return String::new();
+            }
+            format!("{:02}:{:02}", tm.tm_hour, tm.tm_min)
+        }
+    }
+
+    /// How many displays other than the built-in one are on (an external display
+    /// that sleeps does not count).
+    fn other_displays_awake() -> usize {
+        let mut displays = [0u32; 16];
+        let mut count = 0u32;
+        // SAFETY: the buffer holds 16 IDs and the call is told so.
+        if unsafe { CGGetOnlineDisplayList(16, displays.as_mut_ptr(), &mut count) } != 0 {
+            return 0;
+        }
+        displays[..(count as usize).min(displays.len())]
+            .iter()
+            // SAFETY: both take any display ID and answer a boolean.
+            .filter(|&&display| unsafe { CGDisplayIsBuiltin(display) == 0 && CGDisplayIsAsleep(display) == 0 })
+            .count()
+    }
+
+    /// "Battery Power" as the source in use; "AC Power", "UPS Power" and no
+    /// answer count as the adapter. The same reading as Keep This Mac Awake's.
+    fn on_battery() -> bool {
+        // SAFETY: IOPSCopyPowerSourcesInfo returns an owned CFTypeRef or NULL,
+        // released below. IOPSGetProvidingPowerSourceType returns a CFStringRef
+        // owned by that snapshot (the Get rule), read before the release; a
+        // CFString is toll-free bridged to NSString.
+        unsafe {
+            let snapshot = IOPSCopyPowerSourcesInfo();
+            if snapshot.is_null() {
+                return false;
+            }
+            let kind = IOPSGetProvidingPowerSourceType(snapshot);
+            let battery = !kind.is_null() && (*kind.cast::<NSString>()).to_string() == "Battery Power";
+            CFRelease(snapshot);
+            battery
+        }
     }
 
     /// Whether the built-in display is on. A closed lid takes it off the list.
@@ -1040,25 +1691,96 @@ mod system {
             .is_some_and(|&display| unsafe { CGDisplayIsAsleep(display) } == 0)
     }
 
-    /// Whether LogoLight runs, which drives the logo with the same fades.
+    /// Whether a LogoLight runs that drives the logo with the same fades and
+    /// would fight a blink: one from before it learnt to step aside.
     pub fn driven_elsewhere() -> bool {
-        running(LOGOLIGHT)
+        logolight() == Some(false)
     }
 
-    /// Whether a process of this name runs (the name the kernel keeps, at most
-    /// 32 bytes, which LogoLight's is well inside).
-    fn running(wanted: &[u8]) -> bool {
+    /// Whether a LogoLight runs that steps aside while the marker says a blink
+    /// runs (`LogoLightStepsAsideForCodeman` in its Info.plist).
+    pub fn steps_aside_elsewhere() -> bool {
+        logolight() == Some(true)
+    }
+
+    /// LogoLight's own key for its side of the contract (its `CodemanLoan`).
+    const STEPS_ASIDE_KEY: &str = "LogoLightStepsAsideForCodeman";
+
+    /// Whether LogoLight runs (None if not), and if so whether it steps aside.
+    /// Its Info.plist is read once per process: an update relaunches it.
+    fn logolight() -> Option<bool> {
+        static SEEN: Mutex<Option<(libc::pid_t, bool)>> = Mutex::new(None);
+        let pid = find(LOGOLIGHT)?;
+        if let Some((seen, answer)) = SEEN.lock().ok().and_then(|seen| *seen) {
+            if seen == pid {
+                return Some(answer);
+            }
+        }
+        let answer = steps_aside(pid);
+        if let Ok(mut seen) = SEEN.lock() {
+            *seen = Some((pid, answer));
+        }
+        Some(answer)
+    }
+
+    /// Whether the app bundle this process runs from says it steps aside. Read
+    /// from the file each time, never through NSBundle, which keeps what it read
+    /// for a path for the life of this process.
+    fn steps_aside(pid: libc::pid_t) -> bool {
+        let mut path = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+        // SAFETY: the buffer is as long as the call is told, and the answer is
+        // how much of it the path filled.
+        let len = unsafe { libc::proc_pidpath(pid, path.as_mut_ptr().cast(), path.len() as u32) };
+        let Some(path) = usize::try_from(len)
+            .ok()
+            .and_then(|len| std::str::from_utf8(&path[..len]).ok())
+        else {
+            return false;
+        };
+        let Some(app) = std::path::Path::new(path)
+            .ancestors()
+            .find(|dir| dir.extension().is_some_and(|ext| ext == "app"))
+        else {
+            return false;
+        };
+        let info = app.join("Contents").join("Info.plist");
+        let Some(info) = info.to_str() else {
+            return false;
+        };
+        autoreleasepool(|_| {
+            let Some(class) = AnyClass::get(c"NSDictionary") else {
+                return false;
+            };
+            let info = NSString::from_str(info);
+            // SAFETY: NSDictionary's class method takes a path and answers the
+            // property list there (XML or binary), or nil.
+            let plist: Option<Retained<AnyObject>> = unsafe { msg_send![class, dictionaryWithContentsOfFile: &*info] };
+            let Some(plist) = plist else { return false };
+            let Some(plist) = plist.downcast_ref::<NSDictionary>() else {
+                return false;
+            };
+            let key = NSString::from_str(STEPS_ASIDE_KEY);
+            // SAFETY: an NSDictionary answers objectForKey:, with nil for a key it
+            // does not have.
+            let value: Option<Retained<AnyObject>> = unsafe { msg_send![plist, objectForKey: &*key] };
+            value.and_then(|value| value.downcast_ref::<NSNumber>().map(|n| n.as_i64() >= 1)) == Some(true)
+        })
+    }
+
+    /// The first process of this name (the name the kernel keeps, at most 32
+    /// bytes, which LogoLight's is well inside).
+    fn find(wanted: &[u8]) -> Option<libc::pid_t> {
         // SAFETY: with no buffer it answers how many processes there are.
         let count = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
         if count <= 0 {
-            return false;
+            return None;
         }
         let mut pids = vec![0 as libc::pid_t; count as usize + 32];
         let bytes = (pids.len() * std::mem::size_of::<libc::pid_t>()) as libc::c_int;
         // SAFETY: the buffer is `bytes` long, and the answer is how many it filled.
         let filled = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast(), bytes) };
         pids.truncate(filled.max(0) as usize);
-        pids.iter().any(|&pid| {
+        pids.into_iter().find(|&pid| {
             let mut name = [0u8; 64];
             // SAFETY: the buffer is 64 bytes, and the answer is the name's length.
             let len = unsafe { libc::proc_name(pid, name.as_mut_ptr().cast(), name.len() as u32) };
@@ -1090,11 +1812,25 @@ mod system {
     struct Live {
         pipe_closed: Receiver<()>,
         activity: Arc<Mutex<Activity>>,
+        slept: bool,
     }
+
+    /// More wall-clock time than this, past the monotonic time, in one wait means
+    /// the Mac slept: `Instant` stops while it sleeps, the wall clock does not.
+    const SLEPT_GAP: Duration = Duration::from_secs(10);
 
     impl Signals for Live {
         fn wait(&mut self, time: Duration) -> bool {
-            !matches!(self.pipe_closed.recv_timeout(time), Err(RecvTimeoutError::Timeout))
+            let (wall, monotonic) = (std::time::SystemTime::now(), Instant::now());
+            let gone = !matches!(self.pipe_closed.recv_timeout(time), Err(RecvTimeoutError::Timeout));
+            if wall.elapsed().unwrap_or_default() > monotonic.elapsed() + SLEPT_GAP {
+                self.slept = true;
+            }
+            gone
+        }
+
+        fn slept(&mut self) -> bool {
+            std::mem::take(&mut self.slept)
         }
 
         fn activity(&self) -> Activity {
@@ -1166,7 +1902,11 @@ mod system {
         let found = activity.clone();
         std::thread::spawn(move || poll_until_refused(poller, &found));
 
-        let mut signals = Live { pipe_closed, activity };
+        let mut signals = Live {
+            pipe_closed,
+            activity,
+            slept: false,
+        };
         watch(&logo, &Marker::default_location(), styles, &mut signals);
         std::process::exit(0)
     }
@@ -1182,15 +1922,23 @@ mod system {
         fn what_this_mac_answers() {
             println!("logo available: {}", available());
             println!("built-in display awake: {}", built_in_display_awake());
+            println!("other displays awake: {}", other_displays_awake());
+            println!("on battery: {}", on_battery());
+            println!("lid sensor: {:?}", lid_sensor());
+            println!("clock: {}", clock());
             println!("driven elsewhere: {}", driven_elsewhere());
-            println!("finds the shell that ran this (bash): {}", running(b"bash"));
+            println!("steps aside elsewhere: {}", steps_aside_elsewhere());
+            println!("finds the shell that ran this (bash): {}", find(b"bash").is_some());
             println!("keyboard backlight IDs: {:?}", keyboard_ids());
             match SystemLogo::open() {
                 Some(logo) => println!(
-                    "mode {:?}, factor {:?}, keyboards the client can reach {:?}",
+                    "mode {:?}, factor {:?}, lid handled {:?}, keyboards the client can reach {:?}, displays {:?} (one alone: {})",
                     logo.mode(),
                     logo.factor(),
-                    logo.keyboards
+                    logo.lid_handled(),
+                    logo.keyboards,
+                    logo.display_ids(),
+                    logo.per_display
                 ),
                 None => println!("no BrightnessSystemClient"),
             }
@@ -1256,6 +2004,9 @@ mod tests {
         Duration(f64),
         Heading(bool),
         Keyboards(bool),
+        /// `ClamshellUpdate`: true is "the lid is open" to the logo (and closed
+        /// to the keyboards and the displays), false is "closed" to everything.
+        Lid(bool),
     }
 
     #[derive(Debug, Clone, Copy)]
@@ -1268,12 +2019,25 @@ mod tests {
 
     /// A `corebrightnessd` that moves like the real one: in frames, on the spring,
     /// starting a little after the write, only on a change of direction, and with
-    /// a rise from exactly dark held back by `gate`. Asleep, the logo is dark.
+    /// a rise from exactly dark held back by `gate`. Asleep, the logo is dark,
+    /// and so it is under a closed lid unless told the lid is open, which lets
+    /// it move if `through_lid`.
     struct FakeLogo {
         now: Rc<Cell<Duration>>,
         mode: Cell<i64>,
         awake: Cell<bool>,
+        /// The lid sensor.
+        lid: Cell<Option<bool>>,
+        /// `CBClamshellState`: the daemon has handled the closed lid.
+        handled: Cell<Option<bool>>,
+        /// What the logo was last told about the lid (true: open).
+        told_open: Cell<bool>,
+        through_lid: Cell<bool>,
+        statuses: RefCell<Vec<LidStatus>>,
+        keyboards_reachable: Cell<bool>,
+        battery: Cell<bool>,
         elsewhere: Cell<bool>,
+        aside: Cell<bool>,
         gate: Cell<Duration>,
         refuse_writes: Cell<bool>,
         lit: Cell<bool>,
@@ -1290,7 +2054,15 @@ mod tests {
                 now: Rc::new(Cell::new(Duration::ZERO)),
                 mode: Cell::new(mode),
                 awake: Cell::new(true),
+                lid: Cell::new(Some(false)),
+                handled: Cell::new(Some(false)),
+                told_open: Cell::new(false),
+                through_lid: Cell::new(true),
+                statuses: RefCell::new(Vec::new()),
+                keyboards_reachable: Cell::new(true),
+                battery: Cell::new(false),
                 elsewhere: Cell::new(false),
+                aside: Cell::new(false),
                 gate: Cell::new(Duration::ZERO),
                 refuse_writes: Cell::new(false),
                 lit: Cell::new(true),
@@ -1308,6 +2080,52 @@ mod tests {
 
         fn advance(&self, time: Duration) {
             self.now.set(self.now.get() + time);
+        }
+
+        /// The lid closes and the daemon handles it: the built-in display goes,
+        /// and every module is told the lid is closed.
+        fn close_the_lid(&self) {
+            self.awake.set(false);
+            self.lid.set(Some(true));
+            self.handled.set(Some(true));
+            self.told_open.set(false);
+        }
+
+        /// The lid opens: the daemon tells every module so, and the display is on.
+        fn open_the_lid(&self) {
+            self.awake.set(true);
+            self.lid.set(Some(false));
+            self.handled.set(Some(false));
+            self.told_open.set(false);
+        }
+
+        /// The logo can be seen: the lid is open and the display on, or the lid
+        /// is closed and the logo was told it is open, and that works on this Mac.
+        fn shown(&self) -> bool {
+            if self.lid.get() == Some(true) {
+                self.told_open.get() && self.through_lid.get()
+            } else {
+                self.awake.get()
+            }
+        }
+
+        /// The `ClamshellUpdate` writes.
+        fn lid_writes(&self) -> Vec<W> {
+            self.writes().into_iter().filter(|w| matches!(w, W::Lid(_))).collect()
+        }
+
+        fn statuses(&self) -> Vec<LidStatus> {
+            self.statuses.borrow().clone()
+        }
+
+        /// The writes made from `from` on.
+        fn writes_since(&self, from: Duration) -> Vec<W> {
+            self.writes
+                .borrow()
+                .iter()
+                .filter(|&&(at, _)| at >= from)
+                .map(|&(_, w)| w)
+                .collect()
         }
 
         fn level_at(&self, at: Duration) -> f64 {
@@ -1379,7 +2197,7 @@ mod tests {
         }
 
         fn factor(&self) -> Option<f64> {
-            Some(if self.awake.get() && self.mode.get() == MODE_AUTO {
+            Some(if self.shown() && self.mode.get() == MODE_AUTO {
                 self.level()
             } else {
                 0.0
@@ -1428,8 +2246,8 @@ mod tests {
 
         fn set_keyboards_lit(&self, lit: bool) {
             assert!(
-                self.awake.get() || !lit,
-                "a keyboard told to light while the display sleeps"
+                (self.awake.get() && self.lid.get() != Some(true)) || !lit,
+                "a keyboard told to light while the display sleeps or the lid is closed"
             );
             self.record(W::Keyboards(lit));
         }
@@ -1440,6 +2258,35 @@ mod tests {
 
         fn driven_elsewhere(&self) -> bool {
             self.elsewhere.get()
+        }
+
+        fn steps_aside_elsewhere(&self) -> bool {
+            self.aside.get()
+        }
+
+        fn lid_closed(&self) -> Option<bool> {
+            self.lid.get()
+        }
+
+        fn lid_handled(&self) -> Option<bool> {
+            self.handled.get()
+        }
+
+        fn tell_lid(&self, open: bool) -> bool {
+            if self.refuse_writes.get() || (open && !self.keyboards_reachable.get()) {
+                return false;
+            }
+            self.record(W::Lid(open));
+            self.told_open.set(open);
+            true
+        }
+
+        fn lid_status(&self, status: LidStatus) {
+            self.statuses.borrow_mut().push(status);
+        }
+
+        fn on_battery(&self) -> bool {
+            self.battery.get()
         }
     }
 
@@ -1684,6 +2531,178 @@ mod tests {
     }
 
     #[test]
+    fn an_app_that_steps_aside_is_given_the_marker_and_a_moment_first() {
+        let logo = FakeLogo::new(MODE_AUTO);
+        logo.aside.set(true);
+        let (marker, path) = temp_marker("aside");
+        let mut first = None;
+        let ended = blink(&logo, &marker, &BlinkStyle::Calm.moves(), |time| {
+            if first.is_none() {
+                first = Some((time, logo.writes().len(), path.exists()));
+            }
+            logo.advance(time);
+            logo.now.get() >= secs(10)
+        });
+        assert_eq!(ended, Ended::Stopped);
+        assert_eq!(
+            first,
+            Some((LOAN_GRACE, 0, true)),
+            "the marker first, then the wait, then the first write"
+        );
+        assert!(logo.falls() >= 2, "it blinks after the wait");
+        assert_eq!(logo.settled_level(), 1.0);
+        assert!(!path.exists());
+
+        // With no such app, the first write comes straight away.
+        let logo = FakeLogo::new(MODE_AUTO);
+        let (marker, _) = temp_marker("no-aside");
+        let mut first_writes = None;
+        blink(&logo, &marker, &BlinkStyle::Calm.moves(), |_| {
+            first_writes.get_or_insert(logo.writes().len());
+            true
+        });
+        assert!(first_writes.is_some_and(|writes| writes > 0));
+    }
+
+    #[test]
+    fn the_app_quitting_during_that_moment_leaves_the_logo_untouched() {
+        let logo = FakeLogo::new(MODE_AUTO);
+        logo.aside.set(true);
+        let (marker, path) = temp_marker("aside-quit");
+        let ended = blink(&logo, &marker, &BlinkStyle::Calm.moves(), |_| true);
+        assert_eq!(ended, Ended::Stopped);
+        assert_eq!(logo.writes(), []);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn the_marker_names_the_blinker() {
+        let logo = FakeLogo::new(MODE_AUTO);
+        let (marker, path) = temp_marker("names");
+        let mut seen = Vec::new();
+        run_until(&logo, &marker, BlinkStyle::Calm, secs(5), |_, _| {
+            seen.push(std::fs::read_to_string(&path).ok());
+        });
+        let pid = format!("{}\n", std::process::id());
+        assert!(!seen.is_empty());
+        assert!(
+            seen.iter().all(|text| text.as_deref() == Some(pid.as_str())),
+            "{seen:?}"
+        );
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn no_marker_while_the_blink_waits_for_the_display() {
+        let logo = FakeLogo::new(MODE_AUTO);
+        logo.awake.set(false);
+        let (marker, path) = temp_marker("waits");
+        let (mut while_asleep, mut once_awake) = (false, false);
+        run_until(&logo, &marker, BlinkStyle::Calm, secs(10), |logo, now| {
+            if logo.awake.get() {
+                once_awake |= path.exists();
+            } else {
+                while_asleep |= path.exists();
+            }
+            logo.awake.set(now >= secs(4));
+        });
+        assert!(
+            !while_asleep,
+            "a LogoLight with the lid closed is not paused for nothing"
+        );
+        assert!(once_awake);
+        assert!(!path.exists());
+    }
+
+    /// The times of the writes made from `from` to `to`.
+    fn write_times(logo: &FakeLogo, from: Duration, to: Duration) -> Vec<Duration> {
+        logo.writes
+            .borrow()
+            .iter()
+            .map(|&(at, _)| at)
+            .filter(|&at| at >= from && at < to)
+            .collect()
+    }
+
+    #[test]
+    fn a_blink_right_after_another_does_not_wait_for_logolight_again() {
+        let styles = BlinkStyles {
+            waiting: BlinkStyle::Fast,
+            ..WORK
+        };
+        let logo = FakeLogo::new(MODE_AUTO);
+        logo.aside.set(true);
+        let (marker, path) = temp_marker("loan-linger");
+        let mut script = Script::with(&logo, &[(0, 20_000, working()), (20_000, 40_000, waiting())], 45_000);
+        watch(&logo, &marker, styles, &mut script);
+        // The first blink waits: the work settles, the marker goes down, then the wait.
+        let first = write_times(&logo, Duration::ZERO, secs(60))[0];
+        assert!(first >= SETTLE + LOAN_GRACE, "first write at {first:?}");
+        // The change to waiting ends it and starts the next, with LogoLight still paused.
+        let around = write_times(&logo, secs(22), secs(30));
+        let gap = around.windows(2).map(|w| w[1] - w[0]).max().expect("writes");
+        assert!(gap < LOAN_GRACE, "a pause of {gap:?} at the change");
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn a_blink_after_a_rest_waits_for_logolight_again() {
+        let logo = FakeLogo::new(MODE_AUTO);
+        logo.aside.set(true);
+        let (marker, _) = temp_marker("loan-again");
+        let mut script = Script::new(&logo, &[(0, 10_000), (20_000, 30_000)], 35_000);
+        watch(&logo, &marker, WORK, &mut script);
+        // The first ends once the rest has settled; the second waits like the first.
+        let second = write_times(&logo, secs(15), secs(60));
+        assert!(
+            second[0] >= secs(20) + SETTLE + LOAN_GRACE,
+            "its first write at {:?}",
+            second[0]
+        );
+    }
+
+    #[test]
+    fn under_the_closed_lid_the_marker_and_the_wait_come_before_the_logo_is_told() {
+        let logo = FakeLogo::new(MODE_AUTO);
+        logo.aside.set(true);
+        logo.close_the_lid();
+        let (marker, path) = temp_marker("loan-lid");
+        let mut first = None;
+        blink(&logo, &marker, &BlinkStyle::Calm.moves(), |time| {
+            if first.is_none() {
+                first = Some((time, logo.writes().len(), path.exists()));
+            }
+            logo.advance(time);
+            logo.now.get() >= secs(20)
+        });
+        assert_eq!(first, Some((LOAN_GRACE, 0, true)));
+        assert_eq!(
+            logo.writes().first(),
+            Some(&W::Lid(true)),
+            "then the lid, then the blink"
+        );
+        assert_eq!(logo.statuses(), [LidStatus::Blinking]);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn recover_leaves_the_closed_lid_to_a_logolight() {
+        for (elsewhere, aside) in [(true, false), (false, true)] {
+            let logo = FakeLogo::new(MODE_AUTO);
+            logo.elsewhere.set(elsewhere);
+            logo.aside.set(aside);
+            let (marker, path) = temp_marker("lid-logolight");
+            assert!(marker.set());
+            logo.close_the_lid();
+            // LogoLight lights the logo under the lid.
+            logo.told_open.set(true);
+            recover(&logo, &marker, &Marker(None));
+            assert_eq!(logo.lid_writes(), [], "elsewhere {elsewhere}, aside {aside}");
+            assert!(path.exists(), "tried again at a launch with the lid open");
+        }
+    }
+
+    #[test]
     fn a_logo_switched_off_during_a_blink_stays_off() {
         let logo = FakeLogo::new(MODE_AUTO);
         let (marker, path) = temp_marker("off-during");
@@ -1754,6 +2773,292 @@ mod tests {
         assert!(!path.exists());
     }
 
+    /// Run `style` with the lid closed from the start, until `stop_at`.
+    fn under_the_lid(logo: &FakeLogo, style: BlinkStyle, stop_at: Duration) -> Ended {
+        logo.close_the_lid();
+        let (marker, _) = temp_marker("under-lid");
+        run(logo, &marker, style, stop_at)
+    }
+
+    #[test]
+    fn with_the_lid_closed_it_blinks_on_and_the_keyboards_stay_dark() {
+        for style in [BlinkStyle::Breathe, BlinkStyle::Calm, BlinkStyle::Alarm] {
+            let logo = FakeLogo::new(MODE_AUTO);
+            let (marker, path) = temp_marker("lid-blinks");
+            let mut closed_at = None;
+            run_until(&logo, &marker, style, secs(60), |logo, now| {
+                if now >= secs(10) && closed_at.is_none() {
+                    logo.close_the_lid();
+                    closed_at = Some(now);
+                }
+            });
+            let since = logo.writes_since(closed_at.unwrap());
+            let told = since
+                .iter()
+                .position(|w| *w == W::Lid(true))
+                .expect("told the lid is open");
+            assert_eq!(
+                since[..told].iter().filter(|w| **w == W::Keyboards(false)).count(),
+                1,
+                "{style:?}: the keyboards are told the display is off first"
+            );
+            let falls = since[told..].iter().filter(|w| **w == W::Heading(false)).count();
+            assert!(falls >= 5, "{style:?}: it blinks on under the lid ({falls} Blanks)");
+            assert!(
+                !since[told..].contains(&W::Keyboards(true)),
+                "{style:?}: no keyboard lit under the closed lid"
+            );
+            // Told once, and at the end: back to normal, then the lid is closed
+            // again, so it goes dark.
+            assert_eq!(logo.lid_writes(), [W::Lid(true), W::Lid(false)], "{style:?}");
+            assert_eq!(
+                &since[since.len() - 2..],
+                [W::Heading(true), W::Lid(false)],
+                "{style:?}"
+            );
+            assert_eq!(logo.statuses(), [LidStatus::Blinking], "{style:?}");
+            assert_eq!(logo.last_duration(), Some(0.0));
+            assert!(!path.exists(), "{style:?}");
+        }
+    }
+
+    #[test]
+    fn the_logo_is_told_once_the_daemon_has_handled_the_lid() {
+        // The sensor says closed first; the daemon's own update would undo ours.
+        let logo = FakeLogo::new(MODE_AUTO);
+        logo.awake.set(false);
+        logo.lid.set(Some(true));
+        logo.handled.set(Some(false));
+        let (marker, _) = temp_marker("lid-late");
+        run_until(&logo, &marker, BlinkStyle::Calm, secs(20), |logo, now| {
+            if now >= secs(1) {
+                logo.handled.set(Some(true));
+            }
+        });
+        let told_at = |logo: &FakeLogo| {
+            logo.writes
+                .borrow()
+                .iter()
+                .find(|(_, w)| *w == W::Lid(true))
+                .map(|&(at, _)| at)
+        };
+        let first = told_at(&logo).expect("told once the daemon had it");
+        assert!(first >= secs(1) && first < secs(2), "told at {first:?}");
+        assert_eq!(logo.statuses(), [LidStatus::Blinking]);
+
+        // A daemon that never says so (or cannot) does not hold the logo up for long.
+        for handled in [Some(false), None] {
+            let logo = FakeLogo::new(MODE_AUTO);
+            logo.awake.set(false);
+            logo.lid.set(Some(true));
+            logo.handled.set(handled);
+            let (marker, _) = temp_marker("lid-unhandled");
+            run(&logo, &marker, BlinkStyle::Calm, secs(20));
+            let first = told_at(&logo).expect("told anyway");
+            assert!(
+                first <= LOOK_EVERY * LID_HANDLED_LOOKS,
+                "{handled:?}: told at {first:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_closed_lid_that_keeps_the_logo_dark_says_so_and_tries_again_now_and_then() {
+        let logo = FakeLogo::new(MODE_AUTO);
+        logo.through_lid.set(false);
+        let (marker, path) = temp_marker("lid-dark");
+        logo.close_the_lid();
+        let mut tells_at_a_minute = None;
+        run_until(&logo, &marker, BlinkStyle::Calm, secs(130), |logo, now| {
+            if now >= secs(60) && tells_at_a_minute.is_none() {
+                tells_at_a_minute = Some(logo.lid_writes().len());
+            }
+        });
+        assert_eq!(logo.statuses(), [LidStatus::StayedDark]);
+        let lid = logo.lid_writes();
+        assert!(
+            lid[..lid.len() - 1].iter().all(|w| *w == W::Lid(true)),
+            "never told closed in between: {lid:?}"
+        );
+        assert_eq!(lid.last(), Some(&W::Lid(false)), "put back at the end");
+        // Three tries in the first seconds, then one about every half minute.
+        let early = tells_at_a_minute.unwrap();
+        assert!(
+            (LID_TRIES as usize..=LID_TRIES as usize + 2).contains(&early),
+            "{early}"
+        );
+        let later = lid.len() - 1 - early;
+        assert!((1..=3).contains(&later), "{later} more in the next 70 s");
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn a_dark_lid_that_lights_later_says_it_blinks() {
+        let logo = FakeLogo::new(MODE_AUTO);
+        logo.through_lid.set(false);
+        logo.close_the_lid();
+        let (marker, _) = temp_marker("lid-later");
+        run_until(&logo, &marker, BlinkStyle::Calm, secs(120), |logo, now| {
+            if now >= secs(20) {
+                logo.through_lid.set(true);
+            }
+        });
+        assert_eq!(logo.statuses(), [LidStatus::StayedDark, LidStatus::Blinking]);
+        assert!(logo.falls() >= 10, "and blinks on from there");
+    }
+
+    #[test]
+    fn a_logo_the_daemon_takes_back_is_told_again() {
+        let logo = FakeLogo::new(MODE_AUTO);
+        logo.close_the_lid();
+        let (marker, _) = temp_marker("lid-taken");
+        let mut taken = false;
+        let mut back = false;
+        run_until(&logo, &marker, BlinkStyle::Breathe, secs(80), |logo, now| {
+            if now >= secs(30) && !taken {
+                // A keyboard came up: the daemon tells every module the lid is closed.
+                logo.told_open.set(false);
+                taken = true;
+            }
+            if now >= secs(45) && logo.factor().is_some_and(|f| f > 0.5) {
+                back = true;
+            }
+        });
+        assert!(back, "lit again under the lid");
+        assert_eq!(logo.lid_writes(), [W::Lid(true), W::Lid(true), W::Lid(false)]);
+        assert_eq!(logo.statuses(), [LidStatus::Blinking]);
+    }
+
+    #[test]
+    fn the_lid_opening_ends_it_without_a_word_to_the_lid() {
+        let logo = FakeLogo::new(MODE_AUTO);
+        logo.close_the_lid();
+        let (marker, path) = temp_marker("lid-opens");
+        run_until(&logo, &marker, BlinkStyle::Calm, secs(40), |logo, now| {
+            if now >= secs(20) && !logo.awake.get() {
+                logo.open_the_lid();
+            }
+        });
+        assert_eq!(logo.lid_writes(), [W::Lid(true)], "the daemon told it the lid is open");
+        assert!(
+            logo.writes_since(secs(21)).contains(&W::Keyboards(true)),
+            "the keyboards follow the blink again"
+        );
+        assert_eq!(logo.settled_level(), 1.0);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn unplugged_under_the_lid_the_logo_goes_dark() {
+        let logo = FakeLogo::new(MODE_AUTO);
+        logo.close_the_lid();
+        let (marker, _) = temp_marker("lid-unplugged");
+        let mut falls_once_dark = None;
+        run_until(&logo, &marker, BlinkStyle::Calm, secs(40), |logo, now| {
+            logo.battery.set(now >= secs(20));
+            if now >= secs(23) && falls_once_dark.is_none() {
+                falls_once_dark = Some(logo.falls());
+            }
+        });
+        assert_eq!(logo.lid_writes(), [W::Lid(true), W::Lid(false)]);
+        assert_eq!(logo.statuses(), [LidStatus::Blinking, LidStatus::OnBattery]);
+        assert_eq!(Some(logo.falls()), falls_once_dark, "no blink on battery");
+        assert!(
+            !logo.writes_since(secs(23)).contains(&W::Heading(true)),
+            "and nothing lights it: the Mac is about to sleep"
+        );
+    }
+
+    #[test]
+    fn on_battery_or_with_keyboards_out_of_reach_a_closed_lid_stays_dark() {
+        for (battery, keyboards, status) in [
+            (true, true, LidStatus::OnBattery),
+            (false, false, LidStatus::NoKeyboards),
+        ] {
+            let logo = FakeLogo::new(MODE_AUTO);
+            logo.battery.set(battery);
+            logo.keyboards_reachable.set(keyboards);
+            under_the_lid(&logo, BlinkStyle::Calm, secs(30));
+            assert_eq!(logo.lid_writes(), [], "{status:?}");
+            assert!(!logo.writes().contains(&W::Heading(false)), "{status:?}");
+            assert_eq!(logo.statuses(), [status]);
+        }
+    }
+
+    #[test]
+    fn a_display_that_only_sleeps_is_not_a_closed_lid() {
+        for (lid, statuses) in [(Some(false), vec![]), (None, vec![LidStatus::NoLidSensor])] {
+            let logo = FakeLogo::new(MODE_AUTO);
+            logo.awake.set(false);
+            logo.lid.set(lid);
+            let (marker, _) = temp_marker("lid-asleep");
+            run(&logo, &marker, BlinkStyle::Calm, secs(30));
+            assert_eq!(logo.writes(), [], "{lid:?}");
+            assert_eq!(logo.statuses(), statuses, "{lid:?}");
+        }
+    }
+
+    #[test]
+    fn the_lid_sensor_wins_over_a_display_list_that_still_has_the_display() {
+        // What a Mac kept awake with no other display shows: the built-in display
+        // stays online and is not called asleep.
+        let logo = FakeLogo::new(MODE_AUTO);
+        let (marker, _) = temp_marker("lid-sensor");
+        run_until(&logo, &marker, BlinkStyle::Calm, secs(40), |logo, now| {
+            if now >= secs(10) && logo.lid.get() != Some(true) {
+                logo.lid.set(Some(true));
+                logo.handled.set(Some(true));
+                logo.told_open.set(false);
+            }
+        });
+        let since = logo.writes_since(secs(10));
+        let told = since
+            .iter()
+            .position(|w| *w == W::Lid(true))
+            .expect("told the lid is open");
+        assert!(
+            !since[told..].contains(&W::Keyboards(true)),
+            "no keyboard lit under the lid"
+        );
+        assert_eq!(logo.statuses(), [LidStatus::Blinking]);
+    }
+
+    #[test]
+    fn recover_darkens_a_logo_a_killed_child_left_lit_under_the_closed_lid() {
+        let logo = FakeLogo::new(MODE_AUTO);
+        let (marker, path) = temp_marker("lid-killed");
+        assert!(marker.set());
+        logo.close_the_lid();
+        assert!(logo.tell_lid(true));
+        recover(&logo, &marker, &Marker(None));
+        let writes = logo.writes();
+        assert_eq!(&writes[writes.len() - 2..], [W::Heading(true), W::Lid(false)]);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn the_status_line_reads_like_the_menu() {
+        assert_eq!(LidStatus::Blinking.text(), "blinking");
+        for status in [
+            LidStatus::Blinking,
+            LidStatus::StayedDark,
+            LidStatus::OnBattery,
+            LidStatus::NoKeyboards,
+            LidStatus::NoLidSensor,
+            LidStatus::Idle,
+            LidStatus::SwitchedOff,
+            LidStatus::LogoLight,
+            LidStatus::Refused,
+            LidStatus::Slept,
+        ] {
+            let text = status.text();
+            assert!(
+                !text.is_empty() && text.len() < 45 && !text.contains('\n'),
+                "{status:?}"
+            );
+        }
+    }
+
     #[test]
     fn recover_needs_a_marker() {
         let logo = FakeLogo::new(MODE_OFF);
@@ -1811,6 +3116,8 @@ mod tests {
         now: Rc<Cell<Duration>>,
         spans: Vec<(u64, u64, Activity)>,
         app_gone_at: u64,
+        /// When the Mac is found to have slept, once.
+        slept_at: Option<u64>,
     }
 
     impl Script {
@@ -1825,6 +3132,7 @@ mod tests {
                 now: logo.now.clone(),
                 spans: spans.to_vec(),
                 app_gone_at,
+                slept_at: None,
             }
         }
 
@@ -1850,6 +3158,72 @@ mod tests {
         fn now(&self) -> Instant {
             self.start + self.now.get()
         }
+
+        fn slept(&mut self) -> bool {
+            let due = self.slept_at.is_some_and(|at| self.elapsed_ms() >= at);
+            if due {
+                self.slept_at = None;
+            }
+            due
+        }
+    }
+
+    #[test]
+    fn with_the_lid_closed_and_no_agent_at_work_the_line_says_so() {
+        let logo = FakeLogo::new(MODE_AUTO);
+        logo.close_the_lid();
+        let (marker, _) = temp_marker("watch-lid-idle");
+        let mut script = Script::new(&logo, &[], 20_000);
+        watch(&logo, &marker, WORK, &mut script);
+        assert_eq!(logo.statuses(), [LidStatus::Idle]);
+        assert_eq!(logo.writes(), []);
+    }
+
+    #[test]
+    fn with_the_lid_closed_a_declined_blink_says_why() {
+        for (mode, elsewhere, why) in [
+            (MODE_OFF, false, LidStatus::SwitchedOff),
+            (MODE_AUTO, true, LidStatus::LogoLight),
+        ] {
+            let logo = FakeLogo::new(mode);
+            logo.elsewhere.set(elsewhere);
+            logo.close_the_lid();
+            let (marker, _) = temp_marker("watch-lid-declined");
+            let mut script = Script::new(&logo, &[(0, 30_000)], 30_000);
+            watch(&logo, &marker, WORK, &mut script);
+            // Idle while the work settles, then the reason.
+            assert_eq!(logo.statuses(), [LidStatus::Idle, why]);
+        }
+    }
+
+    #[test]
+    fn a_sleep_under_the_closed_lid_is_the_line_too() {
+        // Seen at a dark wake: the lid is still closed.
+        let logo = FakeLogo::new(MODE_AUTO);
+        logo.close_the_lid();
+        let (marker, _) = temp_marker("watch-slept");
+        let mut script = Script::new(&logo, &[], 20_000);
+        script.slept_at = Some(100);
+        watch(&logo, &marker, WORK, &mut script);
+        assert_eq!(logo.statuses(), [LidStatus::Slept]);
+
+        // A sleep with the lid open says nothing about the lid.
+        let logo = FakeLogo::new(MODE_AUTO);
+        let (marker, _) = temp_marker("watch-slept-open");
+        let mut script = Script::new(&logo, &[], 20_000);
+        script.slept_at = Some(5_000);
+        watch(&logo, &marker, WORK, &mut script);
+        assert_eq!(logo.statuses(), []);
+    }
+
+    #[test]
+    fn work_then_rest_under_the_closed_lid_reads_blinking_then_idle() {
+        let logo = FakeLogo::new(MODE_AUTO);
+        logo.close_the_lid();
+        let (marker, _) = temp_marker("watch-lid-work");
+        let mut script = Script::new(&logo, &[(0, 30_000)], 50_000);
+        watch(&logo, &marker, WORK, &mut script);
+        assert_eq!(logo.statuses(), [LidStatus::Idle, LidStatus::Blinking, LidStatus::Idle]);
     }
 
     const CYCLE_MS: u64 = (CALM[0].lit.as_millis() + CALM[0].dark.as_millis()) as u64;
