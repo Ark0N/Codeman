@@ -21,6 +21,7 @@ import type {
   PiConfig,
   GrokConfig,
   CopilotConfig,
+  JcodeConfig,
   DeepSeekConfig,
   OmpConfig,
   SessionRemote,
@@ -127,6 +128,7 @@ export interface CreateSessionOptions {
   piConfig?: PiConfig;
   grokConfig?: GrokConfig;
   copilotConfig?: CopilotConfig;
+  jcodeConfig?: JcodeConfig;
   deepSeekConfig?: DeepSeekConfig;
   ompConfig?: OmpConfig;
   /** When restoring after reboot, resume a previous Claude conversation by its session ID */
@@ -179,6 +181,7 @@ export interface RespawnPaneOptions {
   piConfig?: PiConfig;
   grokConfig?: GrokConfig;
   copilotConfig?: CopilotConfig;
+  jcodeConfig?: JcodeConfig;
   deepSeekConfig?: DeepSeekConfig;
   ompConfig?: OmpConfig;
   /** Resume a previous Claude conversation when respawning */

@@ -35,6 +35,7 @@ import type {
   GeminiConfig,
   GrokConfig,
   CopilotConfig,
+  JcodeConfig,
   OmpConfig,
   OpenCodeConfig,
   PiConfig,
@@ -53,6 +54,7 @@ export interface SpawnBridgeOptions {
   piConfig?: PiConfig;
   grokConfig?: GrokConfig;
   copilotConfig?: CopilotConfig;
+  jcodeConfig?: JcodeConfig;
   deepSeekConfig?: DeepSeekConfig;
   ompConfig?: OmpConfig;
   resumeSessionId?: string;

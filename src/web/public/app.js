@@ -3186,9 +3186,11 @@ class CodemanApp {
                   ? 'OMP'
                   : mode === 'copilot'
                     ? 'GitHub Copilot'
-                    : mode === 'opencode'
-                      ? 'OpenCode'
-                      : 'Claude';
+                    : mode === 'jcode'
+                      ? 'jcode'
+                      : mode === 'opencode'
+                        ? 'OpenCode'
+                        : 'Claude';
   }
 
   async toggleResponseViewer() {
@@ -11023,7 +11025,9 @@ class CodemanApp {
                       ? 'Kill Tmux & OMP'
                       : session.mode === 'copilot'
                         ? 'Kill Tmux & GitHub Copilot'
-                        : 'Kill Tmux & Claude Code';
+                        : session.mode === 'jcode'
+                          ? 'Kill Tmux & jcode'
+                          : 'Kill Tmux & Claude Code';
     }
 
     document.getElementById('closeConfirmModal').classList.add('active');

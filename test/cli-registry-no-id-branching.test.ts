@@ -97,6 +97,7 @@ const ALLOWED_BRANCHES: Record<string, Allowance> = {
   "web/routes/session-routes.ts::mode === 'grok'": allow(2, 'legacy <Mode>Config plumbing'),
   "web/routes/session-routes.ts::mode === 'copilot'": allow(2, 'legacy <Mode>Config plumbing'),
   "web/routes/session-routes.ts::mode === 'deepseek'": allow(2, 'legacy <Mode>Config plumbing'),
+  "web/routes/session-routes.ts::mode === 'jcode'": allow(2, 'legacy <Mode>Config plumbing'),
   "web/server.ts::mode === 'opencode'": allow(1, 'legacy <Mode>Config plumbing (session recovery)'),
   "web/server.ts::mode === 'codex'": allow(1, 'legacy <Mode>Config plumbing (session recovery)'),
   "web/server.ts::mode === 'gemini'": allow(1, 'legacy <Mode>Config plumbing (session recovery)'),
@@ -106,6 +107,7 @@ const ALLOWED_BRANCHES: Record<string, Allowance> = {
   "web/server.ts::mode === 'copilot'": allow(1, 'legacy <Mode>Config plumbing (session recovery)'),
   "web/server.ts::mode === 'deepseek'": allow(1, 'legacy <Mode>Config plumbing (session recovery)'),
   "web/server.ts::mode === 'omp'": allow(1, 'legacy <Mode>Config plumbing (session recovery)'),
+  "web/server.ts::mode === 'jcode'": allow(1, 'legacy <Mode>Config plumbing (session recovery)'),
 
   // --- Claude's remote/docker command construction ---
   "tmux-manager.ts::mode === 'claude'": allow(
@@ -174,7 +176,7 @@ const ALLOWED_BRANCHES: Record<string, Allowance> = {
       'chain (see the opencode entry below)'
   ),
 
-  // ⚠️ Scaffolded-case hooks. This chain excludes seven CLIs but NOT `deepseek`, while its
+  // ⚠️ Scaffolded-case hooks. This chain excludes eight CLIs but NOT `deepseek`, while its
   // own comment says DeepSeek uses its own system — so a scaffolded deepseek case gets a
   // Claude hooks block written into it. That inconsistency is UPSTREAM's and predates this
   // change; expressing the chain as a capability would have to pick a side and would
@@ -189,6 +191,7 @@ const ALLOWED_BRANCHES: Record<string, Allowance> = {
   "web/routes/session-routes.ts::mode !== 'antigravity'": allow(1, 'scaffolded-case hooks (see the opencode entry)'),
   "web/routes/session-routes.ts::mode !== 'pi'": allow(1, 'scaffolded-case hooks (see the opencode entry)'),
   "web/routes/session-routes.ts::mode !== 'grok'": allow(1, 'scaffolded-case hooks (see the opencode entry)'),
+  "web/routes/session-routes.ts::mode !== 'jcode'": allow(1, 'scaffolded-case hooks (see the opencode entry)'),
 };
 
 /** Every stock CLI id, derived rather than restated so a new entry is covered automatically. */

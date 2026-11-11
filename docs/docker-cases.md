@@ -34,8 +34,8 @@ must not change what is inside an image tagged `codeman/agent:base`, or two mach
 that tag hold different images and every cache decision downstream is a lie. Each entry's
 `enabled` flag IS honoured, so a CLI that ships disabled is never baked in.
 
-Five CLIs keep hand-written layers, for two different reasons that are easy to conflate.
-`antigravity`, `grok` and `omp` declare no `npmPackage` at all, so they never enter the shared
+Six CLIs keep hand-written layers, for two different reasons that are easy to conflate.
+`antigravity`, `grok`, `omp` and `jcode` declare no `npmPackage` at all, so they never enter the shared
 npm layer and each gets a vendor-installer layer instead. `pi` and `deepseek` ARE on npm but
 carry `discovery.install.agentImageLayer` in `stock.ts` (a REGISTRY field, rather than an
 id-keyed table duplicated between the two producers of the image's build args), which pulls
@@ -47,6 +47,7 @@ them out of the shared layer because a plain `npm install -g` is not enough for 
 | `deepseek` | Needs `pnpm` alongside it (`dsh plugin`, issue #352) plus a `dsh-tui` profile install. |
 | `antigravity` | Not on npm — Google ships a standalone binary (~190MB, the largest layer). |
 | `grok`, `omp` | Not on npm — standalone vendor installers. |
+| `jcode` | Not on npm: jcode.sh's installer, then the WHOLE version directory copied to `/opt/jcode` (the launcher is an `sh` script that execs the binary beside it). |
 
 `test/docker-agent-image-coverage.test.ts` requires every special case to carry a written
 reason AND still be present in the Dockerfile, so an exclusion cannot silently become an
@@ -62,7 +63,7 @@ A zero exit code only proves the layers ran, not that the toolchain works. Verif
 
 ```bash
 docker run --rm codeman/agent:base bash -lc \
-  'for c in claude codex gemini opencode agy pi grok dsh omp; do printf "%-9s " $c; $c --version 2>&1 | head -1; done'
+  'for c in claude codex gemini opencode agy pi grok dsh omp jcode; do printf "%-9s " $c; $c --version 2>&1 | head -1; done'
 ```
 
 ⚠️ `dsh --version` is the one line above that answers a different question than the
@@ -80,6 +81,8 @@ Building that profile is also why `pnpm` is in the image: `dsh plugin` forwards 
 Antigravity (`agy`) and Grok (`grok`) are the two CLIs not installed from npm (Google and xAI ship standalone binaries), so each has its own Dockerfile step, adding roughly 190MB and 160MB respectively. Pi also gets its own step, because upstream documents installing it with `--ignore-scripts` and that flag must not silently change how the other npm CLIs install.
 
 Pi's credentials are seeded per-FILE rather than as a whole directory (`auth.json`, `settings.json`, `trust.json`, `models.json`, `models-store.json` out of `~/.pi/agent`), because that directory also holds `sessions/`, `extensions/`, `skills/` and the installed package trees — gigabytes on an active host. Consequence: in-container pi sessions are invisible host-side, so `pi -c` inside a Docker case only sees that container's own history. See [`pi-integration.md`](./pi-integration.md). Grok is seeded per-file for the same reason (`auth.json`, `config.toml`, `pager.toml` out of `~/.grok`, which also holds `sessions/`, `memory/` and the ~160MB binary under `downloads/`), with the same consequence for `grok -c`. See [`grok-integration.md`](./grok-integration.md). OMP is the one CLI in this family where `sessions/` is the EXCEPTION rather than the rule: `~/.omp/agent/{config.yml,mcp.json,models.yml,settings.yml}` are seeded per-file (the dir also holds SQLite caches and `terminal-sessions/`), but `~/.omp/agent/sessions/` is shared RW like codex's, not seeded, because Codeman reads it host-side for history recovery and `--resume` pinning. See [`omp-integration.md`](./omp-integration.md).
+
+jcode's credentials are not seeded at all: `~/.jcode` keeps its OAuth tokens beside ~160MB of builds, its sessions and SQLite caches, and its API keys live in `~/.config/jcode`, so there is no small set of files to copy. Sign in to jcode inside the container (`docs/jcode-integration.md`).
 
 The image can also carry the GitHub CLI (`gh`) and the Azure CLI (`az` + the `azure-devops` extension, in `AZURE_EXTENSION_DIR=/opt/az-extensions` so it stays out of the seeded HOME), wired into the system git config as credential helpers for github.com and dev.azure.com / *.visualstudio.com, exactly as in `docker/server.Dockerfile`. Their sign-ins are seeded per-FILE like pi's: `~/.config/gh/{hosts.yml,config.yml}` and `~/.azure/{azureProfile.json,msal_token_cache.json,service_principal_entries.json,clouds.config,config}`, never `~/.azure`'s logs, command index or extensions. A token kept in a desktop keyring, or in the encrypted MSAL cache az uses on Windows/macOS, is not in those files and does not carry. None of the three is version-pinned; the `--no-cache` rebuild recommended above is also what refreshes them. Both CLIs are opt-in and OFF by default: `CODEMAN_AGENT_IMAGE_INSTALL_GH=1` / `CODEMAN_AGENT_IMAGE_INSTALL_AZ=1` in the environment of `scripts/build-agent-image.mjs`, or of the Codeman server for its own auto-build (in the Compose deployment, `environment:` in `docker-compose.override.yml`), become the `CODEMAN_INSTALL_GH` / `CODEMAN_INSTALL_AZ` build args and put that CLI, its extension and its helper entry into the image. Unset passes nothing, so a default build's argv is unchanged and the image has neither. The sign-in seeds follow the same switches, read when a case container is created: `.config/gh` only with `CODEMAN_AGENT_IMAGE_INSTALL_GH=1`, `.azure` only with `CODEMAN_AGENT_IMAGE_INSTALL_AZ=1` (`enabledByEnv` in `CRED_STORES`), never merely because the files exist. Seeds are create-time mounts and deliberately not part of the config hash (hashing them would trip the drift gate for every case), so an existing case container picks them up only when it is recreated.
 

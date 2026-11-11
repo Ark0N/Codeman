@@ -15,7 +15,13 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 
-import { collectDescendants, PROC_WALK_MAX_DEPTH, PROC_WALK_MAX_NODES } from '../src/proc-tree.js';
+import {
+  collectDescendants,
+  descendantsInPaneGroup,
+  PROC_WALK_MAX_DEPTH,
+  PROC_WALK_MAX_NODES,
+} from '../src/proc-tree.js';
+import { STOCK_CLIS } from '../src/config/cli-registry/stock.js';
 
 /** Build a parent→children map from `[parent, child]` pairs. */
 function tree(pairs: [number, number][]): Map<number, number[]> {
@@ -196,5 +202,43 @@ describe('TmuxManager uses the bounded walk', () => {
     // test completing at all is the assertion, plus the bound holding.
     const out = await walkVia(bigTree(4, 6));
     expect(out.length).toBeLessThanOrEqual(PROC_WALK_MAX_NODES);
+  });
+});
+
+describe('descendantsInPaneGroup (a shared daemon outlives the pane that started it)', () => {
+  // The jcode shape, measured: pane 100 runs the client (group 100); the client spawned the
+  // daemon 200, which setsid()'d into group 200 and runs tools 300 and 301 for EVERY jcode
+  // session; 110 is an ordinary child of the client.
+  const descendants = collectDescendants(
+    100,
+    tree([
+      [100, 110],
+      [100, 200],
+      [200, 300],
+      [200, 301],
+    ])
+  );
+  const groups = new Map([
+    [100, 100],
+    [110, 100],
+    [200, 200],
+    [300, 200],
+    [301, 200],
+  ]);
+
+  it("keeps the pane's own group and spares the daemon with its whole subtree", () => {
+    expect(descendants.sort()).toEqual([110, 200, 300, 301]);
+    expect(descendantsInPaneGroup(descendants, groups, 100)).toEqual([110]);
+  });
+
+  it('kills a pid whose group could not be read (it most likely exited already)', () => {
+    const partial = new Map(groups);
+    partial.delete(110);
+    expect(descendantsInPaneGroup(descendants, partial, 100)).toEqual([110]);
+  });
+
+  it('is declared by jcode alone, so every other CLI keeps the full descendant kill', () => {
+    const declaring = STOCK_CLIS.filter((e) => e.capabilities.sharedDaemon === true).map((e) => e.id as string);
+    expect(declaring).toEqual(['jcode']);
   });
 });

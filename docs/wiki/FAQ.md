@@ -24,7 +24,7 @@ stores, or refreshes your credentials.
 ### Which agent CLIs does it support?
 
 Claude Code, OpenCode, Codex, Gemini, Antigravity, Pi, Grok Build, DeepSeek Harness,
-OMP and GitHub Copilot CLI, plus a plain shell, chosen per session. Claude is the reference mode and a few features
+OMP, GitHub Copilot CLI and jcode, plus a plain shell, chosen per session. Claude is the reference mode and a few features
 are Claude-only; [Agent CLIs](Agent-CLIs) has the table.
 
 ### Does Codeman send my code or prompts anywhere?
