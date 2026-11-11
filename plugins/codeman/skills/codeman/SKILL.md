@@ -643,7 +643,7 @@ sendwait() {
 # complete answer to codeman-answer-<token>.md in the working directory, and only then end
 # the reply with the word DONE immediately followed by _<token>. The marker is split in what
 # is typed, so the prompt echoing into the pane never matches it, and the token is new for
-# every call (§5.5). The send is sendwait's exactly-once body (per-worker clientId,
+# every call and every worker (§5.5). The send is sendwait's exactly-once body (per-worker clientId,
 # epoch-second seq) with a one-second `exit` wait, so `delivered` says the pane took it.
 # ⚠️ A marker proves that the model printed the token. Not that it did the work, not that
 # it did it right, not even that the turn is over: a reasoning model can restate the
@@ -667,7 +667,12 @@ sendmark() {
     p=$(printf '%s\n' "$p" | tr '\r' '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^$/d' | paste -sd ' ' -) ;;
   esac
   [ -n "$p" ] || { echo "sendmark: empty prompt" >&2; return 1; }
-  tok=$(printf 'm%x%04x' "$(date +%s)" "$RANDOM"); mark="DONE_$tok"
+  # The token carries six characters of the WORKER's id on top of the second and $RANDOM.
+  # Those two repeat: in zsh (the shell Claude Code runs on a Mac) every subshell draws the
+  # SAME $RANDOM until the parent shell reads it, and this line is a subshell. Two sendmark
+  # calls started in one second for two workers in ONE folder shared a token, and one
+  # worker's answer file replaced the other's (seen on a Mac, 2026-11-12).
+  tok=$(printf 'm%x%04x%s' "$(date +%s)" "$RANDOM" "$(printf '%s' "$sid" | tr -cd 'a-f0-9' | cut -c1-6)"); mark="DONE_$tok"
   if [ "${SENDMARK_ANSWER_FILE:-1}" != 0 ]; then
     wd=$("${CURL[@]}" "$API/api/v1/sessions/$sid" | jq -r '.data.workingDir // empty' 2>/dev/null)
     [ -n "$wd" ] || { echo "sendmark: could not read the working directory of worker $sid" >&2; return 1; }
