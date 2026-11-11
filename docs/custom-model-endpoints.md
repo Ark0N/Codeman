@@ -578,6 +578,13 @@ automatically). Results:
 
 - **Claude, opencode, Pi, Grok, OMP** — verified: a real "hello world" reply
   came back through the endpoint.
+  Pi's model entry carries the endpoint's context length when one is known
+  (`contextWindow`, the full window, and `maxTokens`, a quarter of it and
+  8,192 at most). Without it Pi takes an unknown model for a 128,000-token
+  one (its footer reads `/128k`) and asks for 16,384 reply tokens, so on a
+  smaller window it never compacts before the server's real window is full.
+  Measured on pi 1.5.2: with both fields `pi --list-models` shows the window
+  and the request carries `max_tokens: 8192`.
 - **Codex** — the config is structurally correct, and against a llama-swap
   server that DOES answer `/v1/responses` (confirmed live: a plain,
   no-tool-call chat turn returned a real reply), the picture is more

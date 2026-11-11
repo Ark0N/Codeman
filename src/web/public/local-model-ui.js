@@ -13,6 +13,7 @@
  *   POST   /api/local-model/runtime   { action: 'start' | 'stop', newPort? }
  *   DELETE /api/local-model           { removeModel }
  *   DELETE /api/local-model/models    { modelId }
+ *   POST   /api/local-model/agent     { cli }
  *
  * ## Three surfaces, one window
  *
@@ -35,9 +36,11 @@
  *    | `progress`  | installing: the download bar, the steps, Cancel                   |
  *    | `paused`    | paused (Cancel or a server restart): Continue or Remove           |
  *    | `failed`    | failed: the server's sentence and the ONE action that helps       |
- *    | `installed` | installed: running or stopped, the models on this Mac with their  |
- *    |             | size on disk (Use, Delete), Add a model, Start a session,         |
- *    |             | Stop/Start, Remove (right after an install: Start a session alone) |
+ *    | `installed` | installed: running or stopped, the coding agents a session can be |
+ *    |             | started with, the models on this Mac with their size on disk      |
+ *    |             | (Use, Delete), Add a model, Start a session (or "Install <agent>" |
+ *    |             | for one that is not on this Mac), Stop/Start, Remove (right after |
+ *    |             | an install: Start a session alone)                                |
  *    | `none`      | idle and nothing fits: the hardware line, the reason, Close       |
  *
  * The memory bar is the one strong element: the memory this Mac can give a model, filled to
@@ -60,6 +63,16 @@
  * downloaded) and "Delete" (asked once, in the row). Under it the disk use of all downloaded
  * models (`install.store`) and "Add a model". A row has a button only for an action the server
  * lists for THAT row (`row.actions`).
+ *
+ * The coding agent is chosen per session (`install.harnesses`): on the installed screen every
+ * agent the model can be run with is a chip of one radio group, the server's default first.
+ * The main button follows the selected chip: "Start a session" for one that can be started,
+ * "Install <agent>" for one that is not on this Mac (its literal install command is on screen
+ * above the button, so the click is the consent), and nothing to press for one that needs a
+ * setup of its own. An install of an agent runs beside the model: the state stays `installed`,
+ * and another agent can be started meanwhile. The device remembers the agent a session was
+ * last STARTED with, and each opening of the window selects it while it can be started (a
+ * chip that was only looked at is not a choice, or the window would reopen on "Install").
  *
  * ## Polling
  *
@@ -114,6 +127,9 @@ const LOCAL_MODEL_POLL_MS = 1000;
 
 /** What `confirmDelete` holds while the question is about everything an earlier Remove kept. No model id has a space. */
 const LOCAL_MODEL_STORE_KEY = 'the store';
+
+/** Where this device remembers the coding agent last chosen for a session (a CLI id, as data). */
+const LOCAL_MODEL_AGENT_STORAGE_KEY = 'codeman-local-model-agent';
 
 /** The tag kinds of the server's pick (`CandidateTagKind`): the ones drawn in the accent colour. */
 const LOCAL_MODEL_ACCENT_TAGS = ['tested', 'best', 'best-tight'];
@@ -238,6 +254,39 @@ function localModelLibraryTag(row) {
   if (row.status === 'changed') return { text: localModelT('Changed'), kind: 'changed' };
   if (row.status === 'missing') return { text: localModelT('Missing'), kind: 'missing' };
   return { text: localModelT('Not checked'), kind: 'unverified' };
+}
+
+/** The rows of `install.harnesses`: the coding agents the model in use can be run with. A payload without the list has none. */
+function localModelAgents(install) {
+  return (Array.isArray(install.harnesses) ? install.harnesses : []).filter(
+    (row) => row && typeof row.cli === 'string' && row.cli
+  );
+}
+
+/** What an agent chip says beside the name, and the tag class that colours it. Nothing for one that can be started. */
+function localModelAgentTag(row) {
+  if (row.status === 'installing') return { text: localModelT('Installing'), kind: 'tight' };
+  if (row.status === 'installable') return { text: localModelT('Not installed'), kind: 'unverified' };
+  if (row.status === 'setup-needed') return { text: localModelT('Needs setup'), kind: 'unverified' };
+  return null;
+}
+
+/** The coding agent this device chose last, or '' (storage can be empty or refused: the default agent stands then). */
+function localModelStoredAgent() {
+  try {
+    const value = window.localStorage.getItem(LOCAL_MODEL_AGENT_STORAGE_KEY);
+    return typeof value === 'string' ? value : '';
+  } catch {
+    return '';
+  }
+}
+
+function localModelStoreAgent(cli) {
+  try {
+    window.localStorage.setItem(LOCAL_MODEL_AGENT_STORAGE_KEY, String(cli));
+  } catch {
+    /* a convenience only */
+  }
 }
 
 /**
@@ -545,6 +594,11 @@ Object.assign(CodemanApp.prototype, {
         modelId: null,
         /** The selected coding agent (a CLI id, as data), or null for the row's first. */
         cli: null,
+        /**
+         * The coding agent chosen for a session on the installed model (a CLI id, as data), or
+         * null: what this device chose last, else the server's default.
+         */
+        agent: null,
         /** A verb is in flight: every button waits. */
         busy: false,
         /** What the last verb answered when it was refused. */
@@ -578,6 +632,26 @@ Object.assign(CodemanApp.prototype, {
     const harnesses = localModelHarnesses(candidate);
     const harness = harnesses.find((entry) => entry.cli === ui.cli) || harnesses[0];
     return { candidates, candidate, harnesses, harness };
+  },
+
+  /**
+   * The coding agents of the installed model and the one a session would start with: the chip
+   * selected in this opening of the window, else the agent this device last STARTED a session
+   * with while it can still be started, else the server's default (its first row). A
+   * remembered agent that is not startable now never wins: the window would open on "Install"
+   * or on nothing to press, with "Start a session" out of sight. `row` is null when the server
+   * lists none.
+   */
+  _localModelAgent() {
+    const ui = this._localModelWindowState();
+    const rows = localModelAgents(localModelInstall(this._localModelStatus));
+    const stored = ui.agent ? '' : localModelStoredAgent();
+    const row =
+      rows.find((entry) => entry.cli === ui.agent) ||
+      rows.find((entry) => entry.cli === stored && entry.status === 'ready') ||
+      rows.find((entry) => entry.default === true) ||
+      rows[0];
+    return { rows, row: row || null };
   },
 
   /** Which screen the window shows, see the table in @fileoverview. */
@@ -615,6 +689,9 @@ Object.assign(CodemanApp.prototype, {
       busy: false,
       notice: null,
       expected: null,
+      // A chip that was only looked at in an earlier opening is not a choice: each opening
+      // starts from the agent last STARTED on this device, else the server's default.
+      agent: null,
       confirmRemove: false,
       confirmDelete: null,
       justInstalled: false,
@@ -845,6 +922,28 @@ Object.assign(CodemanApp.prototype, {
     if (asked) this._focusLocalModelWindow(asked === LOCAL_MODEL_STORE_KEY ? 'store-delete' : `delete:${asked}`);
   },
 
+  /**
+   * Select a coding agent for the next session. Nothing is sent, and nothing is remembered
+   * yet: a chip can be selected just to see what installing it would run. The device
+   * remembers an agent once a session was started with it.
+   */
+  selectLocalModelAgent(cli) {
+    const ui = this._localModelWindowState();
+    if (ui.busy || typeof cli !== 'string' || !cli) return;
+    ui.agent = cli;
+    ui.notice = null;
+    this.renderLocalModel();
+  },
+
+  /**
+   * "Install <agent>": the consent click for the command shown above the button. The server
+   * runs its own stock command for that agent, never text from here, and answers at once: the
+   * install goes on beside the model and the next polls say how it stands.
+   */
+  installLocalModelAgent(cli) {
+    return this._localModelVerb('POST', '/api/local-model/agent', { cli });
+  },
+
   cancelLocalModelInstall() {
     return this._localModelVerb('POST', '/api/local-model/cancel');
   },
@@ -873,20 +972,24 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
-   * "Start a session": a session on the saved connection with the coding agent of the install.
+   * "Start a session": a session on the saved connection with a coding agent: `cli` (the
+   * chip that is selected), or without one the server's default agent (`install.cli`).
    * The page's own copies are stale right after an install (the settings flag was switched on
    * by the server and the agent may have been installed a moment ago), so both are read again
    * before the existing launcher runs. Both values are the payload's; no id is compared.
    */
-  async startLocalModelSession() {
+  async startLocalModelSession(cli) {
     const install = localModelInstall(this._localModelStatus);
-    if (typeof install.cli !== 'string' || typeof install.endpointId !== 'string') return;
+    const agent = typeof cli === 'string' && cli ? cli : install.cli;
+    if (typeof agent !== 'string' || typeof install.endpointId !== 'string') return;
+    // The agent a session was started with is the one the next opening selects.
+    if (typeof cli === 'string' && cli) localModelStoreAgent(cli);
     const settingsOpen = document.getElementById('appSettingsModal')?.classList.contains('active');
     this.closeLocalModelWindow();
     if (settingsOpen) this.closeAppSettings?.();
     await this.loadAppSettingsFromServer?.();
     await this.loadCliListForSettings?.();
-    await this.selectCustomModelEntry?.(install.cli, install.endpointId);
+    await this.selectCustomModelEntry?.(agent, install.endpointId);
   },
 
   // ═══════════════════════════════════════════════════════════════
@@ -1495,6 +1598,107 @@ Object.assign(CodemanApp.prototype, {
     return box;
   },
 
+  /**
+   * The coding agents a session on the installed model can be started with
+   * (`install.harnesses`): one chip per agent, a radio group, and under it one line about the
+   * selected one. For an agent that is not on this Mac that line is the literal install command
+   * (the main button then reads "Install <agent>"), and after a failed install the server's
+   * sentence with the installer's last words folded away. `null` when the server lists none.
+   */
+  _localModelAgentsEl() {
+    const ui = this._localModelWindowState();
+    const { rows, row: chosen } = this._localModelAgent();
+    if (!rows.length || !chosen) return null;
+
+    const section = localModelEl('div', 'lm-agents');
+    const label = localModelEl('p', 'lm-agents-label', localModelT('Start a session with'));
+    label.id = 'localModelAgentsLabel';
+    section.appendChild(label);
+
+    const group = localModelEl('div', 'lm-agent-list');
+    group.setAttribute('role', 'radiogroup');
+    group.setAttribute('aria-labelledby', 'localModelAgentsLabel');
+    for (const row of rows) {
+      const on = row === chosen;
+      const chip = localModelEl('button', on ? 'lm-agent lm-agent-on' : 'lm-agent');
+      chip.type = 'button';
+      chip.setAttribute('role', 'radio');
+      chip.setAttribute('aria-checked', on ? 'true' : 'false');
+      // One tab stop for the group: the selected chip.
+      chip.tabIndex = on ? 0 : -1;
+      chip.dataset.lmKey = `agent:${row.cli}`;
+      chip.disabled = ui.busy;
+      const radio = localModelEl('span', 'lm-radio');
+      radio.setAttribute('aria-hidden', 'true');
+      chip.appendChild(radio);
+      chip.appendChild(localModelEl('span', 'lm-agent-name', String(row.cliLabel || row.cli)));
+      const tag = localModelAgentTag(row);
+      if (tag) chip.appendChild(localModelEl('span', `lm-tag lm-tag-${tag.kind}`, tag.text));
+      chip.addEventListener('click', () => this.selectLocalModelAgent(row.cli));
+      group.appendChild(chip);
+    }
+    group.addEventListener('keydown', (event) => this._onLocalModelAgentKey(event));
+    section.appendChild(group);
+
+    const name = String(chosen.cliLabel || chosen.cli);
+    const about = localModelEl('div', 'lm-agent-about');
+    if (chosen.status === 'installable' || chosen.status === 'installing') {
+      const lead =
+        chosen.status === 'installing'
+          ? localModelT('Installing {cli}. You can start a session with another agent meanwhile.', { cli: name })
+          : localModelT('{cli} is not on this Mac yet. Codeman installs it with this command:', { cli: name });
+      about.appendChild(localModelEl('p', 'lm-aside', lead));
+      if (chosen.installCommand) about.appendChild(localModelEl('code', 'lm-command', String(chosen.installCommand)));
+    } else if (chosen.status === 'setup-needed') {
+      about.appendChild(
+        localModelEl(
+          'p',
+          'lm-aside',
+          localModelT(
+            '{cli} needs a setup of its own. Set it up from the Run menu, then start a session with it here.',
+            {
+              cli: name,
+            }
+          )
+        )
+      );
+    } else if (chosen.slowFirstTurn === true) {
+      about.appendChild(localModelEl('p', 'lm-aside', localModelT('The first answer can take minutes.')));
+    }
+    // The last install of this agent failed: the server's sentence, and what the installer said.
+    const error = chosen.status === 'installable' ? chosen.error : null;
+    if (error && error.message) {
+      const failed = localModelEl('div', 'lm-notice');
+      failed.setAttribute('role', 'alert');
+      failed.appendChild(localModelEl('p', 'lm-notice-text', localModelMessage(error.message)));
+      if (typeof error.detail === 'string' && error.detail) {
+        const details = localModelEl('details', 'lm-details');
+        details.appendChild(localModelEl('summary', '', localModelT('Details')));
+        details.appendChild(localModelEl('pre', 'lm-detail-text', error.detail));
+        failed.appendChild(details);
+      }
+      about.appendChild(failed);
+    }
+    if (about.childElementCount) section.appendChild(about);
+    return section;
+  },
+
+  /** Arrow keys, Home and End move the selection of the agent chips, and the focus with it. */
+  _onLocalModelAgentKey(event) {
+    const { rows, row } = this._localModelAgent();
+    if (!rows.length || !row) return;
+    const index = rows.indexOf(row);
+    let next = -1;
+    if (event.key === 'ArrowDown' || event.key === 'ArrowRight') next = (index + 1) % rows.length;
+    else if (event.key === 'ArrowUp' || event.key === 'ArrowLeft') next = (index - 1 + rows.length) % rows.length;
+    else if (event.key === 'Home') next = 0;
+    else if (event.key === 'End') next = rows.length - 1;
+    if (next < 0 || next === index) return;
+    event.preventDefault();
+    this.selectLocalModelAgent(rows[next].cli);
+    this._focusLocalModelWindow(`agent:${rows[next].cli}`);
+  },
+
   /** Arrow keys, Home and End move the selection of the radio group, and the focus with it. */
   _onLocalModelListKey(event) {
     const selection = this._localModelSelection();
@@ -1962,7 +2166,9 @@ Object.assign(CodemanApp.prototype, {
     state.appendChild(localModelEl('span', 'lm-state-text', error ? `${model}, ${running}` : running));
     parts.push(state);
     const about = [];
-    if (install.cliLabel) about.push(localModelT('Runs with {cli}.', { cli: String(install.cliLabel) }));
+    // The agents have their own block below when the server lists them; without the list, the one of the install.
+    const agent = this._localModelAgent().row;
+    if (!agent && install.cliLabel) about.push(localModelT('Runs with {cli}.', { cli: String(install.cliLabel) }));
     const line = this._localModelFactsLine(install);
     if (line) about.push(line);
     if (about.length) parts.push(localModelEl('p', 'lm-aside', about.join(' ')));
@@ -1980,6 +2186,11 @@ Object.assign(CodemanApp.prototype, {
     // The screen that ends an install has one button. Stop and Remove are for the window
     // opened later (or for this one once anything else was said in it).
     const ending = ui.justInstalled === true && can('start-session') && !error && !notice;
+    // Which coding agent the next session runs with. Not on the screen that ends an install
+    // (that one says one thing: the session starts with the agent that was just chosen), and
+    // not while something blocks every session.
+    const agents = ending || error ? null : this._localModelAgentsEl();
+    if (agents) parts.push(agents);
     // Everything that is on this Mac, what it takes on disk, and the way to another model.
     // Not on the screen that ends an install: that one says one thing.
     const library = ending ? null : this._localModelLibraryEl(install);
@@ -2006,24 +2217,53 @@ Object.assign(CodemanApp.prototype, {
       );
     }
     // Start is the main action of a stopped model, unless the error's own button says so already.
+    const startIsMain =
+      can('start') &&
+      !(error && (error.next === 'start' || error.next === 'other-port')) &&
+      !can('start-session') &&
+      !next;
     if (can('start') && !(error && (error.next === 'start' || error.next === 'other-port'))) {
       buttons.appendChild(
         localModelButton(localModelT('Start'), {
-          key: can('start-session') || next ? 'start' : 'primary',
-          primary: !can('start-session') && !next,
+          key: startIsMain ? 'primary' : 'start',
+          primary: startIsMain,
           disabled: ui.busy,
           onClick: () => void this.setLocalModelRuntime('start'),
         })
       );
     }
     if (next) buttons.appendChild(next);
-    if (can('start-session')) {
+    // The main button follows the selected coding agent, by what the server offers for it.
+    const offers = (action) => !!agents && Array.isArray(agent?.actions) && agent.actions.includes(action);
+    if (agents && agent && agent.status !== 'ready') {
+      const name = String(agent.cliLabel || agent.cli);
+      if (offers('install')) {
+        buttons.appendChild(
+          localModelButton(localModelT('Install {cli}', { cli: name }), {
+            // A stopped model's main action is Start: installing an agent is the quiet one then.
+            key: startIsMain ? 'agent-install' : 'primary',
+            primary: !next && !startIsMain,
+            disabled: ui.busy,
+            onClick: () => void this.installLocalModelAgent(agent.cli),
+          })
+        );
+      } else if (agent.status === 'installing') {
+        buttons.appendChild(
+          localModelButton(localModelT('Installing {cli}', { cli: name }), {
+            key: startIsMain ? 'agent-install' : 'primary',
+            primary: !next && !startIsMain,
+            disabled: true,
+          })
+        );
+      }
+      // An agent that needs a setup of its own has nothing to press: the line above says where.
+    } else if (agents ? offers('start-session') : can('start-session')) {
       buttons.appendChild(
         localModelButton(localModelT('Start a session'), {
           key: 'primary',
           primary: !next,
           disabled: ui.busy,
-          onClick: () => void this.startLocalModelSession(),
+          onClick: () => void this.startLocalModelSession(agents && agent ? agent.cli : undefined),
         })
       );
     }

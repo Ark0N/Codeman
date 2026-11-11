@@ -23318,6 +23318,88 @@ html[data-skin='rose-pine-dawn'] {
   accent-color: var(--lm-brand);
 }
 
+/* ── the coding agents of an installed model ─────────────────────── */
+/* One chip per agent a session can be started with, as a radio group: the
+   selected one in the look of the selected model row, a tag on the ones that
+   are not on this Mac. Under them, one line about the selected one. */
+.lm-agents {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.lm-agents-label {
+  font-size: 0.7rem;
+  color: var(--text-dim);
+}
+
+.lm-agent-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.lm-agent {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-height: 2.1rem;
+  padding: 0 0.7rem 0 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition:
+    background var(--transition-smooth),
+    border-color var(--transition-smooth);
+}
+
+.lm-agent:hover:not(:disabled) {
+  background: var(--control-bg);
+}
+
+.lm-agent:focus-visible {
+  outline: 2px solid var(--lm-brand);
+  outline-offset: 1px;
+}
+
+.lm-agent:disabled {
+  cursor: default;
+}
+
+.lm-agent-on,
+.lm-agent-on:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--lm-brand) 55%, var(--border));
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--lm-brand) 17%, transparent),
+    color-mix(in srgb, var(--lm-brand) 5%, transparent)
+  );
+}
+
+.lm-agent .lm-radio {
+  flex: none;
+}
+
+.lm-agent-on .lm-radio {
+  border-color: var(--lm-brand);
+  background: radial-gradient(circle, var(--lm-brand) 0 3px, transparent 3.5px);
+}
+
+.lm-agent-name {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.lm-agent-about {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
 /* ── the models on this Mac ───────────────────────────────────────── */
 /* Name with its context, state, size on disk, and what can be done with the
    row. One grid like the chooser's, so the sizes line up down the list. The
@@ -23552,7 +23634,8 @@ html[data-skin='rose-pine-dawn'] {
 
 @media (prefers-reduced-motion: reduce) {
   .lm-bar-fill,
-  .lm-model {
+  .lm-model,
+  .lm-agent {
     transition: none;
   }
 }
@@ -23561,6 +23644,10 @@ html[data-skin='rose-pine-dawn'] {
 @media (pointer: coarse) {
   .lm-model {
     min-height: 2.9rem;
+  }
+
+  .lm-agent {
+    min-height: 2.6rem;
   }
 
   .local-model-window .wt-btn.lm-btn.lm-btn-row {

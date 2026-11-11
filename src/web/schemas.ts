@@ -2495,14 +2495,20 @@ const localModelId = z
   .max(200)
   .regex(/^[a-z0-9][a-z0-9._-]*:[a-z0-9][a-z0-9._-]*$/, 'Invalid model id');
 
+/**
+ * A coding agent as a CLI registry id. A request-shape check only: the real gate is the
+ * service's own lookup of the id among the catalogue harnesses it offers right now.
+ */
+const localModelCli = z
+  .string()
+  .max(64)
+  .regex(/^[a-z0-9][a-z0-9_-]*$/, 'Invalid coding agent id');
+
 /** POST /api/local-model/install: the row the person chose and the size they confirmed. */
 export const LocalModelInstallSchema = z
   .object({
     modelId: localModelId,
-    cli: z
-      .string()
-      .max(64)
-      .regex(/^[a-z0-9][a-z0-9_-]*$/, 'Invalid coding agent id'),
+    cli: localModelCli,
     context: z.number().int().positive().max(MAX_DISCOVERED_CONTEXT_TOKENS),
     acknowledgedBytes: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   })
@@ -2524,6 +2530,9 @@ export const LocalModelUseSchema = z.object({ modelId: localModelId }).strict();
 
 /** DELETE /api/local-model/models: one model of the store, by its name. Never a path. */
 export const LocalModelDeleteSchema = z.object({ modelId: localModelId }).strict();
+
+/** POST /api/local-model/agent: one more coding agent to install beside an installed model. */
+export const LocalModelAgentSchema = z.object({ cli: localModelCli }).strict();
 
 /**
  * A shell-safe bare word, mirroring `config/cli-registry/schema.ts`'s own `shellToken` —

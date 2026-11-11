@@ -150,7 +150,12 @@ function without(facts: HardwareFacts, ...fields: (keyof HardwareFacts)[]): Hard
 }
 
 /** Display labels of the stock harnesses, as the CLI registry would supply them. Data, not a branch. */
-const HARNESS_LABELS: Record<string, string> = { opencode: 'OpenCode', claude: 'Claude Code', pi: 'Pi' };
+const HARNESS_LABELS: Record<string, string> = {
+  opencode: 'OpenCode',
+  claude: 'Claude Code',
+  pi: 'Pi',
+  deepseek: 'DeepSeek',
+};
 
 /** What the server knows about one harness: installed and accepting every model id, unless overridden. */
 function fact(cli: string, overrides: Partial<HarnessFact> = {}): HarnessFact {
@@ -170,7 +175,10 @@ const STOCK = getLocalModelCatalog();
 /** The frozen catalogue of 2026-11-06: for the rule tests (see the file header). */
 const RULES = LocalModelCatalogSchema.parse(RULES_LOCAL_MODEL_CATALOG);
 
-/** Every harness installed, the gated one included. Both catalogues list the same three. */
+/**
+ * Every harness installed. The stock catalogue lists four and gates none; the rules catalogue
+ * lists the first three of them and gates one, which is what the gate tests need.
+ */
 const ALL_INSTALLED: HarnessFact[] = STOCK.harnesses.map((row) => fact(row.cli));
 
 /** A stock model row by id. */
@@ -602,9 +610,12 @@ describe('the MacBook Pro (Mac17,13: Apple M5 Pro, 48 GB)', () => {
       tested: true,
       needSource: 'measured',
       tag: { kind: 'tested', label: 'Tested on a Mac like this' },
+      // Every harness of the catalogue can run it, the pick's own first, then by rank.
       harnesses: [
         { cli: 'opencode', cliLabel: 'OpenCode', installed: true },
         { cli: 'claude', cliLabel: 'Claude Code', installed: true, slowFirstTurn: true },
+        { cli: 'pi', cliLabel: 'Pi', installed: true },
+        { cli: 'deepseek', cliLabel: 'DeepSeek', installed: true },
       ],
       // No runtime download was named, so an install downloads the model alone.
       installBytes: 23_105_798_956,
@@ -1718,9 +1729,12 @@ describe('harnesses', () => {
   const hw = mac(48, 'Apple M4 Max');
 
   it('never chooses a gated harness, even when it is the only one that could run a model', () => {
+    // The rule is tested on the rules catalogue, which gates one harness. The stock catalogue
+    // gates none since 2026-11-10; the sweep still runs on it, so a row gated again is covered.
+    expect(RULES.harnesses.filter((row) => row.gated).map((row) => row.cli)).toEqual(['pi']);
+    expect(STOCK.harnesses.filter((row) => row.gated)).toEqual([]);
     for (const [, catalog] of BOTH) {
       const gated = catalog.harnesses.filter((row) => row.gated).map((row) => row.cli);
-      expect(gated).toEqual(['pi']);
       for (const swept of SWEEP) {
         const result = recommend(swept, catalog, ALL_INSTALLED);
         for (const candidate of rows(result)) {

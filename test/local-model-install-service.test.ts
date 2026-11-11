@@ -253,7 +253,9 @@ function setup(
 ) {
   const store = memoryStore(options.state);
   const world = {
-    agentInstalled: options.agentInstalled ?? false,
+    // A model that is installed was installed with its coding agent: what the world holds
+    // then, unless the test says the agent has gone since.
+    agentInstalled: options.agentInstalled ?? options.state?.state === 'installed',
     runtimeOnDisk: options.runtimeOnDisk ?? false,
     clock: 1_000_000,
     startResult: undefined as RuntimeStartResult | undefined,
@@ -294,7 +296,22 @@ function setup(
   const deps = {
     readHardware: vi.fn(async () => MAC),
     getCatalog: vi.fn(() => CATALOG),
-    buildHarnessFacts: vi.fn(async () => FACTS),
+    // The facts follow the world, like the real probe: an agent that is on this Mac is not
+    // offered for install, and one that is missing is.
+    buildHarnessFacts: vi.fn(
+      async (): Promise<HarnessFact[]> =>
+        FACTS.map((fact) =>
+          world.agentInstalled
+            ? {
+                cli: fact.cli,
+                label: fact.label,
+                installed: true,
+                installable: false,
+                acceptsModelId: fact.acceptsModelId,
+              }
+            : fact
+        )
+    ),
     recommend: vi.fn(() => recommendation(world.agentInstalled)),
     modelFitsBudget: vi.fn(() => true),
     isRuntimeInstalled: vi.fn(async () => world.runtimeOnDisk),
@@ -1771,6 +1788,7 @@ describe('Remove', () => {
       library: [],
       // Measured again after the Remove: the store is empty here.
       store: { bytes: 0, gb: '0.0' },
+      harnesses: [],
       actions: ['install'],
     });
     expect(h.store.get()).toMatchObject({ schema: 1, state: 'idle' });
@@ -3035,6 +3053,23 @@ describe('use: the switch to a checked model', () => {
     expect(withoutPi.store.get().cli).toEqual({ id: 'opencode', label: 'OpenCode' });
   });
 
+  it('with neither of the two installed it takes another agent the model can be run with that is on this Mac', async () => {
+    const h = setup({ state: TWO_MODELS, runtimeOnDisk: true, agentInstalled: false });
+    // OpenCode has gone; Claude Code, the catalogue's other harness, is there.
+    h.deps.buildHarnessFacts.mockImplementation(async () => [
+      FACTS[0],
+      { cli: 'claude', label: 'Claude Code', installed: true, installable: false, acceptsModelId: () => true },
+    ]);
+    await h.service.boot();
+    expect((await h.service.use({ modelId: GPT.id }, ADMIN)).ok).toBe(true);
+    await h.service.idle();
+    expect(h.store.get()).toMatchObject({
+      state: 'installed',
+      model: { id: GPT.id },
+      cli: { id: 'claude', label: 'Claude Code' },
+    });
+  });
+
   it('with no coding agent of the two installed it is refused, in one sentence, and nothing starts', async () => {
     const h = setup({ state: TWO_MODELS, runtimeOnDisk: true, agentInstalled: false });
     await h.service.boot();
@@ -3097,6 +3132,206 @@ describe('use: the switch to a checked model', () => {
     await h.service.resume({}, ADMIN);
     await h.service.idle();
     expect(h.store.get()).toMatchObject({ state: 'installed', model: { id: GPT.id } });
+  });
+});
+
+describe('installAgent: one more coding agent beside an installed model', () => {
+  /** An installed, running model whose coding agent is not on this Mac. */
+  async function withoutAgent() {
+    const h = setup({ state: INSTALLED, runtimeOnDisk: true, agentInstalled: false });
+    await h.service.boot();
+    return h;
+  }
+
+  it('the view offers it: the agent with its literal command, no session, and the state untouched', async () => {
+    const h = await withoutAgent();
+    const view = await h.service.view();
+    expect(view.state).toBe('installed');
+    expect(view.harnesses).toEqual([
+      {
+        cli: 'opencode',
+        cliLabel: 'OpenCode',
+        default: true,
+        status: 'installable',
+        installCommand: INSTALL_COMMAND,
+        actions: ['install'],
+      },
+    ]);
+    expect(view.actions).toContain('install-agent');
+    // Nothing can be started, so no session is offered: the window says "Install OpenCode".
+    expect(view.actions).not.toContain('start-session');
+  });
+
+  it('answers once the installer is started, runs the stock command in the shared slot, and ends on an agent that can be started', async () => {
+    const h = await withoutAgent();
+    let finish: () => void = () => {};
+    h.deps.runInstallCommand.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = () => {
+            h.world.agentInstalled = true;
+            resolve({ code: 0, output: 'opencode installed\n', timedOut: false, aborted: false });
+          };
+        })
+    );
+    const before = structuredClone(h.store.get());
+
+    const started = await h.service.installAgent({ cli: 'opencode' }, ADMIN);
+    expect(started.ok).toBe(true);
+    if (!started.ok) throw new Error('unreachable');
+    // While it runs: the row says so, nothing else is offered for it, and the model is as it was.
+    expect(started.view.state).toBe('installed');
+    expect(started.view.harnesses[0]).toMatchObject({
+      status: 'installing',
+      installCommand: INSTALL_COMMAND,
+      actions: [],
+    });
+    expect(started.view.actions).not.toContain('install-agent');
+    await vi.waitFor(() => expect(h.deps.runInstallCommand).toHaveBeenCalledTimes(1));
+    const [command, options] = h.deps.runInstallCommand.mock.calls[0] as unknown as [string, { signal: AbortSignal }];
+    expect(command).toBe(INSTALL_COMMAND);
+    expect(options.signal).toBeInstanceOf(AbortSignal);
+    expect(h.deps.tryBeginCliInstall).toHaveBeenCalledWith('opencode');
+    // Not a job: a session on the model is still not refused.
+    expect(await h.service.launchRefusal('local-ollama')).toBeUndefined();
+
+    finish();
+    await h.service.idle();
+    const view = await h.service.view();
+    expect(view.harnesses).toEqual([
+      { cli: 'opencode', cliLabel: 'OpenCode', default: true, status: 'ready', actions: ['start-session'] },
+    ]);
+    expect(view.actions).toContain('start-session');
+    expect(h.calls).toContain('release');
+    expect(h.deps.audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        admin: ADMIN.username,
+        action: 'cli_install',
+        target: 'opencode',
+        detail: expect.objectContaining({ command: INSTALL_COMMAND, exitCode: 0, via: 'local-model' }),
+      })
+    );
+    // The state file never heard of it (the pid and the time of a write aside, nothing moved).
+    expect(h.store.get()).toEqual(before);
+  });
+
+  it('an installer that fails leaves the model installed and usable, and its last words on the row', async () => {
+    const h = await withoutAgent();
+    h.deps.runInstallCommand.mockResolvedValue({
+      code: 1,
+      output: 'npm ERR! network request failed',
+      timedOut: false,
+      aborted: false,
+    });
+    expect((await h.service.installAgent({ cli: 'opencode' }, ADMIN)).ok).toBe(true);
+    await h.service.idle();
+    const view = await h.service.view();
+    expect(view.state).toBe('installed');
+    expect(view).not.toHaveProperty('error');
+    expect(view.harnesses[0]).toMatchObject({
+      status: 'installable',
+      actions: ['install'],
+      error: {
+        message: { text: LOCAL_MODEL_INSTALL_LABELS.errHarnessFailed, vars: { cli: 'OpenCode' } },
+        detail: 'npm ERR! network request failed',
+      },
+    });
+    expect(h.store.get().state).toBe('installed');
+    expect(await h.service.launchRefusal('local-ollama')).toBeUndefined();
+
+    // Try again: the old failure is gone the moment the new attempt starts, and it can work.
+    h.deps.runInstallCommand.mockImplementation(async () => {
+      h.world.agentInstalled = true;
+      return { code: 0, output: '', timedOut: false, aborted: false };
+    });
+    const again = await h.service.installAgent({ cli: 'opencode' }, ADMIN);
+    if (!again.ok) throw new Error('unreachable');
+    expect(again.view.harnesses[0]).not.toHaveProperty('error');
+    await h.service.idle();
+    expect((await h.service.view()).harnesses[0]).toMatchObject({ status: 'ready' });
+  });
+
+  it('one installer at a time: a second request while one runs is 409 job-running', async () => {
+    const h = await withoutAgent();
+    let finish: () => void = () => {};
+    h.deps.runInstallCommand.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = () => resolve({ code: 1, output: 'stopped', timedOut: false, aborted: false });
+        })
+    );
+    expect((await h.service.installAgent({ cli: 'opencode' }, ADMIN)).ok).toBe(true);
+    expect(await h.service.installAgent({ cli: 'opencode' }, ADMIN)).toMatchObject({
+      ok: false,
+      status: 409,
+      conflict: { reason: 'job-running' },
+    });
+    await vi.waitFor(() => expect(h.deps.runInstallCommand).toHaveBeenCalledTimes(1));
+    finish();
+    await h.service.idle();
+    expect(h.deps.runInstallCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it('an agent that is already there answers with the view and runs nothing', async () => {
+    const h = setup({ state: INSTALLED, runtimeOnDisk: true });
+    await h.service.boot();
+    const result = await h.service.installAgent({ cli: 'opencode' }, ADMIN);
+    expect(result.ok).toBe(true);
+    expect(h.deps.runInstallCommand).not.toHaveBeenCalled();
+    expect(h.deps.tryBeginCliInstall).not.toHaveBeenCalled();
+  });
+
+  it('refuses an agent the view does not list, and one that one command does not make startable', async () => {
+    const h = await withoutAgent();
+    // `claude` is a catalogue harness with no fact here (the registry does not offer it).
+    for (const cli of ['claude', 'not-a-cli']) {
+      expect(await h.service.installAgent({ cli }, ADMIN)).toEqual({
+        ok: false,
+        status: 400,
+        message: { text: LOCAL_MODEL_INSTALL_LABELS.refusedAgentNotOffered },
+      });
+    }
+    // A launcher, or a command that needs an administrator: listed, never installed from here.
+    h.deps.buildHarnessFacts.mockImplementation(async () => [
+      { cli: 'opencode', label: 'OpenCode', installed: false, installable: false, acceptsModelId: () => true },
+    ]);
+    expect((await h.service.view()).harnesses[0]).toMatchObject({ status: 'setup-needed', actions: [] });
+    expect(await h.service.installAgent({ cli: 'opencode' }, ADMIN)).toEqual({
+      ok: false,
+      status: 400,
+      message: { text: LOCAL_MODEL_INSTALL_LABELS.refusedAgentNotInstallable, vars: { cli: 'OpenCode' } },
+    });
+    expect(h.deps.runInstallCommand).not.toHaveBeenCalled();
+  });
+
+  it('is refused outside installed: 409 wrong-state', async () => {
+    for (const state of [undefined, jobAt('model', 'paused')]) {
+      const h = setup(state ? { state } : {});
+      expect(await h.service.installAgent({ cli: 'opencode' }, ADMIN)).toMatchObject({
+        ok: false,
+        status: 409,
+        conflict: { reason: 'wrong-state' },
+      });
+      expect(h.deps.runInstallCommand).not.toHaveBeenCalled();
+    }
+  });
+
+  it('a server that stops ends the installer and records nothing', async () => {
+    const h = await withoutAgent();
+    let seen: AbortSignal | undefined;
+    h.deps.runInstallCommand.mockImplementation((async (_command: string, options?: { signal?: AbortSignal }) => {
+      seen = options?.signal;
+      await untilAborted(options?.signal);
+      return { code: null, output: '', timedOut: false, aborted: true };
+    }) as never);
+    await h.service.installAgent({ cli: 'opencode' }, ADMIN);
+    await vi.waitFor(() => expect(seen).toBeDefined());
+    await h.service.shutdown();
+    expect(seen?.aborted).toBe(true);
+    await h.service.idle();
+    expect(h.store.get().state).toBe('installed');
+    // Interrupted is not failed: the row has no error.
+    expect((await h.service.view()).harnesses[0]).not.toHaveProperty('error');
   });
 });
 

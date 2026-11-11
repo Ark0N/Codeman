@@ -194,6 +194,21 @@ function opencodeModelLimit(contextLength: number | undefined): { context: numbe
   return { context: total, output };
 }
 
+/**
+ * The two fields pi's model list and the dsh provider patch (which is built on pi's model
+ * layer) take for a model's window: `contextWindow`, the FULL window, and `maxTokens`, the
+ * reply's share of it (a quarter, capped at 8192 on a large window). Empty for an unknown or
+ * non-finite size: the CLI then keeps its own default, and no limit is invented here.
+ */
+function modelWindowFields(contextLength: number | undefined): { contextWindow?: number; maxTokens?: number } {
+  if (contextLength === undefined || !Number.isFinite(contextLength) || contextLength <= 0) return {};
+  return {
+    contextWindow: Math.trunc(contextLength),
+    // A quarter of the window keeps the reply inside the prompt's share; 8192 caps it on a large window.
+    maxTokens: Math.max(1, Math.min(8192, Math.floor(contextLength / 4))),
+  };
+}
+
 function renderConfigContent(
   template: 'opencode-json',
   endpoint: CustomModelEndpoint,
@@ -260,19 +275,7 @@ function renderConfigFile(
                     apiKeyEnv: CUSTOM_MODEL_API_KEY_ENV_VAR,
                     api: 'openai-completions',
                     baseURL: baseUrl,
-                    models: [
-                      {
-                        id: modelId,
-                        name: modelId,
-                        ...(contextLength !== undefined && Number.isFinite(contextLength) && contextLength > 0
-                          ? {
-                              contextWindow: Math.trunc(contextLength),
-                              // A quarter of the window keeps the reply inside the prompt's share; 8192 caps it on a large window.
-                              maxTokens: Math.max(1, Math.min(8192, Math.floor(contextLength / 4))),
-                            }
-                          : {}),
-                      },
-                    ],
+                    models: [{ id: modelId, name: modelId, ...modelWindowFields(contextLength) }],
                   },
                 },
               },
@@ -327,6 +330,11 @@ function renderConfigFile(
       // true` is required too: pi does not automatically send `Authorization: Bearer
       // <apiKey>` just because `apiKey` is set (per the same doc) — without it, a real
       // (non-llama.cpp) endpoint that actually checks the key would reject every request.
+      // The model entry carries the endpoint's context window when it is known. Without it pi
+      // takes an unknown model for a 128,000-token one (its footer reads `/128k`) and asks for
+      // 16,384 reply tokens, so on a 65,536 or 32,768 window it never compacts before the
+      // server's real window is full. Measured on pi 1.5.2: with both fields `pi --list-models`
+      // shows the window and the request carries `max_tokens: 8192`.
       return {
         content: JSON.stringify(
           {
@@ -336,7 +344,7 @@ function renderConfigFile(
                 apiKey,
                 api: 'openai-completions',
                 authHeader: true,
-                models: [{ id: modelId }],
+                models: [{ id: modelId, ...modelWindowFields(contextLength) }],
               },
             },
           },
