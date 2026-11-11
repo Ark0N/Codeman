@@ -510,6 +510,71 @@ describe('the local model window (real Chromium)', () => {
     expect(overflow).toBeLessThanOrEqual(0);
   });
 
+  it('the coding agents: chips that wrap inside the window at every width, the install command included', async () => {
+    const agents = [
+      { cli: 'opencode', cliLabel: 'OpenCode', default: true, status: 'ready', actions: ['start-session'] },
+      {
+        cli: 'claude',
+        cliLabel: 'Claude Code',
+        default: false,
+        status: 'ready',
+        slowFirstTurn: true,
+        actions: ['start-session'],
+      },
+      {
+        cli: 'pi',
+        cliLabel: 'Pi',
+        default: false,
+        status: 'installable',
+        installCommand: 'npm install -g --ignore-scripts @earendil-works/pi-coding-agent',
+        actions: ['install'],
+      },
+      { cli: 'deepseek', cliLabel: 'DeepSeek', default: false, status: 'setup-needed', actions: [] },
+    ];
+    const answer = {
+      ...INSTALLED,
+      install: {
+        ...INSTALLED.install,
+        harnesses: agents,
+        actions: [...INSTALLED.install.actions, 'install-agent'],
+      },
+    };
+    for (const [width, height] of [
+      [1440, 900],
+      [390, 844],
+      [320, 640],
+    ]) {
+      await load(width, height, answer);
+      await open();
+      // The agent that is not on this Mac: its command is the longest line of the block.
+      await p.locator('.lm-agent', { hasText: 'Pi' }).click();
+      const seen = await p.evaluate(() => {
+        const frame = document.querySelector('.local-model-window')!.getBoundingClientRect();
+        const body = document.getElementById('localModelWindowBody')!;
+        const outside = [...document.querySelectorAll('.lm-agent, .lm-agents .lm-command, .lm-buttons button')]
+          .map((el) => el.getBoundingClientRect())
+          .filter((box) => box.width > 0 && (box.left < frame.left - 0.5 || box.right > frame.right + 0.5)).length;
+        const chips = [...document.querySelectorAll<HTMLElement>('.lm-agent')];
+        return {
+          chips: chips.length,
+          outside,
+          sideways: body.scrollWidth - body.clientWidth,
+          checked: document.querySelector('.lm-agent[aria-checked="true"] .lm-agent-name')!.textContent,
+          tabStops: chips.filter((chip) => chip.tabIndex === 0).length,
+          main: document.querySelector('.lm-buttons .wt-btn-primary')!.textContent,
+        };
+      });
+      expect(seen, `${width}px`).toEqual({
+        chips: 4,
+        outside: 0,
+        sideways: 0,
+        checked: 'Pi',
+        tabStops: 1,
+        main: 'Install Pi',
+      });
+    }
+  });
+
   it('paints above App Settings when it is opened from there', async () => {
     await load(1440);
     await p.evaluate(() => document.getElementById('appSettingsModal')!.classList.add('active'));
