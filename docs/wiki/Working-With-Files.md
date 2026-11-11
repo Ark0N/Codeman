@@ -76,6 +76,10 @@ convenient:
 - **`.git/` is denied outright.** Hooks are executable code, and a corrupted index looks
   unrecoverable to someone who wanted to fix a typo.
 - **Non-UTF-8 content is refused**, verified by a round-trip comparison.
+- **Dotenv files are editable, other credential files are not.** `.env`, `.env.local` and
+  `prod.env` open in the editor like any config file, and a save keeps the file's permissions
+  (a `0600` file stays `0600`). `.npmrc`, `credentials.json`, anything under `.ssh/` and
+  Codeman's own `~/.codeman/.env` stay read-only here.
 
 ## Attachments
 

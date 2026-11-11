@@ -6,7 +6,9 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { TEXT_ATTACHMENT_EXTENSIONS } from '../src/attachment-registry.js';
 import {
+  EDITABLE_EXTENSIONS,
   MAX_EDITABLE_BYTES,
   applyEol,
   detectEol,
@@ -15,6 +17,20 @@ import {
 } from '../src/config/file-editing.js';
 
 describe('file-editing policy', () => {
+  describe('shared text extensions', () => {
+    it('excludes env from TEXT_ATTACHMENT_EXTENSIONS', () => {
+      expect(TEXT_ATTACHMENT_EXTENSIONS.has('env')).toBe(false);
+    });
+
+    it('excludes env from EDITABLE_EXTENSIONS', () => {
+      expect(EDITABLE_EXTENSIONS.has('env')).toBe(false);
+    });
+
+    it('shares the same set between attachment and editor extensions', () => {
+      expect(TEXT_ATTACHMENT_EXTENSIONS).toBe(EDITABLE_EXTENSIONS);
+    });
+  });
+
   describe('isEditableFileName', () => {
     it('allows common text extensions', () => {
       for (const name of ['a.ts', 'b.md', 'c.json', 'd.py', 'style.css', 'notes.txt', 'x.yml', 'Q.SQL']) {
@@ -34,10 +50,33 @@ describe('file-editing policy', () => {
       }
     });
 
-    it('rejects svg and env (deliberate v1 exclusions)', () => {
+    it('rejects svg (deliberate exclusion)', () => {
       expect(isEditableFileName('image.svg')).toBe(false);
-      expect(isEditableFileName('config.env')).toBe(false);
     });
+
+    it.each([
+      '.env',
+      '.env.local',
+      '.env.production',
+      '.env.development.local',
+      '.env.example',
+      '.env.template',
+      '.env.sample',
+      '.ENV',
+      '.Env.Local',
+      'config.env',
+      'prod.env',
+      'docker.ENV',
+    ])('allows dotenv filename %s', (name) => {
+      expect(isEditableFileName(name)).toBe(true);
+    });
+
+    it.each(['.envrc', 'env', '.environment', 'environment', '.env-local', 'foo.envrc', 'envfile'])(
+      'rejects dotenv lookalike %s',
+      (name) => {
+        expect(isEditableFileName(name)).toBe(false);
+      }
+    );
 
     it('rejects extensionless and unknown-dotfile names not on the basename list', () => {
       expect(isEditableFileName('somebinary')).toBe(false);

@@ -109,7 +109,9 @@ Decisions baked in:
 - `svg` and `env` are deliberately marked with `?` above: `svg` is served as an untrusted octet-stream on
   the read side (`file-routes.ts:118`) so allowing an edit is defensible, but I recommend **excluding
   both** in v1. `.env` files are matched by `isSensitivePath()` anyway and would be rejected downstream;
-  excluding them at the allowlist keeps a single obvious refusal.
+  excluding them at the allowlist keeps a single obvious refusal. Superseded for dotenv: the plain
+  preview serves a workspace `.env` in full, so the editor now opens dotenv files (`allowDotenv`, see
+  `docs/architecture-invariants.md#file-viewer-edit-mode`); `svg` stays excluded.
 - `isDeniedEditRelativePath` blocks the `.git/` subtree: `.git/hooks/*` is code execution and a corrupt
   index is unrecoverable-looking to a user who only wanted to fix a typo. Other dotfiles stay allowed but
   are not reachable from the tree UI anyway (`showHidden=false`).
@@ -363,7 +365,8 @@ Route cases to assert explicitly:
 4. symlink pointing inside is written through to the target
 5. non-allowlisted extension gives 400
 6. `.git/config` gives 403
-7. a `.env` in the workspace gives 403 (sensitive-path)
+7. a `.env` in the workspace gives 403 (sensitive-path); superseded: it is now editable, while `.ssh/.env`,
+   the data dir's `.env` and the other credential files still give 403
 8. a file with a NUL byte gives 400
 9. a latin-1 file that fails the UTF-8 round-trip gives 400
 10. stale `baseHash` gives 409 (`CONFLICT` envelope, no data); `force:true` then succeeds

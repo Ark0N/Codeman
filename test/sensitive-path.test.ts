@@ -21,6 +21,13 @@ import { describe, expect, it } from 'vitest';
 import { isSensitivePath } from '../src/web/sensitive-path.js';
 
 const HOME = '/home/dev';
+const dotenvPaths: Array<[string, string]> = [
+  ['dotenv', '/srv/app/.env'],
+  ['local dotenv', '/srv/app/.env.local'],
+  ['suffixed dotenv', '/srv/app/.env.production'],
+  ['a dotenv example', '/srv/app/.env.example'],
+  ['nested dotenv', '/srv/app/sub/dir/.env'],
+];
 
 describe('isSensitivePath', () => {
   describe('blocks', () => {
@@ -35,12 +42,7 @@ describe('isSensitivePath', () => {
       ['ssh keys anywhere', '/srv/deploy/.ssh/id_rsa'],
       ['gpg keyring', `${HOME}/.gnupg/private-keys-v1.d/key.key`],
 
-      ['dotenv', '/srv/app/.env'],
-      ['suffixed dotenv', '/srv/app/.env.production'],
-      // Pre-existing and deliberate: `.env.*` is blocked wholesale, so even a
-      // committed `.env.example` is refused rather than risking the one repo
-      // whose "example" holds a live key.
-      ['a dotenv example', '/srv/app/.env.example'],
+      ...dotenvPaths,
 
       ['generic credentials file', '/srv/app/credentials'],
       ['json credentials', '/srv/app/credentials.json'],
@@ -106,11 +108,59 @@ describe('isSensitivePath', () => {
     it.each(blocked)('blocks the %s', (_label, path) => {
       expect(isSensitivePath(path)).toBe(true);
     });
+
+    it.each(blocked.filter(([, path]) => !dotenvPaths.some(([, dotenv]) => dotenv === path)))(
+      'still blocks the %s with allowDotenv:true',
+      (_label, path) => {
+        expect(isSensitivePath(path, { allowDotenv: true })).toBe(true);
+      }
+    );
+  });
+
+  describe('dotenv opt-in', () => {
+    it.each(dotenvPaths)('blocks the %s with allowDotenv:false', (_label, path) => {
+      expect(isSensitivePath(path, { allowDotenv: false })).toBe(true);
+    });
+
+    it.each(dotenvPaths)('blocks the %s with empty options', (_label, path) => {
+      expect(isSensitivePath(path, {})).toBe(true);
+    });
+
+    it.each(dotenvPaths)('allows the %s with allowDotenv:true', (_label, path) => {
+      expect(isSensitivePath(path, { allowDotenv: true })).toBe(false);
+    });
+
+    it.each([
+      '/home/u/.ssh/.env',
+      '/home/u/.gnupg/.env.local',
+      '/home/u/.config/gh/.env',
+      '/home/u/.azure/.env',
+      '/home/u/.codeman/backups/cfg-20260101-000000/.env',
+    ])('still blocks dotenv inside sensitive tree %s', (path) => {
+      expect(isSensitivePath(path, { allowDotenv: true })).toBe(true);
+    });
+
+    describe.each([
+      ['default', undefined],
+      ['empty options', {}],
+      ['allowDotenv:false', { allowDotenv: false }],
+      ['allowDotenv:true', { allowDotenv: true }],
+    ])('Codeman login files with %s', (_label, options) => {
+      it.each([
+        '/home/u/.codeman/.env',
+        '/home/u/.codeman-dev/.env',
+        '/home/u/.codeman-beta/.env',
+        '/srv/x/.codeman/.env',
+      ])('blocks %s', (path) => {
+        expect(isSensitivePath(path, options)).toBe(true);
+      });
+    });
   });
 
   describe('leaves ordinary files attachable', () => {
     const allowed: Array<[string, string]> = [
       ['a source file', '/srv/app/src/index.ts'],
+      ['a readme', '/srv/app/README.md'],
       ['a dotfile that carries no secret', '/srv/app/.gitignore'],
       ['a hidden CI directory', '/srv/app/.github/workflows/ci.yml'],
       // The publish skill and the review-card loop attach from these trees, so
@@ -127,6 +177,10 @@ describe('isSensitivePath', () => {
 
     it.each(allowed)('allows %s', (_label, path) => {
       expect(isSensitivePath(path)).toBe(false);
+    });
+
+    it.each(allowed)('still allows %s with allowDotenv:true', (_label, path) => {
+      expect(isSensitivePath(path, { allowDotenv: true })).toBe(false);
     });
   });
 
@@ -153,6 +207,13 @@ describe('isSensitivePath', () => {
     ])('blocks the %s', (_label, path) => {
       expect(isSensitivePath(path)).toBe(true);
     });
+
+    it.each(['.claude.json', '.claude/settings.json', '.claude/settings.local.json'])(
+      'still blocks home-anchored %s with allowDotenv:true',
+      (relativePath) => {
+        expect(isSensitivePath(`${homedir()}/${relativePath}`, { allowDotenv: true })).toBe(true);
+      }
+    );
 
     // A blanket `/\.claude\/settings\.json$/` would also catch every CASE-level
     // settings file, which users legitimately view and edit in the File Viewer

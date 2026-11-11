@@ -1125,5 +1125,26 @@ describe('file-routes', () => {
 
       expect(res.statusCode).toBe(403);
     });
+
+    it('refuses a workspace dotenv download without reading or streaming its content', async () => {
+      const content = 'TEST_DOWNLOAD_VALUE=must-stay-private';
+      const path = `${harness.ctx._session.workingDir}/.env`;
+      mockedReadFile.mockImplementation(async (requestedPath) =>
+        String(requestedPath) === path ? (content as never) : ('{}' as never)
+      );
+      mockedCreateReadStream.mockImplementation(() => Readable.from([Buffer.from(content)]) as never);
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/download?sessionId=${harness.ctx._sessionId}&path=.env`,
+      });
+
+      expect(res.statusCode).toBe(403);
+      expect(res.json().success).toBe(false);
+      expect(res.json().data).toBeUndefined();
+      expect(res.headers['content-disposition']).toBeUndefined();
+      expect(mockedCreateReadStream.mock.calls).toEqual([]);
+      expect(mockedReadFile.mock.calls.filter(([requestedPath]) => String(requestedPath) === path)).toEqual([]);
+    });
   });
 });
