@@ -13,6 +13,7 @@
 html.mobile-init .header-font-controls,
 html.mobile-init .header-system-stats,
 html.mobile-init .header-tokens,
+html.mobile-init .btn-file-viewer,
 html.mobile-init .monitor-panel,
 html.mobile-init .subagents-panel,
 html.mobile-init .project-insights-panel,
@@ -574,18 +575,29 @@ html.mobile-init .file-browser-panel {
     height: 18px;
   }
 
-  /* Hide header settings gear, lifecycle log, away digest, session manager, and
-     file viewer on mobile - settings moved to toolbar; the others are secondary /
+  /* File Viewer is off by default on phones, but honors an explicit opt-in.
+     Give its header entry the same minimum touch target as the home button. */
+  .btn-icon-header.btn-file-viewer {
+    width: 44px;
+    height: 44px;
+  }
+
+  .btn-icon-header.btn-file-viewer svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  /* Hide header settings gear, lifecycle log, away digest, and session manager
+     on mobile - settings moved to toolbar; the others are secondary /
      desktop-oriented controls that don't belong on the cramped phone header (the
      session manager stays reachable via the Ctrl+K palette's "Browse all sessions"
-     item; the file viewer button is opt-in but its panel is desktop-sized).
+     item).
      (The attachments button is opt-in / default-hidden everywhere via its own
      --hidden marker, so it needs no mobile-specific rule here.) */
   .btn-icon-header.btn-settings,
   .btn-icon-header.btn-lifecycle-log,
   .btn-icon-header.btn-away-digest,
   .btn-icon-header.btn-session-manager,
-  .btn-icon-header.btn-file-viewer,
   /* Edit history: a desktop panel; phones never show the button (opt-in, default OFF anyway). */
   .btn-icon-header.btn-edit-history,
   /* Approvals bell: phones answer from the overview's NEEDS YOU rows instead

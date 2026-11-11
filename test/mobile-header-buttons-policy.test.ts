@@ -29,10 +29,9 @@ const PUBLIC = join(HERE, '../src/web/public');
 // Matches the device the browser-based test emulates (iPhone 14 Pro = 393px CSS).
 const PHONE_WIDTH = 393;
 
-// Header buttons intentionally kept VISIBLE in the phone header. Empty today: the
-// mobile header is deliberately minimal and essential controls (settings, case)
-// live in the toolbar. Add a class here ONLY with a justifying comment.
-const MOBILE_VISIBLE_ALLOWLIST = new Set<string>([]);
+// Issue #759: the maintainer approved File Viewer on phones when explicitly enabled.
+// Its per-device setting still defaults off; the browser test covers that default.
+const MOBILE_VISIBLE_ALLOWLIST = new Set<string>(['btn-file-viewer']);
 
 // Buttons we expect to STAY hidden on phones — an explicit lock so a future edit
 // that removes a hide rule fails loudly (not silently). The attachments button is
@@ -40,13 +39,7 @@ const MOBILE_VISIBLE_ALLOWLIST = new Set<string>([]);
 // it's excluded from the default-visible enumeration rather than mobile-hidden.
 // The edit history button is opt-in the same way, but it IS here: its panel is
 // desktop-sized, so it stays off phones even when the setting is on.
-const KNOWN_PHONE_HIDDEN = [
-  'btn-settings',
-  'btn-lifecycle-log',
-  'btn-session-manager',
-  'btn-file-viewer',
-  'btn-edit-history',
-];
+const KNOWN_PHONE_HIDDEN = ['btn-settings', 'btn-lifecycle-log', 'btn-session-manager', 'btn-edit-history'];
 
 function attrOf(openTag: string, name: string): string {
   const m = openTag.match(new RegExp(`${name}="([^"]*)"`));
@@ -149,6 +142,13 @@ describe('Mobile header button policy (static guard)', () => {
           `display:none block in src/web/public/mobile.css.`
       ).toBe(true);
     }
+  });
+
+  it('allows the explicitly enabled File Viewer button on phones (issue #759)', () => {
+    // The setting removes the --hidden marker; a separate blanket phone hide
+    // would override that choice. Default-off and live toggling are exercised
+    // against the real page in test/mobile/file-browser.test.ts.
+    expect(phoneHidden.has('btn-file-viewer')).toBe(false);
   });
 });
 
