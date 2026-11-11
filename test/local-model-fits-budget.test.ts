@@ -12,9 +12,9 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { getLocalModelCatalog } from '../src/config/local-model-catalog.js';
+import { getLocalModelCatalog, LocalModelCatalogSchema } from '../src/config/local-model-catalog.js';
 import { formatGb, memClassGb } from '../src/local-model/format.js';
-import { modelFitsBudget, recommend } from '../src/local-model/recommend.js';
+import { MAX_ALTERNATIVES, modelFitsBudget, recommend } from '../src/local-model/recommend.js';
 import type { HardwareFacts, HarnessFact } from '../src/types.js';
 
 /** A Mac with Apple silicon and `gb` GB of memory as sold. */
@@ -72,15 +72,43 @@ describe('modelFitsBudget', () => {
     }
   });
 
-  it('does not depend on the ranking: a model that fits and is listed nowhere still fits', () => {
-    // On a 128 GB Mac more models fit than the recommendation lists.
-    const hw = mac(128, 'Apple M5 Max');
+  it('does not depend on what the recommendation lists: a model left out for disk space still fits', () => {
+    // The recommendation lists every model that fits the memory, unless its download would
+    // leave under 10 GiB on the disk. With 40 GB free on a 128 GB Mac that leaves out the two
+    // largest downloads, which fit the memory all the same.
+    const hw = { ...mac(128, 'Apple M5 Max'), freeDiskBytes: 40_000_000_000 };
     const offered = recommend(hw, catalog, harnessFacts());
     const listed = new Set([offered.pick, ...offered.alternatives].map((row) => row?.modelId));
     const unlisted = catalog.models.filter((model) => !listed.has(model.id));
-    expect(unlisted.length).toBeGreaterThan(0);
+    expect(unlisted.map((model) => model.id)).toEqual(['qwen3.8:27b-q8_0', 'ornith-1.5:122b']);
     for (const model of unlisted) {
       expect(modelFitsBudget(hw, catalog, model.id, model.contexts.at(-1) as number), model.id).toBe(true);
+    }
+  });
+
+  it('does not depend on the ranking: a model cut off by the length of the list still fits', () => {
+    // A catalogue longer than the list: the stock rows plus six more copies of its smallest.
+    const smallest = catalog.models[0];
+    const long = LocalModelCatalogSchema.parse({
+      ...structuredClone(catalog),
+      models: [
+        ...structuredClone(catalog.models),
+        ...Array.from({ length: 6 }, (_, index) => ({
+          ...structuredClone(smallest),
+          id: `extra-${index + 1}:9b`,
+          rank: -1 - index,
+        })),
+      ],
+    });
+    expect(long.models.length).toBeGreaterThan(1 + MAX_ALTERNATIVES);
+    const hw = mac(512, 'Apple M5 Max');
+    const offered = recommend(hw, long, harnessFacts());
+    const listed = new Set([offered.pick, ...offered.alternatives].map((row) => row?.modelId));
+    expect(listed.size).toBe(1 + MAX_ALTERNATIVES);
+    const unlisted = long.models.filter((model) => !listed.has(model.id));
+    expect(unlisted.length).toBe(long.models.length - 1 - MAX_ALTERNATIVES);
+    for (const model of unlisted) {
+      expect(modelFitsBudget(hw, long, model.id, model.contexts.at(-1) as number), model.id).toBe(true);
     }
   });
 

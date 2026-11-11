@@ -28,9 +28,10 @@
  *    gated, installed or installable, and accepting the model id.
  *  - Ranking, lexicographic: tested on a Mac like this before not tested (a measurement beats
  *    a formula); ok before unknown before slow; the higher model rank; the higher harness
- *    rank; the larger context. The pick is the first candidate, the alternatives are the next
- *    four MODELS, each at its own best context and harness, so a model is always offered at
- *    the largest context it fits at.
+ *    rank; the larger context. The pick is the first candidate, the alternatives are EVERY
+ *    other model that fits (`MAX_ALTERNATIVES` is above what the catalogue holds), each at its
+ *    own best context and harness, so a model is always offered at the largest context it
+ *    fits at.
  *  - Disk: a model whose download would leave less than 10 GiB free is not offered. It is not
  *    dropped in silence: the best-ranked model left out that way is named in `noteDiskDropped`
  *    with what is missing.
@@ -109,8 +110,13 @@ export const SLOW_BELOW_TOKENS_PER_SECOND = 10;
 export const LIMITED_BELOW_PARAMS_B = 12;
 /** What must stay free on the disk after the model download. */
 export const DISK_HEADROOM_BYTES = 10 * GIB;
-/** How many other models are listed under the pick. */
-export const MAX_ALTERNATIVES = 4;
+/**
+ * How many other models are listed under the pick, at most. Above what the stock catalogue
+ * holds (10 models: 9 beside the pick), so a Mac is shown every model that fits it and the
+ * install accepts every one of them. Still a bound: test/local-model-catalog.test.ts fails for
+ * a catalogue that outgrows it, so nothing drops out of the list unseen.
+ */
+export const MAX_ALTERNATIVES = 11;
 
 /** A memory size of at least this many GB (as sold) gets 3/4 of its memory as device limit, below it 2/3. */
 const LARGE_LIMIT_FROM_GB = 36;

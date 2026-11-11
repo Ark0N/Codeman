@@ -24,8 +24,9 @@
  *    throws on a bad row. test/local-model-catalog.test.ts pins that the stock constant parses,
  *    so a bad row fails the gate and never reaches the route.
  *
- * Where each figure of the stock rows comes from, and what was checked (2026-11-08). [V] read
- * at the source that day, [M] measured on a Mac, [C] computed from [V] inputs:
+ * Where each figure of the stock rows comes from, and what was checked (2026-11-08; the two rows
+ * added on 2026-11-10, `ornith:9b-q4_k_m` and `muse-glimmer:30b-q4_k_m`, were read that day).
+ * [V] read at the source that day, [M] measured on a Mac, [C] computed from [V] inputs:
  *
  * | Figure               | Source                                                    | Checked                              |
  * |----------------------|-----------------------------------------------------------|--------------------------------------|
@@ -74,8 +75,10 @@
  *    src/local-model/runtime.ts, q8_0: 34 bytes per 32 values), and does not grow after that.
  *    "MTP" below is a GGUF with a multi-token-prediction layer (`nextn_predict_layers` 1 in
  *    its header, read on 2026-11-08 from the first bytes of each model layer: the two `-mtp`
- *    tags and `qwen3.8:27b-q8_0` have it, the two 9B tags and North Mini Code do not). For
- *    such a model the runtime always passes `--spec-type draft-mtp --spec-draft-n-max N`, N
+ *    tags and `qwen3.8:27b-q8_0` have it, the two 9B tags and North Mini Code do not; read
+ *    the same way on 2026-11-10, `ornith:9b-q4_k_m` and `muse-glimmer:30b-q4_k_m` do not
+ *    either). For such a model the runtime always passes
+ *    `--spec-type draft-mtp --spec-draft-n-max N`, N
  *    being the tag's own `draft_num_predict` (its params layer: 4 for
  *    `qwen3.8:27b-mtp-q4_k_m`, 2 for `qwen3.6:35b-a3b-mtp-q4_k_m`) or the runtime's default
  *    of 4 (`qwen3.8:27b-q8_0` sets none).
@@ -83,9 +86,11 @@
  *       adds its prediction layer, whose cache llama-server keeps in a draft context of the
  *       same length in the draft's own cache type, f16 by default (2 bytes per value).
  *     - overhead = the fixed caches (the f32 recurrent state of the linear-attention layers,
- *       or the sliding-window cache of `n_swa + 512` cells), held 1 + N times for an MTP
- *       model (llama.cpp keeps one recurrent state per drafted token for rollback,
- *       `need_n_rs_seq()`), + the context checkpoints: `LLAMA_ARG_CTX_CHECKPOINTS` host copies
+ *       or the sliding-window cache of `n_swa + 512` cells: `size_swa` in
+ *       src/llama-kv-cache-iswa.cpp, the cache every model with a sliding window gets), held
+ *       1 + N times for an MTP model (llama.cpp keeps one recurrent state per drafted token
+ *       for rollback, `need_n_rs_seq()`), + the context checkpoints:
+ *       `LLAMA_ARG_CTX_CHECKPOINTS` host copies
  *       (`RUNTIME_CTX_CHECKPOINTS`, 8) of the state that cannot be rolled back (the recurrent
  *       state, or the sliding-window cache), + 1.0 GB for the runner's own buffers (calibrated
  *       on a third-party table of a 27B model on llama.cpp: 8.4 GB at 4,096 tokens with
@@ -125,25 +130,58 @@
  * checked. For an `mlx` row it proves only the weights (issue 19417): the figures above are
  * all that stands between such a row and swap.
  *
- * Models set aside on purpose (a weekly review should look at them again):
+ * Models set aside on purpose (a weekly review should look at them again). Every reason was
+ * read again at its source on 2026-11-10:
+ *  - `ripple-preview:65b` (Ricursive, Apache-2.0, a dense 65B published on 2026-11-09;
+ *    Terminal-Bench 2.1 80.5 and SWE-bench Verified 76.5 on its card; 38.8 GB as a GGUF build,
+ *    45.8 GB as the MLX build a Mac pulls): every build requires runtime 0.40.16, one above
+ *    the pin. Computed from its config.json by the llamacpp rule, its GGUF build would be the
+ *    first row between the 27B and the 122B (47 GB at 131,072 tokens: 64 and 96 GB Macs, slow
+ *    below an Ultra chip). Look at it the day the pin moves.
  *  - `bonsai-2:27b`, `bonsai-2:9b` (ternary builds of Qwen3.8-27B and Qwen3.5-9B; the 27B
- *    would make a 24 GB Mac `ok`): the vendor reports no SWE-bench and no agent loop, and
- *    whether 2-bit weights keep tool calls reliable was never measured.
+ *    would make a 24 GB Mac `ok`): the vendor reports no SWE-bench and no agent loop (its card
+ *    of 2026-11-04 still lists BFCL v3 only), and whether 2-bit weights keep tool calls
+ *    reliable was never measured.
  *  - `ornith-1.5:9b`, `ornith-1.5:35b`, `ornith-1.5:397b` (GGUF only): strong cards, but their
  *    manifests name no renderer and no tool parser, so whether tool calls work through the
- *    runtime is unknown (runtime pull request 17965 is open). `ornith-1.5:122b` has both.
+ *    runtime is unknown (runtime pull request 17965 is still open). `ornith-1.5:122b` has
+ *    both.
+ *  - `ornith:35b` (Ornith 1.0 35B-A3B, MIT, with a renderer and a tool parser; SWE-bench
+ *    Verified 75.6 against 73.4 for Qwen3.6 35B-A3B on Ornith's card): runtime issue 16992,
+ *    open, reports its tool calls arriving as text in long agent chains, and its size is
+ *    served by the pair we ran. Its 9B sibling `ornith:9b-q4_k_m` is listed: see that row
+ *    for why.
  *  - `gpt-oss:20b`: weak in agentic coding (SWE-bench Verified 52.4, Terminal-Bench 2.1 15.2
  *    in NVIDIA's table).
- *  - `flint:40b`: runtime issue 19191 breaks integer tool arguments after the first call.
+ *  - `flint:40b`: runtime issue 19191 (open) breaks integer tool arguments after the first
+ *    call.
  *  - `lfm2.5:24b-a2b`: its licence allows commercial use only below USD 10M of revenue.
  *  - `laguna-xs-2.1`: the runtime's own page names an open problem with it on macOS.
  *    `laguna-s-2.1`: open runtime issues 17602 and 17632.
- *  - `qwen3.8-flash-next:125b`: the Qwen Community License, not an open licence.
+ *  - `qwen3.8-flash-next:125b`: the Qwen Community License, not an open licence, and its
+ *    builds require runtime 0.40.16 since 2026-11-09.
+ *  - `nemotron-3.5-super:120b` (79.6 GB as the MLX build a Mac pulls): Terminal-Bench 2.1
+ *    60.7 and SWE-bench Verified 71.1 in NVIDIA's table, below `ornith-1.5:122b` at a larger
+ *    download, so it adds no choice a 128 GB Mac would take.
+ *  - `qwen3.5:4b-q4_k_m` (3.3 GB, it would fit a 16 GB Mac with room): runtime issue 18916,
+ *    open, has it answer with thinking only in a long conversation at 65,536 tokens.
+ *  - `qwen3-coder-next` (51.7 GB): the generation before Qwen3.6. Its card shows its results
+ *    as pictures only, so there is no figure to rank it by against the rows listed here.
+ *  - `muse-glimmer:30b-mlx` and the `-dflash` tags of that model: open runtime issues 17656
+ *    and 18269 on the MLX build, and no rule here covers the memory of a separate draft
+ *    model. Its GGUF build `muse-glimmer:30b-q4_k_m` is listed.
  *  - The plain tags `qwen3.5:9b`, `mimo-v2.6:9b` and `qwen3.8:27b`: a Mac pulls their MLX
  *    builds, whose 8 GiB of prefix snapshots do not fit the Macs a 9B or a 27B is for. Their
  *    GGUF builds are listed instead.
  *  - `qwen3.5:122b-a10b`: replaced by `ornith-1.5:122b`, a fine-tune of it (SWE-bench
  *    Verified 84.5 against 72.0) whose MLX build carries a renderer and a tool parser.
+ *
+ * One open issue touches rows that ARE listed: runtime issue 16992 (above). Its one diagnosed
+ * cause sits in the tool parser itself (it closes a call at the first closing tag, so a tool
+ * argument that quotes a whole tool call is cut off; the fix, runtime pull request 17021, is
+ * open). The names `ornith` and `qwen3.5` map to that one parser in the pinned runtime
+ * (model/parsers/parsers.go), so every Qwen-family row here shares it, the pair we ran
+ * included. The check after a download asks for one plain tool call and cannot see this.
  *
  * `tested` has one entry: `qwen3.6:35b-a3b` with OpenCode on an Apple M5 Pro with 48 GB,
  * 2026-11-06, 67.7 tokens per second. Only a Mac of exactly that chip and memory size is told
@@ -336,7 +374,7 @@ const MLX_PREFIX_CACHE_BYTES = 8 * 1024 * 1024 * 1024;
  */
 export const STOCK_LOCAL_MODEL_CATALOG: LocalModelCatalog = {
   schema: 1,
-  updated: '2026-11-08',
+  updated: '2026-11-10',
   // The oldest macOS the model runtime supports.
   minMacosMajor: 14,
   // Ordered by rank. The higher rank wins among models that fit and whose speed is graded
@@ -344,7 +382,7 @@ export const STOCK_LOCAL_MODEL_CATALOG: LocalModelCatalog = {
   // that are left out and why.
   models: [
     {
-      // Small Macs (16 to 32 GB, `limited`): the base model of the row below.
+      // Small Macs (18 to 32 GB): the base model of the two rows below.
       id: 'qwen3.5:9b-q4_k_m',
       label: 'Qwen3.5 9B',
       license: 'Apache-2.0',
@@ -365,7 +403,35 @@ export const STOCK_LOCAL_MODEL_CATALOG: LocalModelCatalog = {
       tested: [],
     },
     {
-      // Small Macs (16 to 32 GB, `limited`). MiMo-V2.6-Distill-Qwen-9B, a fine-tune of
+      // The model a 16 GB Mac can hold: 9.3 GB at 65,536 tokens, tight. Ornith 1.0 9B, a
+      // fine-tune of Qwen3.5-9B for coding agents, as a GGUF build without a vision projector,
+      // so 0.9 GB smaller than the rows around it. SWE-bench Verified 69.4, SWE-bench Pro 42.9
+      // and Terminal-Bench 2.1 43.1, against 53.2, 31.3 and 21.3 for its base (Ornith's card,
+      // which puts that base 7 points under Xiaomi's figure for it: the two cards do not
+      // compare). Ranked under MiMo for that, and because runtime issue 16992 was filed on its
+      // 35B sibling, which has the same renderer and parser (see the header): it is the pick
+      // only where nothing else fits. Text only.
+      id: 'ornith:9b-q4_k_m',
+      label: 'Ornith 1.0 9B',
+      license: 'MIT',
+      paramsB: 9,
+      runner: 'llamacpp',
+      bytes: 5_629_110_568,
+      // The architecture of the row above (its config.json and its GGUF header say so), so
+      // its figures.
+      heldBytesPerToken: 17_408,
+      overheadBytes: 52_690_944 * (1 + LLAMACPP_CTX_CHECKPOINTS) + LLAMACPP_RUNNER_BYTES + LLAMACPP_PROMPT_CACHE_BYTES,
+      peakExtraBytes: 0,
+      figures: 'estimated',
+      contexts: [131072, 65536],
+      rank: 2,
+      // Not measured: the 9.3 of the row above, the same architecture and the same weights file
+      // size (5.63 GB without the projector).
+      speedPer100Gbps: 9.3,
+      tested: [],
+    },
+    {
+      // Small Macs (18 to 32 GB). MiMo-V2.6-Distill-Qwen-9B, a fine-tune of
       // Qwen3.5-9B for code and agents: SWE-bench Verified 61.1 and SWE-bench Pro 44.6,
       // against 60.0 and 32.0 for its base (Xiaomi's card). Requires exactly the pinned
       // runtime, 0.40.15.
@@ -375,14 +441,14 @@ export const STOCK_LOCAL_MODEL_CATALOG: LocalModelCatalog = {
       paramsB: 9,
       runner: 'llamacpp',
       bytes: 6_550_811_033,
-      // The architecture and the quantization of the row above, so its figures.
+      // The architecture and the quantization of the base model's row, so its figures.
       heldBytesPerToken: 17_408,
       overheadBytes: 52_690_944 * (1 + LLAMACPP_CTX_CHECKPOINTS) + LLAMACPP_RUNNER_BYTES + LLAMACPP_PROMPT_CACHE_BYTES,
       peakExtraBytes: 0,
       figures: 'estimated',
       contexts: [131072, 65536],
-      rank: 2,
-      // Not measured: the 9.3 of the row above, the same architecture and file size.
+      rank: 3,
+      // Not measured: the 9.3 of the base model's row, the same architecture and file size.
       speedPer100Gbps: 9.3,
       tested: [],
     },
@@ -404,10 +470,37 @@ export const STOCK_LOCAL_MODEL_CATALOG: LocalModelCatalog = {
       peakExtraBytes: 0,
       figures: 'estimated',
       contexts: [262144, 131072, 65536],
-      rank: 3,
+      rank: 4,
       // Not measured: the 13.6 measured for Qwen3.6 35B-A3B on llama.cpp, which has the same
       // 3 billion active parameters.
       speedPer100Gbps: 13.6,
+      tested: [],
+    },
+    {
+      // Meta's 30B for local agents, a dense 27.9B language model with a vision encoder:
+      // SWE-bench Verified 76.0, SWE-bench Pro 51.2, Terminal-Bench 2.1 51.7 (Meta's card). Its
+      // K/V cache is the smallest of the 27B class (2 K/V heads of 128, and three layers in
+      // four look at a window of 2,048 tokens), so it is the first model of that class a 32 GB
+      // Mac can hold: 21.2 GB at 65,536 tokens, tight. Dense, so it is slow below a Max chip.
+      // Its own window ends at 131,072 tokens.
+      id: 'muse-glimmer:30b-q4_k_m',
+      label: 'Muse Glimmer 30B',
+      license: 'Apache-2.0',
+      paramsB: 29.6,
+      runner: 'llamacpp',
+      bytes: 18_157_010_252,
+      // 13 full-attention layers x 2 K/V heads x 128 x 2 x 34/32.
+      heldBytesPerToken: 7_072,
+      // 39 sliding-window layers: (2,048 + 512) cells x 2 x 128 x 2 x 34/32 = 54,312,960, live
+      // and in each context checkpoint.
+      overheadBytes: 54_312_960 * (1 + LLAMACPP_CTX_CHECKPOINTS) + LLAMACPP_RUNNER_BYTES + LLAMACPP_PROMPT_CACHE_BYTES,
+      peakExtraBytes: 0,
+      figures: 'estimated',
+      contexts: [131072, 65536],
+      rank: 5,
+      // Not measured: the 2.95 of Qwen3.8 27B, a dense model whose weights are the same size on
+      // llama.cpp (16.8 GB each without the projector).
+      speedPer100Gbps: 2.95,
       tested: [],
     },
     {
@@ -430,7 +523,7 @@ export const STOCK_LOCAL_MODEL_CATALOG: LocalModelCatalog = {
       peakExtraBytes: 0,
       figures: 'estimated',
       contexts: [262144, 131072, 65536],
-      rank: 4,
+      rank: 6,
       // Measured: 54.5 tokens per second on 400 GB/s (llama.cpp, without prediction).
       speedPer100Gbps: 13.6,
       tested: [],
@@ -448,7 +541,7 @@ export const STOCK_LOCAL_MODEL_CATALOG: LocalModelCatalog = {
       ...MEASURED_MEMORY,
       figures: 'measured',
       contexts: [131072, 65536],
-      rank: 5,
+      rank: 7,
       // Measured: 67.8 tokens per second on 400 GB/s with MLX. The one Mac we tested ran it at
       // 67.7 on 307 GB/s, so on other chips the estimate is on the low side.
       speedPer100Gbps: 16.9,
@@ -473,7 +566,7 @@ export const STOCK_LOCAL_MODEL_CATALOG: LocalModelCatalog = {
       peakExtraBytes: 0,
       figures: 'estimated',
       contexts: [262144, 131072, 65536],
-      rank: 6,
+      rank: 8,
       // Not measured: the 2.95 of the row below scaled by file size.
       speedPer100Gbps: 1.7,
       tested: [],
@@ -497,7 +590,7 @@ export const STOCK_LOCAL_MODEL_CATALOG: LocalModelCatalog = {
       peakExtraBytes: 0,
       figures: 'estimated',
       contexts: [262144, 131072, 65536],
-      rank: 7,
+      rank: 9,
       // Measured: 11.8 tokens per second on 400 GB/s (llama.cpp, Q4_K_M, without prediction).
       // This build predicts several tokens at a time, so it is faster than this figure says.
       speedPer100Gbps: 2.95,
@@ -521,7 +614,7 @@ export const STOCK_LOCAL_MODEL_CATALOG: LocalModelCatalog = {
       peakExtraBytes: MEASURED_MEMORY.peakExtraBytes,
       figures: 'estimated',
       contexts: [262144, 131072],
-      rank: 8,
+      rank: 10,
       // Not measured: the 16.9 of Qwen3.6 35B-A3B on MLX x 3/10, its active parameters
       // against these, rounded down.
       speedPer100Gbps: 5,
