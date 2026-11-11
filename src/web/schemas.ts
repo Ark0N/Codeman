@@ -733,6 +733,7 @@ export const StatusTelemetrySchema = z.object({
           used_percentage: z.number().nullish(),
           total_input_tokens: z.number().nullish(),
           total_output_tokens: z.number().nullish(),
+          context_window_size: z.number().nullish(),
         })
         .nullish(),
       cost: z.object({ total_cost_usd: z.number().nullish() }).nullish(),

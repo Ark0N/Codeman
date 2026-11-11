@@ -65,6 +65,13 @@ export function registerStatusTelemetryRoutes(app: FastifyInstance, ctx: Session
       session.noteReportedModel('statusline', payload?.model?.display_name);
     }
 
+    // The context size drives auto-compact and auto-clear. A render without one (the exporter
+    // can post before the first API response) keeps the last report instead of wiping it.
+    const status = reportsStatusLine ? parseSessionStatus(payload) : null;
+    if (session && status?.inputTokens !== undefined) {
+      session.noteContextReport({ tokens: status.inputTokens, windowSize: status.contextWindowSize });
+    }
+
     // Prompt-cache state of the main conversation (Claude Code v2.1.251+): kept on the
     // session for the Session Options readout and `toState()`, broadcast only when the
     // report changes (the statusline fires on every assistant message). The broadcast
