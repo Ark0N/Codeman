@@ -375,6 +375,30 @@ describe('sessionNamesUsingEndpoint', () => {
     expect(sessionNamesUsingEndpoint(new Set(sessions), 'office-gpu')).toEqual(['w3-lib']);
     expect(sessionNamesUsingEndpoint(new Map().values())).toEqual([]);
   });
+
+  // Seen on a Mac: a worker the codeman skill started has no name, and the refusal read
+  // "Sessions are still using this model: . Close them first."
+  it('names a session without a name the way its tab does: the folder, else the short id', () => {
+    const ours = { endpointId: 'local-ollama' };
+    expect(
+      sessionNamesUsingEndpoint([
+        {
+          id: '7dbd7b0d-0000-4000-8000-000000000001',
+          name: '',
+          workingDir: '/Users/x/codeman-cases/summaries',
+          customModel: ours,
+        },
+        {
+          id: 'a030dddb-0000-4000-8000-000000000002',
+          name: '   ',
+          workingDir: '/Users/x/codeman-cases/review/',
+          customModel: ours,
+        },
+        { id: 'c1d2e3f4-0000-4000-8000-000000000003', name: '', workingDir: '', customModel: ours },
+        { id: 'ffffffff-0000-4000-8000-000000000004', name: 'w1-app', workingDir: '/Users/x/app', customModel: ours },
+      ])
+    ).toEqual(['summaries', 'review', 'c1d2e3f4', 'w1-app']);
+  });
 });
 
 describe('compareModelDigest', () => {

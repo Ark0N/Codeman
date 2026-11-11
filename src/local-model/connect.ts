@@ -263,16 +263,30 @@ export async function isManagedLocalEndpoint(id: string): Promise<boolean> {
 }
 
 /**
- * The names of the live sessions that use the endpoint `endpointId`, in the order given.
- * Pure. What `DELETE /api/local-model` answers its 409 with.
+ * What a session is called where a person reads it. A session an agent started (a worker of
+ * the codeman skill, `codeman agent spawn`) has no name of its own, and its tab then shows
+ * the last folder of its working directory, else the first eight characters of its id
+ * (`getSessionName()` in app.js). The same steps here, so that a sentence which lists
+ * sessions never lists an empty name. Pure.
+ */
+export function sessionLabel(session: { id?: string; name?: string; workingDir?: string }): string {
+  const name = (session.name ?? '').trim();
+  if (name) return name;
+  const folder = (session.workingDir ?? '').split('/').filter(Boolean).pop();
+  return folder || (session.id ?? '').slice(0, 8);
+}
+
+/**
+ * The live sessions that use the endpoint `endpointId`, in the order given, each by the name
+ * its tab shows (`sessionLabel()`). Pure. What the feature answers a 409 `sessions-open` with.
  */
 export function sessionNamesUsingEndpoint(
-  sessions: Iterable<{ name: string; customModel?: { endpointId: string } }>,
+  sessions: Iterable<{ id?: string; name: string; workingDir?: string; customModel?: { endpointId: string } }>,
   endpointId: string = LOCAL_MODEL_ENDPOINT_ID
 ): string[] {
   const names: string[] = [];
   for (const session of sessions) {
-    if (session.customModel?.endpointId === endpointId) names.push(session.name);
+    if (session.customModel?.endpointId === endpointId) names.push(sessionLabel(session));
   }
   return names;
 }
