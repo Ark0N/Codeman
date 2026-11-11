@@ -773,6 +773,37 @@ describe.skipIf(!hasJq)('preamble sendmark', () => {
     expect(run.calls.some((call) => call.key === 'delete')).toBe(false);
   });
 
+  // Seen on a Mac (2026-11-12): Claude Code runs zsh there, and zsh hands every subshell the same
+  // $RANDOM. A lead sent two workers in ONE folder their tasks in the same second, both prompts
+  // named the same answer file, and one worker's summary replaced the other's.
+  it('gives each worker its own token and answer file, in the same second and with the same $RANDOM', () => {
+    const other = 'b7e1c2d3-0000-4000-8000-00000000beef';
+    const run = runSkill(
+      withSession(
+        // Two calls at once that draw the same number: what zsh does by itself. bash reseeds its
+        // generator in every subshell, so here the variable is made a plain one that always reads 7.
+        `unset RANDOM; RANDOM=7
+         ( sendmark ${SID} 'count to three' 1 >/dev/null ) &
+         ( sendmark ${other} 'count to three' 1 >/dev/null ) &
+         wait; true`
+      ),
+      { input: delivered, 'wait-output': NOT_MATCHED, 'wait-output.delay': '1' }
+    );
+    expect(run.stderr).toBe('');
+    const tokens = run.calls
+      .filter((call) => call.key === 'input')
+      .map((call) => /codeman-answer-(m[0-9a-f]+)\.md/.exec((JSON.parse(call.d) as { input: string }).input)?.[1] ?? '')
+      .sort();
+    expect(tokens).toHaveLength(2);
+    // m, eight digits of the second, four of $RANDOM, six of the worker's id.
+    for (const token of tokens) expect(token).toMatch(/^m[0-9a-f]{18}$/);
+    // The same draw in both calls...
+    expect(tokens.map((token) => token.slice(9, 13))).toEqual(['0007', '0007']);
+    // ...and still two files, told apart by the workers' own ids.
+    expect(tokens[0]).not.toBe(tokens[1]);
+    expect(tokens.map((token) => token.slice(13)).sort()).toEqual(['b7e1c2', 'eca000']);
+  });
+
   it('reads the answer file without a marker once it held still for a round (a full-screen pane draws the marker in pieces)', () => {
     // Measured on opencode 1.3.0: a reply streamed a character or two at a time reaches the
     // stripped stream as D, spinner, O, spinner, N, ... and never matches, while the screen

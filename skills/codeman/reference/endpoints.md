@@ -216,7 +216,10 @@ you typed matches the moment it is typed.
 generic marker (`BUILD OK`) matched against stale text, either from `from=buffer`
 scanning an earlier run or from tmux replaying old screen content as fresh output on an
 attach/resize/redraw. A unique-per-call token (`DONE_$RANDOM`) makes both `from` modes
-safe.
+safe. ⚠️ In a fan-out put something of the WORKER into it too (its id, the loop index): zsh,
+the shell Claude Code runs on a Mac, hands every subshell the same `$RANDOM` until the
+parent shell reads it, so `( … $RANDOM … ) &` twice draws one number. `sendmark` adds six
+characters of the worker's id for that reason.
 
 ### 6. `jq` parse error instead of an `errorCode`
 
