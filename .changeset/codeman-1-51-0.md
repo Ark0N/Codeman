@@ -6,6 +6,7 @@
 
 - @Randalix for auto-compact and auto-clear that see the whole context (#777), and for the measurements in #585 that showed why they did not.
 - @JDProfresh for the report and the change that lets the File Viewer edit `.env` files (#796, #797).
+- @DodgyBadger for the File Viewer button that follows its setting on a phone (#759, #809).
 - @timkjr for omp tool approvals that raise an alert (#798).
 - @irisitymichaelgrundberg for finding why Firefox still pasted twice (#799).
 
@@ -23,7 +24,8 @@
 
 - **Firefox no longer pastes twice on Ctrl+V (#799).** Firefox sent a second paste for the same key press, and some of the time it reached the terminal.
 - **An omp pane that asks for a tool approval alerts (#798).** It raised no tab alert, no notification and no Approvals Inbox item. Behaviour change: Codeman writes a small hook file into `.claude/hooks/pre/` of an omp session's folder.
+- **Phone: the File Viewer header button follows its setting (#759, #809).** Turning on File Viewer under App Settings > Header & Panels did nothing on a phone. The button now shows there once you turn it on, with a full-size touch target, and stays off until you do. Behaviour change: a desktop window or an iPad split view narrower than 600px shows the button too, where it was hidden before.
 
-**Fixes applied while landing.** Auto-compact and auto-clear decide again at the moment the command goes out, so a `/clear` is not sent into a conversation Claude Code just compacted itself, into a session paused on a usage limit, or after you switched the option off (#777). The File Viewer cannot reach Codeman's own `.env` by another spelling on a case-insensitive disk (#797). An omp alert stays up until omp says its dialog closed (#798).
+**Fixes applied while landing.** Auto-compact and auto-clear decide again at the moment the command goes out, so a `/clear` is not sent into a conversation Claude Code just compacted itself, into a session paused on a usage limit, or after you switched the option off (#777). The File Viewer cannot reach Codeman's own `.env` by another spelling on a case-insensitive disk (#797). An omp alert stays up until omp says its dialog closed (#798). The test gate checks again that the File Viewer button is off on a phone nobody turned it on for (#809).
 
-**Docs and tests.** The experimental API list names the new local model routes, and the wiki's Local Models page walks from install to cloud plus local.
+**Docs and tests.** The experimental API list names the new local model routes, the wiki's Local Models page walks from install to cloud plus local, and the wiki says where the File Viewer button is on a phone.
