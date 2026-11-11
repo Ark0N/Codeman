@@ -4748,10 +4748,9 @@ Object.assign(CodemanApp.prototype, {
       attachmentsBtn.classList.toggle('btn-attachments-history--hidden', !showAttachmentsButton);
     }
 
-    // File Viewer header button — opt-in, default OFF. Marker class (base is
-    // display:inline-flex !important); clicking it toggles the file browser panel.
-    // Default ON (desktop): the folder button is part of the standard header now;
-    // phones still hide it via mobile.css (btn-file-viewer in the phone-hidden set).
+    // File Viewer header button: default ON on desktop, opt-in on phones.
+    // Marker class (base is display:inline-flex !important); clicking it toggles
+    // the file browser panel on either device.
     const showFileViewerButton = settings.showFileViewerButton ?? defaults.showFileViewerButton ?? true;
     const fileViewerBtn = document.querySelector('.btn-file-viewer');
     if (fileViewerBtn) {
