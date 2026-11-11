@@ -210,6 +210,62 @@ This step does not need the `cliManagementEnabled` setting. That setting gates t
 CLI management surface; this path can only ever run one vetted command for one catalogue
 row.
 
+### Which coding agents, and what each was measured with
+
+The coding agent is chosen **per session**. An installed model lists every agent it can be
+run with (`install.harnesses` of the GET), and the window shows them as chips under "Start a
+session with": the agent the model was installed with is the default, and the choice is
+remembered on the device. The launch check asks about the endpoint and the model, never about
+the agent, so a session with one agent and a session with another run on the same model.
+
+| Agent            | First request (its fixed prompt)                                    | Installed from the window | What was seen, and where                                                                                                                    |
+| ---------------- | ------------------------------------------------------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| OpenCode         | about 8,100 tokens, 11 tools (v1.19.5; more with user-level skills) | yes                       | A tool round trip on a Mac with a real model (the catalogue's tested entry), and on a scripted endpoint for v1.19.5                         |
+| Claude Code      | about 36,000 tokens, so the first answer takes minutes              | yes                       | Shipped in 1.50.0; not measured again for this table                                                                                        |
+| Pi               | 2,096 tokens, 4 tools (v1.5.2)                                      | yes                       | A complete tool round trip against a real model: tool call, tool result, final answer, the file on disk                                     |
+| DeepSeek Harness | about 7,650 tokens, 25 tools (0.1.1-rc.2)                           | **no**                    | A tool round trip on a scripted endpoint only. Against a real model the launch and the model name reached the runtime, and no turn finished |
+
+How to read the last column: the runs of 2026-11-10 were made on **Linux**, through Codeman's
+own custom model launch, against Ollama 0.13.0 with a 1.7B model on a CPU ("a real model") or
+against a scripted endpoint that replays that runtime's stream of a tool call. A scripted run
+proves the agent's side of the protocol, not what a model does with its prompt. None of them
+ran on a Mac or on the pinned runtime. Every agent sent the `name:tag` model name unchanged.
+
+Three things follow from how the agents differ:
+
+- **Pi is told the model's window.** Without it Pi takes an unknown model for a
+  128,000-token one and never compacts before the real window is full. Codeman now writes the
+  endpoint's context length into the model list it gives Pi (the custom model feature as a
+  whole, not only this window). Two things remain: a custom model session gives Pi a home
+  directory of its own, so Pi fetches its two search tools again at every start (it needs the
+  network for that; `PI_OFFLINE=1` skips it), and Pi asks "Trust project
+  folder?" in every such session when a folder above the working directory holds agent
+  skills, because the answer is stored in the home it does not keep.
+- **DeepSeek Harness is a launcher.** `dsh` starts nothing by itself: a session needs a
+  terminal profile, which is third-party code with its own consent in the Run menu. Its
+  install command installs the launcher only, so this window never installs it. It is listed
+  as "Needs setup" until the Run menu can start it, and as a normal agent from then on. It is
+  the one agent of the four besides Claude Code that reports the end of a turn. Its custom
+  endpoint recipe itself was verified with a real model on a llama.cpp server
+  ([custom-model-endpoints.md](custom-model-endpoints.md)); what is missing is a finished turn
+  on this feature's runtime.
+- **OpenCode and DeepSeek Harness send a second, small request** beside the first prompt (a
+  title, a side question). The runtime answers one request at a time, so it queues.
+
+### Installing one more agent beside an installed model
+
+An agent that is not on the Mac has "Not installed" on its chip. Selecting it shows the
+literal install command, and the main button becomes "Install <agent>". That click is the
+consent; `POST /api/local-model/agent` then runs the same stock command under the same rules
+as the `agent` step above (catalogue row only, compiled command only, admin only, audited,
+one installer at a time).
+
+It is **not a job**. The state stays `installed` whatever the installer does: the model stays
+loaded, sessions are not refused, and a session with another agent can be started while it
+runs. A failed install shows the sentence and the installer's last lines under the chip, and
+leaves everything else as it was. The outcome is kept in memory only, so a restart of the
+server forgets a failure (the chip then simply says "Not installed" again).
+
 ### The connection
 
 Two writes outside the local model folder, both undone by Remove:
@@ -244,7 +300,7 @@ Switching the setting on also starts that five-minute sweep for every other save
 
 ## Starting a session
 
-"Start a session" starts the coding agent on the endpoint `local-ollama` through the
+"Start a session" starts the selected coding agent on the endpoint `local-ollama` through the
 existing custom model launch. Before a coding agent is STARTED on that endpoint the server
 checks, in this order:
 
@@ -274,7 +330,7 @@ lets an agent in a Codeman session hand work to this model, so Claude in the clo
 reviews while the model on this Mac does the bulk: summaries, classification, first drafts, and
 files that should not leave the machine. `local_model` reads `GET /api/local-model` and says what
 is installed or why nothing can run; `spawn_worker <name> local` starts the runtime when it was
-stopped (as Start does), then starts the installed coding agent on `local-ollama` through the same
+stopped (as Start does), then starts the default coding agent (`install.cli`) on `local-ollama` through the same
 quick-start launch and the same checks as above; `sendmark` gives the worker a task and reads its
 answer back from a file it writes in its own folder. The skill never installs a model and never
 answers a confirmation, the runtime still answers one request at a time, and while a worker it
@@ -312,8 +368,9 @@ and measures the store at most every thirty, never on every poll.
   the runtime is restarted with the context the model was checked with, the model is loaded
   and checked again (the tiny chat, the GPU, the tool probe), its digest must still be the
   stored one (else the switch fails with `model-changed` before the model is loaded), and
-  the endpoint record is rewritten. The coding agent is the one the model was checked with
-  when it is still installed, else the one of the installation.
+  the endpoint record is rewritten. The default coding agent becomes the one the model was
+  checked with when it is still installed, else the one of the installation, else any other
+  agent that is on the Mac and can run the model.
 - **Delete** removes one model through the runtime's own delete, after one question in the
   row. The request carries the model's name, never a path, and the server deletes only a
   name of its own listing. The model in use cannot be deleted: switch first, or Remove. It
