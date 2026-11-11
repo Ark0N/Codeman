@@ -211,6 +211,8 @@ export type LocalModelNextStep = 'retry' | 'other-port' | 'next-model' | 'start'
  *  - `use`: `POST /api/local-model/use`. Listed only while a row of `library` offers it.
  *  - `delete-model`: `DELETE /api/local-model/models`. Listed only while a row of `library`
  *    offers it.
+ *  - `install-agent`: `POST /api/local-model/agent`. Listed only while a row of `harnesses`
+ *    offers it.
  */
 export type LocalModelAction =
   | 'install'
@@ -221,7 +223,8 @@ export type LocalModelAction =
   | 'remove'
   | 'start-session'
   | 'use'
-  | 'delete-model';
+  | 'delete-model'
+  | 'install-agent';
 
 /** Whether the Mac has the developer tools (git, Python) a coding agent calls. */
 export type LocalModelDeveloperTools =
@@ -301,7 +304,7 @@ export const LOCAL_MODEL_INSTALL_LABELS = {
   refusedNotInLibrary: 'This model is not one of the checked models on this Mac.',
   refusedNotOnThisMac: 'This model is not on this Mac.',
   deleteFailed: '{model} could not be deleted from this Mac.',
-  refusedAgentMissing: '{cli} is not installed on this Mac. Install this model again to choose a coding agent.',
+  refusedAgentMissing: '{cli} is not installed on this Mac. Install a coding agent in the local model window first.',
   endpointManaged:
     'This endpoint belongs to the model Codeman runs on this Mac. Change or remove it in the local model window.',
   endpointIdReserved: 'This endpoint id is reserved for the model Codeman runs on this Mac. Pick another id.',
@@ -461,8 +464,9 @@ export interface LocalModelLoadedFacts {
  * | `port`                            |      | once chosen | once chosen | once chosen | yes |
  * | `loaded`, `endpointId`            |      |            |        |        | yes       |
  *
- * `running`, `developerTools`, `runtime`, `folder`, `library` and `actions` are always
- * present. `store` is present once the model store was measured.
+ * `running`, `developerTools`, `runtime`, `folder`, `library`, `harnesses` and `actions` are
+ * always present. `store` is present once the model store was measured. `harnesses` is empty
+ * in every state but `installed`.
  */
 export interface LocalModelInstallView {
   state: LocalModelInstallState;
@@ -473,7 +477,11 @@ export interface LocalModelInstallView {
   progress?: LocalModelProgress;
   error?: LocalModelInstallError;
   model?: LocalModelInstalledModel;
-  /** The coding agent: a CLI registry id, as data. */
+  /**
+   * The coding agent of the job, and on an installed model the DEFAULT one: the agent it was
+   * installed with, which a client that names no agent starts. A CLI registry id, as data.
+   * `harnesses` lists every agent a session can be started with.
+   */
   cli?: string;
   /** The coding agent's display label ('OpenCode'). */
   cliLabel?: string;
@@ -498,8 +506,72 @@ export interface LocalModelInstallView {
   library: LocalModelLibraryRow[];
   /** What the model store takes on disk right now. Present in every state once it was measured. */
   store?: LocalModelStoreView;
+  /**
+   * The coding agents a session on the model in use can be started with: every catalogue
+   * harness that works at the model's context and accepts its name, the default one (`cli`)
+   * first, then by catalogue rank. The agent is chosen per session, so a row is not a setting.
+   * Empty in every state but `installed`.
+   */
+  harnesses: LocalModelHarnessRow[];
   /** What the server accepts right now, see `LocalModelAction`. */
   actions: LocalModelAction[];
+}
+
+/**
+ * How a coding agent of `harnesses` stands on this Mac.
+ *  - `ready`: it can be started (the same answer the Run menu gets).
+ *  - `installable`: it is not on this Mac, and `POST /api/local-model/agent` installs it with
+ *    `installCommand`.
+ *  - `installing`: that install is running. It runs beside the model: nothing about the model
+ *    in use changes, and a session with another agent can be started meanwhile.
+ *  - `setup-needed`: it is not startable and one command does not make it so (a launcher
+ *    without a profile, or a command that needs an administrator). Its own setup is in the Run
+ *    menu or in a terminal; nothing is offered here.
+ */
+export type LocalModelHarnessStatus = 'ready' | 'installable' | 'installing' | 'setup-needed';
+
+/** What can be done with one row of `harnesses`: start a session with it, or `POST /api/local-model/agent`. */
+export type LocalModelHarnessAction = 'start-session' | 'install';
+
+/** One coding agent the model in use can be run with. Everything a client needs is here, so it compares no CLI id. */
+export interface LocalModelHarnessRow {
+  /** The CLI registry id, as data: the `mode` of a session started with it, and the `cli` of `POST /api/local-model/agent`. */
+  cli: string;
+  /** The registry's display label ('OpenCode'). */
+  cliLabel: string;
+  /** True on the row `LocalModelInstallView.cli` names. */
+  default: boolean;
+  status: LocalModelHarnessStatus;
+  /**
+   * The literal command `POST /api/local-model/agent` would run: the STOCK command of the CLI
+   * registry for this platform. Present exactly when `status` is `installable` or `installing`.
+   * The consent prints it as it is.
+   */
+  installCommand?: string;
+  /** The harness row's `slowFirstTurn`: the first answer takes minutes. */
+  slowFirstTurn?: boolean;
+  /**
+   * A literal with no white space the agent's composer draws once it takes input
+   * (`LocalHarnessEntry.readyMark`, else the CLI registry's `composerReadyMark`): what a script
+   * waits for on `GET /api/sessions/:id/wait-output` before it sends the first prompt. Absent
+   * for an agent with no measured mark.
+   */
+  readyMark?: string;
+  /**
+   * The last install of this agent through `POST /api/local-model/agent` failed, and it is
+   * still not on this Mac. Kept in memory only: a restart of the server forgets it.
+   */
+  error?: LocalModelAgentError;
+  /** What the server accepts for this row right now. */
+  actions: LocalModelHarnessAction[];
+}
+
+/** Why an install of a coding agent from an installed model failed. */
+export interface LocalModelAgentError {
+  /** `errHarnessFailed` with the agent's label. */
+  message: LocalModelInstallMessage;
+  /** The end of what the installer printed, as it is (English or the tool's own language). */
+  detail?: string;
 }
 
 /**
@@ -610,6 +682,15 @@ export interface LocalModelUseRequest {
 export interface LocalModelDeleteRequest {
   /** `LocalModelLibraryRow.id` of a row whose `actions` list `delete`. Never a path. */
   modelId: string;
+}
+
+/**
+ * Body of `POST /api/local-model/agent`: a coding agent of `harnesses` to install beside an
+ * installed model. The click that sends it is the consent to the row's `installCommand`.
+ */
+export interface LocalModelAgentRequest {
+  /** `LocalModelHarnessRow.cli` of a row whose `actions` list `install`. */
+  cli: string;
 }
 
 /** The `data` of a 400 the service names: its sentence, for the window to print in its own language. */

@@ -12,6 +12,7 @@
  * | `POST /api/local-model/runtime`  | `LocalModelRuntimeRequest`  | the install view; 409                          |
  * | `DELETE /api/local-model`        | `LocalModelRemoveRequest`   | the install view; 409                          |
  * | `DELETE /api/local-model/models` | `LocalModelDeleteRequest`   | the install view; 400, 409, 500                |
+ * | `POST /api/local-model/agent`    | `LocalModelAgentRequest`    | the install view; 400, 409                     |
  *
  * The GET is built from the hardware probe, the catalogue, the harness facts and the pure
  * `recommend()`, plus the `install` object of the install service
@@ -55,6 +56,10 @@
  *  - `DELETE /api/local-model/models` takes a model NAME in its body, never a path: the schema
  *    admits only `name:tag`, and the service deletes only a name of its own listing, through
  *    the runtime.
+ *  - `POST /api/local-model/agent` installs one more coding agent beside an installed model.
+ *    Its body names a CLI id only: the service takes it only when it is a row of the view's
+ *    `harnesses` that offers `install`, and runs the compiled stock command, never text from
+ *    the request. It looks at no session: nothing about the model in use changes.
  *  - Every dependency is injected (`LocalModelRouteDeps`), so a route test spawns nothing and
  *    does not need a Mac: it passes its own hardware, harness facts and service.
  */
@@ -97,6 +102,7 @@ import {
 } from '../../local-model/install-job.js';
 import { recommend } from '../../local-model/recommend.js';
 import {
+  LocalModelAgentSchema,
   LocalModelDeleteSchema,
   LocalModelInstallSchema,
   LocalModelRemoveSchema,
@@ -261,7 +267,7 @@ export function registerLocalModelRoutes(
         // The measured budget once the runtime reported it, and the runtime download that an
         // install would still add: what turns the estimate into the figures of the consent.
         const options = await service.recommendOptions();
-        const install = await service.view();
+        const install = await service.view({ harnessFacts });
         // A row that is already a checked model on this Mac says so: choosing it is a switch.
         const recommendation = markLibraryCandidates(
           resolved.recommend(hardware, catalog, harnessFacts, options),
@@ -333,5 +339,12 @@ export function registerLocalModelRoutes(
     if (denied) return denied;
     const body = parseBody(LocalModelDeleteSchema, req.body);
     return runVerb(reply, () => resolved.service().deleteLibraryModel(body, actorOf(req)));
+  });
+
+  app.post('/api/local-model/agent', async (req, reply): Promise<LocalModelVerbResponse> => {
+    const denied = adminOnly(req, reply);
+    if (denied) return denied;
+    const body = parseBody(LocalModelAgentSchema, req.body);
+    return runVerb(reply, () => resolved.service().installAgent(body, actorOf(req)));
   });
 }

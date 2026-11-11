@@ -294,12 +294,28 @@ describe('the stock catalogue', () => {
     });
   });
 
-  it('lists its harnesses as data rows, one of them gated', () => {
+  it('lists its harnesses as data rows: four, none gated, none below the smallest context a model offers', () => {
     expect(STOCK_LOCAL_MODEL_CATALOG.harnesses).toEqual([
-      { cli: 'opencode', minContext: 65536, rank: 3 },
-      { cli: 'claude', minContext: 65536, rank: 2, slowFirstTurn: true },
-      { cli: 'pi', minContext: 32768, rank: 1, gated: true },
+      { cli: 'opencode', minContext: 65536, rank: 4, readyMark: '┃' },
+      { cli: 'claude', minContext: 65536, rank: 3, slowFirstTurn: true },
+      { cli: 'pi', minContext: 65536, rank: 2 },
+      { cli: 'deepseek', minContext: 65536, rank: 1 },
     ]);
+    // No harness asks for less than a model can be offered at: nothing below 65536 was run.
+    const smallest = Math.min(...STOCK_LOCAL_MODEL_CATALOG.models.flatMap((model) => model.contexts));
+    for (const harness of STOCK_LOCAL_MODEL_CATALOG.harnesses) {
+      expect(harness.minContext).toBeGreaterThanOrEqual(smallest);
+    }
+  });
+
+  it('a readiness mark is one literal without white space', () => {
+    const spaced = copy();
+    spaced.harnesses[0] = { ...spaced.harnesses[0], readyMark: '/ commands' };
+    expect(issuesOf(spaced)).toHaveLength(1);
+    expect(issuesOf(spaced)[0]).toMatch(/^harnesses\.0\.readyMark: /);
+    const empty = copy();
+    empty.harnesses[0] = { ...empty.harnesses[0], readyMark: '' };
+    expect(issuesOf(empty)[0]).toMatch(/^harnesses\.0\.readyMark: /);
   });
 
   it('names the oldest macOS and its schema version', () => {
@@ -534,7 +550,7 @@ describe('the schema, across rows', () => {
   it('refuses a harness listed twice and a repeated harness rank', () => {
     const twice = copy();
     twice.harnesses.push({ cli: twice.harnesses[0].cli, minContext: 32768, rank: 9 });
-    expect(issuesOf(twice)).toEqual(['harnesses.3.cli: a harness may be listed only once']);
+    expect(issuesOf(twice)).toEqual(['harnesses.4.cli: a harness may be listed only once']);
 
     const sameRank = copy();
     sameRank.harnesses[1] = { ...sameRank.harnesses[1], rank: sameRank.harnesses[0].rank };

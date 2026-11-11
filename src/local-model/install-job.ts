@@ -33,7 +33,7 @@
  * | `installed`  | the runtime, the private home, the model  | stays `installed`; the      | refused (409)          | start a session, start or stop  |
  * |              | in use and every other model of the       | runtime is started again    |                        | the runtime, install (add a     |
  * |              | library                                   | when it was not stopped     |                        | model), use, delete a model,    |
- * |              |                                           |                             |                        | remove                          |
+ * |              |                                           |                             |                        | install a coding agent, remove  |
  *
  * The step table. Every step is IDEMPOTENT, so Resume and "Try again" re-enter the step the
  * job stopped in; they first make sure the runtime runs when the step needs it.
@@ -96,6 +96,16 @@
  *    server's own total.
  *  - No CLI id is compared with a literal here: the coding agent is a catalogue row plus a
  *    `HarnessFact`.
+ *  - The coding agent is chosen PER SESSION. The state file's `cli` is the agent of the job
+ *    and, once installed, the default one; the view's `harnesses` lists every catalogue harness
+ *    the model in use can be run with (`buildHarnessRows()`). The launch check
+ *    (`launchRefusalMessage()`) asks about the endpoint and the model, never about the agent.
+ *  - Installing one more coding agent beside an installed model (`installAgent()`,
+ *    `POST /api/local-model/agent`) is NOT a job and not an event of the reducer: the state
+ *    stays `installed` whatever the installer does, so a failed `npm install` never blocks a
+ *    session on a model that works. It runs in the background through the same install slot
+ *    and the same stock command as the `agent` step, one at a time, and what it leaves behind
+ *    is in memory only (`LocalModelHarnessRow.status` `installing`, or its `error`).
  *
  * The service (`createLocalModelService()`), beyond the reducer:
  *  - Verbs run one at a time on one queue, so two installs sent together cannot both find the
@@ -161,6 +171,7 @@ import {
   type HardwareFacts,
   type HarnessFact,
   type LocalModelAction,
+  type LocalModelAgentRequest,
   type LocalModelCatalog,
   type LocalModelConflict,
   type LocalModelDeleteRequest,
@@ -172,6 +183,8 @@ import {
   type LocalModelInstallState,
   type LocalModelInstallStep,
   type LocalModelInstallView,
+  type LocalModelHarnessRow,
+  type LocalModelHarnessStatus,
   type LocalModelLibraryAction,
   type LocalModelLibraryEntry,
   type LocalModelLibraryRow,
@@ -261,8 +274,9 @@ export interface InstallStateRow {
    * Every action a client may take in this state. The view's `actions` is this list narrowed
    * by what is live (`allowedActions()`): `start` only while the runtime is down, `stop` and
    * `start-session` only while it runs, `start-session` only when nothing blocks a session,
-   * `use` and `delete-model` only while a row of the library offers them, and in `idle`
-   * `remove` only while the model store still holds something.
+   * `use` and `delete-model` only while a row of the library offers them, `install-agent` only
+   * while a row of `harnesses` offers it, and in `idle` `remove` only while the model store
+   * still holds something.
    */
   actions: readonly LocalModelAction[];
 }
@@ -312,7 +326,7 @@ export const INSTALL_STATE_TABLE: Readonly<Record<LocalModelInstallState, Instal
       'Stays installed. The runtime is started again unless the person had stopped it, and the digest is read again: a changed digest or a port taken by another program shows as an error on the view and blocks a session, the state stays installed.',
     afterCancel: null,
     cancel: 'Refused: no job is running.',
-    actions: ['start-session', 'start', 'stop', 'install', 'use', 'delete-model', 'remove'],
+    actions: ['start-session', 'start', 'stop', 'install', 'use', 'delete-model', 'install-agent', 'remove'],
   },
 };
 
@@ -695,6 +709,13 @@ export interface InstallLiveFacts {
   storeBytes?: number;
   /** The catalogue's label per model id, for a model the runtime lists and the state file does not know. */
   labels?: Readonly<Record<string, string>>;
+  /**
+   * The coding agents of the model in use (`buildHarnessRows()`), without their
+   * `start-session` action: the view adds it once it knows whether a session can be started.
+   * Absent while nothing is installed, and when the catalogue or the CLI registry could not be
+   * read: the view then lists none.
+   */
+  harnesses?: readonly LocalModelHarnessRow[];
 }
 
 /** An error code with its sentence, its slots and its one next step. Pure. */
@@ -819,6 +840,91 @@ export function buildLibraryRows(state: LocalModelStateFile, live: InstallLiveFa
   return rows;
 }
 
+/** What the service remembers of installs of a coding agent beside an installed model. In memory only. */
+export interface AgentInstallMemory {
+  /** The CLI id of the agent whose installer runs right now. */
+  running?: string;
+  /** The agents whose last install failed, by CLI id, with the end of what the installer printed. */
+  failed?: Readonly<Record<string, { detail?: string }>>;
+}
+
+/**
+ * The coding agents the model in use can be run with: every catalogue harness that is not
+ * gated, has a fact, works at the model's context and accepts its name. The default agent
+ * first, then the higher catalogue rank. The default is the agent of the installation
+ * (`state.cli`) while it can be started, else the first one that can, so a client that names
+ * no agent never starts one that is gone. Rows carry no `start-session` action yet: whether a
+ * session can be started at all is the view's knowledge (`buildInstallView()`). Empty unless
+ * the state is `installed`. Pure, and it compares no CLI id with a literal.
+ */
+export function buildHarnessRows(
+  state: LocalModelStateFile,
+  catalog: Pick<LocalModelCatalog, 'harnesses'>,
+  facts: readonly HarnessFact[],
+  memory: AgentInstallMemory = {}
+): LocalModelHarnessRow[] {
+  if (state.state !== 'installed' || !state.model) return [];
+  const model = state.model;
+  const ranked: Array<{ rank: number; row: LocalModelHarnessRow }> = [];
+  for (const entry of catalog.harnesses) {
+    if (entry.gated) continue;
+    const fact = facts.find((candidate) => candidate.cli === entry.cli);
+    if (!fact || model.context < entry.minContext) continue;
+    let accepts = false;
+    try {
+      accepts = fact.acceptsModelId(model.id);
+    } catch {
+      accepts = false;
+    }
+    if (!accepts) continue;
+
+    const installing = !fact.installed && memory.running === entry.cli;
+    const status: LocalModelHarnessStatus = fact.installed
+      ? 'ready'
+      : installing
+        ? 'installing'
+        : fact.installable
+          ? 'installable'
+          : 'setup-needed';
+    const failure = status === 'installable' ? memory.failed?.[entry.cli] : undefined;
+    const readyMark = entry.readyMark ?? fact.readyMark;
+    ranked.push({
+      rank: entry.rank,
+      row: {
+        cli: entry.cli,
+        cliLabel: fact.label,
+        default: false,
+        status,
+        ...((status === 'installable' || status === 'installing') && fact.installCommand !== undefined
+          ? { installCommand: fact.installCommand }
+          : {}),
+        ...(entry.slowFirstTurn ? { slowFirstTurn: true } : {}),
+        ...(readyMark !== undefined ? { readyMark } : {}),
+        ...(failure
+          ? {
+              error: {
+                message: { text: LOCAL_MODEL_INSTALL_LABELS.errHarnessFailed, vars: { cli: fact.label } },
+                ...(failure.detail ? { detail: failure.detail } : {}),
+              },
+            }
+          : {}),
+        // One installer at a time: while one runs, no other agent is offered for install.
+        actions: status === 'installable' && memory.running === undefined ? ['install'] : [],
+      },
+    });
+  }
+  ranked.sort((a, b) => b.rank - a.rank);
+  const rows = ranked.map((entry) => entry.row);
+  const chosen = state.cli?.id;
+  const fallback =
+    rows.find((row) => row.cli === chosen && row.status === 'ready') ??
+    rows.find((row) => row.status === 'ready') ??
+    rows.find((row) => row.cli === chosen);
+  if (!fallback) return rows;
+  fallback.default = true;
+  return [fallback, ...rows.filter((row) => row !== fallback)];
+}
+
 /**
  * The actions the server accepts right now: the state row's list narrowed by what is live.
  * `rows` is `buildLibraryRows()` of the same two arguments, for a caller that has it. Pure.
@@ -833,12 +939,18 @@ export function allowedActions(
   return actions.filter((action) => {
     if (action === 'use') return rows.some((row) => row.actions.includes('use'));
     if (action === 'delete-model') return rows.some((row) => row.actions.includes('delete'));
+    if (action === 'install-agent') return (live.harnesses ?? []).some((row) => row.actions.includes('install'));
     // From idle a Remove only clears what an earlier one kept: offered while there is something.
     if (state.state === 'idle') return action !== 'remove' || (live.storeBytes ?? 0) > 0;
     if (state.state !== 'installed') return true;
     if (action === 'start') return !live.running;
     if (action === 'stop') return live.running;
-    if (action === 'start-session') return live.running && !blocked;
+    if (action === 'start-session') {
+      // With the agents known, a session needs one that can be started. Unknown (the registry
+      // could not be read) is not "none": the launch itself says what is missing then.
+      const anAgent = live.harnesses === undefined || live.harnesses.some((row) => row.status === 'ready');
+      return live.running && !blocked && anAgent;
+    }
     return true;
   });
 }
@@ -881,6 +993,7 @@ export function buildInstallView(state: LocalModelStateFile, live: InstallLiveFa
     folder: live.folder,
     library,
     ...(live.storeBytes !== undefined ? { store: { bytes: live.storeBytes, gb: formatGb(live.storeBytes) } } : {}),
+    harnesses: [],
     actions: allowedActions(state, live, library),
   };
   if (state.state === 'idle') return view;
@@ -907,6 +1020,18 @@ export function buildInstallView(state: LocalModelStateFile, live: InstallLiveFa
     if (state.connection) view.endpointId = state.connection.endpointId;
     const blocker = installedBlocker(state, live);
     if (blocker) view.error = blocker;
+    // An agent that can be started offers a session exactly when the model does.
+    const canStart = view.actions.includes('start-session');
+    view.harnesses = (live.harnesses ?? []).map((row) =>
+      row.status === 'ready' && canStart ? { ...row, actions: ['start-session', ...row.actions] } : { ...row }
+    );
+    // The default agent is the one a client that names none starts: never one that is gone
+    // while another can be started.
+    const preferred = view.harnesses.find((row) => row.default);
+    if (preferred) {
+      view.cli = preferred.cli;
+      view.cliLabel = preferred.cliLabel;
+    }
     return view;
   }
 
@@ -1053,8 +1178,12 @@ export interface LocalModelServiceDeps {
 
 /** The install as the routes and the server see it. One per process. */
 export interface LocalModelService {
-  /** The `install` object of the GET. Never throws. */
-  view(): Promise<LocalModelInstallView>;
+  /**
+   * The `install` object of the GET. Never throws. `harnessFacts`: the facts a caller already
+   * built for the same answer (the GET builds them for the recommendation), so they are not
+   * built twice; without them the service builds its own.
+   */
+  view(options?: { harnessFacts?: readonly HarnessFact[] }): Promise<LocalModelInstallView>;
   /**
    * Whether a session may be started on the saved endpoint `endpointId` right now. `undefined`:
    * yes, which is also the answer for every endpoint that is not this feature's. Otherwise the
@@ -1105,6 +1234,14 @@ export interface LocalModelService {
    * runtime is down.
    */
   deleteLibraryModel(request: LocalModelDeleteRequest, actor?: LocalModelActor): Promise<LocalModelVerbResult>;
+  /**
+   * `POST /api/local-model/agent`: install one more coding agent beside an installed model.
+   * Answers once the installer is STARTED; it runs on in the server, and the view's
+   * `harnesses` says how it stands. Not a job: the state stays `installed` and sessions go on.
+   * The agent must be a row of `harnesses` that offers `install`; one that can already be
+   * started answers with the view as it is. One installer at a time (409 `job-running`).
+   */
+  installAgent(request: LocalModelAgentRequest, actor: LocalModelActor): Promise<LocalModelVerbResult>;
   /** `POST /api/local-model/cancel`. Answers once the step in flight was interrupted. */
   cancel(): Promise<LocalModelVerbResult>;
   /**
@@ -1148,7 +1285,7 @@ export interface LocalModelService {
   shutdown(): Promise<void>;
   /** What the runtime supervisor reports through `onChange`: the pid of a child the moment it is spawned, a new pid after a restart, the budget line. Stored, never thrown. */
   onRuntimeChange(status: RuntimeStatus): void;
-  /** Resolves once no job is in flight. For `shutdown()` and for tests. */
+  /** Resolves once no job is in flight and no coding agent is being installed. For `shutdown()` and for tests. */
   idle(): Promise<void>;
 }
 
@@ -1260,6 +1397,13 @@ class LocalModelServiceImpl implements LocalModelService {
   /** What the model store last took on disk, and when. */
   private storeCache: { at: number; bytes: number } | undefined;
   private storeRefresh: Promise<void> | undefined;
+  /**
+   * The install of one more coding agent beside an installed model, while its installer runs.
+   * Not a job: the state file never hears of it, and the state stays `installed`.
+   */
+  private agentInstall: { cli: string; controller: AbortController; promise: Promise<void> } | undefined;
+  /** The agents whose last such install failed, with the end of what the installer printed. Forgotten at a restart. */
+  private readonly agentFailures = new Map<string, { detail?: string }>();
 
   constructor(deps: Partial<LocalModelServiceDeps>) {
     const pin = deps.pin ?? OLLAMA_RUNTIME_PIN;
@@ -1730,8 +1874,30 @@ class LocalModelServiceImpl implements LocalModelService {
 
   // ---------- The view ----------
 
-  private async liveFacts(state: LocalModelStateFile): Promise<InstallLiveFacts> {
+  /** What `buildHarnessRows()` is told about agent installs: the one that runs, and the ones that failed. */
+  private agentMemory(): AgentInstallMemory {
+    return {
+      ...(this.agentInstall ? { running: this.agentInstall.cli } : {}),
+      ...(this.agentFailures.size > 0 ? { failed: Object.fromEntries(this.agentFailures) } : {}),
+    };
+  }
+
+  private async liveFacts(
+    state: LocalModelStateFile,
+    harnessFacts?: readonly HarnessFact[]
+  ): Promise<InstallLiveFacts> {
     const status = this.deps.supervisor.status();
+    let harnesses: LocalModelHarnessRow[] | undefined;
+    if (state.state === 'installed') {
+      try {
+        const catalog = this.deps.getCatalog();
+        const facts = harnessFacts ?? (await this.deps.buildHarnessFacts(catalog));
+        harnesses = buildHarnessRows(state, catalog, facts, this.agentMemory());
+      } catch (err) {
+        // Unknown, not "none": the view then lists no agent and still offers a session.
+        console.warn(`[local-model] The coding agents could not be listed: ${getErrorMessage(err)}`);
+      }
+    }
     let developerTools: LocalModelDeveloperTools = 'unknown';
     try {
       developerTools = await this.deps.checkDeveloperTools();
@@ -1767,10 +1933,11 @@ class LocalModelServiceImpl implements LocalModelService {
       ...(tags ? { tags } : {}),
       ...(this.storeCache ? { storeBytes: this.storeCache.bytes } : {}),
       ...(labels ? { labels } : {}),
+      ...(harnesses ? { harnesses } : {}),
     };
   }
 
-  async view(): Promise<LocalModelInstallView> {
+  async view(options: { harnessFacts?: readonly HarnessFact[] } = {}): Promise<LocalModelInstallView> {
     try {
       await this.recovered();
       let state = await this.currentState();
@@ -1793,7 +1960,7 @@ class LocalModelServiceImpl implements LocalModelService {
         void this.refreshDigest(state).catch(() => {});
       }
       await this.freshenListings(state);
-      return buildInstallView(state, await this.liveFacts(state));
+      return buildInstallView(state, await this.liveFacts(state, options.harnessFacts));
     } catch (err) {
       console.warn(`[local-model] Could not build the install view: ${getErrorMessage(err)}`);
       return buildInstallView(IDLE_LOCAL_MODEL_STATE, {
@@ -1988,9 +2155,11 @@ class LocalModelServiceImpl implements LocalModelService {
       const open = this.sessionsOpen(state, liveSessionNames);
       if (open) return open;
 
-      // The coding agent of the switch: the one this model was checked with, else the one of
-      // the state, whichever is on this Mac now. A job that stopped while it installed another
-      // agent leaves the state naming one that may not be there.
+      // The coding agent of the switch, which becomes the default one: the one this model was
+      // checked with, else the one of the state, whichever is on this Mac now. A job that
+      // stopped while it installed another agent leaves the state naming one that may not be
+      // there. With neither, any agent the model can be run with that is on this Mac: the
+      // agent is chosen per session, so a switch is not refused for one that was uninstalled.
       const agents = [entry.cli, state.cli].filter(
         (cli, index, all): cli is { id: string; label: string } =>
           cli !== undefined && all.findIndex((other) => other?.id === cli.id) === index
@@ -2000,6 +2169,22 @@ class LocalModelServiceImpl implements LocalModelService {
         if (await this.deps.recheckCliInstalled(agent.id).catch(() => false)) {
           cli = agent;
           break;
+        }
+      }
+      if (!cli) {
+        try {
+          const catalog = this.deps.getCatalog();
+          const afterSwitch: LocalModelStateFile = {
+            schema: 1,
+            state: 'installed',
+            model: { id: entry.id, label: entry.label, context: entry.context },
+          };
+          const ready = buildHarnessRows(afterSwitch, catalog, await this.deps.buildHarnessFacts(catalog)).find(
+            (row) => row.status === 'ready'
+          );
+          if (ready) cli = { id: ready.cli, label: ready.cliLabel };
+        } catch {
+          /* no other agent is known then, and the switch is refused below */
         }
       }
       if (!cli) {
@@ -2027,6 +2212,54 @@ class LocalModelServiceImpl implements LocalModelService {
           detail: { cli: cli.id, context: entry.context },
         })
         .catch(() => {});
+      return this.answer();
+    });
+  }
+
+  installAgent(request: LocalModelAgentRequest, actor: LocalModelActor): Promise<LocalModelVerbResult> {
+    return this.exclusive(async () => {
+      await this.settle();
+      const state = await this.currentState();
+      if (state.state === 'installing') return conflict('job-running');
+      if (!INSTALL_STATE_TABLE[state.state].actions.includes('install-agent')) return conflict('wrong-state');
+      // One installer at a time, whichever agent it is for.
+      if (this.agentInstall) return conflict('job-running');
+
+      // Checked against what the server itself lists right now, before anything runs.
+      const catalog = this.deps.getCatalog();
+      const facts = await this.deps.buildHarnessFacts(catalog);
+      const row = buildHarnessRows(state, catalog, facts).find((candidate) => candidate.cli === request.cli);
+      if (!row) {
+        return { ok: false, status: 400, message: { text: LOCAL_MODEL_INSTALL_LABELS.refusedAgentNotOffered } };
+      }
+      // Already there (a second click, or it was installed by hand meanwhile): nothing to do.
+      if (row.status === 'ready') return this.answer();
+      if (row.status !== 'installable') {
+        return {
+          ok: false,
+          status: 400,
+          message: { text: LOCAL_MODEL_INSTALL_LABELS.refusedAgentNotInstallable, vars: { cli: row.cliLabel } },
+        };
+      }
+
+      this.agentFailures.delete(row.cli);
+      const controller = new AbortController();
+      const cli = row.cli;
+      const run = {
+        cli,
+        controller,
+        promise: this.installCodingAgent(cli, actor, controller.signal)
+          .then((outcome) => {
+            if (outcome.kind === 'fail') this.agentFailures.set(cli, { detail: outcome.detail });
+          })
+          .catch((err: unknown) => {
+            this.agentFailures.set(cli, { detail: getErrorMessage(err) });
+          })
+          .finally(() => {
+            if (this.agentInstall === run) this.agentInstall = undefined;
+          }),
+      };
+      this.agentInstall = run;
       return this.answer();
     });
   }
@@ -2372,6 +2605,8 @@ class LocalModelServiceImpl implements LocalModelService {
     const job = this.job;
     // The state file keeps saying `installing`: the next start reads that as a paused job.
     job?.controller.abort();
+    // An agent installer beside an installed model: its process group is ended, nothing is recorded.
+    this.agentInstall?.controller.abort();
     // The runtime is signalled at once, not after the job let go: the server may exit soon.
     const stopped = Promise.resolve()
       .then(() => this.deps.supervisor.stop())
@@ -2385,7 +2620,9 @@ class LocalModelServiceImpl implements LocalModelService {
   }
 
   async idle(): Promise<void> {
-    while (this.job) await this.job.promise.catch(() => {});
+    while (this.job || this.agentInstall) {
+      await (this.job ?? this.agentInstall)?.promise.catch(() => {});
+    }
   }
 
   // ---------- The job ----------
@@ -2741,24 +2978,38 @@ class LocalModelServiceImpl implements LocalModelService {
     signal: AbortSignal
   ): Promise<StepOutcome> {
     if (!state.cli) return { kind: 'fail', code: 'internal', detail: 'The job has no coding agent.' };
-    const cli = state.cli.id;
-    const vars = this.errorVars('harness-failed', state);
+    const outcome = await this.installCodingAgent(state.cli.id, actor, signal);
+    if (outcome.kind !== 'fail') return outcome;
+    return {
+      kind: 'fail',
+      code: 'harness-failed',
+      vars: this.errorVars('harness-failed', state),
+      detail: outcome.detail,
+    };
+  }
+
+  /**
+   * Installs one coding agent with its STOCK command, through the install slot it shares with
+   * the CLI management routes. What the `agent` step of a job and `installAgent()` both run.
+   * `done` also when the agent is already there; `fail` carries what to show as the detail.
+   */
+  private async installCodingAgent(
+    cli: string,
+    actor: LocalModelActor,
+    signal: AbortSignal
+  ): Promise<{ kind: 'done' } | { kind: 'cancelled' } | { kind: 'fail'; detail: string }> {
     // A resumed job, or an installer that finished before a restart: the binary may be there.
-    if (await this.deps.recheckCliInstalled(cli)) return DONE;
-    if (signal.aborted) return CANCELLED;
+    if (await this.deps.recheckCliInstalled(cli)) return { kind: 'done' };
+    if (signal.aborted) return { kind: 'cancelled' };
 
     // Only a coding agent of the catalogue, and only its STOCK install command.
     if (!this.deps.getCatalog().harnesses.some((row) => row.cli === cli)) {
-      return { kind: 'fail', code: 'harness-failed', vars, detail: 'Not a coding agent of the local model catalogue.' };
+      return { kind: 'fail', detail: 'Not a coding agent of the local model catalogue.' };
     }
     const command = this.deps.stockInstallCommand(cli);
-    if (!command) {
-      return { kind: 'fail', code: 'harness-failed', vars, detail: 'No install command for this platform.' };
-    }
+    if (!command) return { kind: 'fail', detail: 'No install command for this platform.' };
     const release = this.deps.tryBeginCliInstall(cli);
-    if (!release) {
-      return { kind: 'fail', code: 'harness-failed', vars, detail: 'Another install of this coding agent is running.' };
-    }
+    if (!release) return { kind: 'fail', detail: 'Another install of this coding agent is running.' };
     let result: CliInstallResult;
     try {
       result = await this.deps.runInstallCommand(command, { signal });
@@ -2783,13 +3034,13 @@ class LocalModelServiceImpl implements LocalModelService {
     // Even a failed or interrupted install may have left a binary behind: the cached lookups
     // are forgotten either way, and what counts is whether the binary is found now.
     const installed = await this.deps.recheckCliInstalled(cli);
-    if (result.aborted || signal.aborted) return CANCELLED;
-    if (installed) return DONE;
+    if (result.aborted || signal.aborted) return { kind: 'cancelled' };
+    if (installed) return { kind: 'done' };
     const detail = result.timedOut
       ? `The installer was stopped after ${Math.round(CLI_INSTALL_TIMEOUT_MS / 1000)} seconds.`
       : result.output.slice(-INSTALLER_DETAIL_CHARS).trim() ||
         (result.code === 0 ? 'The installer finished, but the program was not found afterwards.' : 'No output.');
-    return { kind: 'fail', code: 'harness-failed', vars, detail };
+    return { kind: 'fail', detail };
   }
 
   private async stepConnect(state: LocalModelStateFile, signal: AbortSignal): Promise<StepOutcome> {

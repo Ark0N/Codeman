@@ -9,14 +9,18 @@
  *    mechanism (`capabilities.customModelInjection.kind` is `unsupported`);
  *  - reports `label` from the registry entry and `installed` from the same probe the page
  *    render and `GET /api/clis` use (`utils/cli-installed-probes.ts`), asked once per build;
- *  - reports `installable` only for a STOCK CLI that is not installed and whose install
- *    command for this platform needs no administrator rights (`installCommandNeedsAdmin()`),
- *    and then carries that command as `installCommand`, so the consent screen can print the
+ *  - reports `installable` only for a STOCK CLI that is not installed, whose install command
+ *    for this platform needs no administrator rights (`installCommandNeedsAdmin()`) and which
+ *    is not a launcher (`discovery.launcherProfile`: its install command leaves it with nothing
+ *    to launch, and what it launches is third-party code with a consent of its own in the Run
+ *    menu), and then carries that command as `installCommand`, so the consent screen can print the
  *    literal text. The command is the COMPILED stock one (`stockInstallCommand()`), never the
  *    one a `clis.json` override supplies: it is exactly what the install job would run, and
  *    an override file must not be able to change that;
  *  - supplies `acceptsModelId` (`cliAcceptsCustomModelId()`), the test a custom model launch
- *    applies to the model id before anything is written.
+ *    applies to the model id before anything is written;
+ *  - passes on the registry's `capabilities.composerReadyMark` as `readyMark` when it holds no
+ *    white space (a script waits for it as one literal).
  *
  * Rules:
  *  - No CLI id is compared with a literal here or anywhere: the id comes from the catalogue
@@ -156,19 +160,23 @@ export async function buildHarnessFacts(
     }
 
     let installCommand: string | undefined;
-    if (!installed && entry.stock) {
+    // A launcher (`discovery.launcherProfile`) is not startable after its install command: it
+    // still needs something to launch, which that command does not install.
+    if (!installed && entry.stock && entry.discovery.launcherProfile === undefined) {
       const command = resolved.installCommandFor(entry);
       if (command !== undefined && command.trim() !== '' && !installCommandNeedsAdmin(command)) {
         installCommand = command;
       }
     }
 
+    const registryMark = entry.capabilities.composerReadyMark;
     facts.push({
       cli: row.cli,
       label: entry.label,
       installed,
       installable: installCommand !== undefined,
       ...(installCommand !== undefined ? { installCommand } : {}),
+      ...(registryMark !== undefined && !/\s/.test(registryMark) ? { readyMark: registryMark } : {}),
       acceptsModelId: (modelId: string) => cliAcceptsCustomModelId(entry, modelId),
     });
   }

@@ -187,6 +187,63 @@ describe('buildHarnessFacts', () => {
     expect(byCli.get('omp')).toMatchObject({ installed: false, installable: false });
   });
 
+  it('a launcher is never installable: its install command leaves it with nothing to launch', async () => {
+    // DeepSeek Harness is the stock launcher: its command needs no administrator, and it would
+    // still not be startable after it (it needs a profile, which is third-party code).
+    const launcher = stockEntry('deepseek');
+    expect(launcher.discovery.launcherProfile).toBeDefined();
+    expect(installCommandNeedsAdmin(darwinCommand(launcher) as string)).toBe(false);
+    const command = vi.fn(darwinCommand);
+    const [missing] = await buildHarnessFacts(catalogWith(['deepseek']), {
+      probeInstalled: installedOnly(),
+      installCommandFor: command,
+    });
+    expect(missing).toMatchObject({ cli: 'deepseek', installed: false, installable: false });
+    expect(missing).not.toHaveProperty('installCommand');
+    expect(command).not.toHaveBeenCalled();
+    // Set up by the person: it is a harness like the others.
+    const [there] = await buildHarnessFacts(catalogWith(['deepseek']), { probeInstalled: installedOnly('deepseek') });
+    expect(there).toMatchObject({ installed: true, installable: false });
+
+    // The rule reads the entry's data, not its id: any entry with a launcher profile, and no other.
+    const asLauncher = (id: string): CliEntry | undefined => {
+      const entry = getCli(id);
+      return entry
+        ? { ...entry, discovery: { ...entry.discovery, launcherProfile: launcher.discovery.launcherProfile } }
+        : entry;
+    };
+    const [made] = await buildHarnessFacts(catalogWith(['opencode']), {
+      getCli: asLauncher,
+      probeInstalled: installedOnly(),
+      installCommandFor: darwinCommand,
+    });
+    expect(made.installable).toBe(false);
+  });
+
+  it('readyMark: the registry’s composer mark, only when it is one literal without white space', async () => {
+    const facts = await buildHarnessFacts(catalogWith(['opencode', 'claude', 'deepseek']), {
+      probeInstalled: installedOnly(),
+    });
+    const byCli = new Map(facts.map((f) => [f.cli, f]));
+    expect(byCli.get('claude')?.readyMark).toBe(stockEntry('claude').capabilities.composerReadyMark);
+    expect(byCli.get('deepseek')?.readyMark).toBe('❯');
+    // The registry declares none for opencode: the catalogue row carries the measured one.
+    expect(stockEntry('opencode').capabilities.composerReadyMark).toBeUndefined();
+    expect(byCli.get('opencode')).not.toHaveProperty('readyMark');
+
+    const spaced = (id: string): CliEntry | undefined => {
+      const entry = getCli(id);
+      return entry
+        ? { ...entry, capabilities: { ...entry.capabilities, composerReadyMark: '/ commands · ? help' } }
+        : entry;
+    };
+    const [fact] = await buildHarnessFacts(catalogWith(['opencode']), {
+      getCli: spaced,
+      probeInstalled: installedOnly(),
+    });
+    expect(fact).not.toHaveProperty('readyMark');
+  });
+
   it('installable is false without an install command, for a sudo command, and for a custom entry', async () => {
     const command = vi.fn<(entry: CliEntry) => string | undefined>();
     command.mockReturnValueOnce(undefined);

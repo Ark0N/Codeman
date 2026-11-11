@@ -13,10 +13,11 @@
  *    computed from that model's architecture. test/local-model-catalog.test.ts recomputes every
  *    computed figure from a table of architectures and refuses a row that is not in it, so a
  *    new row needs its model's config.json read, not a figure borrowed from a neighbour.
- *  - A harness is a ROW (`{ cli, minContext, rank, gated?, slowFirstTurn? }`). The `cli` is a CLI
- *    registry id as data: no code may compare it with a literal. Whether that CLI exists and can
- *    take a custom model is checked against the registry at call time, in
- *    src/local-model/harness-facts.ts, never here.
+ *  - A harness is a ROW (`{ cli, minContext, rank, gated?, slowFirstTurn?, readyMark? }`). The
+ *    `cli` is a CLI registry id as data: no code may compare it with a literal. Whether that CLI
+ *    exists, can take a custom model and can be installed from here is checked against the
+ *    registry at call time, in src/local-model/harness-facts.ts, never here. HARNESSES below
+ *    says what was measured for each row, and where.
  *  - The schema checks more than fields. Across rows it requires: unique model ids and ranks,
  *    unique harness `cli`s and ranks, `contexts` largest first, a `tested` entry naming a harness
  *    row, and `chips` most specific first.
@@ -56,13 +57,44 @@
  * |                      |                                                           | faster than the run without it       |
  * | `tested`             | our own run of the model with a harness on a real Mac     | one entry, with its measured speed   |
  * | `minMacosMajor`      | the runtime's documentation (macOS 14)                    | yes, by the facts review             |
- * | harness `minContext` | 65536: the runtime's documentation for OpenCode ("64k or  | 65536 yes. 32768 no, which is why    |
- * |                      | higher"), and OpenCode v1.19.5's own fixed prompt (about  | that row is gated                    |
- * |                      | 8,000 to 10,000 tokens) and compaction rule: at 32768 it  |                                      |
+ * | harness `minContext` | 65536: the runtime's documentation for OpenCode ("64k or  | 65536 yes. Nothing was run below it, |
+ * |                      | higher"), and OpenCode v1.19.5's own fixed prompt (about  | and no model row offers less, so     |
+ * |                      | 8,000 to 10,000 tokens) and compaction rule: at 32768 it  | every row says 65536 (HARNESSES)     |
  * |                      | leaves 14,000 to 16,000 tokens, less than one default     |                                      |
  * |                      | 2,000-line file read                                      |                                      |
  * | `chips`              | the bandwidth column of                                   | yes, read at the source for this     |
  * |                      | https://github.com/ggml-org/llama.cpp/discussions/4167    | file                                 |
+ *
+ * HARNESSES. What each harness row rests on. The runs of 2026-11-10 were made on Linux through
+ * Codeman's own custom model launch, against a real model (Ollama 0.13.0, a 1.7B model on a CPU)
+ * where it says REAL, and against a scripted endpoint that replays that runtime's stream of a
+ * tool call where it says SCRIPTED. A scripted run proves the harness's side of the protocol,
+ * never what a model does with its prompt. None of them ran on a Mac or on the pinned runtime.
+ *
+ * | Harness    | First request (fixed prompt)      | Tool round trip                        | `readyMark`                          |
+ * |------------|-----------------------------------|----------------------------------------|--------------------------------------|
+ * | `opencode` | 8,115 tokens, 11 tools (v1.19.5;  | SCRIPTED (v1.19.5). REAL in our own    | `┃`: the first painted frame holds   |
+ * |            | more with user-level skills)      | run on a Mac, see the `tested` entry   | the composer; a prompt sent at the   |
+ * |            |                                   |                                        | mark was submitted, 2 of 2 launches  |
+ * | `claude`   | about 36,000 tokens, which is     | not run again for this table (the row  | none here: the CLI registry's        |
+ * |            | `slowFirstTurn`                   | shipped in 1.50.0)                     | `composerReadyMark` stands           |
+ * | `pi`       | 2,096 tokens, 4 tools (v1.5.2,    | REAL (v1.5.2): tool call, tool result, | none: its composer rules are painted |
+ * |            | the runtime's own count)          | final answer, the file on disk         | before it takes Enter (2 of 2        |
+ * |            |                                   |                                        | prompts sent at the rule stayed      |
+ * |            |                                   |                                        | unsent), and it draws nothing that   |
+ * |            |                                   |                                        | is a contract once it does           |
+ * | `deepseek` | about 7,650 tokens, 25 tools      | SCRIPTED only (0.1.1-rc.2 with dsh-TUI | none here: the CLI registry's `❯`    |
+ * |            | (0.1.1-rc.2)                      | 0.10.0-beta.1, not today's versions).  | stands; a prompt sent at it was      |
+ * |            |                                   | REAL: the launch and the model name    | submitted, 2 of 2 launches           |
+ * |            |                                   | reached the runtime, no turn finished  |                                      |
+ *
+ * Every one of them sent the `name:tag` model id unchanged. `pi` was gated until 2026-11-10 for
+ * two open questions, both answered by its run: the id (above), and the window, which Codeman
+ * now passes to it (src/custom-model-injection.ts; without it pi takes an unknown model for a
+ * 128,000-token one). `deepseek` is a LAUNCHER: its install command leaves it with nothing to
+ * launch, so src/local-model/harness-facts.ts never reports it installable and a Mac is offered
+ * it only where it was already set up. It is offered on a scripted run and one unfinished real
+ * one: gate the row again (`gated: true`) should a run on a Mac not finish a turn.
  *
  * MEMORY. The need is `bytes + heldBytesPerToken x context + overheadBytes + peakExtraBytes`
  * (src/local-model/recommend.ts). The two runners spend memory differently, so a row's three
@@ -222,6 +254,8 @@ const LocalHarnessEntrySchema = z
     rank: z.number().int(),
     gated: z.boolean().optional(),
     slowFirstTurn: z.boolean().optional(),
+    // One literal a script waits for: no white space, so the terminal's own spacing cannot split it.
+    readyMark: z.string().min(1).max(64).regex(/^\S+$/).optional(),
   })
   .strict();
 
@@ -528,13 +562,16 @@ export const STOCK_LOCAL_MODEL_CATALOG: LocalModelCatalog = {
       tested: [],
     },
   ],
-  // The higher rank wins when a model can run with more than one harness.
+  // The higher rank wins when a model can run with more than one harness. What each row rests
+  // on is the HARNESSES table of the file header.
   harnesses: [
-    { cli: 'opencode', minContext: 65536, rank: 3 },
+    { cli: 'opencode', minContext: 65536, rank: 4, readyMark: '┃' },
     // Sends a fixed prompt of about 36,000 tokens, so the first answer takes minutes.
-    { cli: 'claude', minContext: 65536, rank: 2, slowFirstTurn: true },
-    // Gated: neither its 32768 minimum nor its handling of a `name:tag` model id is verified.
-    { cli: 'pi', minContext: 32768, rank: 1, gated: true },
+    { cli: 'claude', minContext: 65536, rank: 3, slowFirstTurn: true },
+    // The smallest first request of the four (2,096 tokens). No `readyMark`: see HARNESSES.
+    { cli: 'pi', minContext: 65536, rank: 2 },
+    // A launcher: offered only where it is already set up, never installed from here.
+    { cli: 'deepseek', minContext: 65536, rank: 1 },
   ],
   // Memory bandwidth in GB/s, most specific first. Only chips that shipped and are in the source
   // table are listed. Where one name covers two bandwidths (M3 Max 300 or 400, M4 Max 410 or 546,

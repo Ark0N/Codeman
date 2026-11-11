@@ -1628,8 +1628,8 @@
       '此 Mac 目前只使用 {model}。请先在本地模型窗口中切换模型。',
     'This model is not one of the checked models on this Mac.': '该模型不在此 Mac 上已检查的模型之列。',
     'This model is not on this Mac.': '此 Mac 上没有这个模型。',
-    '{cli} is not installed on this Mac. Install this model again to choose a coding agent.':
-      '此 Mac 上没有安装 {cli}。请重新安装此模型，以便选择编程智能体。',
+    '{cli} is not installed on this Mac. Install a coding agent in the local model window first.':
+      '此 Mac 上没有安装 {cli}。请先在本地模型窗口中安装一个编程智能体。',
     '{model} could not be deleted from this Mac.': '无法从此 Mac 删除 {model}。',
     // What the endpoint routes answer for the record of the model on this Mac (shown as a toast).
     'This endpoint belongs to the model Codeman runs on this Mac. Change or remove it in the local model window.':
