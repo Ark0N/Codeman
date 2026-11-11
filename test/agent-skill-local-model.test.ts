@@ -156,6 +156,31 @@ const INSTALLED = {
 };
 const RUNNING = status({ ...INSTALLED, running: true, actions: ['start-session', 'stop', 'remove'] });
 const STOPPED = status({ ...INSTALLED, running: false, actions: ['start', 'remove'] });
+/** What a 1.51 server lists beside `cli`: the agents the model can be run with, and the models on the Mac. */
+const AGENTS = [
+  { cli: 'opencode', cliLabel: 'OpenCode', default: true, status: 'ready', readyMark: '┃', actions: ['start-session'] },
+  { cli: 'pi', cliLabel: 'Pi', default: false, status: 'ready', actions: ['start-session'] },
+  {
+    cli: 'deepseek',
+    cliLabel: 'DeepSeek',
+    default: false,
+    status: 'ready',
+    readyMark: '❯',
+    actions: ['start-session'],
+  },
+  { cli: 'claude', cliLabel: 'Claude Code', default: false, status: 'installable', installCommand: 'x', actions: [] },
+];
+const LIBRARY = [
+  { id: 'qwen3.6:35b-a3b', label: 'Qwen3.6 35B-A3B', active: true, verified: true, status: 'ready', sizeGb: '23.1' },
+  { id: 'gpt-oss:20b', label: 'GPT-OSS 20B', active: false, verified: true, status: 'ready', sizeGb: '13.8' },
+];
+const WITH_AGENTS = status({
+  ...INSTALLED,
+  running: true,
+  harnesses: AGENTS,
+  library: LIBRARY,
+  actions: ['start-session', 'stop', 'remove'],
+});
 const QUICK_START = JSON.stringify({ success: true, data: { sessionId: SID, casePath: '/tmp/summ' } });
 const MATCHED = JSON.stringify({ success: true, data: { wait: { matched: true, timedOut: false, ended: false } } });
 const NOT_MATCHED = JSON.stringify({ success: true, data: { wait: { matched: false, timedOut: true, ended: false } } });
@@ -180,6 +205,39 @@ describe.skipIf(!hasJq)('preamble local_model', () => {
         modelId: 'qwen3.6:35b-a3b',
         modelLabel: 'Qwen3.6 35B-A3B',
       },
+    },
+    {
+      name: 'a server that lists them: the agents with their status and mark, and the models on this Mac',
+      body: WITH_AGENTS,
+      rc: 0,
+      expect: {
+        spawnable: true,
+        cli: 'opencode',
+        agents: [
+          { cli: 'opencode', cliLabel: 'OpenCode', status: 'ready', default: true, readyMark: '┃' },
+          { cli: 'pi', cliLabel: 'Pi', status: 'ready', default: false },
+          { cli: 'deepseek', cliLabel: 'DeepSeek', status: 'ready', default: false, readyMark: '❯' },
+          { cli: 'claude', cliLabel: 'Claude Code', status: 'installable', default: false },
+        ],
+        models: [
+          { id: 'qwen3.6:35b-a3b', label: 'Qwen3.6 35B-A3B', active: true, status: 'ready', sizeGb: '23.1' },
+          { id: 'gpt-oss:20b', label: 'GPT-OSS 20B', active: false, status: 'ready', sizeGb: '13.8' },
+        ],
+      },
+    },
+    {
+      name: 'installed, but no coding agent that can run it is on this Mac: no-agent, running or stopped',
+      body: status({
+        ...INSTALLED,
+        running: false,
+        harnesses: [
+          { cli: 'opencode', cliLabel: 'OpenCode', default: true, status: 'installable', actions: ['install'] },
+        ],
+        // `start` with no error alone would read as spawnable.
+        actions: ['start', 'install-agent', 'remove'],
+      }),
+      rc: 1,
+      expect: { spawnable: false, reason: 'no-agent', agents: [{ cli: 'opencode', status: 'installable' }] },
     },
     {
       name: 'an installed model whose runtime is stopped: spawnable once started',
@@ -427,8 +485,8 @@ describe.skipIf(!hasJq)('preamble spawn_worker <name> local', () => {
   });
 
   it('refuses a harness it knows no composer mark for, unless LOCAL_READY_MARK names one', () => {
-    const pi = status({ ...INSTALLED, cli: 'pi', running: true, actions: ['start-session', 'stop', 'remove'] });
-    const refused = runSkill('spawn_worker summ local', { 'lm-get': pi });
+    const other = status({ ...INSTALLED, cli: 'omp', running: true, actions: ['start-session', 'stop', 'remove'] });
+    const refused = runSkill('spawn_worker summ local', { 'lm-get': other });
     expect(refused.rc).toBe(1);
     expect(refused.stdout).toBe('');
     expect(refused.stderr).toMatch(/LOCAL_READY_MARK/);
@@ -436,13 +494,202 @@ describe.skipIf(!hasJq)('preamble spawn_worker <name> local', () => {
 
     const marked = runSkill(
       'spawn_worker summ local',
-      { 'lm-get': pi, 'quick-start': QUICK_START, 'wait-output': MATCHED },
-      { LOCAL_READY_MARK: 'pi-ready' }
+      { 'lm-get': other, 'quick-start': QUICK_START, 'wait-output': MATCHED },
+      { LOCAL_READY_MARK: 'omp-ready' }
     );
     expect(marked.rc).toBe(0);
     expect(marked.stdout).toBe(`${SID}\n`);
-    expect(JSON.parse(marked.calls[1].d).mode).toBe('pi');
-    expect(marked.calls[2].q).toContain('match=pi-ready');
+    expect(JSON.parse(marked.calls[1].d).mode).toBe('omp');
+    expect(marked.calls[2].q).toContain('match=omp-ready');
+  });
+
+  describe("local:<agent>: the coding agent is the caller's choice", () => {
+    const spawn = (kind: string, lm: string = WITH_AGENTS, env: Record<string, string> = {}) =>
+      runSkill(`spawn_worker summ ${kind}`, { 'lm-get': lm, 'quick-start': QUICK_START, 'wait-output': MATCHED }, env);
+
+    it('plain local still starts the default agent, with the mark the server names', () => {
+      const run = spawn('local');
+      expect(run.rc).toBe(0);
+      expect(JSON.parse(run.calls[1].d)).toEqual({
+        caseName: 'summ',
+        mode: 'opencode',
+        parentSessionId: SELF,
+        customModel: { endpointId: 'local-ollama', modelId: 'qwen3.6:35b-a3b' },
+      });
+      expect(run.calls[2].q).toContain('match=┃');
+    });
+
+    it('local:pi starts Pi without trusting the folder, and waits for the end of its startup', () => {
+      const run = spawn('local:pi');
+      expect(run.stderr).toBe('');
+      expect(run.rc).toBe(0);
+      expect(run.stdout).toBe(`${SID}\n`);
+      expect(run.calls.map((call) => call.key)).toEqual(['lm-get', 'quick-start', 'wait-output']);
+      expect(JSON.parse(run.calls[1].d)).toEqual({
+        caseName: 'summ',
+        mode: 'pi',
+        parentSessionId: SELF,
+        // --no-approve: the task prompt must never answer Pi's trust question.
+        piConfig: { approveProjectTrust: false },
+        customModel: { endpointId: 'local-ollama', modelId: 'qwen3.6:35b-a3b' },
+      });
+      // Not its composer rule, which is painted before Pi takes Enter.
+      expect(run.calls[2].q).toContain('match=extended-keys');
+      expect(run.calls[2].q).not.toContain('match=─');
+    });
+
+    it('local:deepseek starts DeepSeek Harness with the permission posture of the Run button, at its composer glyph', () => {
+      const run = spawn('local:deepseek');
+      expect(run.rc).toBe(0);
+      expect(JSON.parse(run.calls[1].d)).toEqual({
+        caseName: 'summ',
+        mode: 'deepseek',
+        parentSessionId: SELF,
+        deepSeekConfig: { permissionMode: 'danger-full-access' },
+        customModel: { endpointId: 'local-ollama', modelId: 'qwen3.6:35b-a3b' },
+      });
+      expect(run.calls[2].q).toContain('match=❯');
+    });
+
+    it('a DeepSeek Harness worker that opened its setup guide is deleted, never handed back: its cursor is the mark too', () => {
+      // dsh-TUI 0.19.0, as the rendered pane reads: the guide, with `❯` on its first step.
+      const guide = JSON.stringify({
+        success: true,
+        data: {
+          terminalBuffer:
+            '\u001b[1mWelcome to dsh-TUI\u001b[0m   Step 1 of 4\r\n  ✗ No DEEPSEEK_API_KEY yet\r\n❯ Sign in to a subscription (OAuth)\r\n',
+        },
+      });
+      const composer = JSON.stringify({
+        success: true,
+        data: {
+          terminalBuffer:
+            '╭────╮\r\n│ ❯ Say something, or type / for commands…\r\n╰────╯\r\n qwen3.6:35b-a3b  ·  standard\r\n',
+        },
+      });
+      const answers = { 'lm-get': WITH_AGENTS, 'quick-start': QUICK_START, 'wait-output': MATCHED };
+
+      const blocked = runSkill('spawn_worker rev local:deepseek', {
+        ...answers,
+        terminal: guide,
+        delete: JSON.stringify({ success: true, data: {} }),
+      });
+      expect(blocked.rc).toBe(1);
+      expect(blocked.stdout).toBe('');
+      expect(blocked.stderr).toMatch(/setup guide/);
+      expect(blocked.calls.map((call) => `${call.m} ${call.key}`)).toEqual([
+        'GET lm-get',
+        'POST quick-start',
+        'GET wait-output',
+        'GET terminal',
+        'DELETE delete',
+      ]);
+
+      const ready = runSkill('spawn_worker rev local:deepseek', { ...answers, terminal: composer });
+      expect(ready.stderr).toBe('');
+      expect(ready.rc).toBe(0);
+      expect(ready.stdout).toBe(`${SID}\n`);
+
+      // The same look for a DeepSeek worker that is not on the local model.
+      const cloud = runSkill('spawn_worker rev deepseek', {
+        'quick-start': QUICK_START,
+        'wait-output': MATCHED,
+        terminal: guide,
+        delete: JSON.stringify({ success: true, data: {} }),
+      });
+      expect(cloud.rc).toBe(1);
+      expect(cloud.stdout).toBe('');
+      expect(cloud.stderr).toMatch(/setup guide/);
+      expect(cloud.calls.map((call) => call.key)).toEqual(['quick-start', 'wait-output', 'terminal', 'delete']);
+    });
+
+    it('a mark the server names wins over the one this skill measured, and LOCAL_READY_MARK over both', () => {
+      const named = status({
+        ...INSTALLED,
+        running: true,
+        harnesses: AGENTS.map((agent) => (agent.cli === 'pi' ? { ...agent, readyMark: 'pi-is-up' } : agent)),
+        actions: ['start-session', 'stop', 'remove'],
+      });
+      expect(spawn('local:pi', named).calls[2].q).toContain('match=pi-is-up');
+      expect(spawn('local:pi', named, { LOCAL_READY_MARK: 'mine' }).calls[2].q).toContain('match=mine');
+      expect(spawn('local:opencode', WITH_AGENTS, { LOCAL_READY_MARK: 'mine' }).calls[2].q).toContain('match=mine');
+    });
+
+    it('refuses an agent that is not startable, names the ones that are, and starts nothing', () => {
+      const run = spawn('local:claude');
+      expect(run.rc).toBe(1);
+      expect(run.stdout).toBe('');
+      expect(run.stderr).toContain("'claude' is not startable on this Mac (installable)");
+      expect(run.stderr).toContain('Startable now: opencode, pi, deepseek');
+      expect(run.calls.map((call) => call.key)).toEqual(['lm-get']);
+    });
+
+    it('refuses an agent the model cannot be run with at all', () => {
+      const run = spawn('local:grok');
+      expect(run.rc).toBe(1);
+      expect(run.stdout).toBe('');
+      expect(run.stderr).toContain("cannot be run with 'grok'");
+      expect(run.stderr).toContain('Startable: opencode, pi, deepseek');
+      expect(run.calls.map((call) => call.key)).toEqual(['lm-get']);
+    });
+
+    it('a Codeman that lists no agents: its one agent can be named, another cannot', () => {
+      const same = spawn('local:opencode', RUNNING);
+      expect(same.rc).toBe(0);
+      expect(JSON.parse(same.calls[1].d).mode).toBe('opencode');
+      expect(same.calls[2].q).toContain('match=┃');
+
+      const other = spawn('local:pi', RUNNING);
+      expect(other.rc).toBe(1);
+      expect(other.stdout).toBe('');
+      expect(other.stderr).toMatch(/lists one coding agent for the local model, opencode/);
+      expect(other.calls.map((call) => call.key)).toEqual(['lm-get']);
+    });
+
+    it('with no agent that can be started nothing is spawned, whatever was asked for', () => {
+      const none = status({
+        ...INSTALLED,
+        running: true,
+        harnesses: [{ cli: 'opencode', cliLabel: 'OpenCode', default: true, status: 'installing', actions: [] }],
+        actions: ['stop', 'remove'],
+      });
+      for (const kind of ['local', 'local:opencode']) {
+        const run = spawn(kind, none);
+        expect(run.rc).toBe(1);
+        expect(run.stdout).toBe('');
+        expect(run.stderr).toMatch(/no local model to spawn on \(no-agent\)/);
+        expect(run.calls.map((call) => call.key)).toEqual(['lm-get']);
+      }
+    });
+
+    it('a worker whose mark never shows is deleted, and the message names the agent', () => {
+      const run = runSkill('spawn_worker summ local:pi', {
+        'lm-get': WITH_AGENTS,
+        'quick-start': QUICK_START,
+        'wait-output': NOT_MATCHED,
+        delete: JSON.stringify({ success: true, data: {} }),
+      });
+      expect(run.rc).toBe(1);
+      expect(run.stdout).toBe('');
+      expect(run.stderr).toMatch(/\(pi\) never drew 'extended-keys'/);
+      expect(run.calls.map((call) => `${call.m} ${call.key}`)).toEqual([
+        'GET lm-get',
+        'POST quick-start',
+        'GET wait-output',
+        'DELETE delete',
+      ]);
+    });
+
+    it('spawn_workers takes name:local:agent in a mixed fleet', () => {
+      const run = runSkill('spawn_workers a:local:pi', {
+        'lm-get': WITH_AGENTS,
+        'quick-start': QUICK_START,
+        'wait-output': MATCHED,
+      });
+      expect(run.calls.map((call) => call.key)).toContain('quick-start');
+      const body = JSON.parse(run.calls.find((call) => call.key === 'quick-start')!.d);
+      expect([body.caseName, body.mode]).toEqual(['a', 'pi']);
+    });
   });
 
   it('runs a claude harness through the claude readiness path (hooks vetted, shift+tab)', () => {
