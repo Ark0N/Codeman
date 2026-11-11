@@ -580,6 +580,8 @@ html.mobile-init .file-browser-panel {
   .btn-icon-header.btn-file-viewer {
     width: 44px;
     height: 44px;
+    /* Tighten the visible icon spacing without shrinking the touch target. */
+    padding-inline-end: 12px;
   }
 
   .btn-icon-header.btn-file-viewer svg {
