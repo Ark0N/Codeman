@@ -223,7 +223,7 @@ the agent, so a session with one agent and a session with another run on the sam
 | OpenCode         | about 8,100 tokens, 11 tools (v1.19.5; more with user-level skills) | yes                       | A tool round trip on a Mac with a real model (the catalogue's tested entry), and on a scripted endpoint for v1.19.5                         |
 | Claude Code      | about 36,000 tokens, so the first answer takes minutes              | yes                       | Shipped in 1.50.0; not measured again for this table                                                                                        |
 | Pi               | 2,096 tokens, 4 tools (v1.5.2)                                      | yes                       | A complete tool round trip against a real model: tool call, tool result, final answer, the file on disk                                     |
-| DeepSeek Harness | about 7,650 tokens, 25 tools (0.1.1-rc.2)                           | **no**                    | A tool round trip on a scripted endpoint only. Against a real model the launch and the model name reached the runtime, and no turn finished |
+| DeepSeek Harness | about 7,650 tokens, 25 tools (0.1.1-rc.2); 6,983, 27 tools (0.2.2-rc.1) | **no**                | A tool round trip on a scripted endpoint only, on both versions. Against a real model the launch and the model name reached the runtime, and no turn finished |
 
 How to read the last column: the runs of 2026-11-10 were made on **Linux**, through Codeman's
 own custom model launch, against Ollama 0.13.0 with a 1.7B model on a CPU ("a real model") or
@@ -248,7 +248,11 @@ Three things follow from how the agents differ:
   the one agent of the four besides Claude Code that reports the end of a turn. Its custom
   endpoint recipe itself was verified with a real model on a llama.cpp server
   ([custom-model-endpoints.md](custom-model-endpoints.md)); what is missing is a finished turn
-  on this feature's runtime.
+  on this feature's runtime. On today's version (0.2.2-rc.1 with dsh-TUI 0.19.0) two more
+  things were seen: a setup guide opens in every session until a person has finished it once
+  (a person in a tab presses through it; a script must not, see the codeman skill), and its
+  transcript file was renamed, so Codeman's response viewer and `last-response` are empty for
+  a dsh session on that version until the reader learns the new name.
 - **OpenCode and DeepSeek Harness send a second, small request** beside the first prompt (a
   title, a side question). The runtime answers one request at a time, so it queues.
 
