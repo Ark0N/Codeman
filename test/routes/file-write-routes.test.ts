@@ -19,6 +19,7 @@ import {
   readFileSync,
   symlinkSync,
   chmodSync,
+  chownSync,
   statSync,
   lstatSync,
   readlinkSync,
@@ -323,7 +324,16 @@ describe('file viewer edit mode (real fs)', () => {
     const original = 'TEST_VALUE=original\nTEST_LABEL=café';
     const updated = 'TEST_VALUE=updated\nTEST_LABEL=été';
     const editablePaths = ['.env', '.env.local', '.env.example', 'config.env', 'app/.env'];
-    const forbiddenPaths = ['.ssh/.env', '.codeman/.env', '.codeman-dev/.env', '.npmrc', 'credentials.json'];
+    const forbiddenPaths = [
+      '.ssh/.env',
+      '.codeman/.env',
+      '.codeman-dev/.env',
+      // Spelled in capitals: the same login file on a case-insensitive filesystem.
+      '.codeman/.ENV',
+      '.CODEMAN/.env',
+      '.npmrc',
+      'credentials.json',
+    ];
 
     const getPreview = (path: string) =>
       harness.app.inject({
@@ -386,6 +396,21 @@ describe('file viewer edit mode (real fs)', () => {
       expect.soft(res.json().success).toBe(true);
       expect.soft(readFileSync(path)).toEqual(Buffer.from(updated));
       expect(statSync(path).mode & 0o777).toBe(mode);
+    });
+
+    // The save publishes a NEW file. Without help it takes this process's own group, so a
+    // `.env` shared with a web server by group (you:www-data, 0640) came back you:you.
+    const otherGroup = process.getgroups?.().find((gid) => gid !== process.getgid?.());
+    it.skipIf(otherGroup === undefined)('keeps the group of a dotenv file across a save', async () => {
+      const path = join(workDir, '.env');
+      writeFileSync(path, original);
+      chownSync(path, -1, otherGroup!);
+      chmodSync(path, 0o640);
+      const res = await putFile('.env', { content: updated, baseHash: sha256(original) });
+      expect.soft(res.statusCode).toBe(200);
+      expect.soft(readFileSync(path)).toEqual(Buffer.from(updated));
+      expect.soft(statSync(path).mode & 0o777).toBe(0o640);
+      expect(statSync(path).gid).toBe(otherGroup);
     });
 
     it('rejects a stale dotenv baseHash with 409 and leaves the bytes unchanged', async () => {

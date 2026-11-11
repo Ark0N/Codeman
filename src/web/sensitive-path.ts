@@ -85,7 +85,10 @@ const SENSITIVE_PATTERNS: RegExp[] = [
   // The data dir's `.env` is the CODEMAN_USERNAME/PASSWORD fallback `codeman attach`
   // reads. Named here as well as in DOTENV_PATTERNS so `allowDotenv` (the File
   // Viewer editor) cannot reach it from a session whose workspace is $HOME.
-  /\/\.codeman[^/]*\/\.env$/,
+  // Case-insensitive, unlike its neighbours: the editor's name rule lowercases
+  // (`isEditableFileName`), so `.codeman/.ENV` passes it, and on a case-insensitive
+  // filesystem (the macOS default) that IS this file.
+  /\/\.codeman[^/]*\/\.env$/i,
   // Codeman's own state files. Named once `.json` became previewable outside
   // the workspace: `SessionState.envOverrides` persists whatever the user set
   // for a session, and the env allowlist admits key-shaped names

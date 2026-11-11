@@ -2455,6 +2455,13 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
       // masked by the process umask; fsync so the rename never publishes a
       // partially-durable file. Trade-off (same as vim's default): the inode
       // changes, so hardlinks keep the old content.
+      //
+      // The new file would also take this process's own user and group, so a
+      // `.env` shared by group (you:www-data, 0640) came back you:you and the
+      // web server lost it. fchown puts both back where the account may: the
+      // owner can give a file to a group they belong to, and only root can set
+      // the user. Best effort, since a save that cannot keep the group is still
+      // the save the user asked for.
       const fileMode = stat.mode & 0o777;
       const tmpPath = join(
         dirname(resolvedPath),
@@ -2463,6 +2470,12 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
       let handle;
       try {
         handle = await fs.open(tmpPath, 'wx', fileMode);
+        const tmpHandle = handle;
+        await tmpHandle
+          .chown(stat.uid, stat.gid)
+          .catch(() => tmpHandle.chown(-1, stat.gid))
+          .catch(() => {});
+        // After the chown: changing the owner can clear mode bits.
         await handle.chmod(fileMode);
         await handle.writeFile(outBuf);
         await handle.sync();

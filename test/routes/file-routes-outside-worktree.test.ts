@@ -137,6 +137,38 @@ describe('file routes for a worktree outside the session folder', () => {
       expect(plainRaw.body).toBe('plain');
     });
 
+    // The editor's own gate lets a dotenv file through (#796), so for a file in an outside
+    // worktree `validateLocalSessionFilePath()` is the ONLY refusal on the edit path.
+    it('refuses to open or save a dotenv file in the worktree through the editor', async () => {
+      const target = join(sibling, '.env');
+      writeFileSync(target, 'TOKEN=abc');
+      const edit = await harness.app.inject({
+        method: 'GET',
+        url: sessionUrl(`file-content?edit=1&path=${encodeURIComponent(target)}`),
+      });
+      expect(edit.json().success).toBe(false);
+      expect(edit.body).not.toContain('abc');
+
+      const put = await harness.app.inject({
+        method: 'PUT',
+        url: sessionUrl('file-content'),
+        payload: { path: target, content: 'TOKEN=changed', baseHash: sha256('TOKEN=abc') },
+      });
+      expect(put.statusCode).not.toBe(200);
+      expect(put.json().success).toBe(false);
+      expect(readFileSync(target, 'utf8')).toBe('TOKEN=abc');
+
+      // The same file in the session's own folder is the one #796 opened.
+      writeFileSync(join(repo, '.env'), 'TOKEN=abc');
+      const own = await harness.app.inject({
+        method: 'PUT',
+        url: sessionUrl('file-content'),
+        payload: { path: '.env', content: 'TOKEN=changed', baseHash: sha256('TOKEN=abc') },
+      });
+      expect(own.statusCode).toBe(200);
+      expect(readFileSync(join(repo, '.env'), 'utf8')).toBe('TOKEN=changed');
+    });
+
     it('still resolves a relative path against the session folder only', async () => {
       expect((await readContent('src/main-only.ts')).statusCode).toBe(200);
       const escaped = await readContent('../myapp-feature/src/feature-only.ts');

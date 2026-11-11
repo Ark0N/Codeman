@@ -25,6 +25,10 @@ const dotenvPaths: Array<[string, string]> = [
   ['dotenv', '/srv/app/.env'],
   ['local dotenv', '/srv/app/.env.local'],
   ['suffixed dotenv', '/srv/app/.env.production'],
+  // Deliberate: `.env.*` is blocked wholesale for downloads and attachments, so even a
+  // committed `.env.example` is refused rather than risking the one repo whose "example"
+  // holds a live key. Only the File Viewer editor lifts it (`allowDotenv`), and only for
+  // a file the same user already reads in the preview.
   ['a dotenv example', '/srv/app/.env.example'],
   ['nested dotenv', '/srv/app/sub/dir/.env'],
 ];
@@ -151,6 +155,11 @@ describe('isSensitivePath', () => {
         '/home/u/.codeman-dev/.env',
         '/home/u/.codeman-beta/.env',
         '/srv/x/.codeman/.env',
+        // The editor's name rule lowercases, and on a case-insensitive filesystem (the macOS
+        // default) these two ARE the file above.
+        '/home/u/.codeman/.ENV',
+        '/home/u/.CODEMAN/.env',
+        '/home/u/.Codeman-Dev/.Env',
       ])('blocks %s', (path) => {
         expect(isSensitivePath(path, options)).toBe(true);
       });
