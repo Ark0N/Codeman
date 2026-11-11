@@ -194,6 +194,24 @@ describe('buildCustomModelInjection', () => {
     expect(parsed.providers.custom.models).toEqual([{ id: 'qwen3' }]); // array, NOT keyed by id
   });
 
+  it('pi: the model entry carries the endpoint window and a reply share of it, or pi takes the model for a 128k one', () => {
+    const models = (contextLength?: number) => {
+      const result = buildCustomModelInjection(entryOrThrow('pi'), endpoint, 'qwen3.6:35b-a3b', contextLength);
+      if (result.kind !== 'configDir') throw new Error('unreachable');
+      return JSON.parse(result.files[0].content).providers.custom.models;
+    };
+    // The full window, and 8192 reply tokens at most (measured on pi 1.5.2: the request then
+    // carries max_tokens 8192 instead of its own 16384).
+    expect(models(65536)).toEqual([{ id: 'qwen3.6:35b-a3b', contextWindow: 65536, maxTokens: 8192 }]);
+    expect(models(131072.9)).toEqual([{ id: 'qwen3.6:35b-a3b', contextWindow: 131072, maxTokens: 8192 }]);
+    // A small window keeps three quarters for the prompt.
+    expect(models(16384)).toEqual([{ id: 'qwen3.6:35b-a3b', contextWindow: 16384, maxTokens: 4096 }]);
+    // Unknown stays unknown: no limit is invented.
+    for (const contextLength of [undefined, NaN, 0, -1, Infinity]) {
+      expect(models(contextLength), String(contextLength)).toEqual([{ id: 'qwen3.6:35b-a3b' }]);
+    }
+  });
+
   it('omp: configDir writes .omp/agent/models.yml, redirected via HOME (verified live end-to-end)', () => {
     const result = buildCustomModelInjection(entryOrThrow('omp'), endpoint, 'qwen3');
     if (result.kind !== 'configDir') throw new Error('unreachable');
@@ -239,9 +257,9 @@ describe('buildCustomModelInjection', () => {
     // The patch references the DEDICATED var by name, never dsh's own DEEPSEEK_API_KEY:
     // dsh's llm-deepseek/web-search rows read that too and would leak this key to
     // api.deepseek.com on an in-session /model switch back to the official route.
-    expect(patch.find((row: { id: string }) => row.id === 'llm-pi-ai').config.providers['codeman-custom'].apiKeyEnv).toBe(
-      'CODEMAN_CUSTOM_MODEL_API_KEY'
-    );
+    expect(
+      patch.find((row: { id: string }) => row.id === 'llm-pi-ai').config.providers['codeman-custom'].apiKeyEnv
+    ).toBe('CODEMAN_CUSTOM_MODEL_API_KEY');
     expect(result.files[0].content).not.toContain('DEEPSEEK_API_KEY');
     expect(patch.find((row: { id: string }) => row.id === 'dsh-tui').config.model).toBe('qwen3');
   });
