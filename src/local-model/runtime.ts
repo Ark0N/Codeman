@@ -808,6 +808,45 @@ export async function removePartialModelBlobs(paths?: LocalModelPaths): Promise<
   return freed;
 }
 
+/** How many files of the blob folder are counted at most: a store holds a few dozen, and a walk must end. */
+const STORE_MEASURE_MAX_FILES = 20_000;
+
+/**
+ * What the model store takes on disk: the sizes of the regular files directly in
+ * `<models>/blobs`, summed. That folder is flat (one file per layer, plus the partial files of
+ * a download), so this is the store's real disk use, shared layers counted once, an
+ * interrupted download included. The manifests beside it are a few kilobytes and are left out.
+ *
+ * One `readdir` and one `lstat` per file, at most `STORE_MEASURE_MAX_FILES` of them. Nothing is
+ * followed: a `root`, a model store or a blob folder that is a symbolic link counts as empty,
+ * and so does a link in the place of a file. Never outside `LocalModelPaths.root`. Resolves 0
+ * when there is no store. Never throws.
+ */
+export async function measureModelStore(paths?: LocalModelPaths): Promise<number> {
+  let total = 0;
+  try {
+    const resolved = paths ?? localModelPaths(OLLAMA_RUNTIME_PIN.version);
+    const blobs = join(resolved.modelsDir, 'blobs');
+    if (!isInsideLocalModelRoot(blobs, resolved.root)) return 0;
+    for (const folder of [resolved.root, resolved.modelsDir, blobs]) {
+      const info = await lstat(folder);
+      if (info.isSymbolicLink() || !info.isDirectory()) return 0;
+    }
+    const names = await readdir(blobs);
+    for (const name of names.slice(0, STORE_MEASURE_MAX_FILES)) {
+      try {
+        const info = await lstat(join(blobs, name));
+        if (info.isFile()) total += info.size;
+      } catch {
+        // Gone between the listing and the look: a download or a delete is under way.
+      }
+    }
+  } catch {
+    // No model store yet.
+  }
+  return total;
+}
+
 // ---------- Port ----------
 
 /** Whether nothing holds `port` on 127.0.0.1, decided by binding it and letting go again. */

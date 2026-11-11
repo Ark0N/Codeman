@@ -4,7 +4,9 @@ Codeman can set up a coding model that runs on the Mac the server runs on: no ac
 no API key, and the session's prompts and files go to a model on this Mac rather than a
 cloud provider (the coding agent itself may still check for updates). One button on the welcome screen opens a window that
 shows what fits this Mac, installs the choice and ends on a coding agent session that
-runs on it.
+runs on it. The same window then lists the models that are on this Mac with what each takes
+on disk, adds another one, switches between them and deletes one
+([The models on this Mac](#the-models-on-this-mac)).
 
 **Experimental.** The routes and their payloads may change in any release
 ([versioning-policy.md](versioning-policy.md), "Experimental local model routes"). Apple
@@ -109,7 +111,9 @@ for a row it does not know. Its answer for each memory size is then pinned in
 ## What an install does, in order
 
 The person picks a model, presses "Install on this Mac" and confirms the sizes once. The
-server then runs one job of five steps. The window polls `GET /api/local-model` once a
+server then runs one job of five steps. The same job adds a second model to an installed one
+("Add a model"): the runtime is there already, so it downloads the model alone, and the
+earlier model stays on disk. The window polls `GET /api/local-model` once a
 second; the job runs in the server, so the window can be closed.
 
 | Step      | What it does                                                                                                                                              |
@@ -250,10 +254,13 @@ Switching the setting on also starts that five-minute sweep for every other save
 existing custom model launch. Before a coding agent is STARTED on that endpoint the server
 checks, in this order:
 
+- no job that changes the model in use is running or stopped: until an install or a switch
+  ended, nothing is started ("The model on this Mac is being changed and is not ready");
 - the runtime child Codeman started is alive (whatever else answers on the port is not
   ours);
-- the digest the runtime reports for the installed model is the one stored at install time;
-- the model asked for is the one that was installed and checked.
+- the digest the runtime reports for the model in use is the one stored when it was checked;
+- the model asked for is the model in use. Another model that is on this Mac is not started
+  on the endpoint: switch to it in the window first.
 
 That check runs wherever a new agent process comes to be on the endpoint: a session created
 with the model, a model applied to a running session (which restarts its agent), the attach
@@ -279,22 +286,76 @@ answer back from a file it writes in its own folder. The skill never installs a 
 answers a confirmation, the runtime still answers one request at a time, and while a worker it
 opened is live, Stop and Remove are refused until it is closed.
 
+## The models on this Mac
+
+The model store can hold several models. **One of them is the model in use**: the one the
+endpoint record `local-ollama` lists, the runtime is started for and a session can be
+started on. The runtime holds one model in memory at a time (`OLLAMA_MAX_LOADED_MODELS=1`),
+so this is what the Mac can really do, and it keeps every rule above: one record, one
+model, one stored digest per model.
+
+The installed screen lists what is on this Mac, the model in use first:
+
+| A row says    | It means                                                                                                                                                              |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| In use        | The model sessions start on                                                                                                                                           |
+| Ready         | Codeman downloaded and checked it. **Use** switches to it                                                                                                             |
+| Not checked   | The runtime lists it and Codeman never checked it: a model an earlier Remove kept, or one another program pulled through the runtime's port. It can only be deleted   |
+| Changed       | It was checked, and the runtime now reports another digest under its name. It is never started; delete it and install it again                                        |
+| Missing       | It was checked, and the runtime no longer lists it. **Delete** drops the entry                                                                                        |
+
+Each row shows the context the model was checked with and its size on disk, as the runtime
+reports it. Under the list is what all downloads take together: the size of the files in
+`local-model/models/blobs`, so layers two models share are counted once and an interrupted
+download is included. The window asks the runtime for the list at most every five seconds
+and measures the store at most every thirty, never on every poll.
+
+- **Add a model** opens the chooser. A model that is not on this Mac is installed like the
+  first one, with its sizes confirmed; when the job ends it is the model in use, and the
+  earlier model stays in the list. A row that is on this Mac already says so and is switched
+  to, without a download and without a confirm screen.
+- **Use** switches to a checked model. It is a job of two steps, `verify` and `connect`:
+  the runtime is restarted with the context the model was checked with, the model is loaded
+  and checked again (the tiny chat, the GPU, the tool probe), its digest must still be the
+  stored one (else the switch fails with `model-changed` before the model is loaded), and
+  the endpoint record is rewritten. The coding agent is the one the model was checked with
+  when it is still installed, else the one of the installation.
+- **Delete** removes one model through the runtime's own delete, after one question in the
+  row. The request carries the model's name, never a path, and the server deletes only a
+  name of its own listing. The model in use cannot be deleted: switch first, or Remove. It
+  needs the running runtime, so a stopped model shows no Delete until Start.
+
+Adding a model and switching are refused while a session uses the model ("Sessions are
+still using this model"), like Stop: their coding agents were started with the other model's
+name, and the runtime would swap models on every request.
+
+While a job that started from an installed model runs, or after it stopped (paused or
+failed), no session is started: the checks above want a finished installation, and the
+refusal says so (`job-unfinished`). The window
+then lists the checked models with **Use**, which is the way back to the earlier one. Going
+back deletes what the stopped job left of a model that never passed its check, the way a new
+install does; a checked model is never deleted that way.
+
 ## Stop, Start, Remove
 
 - **Stop** stops the runtime and keeps it from starting at the next boot. **Start** undoes
-  that.
+  that, and so does a switch to another model or the install of one: the job starts the
+  runtime, and the model it ends on is in use.
 - **Remove** stops the runtime, removes the endpoint record, switches the setting off again
   only when this feature switched it on and no other endpoint is saved, and deletes the
-  runtime and its private home. The downloaded model is deleted only when asked. The coding
-  agent stays. While a live session uses the model, Remove answers with the session names
-  instead.
+  runtime and its private home. The downloaded models (all of them) are deleted only when
+  asked. The coding agent stays. While a live session uses the model, Remove answers with
+  the session names instead.
+- **Models a Remove kept** are not lost space: with nothing installed the window says how
+  much they still take and offers "Delete them", and after a new install they show in the
+  list as "Not checked", each with its own Delete.
 
 ## Where everything is
 
 All under the data directory (`~/.codeman`, or the instance's own):
 
 ```
-local-model.json                           the state file (mode 0600)
+local-model.json                           the state file (mode 0600), with the list of checked models
 local-model/
   runtime/ollama-0.40.15.tgz.partial       the runtime archive while it downloads
   runtime/ollama-0.40.15/                  the unpacked runtime (about 579 MB)
@@ -319,9 +380,12 @@ in App Settings.
 | ------------ | ------------------------------------------------------------- | ---------------- | -------------------------------------- |
 | `idle`       | stays idle                                                    | refused          | install                                |
 | `installing` | becomes `paused` at the same step                             | becomes `paused` | cancel                                 |
-| `paused`     | stays paused                                                  | refused          | resume, install, remove                |
-| `failed`     | stays failed, same error                                      | refused          | resume, install, remove                |
-| `installed`  | stays installed; the runtime is started unless it was stopped | refused          | start a session, stop or start, remove |
+| `paused`     | stays paused                                                  | refused          | resume, install, use, delete a model, remove |
+| `failed`     | stays failed, same error                                      | refused          | resume, install, use, delete a model, remove |
+| `installed`  | stays installed; the runtime is started unless it was stopped | refused          | start a session, stop or start, install (add a model), use, delete a model, remove |
+
+`use` and "delete a model" are listed only while a row of the list offers them, and in
+`idle` "remove" is offered only while the model store still holds something.
 
 One job at a time. A job a server restart interrupted comes back paused and never continues
 without a click. Cancel interrupts the step in flight (the download, the pull, the request,
@@ -370,6 +434,12 @@ or `python3`.
   asks for one plain tool call and does not see this.
 - **The model stays in memory for ten minutes** after the last request, then the runtime
   unloads it.
+- **One model runs at a time.** Several can be on disk; the runtime holds one, and a switch
+  restarts it and loads the other model (seconds to a minute). Close the sessions on the
+  model first: the window refuses the switch while one is open.
+- **The disk figures are the runtime's.** A row's size is what the runtime reports for the
+  model, and the total is the size of its blob files. Neither was compared with Finder on a
+  Mac yet.
 
 ## Keeping the catalogue current
 

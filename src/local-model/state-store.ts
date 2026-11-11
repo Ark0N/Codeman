@@ -26,6 +26,7 @@ import {
   type LocalModelErrorCode,
   type LocalModelInstallState,
   type LocalModelInstallStep,
+  type LocalModelLibraryEntry,
   type LocalModelStateFile,
 } from '../types.js';
 import { OLLAMA_RUNTIME_PIN } from './runtime.js';
@@ -153,6 +154,41 @@ function parseConnection(value: unknown): LocalModelStateFile['connection'] {
     : undefined;
 }
 
+/** How many checked models a state file may list: far more than one Mac holds, and a bound on what a damaged file can cost. */
+const MAX_LIBRARY_ENTRIES = 64;
+
+/**
+ * The checked models of a file. An entry without its id, label, context or digest is dropped
+ * (it could never be switched to), and so is a second entry for an id. `undefined` for a file
+ * that has no list, which is what an earlier build wrote.
+ */
+function parseLibrary(value: unknown): LocalModelLibraryEntry[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const entries: LocalModelLibraryEntry[] = [];
+  for (const item of value) {
+    if (entries.length >= MAX_LIBRARY_ENTRIES) break;
+    if (!isRecord(item)) continue;
+    const id = text(item.id, 200);
+    const label = text(item.label, 200);
+    const context = count(item.context);
+    const digest = text(item.digest, 200);
+    if (!id || !label || !context || !digest || entries.some((entry) => entry.id === id)) continue;
+    const bytes = count(item.bytes);
+    const cli = parseCli(item.cli);
+    const verifiedAt = text(item.verifiedAt, 64);
+    entries.push({
+      id,
+      label,
+      context,
+      digest,
+      ...(bytes ? { bytes } : {}),
+      ...(cli ? { cli } : {}),
+      ...(verifiedAt ? { verifiedAt } : {}),
+    });
+  }
+  return entries;
+}
+
 /**
  * The state a file's text stands for. Pure and total: text that is not a JSON object of
  * `schema: 1` with a known `state` is `IDLE_LOCAL_MODEL_STATE`. Members it does not know are
@@ -180,6 +216,7 @@ export function parseLocalModelState(raw: string): LocalModelStateFile {
   const connection = parseConnection(parsed.connection);
   const updatedAt = text(parsed.updatedAt, 64);
   const replacedModelId = text(parsed.replacedModelId, 200);
+  const library = parseLibrary(parsed.library);
   if (!model || !cli) return IDLE_LOCAL_MODEL_STATE;
 
   if (state === 'installed') {
@@ -192,6 +229,7 @@ export function parseLocalModelState(raw: string): LocalModelStateFile {
       cli,
       runtime,
       ...(loaded ? { loaded } : {}),
+      ...(library ? { library } : {}),
       ...(connection ? { connection } : {}),
       ...(updatedAt ? { updatedAt } : {}),
     };
@@ -215,6 +253,7 @@ export function parseLocalModelState(raw: string): LocalModelStateFile {
     ...(runtime ? { runtime } : {}),
     ...(progress ? { progress } : {}),
     ...(loaded ? { loaded } : {}),
+    ...(library ? { library } : {}),
     ...(connection ? { connection } : {}),
     ...(replacedModelId ? { replacedModelId } : {}),
     ...(updatedAt ? { updatedAt } : {}),

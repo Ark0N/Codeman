@@ -17,13 +17,18 @@ import {
   allowedActions,
   buildInstallError,
   buildInstallView,
+  buildLibraryRows,
   formatInstallMessage,
   INSTALL_STATE_TABLE,
   INSTALL_STEP_TABLE,
   INSTALL_TRANSITIONS,
   installedBlocker,
   jobSteps,
+  libraryOf,
+  markLibraryCandidates,
   reduceInstallJob,
+  upsertLibraryEntry,
+  USE_JOB_STEPS,
   type InstallJobEvent,
   type InstallJobEventType,
   type InstallLiveFacts,
@@ -38,12 +43,15 @@ import {
   type LocalModelErrorCode,
   type LocalModelInstallState,
   type LocalModelInstallStep,
+  type LocalModelLibraryEntry,
   type LocalModelStateFile,
+  type Recommendation,
 } from '../src/types.js';
 
 const STATES: LocalModelInstallState[] = ['idle', 'installing', 'paused', 'failed', 'installed'];
 const EVENT_TYPES: InstallJobEventType[] = [
   'install',
+  'use',
   'progress',
   'step-done',
   'fail',
@@ -60,6 +68,48 @@ const RUNTIME = { version: '0.40.15', port: 11435, pid: 4711, enabled: true, mea
 const CONNECTION = { endpointId: 'local-ollama', flagWasEnabled: false };
 const LOADED = { context: 131072, sizeBytes: 26_300_000_000, sizeVramBytes: 26_300_000_000 };
 
+/** The model in use as the library lists it, and a second checked model beside it. */
+const ENTRY: LocalModelLibraryEntry = {
+  id: MODEL.id,
+  label: MODEL.label,
+  context: MODEL.context,
+  digest: 'abc123',
+  bytes: 23_105_798_956,
+  cli: CLI,
+};
+const OTHER: LocalModelLibraryEntry = {
+  id: 'qwen3.8:27b-mtp-q4_k_m',
+  label: 'Qwen3.8 27B',
+  context: 65536,
+  digest: 'def456',
+  bytes: 17_741_872_154,
+  cli: CLI,
+};
+
+/** The two as rows of the view, while nothing is known from the runtime. */
+const ENTRY_ROW = {
+  id: ENTRY.id,
+  label: ENTRY.label,
+  context: ENTRY.context,
+  sizeBytes: 23_105_798_956,
+  sizeGb: '23.1',
+  active: true,
+  verified: true,
+  status: 'ready',
+  actions: [],
+};
+const OTHER_ROW = {
+  id: OTHER.id,
+  label: OTHER.label,
+  context: OTHER.context,
+  sizeBytes: 17_741_872_154,
+  sizeGb: '17.7',
+  active: false,
+  verified: true,
+  status: 'ready',
+  actions: ['use'],
+};
+
 const JOB: LocalModelStateFile = {
   schema: 1,
   state: 'installing',
@@ -69,6 +119,8 @@ const JOB: LocalModelStateFile = {
   cli: CLI,
   runtime: RUNTIME,
   progress: { completedBytes: 6_200_000_000, totalBytes: 23_105_798_956 },
+  // An earlier install left one checked model: what `use` can go back to.
+  library: [OTHER],
 };
 
 /** One state file of each state, as the job leaves it. */
@@ -84,6 +136,7 @@ const SAMPLE: Record<LocalModelInstallState, LocalModelStateFile> = {
     cli: CLI,
     runtime: RUNTIME,
     loaded: LOADED,
+    library: [OTHER],
     connection: CONNECTION,
   },
 };
@@ -95,6 +148,11 @@ const EVENT: Record<InstallJobEventType, InstallJobEvent> = {
     model: { id: 'gpt-oss:20b', label: 'GPT-OSS 20B', context: 65536 },
     cli: { id: 'claude', label: 'Claude Code' },
     steps: ['runtime', 'model', 'verify', 'connect'],
+  },
+  use: {
+    type: 'use',
+    model: { id: OTHER.id, label: OTHER.label, context: OTHER.context, digest: OTHER.digest },
+    cli: CLI,
   },
   progress: { type: 'progress', completedBytes: 7_000_000_000, totalBytes: 23_105_798_956 },
   'step-done': { type: 'step-done' },
@@ -151,10 +209,15 @@ describe('the tables', () => {
         cancel: 'paused',
         restart: 'paused',
       },
-      paused: { resume: 'installing', install: 'installing', remove: 'idle', restart: 'paused' },
-      failed: { resume: 'installing', install: 'installing', remove: 'idle', restart: 'failed' },
-      installed: { remove: 'idle', restart: 'installed' },
+      paused: { resume: 'installing', install: 'installing', use: 'installing', remove: 'idle', restart: 'paused' },
+      failed: { resume: 'installing', install: 'installing', use: 'installing', remove: 'idle', restart: 'failed' },
+      installed: { install: 'installing', use: 'installing', remove: 'idle', restart: 'installed' },
     });
+  });
+
+  it('a switch is the two steps that load and connect a model, and downloads nothing', () => {
+    expect(USE_JOB_STEPS).toEqual(['verify', 'connect']);
+    for (const step of USE_JOB_STEPS) expect(INSTALL_STEP_TABLE[step].progress).toBe(false);
   });
 
   it('every step row names error codes that exist, each with a sentence and a next step', () => {
@@ -221,10 +284,10 @@ describe('reduceInstallJob: every state with every event, from the transition ta
     }
   }
 
-  it('covers all 40 pairs, 18 of them listed', () => {
+  it('covers all 45 pairs, 22 of them listed', () => {
     const listed = STATES.flatMap((state) => Object.keys(INSTALL_TRANSITIONS[state]));
-    expect(STATES.length * EVENT_TYPES.length).toBe(40);
-    expect(listed).toHaveLength(18);
+    expect(STATES.length * EVENT_TYPES.length).toBe(45);
+    expect(listed).toHaveLength(22);
   });
 });
 
@@ -246,11 +309,15 @@ describe('the state table agrees with the reducer and the view', () => {
     const row = INSTALL_STATE_TABLE[state];
     const accepts = (type: InstallJobEventType) => INSTALL_TRANSITIONS[state][type] !== undefined;
     expect(row.actions.includes('install')).toBe(accepts('install'));
+    expect(row.actions.includes('use')).toBe(accepts('use'));
     expect(row.actions.includes('cancel')).toBe(accepts('cancel'));
     expect(row.actions.includes('resume')).toBe(accepts('resume'));
-    // Remove is refused only while a job runs. From idle it only clears leftovers, so the
-    // window offers no button for it there.
-    if (state !== 'idle') expect(row.actions.includes('remove')).toBe(accepts('remove'));
+    // Remove is refused only while a job runs. From idle it only clears what an earlier
+    // Remove kept, and the view lists it there only while the store holds something.
+    expect(row.actions.includes('remove')).toBe(accepts('remove'));
+    // A model is deleted through the runtime, which a state without a job in flight and with
+    // a runtime set up can have: never idle (no runtime), never while a job runs.
+    expect(row.actions.includes('delete-model')).toBe(state !== 'idle' && state !== 'installing');
     // The runtime and a session are things of an installed model only.
     for (const action of ['start', 'stop', 'start-session'] as LocalModelAction[]) {
       expect(row.actions.includes(action)).toBe(state === 'installed');
@@ -292,6 +359,7 @@ describe('reduceInstallJob: what each event writes', () => {
       replacedModelId: 'qwen3.6:35b-a3b',
       cli: { id: 'claude', label: 'Claude Code' },
       runtime: RUNTIME,
+      library: [OTHER],
       connection: CONNECTION,
     });
     // Gone: the error, the progress, what the runtime had loaded.
@@ -421,32 +489,65 @@ describe('reduceInstallJob: what each event writes', () => {
 });
 
 describe('allowedActions', () => {
-  it('outside installed it is the state row, whatever is live', () => {
-    for (const state of ['idle', 'installing', 'paused', 'failed'] as const) {
-      expect(allowedActions(SAMPLE[state], { ...LIVE, running: true, gaveUp: true, portInUse: true })).toEqual([
-        ...INSTALL_STATE_TABLE[state].actions,
-      ]);
-    }
-    expect(allowedActions(SAMPLE.idle, LIVE)).toEqual(['install']);
+  it('outside installed the runtime, the port and the digest narrow nothing', () => {
+    const busy = { ...LIVE, running: true, gaveUp: true, portInUse: true };
+    expect(allowedActions(SAMPLE.installing, busy)).toEqual(['cancel']);
     expect(allowedActions(SAMPLE.installing, LIVE)).toEqual(['cancel']);
-    expect(allowedActions(SAMPLE.paused, LIVE)).toEqual(['resume', 'install', 'remove']);
-    expect(allowedActions(SAMPLE.failed, LIVE)).toEqual(['resume', 'install', 'remove']);
+    for (const state of ['paused', 'failed'] as const) {
+      // `use` because a checked model is there; no delete while nothing is known from the runtime.
+      expect(allowedActions(SAMPLE[state], busy)).toEqual(['resume', 'install', 'use', 'remove']);
+      expect(allowedActions(SAMPLE[state], LIVE)).toEqual(['resume', 'install', 'use', 'remove']);
+    }
   });
 
-  it('installed and running: a session can be started and the runtime stopped', () => {
+  it('idle: Remove is offered only while the model store still holds something', () => {
+    expect(allowedActions(SAMPLE.idle, LIVE)).toEqual(['install']);
+    expect(allowedActions(SAMPLE.idle, { ...LIVE, storeBytes: 0 })).toEqual(['install']);
+    expect(allowedActions(SAMPLE.idle, { ...LIVE, storeBytes: 23_105_798_956 })).toEqual(['install', 'remove']);
+  });
+
+  it('use and delete-model are listed only while a row of the library offers them', () => {
+    // A first job: no checked model yet, so nothing to switch to and nothing to delete.
+    const first: LocalModelStateFile = { ...SAMPLE.paused, library: undefined };
+    expect(allowedActions(first, LIVE)).toEqual(['resume', 'install', 'remove']);
+    // The runtime lists the other model: it can be deleted as well as switched to.
+    const tags = [{ name: OTHER.id, size: 17_741_872_154, digest: OTHER.digest }];
+    expect(allowedActions(SAMPLE.paused, { ...LIVE, running: true, tags })).toEqual([
+      'resume',
+      'install',
+      'use',
+      'delete-model',
+      'remove',
+    ]);
+    // The rows it was given decide, when it is given them.
+    expect(allowedActions(SAMPLE.paused, { ...LIVE, running: true, tags }, [])).toEqual([
+      'resume',
+      'install',
+      'remove',
+    ]);
+  });
+
+  it('installed and running: a session can be started, the runtime stopped, a model added', () => {
     expect(allowedActions(SAMPLE.installed, { ...LIVE, running: true, digest: 'same' })).toEqual([
       'start-session',
       'stop',
+      'install',
+      'use',
       'remove',
     ]);
   });
 
   it('installed and stopped: it can be started, and no session is offered', () => {
-    expect(allowedActions(SAMPLE.installed, LIVE)).toEqual(['start', 'remove']);
+    expect(allowedActions(SAMPLE.installed, LIVE)).toEqual(['start', 'install', 'use', 'remove']);
   });
 
   it('installed and running a model that changed: no session', () => {
-    expect(allowedActions(SAMPLE.installed, { ...LIVE, running: true, digest: 'changed' })).toEqual(['stop', 'remove']);
+    expect(allowedActions(SAMPLE.installed, { ...LIVE, running: true, digest: 'changed' })).toEqual([
+      'stop',
+      'install',
+      'use',
+      'remove',
+    ]);
   });
 
   it('a digest that could not be read does not hide the session button: the launch itself reads it again', () => {
@@ -456,8 +557,8 @@ describe('allowedActions', () => {
 
   it('never returns the table row itself', () => {
     const actions = allowedActions(SAMPLE.idle, LIVE);
-    actions.push('remove');
-    expect(INSTALL_STATE_TABLE.idle.actions).toEqual(['install']);
+    actions.push('cancel');
+    expect(INSTALL_STATE_TABLE.idle.actions).toEqual(['install', 'remove']);
   });
 });
 
@@ -535,8 +636,18 @@ describe('buildInstallView', () => {
         unpackedGb: '0.6',
       },
       folder: '/Users/me/.codeman/local-model',
+      library: [],
       actions: ['install'],
     });
+  });
+
+  it('idle with a store an earlier Remove kept: its size, and Remove to free it', () => {
+    const view = buildInstallView(SAMPLE.idle, { ...LIVE, storeBytes: 23_105_798_956 });
+    expect(view.store).toEqual({ bytes: 23_105_798_956, gb: '23.1' });
+    expect(view.library).toEqual([]);
+    expect(view.actions).toEqual(['install', 'remove']);
+    // A store that was measured as empty is said as that, and offers nothing.
+    expect(buildInstallView(SAMPLE.idle, { ...LIVE, storeBytes: 0 }).store).toEqual({ bytes: 0, gb: '0.0' });
   });
 
   it('once the runtime is unpacked an install downloads nothing for it', () => {
@@ -564,6 +675,8 @@ describe('buildInstallView', () => {
         unpackedGb: '0.6',
       },
       folder: '/Users/me/.codeman/local-model',
+      // The checked model of an earlier install: listed, with nothing to do while a job runs.
+      library: [{ ...OTHER_ROW, actions: [] }],
       actions: ['cancel'],
       model: { id: 'qwen3.6:35b-a3b', label: 'Qwen3.6 35B-A3B' },
       context: 131072,
@@ -593,7 +706,9 @@ describe('buildInstallView', () => {
       completedGb: '6.2',
       totalGb: '23.1',
     });
-    expect(view.actions).toEqual(['resume', 'install', 'remove']);
+    expect(view.actions).toEqual(['resume', 'install', 'use', 'remove']);
+    // The way back from a job that stopped: the model that was checked before.
+    expect(view.library).toEqual([OTHER_ROW]);
   });
 
   it('a speed of zero has no time left, and a download without a total has no progress at all', () => {
@@ -677,7 +792,8 @@ describe('buildInstallView', () => {
       developerTools: 'present',
       runtime: { version: '0.40.15', installed: true, downloadBytes: 0, downloadGb: '0.0', unpackedGb: '0.6' },
       folder: '/Users/me/.codeman/local-model',
-      actions: ['start-session', 'stop', 'remove'],
+      library: [ENTRY_ROW, OTHER_ROW],
+      actions: ['start-session', 'stop', 'install', 'use', 'remove'],
       model: { id: 'qwen3.6:35b-a3b', label: 'Qwen3.6 35B-A3B' },
       context: 131072,
       cli: 'opencode',
@@ -692,7 +808,9 @@ describe('buildInstallView', () => {
     const view = buildInstallView(SAMPLE.installed, { ...LIVE, running: true, digest: 'changed' });
     expect(view.state).toBe('installed');
     expect(view.error?.code).toBe('model-changed');
-    expect(view.actions).toEqual(['stop', 'remove']);
+    expect(view.actions).toEqual(['stop', 'install', 'use', 'remove']);
+    // The row of the model in use says the same thing the error does.
+    expect(view.library[0]).toMatchObject({ id: MODEL.id, active: true, status: 'changed' });
   });
 
   it('a model that was not all on the GPU says so', () => {
@@ -710,6 +828,317 @@ describe('buildInstallView', () => {
       expect(sentences.has(error.message.text)).toBe(true);
       expect(error.next).toBe(LOCAL_MODEL_ERROR_NEXT[code]);
     }
+  });
+});
+
+describe('reduceInstallJob: the library', () => {
+  it('libraryOf: the list of the file, and for an installed file without one its model', () => {
+    expect(libraryOf(SAMPLE.idle)).toEqual([]);
+    expect(libraryOf(SAMPLE.paused)).toEqual([OTHER]);
+    // A file an earlier build wrote: the model in use is the library.
+    const old: LocalModelStateFile = { ...SAMPLE.installed, library: undefined };
+    expect(libraryOf(old)).toEqual([ENTRY]);
+    // The model in use is always one of them, first, also when the list does not name it.
+    expect(libraryOf(SAMPLE.installed)).toEqual([ENTRY, OTHER]);
+    // Never twice, and the list's own entry wins.
+    const listed: LocalModelStateFile = { ...SAMPLE.installed, library: [OTHER, { ...ENTRY, context: 65536 }] };
+    expect(libraryOf(listed)).toEqual([OTHER, { ...ENTRY, context: 65536 }]);
+    // A model without a stored digest could never be compared: it is not one of them.
+    const noDigest: LocalModelStateFile = { ...SAMPLE.installed, library: undefined, model: MODEL };
+    expect(libraryOf(noDigest)).toEqual([]);
+    // A job's model is not in the library before it was checked.
+    expect(libraryOf({ ...SAMPLE.installing, library: undefined })).toEqual([]);
+  });
+
+  it('libraryOf hands out a list of its own', () => {
+    const list = libraryOf(SAMPLE.paused);
+    list.pop();
+    expect(SAMPLE.paused.library).toEqual([OTHER]);
+  });
+
+  it('upsertLibraryEntry replaces the entry with the same id in place, else adds at the end', () => {
+    const next = { ...OTHER, digest: 'fff', context: 131072 };
+    expect(upsertLibraryEntry([ENTRY, OTHER], next)).toEqual([ENTRY, next]);
+    expect(upsertLibraryEntry([ENTRY], OTHER)).toEqual([ENTRY, OTHER]);
+    expect(upsertLibraryEntry([], OTHER)).toEqual([OTHER]);
+  });
+
+  it('an install from installed adds a model: the model in use stays in the library and is NOT deleted', () => {
+    const next = reduceInstallJob(SAMPLE.installed, EVENT.install);
+    expect(next).toEqual({
+      schema: 1,
+      state: 'installing',
+      step: 'runtime',
+      steps: ['runtime', 'model', 'verify', 'connect'],
+      model: { id: 'gpt-oss:20b', label: 'GPT-OSS 20B', context: 65536 },
+      cli: { id: 'claude', label: 'Claude Code' },
+      runtime: RUNTIME,
+      // The model that was in use is written into the list: its state member is the new job's now.
+      library: [ENTRY, OTHER],
+      connection: CONNECTION,
+    });
+    expect(next).not.toHaveProperty('replacedModelId');
+    expect(next).not.toHaveProperty('loaded');
+  });
+
+  it('an install from an installed file of an earlier build keeps its one model too', () => {
+    const old: LocalModelStateFile = { ...SAMPLE.installed, library: undefined };
+    const next = reduceInstallJob(old, EVENT.install);
+    expect(next.library).toEqual([ENTRY]);
+    expect(next).not.toHaveProperty('replacedModelId');
+  });
+
+  it('a replaced job deletes its model only when that model was never checked', () => {
+    // The stopped job's model is a checked one (it failed after its check): it stays.
+    const checked: LocalModelStateFile = { ...SAMPLE.failed, library: [OTHER, ENTRY] };
+    expect(reduceInstallJob(checked, EVENT.install)).not.toHaveProperty('replacedModelId');
+    // Not checked: what it left is deleted, as before.
+    expect(reduceInstallJob(SAMPLE.failed, EVENT.install).replacedModelId).toBe(MODEL.id);
+    // A leftover that is waiting to be deleted is dropped from the wait once it is a checked model.
+    const waiting: LocalModelStateFile = { ...SAMPLE.paused, replacedModelId: OTHER.id };
+    expect(reduceInstallJob(waiting, { ...EVENT.install, model: MODEL } as InstallJobEvent)).not.toHaveProperty(
+      'replacedModelId'
+    );
+  });
+
+  it('use from installed: the two steps for the checked model, with its stored digest', () => {
+    expect(reduceInstallJob(SAMPLE.installed, EVENT.use)).toEqual({
+      schema: 1,
+      state: 'installing',
+      step: 'verify',
+      steps: ['verify', 'connect'],
+      model: { id: OTHER.id, label: OTHER.label, context: OTHER.context, digest: OTHER.digest },
+      cli: CLI,
+      runtime: RUNTIME,
+      library: [ENTRY, OTHER],
+      connection: CONNECTION,
+    });
+  });
+
+  it('use from a stopped job replaces it, and deletes what that job left of an unchecked model', () => {
+    for (const state of ['paused', 'failed'] as const) {
+      const next = reduceInstallJob(SAMPLE[state], EVENT.use);
+      expect(next.state).toBe('installing');
+      expect(next.step).toBe('verify');
+      expect(next.model?.id).toBe(OTHER.id);
+      expect(next.replacedModelId).toBe(MODEL.id);
+      expect(next).not.toHaveProperty('error');
+      expect(next).not.toHaveProperty('progress');
+      expect(next.library).toEqual([OTHER]);
+    }
+  });
+
+  it('refuses a use it cannot apply: a model that is not in the library, a state without a runtime', () => {
+    const unknown = { ...EVENT.use, model: { id: 'gpt-oss:20b', label: 'GPT-OSS 20B', context: 65536, digest: 'x' } };
+    expect(reduceInstallJob(SAMPLE.installed, unknown as InstallJobEvent)).toBe(SAMPLE.installed);
+    const noRuntime: LocalModelStateFile = { ...SAMPLE.paused, runtime: undefined };
+    expect(reduceInstallJob(noRuntime, EVENT.use)).toBe(noRuntime);
+  });
+
+  it('every event but remove carries the library', () => {
+    const job = SAMPLE.installing;
+    expect(reduceInstallJob(job, EVENT.progress).library).toEqual([OTHER]);
+    expect(reduceInstallJob(job, EVENT['step-done']).library).toEqual([OTHER]);
+    expect(reduceInstallJob(job, EVENT.fail).library).toEqual([OTHER]);
+    expect(reduceInstallJob(job, EVENT.cancel).library).toEqual([OTHER]);
+    expect(reduceInstallJob(job, EVENT.restart).library).toEqual([OTHER]);
+    expect(reduceInstallJob(SAMPLE.failed, EVENT.resume).library).toEqual([OTHER]);
+    const last: LocalModelStateFile = { ...job, step: 'connect', library: [OTHER, ENTRY], connection: CONNECTION };
+    expect(reduceInstallJob(last, EVENT['step-done'])).toMatchObject({ state: 'installed', library: [OTHER, ENTRY] });
+    expect(reduceInstallJob(SAMPLE.installed, EVENT.remove)).toEqual({ schema: 1, state: 'idle' });
+  });
+});
+
+describe('buildLibraryRows', () => {
+  const tagOf = (entry: LocalModelLibraryEntry, extra: Partial<{ size: number; digest: string }> = {}) => ({
+    name: entry.id,
+    size: entry.bytes ?? 0,
+    digest: entry.digest,
+    ...extra,
+  });
+
+  it('is empty in idle, whatever is live', () => {
+    expect(buildLibraryRows(SAMPLE.idle, { ...LIVE, running: true, tags: [tagOf(OTHER)] })).toEqual([]);
+  });
+
+  it('the runtime stopped: the checked models as they were recorded, a switch, and no delete', () => {
+    expect(buildLibraryRows(SAMPLE.installed, LIVE)).toEqual([ENTRY_ROW, OTHER_ROW]);
+    // A listing that is still around from before the stop is not trusted.
+    expect(buildLibraryRows(SAMPLE.installed, { ...LIVE, running: false, tags: [] })).toEqual([ENTRY_ROW, OTHER_ROW]);
+  });
+
+  it('the runtime running: its sizes, and a delete for every model but the one in use', () => {
+    const rows = buildLibraryRows(SAMPLE.installed, {
+      ...LIVE,
+      running: true,
+      tags: [tagOf(ENTRY, { size: 23_105_800_000 }), tagOf(OTHER)],
+    });
+    expect(rows).toEqual([
+      { ...ENTRY_ROW, sizeBytes: 23_105_800_000 },
+      { ...OTHER_ROW, actions: ['use', 'delete'] },
+    ]);
+  });
+
+  it('the model in use comes first, wherever the list has it', () => {
+    const state: LocalModelStateFile = { ...SAMPLE.installed, library: [OTHER, ENTRY] };
+    expect(buildLibraryRows(state, LIVE).map((row) => row.id)).toEqual([ENTRY.id, OTHER.id]);
+  });
+
+  it('a checked model whose digest the runtime no longer reports: changed, never switched to, deletable', () => {
+    const rows = buildLibraryRows(SAMPLE.installed, {
+      ...LIVE,
+      running: true,
+      tags: [tagOf(ENTRY), tagOf(OTHER, { digest: 'somethingelse' })],
+    });
+    expect(rows[1]).toMatchObject({ id: OTHER.id, status: 'changed', verified: true, actions: ['delete'] });
+    // The digest is compared without its prefix and its case, like everywhere else.
+    const same = buildLibraryRows(SAMPLE.installed, {
+      ...LIVE,
+      running: true,
+      tags: [tagOf(ENTRY), tagOf(OTHER, { digest: 'sha256:DEF456' })],
+    });
+    expect(same[1].status).toBe('ready');
+  });
+
+  it('a checked model the runtime no longer lists: missing, with its recorded size, and its entry can be dropped', () => {
+    const rows = buildLibraryRows(SAMPLE.installed, { ...LIVE, running: true, tags: [tagOf(ENTRY)] });
+    expect(rows[1]).toEqual({ ...OTHER_ROW, status: 'missing', actions: ['delete'] });
+  });
+
+  it('what the runtime lists beside the checked models: not checked, deletable, never switched to', () => {
+    const rows = buildLibraryRows(SAMPLE.installed, {
+      ...LIVE,
+      running: true,
+      labels: { 'mimo-v2.6:9b-q4_k_m': 'MiMo V2.6 9B' },
+      tags: [
+        tagOf(ENTRY),
+        tagOf(OTHER),
+        { name: 'zeta:1b', size: 900_000_000, digest: 'z' },
+        { name: 'mimo-v2.6:9b-q4_k_m', size: 6_550_811_033, digest: 'm' },
+      ],
+    });
+    expect(rows.slice(2)).toEqual([
+      {
+        id: 'mimo-v2.6:9b-q4_k_m',
+        // The catalogue knows it, so it is named as the chooser names it.
+        label: 'MiMo V2.6 9B',
+        sizeBytes: 6_550_811_033,
+        sizeGb: '6.6',
+        active: false,
+        verified: false,
+        status: 'unverified',
+        actions: ['delete'],
+      },
+      {
+        id: 'zeta:1b',
+        label: 'zeta:1b',
+        sizeBytes: 900_000_000,
+        sizeGb: '0.9',
+        active: false,
+        verified: false,
+        status: 'unverified',
+        actions: ['delete'],
+      },
+    ]);
+  });
+
+  it('a name that is not a plain name:tag is listed with its size and offers nothing', () => {
+    const rows = buildLibraryRows(SAMPLE.installed, {
+      ...LIVE,
+      running: true,
+      tags: [tagOf(ENTRY), { name: 'hf.co/someone/model:Q4', size: 1_000_000_000, digest: 'h' }],
+    });
+    expect(rows.find((row) => row.id === 'hf.co/someone/model:Q4')).toMatchObject({
+      status: 'unverified',
+      sizeGb: '1.0',
+      actions: [],
+    });
+  });
+
+  it('the model of a stopped job: listed once it is on disk, and neither switched to nor deleted', () => {
+    const rows = buildLibraryRows(SAMPLE.failed, {
+      ...LIVE,
+      running: true,
+      tags: [tagOf(OTHER), { name: MODEL.id, size: 23_105_798_956, digest: 'abc123' }],
+    });
+    expect(rows).toEqual([
+      { ...OTHER_ROW, actions: ['use', 'delete'] },
+      {
+        id: MODEL.id,
+        label: MODEL.label,
+        sizeBytes: 23_105_798_956,
+        sizeGb: '23.1',
+        active: false,
+        verified: false,
+        status: 'unverified',
+        actions: [],
+      },
+    ]);
+  });
+
+  it('while a job runs nothing is offered on any row', () => {
+    const rows = buildLibraryRows(SAMPLE.installing, { ...LIVE, running: true, tags: [tagOf(OTHER)] });
+    expect(rows.map((row) => row.actions)).toEqual([[]]);
+  });
+
+  it('a row without a known size has neither size member', () => {
+    const state: LocalModelStateFile = { ...SAMPLE.paused, library: [{ ...OTHER, bytes: undefined }] };
+    const [row] = buildLibraryRows(state, LIVE);
+    expect(row).not.toHaveProperty('sizeBytes');
+    expect(row).not.toHaveProperty('sizeGb');
+  });
+});
+
+describe('markLibraryCandidates', () => {
+  const candidate = (modelId: string, context: number) => ({ modelId, context }) as Recommendation['alternatives'][0];
+  const view = buildInstallView(SAMPLE.installed, { ...LIVE, running: true });
+
+  it('marks the model in use and a model a switch can take, at the context they were checked with', () => {
+    const recommendation = {
+      verdict: 'ok',
+      pick: candidate(MODEL.id, MODEL.context),
+      alternatives: [candidate(OTHER.id, OTHER.context), candidate('gpt-oss:20b', 65536)],
+    } as unknown as Recommendation;
+    const marked = markLibraryCandidates(recommendation, view);
+    expect(marked.pick?.library).toBe('active');
+    expect(marked.alternatives[0].library).toBe('ready');
+    expect(marked.alternatives[1]).not.toHaveProperty('library');
+    // The input is not written to.
+    expect(recommendation.pick).not.toHaveProperty('library');
+  });
+
+  it('a row at another context than the one that was checked is an install like any other', () => {
+    const recommendation = {
+      verdict: 'ok',
+      pick: candidate(MODEL.id, 65536),
+      alternatives: [candidate(OTHER.id, 131072)],
+    } as unknown as Recommendation;
+    expect(markLibraryCandidates(recommendation, view)).toBe(recommendation);
+  });
+
+  it('hands back the same object when there is nothing to mark', () => {
+    const none = { verdict: 'none', alternatives: [] } as unknown as Recommendation;
+    expect(markLibraryCandidates(none, view)).toBe(none);
+    const idle = buildInstallView(SAMPLE.idle, LIVE);
+    const recommendation = { verdict: 'ok', pick: candidate(MODEL.id, MODEL.context), alternatives: [] };
+    expect(markLibraryCandidates(recommendation as unknown as Recommendation, idle)).toBe(recommendation);
+  });
+
+  it('a checked model that changed is not marked ready', () => {
+    const changed = buildInstallView(SAMPLE.installed, {
+      ...LIVE,
+      running: true,
+      tags: [
+        { name: MODEL.id, size: 1, digest: 'abc123' },
+        { name: OTHER.id, size: 1, digest: 'other' },
+      ],
+    });
+    const recommendation = {
+      verdict: 'ok',
+      pick: candidate(OTHER.id, OTHER.context),
+      alternatives: [],
+    } as unknown as Recommendation;
+    expect(markLibraryCandidates(recommendation, changed).pick).not.toHaveProperty('library');
   });
 });
 

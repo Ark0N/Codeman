@@ -196,6 +196,89 @@ describe('parseLocalModelState', () => {
   });
 });
 
+describe('parseLocalModelState: the library', () => {
+  const QWEN = {
+    id: 'qwen3.6:35b-a3b',
+    label: 'Qwen3.6 35B-A3B',
+    context: 131072,
+    digest: '0ce5ff81f9ffdf89dd8192ca7b5d34cefd8996a875b3aaaaafaf5c4813569eba',
+    bytes: 23_105_798_956,
+    cli: { id: 'opencode', label: 'OpenCode' },
+    verifiedAt: '2026-11-10T09:00:00.000Z',
+  };
+  const MIMO = { id: 'mimo-v2.6:9b-q4_k_m', label: 'MiMo V2.6 9B', context: 65536, digest: 'abc123' };
+  const read = (state: unknown) => parseLocalModelState(JSON.stringify(state));
+
+  it('reads back the checked models of an installed state and of a job, in their order', () => {
+    expect(read({ ...INSTALLED, library: [QWEN, MIMO] })).toEqual({ ...INSTALLED, library: [QWEN, MIMO] });
+    expect(read({ ...PAUSED, library: [MIMO] })).toEqual({ ...PAUSED, library: [MIMO] });
+    expect(read({ ...FAILED, library: [MIMO, QWEN] }).library).toEqual([MIMO, QWEN]);
+  });
+
+  it('a file an earlier build wrote has no list, and reads back without one', () => {
+    expect(read(INSTALLED)).toEqual(INSTALLED);
+    expect(read(INSTALLED)).not.toHaveProperty('library');
+    expect(read(PAUSED)).not.toHaveProperty('library');
+  });
+
+  it('an empty list stays an empty list: every checked model was deleted', () => {
+    expect(read({ ...PAUSED, library: [] }).library).toEqual([]);
+  });
+
+  it('a list that is not a list is dropped, the state is kept', () => {
+    for (const library of ['qwen', 7, { 0: QWEN }, null, true]) {
+      const state = read({ ...INSTALLED, library });
+      expect(state.state).toBe('installed');
+      expect(state).not.toHaveProperty('library');
+    }
+  });
+
+  it('drops an entry that could never be switched to: without its id, label, context or digest', () => {
+    const library = [
+      { ...QWEN, id: '' },
+      { ...QWEN, label: 7 },
+      { ...QWEN, context: 0 },
+      { ...QWEN, context: '131072' },
+      { ...QWEN, digest: undefined },
+      'qwen3.6:35b-a3b',
+      null,
+      ['qwen3.6:35b-a3b'],
+      MIMO,
+    ];
+    expect(read({ ...INSTALLED, library }).library).toEqual([MIMO]);
+  });
+
+  it('keeps one entry per model: the first', () => {
+    const library = [QWEN, { ...QWEN, context: 65536 }, MIMO];
+    expect(read({ ...INSTALLED, library }).library).toEqual([QWEN, MIMO]);
+  });
+
+  it('drops what it does not know inside an entry, and a member of the wrong type: an entry holds no path', () => {
+    const library = [
+      {
+        ...QWEN,
+        path: '/Users/me/.codeman/local-model/models',
+        blobs: ['/etc/passwd'],
+        bytes: -5,
+        cli: { id: 'opencode' },
+        verifiedAt: 7,
+      },
+    ];
+    const [entry] = read({ ...INSTALLED, library }).library ?? [];
+    expect(entry).toEqual({ id: QWEN.id, label: QWEN.label, context: QWEN.context, digest: QWEN.digest });
+    expect(JSON.stringify(read({ ...INSTALLED, library }))).not.toContain('/');
+  });
+
+  it('reads at most 64 entries of a list, however long it is', () => {
+    const library = Array.from({ length: 500 }, (_unused, i) => ({ ...MIMO, id: `model-${i}:9b` }));
+    expect(read({ ...INSTALLED, library }).library).toHaveLength(64);
+  });
+
+  it('an idle file has no list, whatever it says', () => {
+    expect(read({ schema: 1, state: 'idle', library: [QWEN] })).toEqual(IDLE_LOCAL_MODEL_STATE);
+  });
+});
+
 describe('readLocalModelState', () => {
   it('is idle when the file is missing, and never throws', async () => {
     expect(existsSync(FILE())).toBe(false);

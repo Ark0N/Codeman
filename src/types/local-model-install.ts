@@ -24,7 +24,11 @@
  * | `GET /api/local-model`           | none                        | none (a failed probe is an answer)                    |
  * | `POST /api/local-model/install`  | `LocalModelInstallRequest`  | 400 not a row the server offers, or a saved endpoint  |
  * |                                  |                             | already has the reserved id; 409 `job-running`,       |
- * |                                  |                             | `already-installed`, `size-changed`                   |
+ * |                                  |                             | `already-installed` (this model at this context is    |
+ * |                                  |                             | the one in use), `size-changed`, `sessions-open`      |
+ * | `POST /api/local-model/use`      | `LocalModelUseRequest`      | 400 not a checked model of the library, or no coding  |
+ * |                                  |                             | agent for it is installed; 409 `job-running`,         |
+ * |                                  |                             | `wrong-state`, `already-installed`, `sessions-open`   |
  * | `POST /api/local-model/cancel`   | none                        | 409 `wrong-state` (no job is running)                 |
  * | `POST /api/local-model/resume`   | `LocalModelResumeRequest`   | 409 `job-running`, `wrong-state` (not paused or       |
  * |                                  |                             | failed), `sessions-open` (another port while live     |
@@ -33,6 +37,9 @@
  * |                                  |                             | `sessions-open` (stop, or another port, while live    |
  * |                                  |                             | sessions use the model)                               |
  * | `DELETE /api/local-model`        | `LocalModelRemoveRequest`   | 409 `job-running`, `sessions-open`                    |
+ * | `DELETE /api/local-model/models` | `LocalModelDeleteRequest`   | 400 not a model of this Mac; 409 `job-running`,       |
+ * |                                  |                             | `wrong-state`, `model-active`, `runtime-not-running`; |
+ * |                                  |                             | 500 the runtime did not delete it                     |
  *
  * A 409 is the error envelope plus `data: LocalModelConflict`:
  * `{ success: false, error, errorCode: 'CONFLICT', data: { reason, message, ... } }`. A 409
@@ -141,7 +148,10 @@ export const LOCAL_MODEL_INSTALL_STEPS: readonly LocalModelInstallStep[] = [
  * | `harness-failed`          | the coding agent's install command failed, or its binary is still missing |
  * | `endpoint-id-taken`       | a saved endpoint with our id exists that this feature did not write      |
  * | `connect-failed`          | the endpoint record or the settings flag could not be written            |
- * | `model-changed`           | installed: the model's digest is not the one stored at install time      |
+ * | `model-changed`           | installed: the model's digest is not the one stored at install time. A   |
+ * |                           | switch: the model's digest is not the one it was checked with            |
+ * | `job-unfinished`          | a job that changes the model in use is running or stopped. Only a        |
+ * |                           | refused session start says it: nothing is started until the job ended    |
  * | `internal`                | anything unexpected (the exception text is in `detail`)                  |
  */
 export type LocalModelErrorCode =
@@ -164,6 +174,7 @@ export type LocalModelErrorCode =
   | 'endpoint-id-taken'
   | 'connect-failed'
   | 'model-changed'
+  | 'job-unfinished'
   | 'internal';
 
 /**
@@ -192,12 +203,25 @@ export type LocalModelNextStep = 'retry' | 'other-port' | 'next-model' | 'start'
  *  - `cancel`: `POST /api/local-model/cancel`.
  *  - `resume`: `POST /api/local-model/resume`.
  *  - `start` and `stop`: `POST /api/local-model/runtime`.
- *  - `remove`: `DELETE /api/local-model`.
+ *  - `remove`: `DELETE /api/local-model`. In `idle` it is listed only while the model store
+ *    still holds something (models an earlier Remove kept): it is then what frees that space.
  *  - `start-session`: not a route of this feature: the window starts a session on the endpoint
  *    `endpointId` with the coding agent `cli`. Offered only while the runtime runs and nothing
  *    blocks a session.
+ *  - `use`: `POST /api/local-model/use`. Listed only while a row of `library` offers it.
+ *  - `delete-model`: `DELETE /api/local-model/models`. Listed only while a row of `library`
+ *    offers it.
  */
-export type LocalModelAction = 'install' | 'cancel' | 'resume' | 'start' | 'stop' | 'remove' | 'start-session';
+export type LocalModelAction =
+  | 'install'
+  | 'cancel'
+  | 'resume'
+  | 'start'
+  | 'stop'
+  | 'remove'
+  | 'start-session'
+  | 'use'
+  | 'delete-model';
 
 /** Whether the Mac has the developer tools (git, Python) a coding agent calls. */
 export type LocalModelDeveloperTools =
@@ -225,7 +249,9 @@ export type LocalModelDeveloperTools =
  * | `errHarnessFailed`     | `cli`: the coding agent's label                                      |
  * | `errEndpointIdTaken`   | `id`: the endpoint id this feature uses                              |
  * | `refusedAgentNotInstallable` | `cli`: the coding agent's label                                |
- * | `refusedOtherModel`    | `model`: the label of the model that is installed                    |
+ * | `refusedOtherModel`    | `model`: the label of the model that is in use                       |
+ * | `refusedAgentMissing`  | `cli`: the coding agent's label                                      |
+ * | `conflictModelActive`, `deleteFailed` | `model`: the model's label                            |
  * | `conflictSizeChanged`  | `size`: the server's own total as decimal GB                         |
  * | `conflictSessionsOpen` | `sessions`: the session names, joined with ', '                      |
  *
@@ -259,16 +285,23 @@ export const LOCAL_MODEL_INSTALL_LABELS = {
     'A saved model connection named {id} already exists and was not created here. Rename or delete it in App Settings, then try again.',
   errConnectFailed: 'Codeman could not save the connection to the model.',
   errModelChanged: 'The model on this Mac changed since it was installed. Remove it and install it again.',
+  errJobUnfinished:
+    'The model on this Mac is being changed and is not ready. Finish or undo that in the local model window first.',
   errInternal: 'The install stopped on an unexpected error.',
   conflictJobRunning: 'An install is already running.',
-  conflictAlreadyInstalled: 'A model is already installed on this Mac. Remove it first.',
+  conflictAlreadyInstalled: 'This model is already in use on this Mac.',
+  conflictModelActive: '{model} is the model in use. Switch to another model first, or remove the local model.',
   conflictSizeChanged: 'The download is {size} GB now. Check the sizes and confirm again.',
   conflictSessionsOpen: 'Sessions are still using this model: {sessions}. Close them first.',
   conflictWrongState: 'That is not possible in the current state.',
   refusedModelNotOffered: 'This model at this context is not offered for this Mac right now.',
   refusedAgentNotOffered: 'This coding agent is not offered for this model.',
   refusedAgentNotInstallable: '{cli} is not installed and cannot be installed from here.',
-  refusedOtherModel: 'Only {model} is installed on this Mac. Remove it and install another model first.',
+  refusedOtherModel: 'Only {model} is in use on this Mac. Switch models in the local model window first.',
+  refusedNotInLibrary: 'This model is not one of the checked models on this Mac.',
+  refusedNotOnThisMac: 'This model is not on this Mac.',
+  deleteFailed: '{model} could not be deleted from this Mac.',
+  refusedAgentMissing: '{cli} is not installed on this Mac. Install this model again to choose a coding agent.',
   endpointManaged:
     'This endpoint belongs to the model Codeman runs on this Mac. Change or remove it in the local model window.',
   endpointIdReserved: 'This endpoint id is reserved for the model Codeman runs on this Mac. Pick another id.',
@@ -307,6 +340,7 @@ export const LOCAL_MODEL_ERROR_LABELS: Record<LocalModelErrorCode, LocalModelIns
   'endpoint-id-taken': LOCAL_MODEL_INSTALL_LABELS.errEndpointIdTaken,
   'connect-failed': LOCAL_MODEL_INSTALL_LABELS.errConnectFailed,
   'model-changed': LOCAL_MODEL_INSTALL_LABELS.errModelChanged,
+  'job-unfinished': LOCAL_MODEL_INSTALL_LABELS.errJobUnfinished,
   internal: LOCAL_MODEL_INSTALL_LABELS.errInternal,
 };
 
@@ -331,6 +365,7 @@ export const LOCAL_MODEL_ERROR_NEXT: Record<LocalModelErrorCode, LocalModelNextS
   'endpoint-id-taken': 'retry',
   'connect-failed': 'retry',
   'model-changed': 'remove',
+  'job-unfinished': 'retry',
   internal: 'retry',
 };
 
@@ -426,7 +461,8 @@ export interface LocalModelLoadedFacts {
  * | `port`                            |      | once chosen | once chosen | once chosen | yes |
  * | `loaded`, `endpointId`            |      |            |        |        | yes       |
  *
- * `running`, `developerTools`, `runtime`, `folder` and `actions` are always present.
+ * `running`, `developerTools`, `runtime`, `folder`, `library` and `actions` are always
+ * present. `store` is present once the model store was measured.
  */
 export interface LocalModelInstallView {
   state: LocalModelInstallState;
@@ -454,8 +490,61 @@ export interface LocalModelInstallView {
   loaded?: LocalModelLoadedFacts;
   /** The id of the saved endpoint a session is started on. */
   endpointId?: string;
+  /**
+   * The models on this Mac: every model Codeman checked (`LocalModelStateFile.library`), plus
+   * whatever else the running runtime lists. Empty in `idle` (no runtime is there to ask) and
+   * before anything was downloaded. The model in use comes first.
+   */
+  library: LocalModelLibraryRow[];
+  /** What the model store takes on disk right now. Present in every state once it was measured. */
+  store?: LocalModelStoreView;
   /** What the server accepts right now, see `LocalModelAction`. */
   actions: LocalModelAction[];
+}
+
+/**
+ * How a model of the library stands.
+ *  - `ready`: checked by Codeman, and the runtime (when it was asked) still lists it with the
+ *    digest that was stored.
+ *  - `changed`: checked, but the runtime now lists another digest under the name. It is never
+ *    started: `use` would fail with `model-changed`.
+ *  - `missing`: checked, but the runtime no longer lists it (something deleted it through the
+ *    runtime's port).
+ *  - `unverified`: the runtime lists it and Codeman never checked it: a model an earlier
+ *    Remove kept, the model of a job that has not passed its check yet, or one another program
+ *    pulled through the runtime's port. Never startable.
+ */
+export type LocalModelLibraryStatus = 'ready' | 'changed' | 'missing' | 'unverified';
+
+/** What can be done with one row of `library`: `POST /api/local-model/use` and `DELETE /api/local-model/models`. */
+export type LocalModelLibraryAction = 'use' | 'delete';
+
+/** One model on this Mac. */
+export interface LocalModelLibraryRow {
+  /** The model's name exactly as the runtime lists it (`name:tag`). */
+  id: string;
+  /** Its catalogue label, or `id` for a model the catalogue does not know. */
+  label: string;
+  /** The context it was checked with. Absent for an `unverified` row. */
+  context?: number;
+  /** Its size on disk: what the runtime reports, else what was recorded when it was checked. */
+  sizeBytes?: number;
+  /** `sizeBytes` as decimal GB text, no unit. Present exactly when `sizeBytes` is. */
+  sizeGb?: string;
+  /** It is the model in use: the one of an `installed` state. */
+  active: boolean;
+  /** Codeman checked it (`LocalModelStateFile.library` holds it). */
+  verified: boolean;
+  status: LocalModelLibraryStatus;
+  /** What the server accepts for this row right now. `delete` needs the running runtime. */
+  actions: LocalModelLibraryAction[];
+}
+
+/** The disk use of the model store: the files directly in its blob folder, summed. */
+export interface LocalModelStoreView {
+  bytes: number;
+  /** `bytes` as decimal GB text, no unit. */
+  gb: string;
 }
 
 /** The `data` of `GET /api/local-model`. Admin only in multi-user mode. */
@@ -511,6 +600,18 @@ export interface LocalModelRemoveRequest {
   removeModel?: boolean;
 }
 
+/** Body of `POST /api/local-model/use`: a checked model of `library` to switch to. Nothing is downloaded. */
+export interface LocalModelUseRequest {
+  /** `LocalModelLibraryRow.id` of a row whose `actions` list `use`. */
+  modelId: string;
+}
+
+/** Body of `DELETE /api/local-model/models`: one model to delete from the store. */
+export interface LocalModelDeleteRequest {
+  /** `LocalModelLibraryRow.id` of a row whose `actions` list `delete`. Never a path. */
+  modelId: string;
+}
+
 /** The `data` of a 400 the service names: its sentence, for the window to print in its own language. */
 export interface LocalModelRefusal {
   message: LocalModelInstallMessage;
@@ -522,20 +623,26 @@ export type LocalModelVerbAnswer = LocalModelInstallView;
 /**
  * Why a verb was refused with 409.
  *  - `job-running`: a job is running (a second install, a resume, a remove or a runtime action).
- *  - `already-installed`: install while a model is installed. Remove it first.
+ *  - `already-installed`: install or use of the model that is already the one in use (at the
+ *    same context).
  *  - `size-changed`: `acknowledgedBytes` is not the server's total; `expectedBytes` and
  *    `expectedGb` carry that total, so the window can show it and ask again.
- *  - `sessions-open`: remove, stop or a change of port while live sessions use the endpoint;
- *    `sessions` names them. Their coding agents were given the runtime's address when they
- *    started, so they would go on calling a port nothing of ours holds.
+ *  - `sessions-open`: remove, stop, a change of port, an install of another model or a switch
+ *    while live sessions use the endpoint; `sessions` names them. Their coding agents were
+ *    given the runtime's address and the model's name when they started, so they would go on
+ *    calling a port nothing of ours holds, or make the runtime swap models on every request.
  *  - `wrong-state`: the verb makes no sense in the current state (see the route table above).
+ *  - `model-active`: a delete of the model the installation or the current job is about.
+ *  - `runtime-not-running`: a delete while the runtime is down: only the runtime deletes a model.
  */
 export type LocalModelConflictReason =
   | 'job-running'
   | 'already-installed'
   | 'size-changed'
   | 'sessions-open'
-  | 'wrong-state';
+  | 'wrong-state'
+  | 'model-active'
+  | 'runtime-not-running';
 
 /** The `data` of a 409 of an install verb. */
 export interface LocalModelConflict {
@@ -623,6 +730,14 @@ export interface LocalModelStateFile {
   /** What the runtime reported when the job checked the loaded model. */
   loaded?: { context: number; sizeBytes: number; sizeVramBytes: number };
   /**
+   * Every model that PASSED the check through Codeman and is believed to be in the store, the
+   * model in use among them. An entry is written when the `verify` step passes and dropped
+   * when the model is deleted; `remove` drops the whole list. An `installed` file an earlier
+   * build wrote has none: its one model then counts as the library (`libraryOf()` in
+   * src/local-model/install-job.ts).
+   */
+  library?: LocalModelLibraryEntry[];
+  /**
    * Present once the `connect` step CLAIMED the connection, which it does before its two
    * writes: what uninstall must undo. A claim with nothing behind it (the step was interrupted
    * right after it) is harmless: a resumed job writes both, and uninstall removes nothing.
@@ -635,4 +750,20 @@ export interface LocalModelStateFile {
   };
   /** ISO time of the last write. */
   updatedAt?: string;
+}
+
+/** One checked model of `LocalModelStateFile.library`. It holds no path. */
+export interface LocalModelLibraryEntry {
+  id: string;
+  label: string;
+  /** The context length in tokens it was checked with. */
+  context: number;
+  /** The digest `/api/tags` reported when it passed the check. A switch to it must find the same one. */
+  digest: string;
+  /** Its size on disk as the runtime reported it then, for a listing while the runtime is stopped. */
+  bytes?: number;
+  /** The coding agent of the job that checked it. A switch back takes it when it is installed. */
+  cli?: { id: string; label: string };
+  /** ISO time of the check. */
+  verifiedAt?: string;
 }

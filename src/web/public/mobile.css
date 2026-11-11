@@ -1887,6 +1887,11 @@ html.mobile-init .file-browser-panel {
     justify-content: flex-end;
   }
 
+  /* A screen with the list of models scrolls from its top. */
+  .local-model-window > .lm-body[data-long='true'] {
+    justify-content: flex-start;
+  }
+
   /* Ralph wizard responsive */
   .modal-wizard {
     display: flex;
@@ -4337,6 +4342,61 @@ html[data-session-list="sidebar"] .session-sidebar .session-tab .tab-close {
   .lm-model-size {
     grid-row: 2;
     grid-column: 3;
+  }
+
+  /* The models on this Mac: the name and its size, then the state and what can be done. */
+  .lm-lib-list {
+    grid-template-columns: minmax(0, 1fr) auto;
+    column-gap: 0.7rem;
+  }
+
+  .lm-lib-caption-label {
+    grid-column: 1;
+  }
+
+  .lm-lib-caption-size {
+    grid-column: 2;
+  }
+
+  .lm-lib-row {
+    row-gap: 0.15rem;
+    padding-top: 0.45rem;
+    padding-bottom: 0.45rem;
+  }
+
+  .lm-lib-name {
+    grid-row: 1;
+    grid-column: 1;
+    padding: 0;
+  }
+
+  .lm-lib-size {
+    grid-row: 1;
+    grid-column: 2;
+  }
+
+  .lm-lib-tag {
+    grid-row: 2;
+    grid-column: 1;
+  }
+
+  .lm-lib-actions {
+    grid-row: 2;
+    grid-column: 2;
+  }
+
+  .lm-lib-ask {
+    margin-inline: 0.7rem;
+  }
+
+  .lm-lib-foot {
+    flex-wrap: wrap;
+  }
+
+  /* A row's buttons keep their own size: they sit in the row, not under the thumb. */
+  .local-model-window .wt-btn.lm-btn.lm-btn-row {
+    min-height: 36px;
+    font-size: 0.8rem;
   }
 
   .lm-foot {

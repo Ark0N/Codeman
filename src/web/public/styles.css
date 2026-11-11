@@ -22535,6 +22535,13 @@ html[data-skin='rose-pine-dawn'] {
   padding-bottom: 2.2rem;
 }
 
+/* A screen that carries the list of models is no short screen: it starts at the
+   top and scrolls, or its first lines would be cut off above the frame. */
+.local-model-window > .lm-body[data-long='true'] {
+  justify-content: flex-start;
+  padding-bottom: 1.2rem;
+}
+
 /* The foot of the frame: the buttons of the screen (or the Remove question),
    outside the part that scrolls. */
 .local-model-window > .lm-foot-slot {
@@ -22876,7 +22883,9 @@ html[data-skin='rose-pine-dawn'] {
 
 .lm-model-tag {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-start;
+  gap: 0.25rem;
 }
 
 /* A tag says one thing about a row, in the colour of what it says. */
@@ -22908,6 +22917,29 @@ html[data-skin='rose-pine-dawn'] {
 }
 
 .lm-tag-slow {
+  background: color-mix(in srgb, var(--lm-orange) 15%, transparent);
+  color: var(--lm-orange);
+}
+
+/* The states of a model that is on this Mac: in use takes the feature's own
+   colour, ready is good, a changed or missing one is a warning. A model that
+   was never checked keeps the quiet tag. */
+.lm-tag-inuse {
+  background: color-mix(in srgb, var(--lm-brand) 20%, transparent);
+  color: var(--lm-brand);
+}
+
+.lm-tag-ready {
+  background: color-mix(in srgb, var(--lm-good) 15%, transparent);
+  color: var(--lm-good);
+}
+
+.lm-tag-changed {
+  background: color-mix(in srgb, var(--lm-amber) 15%, transparent);
+  color: var(--lm-amber);
+}
+
+.lm-tag-missing {
   background: color-mix(in srgb, var(--lm-orange) 15%, transparent);
   color: var(--lm-orange);
 }
@@ -23286,6 +23318,176 @@ html[data-skin='rose-pine-dawn'] {
   accent-color: var(--lm-brand);
 }
 
+/* ── the models on this Mac ───────────────────────────────────────── */
+/* Name with its context, state, size on disk, and what can be done with the
+   row. One grid like the chooser's, so the sizes line up down the list. The
+   model in use wears the chooser's selected look: it is the one that runs. */
+.lm-library {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.lm-lib-list {
+  display: grid;
+  grid-template-columns: minmax(0, max-content) minmax(0, 1fr) auto auto;
+  column-gap: 0.75rem;
+  row-gap: 0.1rem;
+  margin-inline: calc(-0.7rem - 2px) -0.7rem;
+}
+
+.lm-lib-caption,
+.lm-lib-row {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  align-items: center;
+  padding: 0 0.7rem;
+  border-inline-start: 2px solid transparent;
+}
+
+.lm-lib-caption {
+  padding-bottom: 0.3rem;
+  font-size: 0.7rem;
+  color: var(--text-dim);
+}
+
+.lm-lib-caption-label {
+  grid-column: 1 / span 2;
+}
+
+.lm-lib-caption-size {
+  grid-column: 3;
+  text-align: end;
+}
+
+.lm-lib-row {
+  min-height: 2.9rem;
+  border-radius: 9px;
+}
+
+.lm-lib-row-on {
+  border-inline-start-color: var(--lm-brand);
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--lm-brand) 17%, transparent),
+    color-mix(in srgb, var(--lm-brand) 4%, transparent)
+  );
+}
+
+.lm-lib-name {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 0.35rem 0;
+}
+
+.lm-lib-label {
+  font-size: 0.86rem;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.lm-lib-meta {
+  font-size: 0.7rem;
+  line-height: 1.4;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.lm-lib-tag {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.lm-lib-size {
+  text-align: end;
+  white-space: nowrap;
+  font-size: 0.8rem;
+  font-weight: 560;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.lm-lib-actions {
+  display: flex;
+  flex-shrink: 0;
+  justify-content: flex-end;
+  gap: 0.35rem;
+}
+
+/* While a row's Delete question is open its buttons keep their room, unseen:
+   the sizes above and below must not jump sideways. */
+.lm-lib-actions-away {
+  visibility: hidden;
+}
+
+/* The buttons of a row are a size smaller than the buttons of the screen. */
+.local-model-window .wt-btn.lm-btn.lm-btn-row {
+  padding: 0.28rem 0.65rem;
+  font-size: 0.74rem;
+}
+
+/* The Delete question of one row, in place under it: the row is what it is about. */
+.lm-lib-ask {
+  display: flex;
+  grid-column: 1 / -1;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  margin: 0.1rem 0.7rem 0.4rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+}
+
+.lm-lib-ask-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+/* Under the list: what all downloads take on disk, and the way to another model. */
+.lm-lib-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+}
+
+.lm-lib-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+/* Nothing installed, and an earlier Remove kept its downloads. */
+.lm-leftovers .lm-lib-ask {
+  margin-inline: 0;
+}
+
+/* A browser without subgrid: fixed tracks keep the columns in line. */
+@supports not (grid-template-columns: subgrid) {
+  .lm-lib-list {
+    display: block;
+  }
+
+  .lm-lib-caption,
+  .lm-lib-row {
+    grid-template-columns: minmax(0, 12rem) minmax(0, 1fr) 4.5rem minmax(0, auto);
+    column-gap: 0.75rem;
+  }
+
+  .lm-lib-row {
+    margin-top: 0.1rem;
+  }
+}
+
 /* ── the foot: one promise on the left, the action on the right ──── */
 .lm-foot {
   display: flex;
@@ -23359,6 +23561,10 @@ html[data-skin='rose-pine-dawn'] {
 @media (pointer: coarse) {
   .lm-model {
     min-height: 2.9rem;
+  }
+
+  .local-model-window .wt-btn.lm-btn.lm-btn-row {
+    min-height: 36px;
   }
 
   .lm-select {

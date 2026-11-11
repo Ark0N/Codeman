@@ -234,6 +234,11 @@ Good to know:
   but it is changed and removed in the local model window, not here.
 - Codeman starts the runtime with the server and stops it with it. **Stop** keeps it from
   starting next time.
+- More than one model can be on the Mac, and one of them runs at a time. Once a model is
+  installed the window lists the models with what each takes on disk: **Add a model**
+  downloads another one, **Use** switches to a model that is already there (nothing is
+  downloaded; close the sessions on the model first), and **Delete** removes one, after one
+  question. The model in use cannot be deleted: switch first, or use **Remove**.
 - **Remove** deletes the runtime and the endpoint, and the model too if you tick that. The
   coding agent stays installed.
 - If the model on disk is no longer the one that was installed, Codeman refuses to start a

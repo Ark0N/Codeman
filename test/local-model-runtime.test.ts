@@ -37,6 +37,7 @@ import {
   OLLAMA_RUNTIME_PIN,
   parseInferenceComputeTotal,
   removeLocalModelFiles,
+  measureModelStore,
   removePartialModelBlobs,
   RUNTIME_CTX_CHECKPOINTS,
   RUNTIME_DOWNLOAD_RETRIES,
@@ -1101,5 +1102,58 @@ describe('removePartialModelBlobs', () => {
     await symlink(outside, join(paths.modelsDir, 'blobs'));
     expect(await removePartialModelBlobs(paths)).toBe(0);
     expect(existsSync(join(outside, 'sha256-eee-partial'))).toBe(true);
+  });
+});
+
+describe('measureModelStore', () => {
+  const blob = (name: string): string => join(paths.modelsDir, 'blobs', name);
+
+  it('is the sizes of the files in the blob folder, a download that was interrupted included', async () => {
+    await mkdir(join(paths.modelsDir, 'blobs'), { recursive: true });
+    await mkdir(join(paths.modelsDir, 'manifests', 'registry.ollama.ai'), { recursive: true });
+    await writeFile(blob('sha256-aaa'), 'x'.repeat(1000));
+    await writeFile(blob('sha256-bbb'), 'y'.repeat(250));
+    await writeFile(blob('sha256-ccc-partial'), 'z'.repeat(40));
+    // The manifests are a few kilobytes beside gigabytes of layers: left out.
+    await writeFile(join(paths.modelsDir, 'manifests', 'registry.ollama.ai', 'latest'), '{"layers":[]}');
+    expect(await measureModelStore(paths)).toBe(1290);
+  });
+
+  it('is 0 without a model store, without a blob folder and for an empty one, and never throws', async () => {
+    expect(await measureModelStore(paths)).toBe(0);
+    await mkdir(paths.modelsDir, { recursive: true });
+    expect(await measureModelStore(paths)).toBe(0);
+    await mkdir(join(paths.modelsDir, 'blobs'), { recursive: true });
+    expect(await measureModelStore(paths)).toBe(0);
+  });
+
+  it('reads nothing and changes nothing: the store is as it was afterwards', async () => {
+    await mkdir(join(paths.modelsDir, 'blobs'), { recursive: true });
+    await writeFile(blob('sha256-aaa'), 'weights');
+    await writeFile(blob('sha256-bbb-partial'), 'half');
+    await measureModelStore(paths);
+    expect(await readFile(blob('sha256-aaa'), 'utf8')).toBe('weights');
+    expect(await readFile(blob('sha256-bbb-partial'), 'utf8')).toBe('half');
+  });
+
+  it('counts only regular files directly in the blob folder, and follows no link', async () => {
+    const outside = await outsideDir();
+    await writeFile(join(outside, 'huge'), 'h'.repeat(5000));
+    await mkdir(join(paths.modelsDir, 'blobs', 'a-folder'), { recursive: true });
+    await writeFile(join(paths.modelsDir, 'blobs', 'a-folder', 'inside'), 'i'.repeat(700));
+    await symlink(join(outside, 'huge'), blob('sha256-link'));
+    await writeFile(blob('sha256-aaa'), 'x'.repeat(10));
+    // The folder's file and the link's target are somebody else's: not counted.
+    expect(await measureModelStore(paths)).toBe(10);
+  });
+
+  it('a blob folder, a model store or a root that is a symlink counts as empty', async () => {
+    const outside = await outsideDir();
+    await writeFile(join(outside, 'sha256-eee'), 'e'.repeat(900));
+    await mkdir(paths.modelsDir, { recursive: true });
+    await symlink(outside, join(paths.modelsDir, 'blobs'));
+    expect(await measureModelStore(paths)).toBe(0);
+    // A path that is not inside the local model folder is refused before anything is read.
+    expect(await measureModelStore({ ...paths, modelsDir: outside })).toBe(0);
   });
 });
