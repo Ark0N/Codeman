@@ -7,9 +7,11 @@
  * Ctrl+V: the `document.execCommand('paste')` the function issues itself, and
  * the keydown's own default action, which still runs because xterm's custom key
  * handler returns false without cancelling the event. A browser that honours
- * execCommand('paste') therefore fires the trap's listener twice, and the
+ * execCommand('paste') (Firefox) therefore produced two paste events, and the
  * clipboard text used to reach the PTY twice with it — while right-click →
- * Paste, which involves no keydown, stayed correct.
+ * Paste, which involves no keydown, stayed correct. Firefox delivers the key's
+ * paste as a later task, so it can also miss the trap and reach xterm's
+ * textarea; the trap therefore cancels the keydown once execCommand delivered.
  *
  * Loads the browser module into a vm sandbox with a fake document, so the tests
  * drive the trap's listener directly rather than through a real browser.
@@ -64,6 +66,13 @@ interface Harness {
   /** How many trap divs are still attached to the fake body. */
   attachedTraps: () => number;
   runTimers: () => void;
+  /** How many times the Ctrl+V keydown handed to _handleImagePaste() was cancelled. */
+  keydownCancels: () => number;
+}
+
+interface PastePayload {
+  text?: string;
+  images?: string[];
 }
 
 interface PasteHarnessOptions {
@@ -73,6 +82,14 @@ interface PasteHarnessOptions {
   localEchoPending?: string;
   /** Terminal the Ctrl+V came from, when it is not the primary pane. */
   terminal?: TargetTerminal;
+  /**
+   * What `document.execCommand('paste')` delivers to the trap before it
+   * returns. Firefox dispatches a real paste event from inside the call;
+   * Chromium and WebKit refuse the command and dispatch nothing (the default).
+   */
+  execCommandDelivers?: PastePayload;
+  /** Call _handleImagePaste() without the keydown, as an older caller would. */
+  omitKeyEvent?: boolean;
 }
 
 function loadPasteHarness(options: PasteHarnessOptions = {}): Harness {
@@ -80,6 +97,19 @@ function loadPasteHarness(options: PasteHarnessOptions = {}): Harness {
   const listeners: TrapListener[] = [];
   const attached = new Set<FakeTrap>();
   const timers: Array<() => void> = [];
+
+  const firePaste = ({ text = '', images = [] }: PastePayload) => {
+    const items = images.map((type) => ({ type, getAsFile: () => ({ type }) }));
+    const event = {
+      clipboardData: {
+        items,
+        getData: () => text,
+      },
+      preventDefault: () => {},
+      stopPropagation: () => {},
+    };
+    for (const fn of listeners) fn(event);
+  };
 
   const documentObj = {
     createElement: (): FakeTrap => {
@@ -106,8 +136,12 @@ function loadPasteHarness(options: PasteHarnessOptions = {}): Harness {
       },
     },
     // A browser that honours the command fires the trap's paste listener from
-    // here as well; the tests model that by firing the listener twice.
-    execCommand: () => true,
+    // inside this call. Firefox then returns false, because the trap cancels
+    // the event and the command never completes.
+    execCommand: () => {
+      if (options.execCommandDelivers) firePaste(options.execCommandDelivers);
+      return false;
+    },
     getElementById: () => null,
   };
 
@@ -184,25 +218,24 @@ function loadPasteHarness(options: PasteHarnessOptions = {}): Harness {
   const toasts: string[] = [];
   app.showToast = (message: string) => toasts.push(message);
 
-  const target =
+  let keydownCancels = 0;
+  const keyEvent = {
+    type: 'keydown',
+    key: 'v',
+    ctrlKey: true,
+    preventDefault: () => {
+      keydownCancels += 1;
+    },
+  };
+  const target: Record<string, unknown> =
     options.sessionId || options.terminal
       ? { terminal: options.terminal ?? app.terminal, sessionId: options.sessionId || 'session-1' }
-      : undefined;
+      : {};
+  if (!options.omitKeyEvent) target.keyEvent = keyEvent;
   (app._handleImagePaste as (t?: object) => void).call(app, target);
 
   return {
-    firePaste({ text = '', images = [] }) {
-      const items = images.map((type) => ({ type, getAsFile: () => ({ type }) }));
-      const event = {
-        clipboardData: {
-          items,
-          getData: () => text,
-        },
-        preventDefault: () => {},
-        stopPropagation: () => {},
-      };
-      for (const fn of listeners) fn(event);
-    },
+    firePaste,
     pastedText,
     inputted,
     sentInputs,
@@ -215,6 +248,7 @@ function loadPasteHarness(options: PasteHarnessOptions = {}): Harness {
       const pending = timers.splice(0, timers.length);
       for (const fn of pending) fn();
     },
+    keydownCancels: () => keydownCancels,
   };
 }
 
@@ -377,6 +411,49 @@ describe('Ctrl+V paste trap', () => {
 
     h.runTimers();
     expect(h.attachedTraps()).toBe(0);
+  });
+
+  // Firefox delivers the execCommand paste inside the call and the key's own
+  // paste as a later task. When the trap's cleanup timer runs first, that
+  // later paste lands on xterm's textarea instead of the trap, and xterm
+  // pastes it a second time. Cancelling the keydown is what stops it.
+  it('cancels the keydown when execCommand already delivered the paste', () => {
+    const h = loadPasteHarness({ execCommandDelivers: { text: 'hello world' } });
+
+    expect(h.inputted).toEqual(['\x1b[200~hello world\x1b[201~']);
+    expect(h.keydownCancels()).toBe(1);
+  });
+
+  it('cancels the split-pane keydown the same way', () => {
+    const paneInputs: string[] = [];
+    const pane: TargetTerminal = { input: (data) => paneInputs.push(data), focus: () => {} };
+    const h = loadPasteHarness({
+      sessionId: 'pane-b',
+      terminal: pane,
+      execCommandDelivers: { text: 'into pane b' },
+    });
+
+    expect(paneInputs).toEqual(['\x1b[200~into pane b\x1b[201~']);
+    expect(h.keydownCancels()).toBe(1);
+  });
+
+  it('leaves the keydown alone when execCommand delivered nothing', () => {
+    // Chromium and WebKit: the key's default action is the only route into
+    // the trap, so cancelling it would lose the paste entirely.
+    const h = loadPasteHarness();
+    expect(h.keydownCancels()).toBe(0);
+
+    h.firePaste({ text: 'hello world' });
+
+    expect(h.inputted).toEqual(['\x1b[200~hello world\x1b[201~']);
+    expect(h.keydownCancels()).toBe(0);
+  });
+
+  it('still pastes once when called without the keydown', () => {
+    const h = loadPasteHarness({ execCommandDelivers: { text: 'hello world' }, omitKeyEvent: true });
+    h.firePaste({ text: 'hello world' });
+
+    expect(h.inputted).toEqual(['\x1b[200~hello world\x1b[201~']);
   });
 });
 

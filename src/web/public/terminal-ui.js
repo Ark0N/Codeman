@@ -924,7 +924,9 @@ Object.assign(CodemanApp.prototype, {
       // Route through our paste trap which handles both images and text.
       if ((ev.ctrlKey || ev.metaKey) && ev.key === 'v' && ev.type === 'keydown') {
         if (this.activeSessionId && this._handleImagePaste) {
-          this._handleImagePaste();
+          // The trap cancels this keydown itself when execCommand('paste')
+          // already delivered the clipboard (Firefox), so pass the event in.
+          this._handleImagePaste({ keyEvent: ev });
         }
         return false;
       }
