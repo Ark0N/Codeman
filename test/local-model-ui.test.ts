@@ -2681,6 +2681,49 @@ describe('the models on this Mac', () => {
     expect(buttons(page.body)).toEqual(['Start a session']);
   });
 
+  // Seen on a Mac: Use, then the list was gone, and deleting the other model meant closing the
+  // window and opening it again.
+  it('a switch that ends in the open window comes back to the list, the other model in use', async () => {
+    const page = mount();
+    const switching = status(
+      {},
+      {
+        ...TWO.install,
+        state: 'installing',
+        step: 'verify',
+        steps: ['verify', 'connect'],
+        model: { id: 'gpt-oss:20b', label: 'GPT-OSS 20B' },
+        library: [
+          { ...QWEN_ROW, active: false },
+          { ...GPT_ROW, actions: [] },
+        ],
+        actions: ['cancel'],
+      }
+    );
+    const switched = status(
+      {},
+      {
+        ...TWO.install,
+        model: { id: 'gpt-oss:20b', label: 'GPT-OSS 20B' },
+        library: [
+          { ...GPT_ROW, active: true, actions: [] },
+          { ...QWEN_ROW, active: false, actions: ['use', 'delete'] },
+        ],
+      }
+    );
+    const { app, serve } = await opened(page, switching);
+    expect(page.body.dataset.screen).toBe('progress');
+    serve(switched);
+    await app.loadLocalModel({ force: true });
+    expect(page.body.dataset.screen).toBe('installed');
+    expect(texts(page.body, '.lm-lib-label')).toEqual(['GPT-OSS 20B', 'Qwen3.6 35B-A3B']);
+    expect(texts(page.body, '.lm-lib-tag .lm-tag')).toEqual(['In use', 'Ready']);
+    expect(rowButtons(page)).toEqual(['Use', 'Delete']);
+    // The whole installed screen, not the one-button screen that ends an install.
+    expect(buttons(page.body)).toEqual(['Remove', 'Stop', 'Start a session']);
+    expect(texts(page.body, '.lm-lib-foot button')).toEqual(['Add a model']);
+  });
+
   it('"Add a model" opens the chooser on an installed model, and Back returns to it', async () => {
     const page = mount();
     const { app } = await opened(page, TWO);
