@@ -83,10 +83,11 @@
  * |            |                                   |                                        | prompts sent at the rule stayed      |
  * |            |                                   |                                        | unsent), and it draws nothing that   |
  * |            |                                   |                                        | is a contract once it does           |
- * | `deepseek` | about 7,650 tokens, 25 tools      | SCRIPTED only (0.1.1-rc.2 with dsh-TUI | none here: the CLI registry's `❯`    |
- * |            | (0.1.1-rc.2)                      | 0.10.0-beta.1, not today's versions).  | stands; a prompt sent at it was      |
- * |            |                                   | REAL: the launch and the model name    | submitted, 2 of 2 launches           |
- * |            |                                   | reached the runtime, no turn finished  |                                      |
+ * | `deepseek` | about 7,650 tokens, 25 tools      | SCRIPTED only, on both versions        | none here: the CLI registry's `❯`    |
+ * |            | (0.1.1-rc.2); 6,983 tokens, 27    | (0.1.1-rc.2 with dsh-TUI 0.10.0-beta.1 | stands; a prompt sent at it was      |
+ * |            | tools (0.2.2-rc.1)                | and 0.2.2-rc.1 with dsh-TUI 0.19.0).   | submitted, 2 of 2 launches. On       |
+ * |            |                                   | REAL: the launch and the model name    | dsh-TUI 0.19.0 a setup guide draws   |
+ * |            |                                   | reached the runtime, no turn finished  | `❯` too until it was finished once   |
  *
  * Every one of them sent the `name:tag` model id unchanged. `pi` was gated until 2026-11-10 for
  * two open questions, both answered by its run: the id (above), and the window, which Codeman
@@ -94,7 +95,11 @@
  * 128,000-token one). `deepseek` is a LAUNCHER: its install command leaves it with nothing to
  * launch, so src/local-model/harness-facts.ts never reports it installable and a Mac is offered
  * it only where it was already set up. It is offered on a scripted run and one unfinished real
- * one: gate the row again (`gated: true`) should a run on a Mac not finish a turn.
+ * one: gate the row again (`gated: true`) should a run on a Mac not finish a turn. Two things
+ * about dsh-TUI 0.19.0 that a client of its `readyMark` must know: until a person has finished
+ * its setup guide once, every session opens on that guide and the guide's cursor is the mark
+ * (the codeman skill reads the pane after the mark for that reason), and its transcript file
+ * was renamed, so Codeman's `last-response` is empty for it for now.
  *
  * MEMORY. The need is `bytes + heldBytesPerToken x context + overheadBytes + peakExtraBytes`
  * (src/local-model/recommend.ts). The two runners spend memory differently, so a row's three
