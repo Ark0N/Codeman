@@ -2898,7 +2898,7 @@ describe('the coding agents of an installed model', () => {
     expect(frameOf(page.body).querySelectorAll('.lm-buttons .wt-btn-primary')).toHaveLength(1);
   });
 
-  it('starts the session with the selected agent, and this device remembers the choice', async () => {
+  it('starts the session with the selected agent, and this device remembers the agent it started', async () => {
     const page = mount();
     const { app } = await opened(page, WITH_AGENTS);
     const launch = launcher(app);
@@ -2907,17 +2907,40 @@ describe('the coding agents of an installed model', () => {
     // What the catalogue says about its first answer.
     expect(texts(page.body, '.lm-agent-about .lm-aside')).toEqual(['The first answer can take minutes.']);
     expect(verbs(app)).toEqual([]);
+    // Looking at a chip is not a choice yet.
+    expect(page.dom.window.localStorage.getItem('codeman-local-model-agent')).toBeNull();
     press(page.body, 'Start a session');
     await settle();
     expect(launch).toHaveBeenCalledWith('claude', 'local-ollama');
 
-    // The window opened again later: the last choice stands, not the default.
+    // The window opened again later: the agent last started stands, not the default.
     expect(page.dom.window.localStorage.getItem('codeman-local-model-agent')).toBe('claude');
     const again = page.newApp(ok(WITH_AGENTS));
     await again.loadLocalModel();
     again.openLocalModelWindow();
     await settle();
     expect(chosen(page)).toBe('Claude Code');
+  });
+
+  it('a chip that was only looked at never hides Start a session when the window is opened again', async () => {
+    const page = mount();
+    const { app } = await opened(page, WITH_AGENTS);
+    pick(page, 'DeepSeek');
+    expect(buttons(page.body)).toEqual(['Remove', 'Stop']);
+    app.closeLocalModelWindow();
+    app.openLocalModelWindow();
+    await settle();
+    // Back on the default agent, with the main action in reach.
+    expect(chosen(page)).toBe('OpenCode');
+    expect(buttons(page.body)).toEqual(['Remove', 'Stop', 'Start a session']);
+
+    // And an agent that was started once and has since been uninstalled does not win either.
+    page.dom.window.localStorage.setItem('codeman-local-model-agent', 'pi');
+    app.closeLocalModelWindow();
+    app.openLocalModelWindow();
+    await settle();
+    expect(chosen(page)).toBe('OpenCode');
+    expect(buttons(page.body)).toEqual(['Remove', 'Stop', 'Start a session']);
   });
 
   it('a remembered agent the server no longer lists falls back to the default', async () => {

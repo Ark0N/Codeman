@@ -70,7 +70,9 @@
  * "Install <agent>" for one that is not on this Mac (its literal install command is on screen
  * above the button, so the click is the consent), and nothing to press for one that needs a
  * setup of its own. An install of an agent runs beside the model: the state stays `installed`,
- * and another agent can be started meanwhile. The choice is remembered on this device.
+ * and another agent can be started meanwhile. The device remembers the agent a session was
+ * last STARTED with, and each opening of the window selects it while it can be started (a
+ * chip that was only looked at is not a choice, or the window would reopen on "Install").
  *
  * ## Polling
  *
@@ -633,15 +635,22 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
-   * The coding agents of the installed model and the one a session would start with: the one
-   * chosen in this window, else the one this device chose last, else the server's default
-   * (its first row). `row` is null when the server lists none.
+   * The coding agents of the installed model and the one a session would start with: the chip
+   * selected in this opening of the window, else the agent this device last STARTED a session
+   * with while it can still be started, else the server's default (its first row). A
+   * remembered agent that is not startable now never wins: the window would open on "Install"
+   * or on nothing to press, with "Start a session" out of sight. `row` is null when the server
+   * lists none.
    */
   _localModelAgent() {
     const ui = this._localModelWindowState();
     const rows = localModelAgents(localModelInstall(this._localModelStatus));
-    const wanted = ui.agent || localModelStoredAgent();
-    const row = rows.find((entry) => entry.cli === wanted) || rows.find((entry) => entry.default === true) || rows[0];
+    const stored = ui.agent ? '' : localModelStoredAgent();
+    const row =
+      rows.find((entry) => entry.cli === ui.agent) ||
+      rows.find((entry) => entry.cli === stored && entry.status === 'ready') ||
+      rows.find((entry) => entry.default === true) ||
+      rows[0];
     return { rows, row: row || null };
   },
 
@@ -680,6 +689,9 @@ Object.assign(CodemanApp.prototype, {
       busy: false,
       notice: null,
       expected: null,
+      // A chip that was only looked at in an earlier opening is not a choice: each opening
+      // starts from the agent last STARTED on this device, else the server's default.
+      agent: null,
       confirmRemove: false,
       confirmDelete: null,
       justInstalled: false,
@@ -910,13 +922,16 @@ Object.assign(CodemanApp.prototype, {
     if (asked) this._focusLocalModelWindow(asked === LOCAL_MODEL_STORE_KEY ? 'store-delete' : `delete:${asked}`);
   },
 
-  /** Select a coding agent for the next session. Remembered on this device; nothing is sent. */
+  /**
+   * Select a coding agent for the next session. Nothing is sent, and nothing is remembered
+   * yet: a chip can be selected just to see what installing it would run. The device
+   * remembers an agent once a session was started with it.
+   */
   selectLocalModelAgent(cli) {
     const ui = this._localModelWindowState();
     if (ui.busy || typeof cli !== 'string' || !cli) return;
     ui.agent = cli;
     ui.notice = null;
-    localModelStoreAgent(cli);
     this.renderLocalModel();
   },
 
@@ -967,6 +982,8 @@ Object.assign(CodemanApp.prototype, {
     const install = localModelInstall(this._localModelStatus);
     const agent = typeof cli === 'string' && cli ? cli : install.cli;
     if (typeof agent !== 'string' || typeof install.endpointId !== 'string') return;
+    // The agent a session was started with is the one the next opening selects.
+    if (typeof cli === 'string' && cli) localModelStoreAgent(cli);
     const settingsOpen = document.getElementById('appSettingsModal')?.classList.contains('active');
     this.closeLocalModelWindow();
     if (settingsOpen) this.closeAppSettings?.();
