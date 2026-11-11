@@ -1152,6 +1152,14 @@ that sends the report, decided when the pane starts: `injected` (it does), `coll
 `.claude/settings.local.json` sets its own `statusLine`, which Codeman never replaces) or
 `remote` (remote and Docker sessions). Absent when unknown.
 
+`contextWindowSize` is the model's context window in tokens from the same report (200000,
+or 1000000 with extended context), absent until a report carries it and dropped, like
+`promptCache`, on a post-`/clear` conversation switch. It is the upper bound for
+`autoCompactThreshold` and `autoClearThreshold` (1000000 while it is absent): a higher value
+is stored as the window, and Session Options stops its two inputs there. The thresholds
+themselves are compared with the report's `context_window.total_input_tokens`, cache reads
+included, and with the session's token counter for a launch without the exporter.
+
 ## Placing a new session in a tab group (`tabGroupId`)
 
 `POST /api/v1/sessions` and `POST /api/v1/quick-start` accept an optional

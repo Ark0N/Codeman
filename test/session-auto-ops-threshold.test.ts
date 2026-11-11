@@ -99,6 +99,7 @@ describe('SessionAutoOps thresholds', () => {
   let report: ContextReport | null;
   let counter: number;
   let writes: string[];
+  let working: boolean;
   let ops: SessionAutoOps;
 
   const settle = () => vi.advanceTimersByTimeAsync(60_000);
@@ -108,12 +109,13 @@ describe('SessionAutoOps thresholds', () => {
     report = null;
     counter = 0;
     writes = [];
+    working = false;
     ops = new SessionAutoOps({
       writeCommand: async (cmd) => {
         writes.push(cmd);
         return true;
       },
-      isWorking: () => false,
+      isWorking: () => working,
       isStopped: () => false,
       getTotalTokens: () => counter,
       getContextReport: () => report,
@@ -254,6 +256,168 @@ describe('SessionAutoOps thresholds', () => {
     expect(writes).toEqual(['/compact\r', '/clear\r', '/compact\r']);
   });
 
+  // A report fires the trigger in the middle of a turn, and the command waits for that turn to
+  // end. What was true at the trigger can be false by then, so the decision is made again there.
+  describe('when the command goes out', () => {
+    it('does not clear a context that fell while it waited for the turn to end', async () => {
+      ops.setAutoClear(true, 140_000);
+      working = true;
+      report = { tokens: 150_000 };
+      ops.checkAutoClear();
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(writes).toEqual([]);
+
+      report = { tokens: 20_000 }; // Claude Code compacted by itself during the turn
+      working = false;
+      await settle();
+      expect(writes).toEqual([]);
+      expect(ops.isClearing).toBe(false);
+
+      // Nothing was stamped by the skipped command, so the same number fires when it comes back.
+      report = { tokens: 150_000 };
+      ops.checkAutoClear();
+      await settle();
+      expect(writes).toEqual(['/clear\r']);
+    });
+
+    it('does not compact a context that fell while it waited for the turn to end', async () => {
+      ops.setAutoCompact(true, 100_000);
+      working = true;
+      report = { tokens: 150_000 };
+      ops.checkAutoCompact();
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      report = { tokens: 20_000 };
+      working = false;
+      await settle();
+      expect(writes).toEqual([]);
+      expect(ops.isCompacting).toBe(false);
+
+      report = { tokens: 150_000 };
+      ops.checkAutoCompact();
+      await settle();
+      expect(writes).toEqual(['/compact\r']);
+    });
+
+    it('reports the size at the moment the command went out', async () => {
+      const fired = vi.fn();
+      ops.on('autoCompact', fired);
+      ops.setAutoCompact(true, 100_000);
+      working = true;
+      report = { tokens: 150_000 };
+      ops.checkAutoCompact();
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      report = { tokens: 180_000 };
+      working = false;
+      await settle();
+      expect(fired).toHaveBeenCalledWith(expect.objectContaining({ tokens: 180_000 }));
+    });
+
+    it('sends nothing once the option was switched off during the wait', async () => {
+      ops.setAutoCompact(true, 100_000);
+      ops.setAutoClear(true, 140_000);
+      working = true;
+      report = { tokens: 150_000 };
+      ops.checkAutoClear();
+      await vi.advanceTimersByTimeAsync(5_000);
+      ops.setAutoClear(false);
+      working = false;
+      await settle();
+      expect(writes).toEqual([]);
+
+      // The compact it held off while it waited is free to run again.
+      ops.checkAutoCompact();
+      await settle();
+      expect(writes).toEqual(['/compact\r']);
+    });
+
+    it('follows a threshold that was raised during the wait', async () => {
+      ops.setAutoClear(true, 140_000);
+      working = true;
+      report = { tokens: 150_000 };
+      ops.checkAutoClear();
+      await vi.advanceTimersByTimeAsync(5_000);
+      ops.setAutoClear(true, 300_000);
+      working = false;
+      await settle();
+      expect(writes).toEqual([]);
+    });
+  });
+
+  // With auto-resume on, a /clear sent into a usage-limit pause is followed by the resume
+  // prompt: `continue` typed into an empty conversation.
+  describe('during a usage-limit pause', () => {
+    const limitLine = (resetInMs: number) =>
+      `Claude AI usage limit reached|${Math.floor((Date.now() + resetInMs) / 1000)}`;
+
+    beforeEach(() => {
+      vi.setSystemTime(Math.floor(Date.now() / 1000) * 1000);
+      ops.setAutoResume(true);
+    });
+
+    it('holds a clear that fired before the limit hit, and lets the next report decide after the resume', async () => {
+      ops.setAutoClear(true, 140_000);
+      working = true;
+      report = { tokens: 150_000 };
+      ops.checkAutoClear();
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      ops.processCleanData(limitLine(60 * 60_000)); // the turn ends on the limit
+      working = false;
+      await vi.advanceTimersByTimeAsync(30 * 60_000);
+      expect(ops.isLimitPaused).toBe(true);
+      expect(writes).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(40 * 60_000); // past the reset and its buffer
+      expect(writes).toEqual(['\x1b', 'continue\r']);
+
+      // The resumed turn ran and ended; the context is still above the threshold.
+      ops.notifyWorking();
+      ops.checkAutoClear();
+      await settle();
+      expect(writes).toEqual(['\x1b', 'continue\r', '/clear\r']);
+    });
+
+    it('holds a compact the same way', async () => {
+      ops.setAutoCompact(true, 100_000);
+      working = true;
+      report = { tokens: 150_000 };
+      ops.checkAutoCompact();
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      ops.processCleanData(limitLine(60 * 60_000));
+      working = false;
+      await vi.advanceTimersByTimeAsync(30 * 60_000);
+      expect(writes).toEqual([]);
+    });
+
+    it('starts nothing on a report that arrives while the session is paused', async () => {
+      ops.setAutoCompact(true, 100_000);
+      ops.setAutoClear(true, 140_000);
+      ops.processCleanData(limitLine(60 * 60_000));
+      report = { tokens: 150_000 };
+      ops.checkAutoCompact();
+      ops.checkAutoClear();
+      expect([ops.isCompacting, ops.isClearing]).toEqual([false, false]);
+      await vi.advanceTimersByTimeAsync(30 * 60_000);
+      expect(writes).toEqual([]);
+    });
+
+    it('does not send between the Escape and the resume prompt', async () => {
+      ops.setAutoClear(true, 140_000);
+      ops.processCleanData(limitLine(60_000));
+      await vi.advanceTimersByTimeAsync(60_000 + 2 * 60_000); // the Escape went out
+      expect(writes).toEqual(['\x1b']);
+
+      report = { tokens: 150_000 }; // the Escape redraws the statusline
+      ops.checkAutoClear();
+      expect(ops.isClearing).toBe(false);
+      await vi.advanceTimersByTimeAsync(600);
+      expect(writes).toEqual(['\x1b', 'continue\r']);
+    });
+  });
+
   describe('threshold cap', () => {
     it('allows up to 1M while the window is unknown', () => {
       ops.setAutoCompact(true, 1_000_000);
@@ -272,6 +436,14 @@ describe('SessionAutoOps thresholds', () => {
       ops.setAutoClear(true, 1);
       expect(ops.autoCompactThreshold).toBe(110_000);
       expect(ops.autoClearThreshold).toBe(140_000);
+    });
+
+    it('never stores a threshold below the minimum, whatever window was reported', () => {
+      report = { tokens: 1, windowSize: 500 };
+      ops.setAutoCompact(true, 5_000);
+      ops.setAutoClear(true, 5_000);
+      expect(ops.autoCompactThreshold).toBe(1_000);
+      expect(ops.autoClearThreshold).toBe(1_000);
     });
 
     it('follows the reported window', () => {
@@ -306,6 +478,34 @@ describe('Session.noteContextReport', () => {
     expect(write).toHaveBeenCalledWith('/compact\r');
     expect(s.toState().contextWindowSize).toBe(1_000_000);
     s.setAutoCompact(false);
+  });
+
+  it('drops the report when the conversation changes, so the old size cannot fire on the new one', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const s = session();
+    const write = vi.spyOn(s, 'writeViaMux').mockResolvedValue(true);
+    s.adoptClaudeSessionId('11111111-1111-4111-8111-111111111111');
+    s.noteContextReport({ tokens: 90_000, windowSize: 200_000 });
+    expect(s.toState().contextWindowSize).toBe(200_000);
+
+    s.adoptClaudeSessionId('22222222-2222-4222-8222-222222222222'); // a /clear switched it
+    expect(s.toState().contextWindowSize).toBeUndefined();
+
+    // 90k is above this threshold, and it belonged to the conversation that is gone.
+    s.setAutoCompact(true, 50_000);
+    (s as never as { _autoOps: SessionAutoOps })._autoOps.checkAutoCompact();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(write).not.toHaveBeenCalled();
+    s.setAutoCompact(false);
+  });
+
+  it('keeps the report on a reattach to the same conversation', () => {
+    const s = session();
+    s.adoptClaudeSessionId('11111111-1111-4111-8111-111111111111');
+    s.noteContextReport({ tokens: 90_000, windowSize: 200_000 });
+    s.adoptClaudeSessionId('11111111-1111-4111-8111-111111111111');
+    expect(s.toState().contextWindowSize).toBe(200_000);
   });
 });
 

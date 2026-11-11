@@ -5,7 +5,9 @@
  * configurable thresholds are reached. The size comes from the statusline report
  * when the session has one and from the session's token counter otherwise (see
  * decideAutoThreshold). Waits for Claude to be idle before sending commands, with
- * retry logic and mutual exclusion (compact and clear never run simultaneously).
+ * retry logic and mutual exclusion (compact and clear never run simultaneously),
+ * and decides again when the command would go out (see _decideAtSend): nothing is
+ * sent into a context that fell during the wait or into a usage-limit pause.
  *
  * Also implements auto-resume on usage limit ("token pause" control):
  * when enabled and Claude stops on a usage-limit message ("5-hour limit
@@ -439,7 +441,6 @@ export class SessionAutoOps extends EventEmitter {
   // Threshold checks
   // ============================================================================
 
-  /** The highest threshold that can ever fire: the reported window, or 1M when it is unknown. */
   /**
    * A value above the window stops at the window rather than falling to the default: a threshold
    * saved under a larger window comes back on every save of the options, and the default would
@@ -470,8 +471,47 @@ export class SessionAutoOps extends EventEmitter {
     this._counterBaseline = 0;
   }
 
+  /**
+   * The highest threshold that can ever fire: the reported window, or 1M when it is unknown.
+   * Never below the minimum, so a nonsense window (a report of 500) cannot store a threshold
+   * that every later save would then refuse.
+   */
   private _maxThreshold(): number {
-    return this.callbacks.getContextReport()?.windowSize ?? MAX_AUTO_THRESHOLD;
+    return Math.max(MIN_AUTO_THRESHOLD, this.callbacks.getContextReport()?.windowSize ?? MAX_AUTO_THRESHOLD);
+  }
+
+  /**
+   * True from a usage-limit message until the resume prompt went out. A /clear sent in that
+   * window is followed by auto-resume's `continue`, typed into an empty conversation, and a
+   * /compact needs the API the limit just closed. Only auto-resume watches for the limit, so
+   * with it off this is always false, as before.
+   */
+  private _heldByLimit(): boolean {
+    return this._limitPaused || this._resumeFollowupTimer !== null;
+  }
+
+  /**
+   * The decision at the moment the command would go out, or null when it must not. A report
+   * fires the trigger in the middle of a turn and the command then waits for that turn to end,
+   * which can outlast a compaction by Claude Code itself (the context is small again), a change
+   * of the option or its threshold, and the start of a usage-limit pause. The counter never
+   * falls, so on the fallback this only repeats the trigger's answer.
+   *
+   * A null stamps nothing: the caller returns, the cooldown releases its flag, and the next
+   * report is judged like any other.
+   */
+  private _decideAtSend(name: string, enabled: boolean, threshold: number): AutoThresholdDecision | null {
+    const skipped = (why: string): null => {
+      console.log(`[SessionAutoOps ${this.callbacks.getSessionId()}] ${name} not sent: ${why}`);
+      return null;
+    };
+    if (!enabled) return skipped('switched off while it waited for the turn to end');
+    if (this._heldByLimit()) return skipped('the session is paused on a usage limit');
+    const decision = this._decide(threshold);
+    if (!decision.trigger) {
+      return skipped(`${decision.tokens} tokens (${decision.source}) is no longer at the ${threshold} threshold`);
+    }
+    return decision;
   }
 
   private _decide(threshold: number): AutoThresholdDecision {
@@ -491,16 +531,18 @@ export class SessionAutoOps extends EventEmitter {
   checkAutoCompact(): void {
     if (this.callbacks.isStopped()) return;
     if (!this._autoCompactEnabled || this._isCompacting || this._isClearing) return;
+    if (this._heldByLimit()) return;
 
     const decision = this._decide(this._autoCompactThreshold);
     if (decision.trigger) {
-      const totalTokens = decision.tokens;
       this._isCompacting = true;
       console.log(
-        `[SessionAutoOps] Auto-compact triggered: ${totalTokens} tokens (${decision.source}) >= ${this._autoCompactThreshold} threshold`
+        `[SessionAutoOps] Auto-compact triggered: ${decision.tokens} tokens (${decision.source}) >= ${this._autoCompactThreshold} threshold`
       );
 
       const action = async () => {
+        const atSend = this._decideAtSend('Auto-compact', this._autoCompactEnabled, this._autoCompactThreshold);
+        if (!atSend) return;
         // One line: this fires unattended, and a multi-line focus prompt would go out
         // as a multi-line paste (see toSingleLine).
         const compactCmd = this._autoCompactPrompt
@@ -511,7 +553,7 @@ export class SessionAutoOps extends EventEmitter {
         this._counterBaseline = this.callbacks.getTotalTokens();
         await this.callbacks.writeCommand(compactCmd);
         this.emit('autoCompact', {
-          tokens: totalTokens,
+          tokens: atSend.tokens,
           threshold: this._autoCompactThreshold,
           prompt: this._autoCompactPrompt || undefined,
         });
@@ -547,21 +589,23 @@ export class SessionAutoOps extends EventEmitter {
   checkAutoClear(): void {
     if (this.callbacks.isStopped()) return;
     if (!this._autoClearEnabled || this._isClearing || this._isCompacting) return;
+    if (this._heldByLimit()) return;
 
     const decision = this._decide(this._autoClearThreshold);
     if (decision.trigger) {
-      const totalTokens = decision.tokens;
       this._isClearing = true;
       console.log(
-        `[SessionAutoOps] Auto-clear triggered: ${totalTokens} tokens (${decision.source}) >= ${this._autoClearThreshold} threshold`
+        `[SessionAutoOps] Auto-clear triggered: ${decision.tokens} tokens (${decision.source}) >= ${this._autoClearThreshold} threshold`
       );
 
       const action = async () => {
+        const atSend = this._decideAtSend('Auto-clear', this._autoClearEnabled, this._autoClearThreshold);
+        if (!atSend) return;
         this._reportTokensAtCommand = this.callbacks.getContextReport()?.tokens ?? null;
         // The session zeroes its counter on 'autoClear', so the counter restarts from 0.
         this._counterBaseline = 0;
         await this.callbacks.writeCommand('/clear\r');
-        this.emit('autoClear', { tokens: totalTokens, threshold: this._autoClearThreshold });
+        this.emit('autoClear', { tokens: atSend.tokens, threshold: this._autoClearThreshold });
       };
 
       if (!this.callbacks.isStopped()) {
