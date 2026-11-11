@@ -551,6 +551,58 @@ describe.skipIf(!hasJq)('preamble spawn_worker <name> local', () => {
       expect(run.calls[2].q).toContain('match=❯');
     });
 
+    it('a DeepSeek Harness worker that opened its setup guide is deleted, never handed back: its cursor is the mark too', () => {
+      // dsh-TUI 0.19.0, as the rendered pane reads: the guide, with `❯` on its first step.
+      const guide = JSON.stringify({
+        success: true,
+        data: {
+          terminalBuffer:
+            '\u001b[1mWelcome to dsh-TUI\u001b[0m   Step 1 of 4\r\n  ✗ No DEEPSEEK_API_KEY yet\r\n❯ Sign in to a subscription (OAuth)\r\n',
+        },
+      });
+      const composer = JSON.stringify({
+        success: true,
+        data: {
+          terminalBuffer:
+            '╭────╮\r\n│ ❯ Say something, or type / for commands…\r\n╰────╯\r\n qwen3.6:35b-a3b  ·  standard\r\n',
+        },
+      });
+      const answers = { 'lm-get': WITH_AGENTS, 'quick-start': QUICK_START, 'wait-output': MATCHED };
+
+      const blocked = runSkill('spawn_worker rev local:deepseek', {
+        ...answers,
+        terminal: guide,
+        delete: JSON.stringify({ success: true, data: {} }),
+      });
+      expect(blocked.rc).toBe(1);
+      expect(blocked.stdout).toBe('');
+      expect(blocked.stderr).toMatch(/setup guide/);
+      expect(blocked.calls.map((call) => `${call.m} ${call.key}`)).toEqual([
+        'GET lm-get',
+        'POST quick-start',
+        'GET wait-output',
+        'GET terminal',
+        'DELETE delete',
+      ]);
+
+      const ready = runSkill('spawn_worker rev local:deepseek', { ...answers, terminal: composer });
+      expect(ready.stderr).toBe('');
+      expect(ready.rc).toBe(0);
+      expect(ready.stdout).toBe(`${SID}\n`);
+
+      // The same look for a DeepSeek worker that is not on the local model.
+      const cloud = runSkill('spawn_worker rev deepseek', {
+        'quick-start': QUICK_START,
+        'wait-output': MATCHED,
+        terminal: guide,
+        delete: JSON.stringify({ success: true, data: {} }),
+      });
+      expect(cloud.rc).toBe(1);
+      expect(cloud.stdout).toBe('');
+      expect(cloud.stderr).toMatch(/setup guide/);
+      expect(cloud.calls.map((call) => call.key)).toEqual(['quick-start', 'wait-output', 'terminal', 'delete']);
+    });
+
     it('a mark the server names wins over the one this skill measured, and LOCAL_READY_MARK over both', () => {
       const named = status({
         ...INSTALLED,
