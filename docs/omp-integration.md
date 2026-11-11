@@ -55,6 +55,19 @@ documented default `tools.approvalMode` is `yolo`, so an omp pane auto-approves 
 with no flag from Codeman — the CLI's own config, not Codeman, is what would need to
 change that.
 
+**Approval alerts.** When a session is created (`POST /api/sessions` or
+`POST /api/quick-start`, local workspaces only, and only while `workspaceHooksEnabled`
+is on), Codeman writes a hook module, `.claude/hooks/pre/codeman-approval.ts`, into the
+workspace; omp loads project hooks from that folder. It forwards omp's
+`tool_approval_requested` / `tool_approval_resolved` events to `/api/hook-event`, so a
+pending approval raises a tab alert, a notification and an Approvals Inbox item. The
+item is **alert-only**: answer the dialog in the omp pane (omp's composer keeps taking
+typing while the prompt is docked, so Codeman never types an answer for you). The
+registry declares this as `capabilities.approvalHookFile`, separate from `hooks`, which
+stays `'none'`: the `blocked` wait signal works for omp, `stop` is still a 400. ⚠️ With
+omp's default `tools.approvalMode: yolo` omp never asks, so the module only does
+anything once that setting is changed.
+
 Env overrides: the `OMP_*` prefix is allowlisted, and per omp's own
 `docs/environment-variables.md` it is not the narrow surface it looks like. omp reads
 roughly 40 provider keys from the environment (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
@@ -163,13 +176,13 @@ remote user's home, so resolving locally would pin a stranger's id. See
 
 ## Known gaps
 
-- **No idle/completion hook.** Idle detection reads the screen instead: the
+- **No idle/completion hook.** The approval hook module (see Approval alerts
+  above) reports approvals only, so idle detection reads the screen instead: the
   registry entry's `workDetect` names omp's `╰─` input row as the glyph that arms
   the idle check, and the status bar's spinner plus elapsed time (` ⠼ 14s > ⬢ …`)
   or the `⎋ Working…` row as the working line, measured on omp 18.8.6 and 18.0.11.
-  Without it an omp session that had started a turn never left `busy`. If omp ever
-  ships a hooks system, a Codeman hook POSTing to `/api/hook-event` would still be
-  the highest-value follow-up.
+  Without it an omp session that had started a turn never left `busy`. Reporting
+  end-of-turn from the same module would be the follow-up that earns omp `stop`.
 - **Killing a pane mid-turn loses the conversation for real.** `tmux kill-session`
   before an in-TUI `/exit` beats omp's own session-file flush — confirmed by direct
   testing (kill after a clean `/exit` resumes correctly; kill without `/exit` first

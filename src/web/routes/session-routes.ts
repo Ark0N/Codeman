@@ -156,6 +156,7 @@ import {
   seedAgentSessionPreamble,
   applyWorkspaceHooks,
   refreshStaleCodemanHooks,
+  applyApprovalHookFile,
 } from '../../hooks-config.js';
 import { generateClaudeMd } from '../../templates/claude-md.js';
 import { imageWatcher } from '../../image-watcher.js';
@@ -1089,6 +1090,19 @@ export function registerSessionRoutes(
   /** Test seam: inject a registry with fake IO instead of the real TCP/WoL probes. */
   options: { remoteWake?: RemoteWakeRegistry } = {}
 ): RemoteWakeRegistry {
+  /**
+   * Install the approval hook MODULE a CLI declares (`capabilities.approvalHookFile`,
+   * omp) into a LOCAL workspace, so its approval dialogs raise an alert. Shared by
+   * POST /api/sessions and POST /api/quick-start so the two cannot drift; callers own
+   * the remote/Docker/named-workspace conditions and call it only after the launch
+   * pre-flight. Gated on `workspaceHooksEnabled` like Claude's block. Best-effort: a
+   * failure here must not fail the create.
+   */
+  const installApprovalHook = async (mode: SessionMode, workspace: string): Promise<void> => {
+    const fileName = getCli(mode)?.capabilities.approvalHookFile;
+    if (!fileName || !(await ctx.getWorkspaceHooksEnabled())) return;
+    await applyApprovalHookFile(workspace, fileName).catch(() => {});
+  };
   // Wake-on-LAN for sleeping remote hosts (see remote-wake.ts). One registry per
   // route registration (= one web server) — the same shape as the process-wide
   // `sessionWaits` singleton, but without the global.
@@ -1350,6 +1364,13 @@ export function registerSessionRoutes(
       if (cliLaunchError) {
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, cliLaunchError);
       }
+    }
+
+    // Approval hook module (omp): after the pre-flight, like the agent skill below, so a
+    // CLI that cannot start leaves nothing in the workspace. Same remote and
+    // named-workingDir conditions as the hooks above.
+    if (!remote && body.workingDir) {
+      await installApprovalHook(body.mode ?? 'claude', workingDir);
     }
 
     // Agent skill (docs/agent-control-plan.md §2): ADD-ONLY on create, same shared-
@@ -4628,6 +4649,13 @@ export function registerSessionRoutes(
       } else {
         await refreshStaleCodemanHooks(workspacePath).catch(() => {});
       }
+    }
+
+    // Approval hook module (omp), for a new AND an existing case. The launch pre-flight
+    // above has passed. Local only: a remote case path lives on another host, and a Docker
+    // pane cannot reach the loopback API (`approvalHookAvailableForMode()` answers no there).
+    if (!remote && !docker) {
+      await installApprovalHook(mode, workspacePath);
     }
 
     // Agent skill injection (docs/agent-control-plan.md §2): ADD-ONLY on create,

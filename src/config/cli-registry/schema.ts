@@ -325,6 +325,14 @@ const capabilitiesSchema = z
     // A closed list on purpose: it decides where the server WRITES, and this file is
     // user-editable, so it can never be a free path (`..`, absolute).
     agentSkillDir: z.enum(AGENT_SKILL_DIRS).optional(),
+    // The hook module Codeman installs for a CLI whose hooks are files, not a settings
+    // block (omp). Same closed-list reasoning as `agentSkillDir`, stricter still: this
+    // name is written into the user's workspace, so a value like `../../evil.ts` must be
+    // refused by the schema rather than by whatever calls the writer.
+    approvalHookFile: z
+      .string()
+      .regex(/^[A-Za-z0-9._-]+\.ts$/)
+      .optional(),
     statusLineTelemetry: z.boolean(),
     // How many columns this CLI indents its transcript body by, so a copy can take
     // that much off the clipboard. Bounded, because it is the whole strip: a copy

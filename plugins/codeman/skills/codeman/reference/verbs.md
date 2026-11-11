@@ -389,6 +389,10 @@ question or trust dialog is up; a wait for it answers at once if one already is)
 lifecycle transitions there are coarse (a short shell command may emit **no**
 `idle` transition at all, verified live), so synchronize those with markers.
 
+`blocked` also works on a local `omp` session: Codeman installs a hook module into its
+workspace that reports omp's approval dialogs (the inbox item is alert-only, so answer in
+the pane). `stop` stays a 400 there, so wait on `idle` or a marker for end-of-turn.
+
 ⚠️ A dsh session can still refuse them for a per-SESSION reason: `statusReporting:
 false` at create time disarms the bridge, and an explicit `until=stop` is then a 400
 naming that setting. And a `stop` that is *accepted* is not proof it will ever fire —
