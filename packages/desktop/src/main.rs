@@ -28,6 +28,9 @@ mod config;
 mod credentials;
 mod gui_install;
 mod keep_awake;
+// The pure half is only used by the macOS half and the tests.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod lid_awake;
 mod local_server;
 mod login;
 mod logo;
@@ -190,12 +193,9 @@ enum UserEvent {
         generation: u64,
         text: String,
     },
-    /// The administrator prompt for the lid helper was answered, and its command
-    /// ran (keep_awake::install_helper, keep_awake::remove_helper).
-    LidHelperDone {
-        install: bool,
-        outcome: keep_awake::AdminOutcome,
-    },
+    /// The administrator prompt for removing the lid helper of 1.50.1 was answered,
+    /// and its command ran (keep_awake::remove_old_helper).
+    OldHelperRemoved(keep_awake::AdminOutcome),
     /// What the closed lid did with the logo last (logo::watch_lid_status).
     LogoLidStatus(String),
 }
@@ -336,14 +336,18 @@ struct App {
     logo_watch: logo::Watcher,
     /// The worker that keeps this Mac awake while its agents work.
     keep_awake: keep_awake::KeepAwake,
-    /// An administrator prompt for the lid helper is open.
-    lid_helper_busy: bool,
+    /// The administrator prompt for removing the old lid helper is open.
+    old_helper_busy: bool,
 }
 
 fn main() {
     // The blinker is this binary without a window (logo.rs).
     if std::env::args().nth(1).as_deref() == Some(logo::BLINK_ARG) {
         logo::blink_main();
+    }
+    // So is the lid keeper (lid_awake.rs).
+    if std::env::args().nth(1).as_deref() == Some(lid_awake::LID_ARG) {
+        lid_awake::child_main();
     }
 
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
@@ -375,6 +379,10 @@ fn main() {
     let config_path = config_path.filter(|_| can_save);
     let notice = (!can_save).then(|| SETTINGS_UNREADABLE.to_string());
     logo::recover_at_launch();
+    // A lid keeper that was killed left lid sleep off; and 1.50.1's helper, where
+    // it is still installed, gets nothing to act on.
+    lid_awake::heal();
+    keep_awake::forget_legacy_request();
     let menu = build_menu(&config).unwrap_or_else(|e| fatal(&format!("Could not build the menu: {e}")));
     let phase = Rc::new(RefCell::new(Phase::Connect));
     // Started once: the probe workers and the event loop share this queue,
@@ -421,7 +429,7 @@ fn main() {
         keep_awake: keep_awake::KeepAwake::new(move |generation, text| {
             let _ = keep_awake_proxy.send_event(UserEvent::KeepAwakeStatus { generation, text });
         }),
-        lid_helper_busy: false,
+        old_helper_busy: false,
     };
 
     if app.menu.logo_lid.is_some() {
@@ -1010,7 +1018,7 @@ impl App {
                     }
                 }
             }
-            UserEvent::LidHelperDone { install, outcome } => self.on_lid_helper_done(install, outcome),
+            UserEvent::OldHelperRemoved(outcome) => self.on_old_helper_removed(outcome),
         }
     }
 
@@ -1181,7 +1189,10 @@ impl App {
     /// Keep-awake watches the open server while a mode is chosen. Whether that
     /// server is this Mac is the worker's to find out.
     fn sync_keep_awake(&mut self) {
-        let settings = self.config.keep_awake;
+        let mut settings = self.config.keep_awake;
+        // The lid item only exists on a Mac with a lid; a setting copied from one
+        // does nothing elsewhere.
+        settings.lid &= keep_awake::has_lid();
         let server = self.phase.borrow().loaded().cloned();
         let watch = server
             .filter(|_| settings.mode != keep_awake::Mode::Off)
@@ -1222,92 +1233,45 @@ impl App {
         self.sync_keep_awake();
     }
 
-    /// The lid item is the helper: ticking it installs the helper behind the
-    /// administrator prompt (unless this version's is already in), unticking it removes
-    /// it behind another. The setting changes only once the prompt's command ran, so a
-    /// cancelled or failed prompt leaves the item as it was.
     fn toggle_keep_awake_lid(&mut self) {
-        use keep_awake::HelperState;
-        let Some(wanted) = self
-            .menu
-            .keep_awake
-            .as_ref()
-            .and_then(|items| items.lid.as_ref())
-            .map(|item| item.is_checked())
-        else {
+        let Some(item) = self.menu.keep_awake.as_ref().and_then(|items| items.lid.as_ref()) else {
             return;
         };
-        let state =
-            keep_awake::request_path().map_or(HelperState::Missing, |request| keep_awake::helper_state(&request));
-        let prompt = match (wanted, state) {
-            _ if self.lid_helper_busy => None,
-            (true, HelperState::Installed) | (false, HelperState::Missing) => {
-                self.config.keep_awake.lid = wanted;
-                self.config_dirty = true;
-                None
-            }
-            (install, _) => Some(install),
-        };
-        // The click flipped the item already. Until a prompt's command ran it shows
-        // what is true.
-        if let Some(items) = &self.menu.keep_awake {
-            items.show_helper(state, self.config.keep_awake.lid);
-        }
-        match prompt {
-            Some(install) => self.run_lid_helper(install),
-            None => self.sync_keep_awake(),
-        }
+        self.config.keep_awake.lid = item.is_checked();
+        self.config_dirty = true;
+        self.sync_keep_awake();
     }
 
-    fn run_lid_helper(&mut self, install: bool) {
-        if self.lid_helper_busy {
+    /// Codeman 1.50.1 kept the lid awake through a root helper. Nothing uses it any
+    /// more, and taking it away is the one thing left that asks for the
+    /// administrator password. The prompt runs off the event loop.
+    fn remove_old_helper(&mut self) {
+        if self.old_helper_busy {
             return;
         }
-        self.lid_helper_busy = true;
+        self.old_helper_busy = true;
         let proxy = self.proxy.clone();
         std::thread::spawn(move || {
-            let outcome = match install {
-                true => keep_awake::install_helper(),
-                false => keep_awake::remove_helper(),
-            };
-            let _ = proxy.send_event(UserEvent::LidHelperDone { install, outcome });
+            let _ = proxy.send_event(UserEvent::OldHelperRemoved(keep_awake::remove_old_helper()));
         });
     }
 
-    fn on_lid_helper_done(&mut self, install: bool, outcome: keep_awake::AdminOutcome) {
-        use keep_awake::{AdminOutcome, HelperState};
-        self.lid_helper_busy = false;
-        let state =
-            keep_awake::request_path().map_or(HelperState::Missing, |request| keep_awake::helper_state(&request));
-        let failure = match (&outcome, install, state) {
-            (AdminOutcome::Cancelled, _, _) => None,
-            (AdminOutcome::Failed(error), true, _) => Some(("The lid helper could not be installed.", error.clone())),
-            (AdminOutcome::Failed(error), false, _) => Some(("The lid helper could not be removed.", error.clone())),
-            (AdminOutcome::Done, true, HelperState::Installed) => {
-                self.config.keep_awake.lid = true;
-                self.config_dirty = true;
+    fn on_old_helper_removed(&mut self, outcome: keep_awake::AdminOutcome) {
+        use keep_awake::AdminOutcome;
+        self.old_helper_busy = false;
+        let failure = match (outcome, keep_awake::old_helper_installed()) {
+            (AdminOutcome::Cancelled, _) => None,
+            (AdminOutcome::Failed(error), _) => Some(error),
+            (AdminOutcome::Done, false) => {
+                if let Some(items) = &mut self.menu.keep_awake {
+                    items.old_helper_removed();
+                }
                 None
             }
-            (AdminOutcome::Done, true, _) => Some((
-                "The lid helper could not be installed.",
-                "The installation ran, but the helper's files are not what the app wrote.".to_owned(),
-            )),
-            (AdminOutcome::Done, false, HelperState::Missing) => {
-                self.config.keep_awake.lid = false;
-                self.config_dirty = true;
-                None
-            }
-            (AdminOutcome::Done, false, _) => Some((
-                "The lid helper could not be removed.",
-                "The removal ran, but the helper's files are still there.".to_owned(),
-            )),
+            (AdminOutcome::Done, true) => Some("The removal ran, but the helper's files are still there.".to_owned()),
         };
-        if let Some(items) = &self.menu.keep_awake {
-            items.show_helper(state, self.config.keep_awake.lid);
-        }
-        self.keep_awake.refresh();
-        self.sync_keep_awake();
-        if let Some((title, detail)) = failure {
+        if let Some(detail) = failure {
+            let title = "The old lid helper could not be removed.";
             eprintln!("codeman-desktop: {title} {detail}");
             #[cfg(target_os = "macos")]
             macos::show_message(title, &detail);
@@ -1326,6 +1290,7 @@ impl App {
         match id {
             keep_awake::AC_ONLY_ID => self.toggle_keep_awake_ac_only(),
             keep_awake::LID_ID => self.toggle_keep_awake_lid(),
+            keep_awake::REMOVE_OLD_HELPER_ID => self.remove_old_helper(),
             menu_id::SWITCH => self.show_connect_page(None, true),
             menu_id::ADD_AGENT => self.add_agent(),
             menu_id::RELOAD => self.reload_focused(),

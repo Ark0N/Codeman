@@ -1,24 +1,23 @@
 //! Keep This Mac Awake: while Codeman's agents work on this Mac, the app keeps the
-//! Mac from going to sleep, and with a small root helper also with the lid closed.
-//! Opt-in (app menu > Keep This Mac Awake), off by default.
+//! Mac from going to sleep, also with the lid closed. Opt-in (app menu > Keep This
+//! Mac Awake), off by default, and no password anywhere.
 //!
 //! Two layers, because macOS draws a line between them:
 //!
-//! - **Idle sleep**, no password: the app holds a power assertion of its own
-//!   (`NSProcessInfo` activity with `IdleSystemSleepDisabled`, which is
-//!   `PreventUserIdleSystemSleep` in `pmset -g assertions`). The kernel drops it
-//!   with the process, so a crash or a Force Quit can never leave the Mac awake.
-//!   The display still sleeps.
-//! - **Lid close**, once behind macOS's administrator prompt: nothing an app holds
-//!   stops a MacBook from sleeping when its lid closes. Only `pmset -a disablesleep 1`
-//!   does, a machine-wide root setting with no owner. So a LaunchDaemon runs
-//!   `macos/keep-awake-lid.sh` every 20 seconds, and it sets that only while this app
-//!   keeps a fresh request file holding its live pid, and only on the power adapter.
-//!   An app that quits or crashes is a dead pid, so the lid is released at the next
-//!   run (measured on a Mac mini with the same script: the next tick, both after a
-//!   clean stop and after a SIGKILL). The app writes the helper itself, to a
-//!   root-owned folder, from the copy built into it (`include_str!`), never from a
-//!   file a user could edit.
+//! - **Idle sleep**: the app holds a power assertion of its own (`NSProcessInfo`
+//!   activity with `IdleSystemSleepDisabled`, which is `PreventUserIdleSystemSleep`
+//!   in `pmset -g assertions`). The kernel drops it with the process, so a crash or a
+//!   Force Quit can never leave the Mac awake. The display still sleeps.
+//! - **Lid close**: nothing an app holds stops a MacBook from sleeping when its lid
+//!   closes, but one switch in the kernel does (lid sleep off), and any process may
+//!   set it. It has no owner and outlives the process that set it, so a child process
+//!   holds it and always lets go (`lid_awake`): when the app stops asking, when the
+//!   app ends however it ends, when the app hangs, and on battery whatever the app
+//!   says. Codeman 1.50.1 did this job with a root helper behind the administrator
+//!   password (`pmset disablesleep`). Nothing uses that helper any more: it only acts
+//!   on a request file this version never writes, and the menu offers to remove it
+//!   where it is still installed (`remove_command`, the one thing left that asks for
+//!   the password).
 //!
 //! When it holds is the user's pick: **While Agents Work** (an agent at work, and for
 //! `GRACE` after the last one stopped, so the gap between two turns or a reply from
@@ -28,9 +27,7 @@
 //! MacBook only), and the lid never on battery, whatever the setting.
 //!
 //! The menu is kept short on purpose: three modes, then on a MacBook two check items
-//! (Only When Plugged In, With the Lid Closed…). The lid item IS the helper: ticking it
-//! installs the helper behind the administrator prompt, unticking it removes it behind
-//! another, so no separate "remove" item and no helper left behind unasked.
+//! (Only When Plugged In, With the Lid Closed).
 //!
 //! It lives in the app, so it ends with the app: Codeman's LaunchAgent keeps the server
 //! running after the app quits, but nothing keeps the Mac awake then. So while it watches
@@ -43,44 +40,36 @@
 //! so a hidden app does not see work late.
 
 use crate::agents::{Poll, Poller, POLL_EVERY};
-use base64::Engine as _;
+use crate::lid_awake::Lid;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::net::IpAddr;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
 use url::{Host, Url};
 
-/// How often the worker looks: at the agents (While Agents Work), the power source
-/// and the lid request.
+/// How often the worker looks: at the agents (While Agents Work) and the power
+/// source. Each look is also the word the lid keeper waits for (`lid_awake`).
 const TICK: Duration = POLL_EVERY;
 /// How long the Mac stays awake after the last agent stopped working: the gap
 /// between two turns, a respawn, a short Bash call the server reports as idle, and
 /// time to answer from the phone.
 pub const GRACE: Duration = Duration::from_secs(5 * 60);
-/// The helper honours a request file younger than 2 minutes (`find -mmin -2`); the
-/// app rewrites it this often while it wants the lid covered.
-const LID_REFRESH: Duration = Duration::from_secs(30);
-/// How often the worker reads whether the lid is covered (`pmset -g`, a process
-/// spawn) and whether the helper is installed, while it asks for the lid. The helper
-/// itself runs every 20 seconds.
-const LID_CHECK: Duration = Duration::from_secs(20);
 
-pub const HELPER_LABEL: &str = "com.getcodeman.keepawake";
-pub const HELPER_PLIST: &str = "/Library/LaunchDaemons/com.getcodeman.keepawake.plist";
-pub const HELPER_DIR: &str = "/Library/Application Support/Codeman";
-pub const HELPER_SCRIPT: &str = "/Library/Application Support/Codeman/keep-awake-lid.sh";
+// The root helper Codeman 1.50.1 installed for the lid, only named here to find it
+// and to remove it.
+const HELPER_LABEL: &str = "com.getcodeman.keepawake";
+const HELPER_PLIST: &str = "/Library/LaunchDaemons/com.getcodeman.keepawake.plist";
+const HELPER_DIR: &str = "/Library/Application Support/Codeman";
+const HELPER_SCRIPT: &str = "/Library/Application Support/Codeman/keep-awake-lid.sh";
 const HELPER_OWNED: &str = "/Library/Application Support/Codeman/keep-awake.owned";
-const DAEMONS_DIR: &str = "/Library/LaunchDaemons";
-/// The helper exactly as it is installed; `test/desktop-keep-awake-lid.test.ts` runs
-/// this file against a stub `pmset`.
-const HELPER_SOURCE: &str = include_str!("../macos/keep-awake-lid.sh");
-/// Next to `desktop.json`. Its path is written into the helper's plist at install.
-const REQUEST_FILE: &str = "keep-awake-lid.pid";
+/// Where 1.50.1 asked its helper for the lid, next to `desktop.json`.
+const LEGACY_REQUEST_FILE: &str = "keep-awake-lid.pid";
 
 pub const AC_ONLY_ID: &str = "keep-awake-ac-only";
 pub const LID_ID: &str = "keep-awake-lid";
+pub const REMOVE_OLD_HELPER_ID: &str = "keep-awake-remove-old-helper";
 
 /// The status line while nothing is watched.
 pub const OFF_TEXT: &str = "Sleeps as usual";
@@ -88,9 +77,8 @@ pub const NO_SERVER_TEXT: &str = "Waiting for Codeman on this Mac";
 
 /// What macOS shows in the administrator prompt (`with prompt`). No double quote or
 /// backslash: they would end the AppleScript string (`applescript` refuses them).
-const INSTALL_PROMPT: &str = "Codeman wants to install a small helper that keeps this Mac awake with the lid \
-closed while your agents work. It only acts on the power adapter, and only while the Codeman app asks it to.";
-const REMOVE_PROMPT: &str = "Codeman wants to remove its lid helper, so this Mac sleeps again when the lid closes.";
+const REMOVE_PROMPT: &str = "Codeman wants to remove the lid helper that version 1.50.1 installed. It is no \
+longer needed: Codeman keeps a closed Mac awake without it now.";
 
 /// When the Mac is kept awake.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -135,7 +123,7 @@ pub struct Settings {
     /// Only while the Mac runs on its power adapter (a MacBook; a desktop Mac always
     /// does). On by default.
     pub ac_only: bool,
-    /// Also with the lid closed, through the root helper. Never on battery.
+    /// Also with the lid closed (`lid_awake`). Never on battery.
     pub lid: bool,
 }
 
@@ -186,8 +174,6 @@ pub struct Facts {
     pub local: bool,
     pub on_battery: bool,
     pub agents: Agents,
-    /// The lid helper is installed as this version of the app installs it.
-    pub helper: bool,
 }
 
 /// Why the Mac is or is not held, which the status line says.
@@ -224,7 +210,7 @@ impl Status {
 pub struct Decision {
     /// Hold the idle-sleep assertion.
     pub hold: bool,
-    /// Ask the helper to keep the Mac awake with the lid closed.
+    /// Keep the Mac awake with the lid closed as well.
     pub lid: bool,
     pub status: Status,
 }
@@ -247,28 +233,32 @@ pub fn decide(settings: Settings, facts: Facts) -> Decision {
     let hold = matches!(status, Status::Working | Status::Recently | Status::Always);
     Decision {
         hold,
-        lid: hold && settings.lid && facts.helper && !facts.on_battery,
+        lid: hold && settings.lid && !facts.on_battery,
         status,
     }
 }
 
-/// The line under the menu's choices. `covered` is what `pmset -g` says about
-/// `SleepDisabled` while the lid is asked for.
-pub fn status_line(decision: Decision, settings: Settings, facts: Facts, covered: Option<bool>) -> String {
+/// The line under the menu's choices. `lid` is what the lid keeper said on this
+/// look, while the lid is asked for.
+pub fn status_line(decision: Decision, settings: Settings, facts: Facts, lid: &Lid) -> String {
     let text = decision.status.text();
     if !decision.hold || !settings.lid {
         return text.to_owned();
     }
-    // Asked for, but missing or from another version of the app (an update that
-    // changed the script, a removal by hand): the lid item offers the install again.
-    let lid = if !facts.helper {
-        "not with the lid closed: turn it on again"
-    } else if facts.on_battery {
-        "not with the lid closed on battery"
-    } else if covered == Some(true) {
-        "lid closed too"
-    } else {
-        "lid closed in a moment"
+    let lid = match lid {
+        _ if facts.on_battery => "not with the lid closed on battery".to_owned(),
+        Lid::Held { slept: None } => "lid closed too".to_owned(),
+        // It held and the Mac slept anyway (macOS forced it, or let go of the switch).
+        Lid::Held { slept: Some(until) } => format!("lid closed too, but the Mac slept until {until}"),
+        // Nothing of Codeman's holds the lid: macOS's own closed-lid mode is left to.
+        Lid::Docked { slept: None } => "lid left to macOS at a display".to_owned(),
+        Lid::Docked { slept: Some(until) } => {
+            format!("lid left to macOS at a display, but the Mac slept until {until}")
+        }
+        Lid::Off | Lid::Starting => "lid closed in a moment".to_owned(),
+        Lid::OnBattery => "not with the lid closed on battery".to_owned(),
+        Lid::Refused => "not with the lid closed: macOS refused it".to_owned(),
+        Lid::Failed => "not with the lid closed: it could not start".to_owned(),
     };
     format!("{text}, {lid}")
 }
@@ -343,12 +333,9 @@ pub enum Hold {
 pub trait System {
     fn on_battery(&mut self) -> bool;
     fn set_hold(&mut self, hold: Hold);
-    fn helper_installed(&mut self) -> bool;
-    /// Write the lid request, or freshen it; false when it could not be written.
-    fn write_request(&mut self) -> bool;
-    fn clear_request(&mut self);
-    /// `SleepDisabled` as `pmset -g` reports it; None when it could not be read.
-    fn lid_covered(&mut self) -> Option<bool>;
+    /// Ask for the lid, or stop asking, and what came of it. Called on every look:
+    /// while it is asked for, the call is also the word the lid keeper waits for.
+    fn lid(&mut self, wanted: bool) -> Lid;
     fn is_this_mac(&mut self, server: &Url) -> bool;
 }
 
@@ -365,11 +352,6 @@ struct Worker<S: System> {
     refused: bool,
     working: Option<bool>,
     last_work: Option<Instant>,
-    /// The helper's state and when it was read.
-    helper: Option<(bool, Instant)>,
-    /// When the lid request was last written, while the app asks for the lid.
-    request_at: Option<Instant>,
-    covered: Option<(Option<bool>, Instant)>,
     hold: Hold,
     status: Option<String>,
 }
@@ -385,9 +367,6 @@ impl<S: System> Worker<S> {
             refused: false,
             working: None,
             last_work: None,
-            helper: None,
-            request_at: None,
-            covered: None,
             hold: Hold::None,
             status: None,
         }
@@ -411,9 +390,6 @@ impl<S: System> Worker<S> {
             };
         }
         self.watch = watch;
-        // Read again: the settings may ask for the lid now, or an install just ran.
-        self.helper = None;
-        self.covered = None;
         // The app numbers its values, so the line goes out again under the new one.
         self.status = None;
     }
@@ -440,7 +416,6 @@ impl<S: System> Worker<S> {
             local: self.local,
             on_battery: self.local && settings.mode != Mode::Off && self.sys.on_battery(),
             agents,
-            helper: settings.lid && self.helper_installed(now),
         };
         let decision = decide(settings, facts);
         let watching = self.local && settings.mode == Mode::WhileWorking && !self.refused;
@@ -449,8 +424,8 @@ impl<S: System> Worker<S> {
             (false, true) => Hold::Watching,
             (false, false) => Hold::None,
         });
-        let covered = self.lid(decision.lid, now);
-        let line = status_line(decision, settings, facts, covered);
+        let lid = self.sys.lid(decision.lid);
+        let line = status_line(decision, settings, facts, &lid);
         (self.status.as_deref() != Some(line.as_str())).then(|| {
             self.status = Some(line.clone());
             line
@@ -492,17 +467,6 @@ impl<S: System> Worker<S> {
         }
     }
 
-    fn helper_installed(&mut self, now: Instant) -> bool {
-        match self.helper {
-            Some((installed, at)) if now.duration_since(at) < LID_CHECK => installed,
-            _ => {
-                let installed = self.sys.helper_installed();
-                self.helper = Some((installed, now));
-                installed
-            }
-        }
-    }
-
     fn set_hold(&mut self, hold: Hold) {
         if hold != self.hold {
             self.sys.set_hold(hold);
@@ -510,35 +474,10 @@ impl<S: System> Worker<S> {
         }
     }
 
-    /// Ask for the lid or stop asking, and what `pmset` says while asking.
-    fn lid(&mut self, wanted: bool, now: Instant) -> Option<bool> {
-        if !wanted {
-            if self.request_at.take().is_some() {
-                self.sys.clear_request();
-            }
-            self.covered = None;
-            return None;
-        }
-        if self.request_at.is_none_or(|at| now.duration_since(at) >= LID_REFRESH) && self.sys.write_request() {
-            self.request_at = Some(now);
-        }
-        match self.covered {
-            Some((covered, at)) if now.duration_since(at) < LID_CHECK => covered,
-            _ => {
-                let covered = self.sys.lid_covered();
-                self.covered = Some((covered, now));
-                covered
-            }
-        }
-    }
-
     /// Let go of everything: the app went away or watches nothing.
     fn release(&mut self) {
         self.set_hold(Hold::None);
-        if self.request_at.take().is_some() {
-            self.sys.clear_request();
-        }
-        self.covered = None;
+        self.sys.lid(false);
     }
 }
 
@@ -600,14 +539,6 @@ impl KeepAwake {
         }
     }
 
-    /// Look again at once, under a new number: an install or a removal of the helper
-    /// just ran.
-    pub fn refresh(&mut self) {
-        if self.current.is_some() {
-            self.send();
-        }
-    }
-
     /// Whether a status line is about the latest value.
     pub fn is_current(&self, generation: u64) -> bool {
         generation == self.generation && self.current.is_some()
@@ -623,14 +554,10 @@ impl KeepAwake {
         }
     }
 
-    /// The app is about to exit. The power assertion goes with the process; the lid
-    /// request is removed here so the helper lets go at its next run without having to
-    /// find the pid dead.
+    /// The app is about to exit: the worker ends and lets go. The power assertion
+    /// and the pipe to the lid keeper go with the process in any case.
     pub fn shutdown(&mut self) {
         self.sender = None;
-        if let Some(path) = request_path() {
-            clear_request_file(&path);
-        }
     }
 }
 
@@ -644,7 +571,7 @@ fn spawn(report: Report) -> Option<Sender<(u64, Option<Watch>)>> {
                 Poller::new(&watch.server, watch.authorization.clone(), false)
                     .map(|poller| Box::new(poller) as Box<dyn AgentSource>)
             });
-            let worker = Worker::new(system::Mac::new(request_path()), new_source);
+            let worker = Worker::new(system::Mac::new(), new_source);
             run(&rx, worker, &*report);
         })
         .ok()?;
@@ -661,142 +588,30 @@ pub fn available() -> bool {
     cfg!(target_os = "macos")
 }
 
-/// Where the app asks the helper for the lid: next to `desktop.json`.
-pub fn request_path() -> Option<PathBuf> {
-    crate::config::Config::default_path().map(|path| path.with_file_name(REQUEST_FILE))
+/// Whether the root helper Codeman 1.50.1 installed for the lid is still on this
+/// Mac. Anyone may look.
+pub fn old_helper_installed() -> bool {
+    old_helper_under("")
 }
 
-fn write_request_file(path: &Path) -> bool {
-    let write = || -> std::io::Result<()> {
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        // Written aside and renamed in: the helper never reads half a pid.
-        let aside = path.with_extension("pid.new");
-        std::fs::write(&aside, format!("{}\n", std::process::id()))?;
-        std::fs::rename(&aside, path)
-    };
-    write().is_ok()
+fn old_helper_under(root: &str) -> bool {
+    [HELPER_PLIST, HELPER_SCRIPT]
+        .iter()
+        .any(|path| Path::new(&format!("{root}{path}")).exists())
 }
 
-/// Removes the request only while it is this process's, so a second copy of the app
-/// (`open -n`) is not cut off.
-fn clear_request_file(path: &Path) {
-    let ours = std::fs::read_to_string(path).is_ok_and(|text| text.trim() == std::process::id().to_string());
-    if ours {
-        let _ = std::fs::remove_file(path);
+/// Removes the request file 1.50.1 kept for its helper, so a helper that is still
+/// installed has nothing to act on (it honours a file younger than 2 minutes that
+/// names a live process).
+pub fn forget_legacy_request() {
+    if let Some(path) = crate::config::Config::default_path() {
+        let _ = std::fs::remove_file(path.with_file_name(LEGACY_REQUEST_FILE));
     }
 }
 
-/// Whether `pmset -g` says sleep is disabled. A missing line is 0, as the helper reads it.
-pub fn sleep_disabled(pmset_g: &str) -> bool {
-    pmset_g.lines().any(|line| {
-        let mut words = line.split_whitespace();
-        words.next() == Some("SleepDisabled") && words.next() == Some("1")
-    })
-}
-
-fn xml_escape(text: &str) -> String {
-    text.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
-}
-
-/// The helper's LaunchDaemon: the installed script, with this user's request file, every
-/// 20 seconds and once at load (and so at every boot, which undoes a `disablesleep` a
-/// power cut left behind).
-pub fn plist_text(request: &Path) -> String {
-    format!(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>{HELPER_LABEL}</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/bin/bash</string>
-    <string>{script}</string>
-    <string>{request}</string>
-  </array>
-  <key>StartInterval</key>
-  <integer>20</integer>
-  <key>RunAtLoad</key>
-  <true/>
-</dict>
-</plist>
-"#,
-        script = xml_escape(HELPER_SCRIPT),
-        request = xml_escape(&request.to_string_lossy()),
-    )
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HelperState {
-    Missing,
-    /// Exactly as this version of the app installs it, for this user.
-    Installed,
-    /// From another version of the app, or another user's.
-    Outdated,
-}
-
-/// Read from the installed files, which anyone may read.
-pub fn helper_state(request: &Path) -> HelperState {
-    helper_state_under("", request)
-}
-
-fn helper_state_under(root: &str, request: &Path) -> HelperState {
-    let Ok(plist) = std::fs::read_to_string(format!("{root}{HELPER_PLIST}")) else {
-        return HelperState::Missing;
-    };
-    let script = std::fs::read_to_string(format!("{root}{HELPER_SCRIPT}")).unwrap_or_default();
-    if plist == plist_text(request) && script == HELPER_SOURCE {
-        HelperState::Installed
-    } else {
-        HelperState::Outdated
-    }
-}
-
-fn base64(text: &str) -> String {
-    base64::engine::general_purpose::STANDARD.encode(text)
-}
-
-/// The root shell command that installs (or replaces) the helper. The two files go in
-/// as base64 written by root straight into root-owned folders, so there is no copy a
-/// user could swap between the prompt and the write, and no file content ever needs
-/// quoting. `root` is empty, except in tests, which run it in a temporary folder.
-pub fn install_command(root: &str, request: &Path) -> String {
-    let dir = format!("{root}{HELPER_DIR}");
-    let daemons = format!("{root}{DAEMONS_DIR}");
-    let script = format!("{root}{HELPER_SCRIPT}");
-    let plist = format!("{root}{HELPER_PLIST}");
-    [
-        "set -e".to_owned(),
-        "umask 022".to_owned(),
-        format!("mkdir -p '{dir}' '{daemons}'"),
-        format!("chown root:wheel '{dir}'"),
-        format!("chmod 755 '{dir}'"),
-        format!("echo {} | base64 --decode > '{script}.new'", base64(HELPER_SOURCE)),
-        format!("chown root:wheel '{script}.new'"),
-        format!("chmod 755 '{script}.new'"),
-        format!("mv -f '{script}.new' '{script}'"),
-        format!(
-            "echo {} | base64 --decode > '{plist}.new'",
-            base64(&plist_text(request))
-        ),
-        format!("chown root:wheel '{plist}.new'"),
-        format!("chmod 644 '{plist}.new'"),
-        format!("mv -f '{plist}.new' '{plist}'"),
-        format!("launchctl bootout system/{HELPER_LABEL} 2>/dev/null || true"),
-        format!("launchctl bootstrap system '{plist}'"),
-    ]
-    .join("; ")
-}
-
-/// The root shell command that removes the helper: stop it, undo a `disablesleep` it set
-/// (its marker; an administrator's own setting is left alone), delete its files.
+/// The root shell command that removes 1.50.1's helper: stop it, undo a `disablesleep`
+/// it set (its marker; an administrator's own setting is left alone), delete its files.
+/// `root` is empty, except in tests, which run it in a temporary folder.
 pub fn remove_command(root: &str) -> String {
     let dir = format!("{root}{HELPER_DIR}");
     let script = format!("{root}{HELPER_SCRIPT}");
@@ -826,16 +641,8 @@ pub enum AdminOutcome {
     Failed(String),
 }
 
-/// Install the helper behind the administrator prompt. Blocks until it is answered.
-pub fn install_helper() -> AdminOutcome {
-    let Some(request) = request_path() else {
-        return AdminOutcome::Failed("The app has no settings folder for the request file.".into());
-    };
-    run_admin(&install_command("", &request), INSTALL_PROMPT)
-}
-
-/// Remove the helper behind the administrator prompt. Blocks until it is answered.
-pub fn remove_helper() -> AdminOutcome {
+/// Remove 1.50.1's helper behind the administrator prompt. Blocks until it is answered.
+pub fn remove_old_helper() -> AdminOutcome {
     run_admin(&remove_command(""), REMOVE_PROMPT)
 }
 
@@ -865,7 +672,7 @@ fn run_admin(command: &str, prompt: &str) -> AdminOutcome {
 }
 
 #[cfg(target_os = "macos")]
-pub use system::has_lid;
+pub use system::{has_lid, on_battery};
 
 /// A desktop Mac has no lid and always runs on mains.
 #[cfg(not(target_os = "macos"))]
@@ -875,13 +682,13 @@ pub fn has_lid() -> bool {
 
 #[cfg(target_os = "macos")]
 mod system {
-    use super::{clear_request_file, helper_state, sleep_disabled, write_request_file, HelperState, Hold, System};
+    use super::{Hold, Lid, System};
+    use crate::lid_awake::Holder;
     use objc2::rc::Retained;
     use objc2::runtime::{NSObjectProtocol, ProtocolObject};
     use objc2_foundation::{NSActivityOptions, NSProcessInfo, NSString};
     use std::ffi::{c_char, c_void};
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-    use std::path::PathBuf;
     use std::sync::OnceLock;
     use url::Url;
 
@@ -910,8 +717,8 @@ mod system {
     }
 
     /// "Battery Power" as the source in use. "AC Power", "UPS Power" and no answer
-    /// all count as mains here; the helper asks `pmset` for itself before the lid.
-    fn on_battery() -> bool {
+    /// all count as mains. The lid keeper reads the same for itself.
+    pub fn on_battery() -> bool {
         // SAFETY: IOPSCopyPowerSourcesInfo returns an owned CFTypeRef or NULL, released
         // below. IOPSGetProvidingPowerSourceType returns a CFStringRef owned by that
         // snapshot (the Get rule), read before the release; a CFString is toll-free
@@ -993,14 +800,14 @@ mod system {
 
     pub struct Mac {
         activity: Option<Retained<ProtocolObject<dyn NSObjectProtocol>>>,
-        request: Option<PathBuf>,
+        lid: Holder,
     }
 
     impl Mac {
-        pub fn new(request: Option<PathBuf>) -> Self {
+        pub fn new() -> Self {
             Mac {
                 activity: None,
-                request,
+                lid: Holder::default(),
             }
         }
     }
@@ -1025,27 +832,8 @@ mod system {
             }
         }
 
-        fn helper_installed(&mut self) -> bool {
-            self.request
-                .as_deref()
-                .is_some_and(|request| helper_state(request) == HelperState::Installed)
-        }
-
-        fn write_request(&mut self) -> bool {
-            self.request.as_deref().is_some_and(write_request_file)
-        }
-
-        fn clear_request(&mut self) {
-            if let Some(path) = &self.request {
-                clear_request_file(path);
-            }
-        }
-
-        fn lid_covered(&mut self) -> Option<bool> {
-            let out = std::process::Command::new("/usr/bin/pmset").arg("-g").output().ok()?;
-            out.status
-                .success()
-                .then(|| sleep_disabled(&String::from_utf8_lossy(&out.stdout)))
+        fn lid(&mut self, wanted: bool) -> Lid {
+            self.lid.hold(wanted)
         }
 
         fn is_this_mac(&mut self, server: &Url) -> bool {
@@ -1055,6 +843,7 @@ mod system {
 
     impl Drop for Mac {
         fn drop(&mut self) {
+            // The pipe to the lid keeper closes with the `Holder`.
             self.set_hold(Hold::None);
         }
     }
@@ -1072,7 +861,7 @@ mod system {
             println!("has a lid: {}", has_lid());
             println!("on battery: {}", on_battery());
             println!("addresses: {:?}", local_addresses());
-            let mut mac = Mac::new(None);
+            let mut mac = Mac::new();
             mac.set_hold(Hold::Holding);
             println!("holding for 15 s");
             std::thread::sleep(std::time::Duration::from_secs(15));
@@ -1081,31 +870,24 @@ mod system {
             std::thread::sleep(std::time::Duration::from_secs(15));
             mac.set_hold(Hold::None);
             println!("let go");
-            println!("lid covered: {:?}", mac.lid_covered());
         }
 
         /// The exact AppleScript the app runs, compiled by macOS without running it
         /// (no prompt, nothing as root). Also in the gate, since it needs no hardware.
         #[test]
-        fn the_admin_scripts_compile() {
-            use super::super::{applescript, install_command, remove_command, INSTALL_PROMPT, REMOVE_PROMPT};
-            let request = std::path::Path::new("/Users/x/Library/Application Support/Codeman/keep-awake-lid.pid");
+        fn the_admin_script_compiles() {
+            use super::super::{applescript, remove_command, REMOVE_PROMPT};
             let out_dir = std::env::temp_dir().join(format!("keep-awake-osa-{}", std::process::id()));
             std::fs::create_dir_all(&out_dir).unwrap();
-            for (name, command, prompt) in [
-                ("install", install_command("", request), INSTALL_PROMPT),
-                ("remove", remove_command(""), REMOVE_PROMPT),
-            ] {
-                let script = applescript(&command, prompt).unwrap();
-                let out = std::process::Command::new("/usr/bin/osacompile")
-                    .arg("-e")
-                    .arg(&script)
-                    .arg("-o")
-                    .arg(out_dir.join(format!("{name}.scpt")))
-                    .output()
-                    .unwrap();
-                assert!(out.status.success(), "{name}: {}", String::from_utf8_lossy(&out.stderr));
-            }
+            let script = applescript(&remove_command(""), REMOVE_PROMPT).unwrap();
+            let out = std::process::Command::new("/usr/bin/osacompile")
+                .arg("-e")
+                .arg(&script)
+                .arg("-o")
+                .arg(out_dir.join("remove.scpt"))
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
             let _ = std::fs::remove_dir_all(&out_dir);
         }
 
@@ -1200,7 +982,6 @@ mod tests {
         local: true,
         on_battery: false,
         agents: Agents::Working,
-        helper: false,
     };
 
     #[test]
@@ -1330,18 +1111,16 @@ mod tests {
     }
 
     #[test]
-    fn the_lid_needs_the_setting_the_helper_mains_and_a_hold() {
+    fn the_lid_needs_the_setting_mains_and_a_hold() {
         let lid = Settings { lid: true, ..WORK };
-        let ready = Facts { helper: true, ..HERE };
-        assert!(decide(lid, ready).lid);
-        assert!(!decide(WORK, ready).lid, "setting off");
-        assert!(!decide(lid, HERE).lid, "no helper");
+        assert!(decide(lid, HERE).lid);
+        assert!(!decide(WORK, HERE).lid, "setting off");
         assert!(
             !decide(
                 lid,
                 Facts {
                     agents: Agents::Idle,
-                    ..ready
+                    ..HERE
                 }
             )
             .lid,
@@ -1351,7 +1130,7 @@ mod tests {
         let anywhere = Settings { ac_only: false, ..lid };
         let battery = Facts {
             on_battery: true,
-            ..ready
+            ..HERE
         };
         assert!(decide(anywhere, battery).hold);
         assert!(!decide(anywhere, battery).lid);
@@ -1360,34 +1139,64 @@ mod tests {
     #[test]
     fn the_status_line_says_what_the_lid_does() {
         let lid = Settings { lid: true, ..WORK };
-        let ready = Facts { helper: true, ..HERE };
-        let line = |settings, facts, covered| status_line(decide(settings, facts), settings, facts, covered);
-        assert_eq!(line(WORK, HERE, None), "Awake: agents working");
-        assert_eq!(line(lid, ready, Some(true)), "Awake: agents working, lid closed too");
+        let held = Lid::Held { slept: None };
+        let line = |settings, facts, lid: &Lid| status_line(decide(settings, facts), settings, facts, lid);
+        assert_eq!(line(WORK, HERE, &Lid::Off), "Awake: agents working");
+        assert_eq!(line(lid, HERE, &held), "Awake: agents working, lid closed too");
         assert_eq!(
-            line(lid, ready, Some(false)),
+            line(lid, HERE, &Lid::Starting),
             "Awake: agents working, lid closed in a moment"
         );
+        // It held and the Mac slept all the same: the line is the evidence.
+        let slept = Lid::Held {
+            slept: Some("07:42".into()),
+        };
+        assert_eq!(
+            line(lid, HERE, &slept),
+            "Awake: agents working, lid closed too, but the Mac slept until 07:42"
+        );
+        // At a display Codeman writes nothing, and the line must not read as if it did.
+        assert_eq!(
+            line(lid, HERE, &Lid::Docked { slept: None }),
+            "Awake: agents working, lid left to macOS at a display"
+        );
+        let slept_docked = Lid::Docked {
+            slept: Some("07:42".into()),
+        };
+        assert_eq!(
+            line(lid, HERE, &slept_docked),
+            "Awake: agents working, lid left to macOS at a display, but the Mac slept until 07:42"
+        );
+        assert_eq!(
+            line(lid, HERE, &Lid::Refused),
+            "Awake: agents working, not with the lid closed: macOS refused it"
+        );
+        assert_eq!(
+            line(lid, HERE, &Lid::Failed),
+            "Awake: agents working, not with the lid closed: it could not start"
+        );
+        // The app's reading of the power source, and the keeper's own.
         let battery = Facts {
             on_battery: true,
-            ..ready
+            ..HERE
         };
         let anywhere = Settings { ac_only: false, ..lid };
+        for said in [&Lid::Off, &held] {
+            assert_eq!(
+                line(anywhere, battery, said),
+                "Awake: agents working, not with the lid closed on battery"
+            );
+        }
         assert_eq!(
-            line(anywhere, battery, None),
+            line(lid, HERE, &Lid::OnBattery),
             "Awake: agents working, not with the lid closed on battery"
-        );
-        // Asked for, but no helper (an update changed it): the line says so.
-        assert_eq!(
-            line(lid, HERE, None),
-            "Awake: agents working, not with the lid closed: turn it on again"
         );
         // Not held: nothing about the lid.
         let idle = Facts {
             agents: Agents::Idle,
-            ..ready
+            ..HERE
         };
-        assert_eq!(line(lid, idle, None), "Sleeps as usual: no agent working");
+        assert_eq!(line(lid, idle, &held), "Sleeps as usual: no agent working");
     }
 
     #[test]
@@ -1405,50 +1214,20 @@ mod tests {
     }
 
     #[test]
-    fn pmset_says_whether_sleep_is_disabled() {
-        let on = "System-wide power settings:\n SleepDisabled\t\t1\nCurrently in use:\n sleep 1\n";
-        let off = "System-wide power settings:\n SleepDisabled\t\t0\n";
-        assert!(sleep_disabled(on));
-        assert!(!sleep_disabled(off));
-        assert!(!sleep_disabled("Currently in use:\n sleep 1\n"));
-    }
-
-    #[test]
-    fn the_plist_runs_the_installed_script_on_this_users_request() {
-        let text = plist_text(Path::new(
-            "/Users/a & b/Library/Application Support/Codeman/keep-awake-lid.pid",
-        ));
-        assert!(text.contains("<string>com.getcodeman.keepawake</string>"));
-        assert!(text.contains("<string>/Library/Application Support/Codeman/keep-awake-lid.sh</string>"));
-        assert!(
-            text.contains("<string>/Users/a &amp; b/Library/Application Support/Codeman/keep-awake-lid.pid</string>")
-        );
-        assert!(text.contains("<key>StartInterval</key>\n  <integer>20</integer>"));
-        assert!(text.contains("<key>RunAtLoad</key>\n  <true/>"));
-    }
-
-    #[test]
-    fn the_admin_commands_fit_in_an_applescript_string() {
-        // A home with a quote and a backslash in it: the request path goes in base64.
-        let request = Path::new("/Users/o'neil \"x\\y\"/Library/Application Support/Codeman/keep-awake-lid.pid");
-        for (command, prompt) in [
-            (install_command("", request), INSTALL_PROMPT),
-            (remove_command(""), REMOVE_PROMPT),
-        ] {
-            let script = applescript(&command, prompt).expect("no quote or backslash");
-            assert!(script.starts_with("do shell script \""));
-            assert!(script.ends_with("with administrator privileges"));
-        }
+    fn the_removal_fits_in_an_applescript_string() {
+        let script = applescript(&remove_command(""), REMOVE_PROMPT).expect("no quote or backslash");
+        assert!(script.starts_with("do shell script \""));
+        assert!(script.ends_with("with administrator privileges"));
         assert_eq!(applescript("echo \"x\"", "p"), None);
         assert_eq!(applescript("echo x", "a \\ b"), None);
     }
 
-    /// The real install and removal commands, run by `sh` in a temporary folder with
-    /// stand-ins for what needs root (`chown`, `launchctl`, `pmset`). `base64 --decode`
-    /// is the real one, macOS's or GNU's.
+    /// The real removal command, run by `sh` in a temporary folder that looks like a
+    /// Mac where 1.50.1 installed its helper, with stand-ins for what needs root
+    /// (`launchctl`, `pmset`).
     #[cfg(unix)]
     #[test]
-    fn the_install_and_removal_commands_do_what_they_say() {
+    fn the_removal_command_takes_the_old_helper_away() {
         use std::os::unix::fs::PermissionsExt;
         use std::process::Command;
 
@@ -1457,13 +1236,12 @@ mod tests {
         let bin = root.join("bin");
         std::fs::create_dir_all(&bin).unwrap();
         let log = root.join("calls.log");
-        for tool in ["chown", "launchctl", "pmset"] {
+        for tool in ["launchctl", "pmset"] {
             let stub = bin.join(tool);
             std::fs::write(&stub, format!("#!/bin/sh\necho \"{tool} $*\" >> '{}'\n", log.display())).unwrap();
             std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
         let prefix = root.join("fs").to_string_lossy().into_owned();
-        let request = Path::new("/Users/someone/Library/Application Support/Codeman/keep-awake-lid.pid");
         let sh = |command: &str| {
             let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default());
             let out = Command::new("sh")
@@ -1474,38 +1252,23 @@ mod tests {
                 .unwrap();
             assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
         };
+        let install = |owned: bool| {
+            for dir in [HELPER_DIR, "/Library/LaunchDaemons"] {
+                std::fs::create_dir_all(format!("{prefix}{dir}")).unwrap();
+            }
+            for file in [HELPER_PLIST, HELPER_SCRIPT] {
+                std::fs::write(format!("{prefix}{file}"), "as 1.50.1 wrote it").unwrap();
+            }
+            if owned {
+                std::fs::write(format!("{prefix}{HELPER_OWNED}"), "").unwrap();
+            }
+            std::fs::write(&log, "").unwrap();
+        };
 
-        sh(&install_command(&prefix, request));
-        let script = format!("{prefix}{HELPER_SCRIPT}");
-        let plist = format!("{prefix}{HELPER_PLIST}");
-        assert_eq!(std::fs::read_to_string(&script).unwrap(), HELPER_SOURCE);
-        assert_eq!(std::fs::read_to_string(&plist).unwrap(), plist_text(request));
-        let mode = |path: &str| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode(&script), 0o755);
-        assert_eq!(mode(&plist), 0o644);
-        assert_eq!(helper_state_under(&prefix, request), HelperState::Installed);
-        assert_eq!(
-            helper_state_under(&prefix, Path::new("/Users/other/x.pid")),
-            HelperState::Outdated
-        );
-        let calls = std::fs::read_to_string(&log).unwrap();
-        assert!(calls.contains(&format!("chown root:wheel {script}.new")), "{calls}");
-        assert!(
-            calls.contains(&format!("launchctl bootout system/{HELPER_LABEL}")),
-            "{calls}"
-        );
-        assert!(
-            calls.ends_with(&format!("launchctl bootstrap system {plist}\n")),
-            "{calls}"
-        );
-
-        // A second install replaces the first.
-        sh(&install_command(&prefix, request));
-        assert_eq!(helper_state_under(&prefix, request), HelperState::Installed);
-
+        assert!(!old_helper_under(&prefix));
         // The helper had set disablesleep: the removal undoes it, then nothing is left.
-        std::fs::write(format!("{prefix}{HELPER_OWNED}"), "").unwrap();
-        std::fs::write(&log, "").unwrap();
+        install(true);
+        assert!(old_helper_under(&prefix));
         sh(&remove_command(&prefix));
         let calls = std::fs::read_to_string(&log).unwrap();
         assert!(
@@ -1513,33 +1276,22 @@ mod tests {
             "{calls}"
         );
         assert!(calls.contains("pmset -a disablesleep 0"), "{calls}");
-        assert_eq!(helper_state_under(&prefix, request), HelperState::Missing);
+        assert!(!old_helper_under(&prefix));
         assert!(!Path::new(&format!("{prefix}{HELPER_DIR}")).exists());
 
         // Without the marker, an administrator's own setting is left alone.
-        sh(&install_command(&prefix, request));
-        std::fs::write(&log, "").unwrap();
+        install(false);
         sh(&remove_command(&prefix));
         assert!(!std::fs::read_to_string(&log).unwrap().contains("pmset"));
-        let _ = std::fs::remove_dir_all(&root);
-    }
+        assert!(!old_helper_under(&prefix));
 
-    #[test]
-    fn the_request_file_holds_this_pid_and_is_only_removed_while_it_does() {
-        let dir = std::env::temp_dir().join(format!("keep-awake-request-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let path = dir.join(REQUEST_FILE);
-        assert!(write_request_file(&path), "creates the folder");
-        assert_eq!(
-            std::fs::read_to_string(&path).unwrap(),
-            format!("{}\n", std::process::id())
-        );
-        clear_request_file(&path);
-        assert!(!path.exists());
-        std::fs::write(&path, "1\n").unwrap();
-        clear_request_file(&path);
-        assert!(path.exists(), "another copy's request stays");
-        let _ = std::fs::remove_dir_all(&dir);
+        // Half of it is still a helper to remove (a removal that was interrupted).
+        install(false);
+        std::fs::remove_file(format!("{prefix}{HELPER_PLIST}")).unwrap();
+        assert!(old_helper_under(&prefix));
+        sh(&remove_command(&prefix));
+        assert!(!old_helper_under(&prefix));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     // The worker, with stand-ins for the Mac and the server.
@@ -1547,13 +1299,12 @@ mod tests {
     #[derive(Default)]
     struct FakeMac {
         battery: bool,
-        helper: bool,
-        covered: Option<bool>,
         local: bool,
         holds: Vec<Hold>,
-        writes: usize,
-        clears: usize,
-        covered_reads: usize,
+        /// What the lid keeper answers while it is asked.
+        lid: Option<Lid>,
+        /// Every look's asking, in order.
+        lid_asks: Vec<bool>,
     }
 
     #[derive(Clone, Default)]
@@ -1566,20 +1317,13 @@ mod tests {
         fn set_hold(&mut self, hold: Hold) {
             self.0.borrow_mut().holds.push(hold);
         }
-        fn helper_installed(&mut self) -> bool {
-            self.0.borrow().helper
-        }
-        fn write_request(&mut self) -> bool {
-            self.0.borrow_mut().writes += 1;
-            true
-        }
-        fn clear_request(&mut self) {
-            self.0.borrow_mut().clears += 1;
-        }
-        fn lid_covered(&mut self) -> Option<bool> {
+        fn lid(&mut self, wanted: bool) -> Lid {
             let mut mac = self.0.borrow_mut();
-            mac.covered_reads += 1;
-            mac.covered
+            mac.lid_asks.push(wanted);
+            match wanted {
+                true => mac.lid.clone().unwrap_or(Lid::Starting),
+                false => Lid::Off,
+            }
         }
         fn is_this_mac(&mut self, _server: &Url) -> bool {
             self.0.borrow().local
@@ -1765,25 +1509,21 @@ mod tests {
     }
 
     #[test]
-    fn the_lid_request_is_written_freshened_and_cleared() {
+    fn the_lid_is_asked_for_on_every_look_and_let_go_of() {
         let mut rig = rig(true);
-        rig.mac.0.borrow_mut().helper = true;
-        rig.mac.0.borrow_mut().covered = Some(true);
         rig.watch(Settings { lid: true, ..ALWAYS });
         assert_eq!(
             rig.look_at(0).as_deref(),
+            Some("Awake: Codeman is open, lid closed in a moment")
+        );
+        rig.mac.0.borrow_mut().lid = Some(Lid::Held { slept: None });
+        assert_eq!(
+            rig.look_at(2).as_deref(),
             Some("Awake: Codeman is open, lid closed too")
         );
-        assert_eq!(rig.mac.0.borrow().writes, 1);
-        rig.look_at(10);
-        assert_eq!(rig.mac.0.borrow().writes, 1, "fresh enough");
-        assert_eq!(rig.mac.0.borrow().covered_reads, 1, "pmset is not asked every look");
-        rig.look_at(30);
-        assert_eq!(
-            rig.mac.0.borrow().writes,
-            2,
-            "freshened well inside the helper's 2 minutes"
-        );
+        assert_eq!(rig.look_at(4), None);
+        // Every look asks: it is the word the keeper waits for.
+        assert_eq!(rig.mac.0.borrow().lid_asks, [true, true, true]);
         // On battery the lid is never asked for, whatever the setting.
         rig.watch(Settings {
             lid: true,
@@ -1792,18 +1532,47 @@ mod tests {
         });
         rig.mac.0.borrow_mut().battery = true;
         assert_eq!(
-            rig.look_at(32).as_deref(),
+            rig.look_at(6).as_deref(),
             Some("Awake: Codeman is open, not with the lid closed on battery")
         );
-        assert_eq!(rig.mac.0.borrow().clears, 1);
-        // Nothing to watch: everything let go.
+        assert_eq!(rig.mac.0.borrow().lid_asks.last(), Some(&false));
         rig.mac.0.borrow_mut().battery = false;
-        rig.look_at(34);
-        assert_eq!(rig.mac.0.borrow().writes, 3);
+        rig.look_at(8);
+        assert_eq!(rig.mac.0.borrow().lid_asks.last(), Some(&true));
+        // The setting off: let go, though the Mac is still held awake.
+        rig.watch(ALWAYS);
+        assert_eq!(rig.look_at(10).as_deref(), Some("Awake: Codeman is open"));
+        assert_eq!(rig.mac.0.borrow().lid_asks.last(), Some(&false));
+        assert_eq!(rig.mac.last_hold(), Some(Hold::Holding));
+        // Nothing to watch: everything let go.
+        rig.watch(Settings { lid: true, ..ALWAYS });
+        rig.look_at(12);
+        assert_eq!(rig.mac.0.borrow().lid_asks.last(), Some(&true));
         rig.worker.update(None);
-        assert_eq!(rig.look_at(36), None);
+        assert_eq!(rig.look_at(14), None);
         assert_eq!(rig.mac.last_hold(), Some(Hold::None));
-        assert_eq!(rig.mac.0.borrow().clears, 2);
+        assert_eq!(rig.mac.0.borrow().lid_asks.last(), Some(&false));
+    }
+
+    #[test]
+    fn the_lid_goes_with_the_hold_when_the_agents_stop() {
+        let mut rig = rig(true);
+        rig.mac.0.borrow_mut().lid = Some(Lid::Held { slept: None });
+        rig.watch(Settings { lid: true, ..WORK });
+        rig.answer(vec![seen(true)]);
+        assert_eq!(rig.look_at(0).as_deref(), Some("Awake: agents working, lid closed too"));
+        rig.answer(vec![seen(false)]);
+        rig.look_at(2);
+        assert_eq!(
+            rig.mac.0.borrow().lid_asks.last(),
+            Some(&true),
+            "held through the grace"
+        );
+        assert_eq!(
+            rig.look_at(2 + GRACE.as_secs()).as_deref(),
+            Some("Sleeps as usual: no agent working")
+        );
+        assert_eq!(rig.mac.0.borrow().lid_asks.last(), Some(&false));
     }
 
     #[test]
