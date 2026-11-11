@@ -40,8 +40,8 @@ cannot do.
 | **Links** | On Codeman's own pages (the dashboard and session windows), a link to another site opens in your default browser, also on `⌘`-click or a middle click. Pages can send at most 3 links to the browser at once, then 1 per second. Inside a rendered HTML preview or a web tab, a plain link to another site does nothing, while one that asks for a new window (`target="_blank"`, `window.open`) opens in your default browser within the same budget (see Known limits). |
 | **Downloads** | Codeman's Download links, and downloads Codeman opens in a new window, save the file to `~/Downloads` whatever its type, and a toast in Codeman names the file. Files the web view cannot display are saved the same way. |
 | **A page that stops** | When the web content process of a window ends (a WebKit crash, or macOS taking the process back under memory pressure), the window loads its page again instead of staying blank. A second time within 30 seconds, the main window goes back to the connect screen and a pop-out closes, so a page that cannot stay up never becomes a reload loop. |
-| **Apple logo** | On a MacBook Pro with a PROLED XDR display, the lit Apple logo on the lid says what the agents are doing. **View > Blink Apple Logo** is the one switch, off until you turn it on. The more the logo moves, the more it needs you: it breathes (a slow fade out and back in) while agents work, blinks every two seconds for a yellow tab and flashes three times, then rests, for a red one. Each state can take another style under **View > Apple Logo Blink Styles**: Off, Breathe, Calm, Slow, Wink, Heartbeat, Fast, or Alarm. Picking a style turns the switch on, and turning the switch on with every state off brings back the recommended three (Breathe, Calm, Alarm). When several states hold, the most urgent one with a style shows: red, then yellow, then work. Styles chosen in 1.50.0 are kept, with the switch on if any of them was. The menu only exists on a Mac with that logo. No password is needed. Shell tabs do not count. The app asks the server every two seconds, and a change has to hold for three seconds before the logo follows it, so an agent between two turns does not flicker it. It keeps working while the window is hidden, and with any Codeman server. The logo moves on its own hardware fades, the ones [LogoLight](https://github.com/Ark0N/LogoLight) uses, so a blink writes no setting, and a logo you switched off yourself stays off. LogoLight (1.3 or later) steps aside while Codeman shows its agents on the logo, and takes the logo back afterwards, with whatever it showed before; while an older LogoLight runs, Codeman leaves the logo to it. While the app is closed nothing blinks. With the lid closed it just goes on while the Mac stays awake on its power adapter (**Keep This Mac Awake > With the Lid Closed…**, or an external display): macOS keeps the logo dark under a closed lid, so the app tells the logo the lid is open and the keyboard that it is closed, which stays dark, as LogoLight's *Lit with Lid Closed* does. The light sensor is covered then, so the logo glows as it would in a dark room. The line under **Apple Logo Blink Styles** says what the closed lid did last (blinking, or why not). On battery, and while the display only sleeps with the lid open, the blink pauses and writes nothing. |
-| **Keep awake** | **Codeman > Keep This Mac Awake** keeps the Mac from going to sleep while Codeman's agents work on it: **While Agents Work** (an agent at work, and for 5 minutes after the last one stopped, so the gap between two turns or a reply from your phone does not let it drop off), or **Always** (while the app is open). Off until you choose. Only for a Codeman on this Mac (`127.0.0.1`, `localhost`, or one of this Mac's own addresses); for a server on another machine the menu says so. The display still sleeps. No password is needed for this part: the app holds a power assertion of its own, which macOS shows in Activity Monitor and in `pmset -g assertions` as *Codeman keeps this Mac awake while its agents work*, and which ends with the app, a crash or a Force Quit included. On a MacBook, **Only When Plugged In** (on by default) pauses it on battery, and **With the Lid Closed…** keeps a closed MacBook awake as well: nothing an app holds can do that, so ticking it asks for your administrator password and installs a small helper (see Decisions), and unticking it asks again and removes the helper. The lid is never kept awake on battery, whatever the settings, and while the lid is covered *Sleep* in the Apple menu does nothing. A line at the bottom of the menu says what it does right now. It lives in the app, so it ends when the app quits: Codeman keeps running as a LaunchAgent, but nothing keeps the Mac awake then. That is why, while it watches a Codeman on this Mac, closing the Codeman window hides the app instead of quitting it, as Cmd+H does, also while it is paused (on battery, say), since it carries on by itself: a click on its Dock icon brings it back, and only Cmd+Q (or Quit from the Dock) ends it. With no server open, or one on another machine, closing the window quits. |
+| **Apple logo** | On a MacBook Pro with a PROLED XDR display, the lit Apple logo on the lid says what the agents are doing. **View > Blink Apple Logo** is the one switch, off until you turn it on. The more the logo moves, the more it needs you: it breathes (a slow fade out and back in) while agents work, blinks every two seconds for a yellow tab and flashes three times, then rests, for a red one. Each state can take another style under **View > Apple Logo Blink Styles**: Off, Breathe, Calm, Slow, Wink, Heartbeat, Fast, or Alarm. Picking a style turns the switch on, and turning the switch on with every state off brings back the recommended three (Breathe, Calm, Alarm). When several states hold, the most urgent one with a style shows: red, then yellow, then work. Styles chosen in 1.50.0 are kept, with the switch on if any of them was. The menu only exists on a Mac with that logo. No password is needed. Shell tabs do not count. The app asks the server every two seconds, and a change has to hold for three seconds before the logo follows it, so an agent between two turns does not flicker it. It keeps working while the window is hidden, and with any Codeman server. The logo moves on its own hardware fades, the ones [LogoLight](https://github.com/Ark0N/LogoLight) uses, so a blink writes no setting, and a logo you switched off yourself stays off. LogoLight (1.3 or later) steps aside while Codeman shows its agents on the logo, and takes the logo back afterwards, with whatever it showed before; while an older LogoLight runs, Codeman leaves the logo to it. While the app is closed nothing blinks. With the lid closed it just goes on while the Mac stays awake on its power adapter (**Keep This Mac Awake > With the Lid Closed**, or an external display): macOS keeps the logo dark under a closed lid, so the app tells the logo the lid is open and the keyboard that it is closed, which stays dark, as LogoLight's *Lit with Lid Closed* does. The light sensor is covered then, so the logo glows as it would in a dark room. The line under **Apple Logo Blink Styles** says what the closed lid did last (blinking, or why not). On battery, and while the display only sleeps with the lid open, the blink pauses and writes nothing. |
+| **Keep awake** | **Codeman > Keep This Mac Awake** keeps the Mac from going to sleep while Codeman's agents work on it: **While Agents Work** (an agent at work, and for 5 minutes after the last one stopped, so the gap between two turns or a reply from your phone does not let it drop off), or **Always** (while the app is open). Off until you choose. Only for a Codeman on this Mac (`127.0.0.1`, `localhost`, or one of this Mac's own addresses); for a server on another machine the menu says so. The display still sleeps. No password is needed anywhere: the app holds a power assertion of its own, which macOS shows in Activity Monitor and in `pmset -g assertions` as *Codeman keeps this Mac awake while its agents work*, and which ends with the app, a crash or a Force Quit included. On a MacBook, **Only When Plugged In** (on by default) pauses it on battery, and **With the Lid Closed** keeps a closed MacBook awake as well: while it holds, the app has macOS's sleep-on-lid-close turned off (see Decisions), and turns it back on when it lets go, quits or crashes. The lid is never kept awake on battery, whatever the settings: unplugged with the lid closed, the Mac goes to sleep. A line at the bottom of the menu says what it does right now: whether the lid is covered, that it is left to macOS while an external display is connected (a docked MacBook stays awake with its lid closed by macOS's own doing), and if the Mac slept under the lid all the same, until when. Codeman 1.50.1 kept the lid awake through a small root helper, behind the administrator password. Nothing uses that helper any more, and where it is still installed the menu has **Remove the Old Lid Helper…** (the one item that asks for the password). It lives in the app, so it ends when the app quits: Codeman keeps running as a LaunchAgent, but nothing keeps the Mac awake then. That is why, while it watches a Codeman on this Mac, closing the Codeman window hides the app instead of quitting it, as Cmd+H does, also while it is paused (on battery, say), since it carries on by itself: a click on its Dock icon brings it back, and only Cmd+Q (or Quit from the Dock) ends it. With no server open, or one on another machine, closing the window quits. |
 | **Window** | Size, position and full-screen state are remembered. A saved window that hangs off the screen it opens on (it was last on a larger display that is gone, say) is pulled back on and shrunk to fit; one whose title bar is on no screen at all opens at the default size instead. Clicking the Dock icon brings back a minimized window. |
 
 ## Build (on a Mac)
@@ -148,29 +148,67 @@ classes of wry's own delegates, so wry stays an unmodified crates.io dependency.
 - `codeman web -d` gets the port and base path as separate arguments, never as
   shell text.
 
-**Keeping a closed MacBook awake takes a root helper, installed on request.**
+**Keeping a closed MacBook awake is one kernel switch, held by a child process.**
 macOS sleeps on lid close whatever an app asks: `caffeinate` and every power
-assertion stop idle sleep only. `pmset -a disablesleep 1` keeps a closed MacBook
-awake, but it is a machine-wide root setting with no owner process, so nothing
-would undo it after a crash. So ticking *With the Lid Closed…* installs a
-LaunchDaemon (`com.getcodeman.keepawake`) that runs `macos/keep-awake-lid.sh`
-every 20 seconds. The script sets `disablesleep` only while a request file next
-to `desktop.json` is younger than 2 minutes, is not a symlink, names a live
-process of the file's owner, and `pmset -g batt` says the Mac runs on its power
-adapter. The app writes its own pid there and rewrites it every 30 seconds while
-it wants the lid covered, so an app that quits or crashes is a dead pid and the
-lid is released at the next run. The script undoes only a `disablesleep` it set
-itself (a marker file), never an administrator's own. The app writes the script
-and the plist itself, as root, straight into `/Library/Application
-Support/Codeman` and `/Library/LaunchDaemons` from the copies built into it
-(base64 in the root command, so nothing user-writable is copied and no file
-content needs quoting), behind macOS's administrator prompt (`do shell script
-... with administrator privileges` through `osascript`, so the event loop keeps
-running while the prompt is open). The idle-sleep part needs none of this: an
-`NSProcessInfo` activity with `IdleSystemSleepDisabled`, released by the kernel
-with the process. While the app watches for work but holds nothing, a second
-kind of activity keeps App Nap from slowing its look at the server, and still
-allows sleep.
+assertion stop idle sleep only, and an assertion against system sleep turns the
+lid's sleep into a dark wake. What decides is the power management root's
+lid-sleep switch (`kPMSetClamshellSleepState` on `IOPMrootDomain`), which any
+process may set through the root domain's user client, with no entitlement and
+no password. With it set a closed lid changes nothing and the Mac stays at full
+wake. It is the method LogoLight ships as *Lit with Lid Closed*; 1.50.1 used
+`pmset -a disablesleep 1` through a root LaunchDaemon instead.
+
+The switch has no owner (read from Apple's open sources of the kernel and of
+its power daemon, `IOPMrootDomain.cpp` and `PMAssertions.c`). The kernel keeps
+it after the process that set it has gone, and honours it on battery. It is a
+single bit that the power daemon also writes when its own reasons change, and
+that LogoLight writes for its feature. On an Apple silicon Mac it is also what
+keeps a docked MacBook awake with its lid closed: the window server tells the
+power daemon about the external display, and the daemon sets the bit once, when
+that changes, so a zero written by anyone else stays until the display or the
+adapter next changes. Clearing it under a closed lid puts the Mac to sleep at
+once. So the app never writes it itself. A child process (`src/lid_awake.rs`, this binary with
+`--keep-awake-lid`) holds it together with two assertions, against system sleep
+and idle sleep (LogoLight measured the three together), and:
+
+- sets the switch again every second, so a write by anyone else is undone
+  within a second;
+- reads the power source itself and holds nothing on battery, whatever the app
+  says;
+- writes nothing at all while an external display is connected: macOS's own
+  closed-lid mode has the switch then, and a zero from Codeman would put a
+  docked Mac to sleep, or leave it without that mode until the display is
+  plugged in again. The assertions keep the Mac awake meanwhile. What the child
+  set before the display came is cleared once the display has been gone for five
+  seconds (the display list is short for a moment while displays are
+  rearranged), and for that the child outlives the app if it has to;
+- lets go when the pipe from the app closes (a quit, a crash, a Force Quit) or
+  when the app has not written to it for a minute (a hang): the assertions
+  first, then the switch, so a closed Mac goes straight to sleep;
+- ignores SIGHUP, SIGINT and SIGTERM, which arrive together with the app's own
+  end, so the pipe is its one way out;
+- leaves the switch alone on its way out while LogoLight holds it for its own
+  feature (LogoLight's power assertions say so): LogoLight sets it once and
+  would not notice it gone.
+
+One child at a time holds a lock on `lid-awake` next to `desktop.json`, and
+that file is non-empty while the switch may be set. A child that was killed
+leaves it marked and unlocked, and the app turns lid sleep back on when it sees
+a child end and at its next launch. The child tells the app what it did (the
+kernel took the call, a display is connected so nothing was written, on
+battery, refused, or that the Mac slept all the same, which it sees as
+wall-clock time that passed while its monotonic clock stood still), and the
+menu's status line says it.
+
+The helper of 1.50.1 gets nothing to act on: its request file is never written
+and is deleted at launch. It stays installed until the user removes it from
+the menu, the one thing left behind macOS's administrator prompt (`do shell
+script ... with administrator privileges` through `osascript`, so the event
+loop keeps running while the prompt is open). The idle-sleep part needs none of
+this: an `NSProcessInfo` activity with `IdleSystemSleepDisabled`, released by
+the kernel with the process. While the app watches for work but holds nothing,
+a second kind of activity keeps App Nap from slowing its look at the server,
+and still allows sleep.
 
 **The app runs the installer itself; Terminal is the fallback.** `install.sh
 --no-admin` puts Node.js and tmux in the home folder, so a This Mac install needs
@@ -306,8 +344,8 @@ the app shows its first line as **Lid Closed: …** under View > Apple Logo Blin
 says nothing watches the lid while no child runs.
 
 Whether the Mac stays awake under the lid is not the logo's business: Keep This Mac Awake's
-lid helper does that (`pmset disablesleep`, which holds the Mac at full wake), or LogoLight's
-own Lit with Lid Closed, or an external display. An assertion against system sleep alone would
+lid keeper does that (lid sleep off in the kernel, which holds the Mac at full wake), or
+LogoLight's own Lit with Lid Closed, which is the same switch, or an external display. An assertion against system sleep alone would
 not do: LogoLight saw the Mac enter a dark wake with it, where the logo stays dark.
 
 LogoLight drives the logo the same way, so the two would fight over every fade. The marker the
@@ -409,14 +447,31 @@ crosses, so the login is never on a command line.
   own tests, and ran in that release candidate next to LogoLight 1.3.1; its
   timing on a real logo was not measured. `api/sessions` does not say which turns are Codeman's own, so with
   prompt-cache keep-warm on, a keep-alive turn blinks too.
-- **Keeping the lid awake has not been seen on a real closed MacBook yet.**
-  The helper ran every case against a stand-in `pmset`, the install and removal
-  commands ran in a temporary folder with stand-ins for `chown` and `launchctl`,
-  and the power assertion was measured on a Mac mini (it appears with its name
-  while agents work, and goes with a clean end and with a SIGKILL). Whether a
-  closed MacBook goes to sleep at once when the helper lets go (the app quit, an
-  agent finished, the adapter came out) has not been watched. The helper is
-  machine-wide: on a Mac where two users install it, the last install wins.
+- **Keeping the lid awake without a password has not been seen on a real closed
+  MacBook yet.** The method is LogoLight's, which its author saw work on a
+  MacBook Pro (macOS 27.2, LogoLight 1.3.1). Codeman's own code ran on a Mac
+  mini, which has no lid (macOS 27.2): the kernel took the call from an
+  unprivileged process, the child held its two assertions under its name, let
+  go when its pipe closed and after a minute of silence, ignored SIGTERM, and
+  waited for a child before it; a child killed with SIGKILL was replaced by the
+  app, and its mark undone; told that a display is connected, it held its
+  assertions and wrote nothing. Not checked: *Sleep* in the Apple menu while the lid
+  is held, a run of many hours, and pulling the adapter with the lid closed.
+  Read from Apple's sources and not measured: when an external display is
+  unplugged under a closed lid, macOS's power daemon turns lid sleep back on
+  itself, and the Mac sleeps or drops to a dark wake (logo dark), although the
+  child sets the switch again a second later. Docked is read as "a display other
+  than the built-in one is connected", the nearest an app gets to what the
+  window server tells the power daemon: with a display macOS does not use for
+  its closed-lid mode (Sidecar and AirPlay were not checked), nobody holds the
+  lid, and the Mac sleeps or drops to a dark wake when it closes; the status
+  line then reads "lid left to macOS at a display", and after such a sleep
+  until when the Mac slept. A child that
+  set the switch and was then let go of at a display stays, without the app,
+  until the display has gone. A SIGKILL of the app together with its child
+  leaves lid sleep off until Codeman next starts or the Mac restarts. With two
+  copies of the app open, the lid is released for a second when the copy that
+  held it lets go.
 - **Blinking with the lid closed was seen on one MacBook Pro so far** (macOS
   27.2, on power, a release candidate of 1.50.1 on 2026-11-10; the method is
   LogoLight's, which its author measured for LogoLight 1.3.1). Nothing was

@@ -1262,7 +1262,7 @@ pub fn watch_lid_status(changed: impl Fn(String) + Send + 'static) {
 }
 
 #[cfg(target_os = "macos")]
-pub use system::{available, blink_main, driven_elsewhere, recover_at_launch, switched_off};
+pub use system::{available, blink_main, clock, driven_elsewhere, recover_at_launch, switched_off};
 
 #[cfg(not(target_os = "macos"))]
 pub fn available() -> bool {
@@ -1624,8 +1624,9 @@ mod system {
         }
     }
 
-    /// The local time as hours and minutes, for the status line.
-    fn clock() -> String {
+    /// The local time as hours and minutes, for the status line (the lid keeper's
+    /// too, lid_awake.rs).
+    pub fn clock() -> String {
         // SAFETY: time(NULL) answers the time; localtime_r fills the struct it is
         // given and answers NULL on failure.
         unsafe {

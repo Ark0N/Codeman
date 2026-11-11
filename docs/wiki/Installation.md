@@ -257,10 +257,10 @@ you turn it on, and the menu only exists on such a Mac.
 on it (**While Agents Work**, plus 5 minutes after the last one stops), or for as long as
 the app is open (**Always**). It is off until you choose, only acts for a Codeman running
 on this Mac, needs no password, and ends when the app quits. On a MacBook it pauses on
-battery unless you untick **Only When Plugged In**, and **With the Lid Closed…** keeps a
-closed MacBook awake too: ticking it asks for your administrator password to install a
-small helper, unticking it asks again and removes the helper, and it never acts on
-battery.
+battery unless you untick **Only When Plugged In**, and **With the Lid Closed** keeps a
+closed MacBook awake too, with no password and never on battery. Codeman 1.50.1 installed
+a small helper for this behind your administrator password. It is no longer used:
+**Remove the Old Lid Helper…** in the same menu takes it away.
 
 ### First launch
 
