@@ -831,8 +831,18 @@ can be spawned now (`running: true`) or once `spawn_worker` has started the runt
 
 ```json
 {"spawnable":true,"state":"installed","running":true,"cli":"opencode","cliLabel":"OpenCode",
- "endpointId":"local-ollama","modelId":"qwen3.6:35b-a3b","modelLabel":"Qwen3.6 35B-A3B"}
+ "endpointId":"local-ollama","modelId":"qwen3.6:35b-a3b","modelLabel":"Qwen3.6 35B-A3B",
+ "agents":[{"cli":"opencode","cliLabel":"OpenCode","status":"ready","default":true,"readyMark":"┃"},
+           {"cli":"pi","cliLabel":"Pi","status":"installable","default":false}],
+ "models":[{"id":"qwen3.6:35b-a3b","label":"Qwen3.6 35B-A3B","active":true,"status":"ready","sizeGb":"23.1"}]}
 ```
+
+`cli` is the default coding agent. `agents` is every agent the model can be run with
+(`install.harnesses` of the route): `ready` can be started, `installable` and `installing`
+are an install a person makes or made in the window, `setup-needed` is an agent with a setup
+of its own (DeepSeek Harness without a terminal profile). `models` is what is on the Mac
+(`install.library`); only the `active` one runs. A Codeman older than 1.51 sends neither
+list, and both keys are then absent.
 
 Exit 1 carries `reason` and `message` (the server's own sentence where it has one):
 
@@ -841,6 +851,7 @@ Exit 1 carries `reason` and `message` (the server's own sentence where it has on
 | `not-mac` | the server is not on macOS | local models need a Mac with Apple silicon |
 | `not-installed` | nothing installed; on a Mac where no model fits, `message` says why | install one with **Run a local model** on the welcome screen |
 | `install-unfinished` | a job is installing, paused or failed (`state`, `step`, `errorCode`) | finish it in that window; nothing here continues it |
+| `no-agent` | installed, and `agents` holds none that is `ready` | install a coding agent in that window (a chip that says "Not installed") |
 | `blocked` | installed, but the server refuses a session now (`errorCode`: `model-changed`, `port-in-use`, `runtime-start-failed`, `runtime-stopped`) | the window shows the one button that helps |
 | `admin-only` | multi-user mode, and you are not an admin (403) | ask an admin |
 | `unsupported` | the server has no local model routes (404) | it predates the feature |
@@ -849,29 +860,44 @@ Exit 1 carries `reason` and `message` (the server's own sentence where it has on
 It never downloads, installs or starts anything. Installing is many gigabytes the person
 confirms in the window, and no route this skill calls can do it.
 
-**`spawn_worker <name> local`** (also `name:local` in `spawn_workers`), in order:
+**`spawn_worker <name> local`** (also `name:local` in `spawn_workers`), and
+**`spawn_worker <name> local:<cli>`** to choose the coding agent, in order:
 
-1. `local_model`; anything but exit 0 fails the spawn with that reason.
+1. `local_model`; anything but exit 0 fails the spawn with that reason. With `local:<cli>`
+   the agent must be a row of `agents` whose status is `ready`; any other status, or an
+   agent the model cannot be run with, fails the spawn with the ones that are startable.
+   On a Codeman that lists no agents only its one `cli` can be named. No agent is ever
+   installed from here.
 2. Runtime stopped: `POST /api/v1/local-model/runtime {"action":"start"}`, what the
    window's Start button sends, then `local_model` again until it reports `running`
    (about 30 s at most). This undoes a Stop the person made. Concurrent spawns may both
    send it; the server runs one runtime verb at a time and keeps a runtime that runs.
 3. `POST /api/v1/quick-start {"caseName":…,"mode":"<cli>","parentSessionId":…,
    "customModel":{"endpointId":…,"modelId":…}}`: the launch of the window's "Start a
-   session", with the installed agent as the mode. No advisor, which is a cloud model.
+   session", with the chosen agent as the mode. No advisor, which is a cloud model. A Pi
+   worker also carries `"piConfig":{"approveProjectTrust":false}` (`--no-approve`): on a
+   custom model Pi keeps no home, so it would ask to trust the folder in every session with
+   Trust preselected, and the task prompt's Enter would answer it.
    The server checks again that its own runtime runs and that the model on disk is the one
    it installed, and refuses otherwise (`OPERATION_FAILED`, with the reason).
 4. An answer of `requiresContextWarning` or `requiresConfirmation` is a question for a
    person (a context below the agent's safe floor, a model swap that would evict another
    session's model). It fails the spawn with the answer on stderr and nothing on stdout,
    and no `confirmed*` flag is ever sent.
-5. Readiness: OpenCode's composer bar `┃` (its registry `promptGlyph`) through
-   `wait-output`, 45 s, and the session deleted on a miss. Measured on OpenCode 1.3.0 on
-   Linux (not yet on a Mac) with a fresh home and a custom provider: nothing draws `┃` before the composer, there was no
-   first-run screen, and a prompt pasted with its Enter at the first `┃` was submitted. A
-   claude agent takes the claude path instead (hooks vetted, `shift+tab`, the trust
-   dialog). Any other agent needs `LOCAL_READY_MARK` set to a space-free token its
-   composer draws, or the spawn is refused before a session exists.
+5. Readiness: a token the agent's composer draws once it takes input, through
+   `wait-output`, 45 s, and the session deleted on a miss. The token is the agent's
+   `readyMark` from `local_model` when the server sends one, else the one measured for this
+   skill, and `LOCAL_READY_MARK` overrides both. All of it was measured on Linux through a
+   custom model launch, none of it on a Mac yet:
+
+   | Agent | Token | What was measured |
+   |-------|-------|-------------------|
+   | OpenCode | `┃` | 1.3.0 and 1.19.5: nothing draws it before the composer, no first-run screen, and a prompt pasted at the first `┃` was submitted (2 of 2 on 1.19.5) |
+   | DeepSeek Harness | `❯` | 0.1.1-rc.2 with dsh-TUI 0.10.0-beta.1: splash, composer and status line arrive in one frame; a prompt sent at the mark was submitted (2 of 2). The harness reports idle about 150 ms BEFORE that frame, so `stop` is no readiness signal |
+   | Pi | `extended-keys` | 1.5.2: Pi paints its composer rules in its first frame and ignores Enter until startup has finished, so the rule `─` is NOT a mark (a prompt sent at it stayed in the composer, 2 of 2). The last line of its startup is a warning that tmux's `extended-keys` option is off, which it is on Codeman's socket; a prompt sent once that word showed was submitted (4 of 4). A side effect, not a contract: a Pi that stops printing it fails the spawn until `LOCAL_READY_MARK` names what it draws instead |
+
+   A claude agent takes the claude path instead (hooks vetted, `shift+tab`, the trust
+   dialog). An agent with no token at all is refused before a session exists.
 
 **`sendmark <sid> <prompt> [timeoutSec]`** drives it, and any other agent worker without
 an end-of-turn signal ([§5.5](#55-markers-for-hook-less-workers)):

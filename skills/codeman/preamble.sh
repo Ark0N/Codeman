@@ -1,4 +1,4 @@
-# ---- Codeman agent preamble 1.50.0 (seeded by Codeman at session spawn; the SKILL.md §0 bootstrap rewrites it when missing or stale) ----
+# ---- Codeman agent preamble 1.51.0 (seeded by Codeman at session spawn; the SKILL.md §0 bootstrap rewrites it when missing or stale) ----
 # Positional parameters are always written with braces, ${1} and never a bare dollar-digit: Claude Code
 # replaces a bare one in a skill body with the matching word of the skill's arguments, and §0 is pasted
 # from that body (test/agent-skill.test.ts pins it).
@@ -121,9 +121,18 @@ _accept_trust() {  # <sid> -> 0 once it has answered the dialog, 1 if it could n
 # local_model -> ONE compact JSON object on stdout. rc 0 only when a `local` worker can be
 # spawned now (`running:true`) or once spawn_worker has started the runtime (`running:false`):
 #   {"spawnable":true,"state":"installed","running":true,"cli":"opencode","cliLabel":"OpenCode",
-#    "endpointId":"local-ollama","modelId":"<id>","modelLabel":"<label>"}
+#    "endpointId":"local-ollama","modelId":"<id>","modelLabel":"<label>",
+#    "agents":[{"cli":"opencode","cliLabel":"OpenCode","status":"ready","default":true,"readyMark":"┃"},
+#              {"cli":"pi","cliLabel":"Pi","status":"installable","default":false}],
+#    "models":[{"id":"<id>","label":"<label>","active":true,"status":"ready","sizeGb":"23.1"}]}
+# `cli` is the DEFAULT coding agent, the one `spawn_worker <name> local` starts. `agents` is
+# every agent the model can be run with: `local:<cli>` starts one whose status is `ready`
+# (`installable`, `installing` and `setup-needed` are a person's to resolve in the window).
+# `models` is what is on this Mac; only the `active` one runs, and switching is a person's
+# decision too. A Codeman older than 1.51 sends neither list: only `local` works there.
 # Otherwise rc 1 and {"spawnable":false,"reason":"<reason>","message":"<why>",...}, the reason
-# one of: not-mac, not-installed, install-unfinished, blocked (installed, but the server
+# one of: not-mac, not-installed, install-unfinished, no-agent (installed, but no coding agent
+# that can run the model is on this Mac), blocked (installed, but the server
 # refuses a session now: the model changed on disk, another program holds the port, the
 # runtime does not start), admin-only (multi-user mode, 403), unsupported (a Codeman without
 # local models, 404), unauthorized (401, §6), unreachable, error.
@@ -139,12 +148,23 @@ local_model() {
         | reduce ((.vars // {}) | to_entries[]) as $e ($t; gsub("\\{" + $e.key + "\\}"; $e.value));
       .data as $d | ($d.install // {}) as $i | ($i.actions // []) as $a
       | {state:$i.state, running:($i.running == true), cli:$i.cli, cliLabel:$i.cliLabel,
-         endpointId:$i.endpointId, modelId:$i.model.id, modelLabel:$i.model.label} as $base
+         endpointId:$i.endpointId, modelId:$i.model.id, modelLabel:$i.model.label,
+         agents:(if ($i.harnesses | type) == "array"
+                 then [$i.harnesses[] | {cli, cliLabel, status, default, readyMark} | with_entries(select(.value != null))]
+                 else null end),
+         models:(if ($i.library | type) == "array" and ($i.library | length) > 0
+                 then [$i.library[] | {id, label, active, status, sizeGb} | with_entries(select(.value != null))]
+                 else null end)} as $base
       | if ($d | type) != "object" then {spawnable:false, reason:"error", message:"no data in the answer"}
         elif $i.state == "installed" then
+          # With the agents listed and none of them startable there is nothing to spawn,
+          # running or not: say that, not "blocked".
+          if $i.error == null and $base.agents != null and ([$base.agents[] | select(.status == "ready")] | length) == 0
+          then {spawnable:false, reason:"no-agent",
+                message:"The model is installed, but no coding agent that can run it is on this Mac. A person installs one in the Run a local model window."} + $base
           # `start` alone over-promises: it is offered too while another program holds the
           # port. Only an error-free start is a runtime spawn_worker can bring up.
-          if ($i.cli and $i.endpointId and $i.model.id)
+          elif ($i.cli and $i.endpointId and $i.model.id)
              and (($a | index("start-session")) != null or (($a | index("start")) != null and $i.error == null))
           then {spawnable:true} + $base
           else {spawnable:false, reason:"blocked", errorCode:$i.error.code,
@@ -207,31 +227,55 @@ _local_ready_model() {
 # rather than handed back, because a worker that never drew its composer would eat the
 # task prompt with its trust dialog. There is deliberately no pid poll: wait-output
 # already blocks until the composer draws, and pid!=null proved startup, never readiness.
-# mode `local` is the model Codeman installed on this Mac (local_model), run by the coding
-# agent it was installed with. The worker's mode becomes that agent, and the endpoint and
-# model ride the quick-start as `customModel`: the launch the window's "Start a session"
-# makes. A stopped runtime is started first. Any answer that wants a person to confirm
-# something (a context below the agent's safe floor, a model swap) fails the spawn: this
-# never confirms on anyone's behalf.
+# mode `local` is the model Codeman installed on this Mac (local_model), run by its default
+# coding agent; `local:<cli>` (`local:pi`, `local:deepseek`, `local:opencode`, `local:claude`)
+# picks another one of local_model's `agents`, which must be `ready`. The worker's mode
+# becomes that agent, and the endpoint and model ride the quick-start as `customModel`: the
+# launch the window's "Start a session" makes. A stopped runtime is started first. Any answer
+# that wants a person to confirm something (a context below the agent's safe floor, a model
+# swap) fails the spawn: this never confirms on anyone's behalf, and it never installs an
+# agent. All local workers share ONE model that answers one request at a time.
 # CODEMAN_WORKER_ADVISOR=opus (or fable / sonnet) gives every CLAUDE worker spawned while
 # it is set Claude Code's advisor tool: a stronger model the worker consults before
 # committing to an approach, on a recurring error and before declaring the task done.
 # Other modes ignore it. A value the server refuses fails the spawn (INVALID_INPUT); an
 # advisor that ranks below the worker's model is accepted but never attached by claude.
 spawn_worker() {
-  local name="${1:?spawn_worker needs a case name}" mode="${2:-claude}" q sid cp r lm cm='' mark=''
+  local name="${1:?spawn_worker needs a case name}" mode="${2:-claude}" q sid cp r lm cm='' mark='' want=''
+  case "$mode" in local:*) want=${mode#local:}; mode=local ;; esac
   if [ "$mode" = local ]; then
     lm=$(_local_ready_model) || return 1
-    mode=$(jq -r .cli <<<"$lm")
+    if [ -n "$want" ]; then
+      # Only an agent the server lists as startable. A Codeman that lists none (older than
+      # 1.51) knows one agent, its `cli`: naming that one is fine, any other is not.
+      r=$(jq -r --arg w "$want" 'if (.agents | type) == "array" then ([.agents[] | select(.cli == $w) | .status][0] // "absent")
+                                 elif .cli == $w then "ready" else "unlisted" end' <<<"$lm")
+      case "$r" in
+        ready) ;;
+        unlisted) echo "this Codeman lists one coding agent for the local model, $(jq -r .cli <<<"$lm"): use plain \`local\`, or update Codeman to choose another" >&2; return 1 ;;
+        absent) echo "the local model cannot be run with '$want' here. Startable: $(jq -r '[.agents[] | select(.status == "ready") | .cli] | join(", ")' <<<"$lm")" >&2; return 1 ;;
+        *) echo "the coding agent '$want' is not startable on this Mac ($r): a person installs or sets it up in the Run a local model window. Startable now: $(jq -r '[.agents[] | select(.status == "ready") | .cli] | join(", ")' <<<"$lm")" >&2; return 1 ;;
+      esac
+      mode=$want
+    else
+      mode=$(jq -r .cli <<<"$lm")
+    fi
     cm=$(jq -c '{endpointId, modelId}' <<<"$lm")
-    # Readiness is a token the agent's composer draws. The registry's composer data never
-    # reaches the API, so it is named per agent here. opencode: `┃`, its `workDetect.promptGlyph`.
-    # That field is no readiness mark in general (the registry keeps `composerReadyMark` for
-    # that, and declares none for opencode), but at boot only the composer draws it: measured
-    # on opencode 1.3.0 on Linux, fresh home, custom provider, the first `┃` came with the composer,
-    # and a prompt pasted with its Enter at that moment was submitted. claude takes the claude
-    # path below. Any other agent needs LOCAL_READY_MARK rather than a worker handed back on a guess.
-    [ "$mode" = opencode ] && mark='┃'
+    # Readiness is a token the agent's composer draws once it takes input. The server names
+    # the measured one per agent (`readyMark`: opencode `┃`, deepseek `❯`, claude `shift+tab`).
+    # For a server that sends none, the two this skill measured itself:
+    #  - opencode `┃`: at boot only the composer draws it (1.3.0 and 1.19.5, a prompt pasted
+    #    at the mark was submitted every time).
+    #  - pi `extended-keys`: pi paints its composer rules in its FIRST frame and ignores Enter
+    #    until startup has finished, so its rule is no mark (a prompt sent at it stayed
+    #    unsent, 2 of 2). The last line of its startup is a warning that tmux's
+    #    `extended-keys` option is off, which it is on Codeman's socket: a prompt sent once
+    #    that word showed was submitted, 4 of 4 on pi 1.5.2. It is a side effect, not a
+    #    contract, so a pi that stops printing it fails the spawn (the worker is deleted, never
+    #    handed back on a guess) until LOCAL_READY_MARK names what it draws instead.
+    # claude takes the claude path below.
+    mark=$(jq -r --arg m "$mode" '[(.agents // [])[] | select(.cli == $m) | .readyMark // empty][0] // empty' <<<"$lm")
+    [ -n "$mark" ] || case "$mode" in opencode) mark='┃' ;; pi) mark='extended-keys' ;; esac
     mark=${LOCAL_READY_MARK:-$mark}
     [ "$mode" = claude ] || [ -n "$mark" ] || {
       echo "the local model runs through $mode, and this skill knows no composer mark for it: set LOCAL_READY_MARK to a space-free token its composer draws" >&2
@@ -246,11 +290,16 @@ spawn_worker() {
   # server clamps this back to `workspace-write` for an owner without the grant.
   # Spawn by hand (§5.1) when you want a worker that asks. The advisor is a cloud model,
   # so a claude worker on the local model never gets one.
+  # pi on the local model: a custom model session gives pi a home of its own, so it would
+  # ask "Trust project folder?" in EVERY session whose parent folders hold agent skills, with
+  # Trust preselected, and the task prompt's Enter would answer it. `approveProjectTrust:
+  # false` starts it with --no-approve: no dialog, and no project code is trusted for anyone.
   q=$("${CURL[@]}" -X POST "$API/api/v1/quick-start" -H 'Content-Type: application/json' \
       -d "$(jq -nc --arg n "$name" --arg m "$mode" --arg p "$SELF" --arg a "${CODEMAN_WORKER_ADVISOR:-}" --arg cm "$cm" \
         '{caseName:$n,mode:$m,parentSessionId:$p}
          + (if $m == "deepseek" then {deepSeekConfig:{permissionMode:"danger-full-access"}} else {} end)
          + (if $m == "claude" and $a != "" and $cm == "" then {advisorModel:$a} else {} end)
+         + (if $m == "pi" and $cm != "" then {piConfig:{approveProjectTrust:false}} else {} end)
          + (if $cm != "" then {customModel:($cm | fromjson)} else {} end)')")
   # The answers that want a PERSON to decide come back as success with no session id.
   if jq -e '(.data // .) | (.requiresContextWarning or .requiresConfirmation)' <<<"$q" >/dev/null 2>&1; then
@@ -267,8 +316,9 @@ spawn_worker() {
     echo "worker $sid: this Codeman server ignored CODEMAN_WORKER_ADVISOR (no advisor support); it runs without one" >&2
   fi
   if [ -n "$cm" ] && [ "$mode" != claude ]; then
-    # No trust dialog and no hook file to vet: the agent has no hooks, which is exactly
-    # why sendwait refuses it (400) and sendmark drives it.
+    # No trust dialog and no hook file to vet. opencode and pi have no end-of-turn signal,
+    # which is exactly why sendwait refuses them (400) and sendmark drives them; a deepseek
+    # worker reports the end of a turn on the local model too, so sendwait works for it.
     r=$(_mark_up "$sid" "$mark" 45000)
     [ "$r" = true ] || { echo "local worker $sid ($mode) never drew '$mark' within 45 s; deleted it. Look at GET /api/v1/local-model and the pane of a hand-made session before retrying" >&2
       delete_session "$sid" >/dev/null; return 1; }
@@ -545,4 +595,4 @@ last_text() {
 # The stamp is the LAST line on purpose (a truncated write leaves it unset) and is kept
 # bare on purpose: the write condition above anchors on it with $, so an inline comment
 # here would fail that match and rewrite this file on every single bootstrap.
-CODEMAN_PREAMBLE=1.50.0
+CODEMAN_PREAMBLE=1.51.0
