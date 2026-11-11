@@ -20,6 +20,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
+import vm from 'node:vm';
 import postcss from 'postcss';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
@@ -30,7 +31,9 @@ const PUBLIC = join(HERE, '../src/web/public');
 const PHONE_WIDTH = 393;
 
 // Issue #759: the maintainer approved File Viewer on phones when explicitly enabled.
-// Its per-device setting still defaults off; the browser test covers that default.
+// Its per-device setting still defaults off on a handheld. With the blanket phone
+// hide gone, that default and the startup hide are the whole lock, so both are
+// pinned below ("File Viewer on a phone: off until it is switched on").
 const MOBILE_VISIBLE_ALLOWLIST = new Set<string>(['btn-file-viewer']);
 
 // Buttons we expect to STAY hidden on phones — an explicit lock so a future edit
@@ -149,6 +152,74 @@ describe('Mobile header button policy (static guard)', () => {
     // would override that choice. Default-off and live toggling are exercised
     // against the real page in test/mobile/file-browser.test.ts.
     expect(phoneHidden.has('btn-file-viewer')).toBe(false);
+  });
+});
+
+// Until #759 the gate kept the File Viewer button off phones with a blanket
+// display:none rule and its KNOWN_PHONE_HIDDEN entry. That rule is gone, so what
+// keeps the button off a phone nobody switched it on for is now two things, and
+// the real-page test that exercises them (test/mobile/file-browser.test.ts) is
+// not part of `npm test`:
+//   1. the handheld branch of getDefaultSettings() says false, and the header
+//      reads the setting through that default (a bare `?? true` would show it);
+//   2. `html.mobile-init` hides the button until the settings have been applied,
+//      or it would flash on every phone page load (the template ships it visible).
+describe('File Viewer on a phone: off until it is switched on (#759)', () => {
+  const settingsUi = readFileSync(join(PUBLIC, 'settings-ui.js'), 'utf-8');
+
+  /** The real getDefaultSettings() of settings-ui.js on one kind of device. */
+  function defaultsOn(handheld: boolean): Record<string, unknown> {
+    const CodemanApp = function CodemanApp(this: unknown) {};
+    const context = vm.createContext({
+      CodemanApp,
+      VoiceInput: {},
+      localStorage: { getItem: () => null, setItem: () => {} },
+      document: { getElementById: () => null },
+      console,
+      MobileDetection: {
+        isHandheldDevice: () => handheld,
+        isTouchDevice: () => handheld,
+        getDeviceType: () => (handheld ? 'mobile' : 'desktop'),
+      },
+      window: { matchMedia: () => ({ matches: false }) },
+    });
+    vm.runInContext(settingsUi, context, { filename: 'settings-ui.js' });
+    const app = Object.create(CodemanApp.prototype) as { getDefaultSettings(): Record<string, unknown> };
+    return app.getDefaultSettings();
+  }
+
+  it('a handheld defaults the button off', () => {
+    expect(defaultsOn(true).showFileViewerButton).toBe(false);
+  });
+
+  it('a desktop leaves the key unset, which every reader resolves to on', () => {
+    expect(defaultsOn(false)).not.toHaveProperty('showFileViewerButton');
+  });
+
+  it('the header and the App Settings chip both read the setting through the device default', () => {
+    const read = 'settings.showFileViewerButton ?? defaults.showFileViewerButton ?? true;';
+    expect(settingsUi).toContain(`const showFileViewerButton = ${read}`);
+    expect(settingsUi).toContain(`document.getElementById('appSettingsShowFileViewerButton').checked = ${read}`);
+    // Every reader goes through it: one that skipped the device default would resolve to on.
+    const reads = [...settingsUi.matchAll(/\bsettings\.showFileViewerButton\b(.{0,40})/g)];
+    expect(reads.length).toBeGreaterThanOrEqual(2);
+    for (const [line, rest] of reads) {
+      expect(rest.startsWith(' ?? defaults.showFileViewerButton'), `"${line}" skips the device default`).toBe(true);
+    }
+  });
+
+  it('html.mobile-init hides the button until the settings have been applied', () => {
+    const css = readFileSync(join(PUBLIC, 'mobile.css'), 'utf-8');
+    let hidesAtStartup = false;
+    postcss.parse(css).each((node) => {
+      // Top level only: the rule must apply at every width mobile.css is loaded for.
+      if (node.type !== 'rule') return;
+      if (!node.selectors.includes('html.mobile-init .btn-file-viewer')) return;
+      node.walkDecls('display', (decl) => {
+        if (decl.value.trim() === 'none' && decl.important) hidesAtStartup = true;
+      });
+    });
+    expect(hidesAtStartup, 'mobile.css must keep .btn-file-viewer in its html.mobile-init display:none rule').toBe(true);
   });
 });
 

@@ -154,7 +154,7 @@ The right side of the header. Almost all of these are off until you enable them 
 | Connection dot         | Always on          | SSE connection health. Green is connected.                                       |
 | Font size `-` / `+`    | Always on          | `Ctrl +` / `Ctrl -` do the same.                                                 |
 | CPU / MEM              | On                 | Server resource use. Drawn as a compact pill by default; see Header Stats Style below. |
-| File Viewer            | On                 | Toggles the file browser panel.                                                  |
+| File Viewer            | On, off on phones  | Toggles the file browser panel.                                                  |
 | Settings gear          | Always on          | App Settings.                                                                    |
 | Plan usage chip        | On, desktop only   | Live subscription usage: Claude (needs its telemetry exporter, which the same setting installs), Codex limits and the Copilot monthly quota. |
 | Session Manager        | Off                | The full session list, live and historical.                                      |

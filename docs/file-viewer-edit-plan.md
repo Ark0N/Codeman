@@ -45,8 +45,9 @@ target escapes the workspace is already rejected. Ownership is `findSessionOrFai
 - CSS: `src/web/public/styles.css:9320-9430`. Overlay `z-index: 2000`, window `80vw/80vh`, capped
   `900x700`. There are **no `.file-preview-*` rules in `mobile.css` at all**.
 
-**Reachability on phones.** The header File Viewer button is hidden below 430px
-(`mobile.css:482`, locked by `KNOWN_PHONE_HIDDEN` in `test/mobile-header-buttons-policy.test.ts`), so on a
+**Reachability on phones.** When this plan was written the header File Viewer button was hidden below 430px
+(`mobile.css:482`, locked by `KNOWN_PHONE_HIDDEN` in `test/mobile-header-buttons-policy.test.ts`); since
+#759 it shows on a phone once switched on there, and stays off by default. Without it, on a
 phone the preview overlay is reached through:
 
 1. an attachment card's **Preview** button (`panels-ui.js:3451`), which is exactly the "agent just wrote a

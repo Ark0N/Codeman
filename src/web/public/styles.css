@@ -14427,8 +14427,8 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
   display: none !important;
 }
 
-/* "File Viewer" header button — opt-in (App Settings → Header Displays), hidden
-   by default. Clicking it toggles the file browser panel. Same marker pattern as
+/* "File Viewer" header button: on by default on a desktop, opt-in on a phone
+   (App Settings → Header & Panels). Clicking it toggles the file browser panel. Same marker pattern as
    the response viewer: a base inline-flex !important so an inline style can't
    override it, and a more-specific marker rule to hide. */
 .btn-file-viewer {

@@ -191,12 +191,14 @@ last answer as scrollable text instead, with a **More** button for additional co
 Persian, Arabic and Hebrew answers read right to left there.
 
 The [File Viewer](Working-With-Files) works on phones too, including edit mode, which is
-enough to fix a typo an agent introduced while you are away from your desk.
+enough to fix a typo an agent introduced while you are away from your desk. Its header button
+is off on a phone until you turn on **File Viewer** under **App Settings → Header & Panels**
+on that phone.
 
 ## What is deliberately not on phones
 
 - Extra header buttons. New header controls are kept off phones by policy, with a test that
-  enforces it.
+  enforces it. The one exception is File Viewer, which you can switch on (see above).
 - The Approvals bell. Phones get the NEEDS YOU strips on the home screen instead.
 - The desktop home tab rail, which needs a wide window.
 - Lineage lines, which are a desktop overlay.

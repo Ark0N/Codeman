@@ -8,7 +8,8 @@ until you get home.
 
 A panel that browses the active session's working directory, or the git worktree its agent
 moved into ([Git Worktrees](Git-Worktrees#when-an-agent-moves-into-a-worktree)). Its header
-button is on by default; if it is missing, re-enable it in **App Settings → Header & Panels**.
+button is on by default on a desktop and off on a phone. The setting is per device: switch it
+in **App Settings → Header & Panels** on the device you want it on.
 
 The panel and its search list up to 5,000 files and folders per load, shallow levels first and
 taking turns between folders, so one huge folder cannot use up that limit before the ones after it,
