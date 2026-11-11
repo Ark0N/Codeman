@@ -37,7 +37,7 @@ session with**: one chip per agent the model can be run with.
 | OpenCode         | You have no reason to choose. It is the pair Codeman was tested with on a Mac                  |
 | Pi               | You want the first answer soon. Its fixed prompt is the smallest by far, which also leaves the most room for your work |
 | Claude Code      | You want Claude Code's own tools and habits. Its first answer on a local model takes minutes  |
-| DeepSeek Harness | You already use it. It reports when a turn has ended, which helps when another session drives it |
+| DeepSeek Harness | You already use it and have it set up                                                          |
 
 Select a chip and press **Start a session**. The choice is remembered on that device.
 
@@ -49,7 +49,8 @@ chip and nothing else changes.
 
 **A chip that says "Needs setup"** is an agent that needs more than one command. DeepSeek
 Harness is the one today: set it up from the **Run** menu first, then it can be started
-here.
+here. A new DeepSeek Harness also opens its own setup guide in every session until you have
+finished it once.
 
 ## More than one model
 
