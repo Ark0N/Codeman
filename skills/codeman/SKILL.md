@@ -197,6 +197,17 @@ _dsh_up() {        # <sid> <timeoutMs> -> "true"/"false". The DeepSeek Harness T
   # composer glyph. Override with DSH_READY_MARK for a profile that draws another one.
   _mark_up "${1}" "${DSH_READY_MARK:-❯}" "${2}"
 }
+_dsh_guide() {     # <sid> -> 0 when the pane shows dsh-TUI's first-run SETUP GUIDE, not a composer.
+  # dsh-TUI 0.19.0 opens a guide ("Welcome to dsh-TUI  Step 1 of 4") in every session until a
+  # person has finished it once, and the guide's own cursor is `❯`: the readiness mark matches
+  # on it (measured, 2 of 2 launches), and an Enter there acts on the highlighted step, which
+  # is a sign-in. So a worker whose mark matched is still checked for the guide, on the
+  # RENDERED pane with its whitespace removed, and never handed back while it shows.
+  "${CURL[@]}" -G "$API/api/v1/sessions/${1}/terminal" --data-urlencode 'full=1' \
+    | jq -r '.data.terminalBuffer // empty' \
+    | sed -e "s/$(printf '\033')\[[0-9;?]*[a-zA-Z]//g" -e "s/$(printf '\033')[()][AB0]//g" \
+    | tr -d ' \t' | grep -qi 'Step[0-9]of[0-9]'
+}
 # ---- the workspace-trust dialog: READ the screen, never press Enter blind ----
 # Claude Code 2.1.252 dropped the option numbers, REVERSED them, and highlights
 # "No, exit" by default:
@@ -455,11 +466,17 @@ spawn_worker() {
   fi
   if [ -n "$cm" ] && [ "$mode" != claude ]; then
     # No trust dialog and no hook file to vet. opencode and pi have no end-of-turn signal,
-    # which is exactly why sendwait refuses them (400) and sendmark drives them; a deepseek
-    # worker reports the end of a turn on the local model too, so sendwait works for it.
+    # which is exactly why sendwait refuses them (400) and sendmark drives them. A deepseek
+    # worker reports the end of a turn on the local model too, but sendmark is still the way
+    # to get its ANSWER: dsh 0.2.2 renamed its transcript file, and until Codeman reads the
+    # new one `last-response` comes back empty for it.
     r=$(_mark_up "$sid" "$mark" 45000)
     [ "$r" = true ] || { echo "local worker $sid ($mode) never drew '$mark' within 45 s; deleted it. Look at GET /api/v1/local-model and the pane of a hand-made session before retrying" >&2
       delete_session "$sid" >/dev/null; return 1; }
+    if [ "$mode" = deepseek ] && _dsh_guide "$sid"; then
+      echo "dsh worker $sid opened DeepSeek Harness's setup guide instead of a composer; deleted it. A person finishes that guide once (start a DeepSeek session from the Run menu), then spawn again" >&2
+      delete_session "$sid" >/dev/null; return 1
+    fi
     printf '%s\n' "$sid"; return 0
   fi
   if [ "$mode" = deepseek ]; then
@@ -475,6 +492,10 @@ spawn_worker() {
     r=$(_dsh_up "$sid" 45000)
     [ "$r" = true ] || { echo "dsh worker $sid never drew a composer: no pane-capable profile, a profile whose composer is not '${DSH_READY_MARK:-❯}' (set DSH_READY_MARK), or a harness that failed to boot -- check GET /api/v1/deepseek/status. Deleted it" >&2
       delete_session "$sid" >/dev/null; return 1; }
+    if _dsh_guide "$sid"; then
+      echo "dsh worker $sid opened DeepSeek Harness's setup guide instead of a composer; deleted it. A person finishes that guide once (start a DeepSeek session from the Run menu), then spawn again" >&2
+      delete_session "$sid" >/dev/null; return 1
+    fi
     printf '%s\n' "$sid"; return 0
   fi
   [ "$mode" = claude ] || { printf '%s\n' "$sid"; return 0; }   # no other mode draws a composer to wait on
@@ -909,10 +930,10 @@ on), and from then on it is the same verbs. It mixes into one fleet like any oth
 
 | Worker kind | Agent | Why you would pick it | Drive it with |
 | --- | --- | --- | --- |
-| `local` | the default one (`cli` of `local_model`) | you have no reason to choose | `sendmark` (`sendwait` when it is claude or deepseek) |
+| `local` | the default one (`cli` of `local_model`) | you have no reason to choose | `sendmark` (`sendwait` when it is claude) |
 | `local:opencode` | OpenCode | the tested pair; a full tool set | `sendmark` |
 | `local:pi` | Pi | the smallest fixed prompt (about 2,100 tokens against 8,000 and more), so the first answer comes soonest and the most context is left for the work | `sendmark` |
-| `local:deepseek` | DeepSeek Harness | the one of these that reports the end of a turn | `sendwait` or `sendmark` |
+| `local:deepseek` | DeepSeek Harness | the user already works with it | `sendmark` (it reports the end of a turn, but on dsh 0.2.2 its answer cannot be read back through `sendwait` yet) |
 | `local:claude` | Claude Code | hooks and `sendwait`, at the price of a first answer that takes minutes | `sendwait` |
 
 An agent whose status is `installable`, `installing` or `setup-needed` is not startable, and
@@ -968,8 +989,14 @@ The limits, before you promise the user anything:
   loads the model first. A local worker run by claude spends minutes on its first answer
   (its fixed prompt is about 36,000 tokens).
 - **Markers, not hooks.** OpenCode and Pi report no end of turn, so `sendwait` answers 400
-  for those workers; `sendmark` is the way through. A claude worker has hooks and a
-  DeepSeek Harness worker reports its turns, so `sendwait` works for those two.
+  for those workers; `sendmark` is the way through. A claude worker has hooks, so
+  `sendwait` works for it. A DeepSeek Harness worker reports its turns too, but drive it
+  with `sendmark` on the local model: dsh 0.2.2 renamed its transcript file, and Codeman
+  reads an empty answer from it for now.
+- **DeepSeek Harness has a setup guide a person finishes once.** Until then every dsh
+  session opens on it, and the spawn refuses the worker (and deletes it) instead of typing
+  a task into a sign-in screen. Tell the user to start one DeepSeek session from the Run
+  menu and finish the guide.
 - **Pi starts without trusting the folder.** A `local:pi` worker is started with
   `--no-approve`, so it loads no project extensions or skills from the case folder: on the
   local model Pi would otherwise ask to trust the folder in every session, and a task
