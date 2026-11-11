@@ -1540,6 +1540,18 @@
     'Takes {memory} GB of memory now.': '目前占用 {memory} GB 内存。',
     'All of it is on the GPU.': '全部位于 GPU 上。',
     'Start a session': '开始会话',
+    // The coding agents of an installed model: one chip each, and the line under the selected one.
+    'Start a session with': '开始会话时使用',
+    Installing: '正在安装',
+    'Not installed': '未安装',
+    'Needs setup': '需要设置',
+    'Install {cli}': '安装 {cli}',
+    'Installing {cli}. You can start a session with another agent meanwhile.':
+      '正在安装 {cli}。在此期间，你可以用其他智能体开始会话。',
+    '{cli} is not on this Mac yet. Codeman installs it with this command:':
+      '此 Mac 上尚未安装 {cli}。{name} 会用下面这条命令安装它：',
+    '{cli} needs a setup of its own. Set it up from the Run menu, then start a session with it here.':
+      '{cli} 需要单独设置。请先在"运行"菜单中完成设置，然后就可以在这里用它开始会话。',
     'Remove the local model from this Mac?': '要从此 Mac 移除本地模型吗？',
     'Also delete the downloaded model': '同时删除已下载的模型',
     'The coding agent stays installed.': '编程智能体会保留，不会被卸载。',
