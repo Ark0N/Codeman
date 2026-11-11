@@ -42,12 +42,7 @@ import { clampEnvOverridesForOwner } from '../../session-env-clamp.js';
 import { Session } from '../../session.js';
 import { resolveClaudeModeForUsername } from '../../user-store.js';
 import { getCli } from '../../config/cli-registry/registry.js';
-import {
-  agentSkillDir,
-  applyApprovalHookFile,
-  applyWorkspaceHooks,
-  seedAgentSessionPreamble,
-} from '../../hooks-config.js';
+import { agentSkillDir, applyWorkspaceHooks, seedAgentSessionPreamble } from '../../hooks-config.js';
 import { getLifecycleLog } from '../../session-lifecycle-log.js';
 import { STATS_COLLECTION_INTERVAL_MS } from '../../config/server-timing.js';
 import { SseEvent } from '../sse-events.js';
@@ -263,17 +258,6 @@ export function registerRebootRestoreRoutes(app: FastifyInstance, ctx: RebootRes
           if (workspaceHooksEnabled && getCli(session.mode)?.capabilities.hooks === 'always') {
             await applyWorkspaceHooks(session.workingDir, true).catch((err: unknown) =>
               console.warn(`[reboot-restore] hook install failed for ${session.workingDir}: ${getErrorMessage(err)}`)
-            );
-          }
-          // Same reasoning for a CLI that reports approvals through a hook MODULE (omp,
-          // `approvalHookFile`): a deleted or recreated workspace would leave the restored
-          // pane's approval dialogs silent. Local-only is structural here (see below).
-          const approvalHookFile = getCli(session.mode)?.capabilities.approvalHookFile;
-          if (workspaceHooksEnabled && approvalHookFile) {
-            await applyApprovalHookFile(session.workingDir, approvalHookFile).catch((err: unknown) =>
-              console.warn(
-                `[reboot-restore] approval hook install failed for ${session.workingDir}: ${getErrorMessage(err)}`
-              )
             );
           }
 

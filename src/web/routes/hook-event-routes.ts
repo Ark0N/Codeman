@@ -228,6 +228,13 @@ export function registerHookEventRoutes(
         const toolSummary = toolInput
           ? [toolInput.command, toolInput.file_path, toolInput.description].find((v) => typeof v === 'string')
           : undefined;
+        // Visible tmux frame first (it IS the dialog); raw byte-buffer tail as
+        // the fallback for direct-PTY sessions and the no-op test mux.
+        const readFrame = (): string | null => {
+          const muxName = session.muxName;
+          const frame = muxName ? (ctx.mux.capturePaneBuffer?.(muxName) ?? null) : null;
+          return frame ?? session.terminalBuffer.slice(-8192) ?? null;
+        };
         const item = approvalInbox.notePrompt({
           sessionId,
           sessionName,
@@ -247,13 +254,14 @@ export function registerHookEventRoutes(
           // alert nobody can answer; notePrompt() carries the whole reasoning.
           watching: session.watching,
           preAcknowledged: keepAliveReason,
-          // Visible tmux frame first (it IS the dialog); raw byte-buffer tail as
-          // the fallback for direct-PTY sessions and the no-op test mux.
-          capture: () => {
-            const muxName = session.muxName;
-            const frame = muxName ? (ctx.mux.capturePaneBuffer?.(muxName) ?? null) : null;
-            return frame ?? session.terminalBuffer.slice(-8192) ?? null;
-          },
+          // An approval-only module (omp) clears its own item with `elicitation_complete`,
+          // so its frame is taken ONCE, as the card's context, and never read again, like
+          // an item raised from the screen (web/screen-blocked.ts). The inbox's re-read is
+          // shaped for Claude's numbered dialog: omp's has no numbered rows, but an agent's
+          // plan above it does, so the list was parsed as the item's options, and once it
+          // scrolled out of the frame the item was resolved as answered in the terminal
+          // while omp still waited.
+          ...(approvalOnly ? { context: readFrame() ?? undefined } : { capture: readFrame }),
         });
         approvalId = item.id;
         acknowledgedReason = item.acknowledgedReason;

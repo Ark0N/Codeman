@@ -223,6 +223,8 @@ still reading. A caller that asked only for `idle` keeps getting `idle`.
 
 `agentSkillInjection` says a CLI's sessions get the agent skill (`skills/codeman`) and its per-session preamble when the synced `agentSkillEnabled` setting is on; `agentSkillDir` says which workspace directory the CLI scans for skills, read through `agentSkillDir()` (hooks-config.ts), so no call site branches on a CLI id. Absent with the boolean on means `.claude/skills`, which is what the boolean meant before the field existed.
 
+`approvalHookFile` names the hook module Codeman installs into a local workspace for a CLI whose hooks are files rather than a settings block (omp: `<workspace>/.claude/hooks/pre/codeman-approval.ts`, written by `applyApprovalHookFile()` in hooks-config.ts from both create paths, after the launch pre-flight and only while `workspaceHooksEnabled` is on). The module forwards the CLI's own tool approval events to `/api/hook-event`, and that is all the field grants: `blocked` can fire and a dialog opens an alert-only Approvals Inbox item (`approvalHookAvailableForMode()` in session-wait-registry.ts, which says no for an adopted, remote or Docker session). It is deliberately not a `hooks` value: every reader of `hooks` takes a yes for Claude's full hook set, so `stop` stays a 400 for such a CLI. ⚠️ A bare `.ts` file name and nothing else (schema.ts): `clis.json` can set it, and it is written into the user's workspace. A file of that name without Codeman's marker is the user's own and is left alone, and a symbolic link at any path component is refused.
+
 | CLI | Skill directory |
 | --- | --- |
 | claude | `.claude/skills/codeman` |

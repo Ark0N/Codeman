@@ -1793,7 +1793,8 @@ export type ApprovalHookApplyResult = 'installed' | 'refreshed' | 'unchanged' | 
 /**
  * Install or refresh the omp approval hook in `<workspace>/.claude/hooks/pre/`.
  *
- * Ownership: the file carries `OMP_APPROVAL_HOOK_MARKER` in its first line. A file
+ * Ownership: the file carries `OMP_APPROVAL_HOOK_MARKER` (the generated module has it
+ * in its header, and the check takes it anywhere in the file). A file
  * WITHOUT the marker is somebody else's hook and is left untouched (`foreign`) — the
  * same posture `installAgentSkillInto` takes, so Codeman never clobbers user work.
  * EVERY component below the workspace (`.claude`, `.claude/hooks`, `.claude/hooks/pre`)

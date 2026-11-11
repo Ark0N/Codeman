@@ -595,6 +595,34 @@ describe('approval routes: approval-only hook module (omp) alert-only items', ()
     expect(await listApprovals(harness)).toHaveLength(1);
   });
 
+  it('keeps the alert while a numbered list above the dialog scrolls out of the frame', async () => {
+    // A stand-in for omp's dialog: it has no numbered rows. An agent's plan above it
+    // does, and Claude's dialog parser took that list for the item's options. Once the
+    // list scrolled out of the frame, the next read took the dialog for answered and
+    // cleared the alert while omp was still waiting.
+    const dialog = [' Allow bash?', ' rm -rf build', ' > Approve', '   Deny', '   Deny and send message'].join('\n');
+    const plan = ['Plan:', ' 1. Remove the build folder', ' 2. Run the build', ' 3. Run the tests', ''].join('\n');
+    session.terminalBuffer = `${plan}\n${dialog}`;
+    await postHook(harness, 'permission_prompt', { tool_name: 'bash' });
+    const [item] = await listApprovals(harness);
+    // The frame is kept once, as the card's context, and never read for options.
+    expect(item.options).toBeUndefined();
+    expect(item.context).toContain('Allow bash?');
+
+    const resolved: Array<Record<string, unknown>> = [];
+    approvalInbox.onResolved = (info) => resolved.push({ ...info });
+    session.terminalBuffer = dialog;
+    // Past the delay `notePrompt` waits before it judges a new dialog.
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 3_100);
+    expect(await listApprovals(harness)).toHaveLength(1);
+    expect(await listApprovals(harness)).toHaveLength(1);
+    expect(resolved).toEqual([]);
+
+    // The module's own report is what clears it.
+    await postHook(harness, 'elicitation_complete', { tool_name: 'bash', approved: true });
+    expect(await listApprovals(harness)).toHaveLength(0);
+  });
+
   it('opens nothing for a remote omp session, where no module was installed', async () => {
     (session as unknown as { remote: unknown }).remote = { host: 'box' };
     await postHook(harness, 'permission_prompt', { tool_name: 'bash' });

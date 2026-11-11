@@ -211,11 +211,15 @@ a genuine tunnel failure looks like, and `204` cannot carry `waitedMs` / `status
 `limitPaused`. Reserve error handling for the four codes in the table below.
 
 **2. `stop` fires only for `claude` (and `deepseek`) sessions, `blocked` also for
-`codex`.** Both come from Claude Code hooks, and no other mode installs them: `shell`
-runs no agent, and the external CLIs render their own TUIs and post no hooks
-(`deepseek`'s status bridge reports the same two, see its own docs). The one exception
-is `blocked` on `codex`: Codeman reads codex's approval, question and trust dialogs off
-its screen and raises `blocked` for them (see [Signals](#signals)). For every other mode
+`codex` and a local `omp` session.** Both come from Claude Code hooks, and no other mode
+installs them: `shell` runs no agent, and the external CLIs render their own TUIs and post
+no hooks (`deepseek`'s status bridge reports the same two, see its own docs). There are two
+exceptions, both for `blocked` alone. On `codex`, Codeman reads codex's approval, question
+and trust dialogs off its screen and raises `blocked` for them. On `omp`, Codeman installs
+a hook module into the session's workspace that forwards omp's own tool approval events
+(a local session only: nothing is installed for a remote, Docker or adopted one, where
+`blocked` stays a 400, and omp asks nothing while its `tools.approvalMode` is the default
+`yolo`). See [Signals](#signals). For every other mode
 only `idle`, `working` and `exit` are accepted. `exit` is dependable everywhere; `idle` and
 `working` are screen-checked for `opencode`, `gemini`, `pi`, `omp` and `antigravity` (as for `claude` and
 `codex`) and not guaranteed elsewhere: see the caveats under [Signals](#signals) before
@@ -249,7 +253,7 @@ contract is a **marker unique to each call** (`MARK="DONE_$RANDOM"`, send
 | `idle` | the session's own `idle` event | `claude`: yes, on ❯-prompt detection after activity. `codex`, `opencode`, `gemini`, `pi`, `omp`, `antigravity`: yes, the same screen check through the prompt marker and working line each declares (`capabilities.workDetect`); an `antigravity` session waiting on a shell-command approval stays `working` until it is answered. `shell`: **once only**, ~500 ms after start, and never again. Other external CLIs (`grok`, `deepseek`): not guaranteed (they render their own TUIs and readiness is output stabilization) |
 | `working` | the session's own `working` event | `claude`, plus `codex`, `opencode`, `gemini`, `pi`, `omp` and `antigravity` through the working line each declares. Elsewhere not guaranteed: it rests on generic output heuristics such as a braille spinner glyph |
 | `stop` | the Claude Code `stop` hook, the definitive end-of-turn signal | `claude` (and `deepseek`) only |
-| `blocked` | a `permission_prompt` or `elicitation_dialog` hook; on `codex`, a dialog read off its screen | `claude`, `deepseek` and `codex`; on `claude` rarer than it looks: see below |
+| `blocked` | a `permission_prompt` or `elicitation_dialog` hook; on `codex`, a dialog read off its screen; on `omp`, its own tool approval event, forwarded by the hook module Codeman installs | `claude`, `deepseek`, `codex` and a local `omp` session; on `claude` rarer than it looks: see below |
 | `exit` | no process is behind the session | every mode |
 
 `stop` is the signal to orchestrate on where it exists; `idle` is a heuristic
@@ -1259,8 +1263,9 @@ the tab to be tried again: Codeman never starts a local process in its place.
 
 Cross-session queue of prompts waiting on a human (permission dialogs,
 AskUserQuestion questions, idle prompts). Answerable items come from Claude-mode
-sessions only; DeepSeek Harness (its status bridge) and Codex (dialogs read off its
-screen) open **alert-only** items with `answerInTerminal: true`. Items are
+sessions only; DeepSeek Harness (its status bridge), Codex (dialogs read off its
+screen) and omp (its tool approval events, through the hook module Codeman installs)
+open **alert-only** items with `answerInTerminal: true`. Items are
 in-memory (a server restart drops them; the next prompt re-fires the hook, and a
 codex dialog still on screen is read again after the pane re-attaches).
 Design: [`approvals-inbox-plan.md`](approvals-inbox-plan.md).

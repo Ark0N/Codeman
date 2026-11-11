@@ -657,7 +657,7 @@ Three bounded long-polls. Shared semantics:
 | `idle` | output stabilized + prompt detected, heuristic, can flap mid-turn | every mode |
 | `working` | session started producing output | every mode |
 | `stop` | Claude Code `stop` hook, the definitive end-of-turn | `claude`; also `deepseek`, whose harness reports its own end of turn while its status bridge is on |
-| `blocked` | `permission_prompt` / `elicitation_dialog` hook, the worker needs an answer | `claude`; also `deepseek` (its harness reports its dialogs, same condition), and `codex`, whose approval, question and trust dialogs Codeman reads off its screen (answer both in the terminal, never through the inbox) |
+| `blocked` | `permission_prompt` / `elicitation_dialog` hook, the worker needs an answer | `claude`; also `deepseek` (its harness reports its dialogs, same condition), `codex`, whose approval, question and trust dialogs Codeman reads off its screen, and a local `omp` session, whose tool approval dialogs a hook module in its workspace reports (answer all three in the terminal, never through the inbox) |
 | `exit` | PTY exited or session deleted | every mode |
 
 ⚠️ **`claude` mode is necessary for `stop`/`blocked`, not sufficient. The real

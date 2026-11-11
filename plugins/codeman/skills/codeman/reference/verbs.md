@@ -385,7 +385,8 @@ only when the workspace actually has them, see [§5.1](#51-where-to-spawn)) **an
 real end-of-turn signal rather than a guess. On
 `shell`/`opencode`/`codex`/`gemini`/`antigravity`/`pi`/`grok`/`omp`/`copilot`, requesting them explicitly is a
 400 (except `blocked` on `codex`, which Codeman reads off its screen when an approval,
-question or trust dialog is up; a wait for it answers at once if one already is), and
+question or trust dialog is up; a wait for it answers at once if one already is; and
+`blocked` on a local `omp` session, next paragraph), and
 lifecycle transitions there are coarse (a short shell command may emit **no**
 `idle` transition at all, verified live), so synchronize those with markers.
 
