@@ -14,6 +14,7 @@
 - [Tile Grid](Tile-Grid)
 - [Agent CLIs](Agent-CLIs)
 - [Custom Model Endpoints](Custom-Model-Endpoints)
+- [Local Models](Local-Models)
 - [Working With Files](Working-With-Files)
 - [Git Worktrees](Git-Worktrees)
 - [Input And Voice](Input-And-Voice)

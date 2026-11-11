@@ -207,7 +207,9 @@ missing entry is the more current answer.
 ## A model that runs on this Mac
 
 If the Codeman server runs on a Mac with Apple silicon, you do not need a server of your
-own: Codeman can set one model up for you on that Mac. This is experimental.
+own: Codeman can set one model up for you on that Mac. This is experimental. The walkthrough,
+with the coding agents and the cloud plus local setup, is on its own page:
+[Local Models](Local-Models).
 
 1. Press **Run a local model** on the welcome screen (or open App Settings > Models > Model
    on this Mac).
@@ -239,6 +241,10 @@ Good to know:
   downloads another one, **Use** switches to a model that is already there (nothing is
   downloaded; close the sessions on the model first), and **Delete** removes one, after one
   question. The model in use cannot be deleted: switch first, or use **Remove**.
+- The coding agent is chosen per session. The window lists every agent the model can be run
+  with (OpenCode, Claude Code, Pi, DeepSeek Harness) under **Start a session with**, and
+  installs one that is missing after showing you the command. DeepSeek Harness is set up
+  from the Run menu first.
 - **Remove** deletes the runtime and the endpoint, and the model too if you tick that. The
   coding agent stays installed.
 - If the model on disk is no longer the one that was installed, Codeman refuses to start a

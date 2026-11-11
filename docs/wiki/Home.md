@@ -66,6 +66,7 @@ codeman web    # then open http://localhost:3000
 | [Tile Grid](Tile-Grid)                     | How do I watch and drive several sessions side by side?    |
 | [Agent CLIs](Agent-CLIs)                   | Which agent should this session run, and how do I set it up? |
 | [Custom Model Endpoints](Custom-Model-Endpoints) | How do I point a session at my own OpenAI-compatible endpoint? |
+| [Local Models](Local-Models) | How do I run a coding model on my own Mac, and use it next to a cloud model? |
 | [Working With Files](Working-With-Files)   | How do I read, edit, and attach files?                     |
 | [Git Worktrees](Git-Worktrees)             | How do several agents work on one repository without sharing a folder? |
 | [Input And Voice](Input-And-Voice)         | How do I talk to an agent, including by voice?             |

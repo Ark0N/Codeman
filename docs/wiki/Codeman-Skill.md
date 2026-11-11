@@ -138,6 +138,8 @@ from your side. See [Agent CLIs](Agent-CLIs) for the run modes.
 Claude Code lead can hand work to it: Claude in the cloud plans and reviews, the local model
 takes summaries, first drafts and files that should stay on the machine. It answers one
 request at a time and is slower than a cloud model, and the skill never installs one for you.
+You can name the coding agent the worker runs with ("a local worker with Pi"), as long as
+that agent is installed; the walkthrough is in [Local Models](Local-Models#cloud-and-local-together).
 
 With Claude Code workers, where the installed Claude Code supports it, the lead can also
 message a worker directly instead of typing into its terminal.
