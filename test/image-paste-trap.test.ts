@@ -455,6 +455,22 @@ describe('Ctrl+V paste trap', () => {
 
     expect(h.inputted).toEqual(['\x1b[200~hello world\x1b[201~']);
   });
+
+  it('is handed the keydown by the main pane, pinned at the source', () => {
+    // The Ctrl+V branch lives inside initTerminal's attachCustomKeyEventHandler
+    // closure, over a real xterm this harness cannot build, so the call is pinned
+    // at the source, like the Ctrl+C rule in terminal-copy-clean.test.ts. A tile's
+    // call is driven for real in terminal-tile-input.test.ts. Without the keydown
+    // the trap cannot cancel it, and Firefox pastes twice again.
+    const terminalUi = readFileSync(resolve(import.meta.dirname, '../src/web/public/terminal-ui.js'), 'utf8');
+    const start = terminalUi.indexOf('// Ctrl+V / Cmd+V: intercept before xterm sends ^V to PTY.');
+    expect(start).toBeGreaterThan(-1);
+    const end = terminalUi.indexOf('// Ctrl+Z (SIGTSTP/job-control suspend)', start);
+    expect(end).toBeGreaterThan(start);
+    const branch = terminalUi.slice(start, end);
+    expect(branch).toContain('this._handleImagePaste({ keyEvent: ev });');
+    expect(branch).not.toContain('this._handleImagePaste()');
+  });
 });
 
 describe('image upload insertion policy', () => {
