@@ -187,8 +187,9 @@ Setup in [Notifications And Approvals](Notifications-And-Approvals).
 ## Reading long answers
 
 The terminal viewport is small. **Last Response** (opt-in header button) renders the agent's
-last answer as scrollable text instead, with a **More** button for additional context.
-Persian, Arabic and Hebrew answers read right to left there.
+last answer as scrollable text instead, with a **More** button for additional context and a
+**Copy Markdown** button for its raw source. Persian, Arabic and Hebrew answers read right to
+left there.
 
 The [File Viewer](Working-With-Files) works on phones too, including edit mode, which is
 enough to fix a typo an agent introduced while you are away from your desk. Its header button

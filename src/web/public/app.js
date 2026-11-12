@@ -774,6 +774,7 @@ class CodemanApp {
     this.terminal = null;
     this.fitAddon = null;
     this.activeSessionId = null;
+    this._responseViewerMarkdown = '';
 
     // ── Session detach / undock (beta) ───────────────────────────────────
     // A "solo window" is a popped-out browser window showing exactly one
@@ -2948,12 +2949,7 @@ class CodemanApp {
         ev.stopPropagation();
         const code = copyBtn.closest('.rv-code-wrap')?.querySelector('pre code');
         const ok = code ? await this._copyText(code.textContent || '') : false;
-        copyBtn.classList.remove('rv-copied', 'rv-copy-failed');
-        copyBtn.classList.add(ok ? 'rv-copied' : 'rv-copy-failed');
-        clearTimeout(copyBtn._resetTimer);
-        copyBtn._resetTimer = setTimeout(() => {
-          copyBtn.classList.remove('rv-copied', 'rv-copy-failed');
-        }, 1500);
+        this._setCopyControlState(copyBtn, ok);
         return;
       }
 
@@ -2995,6 +2991,50 @@ class CodemanApp {
     } catch {
       return false;
     }
+  }
+
+  _setCopyControlState(btn, success) {
+    if (!btn) return;
+    btn.classList.remove('rv-copied', 'rv-copy-failed');
+    btn.classList.add(success ? 'rv-copied' : 'rv-copy-failed');
+    clearTimeout(btn._resetTimer);
+    btn._resetTimer = setTimeout(() => {
+      btn.classList.remove('rv-copied', 'rv-copy-failed');
+    }, 1500);
+  }
+
+  /**
+   * The raw Markdown of the newest answer in a message list: every row of its
+   * turn, or the last row when the reader emits no numeric turns (Codex, the
+   * pane parser). Tool and status blocks share the assistant role but are not
+   * the answer.
+   */
+  _responseViewerMarkdownFrom(messages) {
+    const answers = messages.filter(
+      (msg) => msg && msg.role === 'assistant' && (!msg.kind || msg.kind === 'response') && msg.text?.trim()
+    );
+    const last = answers[answers.length - 1];
+    if (!last) return '';
+    if (typeof last.turn !== 'number') return last.text;
+    return answers
+      .filter((msg) => msg.turn === last.turn)
+      .map((msg) => msg.text)
+      .join('\n\n');
+  }
+
+  /** Copy the raw Markdown source of the answer the response viewer is showing. */
+  async copyResponseViewerMarkdown() {
+    const button = document.getElementById('responseViewerCopyMarkdown');
+    const markdown = this._responseViewerMarkdown || '';
+    if (!markdown) {
+      this._setCopyControlState(button, false);
+      this.showToast('No response content to copy', 'warning');
+      return;
+    }
+    const copied = await this._copyText(markdown);
+    this._setCopyControlState(button, copied);
+    if (copied) this.showToast('Copied response as Markdown', 'success');
+    else this.showToast('Failed to copy response as Markdown', 'error');
   }
 
   /** Build one response-viewer message so the brief and full views share markup and CSS. */
@@ -3241,6 +3281,8 @@ class CodemanApp {
         }
       }
 
+      this._responseViewerMarkdown = this._responseViewerMarkdownFrom(turnMessages) || lastResponse;
+
       const body = document.getElementById('responseViewerBody');
       if (turnMessages.length > 0) {
         // The whole last turn, rendered exactly as the full view renders that
@@ -3319,6 +3361,9 @@ class CodemanApp {
         notice.textContent = window.codemanT?.(emptyText) || emptyText;
         return;
       }
+
+      // Keep the brief view's answer when this history holds none of its own.
+      this._responseViewerMarkdown = this._responseViewerMarkdownFrom(messages) || this._responseViewerMarkdown;
 
       // Render conversation thread
       const agentLabel = this._getResponseViewerAgentLabel();

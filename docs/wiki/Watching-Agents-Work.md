@@ -77,9 +77,11 @@ Turning on either starts the watcher.
 
 **Last Response** (header button, opt-in) renders the agent's last answer as scrollable text
 rather than terminal output. It exists mostly for phones, where reading a long answer in a
-terminal viewport is painful. **More** loads additional context. Persian, Arabic and Hebrew
-answers read right to left here, which the terminal cannot do, while code and the file paths
-it links stay left to right.
+terminal viewport is painful. **More** loads additional context. **Copy Markdown** copies the
+newest answer's raw Markdown, every part of its turn, so headings, lists and code fences paste
+intact (the same answer in both views; tool and status blocks are left out). Persian, Arabic
+and Hebrew answers read right to left here, which the terminal cannot do, while code and the
+file paths it links stay left to right.
 
 ## After the fact
 
