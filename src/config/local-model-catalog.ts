@@ -26,7 +26,8 @@
  *    so a bad row fails the gate and never reaches the route.
  *
  * Where each figure of the stock rows comes from, and what was checked (2026-11-08; the two rows
- * added on 2026-11-10, `ornith:9b-q4_k_m` and `muse-glimmer:30b-q4_k_m`, were read that day).
+ * added on 2026-11-10, `ornith:9b-q4_k_m` and `muse-glimmer:30b-q4_k_m`, were read that day;
+ * `muse-glimmer:30b-mlx` was read and measured on 2026-11-12).
  * [V] read at the source that day, [M] measured on a Mac, [C] computed from [V] inputs:
  *
  * | Figure               | Source                                                    | Checked                              |
@@ -152,6 +153,26 @@
  *       of many requests, in which the prefix snapshots may add up to 8 GiB. Its figures stay
  *       the measured ones (with 8 GiB on top it would not be offered on the Mac it ran on),
  *       and a 30-request session on it is the first thing to measure next.
+ *       Measured again on 2026-11-12 on the same Mac, from the runner's own log line
+ *       (`msg=memory peak=... held=...` after every request): 39,600 bytes per token between
+ *       prompts of 30,000 and 94,500 tokens, and the session this row owed, twelve separate
+ *       prompts of 15,000 tokens, added 0.5 GiB of prefix snapshots each (5.6 GiB after
+ *       twelve, still growing): the whole run ended at 33.4 GB of the 40.2 GB that Mac's
+ *       runtime measures. The row's figures are unchanged by it.
+ *     - `muse-glimmer:30b-mlx`: MEASURED the same way on that Mac (2026-11-12, runtime
+ *       0.40.15). What stayed held grew by 37,900 to 45,100 bytes per token between prompts
+ *       of 30,000, 60,000 and 94,600 tokens. The 13 full-attention layers alone compute to
+ *       13,312 in bf16 and all 52 layers at full length to 53,248, so the runner evidently
+ *       does not trim the 39 sliding-window layers to their window (an inference from the
+ *       figure, not read in its source). The row takes the upper end. It counts the whole
+ *       8 GiB prefix budget, because the same run filled it: twelve separate prompts of
+ *       15,000 tokens added 0.53 GiB each until the runner dropped the oldest. The process
+ *       (`footprint`) stood 0.2 GB above the runner's own count at the end. Its lifetime
+ *       peak stood 3.0 to 3.3 GB above that, which is a FLOOR for the peak of a long prompt:
+ *       a lifetime maximum taken at the end of the run hides a transient of up to 9 GB
+ *       during the earlier, longer prompts. So the row takes the first measured row's 5 GB.
+ *       The tag carries a draft model; its tensors are inside `bytes`, and what it holds is
+ *       inside these figures.
  *     - every other `mlx` row: held = the K/V cache in bf16 + one recurrent snapshot per
  *       8,192 tokens, computed from the config, x 37,000 / 28,340: the ratio of what the
  *       measured row really held to the same computation for it (same runner, same
@@ -204,9 +225,15 @@
  *    open, has it answer with thinking only in a long conversation at 65,536 tokens.
  *  - `qwen3-coder-next` (51.7 GB): the generation before Qwen3.6. Its card shows its results
  *    as pictures only, so there is no figure to rank it by against the rows listed here.
- *  - `muse-glimmer:30b-mlx` and the `-dflash` tags of that model: open runtime issues 17656
- *    and 18269 on the MLX build, and no rule here covers the memory of a separate draft
- *    model. Its GGUF build `muse-glimmer:30b-q4_k_m` is listed.
+ *  - The `-dflash` tags of Muse Glimmer (`30b-q4_k_m-dflash`, `30b-nvfp4-dflash`): a separate
+ *    draft model whose memory no rule here covers. `muse-glimmer:30b-mlx`, which is built
+ *    from the second one's layers, IS listed since 2026-11-12, with measured figures. Its
+ *    two open runtime issues were read again that day: 17656 takes its `nvfp4` weights for
+ *    a build the MLX engine cannot accelerate (on the Mac it ran on the runtime logged
+ *    "MLX engine initialized ... device=gpu" and it wrote twice as fast as the GGUF build),
+ *    and 18269 reports it stuck in "Stopping..." and a restart on a 32 GB Mac, a size the
+ *    measured figures keep it away from (its maintainer promised a memory fix "in the next
+ *    release" in September; whether that predates the pinned 0.40.15 is not known).
  *  - The plain tags `qwen3.5:9b`, `mimo-v2.6:9b` and `qwen3.8:27b`: a Mac pulls their MLX
  *    builds, whose 8 GiB of prefix snapshots do not fit the Macs a 9B or a 27B is for. Their
  *    GGUF builds are listed instead.
@@ -408,12 +435,34 @@ const LLAMACPP_DEFAULT_DRAFT_TOKENS = 4;
 const MLX_PREFIX_CACHE_BYTES = 8 * 1024 * 1024 * 1024;
 
 /**
+ * The memory figures measured for `muse-glimmer:30b-mlx` on the same Mac (2026-11-12, runtime
+ * 0.40.15, the MLX runner), in decimal bytes: the runner's own `memory peak / held` log line
+ * after every request, and the process footprint at the end. See the file header (MEMORY).
+ */
+const MUSE_MLX_MEASURED_MEMORY = {
+  /** Held grew by 37,900 to 45,100 bytes per token between prompts of 30,000, 60,000 and 94,600 tokens: the upper end. */
+  heldBytesPerToken: 45_000,
+  /**
+   * The prefix snapshots in full (the run filled them: 0.53 GiB per separate prompt of 15,000
+   * tokens until the oldest was dropped), and 0.5 GB for what the process holds beside the
+   * runner's own count (0.2 GB measured).
+   */
+  overheadBytes: MLX_PREFIX_CACHE_BYTES + 500_000_000,
+  /**
+   * The first measured row's 5 GB. This run only gives a floor: the footprint's lifetime peak
+   * stood 3.0 to 3.3 GB above what was held at the end, and a larger transient during the
+   * earlier, longer prompts would not show in that figure.
+   */
+  peakExtraBytes: 5_000_000_000,
+} as const;
+
+/**
  * The catalogue that ships with Codeman. Never read directly outside this file and its test:
  * callers use `getLocalModelCatalog()`, which validates it first.
  */
 export const STOCK_LOCAL_MODEL_CATALOG: LocalModelCatalog = {
   schema: 1,
-  updated: '2026-11-10',
+  updated: '2026-11-12',
   // The oldest macOS the model runtime supports.
   minMacosMajor: 14,
   // Ordered by rank. The higher rank wins among models that fit and whose speed is graded
@@ -537,9 +586,41 @@ export const STOCK_LOCAL_MODEL_CATALOG: LocalModelCatalog = {
       figures: 'estimated',
       contexts: [131072, 65536],
       rank: 5,
-      // Not measured: the 2.95 of Qwen3.8 27B, a dense model whose weights are the same size on
-      // llama.cpp (16.8 GB each without the projector).
+      // The 2.95 of Qwen3.8 27B, a dense model whose weights are the same size on llama.cpp
+      // (16.8 GB each without the projector). Left there on purpose after the one run on a Mac
+      // (M5 Pro, 2026-11-12): the runtime alone wrote 14.5 to 15.2 tokens per second, 4.8 per
+      // 100 GB/s, but an OpenCode worker given one line (through the skill's `sendmark`, which
+      // adds its answer-file sentence) showed no answer after 7 minutes, twice.
       speedPer100Gbps: 2.95,
+      tested: [],
+    },
+    {
+      // The same model as the MLX build: about twice as fast, because the tag carries a draft
+      // model (the runtime logs "Loaded draft model", acceptance 0.34 to 0.62) and its own
+      // renderer and tool parser. On the MacBook Pro (Mac17,13, M5 Pro, 48 GB, 2026-11-12) it
+      // wrote 30.2 tokens per second where the GGUF build wrote 15.2 (the same 300-token
+      // request), answered a tool call in under 3 seconds, and finished an OpenCode turn on
+      // a one-line prompt in 45 seconds. The GGUF build above had shown nothing after 7
+      // minutes on a one-line task (not the same prompt: see that row). The price is
+      // memory: what the MLX runner holds grows six times as fast per token (MEMORY in the
+      // file header), so this build starts at 48 GB and the 32 and 36 GB Macs keep the row
+      // above. Not installed through the window yet, and no agent session beyond that turn:
+      // no `tested` entry.
+      id: 'muse-glimmer:30b-mlx',
+      label: 'Muse Glimmer 30B (MLX)',
+      license: 'Apache-2.0',
+      paramsB: 29.6,
+      runner: 'mlx',
+      // The layers of its manifest, the draft model's included.
+      bytes: 19_053_621_992,
+      ...MUSE_MLX_MEASURED_MEMORY,
+      figures: 'measured',
+      contexts: [131072, 65536],
+      rank: 6,
+      // Measured beside Qwen3.6 35B-A3B on MLX, same Mac, same request (a 1,500-token answer):
+      // 32.6 against 101.9 tokens per second, so 0.32 of that row's 16.9. Like that row's, on
+      // the low side: on 307 GB/s it computes to 16.6.
+      speedPer100Gbps: 5.4,
       tested: [],
     },
     {
@@ -562,7 +643,7 @@ export const STOCK_LOCAL_MODEL_CATALOG: LocalModelCatalog = {
       peakExtraBytes: 0,
       figures: 'estimated',
       contexts: [262144, 131072, 65536],
-      rank: 6,
+      rank: 7,
       // Measured: 54.5 tokens per second on 400 GB/s (llama.cpp, without prediction).
       speedPer100Gbps: 13.6,
       tested: [],
@@ -580,7 +661,7 @@ export const STOCK_LOCAL_MODEL_CATALOG: LocalModelCatalog = {
       ...MEASURED_MEMORY,
       figures: 'measured',
       contexts: [131072, 65536],
-      rank: 7,
+      rank: 8,
       // Measured: 67.8 tokens per second on 400 GB/s with MLX. The one Mac we tested ran it at
       // 67.7 on 307 GB/s, so on other chips the estimate is on the low side.
       speedPer100Gbps: 16.9,
@@ -605,7 +686,7 @@ export const STOCK_LOCAL_MODEL_CATALOG: LocalModelCatalog = {
       peakExtraBytes: 0,
       figures: 'estimated',
       contexts: [262144, 131072, 65536],
-      rank: 8,
+      rank: 9,
       // Not measured: the 2.95 of the row below scaled by file size.
       speedPer100Gbps: 1.7,
       tested: [],
@@ -629,7 +710,7 @@ export const STOCK_LOCAL_MODEL_CATALOG: LocalModelCatalog = {
       peakExtraBytes: 0,
       figures: 'estimated',
       contexts: [262144, 131072, 65536],
-      rank: 9,
+      rank: 10,
       // Measured: 11.8 tokens per second on 400 GB/s (llama.cpp, Q4_K_M, without prediction).
       // This build predicts several tokens at a time, so it is faster than this figure says.
       speedPer100Gbps: 2.95,
@@ -653,7 +734,7 @@ export const STOCK_LOCAL_MODEL_CATALOG: LocalModelCatalog = {
       peakExtraBytes: MEASURED_MEMORY.peakExtraBytes,
       figures: 'estimated',
       contexts: [262144, 131072],
-      rank: 10,
+      rank: 11,
       // Not measured: the 16.9 of Qwen3.6 35B-A3B on MLX x 3/10, its active parameters
       // against these, rounded down.
       speedPer100Gbps: 5,

@@ -20,8 +20,8 @@ in [architecture-invariants.md](architecture-invariants.md#local-model-install).
 
 The window offers the best model of the catalogue (`src/config/local-model-catalog.ts`) that
 fits this Mac's memory at a context a coding agent can work with, and under it every other
-model of the catalogue that fits (ten models today: a 16 GB Mac sees one of them, a 512 GB
-Mac all ten). What the catalogue answers today, before the runtime measured anything (the
+model of the catalogue that fits (eleven models today: a 16 GB Mac sees one of them, a 512 GB
+Mac all eleven). What the catalogue answers today, before the runtime measured anything (the
 budget is then an estimate: 2/3 of the memory below 36 GB, 3/4 from 36 GB, less 1 GiB, and
 never more than the memory less 6, 8 or 12 GiB for macOS, Codeman, a browser and the agent):
 
@@ -31,9 +31,9 @@ never more than the memory less 6, 8 or 12 GiB for macOS, Codeman, a browser and
 | 16 GB            | 10.4 GB | A small model (`limited`): Ornith 1.0 9B at 65,536 tokens, 9.3 GB, tight (90%). Its build has no vision projector, which makes it 0.9 GB smaller than the other two 9B builds: MiMo V2.6 9B needs 10.2 GB there, 98.7% of the budget, just past the 98% a tight fit may reach. Once the runtime measures what a 16 GB Mac mini measured (10.7 GB), all three fit and MiMo is the pick. No 9B was run on such a Mac by us: only a run settles it                                                                                                                                        |
 | 18 GB            | 11.8 GB | A small model (`limited`): MiMo V2.6 9B at 131,072 tokens, 11.4 GB, tight. Ornith 1.0 9B (10.5 GB) and Qwen3.5 9B are the alternatives                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | 24 GB            | 16.1 GB | The same, with room. On a base M2 or M3 (100 GB/s) it computes to 9.3 tokens per second: slow                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| 32 GB            | 21.8 GB | No longer a small-model Mac: Muse Glimmer 30B fits at 65,536 tokens (21.2 GB, 97%, tight). It is a dense model. On an M1 Max or M2 Max it computes to 11.8 tokens per second and is the pick; on a base or Pro chip it computes to under 6 and is listed as slow, and the pick stays MiMo V2.6 9B at 131,072 tokens with the note that it is a small model. North Mini Code 1.0 needs 23.2 GB at 65,536 tokens; once the runtime measures about 3/4 of the memory, as it did on a 16 and a 48 GB Mac, the Mac gets it at 131,072 tokens, or Qwen3.8 27B at 65,536 tokens on a Max chip |
+| 32 GB            | 21.8 GB | No longer a small-model Mac: Muse Glimmer 30B fits at 65,536 tokens (21.2 GB, 97%, tight). It is a dense model. On an M1 Max or M2 Max it computes to 11.8 tokens per second and is the pick; on a base or Pro chip it computes to under 6 and is listed as slow, and the pick stays MiMo V2.6 9B at 131,072 tokens with the note that it is a small model. North Mini Code 1.0 needs 23.2 GB at 65,536 tokens; once the runtime measures about 3/4 of the memory, as it did on a 16 and a 48 GB Mac, the Mac gets it at 131,072 tokens, or Qwen3.8 27B at 65,536 tokens on a Max chip. Run once on a Mac (an M5 Pro with 48 GB, 2026-11-12): this GGUF build wrote 15 tokens per second, and an OpenCode worker given a one-line task showed no answer after 7 minutes. Its MLX build, which finished an OpenCode turn on a one-line prompt in 45 seconds, needs 36.1 GB and is offered from 48 GB |
 | 36 GB            | 27.9 GB | Qwen3.8 27B at 131,072 tokens on an M4 or M5 Max (27.0 GB, 97%); on a slower chip, where the dense 27B computes to under 10 tokens per second, Qwen3.6 35B-A3B as a GGUF build (27.1 GB, 97%). Both tight. Muse Glimmer 30B at 131,072 tokens (21.6 GB, 78%) is the alternative with room to spare                                                                                                                                                                                                                                                                                     |
-| 48 GB            | 37.6 GB | Qwen3.6 35B-A3B (MLX) at 131,072 tokens: the pair we tested, "Recommended" on an Apple M5 Pro with 48 GB. On a Max chip Qwen3.8 27B at 262,144 tokens (32.1 GB, tight). The test was a short task: in a long session MLX may keep up to 8 GiB more, which brings this pair to the edge of the budget, and past it while a long prompt is processed                                                                                                                                                                                                                                     |
+| 48 GB            | 37.6 GB | Qwen3.6 35B-A3B (MLX) at 131,072 tokens: the pair we tested, "Recommended" on an Apple M5 Pro with 48 GB. On a Max chip Qwen3.8 27B at 262,144 tokens (32.1 GB, tight). A session of many prompts on that Mac (a 95,000-token prompt, then twelve separate ones of 15,000 tokens, measured on 2026-11-12) ended at 33.4 GB of the 40.2 GB its runtime measures, still growing by 0.5 GiB a prompt: MLX may keep up to 8 GiB of earlier prompts, which brings this pair to the edge of the budget. Muse Glimmer 30B as its MLX build is offered here too, at 65,536 tokens (36.1 GB, tight) |
 | 64 GB            | 50.5 GB | Qwen3.8 27B at 262,144 tokens on a Max chip; Qwen3.6 35B-A3B (MLX) on a Pro chip                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | 96 GB            | 76.2 GB | Qwen3.8 27B at 262,144 tokens; on an M3 Max, Qwen3.6 35B-A3B (MLX)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | 128 GB           | 102 GB  | Ornith 1.5 122B-A10B (MLX) at 131,072 tokens, 97.4 GB, tight                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
@@ -73,7 +73,10 @@ names its runner (`runner`) and its figures follow that runner's rule:
 - **MLX** grows its cache with the tokens actually used, keeps snapshots of the recurrent
   state, and may keep up to 8 GiB of snapshots of earlier prompts, which no setting bounds. A
   Mac always takes the MLX build of a tag that has one. Below 48 GB that 8 GiB does not fit
-  beside a useful model, so the catalogue lists GGUF builds there.
+  beside a useful model, so the catalogue lists GGUF builds there. For Muse Glimmer the MLX
+  runner was measured holding 38,000 to 45,000 bytes per token, against the 7,072 its GGUF
+  build computes to: close to every layer's cache at full length, so it evidently does not
+  trim the sliding-window layers the way llama.cpp does.
 
 Where every figure comes from:
 
@@ -84,6 +87,7 @@ Where every figure comes from:
 | `mimo-v2.6:9b-q4_k_m`        | llama.cpp | the same (a fine-tune of Qwen3.5-9B)                                                | 9.3: the same architecture and size                       |
 | `north-mini-code-1.0:q4_k_m` | llama.cpp | computed from its config                                                            | 13.6: the 35B-A3B's, the same 3 billion active parameters |
 | `muse-glimmer:30b-q4_k_m`    | llama.cpp | computed from its config: 13 full-attention and 39 sliding-window layers            | 2.95: the dense 27B's, whose weights are the same size    |
+| `muse-glimmer:30b-mlx`       | MLX       | **measured** on an Apple M5 Pro with 48 GB, the 8 GiB of prefix snapshots counted   | 5.4: measured beside the 35B-A3B on MLX, 0.32 of its 16.9 |
 | `qwen3.6:35b-a3b-mtp-q4_k_m` | llama.cpp | computed from the Qwen3.6-35B-A3B config, prediction layer included                 | 13.6: a published run on an M1 Max                        |
 | `qwen3.6:35b-a3b`            | MLX       | **measured** on an Apple M5 Pro with 48 GB                                          | 16.9: a published run; 67.7 measured on the tested Mac    |
 | `qwen3.8:27b-q8_0`           | llama.cpp | computed from the Qwen3.8-27B config, prediction layer included                     | 1.7: the row below scaled by file size                    |
@@ -91,12 +95,18 @@ Where every figure comes from:
 | `ornith-1.5:122b`            | MLX       | computed from the Qwen3.5-122B-A10B config, scaled by the measured MLX row, + 8 GiB | 5.0: the 35B-A3B's, x 3/10 active parameters              |
 
 Sizes are what the registry serves a Mac for each tag (every layer plus the config), read on
-2026-11-08 (the Ornith 1.0 and Muse Glimmer rows on 2026-11-10). Only one row was ever run on
-a Mac, so every other answer in the table above is a calculation. For a llama.cpp build the check after the download catches a load that was
+2026-11-08 (the Ornith 1.0 and Muse Glimmer rows on 2026-11-10, Muse Glimmer's MLX build on
+2026-11-12). Two rows carry memory figures measured on a Mac, both on an Apple M5 Pro with
+48 GB; every other answer in the table above is a calculation. Three more rows were installed
+and loaded on that Mac on 2026-11-12 (Qwen3.5 9B, Ornith 1.0 9B and Muse Glimmer as a GGUF
+build): that checked their download size and that they load on the GPU, not their memory
+figures. For a llama.cpp build the check after the download catches a load that was
 judged too kindly, but not what grows after it in host memory (the checkpoints and the prompt
 cache, which are counted, not checked); for an MLX build it catches neither (see "The check"
-below). The measured row's figures come from single long prompts, not a session of many
-requests, in which MLX may keep up to 8 GiB more. The catalogue header lists the models left
+below). The 35B-A3B's figures come from single long prompts, not a session of many
+requests, in which MLX may keep up to 8 GiB more: such a session was measured on it later
+(the 48 GB row above) and its figures were left as they are. Muse Glimmer's MLX row counts
+the 8 GiB. The catalogue header lists the models left
 out on purpose (no evidence of working tool calls, a restrictive licence, a known bug, a
 build that needs a newer runtime than the pinned one) and why. The strongest of those today
 is Ripple 65B Preview, published on 2026-11-09: every build of it requires Ollama 0.40.16,
@@ -484,8 +494,8 @@ or `python3`.
   a session uses the model: close those sessions first.
 - **The runtime does not enforce the context length.** A prompt longer than the context was
   accepted in testing. Do not rely on the runtime to stop one.
-- **Most memory figures are calculated, not measured.** One model was run on one Mac; the
-  others are computed from their architecture, and the runtime settings they assume (an 8-bit
+- **Most memory figures are calculated, not measured.** Two models were measured on one Mac;
+  the others are computed from their architecture, and the runtime settings they assume (an 8-bit
   K/V cache, flash attention, a 1 GiB prompt cache) were read in its source, not yet observed
   on a Mac. "Recommended" appears only for the pair we ran, on the Mac we ran it on.
 - **A tool call that quotes a tool call can be cut off.** The pinned runtime reads the tool

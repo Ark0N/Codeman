@@ -112,7 +112,7 @@ export const LIMITED_BELOW_PARAMS_B = 12;
 export const DISK_HEADROOM_BYTES = 10 * GIB;
 /**
  * How many other models are listed under the pick, at most. Above what the stock catalogue
- * holds (10 models: 9 beside the pick), so a Mac is shown every model that fits it and the
+ * holds (11 models: 10 beside the pick), so a Mac is shown every model that fits it and the
  * install accepts every one of them. Still a bound: test/local-model-catalog.test.ts fails for
  * a catalogue that outgrows it, so nothing drops out of the list unseen.
  */
