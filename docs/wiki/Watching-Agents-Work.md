@@ -108,9 +108,9 @@ are not reading.
 
 - **A session pointed at a relocated Claude config directory goes blind here.** Transcripts
   written outside `~/.claude/projects` are invisible to the watchers, so subagent windows,
-  the ultracode panel, the response viewer, and Read My Mind all stop working for that
-  session. Symlink `projects` back into the shared tree to fix it. See
-  [Agent CLIs](Agent-CLIs).
+  the ultracode panel and Read My Mind stop working for that session. Symlink `projects`
+  back into the shared tree to fix it. The response viewer reads the session's own
+  directory and keeps working. See [Agent CLIs](Agent-CLIs).
 - **Closing a window does not cancel the agent.** Nothing on this page controls agents; it
   observes them.
 - **Windows are opt-in for ultracode, automatic for subagents.**
