@@ -1,13 +1,13 @@
 {
-  "version": "1.50.1",
+  "version": "1.51.0",
   "highlights": [
-    "A MacBook keeps working with the lid closed (#795)",
-    "The lid logo breathes while agents work (#794)",
-    "The logo keeps blinking with the lid closed (#801)",
-    "Codeman and LogoLight take turns on the logo (#802)",
-    "Dictation survives a thinking pause (#705)",
-    "Sync cases across devices (#732)",
-    "Delete a file from the Files panel (#792)",
-    "Zoom the path picker's image preview (#791)"
+    "Local models: a library, more models, and the coding agent you choose (#803, #804, #806, #807, #808)",
+    "Mac app: With the Lid Closed no longer asks for a password",
+    "Auto-compact and auto-clear see the whole context (#777)",
+    "jcode as a run mode (#650)",
+    "The File Viewer edits `.env` files (#796, #797)",
+    "Response viewer: a Copy Markdown button (#810)",
+    "Firefox no longer pastes twice on Ctrl+V (#799)",
+    "An omp pane that asks for a tool approval alerts (#798)"
   ]
 }
