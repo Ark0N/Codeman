@@ -216,6 +216,7 @@ import {
 import { resolveCaseRepository, resolveManagedWorktree } from '../../git-worktrees.js';
 import { LRUMap } from '../../utils/lru-map.js';
 import { describeUnknownPath, probePathKind, type PathProbeOptions } from '../../utils/index.js';
+import { claudeProjectsDir } from '../../utils/claude-transcript.js';
 import { findLatestOmpSessionId } from '../../utils/omp-session-resolver.js';
 import { scanOmpSessionsHistory } from '../../omp-transcript.js';
 import { scanCodexSessionsHistory, codexThreadBySessionId } from '../../codex-transcript.js';
@@ -2859,7 +2860,8 @@ export function registerSessionRoutes(
   const claudeHistoryPinCache = new LRUMap<string, { submitAt: number; claudeSessionId: string }>({ maxSize: 1024 });
   async function resolveActiveClaudeSessionIdFromHistory(
     session: Session,
-    projectsDir: string
+    projectsDir: string,
+    historyPath: string
   ): Promise<string | null> {
     // A pane whose conversation id came from its OWN hook needs no correlation:
     // $CODEMAN_SESSION_ID (the pane's env) -> data.session_id (the CLI's own
@@ -2886,7 +2888,6 @@ export function registerSessionRoutes(
       if (s.lastSubmitAt) otherSubmits.push(s.lastSubmitAt);
     }
 
-    const historyPath = join(homedir(), '.claude', 'history.jsonl');
     const stat = await fs.stat(historyPath).catch(() => null);
     if (!stat || stat.size === 0) return null;
     const tail = await readFileTail(historyPath, Buffer.alloc(CLAUDE_HISTORY_TAIL_BYTES), stat.size);
@@ -3091,6 +3092,32 @@ export function registerSessionRoutes(
   }
 
   /**
+   * Where THIS session's claude keeps its conversations: `<config dir>/projects` and
+   * `<config dir>/history.jsonl`. The session's own `CLAUDE_CONFIG_DIR` override (#255) comes
+   * first, then the server's (a pane inherits it through tmux), then `~/.claude`: the order
+   * `claudeProjectsDir()` gives the relaunch pin and the Edit history panel. Looking under
+   * `~/.claude` alone showed "No response yet" for every session on a relocated folder (#701).
+   *
+   * ⚠️ A relocated folder is a path somebody chose, and it can sit on a mount that stopped
+   * answering, so it is probed bounded first (#516, without `pastCap`: agents poll this).
+   * Anything but a directory answers null, which callers read as "no transcript", never as a
+   * reason to look under `~/.claude` instead: a file of the same name there is another
+   * conversation. The default folder is not probed, so that path is unchanged.
+   *
+   * ⚠️ Local sessions only read their own override: in a Docker case or on a remote host the
+   * value names a folder over there, and the same path on this host is somebody else's.
+   */
+  async function claudeConversationDirs(
+    session: Session
+  ): Promise<{ projectsDir: string; historyPath: string } | null> {
+    const local = !session.remote && !session.docker;
+    const projectsDir = claudeProjectsDir(local ? session.claudeConfigDir() : undefined);
+    const relocated = projectsDir !== join(homedir(), '.claude', 'projects');
+    if (relocated && (await probePathKind(projectsDir)) !== 'directory') return null;
+    return { projectsDir, historyPath: join(dirname(projectsDir), 'history.jsonl') };
+  }
+
+  /**
    * Mirror a rename into the conversation's `/resume` title (claude-session-title.ts).
    * Local Claude-format transcripts only: a remote pane's transcript lives on the remote host and a
    * docker pane's inside the container (HOME=/home/agent), never under the host's projects dir. Best
@@ -3105,11 +3132,13 @@ export function registerSessionRoutes(
     )
       return;
     try {
-      const projectsDir = join(process.env.HOME || '/tmp', '.claude', 'projects');
       const hookPath = ctx.getTranscriptPath(session.id);
+      const dirs = hookPath ? null : await claudeConversationDirs(session);
       const transcript = hookPath
         ? { sessionId: basename(hookPath, '.jsonl'), path: hookPath }
-        : await findClaudeTranscript(projectsDir, session.claudeSessionId || session.id, session.id);
+        : dirs
+          ? await findClaudeTranscript(dirs.projectsDir, session.claudeSessionId || session.id, session.id)
+          : null;
       if (transcript) await appendClaudeCustomTitle(transcript.path, transcript.sessionId, session.name);
     } catch (err) {
       console.warn(`[Session] Could not carry rename into the Claude transcript for ${session.id}:`, err);
@@ -3264,13 +3293,21 @@ export function registerSessionRoutes(
       }
     }
 
-    // Scan ~/.claude/projects/*/ for the transcript file
-    const projectsDir = join(process.env.HOME || '/tmp', '.claude', 'projects');
+    // `turn` is the brief view's context: the last ANSWERED turn's assistant
+    // messages, so a multi-row answer is not reduced to its final row. `text`
+    // stays the last assistant row in every mode (agent pollers hash it).
+    const wantsMessages = context === 'full' || context === 'turn';
+
+    // Scan <config dir>/projects/*/ for the transcript file: the session's own Claude config
+    // folder when it was relocated, else the server's, else ~/.claude.
+    const dirs = await claudeConversationDirs(session);
+    if (!dirs) return wantsMessages ? { text: '', timestamp: '', messages: [] } : { text: '', timestamp: '' };
+    const { projectsDir, historyPath } = dirs;
 
     // Adopt the current conversation id if the user ran `/clear` — Claude CLI's
     // interactive PTY emits no JSON on stdout, so without this lookup the
     // stored id stays pinned to the pre-/clear transcript.
-    const activeId = await resolveActiveClaudeSessionIdFromHistory(session, projectsDir);
+    const activeId = await resolveActiveClaudeSessionIdFromHistory(session, projectsDir, historyPath);
     if (activeId && activeId !== session.claudeSessionId) {
       session.adoptClaudeSessionId(activeId);
       // Flush the Enter that vouched for this adoption to state.json. A `/clear`
@@ -3286,10 +3323,6 @@ export function registerSessionRoutes(
       }
     }
 
-    // `turn` is the brief view's context: the last ANSWERED turn's assistant
-    // messages, so a multi-row answer is not reduced to its final row. `text`
-    // stays the last assistant row in every mode (agent pollers hash it).
-    const wantsMessages = context === 'full' || context === 'turn';
     const claudeSessionId = session.claudeSessionId || session.id;
     const transcript = await findClaudeTranscript(projectsDir, claudeSessionId, session.id);
     if (!transcript) {

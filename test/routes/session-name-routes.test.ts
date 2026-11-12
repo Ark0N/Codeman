@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { registerSessionRoutes } from '../../src/web/routes/session-routes.js';
@@ -129,6 +129,35 @@ describe('PUT /api/sessions/:id/name', () => {
       });
     }
     expect(transcriptRows()).toHaveLength(before + 1);
+  });
+
+  it("finds the transcript in the session's relocated Claude config folder when no hook has named it (#701)", async () => {
+    // Before the first hook after a restart the watcher has no path, and the scan used to
+    // look under ~/.claude alone, so a session on another account kept its old /resume title.
+    const configDir = join(transcriptDir, 'claude-clients', 'acme');
+    const projectDir = join(configDir, 'projects', '-tmp');
+    mkdirSync(projectDir, { recursive: true });
+    const relocatedPath = join(projectDir, `${session.id}.jsonl`);
+    writeFileSync(relocatedPath, `${JSON.stringify({ type: 'user', message: { role: 'user', content: 'hi' } })}\n`);
+    const hookPath = harness.ctx.getTranscriptPath;
+    (harness.ctx as Record<string, unknown>).getTranscriptPath = () => null;
+    Object.defineProperty(session, 'claudeConfigDir', { configurable: true, value: () => configDir });
+    try {
+      const res = await harness.app.inject({
+        method: 'PUT',
+        url: `/api/sessions/${session.id}/name`,
+        payload: { name: 'client work' },
+      });
+      expect(res.statusCode).toBe(200);
+      const rows = readFileSync(relocatedPath, 'utf8')
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      expect(rows.at(-1)).toEqual({ type: 'custom-title', customTitle: 'client work', sessionId: session.id });
+    } finally {
+      delete (session as unknown as Record<string, unknown>).claudeConfigDir;
+      (harness.ctx as Record<string, unknown>).getTranscriptPath = hookPath;
+    }
   });
 
   it('writes no title row for a docker session, whose transcript lives in the container', async () => {
