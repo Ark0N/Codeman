@@ -106,6 +106,9 @@ const ROW_ARCHITECTURE: Record<string, { architecture: ArchitectureName; draftTo
   'north-mini-code-1.0:q4_k_m': { architecture: 'North-Mini-Code-1.0', draftTokens: 0 },
   // No prediction layer; the tags with a separate draft model (`-dflash`) are not listed.
   'muse-glimmer:30b-q4_k_m': { architecture: 'Muse-Glimmer-30B', draftTokens: 0 },
+  // The MLX build. Its figures are measured, so nothing is recomputed from this entry. The tag
+  // carries a draft MODEL (not a prediction layer of llama.cpp): what that holds was measured too.
+  'muse-glimmer:30b-mlx': { architecture: 'Muse-Glimmer-30B', draftTokens: 0 },
   // Its params layer sets `draft_num_predict` 2.
   'qwen3.6:35b-a3b-mtp-q4_k_m': { architecture: 'Qwen3.6-35B-A3B', draftTokens: 2 },
   'qwen3.6:35b-a3b': { architecture: 'Qwen3.6-35B-A3B', draftTokens: 0 },
@@ -167,6 +170,12 @@ function mlxComputedPerToken(arch: Architecture): number {
 
 /** The figures measured for `qwen3.6:35b-a3b` on the MacBook Pro. */
 const MEASURED: [number, number, number] = [37_000, 3_000_000_000, 5_000_000_000];
+/**
+ * The figures measured for `muse-glimmer:30b-mlx` on the same MacBook Pro (2026-11-12): the upper
+ * end of what stayed held per token, the whole prefix budget plus 0.5 GB, and the peak of the
+ * process above what stayed held.
+ */
+const MEASURED_MUSE_MLX: [number, number, number] = [45_000, 8 * GIB + 500_000_000, 3_500_000_000];
 
 /** What an estimated `mlx` row's three figures must be: computed, scaled by what the measured row showed. */
 function mlxFigures(arch: Architecture): [number, number, number] {
@@ -193,22 +202,23 @@ describe('the stock catalogue', () => {
     expect(getLocalModelCatalog()).toBe(first);
   });
 
-  it('lists ten models, by rank, and none of those set aside in the header', () => {
+  it('lists eleven models, by rank, and none of those set aside in the header', () => {
     expect(models.map((m) => m.id)).toEqual([
       'qwen3.5:9b-q4_k_m',
       'ornith:9b-q4_k_m',
       'mimo-v2.6:9b-q4_k_m',
       'north-mini-code-1.0:q4_k_m',
       'muse-glimmer:30b-q4_k_m',
+      'muse-glimmer:30b-mlx',
       'qwen3.6:35b-a3b-mtp-q4_k_m',
       'qwen3.6:35b-a3b',
       'qwen3.8:27b-q8_0',
       'qwen3.8:27b-mtp-q4_k_m',
       'ornith-1.5:122b',
     ]);
-    expect(models.map((m) => m.rank)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    expect(models.map((m) => m.rank)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
     const setAside =
-      /^(bonsai-2|gpt-oss|flint|lfm2\.5|laguna|qwen3\.8-flash-next|qwen3\.5:(122b|4b)|ripple-preview|nemotron-3\.5-super|qwen3-coder-next)|^ornith-1\.5:(9b|35b|397b)|^ornith:35b|^muse-glimmer:.*(mlx|dflash)/;
+      /^(bonsai-2|gpt-oss|flint|lfm2\.5|laguna|qwen3\.8-flash-next|qwen3\.5:(122b|4b)|ripple-preview|nemotron-3\.5-super|qwen3-coder-next)|^ornith-1\.5:(9b|35b|397b)|^ornith:35b|^muse-glimmer:.*dflash/;
     expect(models.filter((m) => setAside.test(m.id)).map((m) => m.id)).toEqual([]);
     // The plain 9B and 27B tags are MLX builds on a Mac: their GGUF builds are listed instead.
     for (const plain of ['qwen3.5:9b', 'mimo-v2.6:9b', 'qwen3.8:27b']) {
@@ -223,6 +233,8 @@ describe('the stock catalogue', () => {
       'mimo-v2.6:9b-q4_k_m': 'llamacpp',
       'north-mini-code-1.0:q4_k_m': 'llamacpp',
       'muse-glimmer:30b-q4_k_m': 'llamacpp',
+      // Its manifest names no runner in a list; the runtime starts its MLX runner for it.
+      'muse-glimmer:30b-mlx': 'mlx',
       'qwen3.6:35b-a3b-mtp-q4_k_m': 'llamacpp',
       // Manifest lists: a Mac takes the MLX child.
       'qwen3.6:35b-a3b': 'mlx',
@@ -242,6 +254,9 @@ describe('the stock catalogue', () => {
       'north-mini-code-1.0:q4_k_m': 18_593_967_008,
       // Fetched on 2026-11-10: 16.76 GB of weights and a 1.40 GB projector.
       'muse-glimmer:30b-q4_k_m': 18_157_010_252,
+      // Fetched on 2026-11-12: 1,503 layers, the draft model's among them. A pull on a Mac
+      // that day ended at 19.1 GB.
+      'muse-glimmer:30b-mlx': 19_053_621_992,
       'qwen3.6:35b-a3b-mtp-q4_k_m': 22_621_314_381,
       // The MLX child of the list, and the total of a real pull on a Mac, byte for byte.
       'qwen3.6:35b-a3b': 23_105_798_956,
@@ -252,9 +267,29 @@ describe('the stock catalogue', () => {
     });
   });
 
-  it('says which row was measured on a Mac: one, and every other row is an estimate', () => {
-    expect(models.filter((m) => m.figures === 'measured').map((m) => m.id)).toEqual(['qwen3.6:35b-a3b']);
+  it('says which rows were measured on a Mac: two, and every other row is an estimate', () => {
+    expect(models.filter((m) => m.figures === 'measured').map((m) => m.id)).toEqual([
+      'muse-glimmer:30b-mlx',
+      'qwen3.6:35b-a3b',
+    ]);
     expect(figuresOf(models.find((m) => m.id === 'qwen3.6:35b-a3b') as LocalModelEntry)).toEqual(MEASURED);
+    expect(figuresOf(models.find((m) => m.id === 'muse-glimmer:30b-mlx') as LocalModelEntry)).toEqual(
+      MEASURED_MUSE_MLX
+    );
+  });
+
+  it('counts the whole prefix budget of the MLX runner in the row that was measured filling it', () => {
+    // Every estimated MLX row counts the 8 GiB too (mlxFigures). The first measured row does
+    // not: the catalogue header says why, and what a session on it really held.
+    expect(MEASURED_MUSE_MLX[1]).toBe(8 * GIB + 500_000_000);
+    expect(MEASURED[1]).toBeLessThan(8 * GIB);
+    // What the runner really keeps per token is far above the 13 full-attention layers alone
+    // and under all 52 layers at full length: it evidently does not trim the sliding-window layers.
+    const arch = ARCHITECTURES['Muse-Glimmer-30B'];
+    expect(arch.attentionLayers * arch.kvHeads * arch.headDim * 2 * 2).toBe(13_312);
+    expect((arch.attentionLayers + arch.sliding.layers) * arch.kvHeads * arch.headDim * 2 * 2).toBe(53_248);
+    expect(MEASURED_MUSE_MLX[0]).toBeGreaterThan(13_312 * 2);
+    expect(MEASURED_MUSE_MLX[0]).toBeLessThanOrEqual(53_248);
   });
 
   it('has one tested entry: the 35B-A3B with OpenCode on the MacBook Pro, with its measured speed', () => {
@@ -277,6 +312,7 @@ describe('the stock catalogue', () => {
       'north-mini-code-1.0:q4_k_m': [30, 'Apache-2.0'],
       // The card's total: a 27.9B language model and a vision encoder.
       'muse-glimmer:30b-q4_k_m': [29.6, 'Apache-2.0'],
+      'muse-glimmer:30b-mlx': [29.6, 'Apache-2.0'],
       'qwen3.6:35b-a3b-mtp-q4_k_m': [35, 'Apache-2.0'],
       'qwen3.6:35b-a3b': [35, 'Apache-2.0'],
       'qwen3.8:27b-q8_0': [27.8, 'Apache-2.0'],
@@ -309,6 +345,8 @@ describe('the stock catalogue', () => {
       'north-mini-code-1.0:q4_k_m': 13.6,
       // The dense 27B's figure: the weights of the two are the same size.
       'muse-glimmer:30b-q4_k_m': 2.95,
+      // Measured beside the 35B-A3B on MLX, same Mac and request: 32.6 against 101.9, x 16.9.
+      'muse-glimmer:30b-mlx': 5.4,
       // 54.5 on 400 GB/s with llama.cpp.
       'qwen3.6:35b-a3b-mtp-q4_k_m': 13.6,
       // 67.8 on 400 GB/s with MLX.
@@ -389,6 +427,8 @@ describe('the memory figures of the stock rows: each row has its own', () => {
       'north-mini-code-1.0:q4_k_m': [14_144, 3_698_117_120, 0],
       // The same rule: 39 layers x 2,560 cells x 544 bytes = 54,312,960 per copy.
       'muse-glimmer:30b-q4_k_m': [7_072, 2_562_558_464, 0],
+      // Measured: the upper end per token, 8 GiB of prefix snapshots + 0.5 GB, the process peak.
+      'muse-glimmer:30b-mlx': [45_000, 9_089_934_592, 3_500_000_000],
       // State x (1 live + 2 rollback copies + 8 checkpoints) + 1.0 GB + 1 GiB; the prediction
       // layer's cache in f16 per token. The 27B rows below draft 4 tokens: 4 rollback copies.
       'qwen3.6:35b-a3b-mtp-q4_k_m': [12_928, 2_798_242_304, 0],
