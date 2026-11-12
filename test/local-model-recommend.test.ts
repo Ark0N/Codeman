@@ -493,9 +493,9 @@ describe('needBytes', () => {
       'north-mini-code-1.0:q4_k_m': 25_999_848_864,
       // At its own window of 131072 tokens: 18.2 GB + 0.9 GB of K/V cache + 2.6 GB.
       'muse-glimmer:30b-q4_k_m': 21_646_509_900,
-      // The MLX build at the same window: 19.1 GB + 5.9 GB of cache (every layer at full length,
-      // measured) + the 8 GiB of prefix snapshots and 0.5 GB + 3.5 GB of peak.
-      'muse-glimmer:30b-mlx': 37_541_796_584,
+      // The MLX build at the same window: 19.1 GB + 5.9 GB of cache (45,000 bytes per token,
+      // measured) + the 8 GiB of prefix snapshots and 0.5 GB + 5 GB of peak.
+      'muse-glimmer:30b-mlx': 39_041_796_584,
       'qwen3.6:35b-a3b-mtp-q4_k_m': 28_808_554_317,
       'qwen3.6:35b-a3b': 35_955_462_956,
       'qwen3.8:27b-q8_0': 44_292_142_594,
@@ -659,8 +659,8 @@ describe('the MacBook Pro (Mac17,13: Apple M5 Pro, 48 GB)', () => {
     ).toEqual([
       // The same model as a GGUF build: its fixed footprint holds the full window, 28.8 GB.
       ['qwen3.6:35b-a3b-mtp-q4_k_m', 262144, 'good', 'ok', 41.8, undefined],
-      // Muse Glimmer as the MLX build: 34.6 GB at 65536 tokens (0.920 of the estimate), and
-      // 5.4 x 3.07 = 16.6 tokens per second. At 131072 it needs 37.5 GB, 0.998: out.
+      // Muse Glimmer as the MLX build: 36.1 GB at 65536 tokens (0.960 of the estimate), and
+      // 5.4 x 3.07 = 16.6 tokens per second. At 131072 it needs 39.0 GB, 1.04: out.
       ['muse-glimmer:30b-mlx', 65536, 'tight', 'ok', 16.6, 'tight'],
       ['north-mini-code-1.0:q4_k_m', 262144, 'good', 'ok', 41.8, undefined],
       ['mimo-v2.6:9b-q4_k_m', 131072, 'good', 'ok', 28.6, 'small'],
@@ -911,7 +911,7 @@ describe('every memory size, with the stock catalogue', () => {
 
   it('offers Muse Glimmer as the MLX build from 48 GB only, and never as the pick of a Mac whose disk has room', () => {
     // Measured on a 48 GB Mac: 45,000 bytes held per token and up to 8 GiB of prefix snapshots,
-    // 34.6 GB at 65536 tokens. Runtime issue 18269 reports this build stuck, and a restart, on
+    // 36.1 GB at 65536 tokens. Runtime issue 18269 reports this build stuck, and a restart, on
     // a 32 GB Mac: the figures keep it away from there.
     for (const hw of SWEEP) {
       const result = recommend(hw, STOCK, ALL_INSTALLED);
@@ -2192,17 +2192,17 @@ describe('the measured budget, end to end', () => {
     // The same models in the same order. The share of each changes, and two models step up a
     // context: the 27B in 8 bits fits 65536 tokens under the estimate (0.975) and 131072 under
     // what the runtime reported (0.976), and Muse Glimmer as the MLX build goes from 65536
-    // (0.920) to its whole window of 131072 (0.935).
+    // (0.960) to its whole window of 131072 (0.972).
     expect(rows(measured).map((c) => c.modelId)).toEqual(rows(estimated).map((c) => c.modelId));
     const stepped = order(estimated).filter((entry, index) => order(measured)[index] !== entry);
     expect(stepped).toEqual(['muse-glimmer:30b-mlx@65536', 'qwen3.8:27b-q8_0@65536']);
     expect(order(measured)).toContain('qwen3.8:27b-q8_0@131072');
     expect(order(measured)).toContain('muse-glimmer:30b-mlx@131072');
     expect(rows(estimated).map((c) => c.budgetShare)).toEqual([
-      0.957, 0.767, 0.92, 0.692, 0.303, 0.278, 0.303, 0.853, 0.975, 0.576,
+      0.957, 0.767, 0.96, 0.692, 0.303, 0.278, 0.303, 0.853, 0.975, 0.576,
     ]);
     expect(rows(measured).map((c) => c.budgetShare)).toEqual([
-      0.895, 0.717, 0.935, 0.647, 0.283, 0.26, 0.283, 0.798, 0.976, 0.539,
+      0.895, 0.717, 0.972, 0.647, 0.283, 0.26, 0.283, 0.798, 0.976, 0.539,
     ]);
     for (const candidate of rows(measured)) {
       expect(candidate.budgetShare).toBeCloseTo(candidate.needBytes / MACBOOK_MEASURED_TOTAL, 3);

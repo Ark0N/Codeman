@@ -130,9 +130,12 @@
  *       figure, not read in its source). The row takes the upper end. It counts the whole
  *       8 GiB prefix budget, because the same run filled it: twelve separate prompts of
  *       15,000 tokens added 0.53 GiB each until the runner dropped the oldest. The process
- *       (`footprint`) stood 0.2 GB above the runner's own count at the end and had peaked
- *       3.0 to 3.3 GB above it. The tag carries a draft model; its tensors are inside
- *       `bytes`, and what it holds is inside these figures.
+ *       (`footprint`) stood 0.2 GB above the runner's own count at the end. Its lifetime
+ *       peak stood 3.0 to 3.3 GB above that, which is a FLOOR for the peak of a long prompt:
+ *       a lifetime maximum taken at the end of the run hides a transient of up to 9 GB
+ *       during the earlier, longer prompts. So the row takes the first measured row's 5 GB.
+ *       The tag carries a draft model; its tensors are inside `bytes`, and what it holds is
+ *       inside these figures.
  *     - every other `mlx` row: held = the K/V cache in bf16 + one recurrent snapshot per
  *       8,192 tokens, computed from the config, x 37,000 / 28,340: the ratio of what the
  *       measured row really held to the same computation for it (same runner, same
@@ -192,7 +195,8 @@
  *    a build the MLX engine cannot accelerate (on the Mac it ran on the runtime logged
  *    "MLX engine initialized ... device=gpu" and it wrote twice as fast as the GGUF build),
  *    and 18269 reports it stuck in "Stopping..." and a restart on a 32 GB Mac, a size the
- *    measured figures keep it away from.
+ *    measured figures keep it away from (its maintainer promised a memory fix "in the next
+ *    release" in September; whether that predates the pinned 0.40.15 is not known).
  *  - The plain tags `qwen3.5:9b`, `mimo-v2.6:9b` and `qwen3.8:27b`: a Mac pulls their MLX
  *    builds, whose 8 GiB of prefix snapshots do not fit the Macs a 9B or a 27B is for. Their
  *    GGUF builds are listed instead.
@@ -405,8 +409,12 @@ const MUSE_MLX_MEASURED_MEMORY = {
    * runner's own count (0.2 GB measured).
    */
   overheadBytes: MLX_PREFIX_CACHE_BYTES + 500_000_000,
-  /** The process footprint had peaked 3.0 to 3.3 GB above what stayed held. */
-  peakExtraBytes: 3_500_000_000,
+  /**
+   * The first measured row's 5 GB. This run only gives a floor: the footprint's lifetime peak
+   * stood 3.0 to 3.3 GB above what was held at the end, and a larger transient during the
+   * earlier, longer prompts would not show in that figure.
+   */
+  peakExtraBytes: 5_000_000_000,
 } as const;
 
 /**
@@ -542,7 +550,8 @@ export const STOCK_LOCAL_MODEL_CATALOG: LocalModelCatalog = {
       // The 2.95 of Qwen3.8 27B, a dense model whose weights are the same size on llama.cpp
       // (16.8 GB each without the projector). Left there on purpose after the one run on a Mac
       // (M5 Pro, 2026-11-12): the runtime alone wrote 14.5 to 15.2 tokens per second, 4.8 per
-      // 100 GB/s, but an OpenCode turn of one line showed no answer after 7 minutes, twice.
+      // 100 GB/s, but an OpenCode worker given one line (through the skill's `sendmark`, which
+      // adds its answer-file sentence) showed no answer after 7 minutes, twice.
       speedPer100Gbps: 2.95,
       tested: [],
     },
@@ -550,8 +559,10 @@ export const STOCK_LOCAL_MODEL_CATALOG: LocalModelCatalog = {
       // The same model as the MLX build: about twice as fast, because the tag carries a draft
       // model (the runtime logs "Loaded draft model", acceptance 0.34 to 0.62) and its own
       // renderer and tool parser. On the MacBook Pro (Mac17,13, M5 Pro, 48 GB, 2026-11-12) it
-      // answered a tool call in under 3 seconds and finished a one-line OpenCode turn in 45
-      // seconds, where the GGUF build above had shown nothing after 7 minutes. The price is
+      // wrote 30.2 tokens per second where the GGUF build wrote 15.2 (the same 300-token
+      // request), answered a tool call in under 3 seconds, and finished an OpenCode turn on
+      // a one-line prompt in 45 seconds. The GGUF build above had shown nothing after 7
+      // minutes on a one-line task (not the same prompt: see that row). The price is
       // memory: what the MLX runner holds grows six times as fast per token (MEMORY in the
       // file header), so this build starts at 48 GB and the 32 and 36 GB Macs keep the row
       // above. Not installed through the window yet, and no agent session beyond that turn:

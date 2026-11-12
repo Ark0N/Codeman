@@ -172,10 +172,10 @@ function mlxComputedPerToken(arch: Architecture): number {
 const MEASURED: [number, number, number] = [37_000, 3_000_000_000, 5_000_000_000];
 /**
  * The figures measured for `muse-glimmer:30b-mlx` on the same MacBook Pro (2026-11-12): the upper
- * end of what stayed held per token, the whole prefix budget plus 0.5 GB, and the peak of the
- * process above what stayed held.
+ * end of what stayed held per token, the whole prefix budget plus 0.5 GB, and for the peak the
+ * first measured row's 5 GB (its own run gave only a floor of 3.0 to 3.3 GB).
  */
-const MEASURED_MUSE_MLX: [number, number, number] = [45_000, 8 * GIB + 500_000_000, 3_500_000_000];
+const MEASURED_MUSE_MLX: [number, number, number] = [45_000, 8 * GIB + 500_000_000, 5_000_000_000];
 
 /** What an estimated `mlx` row's three figures must be: computed, scaled by what the measured row showed. */
 function mlxFigures(arch: Architecture): [number, number, number] {
@@ -427,8 +427,9 @@ describe('the memory figures of the stock rows: each row has its own', () => {
       'north-mini-code-1.0:q4_k_m': [14_144, 3_698_117_120, 0],
       // The same rule: 39 layers x 2,560 cells x 544 bytes = 54,312,960 per copy.
       'muse-glimmer:30b-q4_k_m': [7_072, 2_562_558_464, 0],
-      // Measured: the upper end per token, 8 GiB of prefix snapshots + 0.5 GB, the process peak.
-      'muse-glimmer:30b-mlx': [45_000, 9_089_934_592, 3_500_000_000],
+      // Measured: the upper end per token, 8 GiB of prefix snapshots + 0.5 GB. The peak is the
+      // first measured row's: this run gave only a floor for it (3.0 to 3.3 GB).
+      'muse-glimmer:30b-mlx': [45_000, 9_089_934_592, 5_000_000_000],
       // State x (1 live + 2 rollback copies + 8 checkpoints) + 1.0 GB + 1 GiB; the prediction
       // layer's cache in f16 per token. The 27B rows below draft 4 tokens: 4 rollback copies.
       'qwen3.6:35b-a3b-mtp-q4_k_m': [12_928, 2_798_242_304, 0],
