@@ -569,14 +569,20 @@ Object.assign(CodemanApp.prototype, {
   /**
    * Called with the `install` object that is about to replace the one on screen. An install
    * that was running and is installed now finished in front of the person: the window then
-   * shows the screen that ends it (see `justInstalled`). Any other state ends that moment.
+   * shows the screen that ends it (see `justInstalled`). A switch is the exception: it ends
+   * on the whole installed screen, list of models included. Any other state ends that moment.
    */
   _noteLocalModelInstall(next) {
     const ui = this._localModelWindowState();
-    const before = localModelInstall(this._localModelStatus).state;
+    const last = localModelInstall(this._localModelStatus);
+    const before = last.state;
     const after = next && typeof next.state === 'string' ? next.state : 'idle';
+    // A switch downloads nothing (its job has no `model` step). The person pressed Use in the
+    // list of models, so it ends on that list, with "In use" on the other row: the screen
+    // that ends an install would take the list away from someone who came to tidy it.
+    const switched = Array.isArray(last.steps) && !last.steps.includes('model');
     if (after !== 'installed') ui.justInstalled = false;
-    else if (before === 'installing' && ui.open) ui.justInstalled = true;
+    else if (before === 'installing' && ui.open) ui.justInstalled = !switched;
   },
 
   _localModelRefused() {
@@ -614,8 +620,9 @@ Object.assign(CodemanApp.prototype, {
          */
         confirmDelete: null,
         /**
-         * The install finished while this window was open: the screen that ends it shows
-         * "Start a session" alone. Stop and Remove belong to the window opened later.
+         * An install (a job that downloaded a model) finished while this window was open:
+         * the screen that ends it shows "Start a session" alone. Stop and Remove belong to
+         * the window opened later. Never set by a switch (`_noteLocalModelInstall`).
          */
         justInstalled: false,
       };
