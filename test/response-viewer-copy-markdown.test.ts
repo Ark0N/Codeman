@@ -178,6 +178,18 @@ describe('what Copy Markdown copies', () => {
     await app.copyResponseViewerMarkdown();
     expect(app._copyText).toHaveBeenCalledWith('the answer on screen');
   });
+
+  it('keeps the brief answer when the full view holds a prompt and no answer of its own', async () => {
+    mountViewer();
+    const app = makeApp(
+      { text: 'the brief answer' },
+      { messages: [{ kind: 'prompt', role: 'user', text: 'a question', turn: 1 }] }
+    );
+    await app.toggleResponseViewer();
+    await app.loadFullContext();
+    await app.copyResponseViewerMarkdown();
+    expect(app._copyText).toHaveBeenCalledWith('the brief answer');
+  });
 });
 
 describe('what Copy Markdown reports', () => {
@@ -255,7 +267,12 @@ describe('Copy Markdown markup, layout and strings', () => {
     const tag = actions.match(/<button[^>]*id="responseViewerCopyMarkdown"[^>]*>/)?.[0] ?? '';
     expect(tag).toContain('type="button"');
     expect(tag).toContain('onclick="app.copyResponseViewerMarkdown()"');
-    expect(tag).toContain('aria-label="Copy response as Markdown"');
+    expect(tag).toContain('title="Copy response as Markdown"');
+    // The words on the button are its accessible name (WCAG 2.5.3, Label in
+    // Name): an aria-label would replace them with a name that does not
+    // contain "Copy Markdown", so a voice-control user could not say what
+    // they see. The longer sentence stays as the title.
+    expect(tag).not.toContain('aria-label');
     expect(actions).toContain('>Copy Markdown</button>');
   });
 
