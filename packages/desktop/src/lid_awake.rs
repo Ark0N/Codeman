@@ -925,7 +925,16 @@ mod system {
             );
             // The holder dies without emptying it: the lock goes, the mark stays.
             drop(first);
-            assert_eq!(second.try_take(), Taken::Yes);
+            // Not always at once in a test run. Another test that starts a process at
+            // this moment hands it a copy of every open file of this one until its
+            // exec, and the lock lives as long as the last copy of the file.
+            let free = (0..400).any(|_| {
+                second.try_take() == Taken::Yes || {
+                    std::thread::sleep(Duration::from_millis(5));
+                    false
+                }
+            });
+            assert!(free, "the lock outlived its holder");
             assert!(second.marked());
             assert!(second.mark(false));
             assert!(!second.marked());
