@@ -1388,12 +1388,21 @@ Object.assign(CodemanApp.prototype, {
   },
 
   // ═══════════════════════════════════════════════════════════════
-  // Monitor Panel Detach & Drag
+  // Monitor and Subagents Panel Detach & Drag
   // ═══════════════════════════════════════════════════════════════
 
   toggleMonitorDetach() {
-    const panel = document.getElementById('monitorPanel');
-    const detachBtn = document.getElementById('monitorDetachBtn');
+    this._togglePanelDetach('monitorPanel', 'monitorPanelHeader', 'monitorDetachBtn');
+  },
+
+  toggleSubagentsDetach() {
+    this._togglePanelDetach('subagentsPanel', 'subagentsPanelHeader', 'subagentsDetachBtn');
+  },
+
+  /** Float a bottom panel as a draggable window, or dock it back. */
+  _togglePanelDetach(panelId, headerId, detachBtnId) {
+    const panel = document.getElementById(panelId);
+    const detachBtn = document.getElementById(detachBtnId);
 
     if (panel.classList.contains('detached')) {
       // Re-attach to bottom
@@ -1414,111 +1423,14 @@ Object.assign(CodemanApp.prototype, {
         detachBtn.innerHTML = '&#x229E;'; // Attach icon (squared plus - dock back)
         detachBtn.title = 'Attach panel';
       }
-      // Setup drag functionality
-      this.setupMonitorDrag();
+      this._setupPanelDrag(panelId, headerId);
     }
   },
 
-  setupMonitorDrag() {
-    const panel = document.getElementById('monitorPanel');
-    const header = document.getElementById('monitorPanelHeader');
-
-    if (!panel || !header) return;
-
-    let isDragging = false;
-    let startX, startY, startLeft, startTop;
-
-    const onStart = (e) => {
-      // Only drag from header, not from buttons
-      if (e.target.closest('button')) return;
-      if (!panel.classList.contains('detached')) return;
-
-      isDragging = true;
-      const coords = getEventCoords(e);
-      startX = coords.clientX;
-      startY = coords.clientY;
-      const rect = panel.getBoundingClientRect();
-      startLeft = rect.left;
-      startTop = rect.top;
-
-      document.addEventListener('mousemove', onMove);
-      document.addEventListener('mouseup', onEnd);
-      document.addEventListener('touchmove', onMove, { passive: false });
-      document.addEventListener('touchend', onEnd);
-      e.preventDefault();
-    };
-
-    const onMove = (e) => {
-      if (!isDragging) return;
-
-      const coords = getEventCoords(e);
-      const dx = coords.clientX - startX;
-      const dy = coords.clientY - startY;
-
-      let newLeft = startLeft + dx;
-      let newTop = startTop + dy;
-
-      // Keep within viewport bounds
-      const rect = panel.getBoundingClientRect();
-      newLeft = Math.max(0, Math.min(window.innerWidth - rect.width, newLeft));
-      newTop = Math.max(0, Math.min(window.innerHeight - rect.height, newTop));
-
-      panel.style.left = newLeft + 'px';
-      panel.style.top = newTop + 'px';
-    };
-
-    const onEnd = () => {
-      isDragging = false;
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onEnd);
-      document.removeEventListener('touchmove', onMove);
-      document.removeEventListener('touchend', onEnd);
-    };
-
-    // Remove existing listeners before adding new ones
-    header.removeEventListener('mousedown', header._dragHandler);
-    header.removeEventListener('touchstart', header._touchDragHandler);
-    header._dragHandler = onStart;
-    header._touchDragHandler = onStart;
-    header.addEventListener('mousedown', onStart);
-    header.addEventListener('touchstart', onStart, { passive: false });
-  },
-
-  // ═══════════════════════════════════════════════════════════════
-  // Subagents Panel Detach & Drag
-  // ═══════════════════════════════════════════════════════════════
-
-  toggleSubagentsDetach() {
-    const panel = document.getElementById('subagentsPanel');
-    const detachBtn = document.getElementById('subagentsDetachBtn');
-
-    if (panel.classList.contains('detached')) {
-      // Re-attach to bottom
-      panel.classList.remove('detached');
-      panel.style.top = '';
-      panel.style.left = '';
-      panel.style.width = '';
-      panel.style.height = '';
-      if (detachBtn) {
-        detachBtn.innerHTML = '&#x29C9;'; // Detach icon
-        detachBtn.title = 'Detach panel';
-      }
-    } else {
-      // Detach as floating window
-      panel.classList.add('detached');
-      panel.classList.add('open'); // Ensure it's visible
-      if (detachBtn) {
-        detachBtn.innerHTML = '&#x229E;'; // Attach icon
-        detachBtn.title = 'Attach panel';
-      }
-      // Setup drag functionality
-      this.setupSubagentsDrag();
-    }
-  },
-
-  setupSubagentsDrag() {
-    const panel = document.getElementById('subagentsPanel');
-    const header = document.getElementById('subagentsPanelHeader');
+  /** Let a detached panel be dragged by its header, kept inside the viewport. */
+  _setupPanelDrag(panelId, headerId) {
+    const panel = document.getElementById(panelId);
+    const header = document.getElementById(headerId);
 
     if (!panel || !header) return;
 
