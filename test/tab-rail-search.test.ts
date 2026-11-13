@@ -801,7 +801,6 @@ describe('floating windows whose parent row the search hid', () => {
       ['ag1', { element: document.getElementById('subWin'), minimized: false, hidden: false }],
     ]);
     app.subagentParentMap = new Map([['ag1', 'review']]);
-    app.planSubagents = new Map();
     app.ultracodeWindows = new Map([
       ['run1', { element: document.getElementById('runWin'), parentSessionId: 'review' }],
     ]);

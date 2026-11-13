@@ -16,7 +16,7 @@
  * @dependency None (first in load order)
  * @loadorder 1 of 15 — constants.js → mobile-handlers.js → voice-input.js → notification-manager.js
  *   → keyboard-accessory.js → input-cjk.js → app.js → terminal-ui.js → respawn-ui.js
- *   → ralph-panel.js → settings-ui.js → panels-ui.js → session-ui.js → ralph-wizard.js
+ *   → ralph-panel.js → settings-ui.js → panels-ui.js → session-ui.js
  *   → api-client.js → subagent-windows.js
  */
 
@@ -135,7 +135,6 @@ const TUI_REDRAW_SETTLE_MS = 400;           // Grace for a TUI to redraw after a
 
 // Z-index base values for layered floating windows
 const ZINDEX_SUBAGENT_BASE = 1000;
-const ZINDEX_PLAN_SUBAGENT_BASE = 1100;
 const ZINDEX_LOG_VIEWER_BASE = 2000;
 const ZINDEX_IMAGE_POPUP_BASE = 3000;
 
@@ -1964,7 +1963,7 @@ function getEventCoords(e) {
   return { clientX: e.clientX, clientY: e.clientY };
 }
 
-// HTML escape utility (shared by NotificationManager, CodemanApp, and ralph-wizard.js)
+// HTML escape utility (shared by NotificationManager and the CodemanApp mixins)
 const _htmlEscapeMap = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 const _htmlEscapePattern = /[&<>"']/g;
 function escapeHtml(text) {

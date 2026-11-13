@@ -157,7 +157,6 @@ console.log('\n[build] content-hash cache busting');
     'settings-ui.js',
     'panels-ui.js',
     'session-ui.js',
-    'ralph-wizard.js',
     'api-client.js',
     'subagent-windows.js',
     'image-input.js',

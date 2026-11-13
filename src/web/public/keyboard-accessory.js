@@ -26,8 +26,7 @@
  *   by Link Existing and the extended mobile keyboard bar.
  *
  * - FocusTrap (class) — Traps Tab/Shift+Tab keyboard focus within a modal element.
- *   Saves and restores previously focused element on deactivate. Used by Ralph wizard
- *   and other modal dialogs.
+ *   Saves and restores previously focused element on deactivate. Used by the modal dialogs.
  *
  * @globals {object} KeyboardAccessoryBar
  * @globals {object} PathPicker
