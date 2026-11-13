@@ -234,6 +234,7 @@ import {
   registerReadMyMindRoutes,
   registerGitStatusRoutes,
   registerEditHistoryRoutes,
+  registerStoryRoutes,
   registerStatusTelemetryRoutes,
   registerSystemRoutes,
   registerCaseRoutes,
@@ -1365,6 +1366,7 @@ export class WebServer extends EventEmitter {
     registerReadMyMindRoutes(this.app, ctx);
     registerGitStatusRoutes(this.app, ctx);
     registerEditHistoryRoutes(this.app, ctx, this.editHistorySync);
+    registerStoryRoutes(this.app, ctx);
     // Git fetch on an interval: this is only the wake-up, the scheduler itself decides what is due. Off in
     // tests for the same reason as the polls below: a test drives `tick()` directly instead of waiting on
     // a timer the harness would have to keep alive. The setting is read FRESH inside `tick()`, so turning

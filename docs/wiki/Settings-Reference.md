@@ -61,7 +61,7 @@ non-updatable. See [Running As A Service](Running-As-A-Service).
 
 Chips for every optional header control, with a live preview of the resulting header:
 
-Run, Font Size, System Stats, Redraw Terminal, Response Viewer, Away Digest, Session
+Run, Font Size, System Stats, Redraw Terminal, Response Viewer, Story Mode, Away Digest, Session
 Manager, Attachments, Edit history, File Viewer, Multi-monitor, Split, Tiles, Plan Usage, Lifecycle Log, Monitor,
 Project Insights, File Browser, Subagents, Approvals Inbox, Read My Mind, Ultracode Agents,
 Ultracode Windows, Cron.
@@ -75,6 +75,18 @@ any vendor (an Intel GPU gives load and memory in use, but Windows publishes no 
 total is taken as half of Windows' RAM, the limit Windows applies to integrated GPUs); and
 `scaling_cur_freq`, `/proc/cpuinfo` or, inside WSL, the Windows `Processor Frequency` counter for the CPU
 clock. Nothing is read, and `nvidia-smi` and `typeperf.exe` are never run, while both are off.
+
+**Story Mode** (off by default, per device, desktop and tablet) adds a header button that
+draws the active Claude Code session as a comic: one page per prompt, panels for what Claude
+did (reading, planning, helpers, edits, tests, saving), and plain captions anyone can follow.
+Three reading levels sit in its bar: **Simple** (plain words, for anyone), **Advanced** (the
+story with file names) and **Director's cut** (every step and tool, with a list of every event
+beside the page), which is the default; your pick is remembered on that device. Click a file to
+open it, the code page for the exact diff, a test board for the output, a helper for what it was
+asked and what it did. An unfinished turn redraws as Claude works, and **Save image** downloads
+the page as a PNG to share. The prompt bar under the page holds the turn picker and a field that
+sends Claude your next prompt (Enter sends, Shift+Enter adds a line). On phones, open it from the
+session's Session Options (the Story button there).
 
 **Bottom bar** (below the chips): **Git status** shows a small indicator at the right of the
 bottom bar, off by default and per device. It reads `● N` uncommitted files, `↑ N` commits not

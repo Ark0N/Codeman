@@ -535,6 +535,14 @@ const DEFAULT_SHORTCUTS = [
     bindings: [{ modifiers: ['alt'], key: 'b', code: 'KeyB' }],
     action: 'toggleSessionSidebar',
   },
+  {
+    id: 'toggle-story-mode',
+    group: 'Panels',
+    label: 'Story Mode',
+    // No default chord: every free one is some CLI's key. Bind one in App Settings → Shortcuts.
+    bindings: [],
+    action: 'toggleStoryMode',
+  },
   // Tile grid (tile-grid.js). Dispatched by tileShortcutFor()/runTileShortcut()
   // and deliberately absent from SHORTCUT_ACTIONS: each applies only in some
   // states (the focus chords only while the grid is open), and outside them the
@@ -2190,6 +2198,18 @@ class CodemanApp {
     // list into a sustained ~1 Hz full ~/.claude/projects rescan loop.
     for (const event of [SSE_EVENTS.SESSION_CREATED, SSE_EVENTS.SESSION_DELETED]) {
       addListener(event, () => this._onSessionListMaybeChanged());
+    }
+
+    // Story Mode (story-mode.js): any sign of transcript activity refreshes an open story for that
+    // session. Extra listeners like the ones above, so the handler map stays one method per event.
+    // No transcript `complete` event: interactive transcripts carry no `result` entry to raise it.
+    for (const event of [
+      SSE_EVENTS.TRANSCRIPT_TOOL_START,
+      SSE_EVENTS.TRANSCRIPT_TOOL_END,
+      SSE_EVENTS.HOOK_STOP,
+      SSE_EVENTS.HOOK_PROMPT_SUBMITTED,
+    ]) {
+      addListener(event, (e) => this._storyOnActivity?.(e));
     }
 
     // Docker export/import: toast + refresh the Manage-tab exports list on completion.
@@ -11279,6 +11299,7 @@ class CodemanApp {
       nextSession: () => this.nextSession(),
       previousSession: () => this.prevSession(),
       clearTerminal: () => this.clearTerminal(),
+      toggleStoryMode: () => this.toggleStoryMode?.(),
       restoreTerminalSize: () => this.restoreTerminalSize(),
       increaseFontSize: () => this.increaseFontSize(),
       decreaseFontSize: () => this.decreaseFontSize(),

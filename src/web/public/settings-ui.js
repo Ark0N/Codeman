@@ -520,6 +520,7 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('appSettingsHeaderStatsStyle').value = this.resolveHeaderStatsStyle(settings);
     document.getElementById('appSettingsShowLifecycleLog').checked = settings.showLifecycleLog ?? defaults.showLifecycleLog ?? false;
     document.getElementById('appSettingsShowResponseViewer').checked = settings.showResponseViewer ?? defaults.showResponseViewer ?? false;
+    document.getElementById('appSettingsShowStoryButton').checked = settings.showStoryButton ?? defaults.showStoryButton ?? false;
     document.getElementById('appSettingsShowFileViewerButton').checked = settings.showFileViewerButton ?? defaults.showFileViewerButton ?? true;
     document.getElementById('appSettingsShowAttachmentsButton').checked = settings.showAttachmentsButton ?? defaults.showAttachmentsButton ?? false;
     document.getElementById('appSettingsSkin').value = settings.skin ?? defaults.skin ?? 'daylight-blue';
@@ -3131,6 +3132,7 @@ Object.assign(CodemanApp.prototype, {
       headerStatsStyle: document.getElementById('appSettingsHeaderStatsStyle').value,
       showLifecycleLog: document.getElementById('appSettingsShowLifecycleLog').checked,
       showResponseViewer: document.getElementById('appSettingsShowResponseViewer').checked,
+      showStoryButton: document.getElementById('appSettingsShowStoryButton').checked,
       showFileViewerButton: document.getElementById('appSettingsShowFileViewerButton').checked,
       showAttachmentsButton: document.getElementById('appSettingsShowAttachmentsButton').checked,
       showMonitor: document.getElementById('appSettingsShowMonitor').checked,
@@ -4740,6 +4742,9 @@ Object.assign(CodemanApp.prototype, {
       responseViewerBtn.classList.toggle('btn-response-viewer-header--hidden', !showResponseViewer);
     }
 
+    // Story Mode (story-mode.js): opt-in, default OFF; turning it off also closes an open story.
+    this.applyStoryButtonVisibility?.();
+
     // Hide the attachments (history) button when disabled. Opt-in, default OFF —
     // marker class, base is display:inline-flex !important.
     const showAttachmentsButton = settings.showAttachmentsButton ?? defaults.showAttachmentsButton ?? false;
@@ -5204,7 +5209,7 @@ Object.assign(CodemanApp.prototype, {
   _displaySettingKeySet() {
     const displayKeys = new Set([
       'showFontControls', 'showSystemStats', 'showGpuStats', 'showCpuMhz', 'headerStatsStyle', 'showTokenCount', 'showCost',
-      'showLifecycleLog', 'showResponseViewer', 'showRedrawButton',
+      'showLifecycleLog', 'showResponseViewer', 'showStoryButton', 'showRedrawButton',
       'showMonitor', 'showProjectInsights', 'showFileBrowser', 'showSubagents',
       'subagentActiveTabOnly', 'tabTwoRows', 'showTabCliLogos', 'tabOrientation', 'tabRailWidth', 'tabRailDetail', 'tabRailSort', 'tabArrangement', 'tabStateOrder', 'sessionListLayout', 'sessionSidebarFontSize', 'localEchoEnabled', 'keyboardHoldsRows', 'cjkInputEnabled', 'extendedKeyboardBar',
       'skin', 'showPlanUsageLimits', 'showAttachmentsButton', 'showFileViewerButton', 'webglRendererEnabled',

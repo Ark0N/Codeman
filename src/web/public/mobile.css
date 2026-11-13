@@ -596,7 +596,10 @@ html.mobile-init .file-browser-panel {
   /* Approvals bell: phones answer from the overview's NEEDS YOU rows instead
      (inline approve/deny in mobile-overview.js); the bell would only crowd the
      header it was designed to stay out of. */
-  .btn-icon-header.btn-approvals {
+  .btn-icon-header.btn-approvals,
+  /* Story Mode: phones open it from Session Options (#sessionOptionsStoryBtn), not one more icon
+     in this header; the overlay itself is responsive. */
+  .btn-icon-header.btn-story-header {
     display: none !important;
   }
   /* Split-pane is hidden here too, but the AUTHORITATIVE hard gate is the

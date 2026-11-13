@@ -23,6 +23,7 @@ export const BROWSER_TEST_GLOBS = [
   'test/command-palette-agent-arrows.browser.test.ts',
   'test/voice-input.browser.test.ts',
   'test/tmux-capture-sgr.browser.test.ts',
+  'test/story-mode.browser.test.ts',
   'test/tab-rail-resize.browser.test.ts',
   'test/tab-activation.browser.test.ts',
   'test/tab-layout-editing.browser.test.ts',
