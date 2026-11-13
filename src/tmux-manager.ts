@@ -4452,21 +4452,6 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
   }
 
   /**
-   * Sync mouse mode based on pane count: enable if split (>1 pane), disable if single.
-   * Called by TeamWatcher when teammates spawn/despawn panes.
-   * Uses `tmux list-panes` for bulletproof detection — counts actual panes, not config.
-   */
-  async syncMouseMode(muxName: string): Promise<boolean> {
-    if (IS_TEST_MODE) return true;
-    const panes = await this.listPanes(muxName);
-    if (panes.length > 1) {
-      return this.enableMouseMode(muxName);
-    } else {
-      return this.disableMouseMode(muxName);
-    }
-  }
-
-  /**
    * List all panes in a tmux session.
    * Returns structured info for each pane.
    */
@@ -4779,67 +4764,6 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     } catch (err) {
       console.error('[TmuxManager] Failed to resolve active pane for capture:', err);
       return null;
-    }
-  }
-
-  /**
-   * Start piping pane output to a file using tmux pipe-pane.
-   * Only pipes output direction (-O) to avoid echoing input.
-   */
-  startPipePane(muxName: string, paneTarget: string, outputFile: string): boolean {
-    if (IS_TEST_MODE) return true;
-    if (!isValidMuxName(muxName)) {
-      console.error('[TmuxManager] Invalid session name in startPipePane:', muxName);
-      return false;
-    }
-    if (!SAFE_PANE_TARGET_PATTERN.test(paneTarget)) {
-      console.error('[TmuxManager] Invalid pane target:', paneTarget);
-      return false;
-    }
-    if (!isValidPath(outputFile)) {
-      console.error('[TmuxManager] Invalid output file path:', outputFile);
-      return false;
-    }
-
-    const target = paneTarget.startsWith('%') ? `${muxName}.${paneTarget}` : `${muxName}.%${paneTarget}`;
-
-    try {
-      execSync(`${this.tmux()} pipe-pane -O -t ${shellescape(target)} ${shellescape('cat >> ' + outputFile)}`, {
-        encoding: 'utf-8',
-        timeout: EXEC_TIMEOUT_MS,
-      });
-      return true;
-    } catch (err) {
-      console.error('[TmuxManager] Failed to start pipe-pane:', err);
-      return false;
-    }
-  }
-
-  /**
-   * Stop piping pane output (calling pipe-pane with no command stops piping).
-   */
-  stopPipePane(muxName: string, paneTarget: string): boolean {
-    if (IS_TEST_MODE) return true;
-    if (!isValidMuxName(muxName)) {
-      console.error('[TmuxManager] Invalid session name in stopPipePane:', muxName);
-      return false;
-    }
-    if (!SAFE_PANE_TARGET_PATTERN.test(paneTarget)) {
-      console.error('[TmuxManager] Invalid pane target:', paneTarget);
-      return false;
-    }
-
-    const target = paneTarget.startsWith('%') ? `${muxName}.${paneTarget}` : `${muxName}.%${paneTarget}`;
-
-    try {
-      execSync(`${this.tmux()} pipe-pane -t ${shellescape(target)}`, {
-        encoding: 'utf-8',
-        timeout: EXEC_TIMEOUT_MS,
-      });
-      return true;
-    } catch (err) {
-      console.error('[TmuxManager] Failed to stop pipe-pane:', err);
-      return false;
     }
   }
 

@@ -883,13 +883,6 @@ export class RalphTracker extends EventEmitter {
   }
 
   /**
-   * Check if a phrase matches any valid completion phrase (primary or alternate).
-   */
-  isValidCompletionPhrase(phrase: string): boolean {
-    return this.findMatchingCompletionPhrase(phrase) !== null;
-  }
-
-  /**
    * Find which completion phrase (primary or alternate) matches the given phrase.
    */
   private findMatchingCompletionPhrase(phrase: string): string | null {

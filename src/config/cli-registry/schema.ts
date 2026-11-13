@@ -817,5 +817,3 @@ export const CliEntrySchema = z
       });
     }
   });
-
-export type ValidatedCliEntry = z.infer<typeof CliEntrySchema>;

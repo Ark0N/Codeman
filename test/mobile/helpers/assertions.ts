@@ -156,21 +156,6 @@ export async function assertNotHasClass(page: Page, selector: string, className:
   expect(has).toBe(false);
 }
 
-/** Assert element's computed transform includes a translateY value */
-export async function assertTranslateY(
-  page: Page,
-  selector: string,
-  expectedY: number,
-  tolerance: number = 2,
-): Promise<void> {
-  const transform = await getCSSProperty(page, selector, 'transform');
-  // transform is a matrix(...) string; extract translateY
-  // matrix(a, b, c, d, tx, ty) — ty is the 6th value
-  const match = transform.match(/matrix\([^,]+,[^,]+,[^,]+,[^,]+,[^,]+,\s*([^)]+)\)/);
-  const ty = match ? parseFloat(match[1]) : 0;
-  expect(Math.abs(ty - expectedY)).toBeLessThanOrEqual(tolerance);
-}
-
 /** Check viewport meta tag doesn't disable zoom */
 export async function assertZoomNotDisabled(page: Page): Promise<void> {
   const meta = await page.evaluate(() => {

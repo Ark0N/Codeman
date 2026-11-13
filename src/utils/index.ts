@@ -12,7 +12,7 @@ export { Debouncer, KeyedDebouncer } from './debouncer.js';
 export { startEventLoopMonitor } from './event-loop-monitor.js';
 export type { EventLoopMonitorHandle } from './event-loop-monitor.js';
 export { StaleExpirationMap } from './stale-expiration-map.js';
-export { isProcessRunning, waitForProcessesExit, PROCESS_EXIT_POLL_MS } from './process-exit-wait.js';
+export { waitForProcessesExit } from './process-exit-wait.js';
 export {
   ANSI_ESCAPE_PATTERN_FULL,
   ANSI_ESCAPE_PATTERN_SIMPLE,
@@ -30,59 +30,13 @@ export { assertNever } from './type-safety.js';
 export { toSingleLine } from './single-line.js';
 export { wrapWithNice } from './nice-wrapper.js';
 export { resolveLocalShell, loginShellArgs } from './shell-resolver.js';
-export {
-  findClaudeDir,
-  getAugmentedPath,
-  getClaudeCliVersion,
-  getClaudeBinaryPath,
-  getClaudeNotFoundMessage,
-} from './claude-cli-resolver.js';
+export { getAugmentedPath, getClaudeCliVersion, getClaudeBinaryPath } from './claude-cli-resolver.js';
 export { spawnPtyWithHelperRepair } from './node-pty-repair.js';
-export { resolveOpenCodeDir, getOpenCodeNotFoundMessage } from './opencode-cli-resolver.js';
-export {
-  resolveCodexDir,
-  resolveCodexBinaryPath,
-  isCodexAvailable,
-  getCodexNotFoundMessage,
-  readCodexPlanUsage,
-} from './codex-cli-resolver.js';
-export { resolveGeminiDir, isGeminiAvailable, getGeminiNotFoundMessage } from './gemini-cli-resolver.js';
-export {
-  resolveAntigravityDir,
-  isAntigravityAvailable,
-  getAntigravityNotFoundMessage,
-} from './antigravity-cli-resolver.js';
-export { resolvePiDir, isPiAvailable, getPiCliVersion, getPiNotFoundMessage } from './pi-cli-resolver.js';
-export { resolveGrokDir, isGrokAvailable, getGrokCliVersion, getGrokNotFoundMessage } from './grok-cli-resolver.js';
-export {
-  resolveDeepSeekDir,
-  isDeepSeekAvailable,
-  isDeepSeekRunnable,
-  getDeepSeekCliVersion,
-  getDeepSeekNotFoundMessage,
-  listDeepSeekProfiles,
-  resolveDefaultDeepSeekProfile,
-  isLaunchableProfile,
-  resolveDshHome,
-  profileExists,
-} from './deepseek-cli-resolver.js';
-export type { DeepSeekProfile, DeepSeekProfileKind } from './deepseek-cli-resolver.js';
-export { compileFileQuery, matchFileQuery } from './file-query.js';
-export type { FileQueryMatcher } from './file-query.js';
-export { resolveOmpDir, isOmpAvailable, getOmpNotFoundMessage, getOmpCliVersion } from './omp-cli-resolver.js';
-export {
-  resolveCopilotDir,
-  isCopilotAvailable,
-  getCopilotNotFoundMessage,
-  getCopilotCliVersion,
-} from './copilot-cli-resolver.js';
-export { readCopilotPlanUsage, resolveCopilotToken } from './copilot-plan-usage.js';
 export {
   boundedPathExists,
   describeUnknownPath,
   probePath,
   probePathKind,
   isNearStalledPath,
-  unknownPathReason,
 } from './bounded-path-probe.js';
-export type { PathProbeState, PathProbeKind, PathProbeOptions } from './bounded-path-probe.js';
+export type { PathProbeOptions } from './bounded-path-probe.js';

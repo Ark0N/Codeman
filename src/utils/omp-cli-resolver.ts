@@ -17,11 +17,7 @@ import { execFileSync } from 'node:child_process';
 import { EXEC_TIMEOUT_MS } from '../config/exec-timeout.js';
 import { getCli } from '../config/cli-registry/registry.js';
 import { expandHome } from './cli-resolver.js';
-import {
-  createCliExecutableResolver,
-  formatCliNotFoundMessage,
-  type CliResolverHost,
-} from './cli-executable-resolver.js';
+import { createCliExecutableResolver, type CliResolverHost } from './cli-executable-resolver.js';
 
 /**
  * Directories probed after `which`, read from this CLI's registry entry so the spawn
@@ -41,8 +37,6 @@ const OMP_SEARCH_DIRS = (): string[] => (getCli('omp')?.discovery.searchDirs ?? 
  * `omp/17.4.0` matches while an unrelated `omp` (some other program) does not.
  */
 export const OMP_VERSION_REGEX = /(?:^|\s)omp\/(\d+\.\d+\.\d+)/;
-
-const OMP_NOT_FOUND = 'OMP CLI not found. Install with: curl -fsSL https://omp.sh/install | sh';
 
 /**
  * Run `omp --version` on a candidate path and return the trimmed version when
@@ -123,10 +117,6 @@ export function resolveOmpDir(): string | null {
  */
 export function isOmpAvailable(): boolean {
   return resolveOmpDir() !== null;
-}
-
-export function getOmpNotFoundMessage(): string {
-  return formatCliNotFoundMessage(OMP_NOT_FOUND, ompResolver.diagnostics());
 }
 
 /**

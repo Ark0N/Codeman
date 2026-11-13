@@ -17,11 +17,7 @@ import { execFileSync } from 'node:child_process';
 import { EXEC_TIMEOUT_MS } from '../config/exec-timeout.js';
 import { getCli } from '../config/cli-registry/registry.js';
 import { expandHome } from './cli-resolver.js';
-import {
-  createCliExecutableResolver,
-  formatCliNotFoundMessage,
-  type CliResolverHost,
-} from './cli-executable-resolver.js';
+import { createCliExecutableResolver, type CliResolverHost } from './cli-executable-resolver.js';
 
 /**
  * Directories probed after `which`, read from this CLI's registry entry so the spawn
@@ -35,8 +31,6 @@ const COPILOT_SEARCH_DIRS = (): string[] => (getCli('copilot')?.discovery.search
  * name keeps an unrelated `copilot` binary on PATH from being accepted.
  */
 export const COPILOT_VERSION_REGEX = /GitHub Copilot CLI (\d+\.\d+\.\d+)/;
-
-const COPILOT_NOT_FOUND = 'GitHub Copilot CLI not found. Install with: npm install -g @github/copilot';
 
 /**
  * Run `copilot --version` on a candidate path and return the trimmed version when
@@ -123,10 +117,6 @@ export function resolveCopilotDir(): string | null {
  */
 export function isCopilotAvailable(): boolean {
   return resolveCopilotDir() !== null;
-}
-
-export function getCopilotNotFoundMessage(): string {
-  return formatCliNotFoundMessage(COPILOT_NOT_FOUND, copilotResolver.diagnostics());
 }
 
 /**

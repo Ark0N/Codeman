@@ -19,11 +19,7 @@ import { execFileSync } from 'node:child_process';
 import { EXEC_TIMEOUT_MS } from '../config/exec-timeout.js';
 import { getCli } from '../config/cli-registry/registry.js';
 import { expandHome } from './cli-resolver.js';
-import {
-  createCliExecutableResolver,
-  formatCliNotFoundMessage,
-  type CliResolverHost,
-} from './cli-executable-resolver.js';
+import { createCliExecutableResolver, type CliResolverHost } from './cli-executable-resolver.js';
 
 /** Common directories where the Pi CLI binary may be installed */
 /**
@@ -47,8 +43,6 @@ const PI_SEARCH_DIRS = (): string[] => (getCli('pi')?.discovery.searchDirs ?? []
  * No `g` flag, so there is no shared `lastIndex` to reset.
  */
 export const PI_VERSION_REGEX = /(?:^|\s)(\d+\.\d+\.\d+)/;
-
-const PI_NOT_FOUND = 'Pi CLI not found. Install with: npm install -g --ignore-scripts @earendil-works/pi-coding-agent';
 
 /**
  * Run `pi --version` on a candidate path and return the trimmed version when it
@@ -130,10 +124,6 @@ export function resolvePiDir(): string | null {
  */
 export function isPiAvailable(): boolean {
   return resolvePiDir() !== null;
-}
-
-export function getPiNotFoundMessage(): string {
-  return formatCliNotFoundMessage(PI_NOT_FOUND, piResolver.diagnostics());
 }
 
 /**

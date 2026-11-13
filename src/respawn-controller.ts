@@ -30,7 +30,7 @@
  * - `DetectionStatus`, `ActiveTimerInfo` — status types
  *
  * Key methods: `start()`, `stop()`, `getStatus()`, `getConfig()`,
- * `getDetectionStatus()`, `getActiveTimers()`, `getAggregateMetrics()`,
+ * `getDetectionStatus()`, `getActiveTimers()`,
  * `getTimingHistory()`, `getHealthScore()`
  *
  * @dependencies session (PTY output), ai-idle-checker, ai-plan-checker,
@@ -76,14 +76,7 @@ import {
   AI_PLAN_CHECK_TIMEOUT_MS,
   AI_PLAN_CHECK_COOLDOWN_MS,
 } from './config/ai-defaults.js';
-import {
-  getErrorMessage,
-  type RespawnCycleMetrics,
-  type RespawnAggregateMetrics,
-  type RalphLoopHealthScore,
-  type TimingHistory,
-  type CycleOutcome,
-} from './types.js';
+import { getErrorMessage, type RalphLoopHealthScore, type TimingHistory, type CycleOutcome } from './types.js';
 
 // ========== Constants ==========
 
@@ -1903,13 +1896,6 @@ export class RespawnController extends EventEmitter {
     this.emit('actionLog', action);
   }
 
-  /**
-   * Get recent action log entries.
-   */
-  getRecentActions(): ActionLogEntry[] {
-    return [...this.recentActions];
-  }
-
   // ========== Multi-Layer Detection Methods ==========
   // Pattern detection delegated to ./respawn-patterns.js (isCompletionMessage, hasWorkingPattern, extractTokenCount)
 
@@ -3176,23 +3162,6 @@ export class RespawnController extends EventEmitter {
         `Cycle #${metrics.cycleNumber} metrics: ${outcome}, duration=${metrics.durationMs}ms, idle_detection=${metrics.idleDetectionMs}ms`
       );
     }
-  }
-
-  /**
-   * Get aggregate metrics for monitoring.
-   * @returns Copy of aggregate metrics
-   */
-  getAggregateMetrics(): RespawnAggregateMetrics {
-    return this.cycleMetrics.getAggregate();
-  }
-
-  /**
-   * Get recent cycle metrics for analysis.
-   * @param limit - Maximum number of metrics to return (default: 20)
-   * @returns Recent cycle metrics, newest first
-   */
-  getRecentCycleMetrics(limit: number = 20): RespawnCycleMetrics[] {
-    return this.cycleMetrics.getRecent(limit);
   }
 
   // ========== P2-005: Health Score (delegated to respawn-health.ts) ==========

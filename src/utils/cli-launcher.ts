@@ -83,26 +83,6 @@ export async function resolveCliLaunchError(mode: string, rawConfig?: Record<str
 }
 
 /**
- * Is this CLI actually usable? For an ordinary CLI that is exactly "its binary resolved".
- * For a launcher it is that AND whatever its profile demands.
- *
- * ⚠️ A named-but-unimplemented profile fails CLOSED. In practice `schema.ts` rejects such an
- * entry at load time, so this is the second line of defence rather than the first — but the
- * direction matters: offering a Run that always fails is worse than reporting unavailable.
- */
-export function isCliRunnable(id: string): boolean {
-  const entry = getCli(id);
-  if (!entry) return false;
-  // No binary to find (`shell`): tmux-manager resolves the login shell in code.
-  const resolved = entry.discovery.binaries.length === 0 ? true : resolveCliBinDir(id) !== null;
-  const profileName = entry.discovery.launcherProfile;
-  if (profileName === undefined) return resolved;
-  const profile = LAUNCHER_PROFILES[profileName];
-  if (!profile) return false;
-  return resolved && profile.isRunnable();
-}
-
-/**
  * The launcher's default target, for the `launcherDefaultTarget` engine value. Null for
  * every non-launcher CLI, which is what makes the corresponding launch arg drop out.
  */

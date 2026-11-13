@@ -698,9 +698,6 @@ export interface LocalModelRefusal {
   message: LocalModelInstallMessage;
 }
 
-/** What every verb answers on success: the view after the verb. */
-export type LocalModelVerbAnswer = LocalModelInstallView;
-
 /**
  * Why a verb was refused with 409.
  *  - `job-running`: a job is running (a second install, a resume, a remove or a runtime action).

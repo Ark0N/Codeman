@@ -76,16 +76,6 @@ export const SETENV_PROFILE_NAMES = [
 export type LauncherProfileName = (typeof LAUNCHER_PROFILE_NAMES)[number];
 export type SetenvProfileName = (typeof SETENV_PROFILE_NAMES)[number];
 
-/**
- * Transcript readers, selected via `capabilities.transcript`. Unlike the profile registries
- * above this one is closed over the schema enum itself rather than an open string, since
- * transcript format is a small, genuinely fixed set — see CliCapabilities['transcript'].
- */
-export const TRANSCRIPT_READER_NAMES = ['claude-jsonl', 'codex-rollout', 'deepseek-zstd', 'none'] as const;
-
-/** Composer-row finders, selected via `capabilities.echo.anchor.kind`. Also schema-closed. */
-export const COMPOSER_ANCHOR_KINDS = ['glyph', 'cursor', 'none'] as const;
-
 /** True when `name` is a predictive-echo profile this build actually implements. */
 export function isKnownPredictProfile(name: string | undefined): boolean {
   return name !== undefined && Object.prototype.hasOwnProperty.call(PREDICT_PROFILES, name);

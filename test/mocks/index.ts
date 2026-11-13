@@ -2,14 +2,11 @@
  * Shared test mocks — import from here instead of defining inline.
  *
  * @example
- * import { MockSession, MockStateStore, terminalOutputs } from './mocks/index.js';
+ * import { MockSession, createMockRouteContext } from './mocks/index.js';
  */
 
-export { MockSession, createMockSession, terminalOutputs } from './mock-session.js';
-export { MockStateStore } from './mock-state-store.js';
+export { MockSession, createMockSession } from './mock-session.js';
 export {
-  waitForEvent,
-  createDeferred,
   safeRmHomeTree,
   isUnderTestHome,
   isSandboxedHome,

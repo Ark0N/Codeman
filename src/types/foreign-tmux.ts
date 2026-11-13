@@ -29,20 +29,6 @@ import type { SessionMode } from './session.js';
 /** Where a foreign tmux server lives. Mirrors Codeman's own three locations. */
 export type ForeignTmuxLocationKind = 'local' | 'docker' | 'remote';
 
-/**
- * A location to scan. `hostId` refers to the saved docker-host / remote-host
- * registry entry, so the transport can be rebuilt without trusting the browser.
- */
-export interface ForeignTmuxLocation {
-  kind: ForeignTmuxLocationKind;
-  /** Registry id (`docker-hosts.json` / `remote-hosts.json`). Absent for local. */
-  hostId?: string;
-  /** Display label for the UI. Absent for local. */
-  label?: string;
-  /** Container to `docker exec` into (`kind === 'docker'`). */
-  containerName?: string;
-}
-
 /** One pane row from the probe script, after parsing. */
 export interface ForeignPaneProbe {
   socketPath: string;

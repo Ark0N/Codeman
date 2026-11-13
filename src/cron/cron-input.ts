@@ -7,8 +7,6 @@
 import type { ConcurrencyPolicy, InputMode, PromptMode, ScheduleType } from '../types/cron.js';
 import type { SessionMode } from '../types/session.js';
 
-export type { CronJob, CronJobRun, CronJobRunStatus, TriggerType } from '../types/cron.js';
-
 export interface CronJobInput {
   name: string;
   agentType: SessionMode;

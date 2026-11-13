@@ -535,55 +535,6 @@ export class MockSession extends EventEmitter {
 }
 
 /**
- * Generate realistic terminal output for testing.
- * Must match the patterns used in MockSession's simulate* methods.
- */
-export const terminalOutputs = {
-  /** Standard completion message */
-  completion(duration: string = '2m 46s'): string {
-    return `\n\u273b Worked for ${duration}\n  123.4k tokens used\n`;
-  },
-
-  /** Working spinner output */
-  working(activity: string = 'Thinking'): string {
-    return `${activity}... \u280b`;
-  },
-
-  /** Plan mode prompt */
-  planMode(question: string = 'Would you like to proceed?'): string {
-    return [`\n${question}\n`, '\u276f 1. Yes\n', '  2. No\n', '  3. Type your own\n'].join('');
-  },
-
-  /** Prompt character */
-  prompt(): string {
-    return '\n\u276f ';
-  },
-
-  /** Token count display */
-  tokens(count: number): string {
-    const formatted =
-      count >= 1000000
-        ? `${(count / 1000000).toFixed(1)}M`
-        : count >= 1000
-          ? `${(count / 1000).toFixed(1)}k`
-          : String(count);
-    return `  ${formatted} tokens\n`;
-  },
-
-  /** Large output for buffer testing */
-  largeOutput(sizeKb: number = 100): string {
-    const baseText = 'Lorem ipsum dolor sit amet. '.repeat(100);
-    const repetitions = Math.ceil((sizeKb * 1024) / baseText.length);
-    return baseText.repeat(repetitions).slice(0, sizeKb * 1024);
-  },
-
-  /** ANSI colored output */
-  ansiColored(text: string): string {
-    return `\x1b[32m${text}\x1b[0m`;
-  },
-};
-
-/**
  * Convenience factory.
  */
 export function createMockSession(id?: string): MockSession {

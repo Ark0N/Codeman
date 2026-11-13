@@ -173,20 +173,6 @@ function createRegistryResolver(
 }
 
 /**
- * Build an isolated resolver for `entry` around an injected probe, host and clock — the
- * test seam. Omitting `probe` keeps the ambient, VITEST-gated one, which is exactly what
- * the hermeticity tests exercise.
- */
-export function createCliResolverForTest(
-  entry: CliEntry,
-  probe?: CliCandidateProbe,
-  host?: CliResolverHost,
-  now?: () => number
-): RegistryResolver {
-  return createRegistryResolver(entry, probe ?? probeCliCandidate, host, now);
-}
-
-/**
  * One memoized resolver per id, for the process lifetime — the same caching the per-CLI
  * modules already do for themselves, just keyed by id so generic code holding only a
  * `CliId` string can resolve a CLI it knows nothing else about, custom entries included.

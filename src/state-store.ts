@@ -430,29 +430,6 @@ export class StateStore {
   }
 
   /**
-   * Attempt to recover state from backup file.
-   * Call this if main state file is corrupt.
-   */
-  recoverFromBackup(): boolean {
-    const backupPath = this.filePath + '.bak';
-    try {
-      if (existsSync(backupPath)) {
-        const backupContent = readFileSync(backupPath, 'utf-8');
-        const parsed = JSON.parse(backupContent) as Partial<AppState>;
-        this.state = this._mergeWithInitialState(parsed);
-        console.log('[StateStore] Successfully recovered state from backup');
-        // Reset circuit breaker after successful recovery
-        this.circuitBreakerOpen = false;
-        this.consecutiveSaveFailures = 0;
-        return true;
-      }
-    } catch (err) {
-      console.error('[StateStore] Failed to recover from backup:', err);
-    }
-    return false;
-  }
-
-  /**
    * Reset the circuit breaker (for manual intervention).
    */
   resetCircuitBreaker(): void {

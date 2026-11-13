@@ -45,10 +45,8 @@ export {
   closeAllLlamaSwapLogTails,
   detectCustomModelSwapDisplacements,
   pruneIdleLlamaSwapLogTails,
-  type CustomModelSessionLike,
-  type CustomModelSwapDisplacement,
 } from './custom-model-routes.js';
-export { registerCliRegistryRoutes, readCliManagementEnabled, type CliListItem } from './cli-registry-routes.js';
+export { registerCliRegistryRoutes } from './cli-registry-routes.js';
 export { registerLocalModelRoutes } from './local-model-routes.js';
 
 export { registerAgentSessionRoutes } from './agent-session-routes.js';

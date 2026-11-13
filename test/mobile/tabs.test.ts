@@ -7,7 +7,7 @@ import { createDevicePage, closeAllBrowsers } from './helpers/browser.js';
 import { swipe, swipeViaCDP, swipeViaSynthetic } from './helpers/touch-sim.js';
 import { assertHidden, assertVisible, getCSSProperty, getCSSNumericValue } from './helpers/assertions.js';
 import { REPRESENTATIVE_DEVICES } from './devices.js';
-import type { WebServer } from '../src/web/server.js';
+import type { WebServer } from '../../src/web/server.js';
 
 let baseUrl: string;
 

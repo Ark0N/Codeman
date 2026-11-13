@@ -7,7 +7,7 @@ import { createDevicePage, closeAllBrowsers } from './helpers/browser.js';
 import { showKeyboard, hideKeyboard } from './helpers/keyboard-sim.js';
 import { getCSSProperty, getCSSNumericValue } from './helpers/assertions.js';
 import { REPRESENTATIVE_DEVICES } from './devices.js';
-import type { WebServer } from '../src/web/server.js';
+import type { WebServer } from '../../src/web/server.js';
 
 let baseUrl: string;
 

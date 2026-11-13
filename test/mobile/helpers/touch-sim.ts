@@ -243,19 +243,3 @@ export async function tapViaSynthetic(page: Page, selector: string): Promise<voi
   }, selector);
 }
 
-/** Tap using the best available method */
-export async function tap(
-  page: Page,
-  selector: string,
-  options: { isChromium?: boolean } = {},
-): Promise<void> {
-  if (options.isChromium !== false) {
-    try {
-      await tapViaCDP(page, selector);
-      return;
-    } catch {
-      // Fall through
-    }
-  }
-  await tapViaSynthetic(page, selector);
-}

@@ -9,7 +9,7 @@
 
 import { getCli } from '../config/cli-registry/registry.js';
 import { expandHome } from './cli-resolver.js';
-import { createCliExecutableResolver, formatCliNotFoundMessage } from './cli-executable-resolver.js';
+import { createCliExecutableResolver } from './cli-executable-resolver.js';
 
 /** Common directories where the Gemini CLI binary may be installed */
 /**
@@ -20,7 +20,6 @@ import { createCliExecutableResolver, formatCliNotFoundMessage } from './cli-exe
 const GEMINI_SEARCH_DIRS = (): string[] => (getCli('gemini')?.discovery.searchDirs ?? []).map(expandHome);
 
 const geminiResolver = createCliExecutableResolver({ binary: 'gemini', searchDirs: GEMINI_SEARCH_DIRS });
-const GEMINI_NOT_FOUND = 'Gemini CLI not found. Install with: npm install -g @google/gemini-cli';
 
 /**
  * Finds the directory containing the `gemini` binary.
@@ -37,8 +36,4 @@ export function resolveGeminiDir(): string | null {
  */
 export function isGeminiAvailable(): boolean {
   return resolveGeminiDir() !== null;
-}
-
-export function getGeminiNotFoundMessage(): string {
-  return formatCliNotFoundMessage(GEMINI_NOT_FOUND, geminiResolver.diagnostics());
 }

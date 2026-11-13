@@ -13,7 +13,6 @@
  * - `applyWorkspaceHooks(workspace, install?)` — the ONE install-vs-refresh decision
  *   point every claude-session create path routes through (see its doc comment)
  * - `ensureCodemanHooks(casePath)` — safely installs/updates hooks for a managed case
- * - `updateCaseEnvVars(casePath, envVars)` — merges env vars into settings
  *
  * Hook events generated: `idle_prompt`, `permission_prompt`, `elicitation_dialog`,
  * `elicitation_complete`, `elicitation_response`, `stop`, `teammate_idle`,
@@ -628,37 +627,6 @@ export async function stripCaseEnvKeys(casePath: string, keysToRemove: readonly 
     if (!changed) return;
 
     existing.env = env;
-    await writeFile(settingsPath, JSON.stringify(existing, null, 2) + '\n');
-  });
-}
-
-/**
- * Updates env vars in .claude/settings.local.json for the given case path.
- * Merges with existing env field; removes vars set to empty string.
- */
-export async function updateCaseEnvVars(casePath: string, envVars: Record<string, string>): Promise<void> {
-  await withSafeSettingsWrite(casePath, 'env vars', async (claudeDir, settingsPath) => {
-    if (!(await pathExistsForWrite(claudeDir))) {
-      await mkdir(claudeDir, { recursive: true });
-    }
-
-    let existing: Record<string, unknown> = {};
-    try {
-      existing = JSON.parse(await readFile(settingsPath, 'utf-8'));
-    } catch {
-      existing = {};
-    }
-
-    const currentEnv = (existing.env as Record<string, string>) || {};
-    for (const [key, value] of Object.entries(envVars)) {
-      if (value) {
-        currentEnv[key] = value;
-      } else {
-        delete currentEnv[key];
-      }
-    }
-    existing.env = currentEnv;
-
     await writeFile(settingsPath, JSON.stringify(existing, null, 2) + '\n');
   });
 }
