@@ -35,8 +35,13 @@ only and can never drive a session.
 with a parse error and `.errorCode` is simply absent (see
 [symptom 6](#6-jq-parse-error-instead-of-an-errorcode)). Ten failed attempts from one
 IP then get a plain-text `429 Too Many Requests` with `Retry-After`, decaying over 15
-minutes (`AUTH_FAILURE_MAX` = 10, `AUTH_FAILURE_WINDOW_MS` = 15 min). **Never retry a
-failing credential in a loop**: you will lock the address out of the login path for
+minutes (`AUTH_FAILURE_MAX` = 10, `AUTH_FAILURE_WINDOW_MS` = 15 min). In multi-user
+mode the per-IP cap is 50 (`AUTH_IP_FAILURE_MAX`) and each account allows 10 failed
+guesses per IP; both are checked before the password, so past either even a correct
+password from that address gets the 429 (for the per-account one, only for that
+account). From the 10th failed guess on, an account's wrong guesses also get the 429
+from every address, but a correct password still logs in. **Never retry a failing
+credential in a loop**: you will lock the address out of the login path for
 everything, including the user's browser through a tunnel (tunneled traffic arrives as
 127.0.0.1, so one bucket covers it all).
 
@@ -113,7 +118,7 @@ Every JSON response: `{"success":true,"data":…}` or
 | `UNAUTHORIZED` | 401 | auth required or failed (send `-u user:password`). ⚠️ The 401 body is plain text, NOT this envelope, see [Auth and credentials](#auth-and-credentials) |
 | `FORBIDDEN` | 403 | authenticated but not permitted: an admin-only route in multi-user mode, a `workingDir`/case path outside your own workspace, or a shell session without the can-bypass-permissions grant. ⚠️ **Not** what an ownership miss on a session returns: a session you do not own answers 404 `NOT_FOUND`, identically to one that does not exist (deliberate, it leaks no existence) |
 | `NOT_FOUND` | 404 | no such session, or one this caller does not own. Also quick-start's answer for an unknown remote or docker host |
-| `SESSION_BUSY` | 409 | on a **wait**: this session's waiter cap (16, combined signal+output) is full. On **quick-start**: a session cap is full, so clean up before starting more. Two different caps can raise it: the global 50 (`MAX_CONCURRENT_SESSIONS`), and in multi-user mode the per-user cap, which defaults to half of that, **25** (`maxSessionsPerUser()`, `config/multiuser.ts:59-63`). The message tells you which |
+| `SESSION_BUSY` | 409 | on a **wait**: this session's waiter cap (16, combined signal+output) is full. On **quick-start**: a session cap is full, so clean up before starting more. Two different caps can raise it: the global cap, 50 by default (`MAX_CONCURRENT_SESSIONS`, env `CODEMAN_MAX_SESSIONS`, 1 to 462), and in multi-user mode the per-user cap, which defaults to half the global cap, **25** by default (`maxSessionsPerUser()`, `config/multiuser.ts:59-63`). The message tells you which |
 | `CONFLICT` / `ALREADY_EXISTS` | 409 | conflicts with current state |
 | `OPERATION_FAILED` | 422 | well-formed but could not be completed |
 | `RATE_LIMITED` | 429 | per-owner or process-wide waiter pool is full; back off, switching sessions will not help |
@@ -211,7 +216,10 @@ you typed matches the moment it is typed.
 generic marker (`BUILD OK`) matched against stale text, either from `from=buffer`
 scanning an earlier run or from tmux replaying old screen content as fresh output on an
 attach/resize/redraw. A unique-per-call token (`DONE_$RANDOM`) makes both `from` modes
-safe.
+safe. ⚠️ In a fan-out put something of the WORKER into it too (its id, the loop index): zsh,
+the shell Claude Code runs on a Mac, hands every subshell the same `$RANDOM` until the
+parent shell reads it, so `( … $RANDOM … ) &` twice draws one number. `sendmark` adds six
+characters of the worker's id for that reason.
 
 ### 6. `jq` parse error instead of an `errorCode`
 
@@ -237,7 +245,7 @@ minutes, never retry the credential.
 flushed slightly *after* the `stop` hook fires, so a read taken the instant the wait
 returns is too early (verified live: empty on the first call, full prose seconds later).
 It is also `""` before the worker's first completed turn, and permanently `""` for
-`shell`, `opencode`, `gemini`, `antigravity`, `pi`, `grok` and `omp`, which write no transcript at
+`shell`, `opencode`, `gemini`, `antigravity`, `pi`, `grok`, `omp`, `copilot` and `jcode`, which write no transcript at
 all. `deepseek` is NOT one of those — it is read from `$DSH_HOME/sessions/**` and lags
 for the same reason claude does (the harness finalizes the assistant message just after
 it reports `idle`), so poll it the same way.
@@ -341,7 +349,7 @@ ESC=$(printf '\033')
 
 `POST /api/v1/quick-start` body (all optional):
 `{"caseName":"worker-1","mode":"claude","sessionName":"auth-worker","effort":"high"}`
-,  `mode` ∈ `claude|shell|opencode|codex|gemini|antigravity|pi|grok|deepseek|omp`; response is
+,  `mode` ∈ `claude|shell|opencode|codex|gemini|antigravity|pi|grok|deepseek|omp|copilot|jcode`; response is
 `.data.{sessionId, caseName, casePath}`. Creates the case directory (a real directory
 on the user's disk) if missing, do not retry it in a loop, and remember the name.
 
@@ -356,9 +364,10 @@ a soft default the worker can change with `/advisor`. Remote and docker cases re
 `OPERATION_FAILED`; it never falls back to claude. Probe first whenever you did not pick
 the mode yourself: `GET /api/v1/claude/status`, `GET /api/v1/opencode/status`,
 `GET /api/v1/codex/status`, `GET /api/v1/gemini/status`, `GET /api/v1/antigravity/status`, `GET /api/v1/grok/status`, `GET /api/v1/deepseek/status`,
-`GET /api/v1/pi/status` and `GET /api/v1/omp/status` each return `.data.{available, path}` (no session needed).
-Pi's, grok's and OMP's also carry `.data.version`, because `pi` is a short generic name,
-`grok` is a name with npm squatters, and `omp` is a similarly short name, so an unrelated
+`GET /api/v1/pi/status`, `GET /api/v1/omp/status`, `GET /api/v1/copilot/status` and `GET /api/v1/jcode/status` each return `.data.{available, path}` (no session needed).
+Pi's, grok's, OMP's, Copilot's and jcode's also carry `.data.version`, because `pi` is a short generic name,
+`grok` is a name with npm squatters, `omp` is a similarly short name, `copilot` is a generic one, and an
+unrelated npm package is also called `jcode`, so an unrelated
 binary on `$PATH` can shadow any of them: the resolver rejects one whose `--version` is
 not version-shaped, so `available:false` there can mean "a different program of the same
 name is in front" rather than "nothing is installed". `shell` has no CLI to probe.
@@ -367,7 +376,7 @@ name is in front" rather than "nothing is installed". `shell` has no CLI to prob
 is absent, `jq -r` prints the literal string `null`, and every later call then targets
 `/api/v1/sessions/null`, burning the full readiness budget and reporting jq noise
 instead of the real cause. The failure codes here are `SESSION_BUSY` (a **session** cap:
-the global 50, or the per-user 25 in multi-user mode, never the waiter cap),
+the global cap (50 by default), or the per-user cap (25 by default) in multi-user mode, never the waiter cap),
 `NOT_FOUND` (an unknown remote host or docker host named by the case), `FORBIDDEN`,
 `CONFLICT`, `OPERATION_FAILED` and `INVALID_INPUT`. None of them are retryable in a
 loop.
@@ -401,7 +410,7 @@ differences that break copied code:
   `POST /api/v1/sessions/:id/interactive` (claude and the other agent CLIs) or
   `POST /api/v1/sessions/:id/shell` (shell mode) to actually start the worker.
 - Its capacity failure is **`OPERATION_FAILED` (422)**, not quick-start's
-  `SESSION_BUSY` (409), from the same global-50 / per-user-25 caps
+  `SESSION_BUSY` (409), from the same global / per-user caps (50 / 25 by default)
   (`sessionCapacityMessage()` in `route-helpers.ts`).
 
 ⚠️ `POST .../interactive` accepts `{"clearBreaker":true}`, which resets the **PTY-exit
@@ -420,8 +429,9 @@ callers send no body at all.
   **or Enter is never sent**: the text is typed onto the worker's prompt and sits
   there unsubmitted. This is [symptom 1](#1-deliveredtrue-then-every-wait-times-out),
   the number-one silent failure.
-- `input` must be single-line (newlines are stripped). To send a bare Enter (confirm
-  a dialog), send `{"input":"\r"}`.
+- With `useMux`, newlines in `input` are kept: the text goes in as one bracketed paste
+  and the `\r` submits all lines (without `useMux`, multi-line input is written straight
+  into the pane). To send a bare Enter (confirm a dialog), send `{"input":"\r"}`.
 - `input` is capped at **65536** characters. ⚠️ **Two caps disagree and the smaller one
   is the real one**: the Zod schema allows 100000 (`schemas.ts:1035`), so a 65537-to-100000
   character body passes validation and *then* 400s at the route against
@@ -486,8 +496,8 @@ Quirks that will bite you:
 - ⚠️ **`active-tools` proves presence, never absence.** It is fed by the BashToolParser,
   which reads Claude's rendered `● Bash(…)` lines, and `_processExpensiveParsers`
   returns early for every external CLI mode (`session.ts:~2225`), so it is permanently
-  `[]` on `opencode`/`codex`/`gemini`/`antigravity`/`pi`/`grok`/`deepseek`/`omp`. ⚠️ **`shell` is NOT one of those**
-  (`isExternalCliMode`, `session.ts:176-187`, lists only those seven), so the parser does
+  `[]` on `opencode`/`codex`/`gemini`/`antigravity`/`pi`/`grok`/`deepseek`/`omp`/`copilot`/`jcode`. ⚠️ **`shell` is NOT one of those**
+  (`isExternalCliMode` covers only those external CLIs), so the parser does
   run on a shell worker, and `TEXT_COMMAND_PATTERN` (`bash-tool-parser.ts:89`) matches
   bare `tail|cat|head|less|grep|watch|multitail <path>` lines with no `● Bash(` wrapper:
   a shell worker running `cat build.log` really does populate this. In practice it stays
@@ -607,6 +617,22 @@ Approving a permission dialog on your own is exactly the laundering this skill f
 can access, which includes the user's own working sessions. An approval belonging to one
 of those is something you **report**, never something you answer.
 
+### Agent inbox: hand a worker text without typing into its pane
+
+Stored, not typed: the receiver reads it when it asks. Semantics, CLI form and the
+receiver loop: `verbs.md` §5.15.
+
+| Task | Call |
+|------|------|
+| post to a session's inbox | `POST /api/v1/sessions/:id/inbox` body `{"text":"…"}` → `.data.message.{id,from}`; 409 = inbox full, nothing stored |
+| read (yours marks seen, anyone else's is a peek) | `GET /api/v1/sessions/:id/inbox` → `.data.{receiver,pending,unseen,messages[]}` |
+| block until something unseen arrives | `GET /api/v1/sessions/:id/inbox?wait=60000` → `.data.wait.{posted,timedOut,ended}` |
+| remove what you handled (receiver only, idempotent) | `POST /api/v1/sessions/:id/inbox/ack` body `{"ids":["…"]}`; 403 from anyone else |
+| counts per session, never text | `GET /api/v1/agent-inbox/summary` → `.data.sessions[id].{pending,unseen,oldestUnseenAt,parked}` |
+
+`from` and "who is the receiver" both come from the `X-Codeman-Parent-Session` header the
+preamble's `CURL` sends, never from the body.
+
 ### The wait primitives
 
 Three bounded long-polls. Shared semantics:
@@ -635,7 +661,7 @@ Three bounded long-polls. Shared semantics:
 | `idle` | output stabilized + prompt detected, heuristic, can flap mid-turn | every mode |
 | `working` | session started producing output | every mode |
 | `stop` | Claude Code `stop` hook, the definitive end-of-turn | `claude`; also `deepseek`, whose harness reports its own end of turn while its status bridge is on |
-| `blocked` | `permission_prompt` / `elicitation_dialog` hook, the worker needs an answer | `claude`; also `deepseek` (its harness reports its dialogs, same condition), and `codex`, whose approval, question and trust dialogs Codeman reads off its screen (answer both in the terminal, never through the inbox) |
+| `blocked` | `permission_prompt` / `elicitation_dialog` hook, the worker needs an answer | `claude`; also `deepseek` (its harness reports its dialogs, same condition), `codex`, whose approval, question and trust dialogs Codeman reads off its screen, and a local `omp` session, whose tool approval dialogs a hook module in its workspace reports (answer all three in the terminal, never through the inbox) |
 | `exit` | PTY exited or session deleted | every mode |
 
 ⚠️ **`claude` mode is necessary for `stop`/`blocked`, not sufficient. The real
@@ -796,11 +822,11 @@ response echoes.
 | `match` string | 1–200 characters, literal only | 400; `regex=` is rejected outright |
 | `from=buffer` scan window | 256 KB tail of the terminal buffer | a marker older than that tail is invisible even with `from=buffer` |
 | wait-output snippet context | 80 characters either side | `wait.snippet` is bounded, not the whole line |
-| sessions, process-wide | 50 (`MAX_CONCURRENT_SESSIONS`) | 409 `SESSION_BUSY` on quick-start |
-| sessions, per user | 25 in multi-user mode (half the global cap) | the same 409, with a different message |
+| sessions, process-wide | 50 by default (`MAX_CONCURRENT_SESSIONS`, env `CODEMAN_MAX_SESSIONS`, 1 to 462) | 409 `SESSION_BUSY` on quick-start |
+| sessions, per user | half the global cap (25 by default) in multi-user mode | the same 409, with a different message |
 | SSE clients, process-wide | 100 (`MAX_SSE_CLIENTS`) | plain-text `503 Too many SSE connections`; shared with every browser tab |
 | active bash tools tracked | 20 per session | oldest entries drop off `active-tools` |
-| auth failures per IP | 10, decaying over 15 min | plain-text 429 with `Retry-After`; locks out the login path, so never loop a bad credential |
+| auth failures per IP | 10, decaying over 15 min (multi-user: 50 per IP, plus 10 per account per IP) | plain-text 429 with `Retry-After`; locks out the login path, so never loop a bad credential |
 
 Case creation is **uncapped**, which is the one place restraint has to come from you:
 every `quick-start` with a new `caseName` creates a real directory on the user's disk.

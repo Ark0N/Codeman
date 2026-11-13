@@ -20,7 +20,7 @@ function loadToolbar(sessionId: string | null = 'session-1', localEcho = true, k
     '<!DOCTYPE html><html><body><span class="btn-attach-mobile-wrap">' +
       '<button type="button" id="attachBtnMobile"></button>' +
       '<input type="file" id="attachFileInput" accept="image/*,video/*,.pdf,.docx,.pptx,.xlsx,.zip,.txt,.md,.csv,.tsv,.json,.log,.yaml,.yml,.xml" multiple>' +
-      '</span></body></html>'
+      '</span><div id="terminalContainer"></div></body></html>'
   );
   const { window } = dom;
   // Stands in for the real bar: the production code reaches for an OPEN composer
@@ -340,6 +340,49 @@ describe('phone toolbar Attach button', () => {
     expect(app._uploadAndInsertImages).not.toHaveBeenCalled();
     expect(app._sendInputAsync).not.toHaveBeenCalled();
     expect(app.showToast).toHaveBeenCalledWith('Unsupported file type', 'error');
+  });
+
+  it('uploads the admitted files of a mixed selection and says how many it skipped', async () => {
+    const { app, window, select } = loadToolbar();
+    const photo = new window.File(['p'], 'photo.jpg', { type: 'image/jpeg' });
+    const script = new window.File(['#!/bin/sh'], 'run.sh', { type: 'text/x-shellscript' });
+    const pdf = new window.File(['%PDF-'], 'notes.pdf', { type: 'application/pdf' });
+    select([photo, script, pdf]);
+    await vi.waitFor(() => expect(app._localEchoOverlay.appendText).toHaveBeenCalledTimes(1));
+    expect(app._uploadAndInsertImages).toHaveBeenCalledWith([photo, pdf], { insert: false, sessionId: 'session-1' });
+    expect(app.showToast).toHaveBeenCalledWith('1 file skipped: unsupported type', 'info');
+  });
+
+  it('a file dropped on the terminal goes through the same filter and its toasts', () => {
+    const { app, window } = loadToolbar();
+    const drop = (files: File[]) => {
+      const event = new window.Event('drop', { bubbles: true, cancelable: true });
+      Object.defineProperty(event, 'dataTransfer', { value: { files, types: ['Files'] } });
+      window.document.getElementById('terminalContainer')!.dispatchEvent(event);
+    };
+    const photo = new window.File(['p'], 'photo.jpg', { type: 'image/jpeg' });
+    const script = new window.File(['#!/bin/sh'], 'run.sh', { type: 'text/x-shellscript' });
+    const page = new window.File(['<p>'], 'page.html', { type: 'text/html' });
+    drop([photo, script, page]);
+    expect(app._uploadAndInsertImages).toHaveBeenCalledWith([photo]);
+    expect(app.showToast).toHaveBeenCalledWith('2 files skipped: unsupported type', 'info');
+    app.showToast.mockClear();
+    app._uploadAndInsertImages.mockClear();
+    drop([script]);
+    expect(app._uploadAndInsertImages).not.toHaveBeenCalled();
+    expect(app.showToast).toHaveBeenCalledWith('Unsupported file type', 'error');
+  });
+
+  it('_admitPromptAttachments: silent when it admits everything, and quiet for a text paste with nothing admitted', () => {
+    const { app, window } = loadToolbar();
+    const photo = new window.File(['p'], 'photo.jpg', { type: 'image/jpeg' });
+    const script = new window.File(['#!/bin/sh'], 'run.sh', { type: 'text/x-shellscript' });
+    expect(app._admitPromptAttachments([photo])).toEqual([photo]);
+    expect(app._admitPromptAttachments([script], { textPasted: true })).toEqual([]);
+    expect(app.showToast).not.toHaveBeenCalled();
+    // Pasted text does not hide a partial refusal: the admitted file uploads, the text does not.
+    expect(app._admitPromptAttachments([photo, script], { textPasted: true })).toEqual([photo]);
+    expect(app.showToast).toHaveBeenCalledWith('1 file skipped: unsupported type', 'info');
   });
 
   it('classifies a pick by its name when the file manager supplied no MIME type', () => {

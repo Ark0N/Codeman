@@ -89,6 +89,32 @@ describe('Codex launch defaults', () => {
     }
   });
 
+  it('fills Allow network access into every local codex launch, and an explicit value wins', async () => {
+    await writeFile(SETTINGS_PATH, JSON.stringify({ codexNetworkAccess: true }));
+    expect(await resolveCodexDefaults(undefined)).toEqual({ networkAccess: true });
+    expect(buildCodexCommand(await resolveCodexDefaults(undefined))).toBe(
+      'codex --config sandbox_workspace_write.network_access=true'
+    );
+    // The browser sends a codexConfig without the field, so the default still applies.
+    expect(await resolveCodexDefaults({ dangerouslyBypassApprovals: false })).toEqual({
+      dangerouslyBypassApprovals: false,
+      networkAccess: true,
+    });
+    expect(await resolveCodexDefaults({ networkAccess: false })).toEqual({ networkAccess: false });
+    // Off (and a malformed value) fills nothing, so the launch stays byte-identical.
+    for (const value of [false, 'yes']) {
+      await writeFile(SETTINGS_PATH, JSON.stringify({ codexNetworkAccess: value }));
+      expect(await resolveCodexDefaults(undefined)).toBeUndefined();
+    }
+  });
+
+  for (const url of ['/api/sessions', '/api/quick-start']) {
+    it(`records Allow network access on a codex session created at ${url}`, async () => {
+      await writeFile(SETTINGS_PATH, JSON.stringify({ codexNetworkAccess: true }));
+      expect(await createdConfig(url)).toMatchObject({ networkAccess: true });
+    });
+  }
+
   it('keeps defaults out of custom endpoint launches', async () => {
     const config = { model: 'local-model', animations: false };
     expect(await resolveCodexDefaults(config, true)).toBe(config);
@@ -100,6 +126,7 @@ describe('Codex launch defaults', () => {
     expect(getCli('codex')!.capabilities.launchDefaults).toEqual({
       model: 'codexModel',
       reasoningEffort: 'codexReasoningEffort',
+      networkAccess: 'codexNetworkAccess',
     });
     for (const entry of STOCK_CLIS) {
       if ((entry.id as string) === 'codex') continue;

@@ -299,7 +299,7 @@ const context = vm.createContext({
 });
 vm.runInContext(
   `${read('constants.js')}\n${read('app.js')}\n${read('terminal-ui.js')}\n${read('terminal-split.js')}\n` +
-    `${read('tile-grid.js')}\n${read('mobile-overview.js')}\n` +
+    `${read('tile-grid.js')}\n${read('mobile-overview.js')}\n${read('image-input.js')}\n` +
     'globalThis.__CodemanApp = CodemanApp;',
   context
 );

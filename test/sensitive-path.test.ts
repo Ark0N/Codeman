@@ -21,6 +21,17 @@ import { describe, expect, it } from 'vitest';
 import { isSensitivePath } from '../src/web/sensitive-path.js';
 
 const HOME = '/home/dev';
+const dotenvPaths: Array<[string, string]> = [
+  ['dotenv', '/srv/app/.env'],
+  ['local dotenv', '/srv/app/.env.local'],
+  ['suffixed dotenv', '/srv/app/.env.production'],
+  // Deliberate: `.env.*` is blocked wholesale for downloads and attachments, so even a
+  // committed `.env.example` is refused rather than risking the one repo whose "example"
+  // holds a live key. Only the File Viewer editor lifts it (`allowDotenv`), and only for
+  // a file the same user already reads in the preview.
+  ['a dotenv example', '/srv/app/.env.example'],
+  ['nested dotenv', '/srv/app/sub/dir/.env'],
+];
 
 describe('isSensitivePath', () => {
   describe('blocks', () => {
@@ -35,12 +46,7 @@ describe('isSensitivePath', () => {
       ['ssh keys anywhere', '/srv/deploy/.ssh/id_rsa'],
       ['gpg keyring', `${HOME}/.gnupg/private-keys-v1.d/key.key`],
 
-      ['dotenv', '/srv/app/.env'],
-      ['suffixed dotenv', '/srv/app/.env.production'],
-      // Pre-existing and deliberate: `.env.*` is blocked wholesale, so even a
-      // committed `.env.example` is refused rather than risking the one repo
-      // whose "example" holds a live key.
-      ['a dotenv example', '/srv/app/.env.example'],
+      ...dotenvPaths,
 
       ['generic credentials file', '/srv/app/credentials'],
       ['json credentials', '/srv/app/credentials.json'],
@@ -88,16 +94,82 @@ describe('isSensitivePath', () => {
       ['codeman push keys (VAPID private)', `${HOME}/.codeman/push-keys.json`],
       ['codeman intent profiles', `${HOME}/.codeman/intents.json`],
       ['codeman intents on a named instance', `${HOME}/.codeman-beta/intents.json`],
+      ['codeman agent inbox snapshot', `${HOME}/.codeman/agent-inbox.json`],
+      // The edit history stores hold every diff an agent wrote (keys and .env
+      // contents included): 0600 and kept out of /api/search like intents.json.
+      ['codeman edit history store', `${HOME}/.codeman/edit-history/s1.json`],
+      ['codeman edit history on a named instance', `${HOME}/.codeman-beta/edit-history/s1.json`],
+      // Credentials outside settings.json, and the backups that copy all of these.
+      ['codeman Discord bot token', `${HOME}/.codeman/discord.json`],
+      ['codeman Discord token on a named instance', `${HOME}/.codeman-beta/discord.json`],
+      ['codeman webhook URL', `${HOME}/.codeman/webhook.json`],
+      ['codeman custom endpoint API keys', `${HOME}/.codeman/custom-model-hosts.json`],
+      ['a generated custom model config', `${HOME}/.codeman/custom-model-configs/s1/opencode.json`],
+      ['a backed-up user list', `${HOME}/.codeman/backups/config/cfg-20261104-120000/users.json`],
+      ['a backed-up settings file', `${HOME}/.codeman/backups/config/cfg-20261104-120000/settings.json`],
     ];
 
     it.each(blocked)('blocks the %s', (_label, path) => {
       expect(isSensitivePath(path)).toBe(true);
+    });
+
+    it.each(blocked.filter(([, path]) => !dotenvPaths.some(([, dotenv]) => dotenv === path)))(
+      'still blocks the %s with allowDotenv:true',
+      (_label, path) => {
+        expect(isSensitivePath(path, { allowDotenv: true })).toBe(true);
+      }
+    );
+  });
+
+  describe('dotenv opt-in', () => {
+    it.each(dotenvPaths)('blocks the %s with allowDotenv:false', (_label, path) => {
+      expect(isSensitivePath(path, { allowDotenv: false })).toBe(true);
+    });
+
+    it.each(dotenvPaths)('blocks the %s with empty options', (_label, path) => {
+      expect(isSensitivePath(path, {})).toBe(true);
+    });
+
+    it.each(dotenvPaths)('allows the %s with allowDotenv:true', (_label, path) => {
+      expect(isSensitivePath(path, { allowDotenv: true })).toBe(false);
+    });
+
+    it.each([
+      '/home/u/.ssh/.env',
+      '/home/u/.gnupg/.env.local',
+      '/home/u/.config/gh/.env',
+      '/home/u/.azure/.env',
+      '/home/u/.codeman/backups/cfg-20260101-000000/.env',
+    ])('still blocks dotenv inside sensitive tree %s', (path) => {
+      expect(isSensitivePath(path, { allowDotenv: true })).toBe(true);
+    });
+
+    describe.each([
+      ['default', undefined],
+      ['empty options', {}],
+      ['allowDotenv:false', { allowDotenv: false }],
+      ['allowDotenv:true', { allowDotenv: true }],
+    ])('Codeman login files with %s', (_label, options) => {
+      it.each([
+        '/home/u/.codeman/.env',
+        '/home/u/.codeman-dev/.env',
+        '/home/u/.codeman-beta/.env',
+        '/srv/x/.codeman/.env',
+        // The editor's name rule lowercases, and on a case-insensitive filesystem (the macOS
+        // default) these two ARE the file above.
+        '/home/u/.codeman/.ENV',
+        '/home/u/.CODEMAN/.env',
+        '/home/u/.Codeman-Dev/.Env',
+      ])('blocks %s', (path) => {
+        expect(isSensitivePath(path, options)).toBe(true);
+      });
     });
   });
 
   describe('leaves ordinary files attachable', () => {
     const allowed: Array<[string, string]> = [
       ['a source file', '/srv/app/src/index.ts'],
+      ['a readme', '/srv/app/README.md'],
       ['a dotfile that carries no secret', '/srv/app/.gitignore'],
       ['a hidden CI directory', '/srv/app/.github/workflows/ci.yml'],
       // The publish skill and the review-card loop attach from these trees, so
@@ -114,6 +186,10 @@ describe('isSensitivePath', () => {
 
     it.each(allowed)('allows %s', (_label, path) => {
       expect(isSensitivePath(path)).toBe(false);
+    });
+
+    it.each(allowed)('still allows %s with allowDotenv:true', (_label, path) => {
+      expect(isSensitivePath(path, { allowDotenv: true })).toBe(false);
     });
   });
 
@@ -140,6 +216,13 @@ describe('isSensitivePath', () => {
     ])('blocks the %s', (_label, path) => {
       expect(isSensitivePath(path)).toBe(true);
     });
+
+    it.each(['.claude.json', '.claude/settings.json', '.claude/settings.local.json'])(
+      'still blocks home-anchored %s with allowDotenv:true',
+      (relativePath) => {
+        expect(isSensitivePath(`${homedir()}/${relativePath}`, { allowDotenv: true })).toBe(true);
+      }
+    );
 
     // A blanket `/\.claude\/settings\.json$/` would also catch every CASE-level
     // settings file, which users legitimately view and edit in the File Viewer

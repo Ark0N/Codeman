@@ -77,6 +77,14 @@ An agent tab shows its CLI's logo before the name, and a shell tab an `SH` badge
 on Tabs** (App Settings → Appearance → Tabs) hides the logos on that device; the tile and split
 headers and the Run menus keep theirs.
 
+**New Session Button on Tabs** (same place, per device, off by default) adds a **+** beside
+the tab's gear. It lists the CLIs that tab's case can start, each with its logo and name (a
+Docker case lists what its container has), and a pick starts one session in that tab's case,
+or the worktree it runs in, and in its named group. The Run button keeps its own mode and case.
+Wherever a tab has a row menu (the vertical rail, the sidebar, `Shift+F10` on a grouped row),
+the same list is its **New session here…** entry. From a tab outside any named group, the new
+session lands in the case's default group if the case has one, as a Run from the toolbar does.
+
 **Status is carried by the dot and the tab's own styling:**
 
 | Look                          | Meaning                                                                 |
@@ -146,9 +154,9 @@ The right side of the header. Almost all of these are off until you enable them 
 | Connection dot         | Always on          | SSE connection health. Green is connected.                                       |
 | Font size `-` / `+`    | Always on          | `Ctrl +` / `Ctrl -` do the same.                                                 |
 | CPU / MEM              | On                 | Server resource use. Drawn as a compact pill by default; see Header Stats Style below. |
-| File Viewer            | On                 | Toggles the file browser panel.                                                  |
+| File Viewer            | On, off on phones  | Toggles the file browser panel.                                                  |
 | Settings gear          | Always on          | App Settings.                                                                    |
-| Plan usage chip        | On, desktop only   | Live Claude subscription usage. Claude-only, and needs its telemetry exporter, which the same setting installs. |
+| Plan usage chip        | On, desktop only   | Live subscription usage: Claude (needs its telemetry exporter, which the same setting installs), Codex limits and the Copilot monthly quota. |
 | Session Manager        | Off                | The full session list, live and historical.                                      |
 | Approvals bell         | Off                | Cross-session queue of prompts waiting on a human. Appears only when the count is above zero. Never shown on phones. |
 | Read My Mind 🧠        | Off                | Predicts your next prompt for this case. Claude-only.                            |
@@ -178,6 +186,14 @@ The connection readout, CPU, MEM and the plan usage windows can be drawn three w
 
 Hiding System Stats or Plan Usage still hides them in every style.
 
+The line between the session tabs and the toolbar is a handle: drag it right to narrow the toolbar
+(it wraps onto a second line and the usage readings shed their labels, then their provider names,
+then, in the Compact style, their percentages), left to widen it. The GPU, VRAM and clock readings
+keep their labels, since their values look like CPU's and MEM's; at the narrowest Compact step a
+clock, which has no ring, is hidden. Arrow keys resize it, and
+double-click or Home resets it. It stops at the widest reading, the width is kept per device, and it
+is not shown on phones, in the sidebar layout, in the vertical rail or in a solo window.
+
 New header controls never appear on phones. Phone layout is deliberately minimal and is
 covered in [Mobile Guide](Mobile-Guide).
 
@@ -201,6 +217,15 @@ with no server behind it used to look identical to a page with no sessions:
 Both wait about 2.5 seconds before appearing, so a deploy that restarts the server does not
 flash a warning at you every time. If the browser reports itself offline, the grace period
 is skipped.
+
+**The transport readout.** With a session open, the header shows how its terminal is
+connected: `WS` (WebSocket, the normal case), `WS…` (connecting or reconnecting) or `HTTP`
+(the WebSocket is unavailable and input goes over HTTP). If typed or pasted input is backing
+up faster than it is acknowledged, the readout grows a suffix such as `WS · 1.2KB queued`.
+That suffix appears only after the backlog has stayed up for about a second, so a paste or a
+fast burst that clears at once does not make the pill widen and shrink. (It is part of the
+text line, so you see it in the Compact and As before header styles; Tiles hides that line and
+shows `WS live`, and phones hide it too.)
 
 There is also a watchdog for the case where the connection stops delivering without
 erroring. If the server's heartbeat stops arriving, Codeman reconnects on its own rather
@@ -226,10 +251,12 @@ Worth knowing:
 - **Wheel and touch scrolling** are forwarded into Claude's own transcript when a recent
   Claude runs fullscreen (`CLAUDE_CODE_NO_FLICKER=1`, or `"tui": "fullscreen"` in
   `~/.claude/settings.json`), so the wheel scrolls the conversation rather than the terminal.
-  Claude's default inline view keeps its history in the terminal and scrolls locally. `Shift+Wheel` is
+  Codex with mouse tracking on gets the wheel forwarded like fullscreen Claude; otherwise
+  it pages its transcript or scrolls locally. Claude's default inline view keeps its history
+  in the terminal and scrolls locally. `Shift+Wheel` is
   always local scrollback. OpenCode's wheel and swipes page its own conversation
-  (PageUp/PageDown), and so do newer Codex versions, which draw on the alternate screen
-  and leave the terminal no history of its own (an older Codex that draws inline keeps
+  (PageUp/PageDown), as do untracked fullscreen Codex versions that leave the terminal
+  no history of its own (an older Codex that draws inline keeps
   its history in the terminal and scrolls locally). The first small movement of a
   gesture pages at once, then one page per half screen of travel; one finger on the
   screen is one gesture however slowly it moves. In a grid tile or the split view's
@@ -259,6 +286,39 @@ Two extras depending on the device:
   it is hidden so it cannot overlap the search panel.
 - **Phones**: tapping the "C" logo gives a session overview instead: NEEDS YOU first, then
   current sessions, then past ones. On by default.
+
+### Opened outside Codeman
+
+A tmux session you started by hand (`tmux new -s work`, then `claude`, or just a shell) shows
+up on the home screen under **Opened outside Codeman**, on the desktop and in the phone
+overview. **Open** wraps it in a tab, and **Go to tab** on a row means it already has one.
+
+| Where it runs        | How it is found                                                              |
+| -------------------- | ---------------------------------------------------------------------------- |
+| **This machine**     | Automatically, every few seconds while the home screen is up.               |
+| **A container**      | The `⟳` button in the block's header scans the containers behind your Docker cases. |
+| **Over SSH**         | The same button scans your saved remote hosts.                               |
+
+The container and SSH scan costs one connection per target, so it runs when you press the
+button, and **Rescan** runs it again.
+
+- **Closing the tab only detaches.** The session keeps running, and the close dialog offers no
+  kill. Opening one types nothing into it.
+- **Codeman did not start it,** so it will not drive it: respawn, Ralph, auto-clear,
+  auto-compact, auto-resume, custom model endpoints, prompt uploads and the image watcher are
+  refused, the git panel shows nothing, and Edit history says it is not available.
+- **The tab opens on the session's first window,** and the row describes that same window.
+- **It joins like a second tmux client.** While the tab is open it can resize a session
+  someone else is viewing, the way any second client does, and that reverses when it closes.
+- **A short line in the block says why a session is missing.** One whose name holds unusual
+  characters is skipped, and so is one named so that tmux reads the name as something else (it
+  starts with `=`, `@` or `%`, or is a bare `~`). Rename it with `tmux rename-session`. A tmux
+  server that stopped answering costs only its own sessions. One case gets no line: a session
+  named `codeman-*` or `claudeman-*`, or on a Codeman socket, counts as Codeman's own.
+
+Only sockets in tmux's own folder are scanned, so `tmux -L <name>` is found and
+`tmux -S /custom/path` is not. In multi-user mode the block is for admins, since it shows
+everyone's processes.
 
 ## Panels
 

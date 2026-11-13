@@ -42,6 +42,8 @@ import { SseEvent } from '../sse-events.js';
 import type { AuthPort } from '../ports/auth-port.js';
 import type { SessionPort } from '../ports/session-port.js';
 import type { EventPort } from '../ports/event-port.js';
+import type { TabLayoutPort } from '../ports/tab-layout-port.js';
+import { ownerLayoutKey } from '../../tab-layout-persistence.js';
 
 const CreateUserSchema = z.object({
   username: z.string().min(1).max(64),
@@ -73,7 +75,10 @@ function storeError(reply: FastifyReply, err: unknown): ReturnType<typeof create
   return createErrorResponse(ApiErrorCode.INTERNAL_ERROR, err instanceof Error ? err.message : 'error');
 }
 
-export function registerAdminRoutes(app: FastifyInstance, ctx: SessionPort & AuthPort & EventPort): void {
+export function registerAdminRoutes(
+  app: FastifyInstance,
+  ctx: SessionPort & AuthPort & EventPort & TabLayoutPort
+): void {
   // Gate: admin routes exist only in multi-user mode, and only for admins.
   const gate = (req: FastifyRequest, reply: FastifyReply): boolean => {
     if (!isMultiUserMode()) {
@@ -299,6 +304,8 @@ export function registerAdminRoutes(app: FastifyInstance, ctx: SessionPort & Aut
       );
     }
     await fsp.rm(realTarget, { recursive: true, force: true });
+    // The user's default session group for that case goes with it.
+    await ctx.tabLayouts.forgetCaseDefaultGroup(ownerLayoutKey(username), params.caseName).catch(() => undefined);
     audit(req, 'user.case-delete', username, { caseName: params.caseName });
     ctx.broadcast(SseEvent.AdminUsersChanged, {});
     return { success: true, data: { username, caseName: params.caseName } };

@@ -30,8 +30,13 @@ A **MAJOR** bump is required to break any of these after 1.0:
 3. **Documented environment variables** that configure deployment:
    `CODEMAN_PASSWORD`, `CODEMAN_USERNAME`, `CODEMAN_HOST`, `CODEMAN_PORT`,
    `CODEMAN_INSTANCE`, `CODEMAN_ALLOWED_HOSTS`, `CODEMAN_DATA_DIR`,
-   `CODEMAN_TMUX_SOCKET`, and the `--host` / `--port` / `--https` CLI flags.
-   Removing or changing the meaning of one of these is breaking.
+   `CODEMAN_TMUX_SOCKET`, `CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK`,
+   `CODEMAN_ALLOW_UNAUTHENTICATED_TUNNEL`, and the `--host` / `--port` /
+   `--https` / `--allow-unauthenticated-network` /
+   `--allow-unauthenticated-tunnel` CLI flags. Removing or changing the meaning
+   of one of these is breaking. The two acknowledgements are listed from 1.46.0,
+   the release that split them: the network one covers the non-loopback bind
+   only, and an unauthenticated tunnel needs the tunnel one.
 4. **The HTTP API and SSE event channel**, served under **`/api/v1`** with the
    uniform `{success:true,data}` / `{success:false,error,errorCode}` envelope and
    conventional HTTP status codes. Endpoint paths, the response envelope, error
@@ -61,6 +66,49 @@ These may change in a **MINOR** (or even PATCH) release without a MAJOR bump:
    (`window.CodemanHost.openWindow` / `closeWindow` / `focusWindow`), and
    anything labeled experimental in the UI or docs. These may change or be
    removed at any time.
+
+### Experimental agent coordination
+
+`codeman agent inspect`, `codeman agent stage` and `codeman agent submit`, and
+the matching `GET /api/v1/sessions/:id/inspect`, `POST /api/v1/sessions/:id/stage`
+and `POST /api/v1/sessions/:id/submit` routes (with their `/api` aliases, since
+every `/api` route is also served under `/api/v1`), are labeled experimental, so
+item 3 above applies to them: their commands, flags, endpoint paths, payloads and
+behavior may change or be removed in a MINOR or PATCH release. They are also
+opt-in: the routes answer `403 FORBIDDEN` with a message naming the synced
+`agentCoordinationEnabled` setting (default OFF) until it is turned on, so
+automation cannot come to depend on them without choosing to. Pin a compatible
+Codeman version when automating them. Existing authentication, ownership and
+shared response-envelope rules still apply. The session behavior underneath them
+(input revision tracking in the session's write paths, the SubmitVerifier
+re-press going through the shared write boundary) runs for every session and is
+covered like any other stable behavior. Other agent commands and API routes keep
+their existing guarantees. Promotion to stable requires an explicit documented
+decision.
+
+### Experimental local model routes
+
+`GET /api/v1/local-model`, `POST /api/v1/local-model/install`, `/use`, `/cancel`,
+`/resume`, `/runtime` and `/agent`, `DELETE /api/v1/local-model` and
+`DELETE /api/v1/local-model/models` (and their `/api` aliases) are
+labeled experimental, so item 3 above applies to them: their paths, their payloads
+(the hardware facts, the verdicts and reasons, the candidate fields, the `install`
+object with its states, steps, error codes and actions, its `library`, `store` and
+`harnesses` lists, the 409 conflict shape and
+every English sentence) and their behavior may change or be removed in a MINOR or
+PATCH release. They look at the Mac the server runs on, say which local model fits,
+install, start, stop and remove one, keep a library of installed models to switch
+between or delete, and install one more coding agent beside an installed model
+([local-models.md](local-models.md)).
+
+They are not behind a setting. Reading changes nothing; an install starts only on an
+explicit request that carries the size the person confirmed. All of them are admin
+only in multi-user mode. What an install leaves behind is ordinary, stable state: one
+saved model endpoint with the id `local-ollama` and the `customModelEndpointsEnabled`
+setting switched on, both of which the stable custom model endpoint routes read like
+any other endpoint. On-disk state (`local-model.json`, the `local-model/` folder) is
+internal, as for every other file in the data directory. Promotion to stable requires
+an explicit documented decision.
 
 ## Deprecation policy
 

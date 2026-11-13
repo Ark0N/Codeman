@@ -33,7 +33,14 @@ import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } 
 import { ApiErrorCode, createErrorResponse } from '../../types.js';
 import { isBlockedAttachmentPath, isUnderTree, loadAttachmentGuardConfig } from '../../config/attachment-guard.js';
 import { HTML_VIEW_PREFIX, htmlViewCapabilities } from '../../html-view-capabilities.js';
-import { CASES_DIR, findSessionOrFail, ownerFor, parseBody, validateSessionFilePath } from '../route-helpers.js';
+import {
+  CASES_DIR,
+  findSessionOrFail,
+  ownerFor,
+  parseBody,
+  validateLocalSessionFilePath,
+  validateSessionFilePath,
+} from '../route-helpers.js';
 import { HtmlViewOpenSchema } from '../schemas.js';
 import { DOCKER_HOME_PATH_ERROR, localFileSource, sendFileBody } from './file-routes.js';
 import { getUserSpacesDir } from '../../config/multiuser.js';
@@ -175,9 +182,15 @@ export function registerHtmlViewRoutes(app: FastifyInstance, ctx: SessionPort): 
     // Inside the workspace: the same check every file route uses. Outside it: the
     // attachment guard, exactly as an external file preview is admitted.
     let resolvedPath: string;
-    const inWorkspace = validateSessionFilePath(session.workingDir, requestedPath);
+    const inWorkspace = validateLocalSessionFilePath(session, requestedPath);
+    // A path the live-worktree root admitted (an outside worktree, a second served root) is
+    // inside that root but not inside `workingDir`: it still answers to the attachment guard.
+    let viaOutsideWorktree = false;
     if (inWorkspace) {
       resolvedPath = inWorkspace.resolvedPath;
+      if (!validateSessionFilePath(session.workingDir, requestedPath)) {
+        viaOutsideWorktree = true;
+      }
     } else {
       if (!isAbsolute(requestedPath)) {
         reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, 'File not found'));
@@ -189,6 +202,9 @@ export function registerHtmlViewRoutes(app: FastifyInstance, ctx: SessionPort): 
         reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, 'File not found'));
         return;
       }
+    }
+    // One gate for every page outside `workingDir`: an external file and one in an outside worktree.
+    if (!inWorkspace || viaOutsideWorktree) {
       const guard = await loadAttachmentGuardConfig();
       if (guard.confineToWorkspace || isBlockedAttachmentPath(resolvedPath, guard.blockedTrees)) {
         reply.code(403).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Access to this file is blocked'));
@@ -233,7 +249,7 @@ export function registerHtmlViewRoutes(app: FastifyInstance, ctx: SessionPort): 
       return;
     }
 
-    const cap = htmlViewCapabilities.mint(dirname(resolvedPath), ownerFor(req), !inWorkspace);
+    const cap = htmlViewCapabilities.mint(dirname(resolvedPath), ownerFor(req), !inWorkspace || viaOutsideWorktree);
     return {
       success: true,
       data: { url: `${HTML_VIEW_PREFIX}/${cap}/${encodeURIComponent(basename(resolvedPath))}` },

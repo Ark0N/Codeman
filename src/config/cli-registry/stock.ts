@@ -13,6 +13,14 @@
 import type { CliEntry } from './types.js';
 import { CODEX_REASONING_EFFORTS } from '../../types/session.js';
 
+/**
+ * Codex's footer effort words: every CODEX_REASONING_EFFORTS level plus `default` (what
+ * codex prints when no effort is configured), as one regex alternation. Shared by the two
+ * patterns that read that footer (`modelDetect.screenLine` and
+ * `workDetect.composerFooterLine`), so a new level is a one-place edit.
+ */
+const CODEX_EFFORT_WORDS = [...CODEX_REASONING_EFFORTS, 'default'].join('|');
+
 const HOME_DIRS = {
   local: '~/.local/bin',
   usrLocal: '/usr/local/bin',
@@ -144,6 +152,7 @@ const CLAUDE: CliEntry = {
       // from the EFFORT_LEVELS allowlist upstream, same as every other engine value).
       effortLevel: { type: 'engine', source: 'effortLevel' },
       effortJson: { type: 'engine', source: 'effortSettingsJson' },
+      discordHint: { type: 'engine', source: 'appendSystemPrompt' },
       sessionId: { type: 'engine', source: 'sessionId' },
       sessionName: { type: 'engine', source: 'sessionName' },
     },
@@ -171,6 +180,12 @@ const CLAUDE: CliEntry = {
           { flag: '--effort', valueFrom: 'effortLevel', quote: 'single', when: { param: 'effortLevel', state: 'set' } },
           { flag: '--settings', valueFrom: 'effortJson', quote: 'single', when: { param: 'effortJson', state: 'set' } },
           { flag: '--name', valueFrom: 'sessionName', quote: 'double', when: { capabilityGate: 'nameFlag' } },
+          {
+            flag: '--append-system-prompt',
+            valueFrom: 'discordHint',
+            quote: 'single',
+            when: { param: 'discordHint', state: 'set' },
+          },
         ],
       },
       {
@@ -195,6 +210,12 @@ const CLAUDE: CliEntry = {
           { flag: '--effort', valueFrom: 'effortLevel', quote: 'single', when: { param: 'effortLevel', state: 'set' } },
           { flag: '--settings', valueFrom: 'effortJson', quote: 'single', when: { param: 'effortJson', state: 'set' } },
           { flag: '--name', valueFrom: 'sessionName', quote: 'double', when: { capabilityGate: 'nameFlag' } },
+          {
+            flag: '--append-system-prompt',
+            valueFrom: 'discordHint',
+            quote: 'single',
+            when: { param: 'discordHint', state: 'set' },
+          },
         ],
       },
     ],
@@ -289,6 +310,10 @@ const CLAUDE: CliEntry = {
     // forwarded (older CLI, inline renderer, the local-scrollback opt-out) a scroll is
     // turned into PageUp/PageDown, which Claude pages its transcript on (#205).
     transcriptPageKeys: true,
+    // Claude's default renderer is inline, and each keyboard-driven PTY height change made
+    // it reprint only the tail that fits, erasing transcript rows from tmux (measured on
+    // 2.1.306: 25 of 100 lines over five keyboard cycles). See CliCapabilities.keyboardHold.
+    keyboardHold: 'inline',
     keyboardAccessory: 'agent',
     privilegedCommandGate: false,
     startMode: 'interactive',
@@ -329,7 +354,12 @@ const CLAUDE: CliEntry = {
       'CLAUDE_CODE_MAX_CONTEXT_TOKENS',
       'CLAUDE_CONFIG_DIR',
     ],
-    gates: { nameFlag: { minVersion: '2.1.224', failClosed: true } },
+    // idleCompactionSetting: the `idleCompaction` settings key first ships in 2.1.290 (2.1.289
+    // already idle-compacts with no opt-out); see TmuxManager._resolveIdleCompactionOptOut.
+    gates: {
+      nameFlag: { minVersion: '2.1.224', failClosed: true },
+      idleCompactionSetting: { minVersion: '2.1.290', failClosed: true },
+    },
     // claude reads `$CLAUDE_CONFIG_DIR/.claude.json` when that is set (checked in 2.1.289).
     mcpConfig: {
       path: '.claude.json',
@@ -610,8 +640,12 @@ const CODEX: CliEntry = {
   launch: {
     params: {
       bypassApprovals: { type: 'bool' },
+      networkAccess: { type: 'bool' },
       animations: { type: 'bool' },
-      model: { type: 'token', pattern: 'model' },
+      // `model-plain-colon`, not `model`: the custom-model feature forces the selected id
+      // onto this param (`launchModel: '{modelId}'` below), and Ollama-style ids carry a
+      // `:` (`qwen3:32b`). A leading alphanumeric still keeps `--yolo` from riding a flag.
+      model: { type: 'token', pattern: 'model-plain-colon' },
       reasoningEffort: { type: 'enum', values: [...CODEX_REASONING_EFFORTS] },
       resumeId: { type: 'token', pattern: 'id' },
     },
@@ -620,7 +654,38 @@ const CODEX: CliEntry = {
         id: 'default',
         args: [
           { lit: 'codex' },
+          // Codex 0.162 hands every client's tool commands to ONE shared background
+          // app-server (`codex app-server --managed-daemon`), started by whichever client
+          // came first. Two things break inside a Codeman pane, both measured 2026-11-01 on
+          // 0.162.0: the commands run with the STARTER's environment, so
+          // `$CODEMAN_SESSION_ID`/`$CODEMAN_API_URL` belong to another session (the codeman
+          // skill's self-check 404s and its delete guard protects the wrong id), and a daemon
+          // of another version (a 0.166 one left by a later install) stops every launch on an
+          // "incompatible feature settings" dialog before the composer appears. `--no-daemon`
+          // runs this session's own in-process server, which is what a pane per session
+          // means anyway. Gated at the version it was measured on; an older or unknown
+          // codex gets nothing (fail-closed), since an unknown flag makes codex exit.
+          { flag: '--no-daemon', when: { capabilityGate: 'noDaemonFlag' } },
           { flag: '--dangerously-bypass-approvals-and-sandbox', when: { param: 'bypassApprovals', is: true } },
+          // Lets commands in codex's workspace-write sandbox open network connections,
+          // Codeman's own API on loopback included (the codeman skill's curl calls fail
+          // with "couldn't connect" without it). Measured on 0.162.0 (`codex sandbox` and
+          // a live pane): loopback stays blocked under workspace-write until this is set.
+          // ⚠️ Not a safe middle ground below the bypass above: that API can start a session
+          // outside the sandbox with no approval prompt, so codex's sandbox no longer contains
+          // a command once this is on. Measured 2026-11-06: a `touch` the sandbox refused
+          // landed through POST /api/sessions, and with a password set too from inside a
+          // Codeman pane, which inherits CODEMAN_PASSWORD by design.
+          // ⚠️ Workspace-write ONLY: a folder codex runs read-only (one it does not trust,
+          // such as a fresh non-git case) keeps the network closed and asks per command.
+          // Deliberately not paired with `--sandbox workspace-write` (owner decision,
+          // 2026-11-06), which would also grant write access to a folder codex itself chose
+          // not to trust, under a label that only says "network".
+          {
+            flag: '--config',
+            value: 'sandbox_workspace_write.network_access=true',
+            when: { param: 'networkAccess', is: true },
+          },
           { flag: '--config', value: 'tui.animations=true', when: { param: 'animations', is: true } },
           { flag: '--config', value: 'tui.animations=false', when: { param: 'animations', is: false } },
           { flag: '--model', valueFrom: 'model', when: { param: 'model', state: 'set' } },
@@ -729,6 +794,34 @@ const CODEX: CliEntry = {
       watchingLines: 4,
       blockedLine: String.raw`(?:^|\n) {0,4}› \d\. [\s\S]*\n {2}(?:Press enter to confirm|tab (?:to add|or esc to clear) notes|enter continue)(?:[^\n]|\n {2}(?=[a-z←])){0,120}(?:cancel|interrupt|quit|back|answer|all)$`,
       blockedLines: 20,
+      // The rows codex draws under an idle composer, tested one at a time by guarded
+      // stage/submit (agent-staging.ts): the model footer (`  gpt-5.6-terra default ·
+      // ~/case`, effort words from CODEX_EFFORT_WORDS as in modelDetect below), the
+      // `? for shortcuts` / `← for agents` hint row 0.162.0 adds at rest, and the older
+      // `NN% context left` footer. Indented, so the `›` composer row itself never matches.
+      composerFooterLine: String.raw`^\s+(?:\d+% context left|\? for shortcuts|← for agents|\S+ (?:${CODEX_EFFORT_WORDS}) · )`,
+      // Read from codex-rs/tui/src/bottom_pane at rust-v0.162.0 (chat_composer/
+      // popup_state.rs, composer_layout.rs and the popups' render code and snapshots):
+      // every suggestion popup renders ABOVE the composer and keeps the footer below it,
+      // so the footer alone cannot tell `› /stat` with the command list open from an
+      // idle draft, and Enter then runs the highlighted `/status`. What sits in the
+      // block just above the composer (past its blank top padding row):
+      //   command list (`/`)           `› /status      show current session ...`
+      //                                `  /statusline  configure which items ...`
+      //   skill and mention lists      `  enter insert · esc close` (key-hint row)
+      //   (`$`, `@` with mentions on)  `  enter/tab insert · esc close · ↑/↓ select · ←/→ filter`
+      //   file search (`@`)            `  loading...` / `  no matches`, else bare path
+      //                                rows, which no pattern can tell from prose
+      // The last case is why stage also refuses the triggers themselves (below).
+      composerPopupLine: String.raw`^ {0,2}(?:enter(?:/tab)? insert · esc close|loading\.\.\.$|no matches$)|^[› ] /[\w:-]+ {2,}\S`,
+      // Same source. A draft starting with `/` is a slash command (the popup opens while
+      // the caret is in its name, and Enter runs a command either way), and one starting
+      // with `!` is a shell command (codex switches its prompt to `!` and runs it). Popups
+      // open for the word under the caret only: `@` (file search, or the unified mention
+      // list) and `$` (skills and mentions; whether a given `$word` opens it depends on
+      // codex's skill catalog, so every `$` word is refused).
+      composerCommandPrefixes: '/!',
+      composerCompletionSigils: '@$',
     },
     // The footer under the composer, measured on a live 0.147.0 pane:
     // `  gpt-5.6-terra default · ~/codeman-cases/th-scratch` (model, reasoning effort,
@@ -752,13 +845,20 @@ const CODEX: CliEntry = {
     // and the `›` composer, and a forged footer-shaped transcript line is not followed by
     // an indented row, so it is not read.
     modelDetect: {
-      screenLine: String.raw`(?:^|\n) {2}([A-Za-z0-9][\w.:/@+-]{0,79}) (?:${[...CODEX_REASONING_EFFORTS, 'default'].join('|')}) · [^\n]*(?:\n {2}[^\n]*)?$`,
+      screenLine: String.raw`(?:^|\n) {2}([A-Za-z0-9][\w.:/@+-]{0,79}) (?:${CODEX_EFFORT_WORDS}) · [^\n]*(?:\n {2}[^\n]*)?$`,
       screenLines: 2,
     },
     // App Settings → Codex model / reasoning effort (synced), filled into a LOCAL launch's
     // codexConfig wherever the caller left the field unset. Launch-only: nothing writes
     // codex's own config.toml. Read by applyLaunchDefaults() in src/web/launch-defaults.ts.
-    launchDefaults: { model: 'codexModel', reasoningEffort: 'codexReasoningEffort' },
+    // `networkAccess` (App Settings → Codex → Allow network access) rides the same path, so
+    // a codex session started by the codeman skill, `codeman agent spawn` or the MCP server
+    // gets it as well as one started from the browser. Off (the default) fills nothing.
+    launchDefaults: {
+      model: 'codexModel',
+      reasoningEffort: 'codexReasoningEffort',
+      networkAccess: 'codexNetworkAccess',
+    },
     // Two columns, like claude's, measured on a live 0.154.0 answer: the `•`/`›`/`⚠`
     // markers sit in the gutter, prose continuations sit at 2, and a nested YAML block
     // the model wrote rendered at 2/4/6/8 for its own 0/2/4/6. Replayed at 100, 120,
@@ -768,8 +868,8 @@ const CODEX: CliEntry = {
     transcript: 'codex-rollout',
     altScreen: 'strip-full',
     echo: { policy: 'predict', anchor: { kind: 'cursor' }, predictProfile: 'codex' },
-    wheelForward: { mode: 'never' }, // #227: codex ignores SGR wheel reports, never forward
-    // ...but it DOES page its transcript on PageUp/PageDown. Measured on 0.157.1 (local,
+    wheelForward: { mode: 'always' }, // 0.163.0 fullscreen: measured SGR scrolling; require observed tracking
+    // Without observed mouse tracking, retain PageUp/PageDown fallback. Measured on 0.157.1 (local,
     // alternate screen inside tmux, so xterm holds no history) and 0.160 (remote): PageUp
     // moved the visible transcript while SGR wheel reports and local scrolling did nothing.
     // This is the page-key fallback for a hollow pane, not wheel forwarding.
@@ -783,7 +883,19 @@ const CODEX: CliEntry = {
     // does. codex is the entry where the two names differ (`bypassApprovals` here,
     // `dangerouslyBypassApprovals` on the wire), so it is the one that would have caught a
     // regression; `schema.ts` now rejects a name that is not a declared param.
-    privilegedParams: [{ param: 'bypassApprovals', clampTo: false }],
+    //
+    // `networkAccess` widens the sandbox too (any host, not just Codeman's loopback API), so
+    // a non-granted owner gets it forced off like the bypass. Only-if-sent is enough here as
+    // well: an absent value leaves codex's own no-network default, and the launch default
+    // above is filled BEFORE the clamp runs, so a filled `true` is still clamped.
+    privilegedParams: [
+      { param: 'bypassApprovals', clampTo: false },
+      { param: 'networkAccess', clampTo: false },
+    ],
+    // `--no-daemon` above. Evaluated against codex's OWN version (resolveSessionCliVersion).
+    gates: {
+      noDaemonFlag: { minVersion: '0.162.0', failClosed: true },
+    },
     mcpConfig: {
       path: '.codex/config.toml',
       format: 'codex-toml',
@@ -796,6 +908,7 @@ const CODEX: CliEntry = {
       dirEnvVar: 'CODEX_HOME',
       fileName: 'config.toml',
       template: 'codex-toml',
+      launchModel: '{modelId}',
     },
     // CODEX_HOME already matches the CODEX_ allowedPrefix above, so it was ALREADY
     // reachable via plain envOverrides before this feature existed. It is arguably
@@ -996,6 +1109,30 @@ const ANTIGRAVITY: CliEntry = {
     ...AGENTS_DIR_SKILL,
     altScreen: 'strip-mux-only',
     echo: { policy: 'buffer', anchor: { kind: 'cursor' } },
+    // Measured on a live `agy` 1.3.3 pane (capture-pane every second through a prose turn
+    // and a shell-call turn, plus the raw PTY stream, 2026-10-11). A running turn animates
+    // `⣯  Generating...` (the label also reads `Working...` and `Loading...`) one row above
+    // the composer, and the footer's left end reads `esc to cancel`; at rest the footer
+    // reads `? for shortcuts` and nothing else on screen matches. A shell call replaces the
+    // composer with a `Run this command?` list, the spinner stops, and the pane goes
+    // silent. Nothing arms the idle check while the list is up (the footer hint is drawn only
+    // at rest), so a pending approval reads as working until it is answered. That differs from
+    // gemini, whose `▀` bar comes back on every spinner repaint.
+    // ⚠️ The frames are the 8-dot braille set (`⣯ ⡿ ⣻ ⣾ ⣷ ⣟ ⢿ ⣽`), none of which is in
+    // SPINNER_PATTERN's Claude set, and this entry used to declare nothing, so no frame
+    // ever marked an antigravity tab working and it never showed the activity spinner.
+    // The composer's `>` is no arming mark: the submitted prompt is echoed as `> <text>`
+    // too. The footer hint is drawn only at rest, and the turn's last repaint carries it.
+    // The schema caps a glyph at 8 characters, so this is the head of `? for shortcuts`. It also
+    // keeps the submit verifier inert (no row starts with it and holds prompt text).
+    // The working line is anchored to the start of a row, like gemini's braille branch: the
+    // idle probe tests it against the whole pane, and an answer that QUOTES the spinner row
+    // (an agent explaining this entry) would otherwise hold the tab busy while it is on screen.
+    // Every `agy` capture draws the spinner at column 0.
+    workDetect: {
+      promptGlyph: '? for sh',
+      workingLine: String.raw`(?:^|\n)[⠀-⣿]  [A-Z][A-Za-z ]{2,30}(?:\.\.\.|…)`,
+    },
     // Like codex: an ABSENT config already defaults safe (no bypass flag), so only a
     // SENT config needs the flag forced off — nothing is materialized.
     privilegedParams: [{ param: 'dangerouslySkipPermissions', clampTo: false }],
@@ -1094,7 +1231,23 @@ const PI: CliEntry = {
     // (hasTrustRequiringProjectResources, pi 1.1.0), which would stall a spawned worker on
     // a dialog. pi reads the user-level `~/.agents/skills` without that prompt, so a pi
     // user installs it there (`npx skills add Ark0N/Codeman --skill codeman -g`).
-    altScreen: 'preserve', // pi's TUI renders into the main screen with terminal-owned scrollback
+    // Fullscreen is pi's default `tuiMode` since 1.0.0 (measured 1.0.0, 1.1.0, 1.4.0, 1.5.0 in
+    // tmux: alternate_on=1, history_size=0, mouse on, SGR): a TUI that enables tracking once at
+    // start. Codeman's replay (tab switch, reload) drops that mode in xterm, so the wheel hit an
+    // empty local buffer and went dead until a redraw. Same shape as copilot: strip the DECSETs
+    // (a drag selects locally), publish `cliMouseTracking`, and forward the wheel by hand from
+    // that flag. pi scrolls on SGR wheel reports, one row each at a low rate, faster on a spin.
+    // `tuiMode: regular`, the default below 1.0.0, is inline and emits no mouse DECSET, so the
+    // strip finds nothing and the flag stays false. A pi from 0.84.0 set to fullscreen does emit
+    // them (0.84.1 and 0.99.2 measured: alternate_on=1, mouse_any_flag=1, SGR) and the flag
+    // covers it.
+    // ⚠️ No `transcriptPageKeys`, though fullscreen pi does page on PageUp/PageDown. pi binds
+    // those keys to its editor in regular mode too, where they page nothing and move the caret
+    // of a multi-line draft, so a wheel over a fresh regular pane sent the next keystroke to the
+    // wrong line (measured). The cost: a fullscreen pi with "Wheel scrolls local history" on
+    // has no paging fallback.
+    altScreen: 'strip-mux-and-mouse',
+    wheelForward: { mode: 'always' },
     echo: { policy: 'buffer', anchor: { kind: 'cursor' } },
     // Measured on a live pi 1.1.0 pane (capture-pane every 250 ms through a turn,
     // 2026-10-09): pi has no composer glyph. Its composer sits between two `─` rules, and
@@ -1284,8 +1437,7 @@ const GROK: CliEntry = {
     // docs/, bin/ — per-file seeding like pi's credStore, not a whole-dir seedWhole copy.
     credStore: { rel: '.grok', seedFiles: ['auth.json', 'config.toml', 'pager.toml'] },
     // No remote/docker overlay needed: the defaults (exec grok / login-shell `grok`) are
-    // already correct — verified against upstream's own pinned test/grok-mode.test.ts
-    // expectation `exec "${SHELL:-/bin/sh}" -i -l -c 'grok'`.
+    // already correct, verified against upstream's own pinned test/grok-mode.test.ts.
   },
 };
 
@@ -1476,30 +1628,30 @@ const DEEPSEEK: CliEntry = {
     // SERVER's own key into every dsh pane, so DEEPSEEK_BASE_URL is the exfiltration
     // vector, not the key itself — a non-granted owner supplying THEIR OWN key removes
     // privilege rather than granting it, and clamping it here was a real regression
-    // (test/deepseek-mode.test.ts) fixed before this shipped.
-    privilegedEnvKeys: ['DSH_PERMISSION_MODE', 'DSH_HOME', 'DEEPSEEK_BASE_URL'],
-    // Reuses the already-existing DEEPSEEK_BASE_URL/DEEPSEEK_API_KEY keys above. No
-    // modelVars — dsh's model is a profile-composition entry (see `model: { source: 'none'
-    // }` above), not an env var, so forcing a specific model name may not fully work;
-    // verify against a real profile before shipping.
-    //
-    // ⚠️ appendV1Suffix is REQUIRED, not optional-nice-to-have: without it every request
-    // 404s. Confirmed live and by reading dsh's own bundled source
-    // (@deepseek-ai/dsh-llm-deepseek): it builds the request URL as
-    // `${DEEPSEEK_BASE_URL}/chat/completions` with no "/v1" of its own (its real public
-    // API, https://api.deepseek.com, expects the caller's base URL to already carry any
-    // needed prefix), while llama-swap/llama.cpp only serves the OpenAI-conventional
-    // "/v1/chat/completions" — a bare POST to ".../chat/completions" 404s live, and the
-    // 404 reported here originally ("dsh: HTTP_404: DeepSeek API error (HTTP 404)")
-    // matches dsh's own error-message template for exactly this failure. See the
-    // customModelInjection doc comment in cli-registry/types.ts for the full reasoning,
-    // including why claude/gemini must NOT get this.
+    // (test/deepseek-mode.test.ts) fixed before this shipped. CODEMAN_CUSTOM_MODEL_API_KEY
+    // joins it (like codex's entry): the dedicated custom-endpoint key rides the same
+    // allowlisted-envOverrides path as the redirect itself.
+    privilegedEnvKeys: ['DSH_PERMISSION_MODE', 'DSH_HOME', 'DEEPSEEK_BASE_URL', 'CODEMAN_CUSTOM_MODEL_API_KEY'],
+    // The installed profile supplies the transport; a per-session patch selects its exact model.
     customModelInjection: {
-      kind: 'env',
-      baseUrlVar: 'DEEPSEEK_BASE_URL',
-      apiKeyVar: 'DEEPSEEK_API_KEY',
-      modelVars: [],
-      appendV1Suffix: true,
+      kind: 'configDir',
+      dirEnvVar: 'DSH_HOME',
+      fileName: 'cordis.patch.yml',
+      template: 'deepseek-patch-json',
+      // dsh keeps state in its home that the redirect must NOT swallow: `sessions` is the
+      // session-log root (deleting it would take the user's transcripts with it on clear/
+      // close), `profiles` are the installed bundles the patch composes over, and
+      // `settings.yaml` must keep applying (read through the link only until the session's
+      // first settings write: dsh saves by rename, which replaces the link with a local file
+      // that goes away with the session). The generated home-level `cordis.patch.yml`
+      // deliberately replaces the user's own for the session rather than linking it.
+      // `sessions` and `profiles` are directories: dsh creates them itself on a first
+      // turn, and a fresh/relocated $DSH_HOME that never ran one would otherwise get a
+      // dangling link whose every write fails ENOENT: the consumer creates missing
+      // directory targets and skips missing file targets like `settings.yaml`.
+      linkFromRealHome: ['profiles', 'sessions', 'settings.yaml'],
+      linkFromRealHomeDirs: ['profiles', 'sessions'],
+      realHomeFallback: '.dsh',
     },
   },
   overlays: {
@@ -1509,9 +1661,11 @@ const DEEPSEEK: CliEntry = {
 };
 
 // OMP (`omp`, omp.sh). The plainest entry in the catalog after opencode: no permission
-// flags at all — omp reads its model routing and hooks from `~/.omp/agent`, so the CLI's
-// own config governs and there is deliberately nothing bypass-shaped to clamp. Its only
-// privileged surface is a pair of ENV keys (see privilegedEnvKeys below).
+// flags at all — omp reads its model routing, approval mode and user hooks from
+// `~/.omp/agent`, so the CLI's own config governs and there is deliberately nothing
+// bypass-shaped to clamp. The one thing Codeman adds is a project hook module that
+// reports approval dialogs (`approvalHookFile` below). Its only privileged surface is a
+// pair of ENV keys (see privilegedEnvKeys below).
 const OMP: CliEntry = {
   id: 'omp' as CliEntry['id'],
   label: 'OMP',
@@ -1590,6 +1744,19 @@ const OMP: CliEntry = {
   capabilities: {
     ...agentDefaults(),
     ...AGENTS_DIR_SKILL,
+    // omp emits REAL approval events (`tool_approval_requested` / `tool_approval_resolved`),
+    // so an omp pane can report a pending dialog first-hand instead of by inference.
+    // Codeman installs the hook module named by `approvalHookFile` into
+    // `<workspace>/.claude/hooks/pre/` when a session is created (both create paths); it
+    // forwards those two events to /api/hook-event as `permission_prompt` /
+    // `elicitation_complete`, so the tab alert, the desktop notification and an ALERT-ONLY
+    // Approvals Inbox item (answer in the terminal) work.
+    // ⚠️ `hooks` stays 'none' (inherited from agentDefaults): that value means Claude's full
+    // hook set (`stop`, `idle_prompt`, answerable dialogs, `.claude/settings.local.json`),
+    // and omp has none of it. `approvalHookFile` is the separate, narrower capability;
+    // `approvalHookAvailableForMode()` is its predicate. Idle stays screen-read via
+    // `workDetect` below.
+    approvalHookFile: 'codeman-approval.ts',
     // Fullscreen alt-screen TUI, same shape as antigravity/grok: only the
     // tmux-attach-time smcup strip, not Ink's full erase-scrollback+DECSET strip.
     altScreen: 'strip-mux-only',
@@ -1611,7 +1778,8 @@ const OMP: CliEntry = {
       promptGlyph: '╰─',
       workingLine: '[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] [0-9hms ]+> |⎋ Working',
     },
-    // No permission prompts and no bypass flag, so nothing config-shaped to clamp — the
+    // No permission FLAGS (omp's approval mode lives in its own config, `tools.approvalMode`)
+    // and no bypass flag, so nothing config-shaped to clamp — the
     // whole privileged surface here is env-shaped.
     privilegedParams: [],
     // Where omp resolves its auth from. No known concrete exfiltration path today (omp
@@ -1652,5 +1820,373 @@ const OMP: CliEntry = {
   },
 };
 
+// GitHub Copilot CLI (`copilot`, github/copilot-cli, npm @github/copilot). Measured on a live
+// 1.0.94 pane inside tmux (capture-pane through real turns, a shell tool call and /model,
+// 2026-10-09). It is an ALTERNATE-SCREEN TUI with mouse tracking on (tmux `alternate_on=1`,
+// `mouse_any_flag=1`, `history_size=0`), so like opencode its mouse DECSETs are stripped
+// (`altScreen: 'strip-mux-and-mouse'` below): a drag selects locally and the wheel is forwarded.
+// Keystrokes sent with `tmux send-keys` reach its composer and a shell tool call completes
+// inside tmux, which github/copilot-cli#4180 (a driven PTY ignoring input) and #4223 (a shell
+// command never reported done under tmux) say they do not on 1.0.70 to 1.0.74: neither
+// reproduces on 1.0.94, and the register of `version` below is what would show a regression.
+const COPILOT: CliEntry = {
+  id: 'copilot' as CliEntry['id'],
+  label: 'GitHub Copilot',
+  shortBadge: 'CP',
+  accent: '#a371f7',
+  enabled: true,
+  stock: true,
+  order: 100,
+  kind: 'agent',
+  discovery: {
+    binaries: ['copilot'],
+    searchDirs: [HOME_DIRS.local, HOME_DIRS.usrLocal, HOME_DIRS.bunBin, HOME_DIRS.npmGlobal, HOME_DIRS.homeBin],
+    // `copilot --version` prints `GitHub Copilot CLI 1.0.94.`; anchoring on the product name
+    // keeps an unrelated `copilot` binary on PATH from passing the probe.
+    version: { arg: '--version', regex: 'GitHub Copilot CLI (\\d+\\.\\d+\\.\\d+)', requireVersionMatch: true },
+    install: {
+      command: { linux: 'npm install -g @github/copilot', darwin: 'npm install -g @github/copilot' },
+      npmPackage: '@github/copilot',
+      docsUrl: 'https://github.com/github/copilot-cli',
+    },
+  },
+  // `--yolo` (allow every tool, path and URL) is opt-in through `allowAll`, which the Run button
+  // sends like the other agent CLIs' bypass switches; an absent config spawns a bare `copilot`
+  // in its own Manual Approval mode. `--model` and `--resume=<id>` are Copilot's own flags
+  // (`copilot --help`, 1.0.94). `--resume` takes an id, id prefix or session NAME and its value
+  // is optional, so the token must be a single plain word that cannot start with `-`: a value
+  // like `--yolo` would otherwise be parsed as its own flag and get around the `allowAll` clamp.
+  launch: {
+    params: {
+      allowAll: { type: 'bool' },
+      // `model-plain`, not `model`: the leading alphanumeric keeps a flag-shaped value out.
+      model: { type: 'token', pattern: 'model-plain' },
+      // `path-segment`, not `id-dotted`: the leading alphanumeric keeps a flag-shaped value out.
+      resumeId: { type: 'token', pattern: 'path-segment' },
+      continueSession: { type: 'bool' },
+      // The tab's name, so the CLI's own session list reads the same as the tab.
+      sessionName: { type: 'engine', source: 'sessionName' },
+    },
+    variants: [
+      {
+        id: 'default',
+        args: [
+          { lit: 'copilot' },
+          { flag: '--yolo', when: { param: 'allowAll', is: true } },
+          // `--name` is refused next to `--resume` and `--continue` (copilot 1.0.95: "cannot be used
+          // with"), and a resumed session keeps the name it was created with.
+          {
+            flag: '--name',
+            valueFrom: 'sessionName',
+            quote: 'double',
+            when: {
+              allOf: [
+                { param: 'sessionName', state: 'set' },
+                { param: 'resumeId', state: 'unset' },
+                { not: { param: 'continueSession', is: true } },
+              ],
+            },
+          },
+          { flag: '--model', valueFrom: 'model', when: { param: 'model', state: 'set' } },
+          { flag: '--resume', valueFrom: 'resumeId', when: { param: 'resumeId', state: 'set' } },
+          {
+            lit: '--continue',
+            when: {
+              allOf: [
+                { param: 'continueSession', is: true },
+                { param: 'resumeId', state: 'unset' },
+              ],
+            },
+          },
+        ],
+      },
+    ],
+    legacyConfigAliases: { resumeId: 'resumeSessionId' },
+    legacyConfigField: 'copilotConfig',
+    resumeAppend: { style: 'flag', flag: '--resume' },
+  },
+  env: {
+    exports: [{ name: 'COLORTERM', value: 'truecolor' }],
+    unset: ['NO_COLOR'],
+    // Sign-in is the CLI's own (`copilot login`, kept under ~/.copilot). A headless host sets
+    // COPILOT_GITHUB_TOKEN, which the COPILOT_ prefix already admits. GH_TOKEN / GITHUB_TOKEN are
+    // deliberately NOT allowlisted: the env allowlist is one global list with no mode context, so
+    // admitting them would make them settable on every session (see allowedEnvPrefixes()).
+    tmuxSetenvKeys: [],
+    dockerExecEnvNames: [],
+    allowedPrefixes: ['COPILOT_'],
+    allowedKeys: [],
+  },
+  capabilities: {
+    ...agentDefaults(),
+    // A full-screen TUI that turns mouse tracking on itself (measured on 1.0.94: alt screen,
+    // mouse reporting on). Kept, xterm reports a plain drag to the TUI instead of selecting, so
+    // Auto Copy and "mark text, copy on select" silently do nothing; stripped, a drag is a local
+    // selection and clicks still reach the CLI through the browser's hand-encoded tap
+    // (`cliMouseTracking`). Same shape and reason as opencode. The wheel keeps working because
+    // `_shouldForwardWheelToApp` forwards it as SGR reports while the CLI is tracking.
+    altScreen: 'strip-mux-and-mouse',
+    // Forwards the wheel as SGR reports while the CLI is tracking the mouse, at any version
+    // (`_shouldForwardWheelToApp` in terminal-ui.js has no version check for copilot).
+    wheelForward: { mode: 'always' },
+    // Pages its own transcript on PageUp/PageDown (1.0.95, measured in tmux: three PageUp moved
+    // lines 109-140 to 010-042 and PageDown returned). This is the fallback when the
+    // wheel-forward flag is stale after a server restart, so the wheel and a swipe never go dead.
+    transcriptPageKeys: true,
+    echo: { policy: 'buffer', anchor: { kind: 'cursor' } },
+    // What `codeman agent spawn` waits for. The composer's footer hint, NOT the `❯` glyph: the
+    // folder-trust dialog draws `❯ 1. Yes` for its selected row, so the glyph would call a worker
+    // ready while it is still asking for trust (measured on 1.0.95: the dialog's footer reads
+    // `↑/↓ to navigate`, the composer's `/ commands · ? help`).
+    composerReadyMark: '/ commands · ? help',
+    // The composer row is a `❯` between two rules, and the submitted prompt is echoed as
+    // ` ❯ <text>  <time>` above it. While a turn runs the footer's left end reads
+    // `◉ Working esc edit prompt` (the dot alternates `◉` and `◎`); at rest it reads
+    // `← open sidebar · Interactive · Manual Approval · / commands · ? help · tab next tab`.
+    // A tool call that is waiting for approval replaces the composer and the footer's
+    // `Working` goes with it, so it reads as idle (waiting on the user), like gemini.
+    workDetect: {
+      promptGlyph: '❯',
+      workingLine: String.raw`[◉◎] Working\b`,
+    },
+    // The model is the right-hand field of the last row, both at rest and mid-turn
+    // (`... tab next tab        Claude Sonnet 5.5`, `◎ Working esc edit prompt     GPT-6 Luna`).
+    // Anchored on the footer's own words so a model-looking string in the transcript cannot match.
+    modelDetect: {
+      screenLine: String.raw`(?:tab next tab|\? help|esc edit prompt|github-mcp-server) {3,}([A-Za-z0-9][\w.:/@ -]{1,60}?) *(?:\n|$)`,
+      screenLines: 2,
+    },
+    // `copilot mcp add` writes `~/.copilot/mcp-config.json`; COPILOT_HOME replaces ~/.copilot
+    // (checked: `COPILOT_HOME=<dir> copilot mcp list` reads <dir>).
+    mcpConfig: {
+      path: '.copilot/mcp-config.json',
+      format: 'copilot-json',
+      relocation: { envVar: 'COPILOT_HOME', path: 'mcp-config.json' },
+    },
+    // Every one of these matches the COPILOT_ allowedPrefix, so a non-granted multi-user owner
+    // must not be able to set it through envOverrides. Read from the 1.0.98 bundle (copilot reads
+    // far more COPILOT_* variables than `copilot help environment` lists), by what each hands back:
+    // - approval: COPILOT_ALLOW_ALL turns every tool on; COPILOT_PLAN_THEN_AUTOPILOT switches a
+    //   plan into autopilot; COPILOT_ASSISTED_APPROVAL; COPILOT_HOME restates the permission config.
+    // - code at boot or without an approval row: COPILOT_CLI_DIST_DIR runs `<dir>/index.js` in place
+    //   of the CLI, the package caches pick which CLI build runs, COPILOT_EDITOR,
+    //   COPILOT_PROVIDER_API_KEY_COMMAND and COPILOT_AHP_HOST_BIN are run as commands, skills and
+    //   provider configs are loaded from the named paths, and the hook switches widen what hooks run.
+    // - credential redirects: the Copilot and GitHub API bases receive the CLI's sign-in token, which
+    //   in multi-user mode is the operator's (every user shares the OS account and ~/.copilot), and
+    //   the BYOK provider family aims a Codeman custom endpoint elsewhere.
+    // The prefix stays because COPILOT_GITHUB_TOKEN and the harmless knobs live in it; a variable a
+    // later release adds is NOT covered until it is listed here.
+    privilegedEnvKeys: [
+      'COPILOT_HOME',
+      'COPILOT_ALLOW_ALL',
+      'COPILOT_PLAN_THEN_AUTOPILOT',
+      'COPILOT_ASSISTED_APPROVAL',
+      'COPILOT_CLI_DIST_DIR',
+      'COPILOT_CLI_RESOLVED_DIST_DIR',
+      'COPILOT_PKG_CACHE_HOME',
+      'COPILOT_CACHE_HOME',
+      'COPILOT_EDITOR',
+      'COPILOT_AHP_HOST_BIN',
+      'COPILOT_DEBUG_VOICE_ENGINE_SCRIPT',
+      'COPILOT_SKILLS_DIRS',
+      'COPILOT_PROVIDERS_CONFIG',
+      'COPILOT_HOOK_ALLOW_HTTP_AUTH_HOOKS',
+      'COPILOT_HOOK_ALLOW_LOCALHOST',
+      'COPILOT_E2E_TEST_HOOKS',
+      'COPILOT_API_URL',
+      'COPILOT_DEBUG_GITHUB_API_URL',
+      'COPILOT_GH_HOST',
+      'COPILOT_MC_BASE_URL',
+      'COPILOT_AHP_URL',
+      'COPILOT_DEBUG_ENTRA_BROKER_URL',
+      'COPILOT_CAFE_METRICS_URL',
+      'COPILOT_PROVIDER_BASE_URL',
+      'COPILOT_PROVIDER_API_KEY',
+      'COPILOT_PROVIDER_API_KEY_COMMAND',
+      'COPILOT_PROVIDER_BEARER_TOKEN',
+      'COPILOT_PROVIDER_HEADERS',
+      'COPILOT_PROVIDER_TYPE',
+      'COPILOT_PROVIDER_WIRE_MODEL',
+      'COPILOT_PROVIDER_MODEL_ID',
+      'COPILOT_PROVIDER_GHES_HOST',
+      'COPILOT_PROVIDER_GHES_TOKEN',
+      'COPILOT_MODEL',
+    ],
+    // Grok/codex-shaped clamp: a bare spawn is already Manual Approval, so the multi-user clamp
+    // only forces an EXPLICITLY-SENT `--yolo` back off; nothing is materialized when absent.
+    privilegedParams: [{ param: 'allowAll', clampTo: false }],
+    // BYOK (`copilot help environment`, 1.0.95): COPILOT_PROVIDER_BASE_URL switches the CLI to a
+    // custom provider and drops the GitHub sign-in requirement; COPILOT_PROVIDER_TYPE defaults to
+    // "openai", which is what a Codeman custom endpoint is (llama.cpp, vLLM, Ollama).
+    // COPILOT_MODEL names the model and COPILOT_PROVIDER_MODEL_ID / _WIRE_MODEL default to it.
+    // The OpenAI-style route is `<base>/v1/chat/completions`, so the base gets the `/v1`
+    // suffix via appendV1Suffix below. All four already match the COPILOT_ prefix allowlist, so
+    // they are privileged env keys below: a non-granted multi-user owner must not be able to
+    // redirect the session's endpoint or credentials through plain envOverrides.
+    customModelInjection: {
+      kind: 'env',
+      baseUrlVar: 'COPILOT_PROVIDER_BASE_URL',
+      apiKeyVar: 'COPILOT_PROVIDER_API_KEY',
+      modelVars: ['COPILOT_MODEL'],
+      appendV1Suffix: true,
+    },
+  },
+  overlays: {
+    // No credStore: Docker seeding is CRED_STORES in docker-hosts.ts, which has no `.copilot` row,
+    // and the sign-in token sits in plain text in config.json on a host without a keyring, so it
+    // is not copied into a container by default. Sign in inside the container instead.
+  },
+};
+
+// jcode (1jehuang/jcode, a Rust coding-agent TUI). Measured on a live v0.98.1 pane inside tmux
+// (capture-pane every 200 ms through real turns, a recorded tmux client stream, PageUp/PageDown
+// and SGR wheel reports, a bracketed-paste prompt; 2026-10-16). Three things about it shape
+// this entry and are worth knowing before changing it:
+//
+//   1. Every jcode TUI is a CLIENT of one shared per-user daemon (`jcode serve`, started by the
+//      first client in its own session, so it outlives the pane that started it). The agent and
+//      its tools run in the DAEMON, with the daemon's environment: a second client's env never
+//      reaches its bash tool (measured, `probe=[]`). A session's `CODEMAN_SESSION_ID` and
+//      `CODEMAN_API_URL` are therefore whatever the session that started the daemon had, or
+//      nothing. That is why the agent skill is not injected (below) and why `JCODE_*` is not an
+//      `envOverrides` prefix: most of that namespace is read by the daemon, so a per-session
+//      value would do nothing, and where it did act (the session that starts the daemon) it
+//      would reach every jcode session, hook and command-path variables included.
+//   2. It has no approval prompts and no bypass flag: bash runs ungated apart from jcode's own
+//      model-side reflection gate and a catastrophic-path deny. Nothing to clamp, nothing to
+//      read as blocked, same shape as pi.
+//   3. A fresh install opens an onboarding wizard instead of the composer until its launch
+//      counter passes 5 (or 10 sessions exist). A prompt typed into it is lost, so a new user
+//      should run `jcode` once in a terminal (or press Esc in the pane) before driving it.
+const JCODE: CliEntry = {
+  id: 'jcode' as CliEntry['id'],
+  label: 'jcode',
+  shortBadge: 'JC',
+  // No brand colour to borrow (the mark is a monochrome halftone donut, and its TUI's own blue
+  // is gemini's #8ab4f8), so an amber no other entry uses.
+  accent: '#f59e0b',
+  enabled: true,
+  stock: true,
+  order: 110,
+  kind: 'agent',
+  discovery: {
+    binaries: ['jcode'],
+    // The official installer links `~/.local/bin/jcode` (its `JCODE_INSTALL_DIR` default) to a
+    // launcher script under `~/.jcode/builds/`; the agent image puts it in `/usr/local/bin`.
+    searchDirs: [HOME_DIRS.local, HOME_DIRS.usrLocal, HOME_DIRS.homeBin],
+    // `jcode --version` prints `jcode v0.98.1 (1c7426eb1)`. npm carries an unrelated `jcode`
+    // package, so the probe is anchored on the `jcode v` prefix and a mismatch counts as absent.
+    version: { arg: '--version', regex: '(?:^|\\s)jcode v(\\d+\\.\\d+\\.\\d+)', requireVersionMatch: true },
+    install: {
+      command: {
+        linux: 'curl -fsSL https://jcode.sh/install | bash',
+        darwin: 'curl -fsSL https://jcode.sh/install | bash',
+      },
+      docsUrl: 'https://jcode.sh/docs',
+      agentImageLayer: {
+        kind: 'dedicated',
+        reason:
+          'Not on npm: jcode ships a standalone Rust binary through jcode.sh/install, whose launcher is a script that execs the binary beside it.',
+      },
+    },
+  },
+  launch: {
+    params: {
+      model: { type: 'token', pattern: 'model' },
+      // jcode ids look like `session_fox_1792160401272_f5b47ce47d631006` and `--resume` also
+      // takes the short name (`fox`). Its value is OPTIONAL (bare `--resume` opens the session
+      // picker), so the token must not be able to start with `-`, or it would be read as a
+      // flag of its own: `path-segment` requires a leading alphanumeric.
+      resumeId: { type: 'token', pattern: 'path-segment' },
+    },
+    variants: [
+      {
+        id: 'default',
+        args: [
+          { lit: 'jcode' },
+          { flag: '--model', valueFrom: 'model', when: { param: 'model', state: 'set' } },
+          { flag: '--resume', valueFrom: 'resumeId', when: { param: 'resumeId', state: 'set' } },
+        ],
+      },
+    ],
+    legacyConfigAliases: { resumeId: 'resumeSessionId' },
+    legacyConfigField: 'jcodeConfig',
+    resumeAppend: { style: 'flag', flag: '--resume' },
+  },
+  env: {
+    exports: [{ name: 'COLORTERM', value: 'truecolor' }],
+    unset: ['NO_COLOR'],
+    // Provider logins live in jcode's own files (`~/.jcode/auth.json`, `~/.config/jcode/*.env`)
+    // and are read by the daemon, so there is nothing for the server to forward into the pane.
+    tmuxSetenvKeys: [],
+    dockerExecEnvNames: [],
+    // Deliberately none: see note 1 above the entry.
+    allowedPrefixes: [],
+    allowedKeys: [],
+  },
+  capabilities: {
+    ...agentDefaults(),
+    // A full-screen alternate-screen TUI that turns mouse tracking on itself (tmux
+    // `alternate_on=1`, `mouse_any_flag=1`, `mouse_sgr_flag=1`), the opencode shape: kept, a
+    // drag would be reported to jcode instead of selecting text, so Auto Copy and copy-on-select
+    // would silently do nothing.
+    altScreen: 'strip-mux-and-mouse',
+    // Pages its own transcript on PageUp/PageDown (measured: PageUp brought the welcome header
+    // back, PageDown returned to the composer). Over the hollow alt-screen buffer the wheel and a
+    // swipe become those keys instead of doing nothing.
+    transcriptPageKeys: true,
+    // Closing a jcode tab must not take the shared daemon (note 1) down with it: it is a
+    // descendant of whichever pane started it, in a process group of its own (setsid).
+    // Measured before this flag: deleting that tab left the next tab's client looping on
+    // `Connection lost - retrying` with its prompt queued.
+    sharedDaemon: true,
+    echo: { policy: 'buffer', anchor: { kind: 'cursor' } },
+    // At rest the composer row is `<n>> ` (the prompt number, then `>`); while a turn runs the
+    // same row reads `<n>…` and a status row appears directly above it, a braille spinner (the
+    // gemini/omp frame set, ~12 fps) then the phase and the elapsed time:
+    // `⠋ sending… 0s`, `⠦ thinking… 2s · https`, `⠼ waiting for response… 3s · https`,
+    // `⠸ running bash · <detail> · 12s · Alt+B bg`, or, while streaming, the time first
+    // (`⠼ 12s · 45.1 tps · ↑16k ↓20`). Past a minute the time reads `1m 3s`, past an hour
+    // `1h 2m`. A dropped connection swaps the spinner for `↻ network disconnected, waiting to
+    // retry · … · 5s`, still mid-turn. At rest that row is empty or a dim tip, never a spinner.
+    // The spinner repaints the pane at least every 100 ms for the whole turn (recorded tmux
+    // client stream), so the pane is never quiet mid-turn, and at rest it sends nothing at all
+    // (12 s recorded: zero bytes), so the idle check settles.
+    // The glyph is the bare `>`: the turn-ending repaint redraws only the cells that changed,
+    // which on that row is the `…` turning into `>` (recorded: `\x1b[43;2H...> `), never the
+    // prompt number. It only ARMS the idle check. It also leaves the submit verifier inert,
+    // which is what jcode wants (no early-Enter defect): every composer row starts with its
+    // number, so no screen row starts with `>` the way the verifier requires.
+    workDetect: {
+      promptGlyph: '>',
+      workingLine: String.raw`(?:^|\n) *(?:[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] [^\n]*\d[smh]\b|↻ network disconnected)`,
+    },
+    // jcode reads `./.agents/skills` (and `./.jcode/skills`, `./.claude/skills`), but its tools
+    // run in the shared daemon, whose CODEMAN_* identity belongs to whichever session started
+    // it (note 1). An injected skill would act as THAT session, so it is not injected.
+    agentSkillInjection: false,
+    customModelInjection: { kind: 'unsupported' },
+  },
+  overlays: {
+    // No credStore: Docker seeding is CRED_STORES in docker-hosts.ts, which has no `.jcode` row.
+    // `~/.jcode` holds the OAuth tokens beside 160 MB of builds, sessions and SQLite caches, and
+    // API keys live in `~/.config/jcode`; sign in inside the container instead.
+  },
+};
+
 /** The full stock catalog, in the order the run menu shows by default. */
-export const STOCK_CLIS: CliEntry[] = [CLAUDE, SHELL, OPENCODE, CODEX, GEMINI, ANTIGRAVITY, PI, GROK, DEEPSEEK, OMP];
+export const STOCK_CLIS: CliEntry[] = [
+  CLAUDE,
+  SHELL,
+  OPENCODE,
+  CODEX,
+  GEMINI,
+  ANTIGRAVITY,
+  PI,
+  GROK,
+  DEEPSEEK,
+  OMP,
+  COPILOT,
+  JCODE,
+];

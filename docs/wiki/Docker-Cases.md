@@ -4,7 +4,7 @@ Run a case inside its own container instead of directly on your host: for isolat
 reproducible toolchain, and for the ability to pick the whole environment up and move it to
 another machine.
 
-A docker case is a **location overlay**, not a run mode. All ten run modes work inside a
+A docker case is a **location overlay**, not a run mode. All twelve run modes work inside a
 container. See [Core Concepts](Core-Concepts).
 
 ## One-time setup: the base image
@@ -26,7 +26,7 @@ A zero exit code proves the layers ran, not that the toolchain works. Verify:
 
 ```bash
 docker run --rm codeman/agent:base bash -lc \
-  'for c in claude codex gemini opencode agy pi grok dsh omp; do printf "%-9s " $c; $c --version 2>&1 | head -1; done'
+  'for c in claude codex gemini opencode agy pi grok dsh omp jcode; do printf "%-9s " $c; $c --version 2>&1 | head -1; done'
 ```
 
 The image is secret-free. Credentials are delivered at runtime, never baked in, so exports
@@ -98,6 +98,10 @@ Adoption is **admin-only in multi-user mode**. Linking creates Codeman's own con
 with one bind mount that has already been checked; an adopted container's mounts belong to
 whoever started it, and one that mounts `/` hands the adopter the host.
 
+That is about a container. A tmux session someone started by hand inside a container is opened
+from the home screen instead, and it needs a Docker case pointing at that container: see
+[Opened outside Codeman](The-Dashboard#opened-outside-codeman).
+
 ## Credentials
 
 Your existing host logins work inside the container without logging in again. Credentials
@@ -116,7 +120,15 @@ as whole directories, because those directories also hold sessions, extensions, 
 installed packages, which can be gigabytes. So in-container Pi and Grok sessions are
 invisible from the host (`pi -c` and `grok -c` inside a docker case see only that
 container's history). OMP's `sessions/` is the exception and is shared read-write, because
-Codeman reads it host-side for history and resume.
+Codeman reads it host-side for history and resume. jcode's credentials are not seeded at all
+(`~/.jcode` keeps its OAuth tokens beside its builds, sessions and caches): sign in to jcode
+inside the container.
+
+GitHub Copilot CLI is not seeded: on a host without a keyring its sign-in token sits in plain
+text in `~/.copilot/config.json`, and there is no Docker credential row for it. Sign in inside
+the container (`copilot login`). A `COPILOT_GITHUB_TOKEN` cannot be handed in instead: a docker
+case refuses per-session environment overrides, and Copilot forwards no server variable into
+the container.
 
 **Git hosts.** The agent image can also include the GitHub CLI (`gh`) and the Azure CLI (`az`,
 with the `azure-devops` extension), off by default, and its git then uses them as credential
@@ -219,7 +231,8 @@ this does not widen your network exposure. Add it to the service unit and restar
 
 - Per-session environment overrides, effort, and per-CLI configuration are **rejected** for
   docker cases, because they do not cross into the container. Configure the container through
-  the docker host's per-mode command override instead.
+  the docker host's per-mode command override instead. A `$` in that override expands inside
+  the container, not on the Codeman machine.
 - tmux must exist in the base image. It is a hard prerequisite and is probed when linking a
   host.
 - On macOS, Docker Desktop takes a dedicated uid path, and memory caps are subject to the

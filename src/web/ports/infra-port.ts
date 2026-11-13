@@ -35,6 +35,8 @@ export interface InfraPort {
   readonly scheduledRuns: Map<string, ScheduledRun>;
   readonly teamWatcher: TeamWatcher;
   readonly tunnelManager: TunnelManager;
+  /** `--allow-unauthenticated-tunnel` was passed to `codeman web` (the env var is read per request, #706). */
+  readonly allowUnauthenticatedTunnel: boolean;
   readonly pushStore: PushSubscriptionStore;
   startScheduledRun(prompt: string, workingDir: string, durationMinutes: number, owner?: string): Promise<ScheduledRun>;
   stopScheduledRun(id: string): Promise<void>;

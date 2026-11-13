@@ -26,7 +26,7 @@
  * @module config/cli-registry/argv
  */
 
-import type { ArgSpec, CliEntry, CliLaunch, Cond, EngineValue, ParamSpec, QuoteStyle } from './types.js';
+import type { ArgSpec, CliLaunch, Cond, EngineValue, ParamSpec, QuoteStyle } from './types.js';
 import { matchesPattern } from './patterns.js';
 import { SAFE_BARE_TOKEN } from './patterns.js';
 
@@ -177,14 +177,4 @@ export function renderLaunch(
   );
 
   return rendered.join(' || ');
-}
-
-/** Convenience: render an entry's launch command straight from a `CliEntry`. */
-export function renderCliCommand(
-  entry: CliEntry,
-  params: ParamValues,
-  engineValues: EngineValues,
-  gatesPassed?: ReadonlySet<string>
-): string {
-  return renderLaunch(entry.launch, params, engineValues, gatesPassed);
 }

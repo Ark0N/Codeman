@@ -29,10 +29,10 @@ import {
 } from '../../usage-telemetry.js';
 import { SessionPromptCache, SessionStatusTelemetry } from '../sse-events.js';
 import { setLatestPlanUsage } from '../plan-usage-latest.js';
-import type { SessionPort, EventPort } from '../ports/index.js';
+import type { SessionPort, EventPort, KeepWarmPort } from '../ports/index.js';
 import { getCli } from '../../config/cli-registry/index.js';
 
-export function registerStatusTelemetryRoutes(app: FastifyInstance, ctx: SessionPort & EventPort): void {
+export function registerStatusTelemetryRoutes(app: FastifyInstance, ctx: SessionPort & EventPort & KeepWarmPort): void {
   // Last broadcast telemetry signature per session — the statusline fires on
   // every assistant message, so we only rebroadcast when the value changes.
   const lastSig = new Map<string, string>();
@@ -65,6 +65,13 @@ export function registerStatusTelemetryRoutes(app: FastifyInstance, ctx: Session
       session.noteReportedModel('statusline', payload?.model?.display_name);
     }
 
+    // The context size drives auto-compact and auto-clear. A render without one (the exporter
+    // can post before the first API response) keeps the last report instead of wiping it.
+    const status = reportsStatusLine ? parseSessionStatus(payload) : null;
+    if (session && status?.inputTokens !== undefined) {
+      session.noteContextReport({ tokens: status.inputTokens, windowSize: status.contextWindowSize });
+    }
+
     // Prompt-cache state of the main conversation (Claude Code v2.1.251+): kept on the
     // session for the Session Options readout and `toState()`, broadcast only when the
     // report changes (the statusline fires on every assistant message). The broadcast
@@ -74,10 +81,14 @@ export function registerStatusTelemetryRoutes(app: FastifyInstance, ctx: Session
     // arrive out of order; a stale one then briefly overwrites newer state until the next
     // render corrects it. Accepted for a display-only readout rather than ordered here.
     const promptCache = reportsStatusLine ? parsePromptCache(payload) : null;
-    if (promptCache && session?.setPromptCache(promptCache)) {
-      ctx.broadcast(SessionPromptCache, { sessionId, ...session.promptCache });
-      // Persisted on change, like a model change, so a crash restores the latest report.
-      ctx.persistSessionState(session);
+    if (promptCache) {
+      if (session?.setPromptCache(promptCache)) {
+        ctx.broadcast(SessionPromptCache, { sessionId, ...session.promptCache });
+        // Persisted on change, like a model change, so a crash restores the latest report.
+        ctx.persistSessionState(session);
+      }
+      // Every report moves `expires_at`, so the keep-warm re-evaluates on each one.
+      void ctx.keepWarm.schedule(sessionId);
     }
 
     // Plan-usage limits (account-wide) → broadcast to the header chip, when

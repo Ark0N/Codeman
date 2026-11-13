@@ -14,6 +14,11 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+    outputs:
+      published: ${{ steps.changesets.outputs.published }}
+      # Set only when aicodeman itself was published: `published` is also true for
+      # a release that moved only xterm-zerolag-input.
+      codeman_version: ${{ steps.codeman.outputs.version }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@v6
@@ -60,15 +65,98 @@ jobs:
           # 1.9.4 lost it to xterm-zerolag-input@0.1.7 by two seconds. All package
           # releases already exist by the time this step runs, so setting it here
           # is deterministic.
+          #
+          # The title and body are the page people land on from the update toast.
+          # changesets copied the body from CHANGELOG.md as one long bullet, so it is
+          # reshaped here (scripts/lib/release-notes.mjs). npm has already published by
+          # now, so a failure in that must not stop the retag below: without the body
+          # field the release keeps the text changesets wrote.
           RELEASE_ID=$(gh release view "$OLD_TAG" --json databaseId -q .databaseId 2>/dev/null || true)
           if [ -n "$RELEASE_ID" ]; then
+            NOTES_FILE="$RUNNER_TEMP/release-notes.md"
+            BODY_ARGS=()
+            if node scripts/generate-release-notes.mjs "$VERSION" > "$NOTES_FILE"; then
+              BODY_ARGS=(-F "body=@$NOTES_FILE")
+            else
+              echo "::warning::Keeping the changesets release notes for $VERSION"
+            fi
             gh api -X PATCH "repos/${{ github.repository }}/releases/${RELEASE_ID}" \
               -f tag_name="$NEW_TAG" \
-              -f name="$NEW_TAG" \
-              -f make_latest=true
+              -f name="Codeman ${VERSION}" \
+              -f make_latest=true \
+              "${BODY_ARGS[@]}"
           fi
 
           # Retag
           git tag "$NEW_TAG" "$OLD_TAG" 2>/dev/null || true
           git tag -d "$OLD_TAG" 2>/dev/null || true
           git push origin "$NEW_TAG" ":refs/tags/$OLD_TAG" 2>/dev/null || true
+
+      # The macOS app job below runs only for a Codeman release, so it reads the
+      # version from the list of packages this run published. Never fails the job:
+      # npm has published by now, and a bad list only means no app build.
+      - name: Codeman version published by this run
+        id: codeman
+        if: steps.changesets.outputs.published == 'true'
+        env:
+          PUBLISHED_PACKAGES: ${{ steps.changesets.outputs.publishedPackages }}
+        run: |
+          VERSION=$(printf '%s' "$PUBLISHED_PACKAGES" | jq -r '.[] | select(.name == "aicodeman") | .version' || true)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Codeman version published: ${VERSION:-none (no macOS app build)}"
+
+      # releases/latest/download/Codeman.dmg (the Mac app's stable link) serves
+      # whichever release holds Latest. GitHub gives Latest to the release created
+      # last, and a publish that moved only xterm-zerolag-input creates one the
+      # retag above never touches, so Latest goes back to the newest Codeman
+      # release after every publish. A failure warns and leaves npm, the tag and
+      # the MCP publish alone.
+      - name: Keep Latest on the Codeman release
+        if: steps.changesets.outputs.published == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          RELEASE_ID=$(gh release view "codeman@${VERSION}" --json databaseId -q .databaseId 2>/dev/null || true)
+          if [ -z "$RELEASE_ID" ]; then
+            echo "::warning::No codeman@${VERSION} release to mark Latest"
+          elif ! gh api -X PATCH "repos/${{ github.repository }}/releases/${RELEASE_ID}" -f make_latest=true > /dev/null; then
+            echo "::warning::Could not mark codeman@${VERSION} Latest"
+          fi
+
+  # Its own job: this one alone holds id-token, and a registry failure shows as itself
+  # without touching the npm publish or the tag above.
+  mcp-registry:
+    name: MCP registry
+    needs: release
+    if: needs.release.outputs.published == 'true'
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/publish-mcp.yml
+
+  # Builds, signs and notarizes the Mac app and attaches Codeman.dmg to the
+  # release (.github/workflows/desktop-dmg.yml), only when Codeman itself was
+  # published. Its own job, so a failed DMG shows as itself and never touches
+  # npm, the tag or the MCP publish; `gh workflow run desktop-dmg.yml -f
+  # tag=codeman@<version>` reruns it. It gets the five secrets it uses and no
+  # other: never `secrets: inherit`, which would hand it NPM_TOKEN.
+  macos-app:
+    name: macOS app
+    needs: release
+    if: needs.release.outputs.codeman_version != ''
+    # The ceiling for the called jobs; only its attach job asks for write. A job in
+    # desktop-dmg.yml that asks for a permission not granted here (id-token or
+    # attestations for a provenance attestation, say) makes GitHub refuse this
+    # whole Release run at startup, npm publish included: widen both together.
+    permissions:
+      contents: write
+    uses: ./.github/workflows/desktop-dmg.yml
+    with:
+      tag: codeman@${{ needs.release.outputs.codeman_version }}
+    secrets:
+      MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+      MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}

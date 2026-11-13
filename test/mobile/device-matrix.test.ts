@@ -1,7 +1,7 @@
 // Ephemeral port - Cross-device parametric tests
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { BrowserContext, Page } from 'playwright';
-import type { WebServer } from '../src/web/server.js';
+import type { WebServer } from '../../src/web/server.js';
 import { createTestServer, stopTestServer } from './helpers/server.js';
 import { createDevicePage, closeAllBrowsers } from './helpers/browser.js';
 import { SELECTORS, BREAKPOINTS, BODY_CLASSES } from './helpers/constants.js';

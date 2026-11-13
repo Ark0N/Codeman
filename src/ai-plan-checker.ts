@@ -139,10 +139,6 @@ export class AiPlanChecker extends AiCheckerBase<
     return 'NOT_PLAN_MODE';
   }
 
-  protected getErrorVerdict(): AiPlanCheckVerdict {
-    return 'ERROR';
-  }
-
   protected createErrorResult(reasoning: string, durationMs: number): AiPlanCheckResult {
     return { verdict: 'ERROR', reasoning, durationMs };
   }

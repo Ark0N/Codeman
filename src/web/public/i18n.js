@@ -55,6 +55,9 @@
       '应用于新本地会话；可用强度取决于模型和 Codex 版本。自定义端点、Docker 和远程会话保留自己的设置。',
     'Default Codex model may only contain letters, digits, ".", "_", "-" and "/"':
       'Codex 默认模型只能包含字母、数字、"."、"_"、"-" 和 "/"',
+    'Allow network access': '允许网络访问',
+    "Lets commands in Codex's workspace-write sandbox use the network, which the Codeman skill needs to reach this server. Those commands can then call Codeman's API, which can start a session outside the sandbox with no approval prompt, even when a password is set. So with this on, Codex's sandbox does not contain a prompt-injected command: treat it as close to Bypass. Applies to every new local Codex session, not scheduled jobs. It does not change Codex's sandbox mode: a folder Codex runs read-only (one it does not trust) keeps the network closed and asks per command.":
+      '允许 Codex 的 workspace-write 沙箱中的命令使用网络，Codeman 技能需要网络才能连接到此服务器。这些命令随后可以调用 Codeman 的 API，而该 API 可以在沙箱之外启动会话且不弹出审批提示，即使设置了密码也是如此。因此开启后，Codex 的沙箱无法约束被提示注入的命令：请把它视为接近“绕过审批与沙箱”。应用于所有新的本地 Codex 会话，不包括定时任务。它不会改变 Codex 的沙箱模式：Codex 以只读方式运行的文件夹（即它不信任的文件夹）仍会保持网络关闭，并逐条命令询问。',
     'Skip to terminal': '跳转到终端',
     'Go to main page': '返回主页',
     'Session tabs': '会话标签页',
@@ -86,6 +89,17 @@
     'Web tab settings': '网页标签设置',
     'New group': '新建分组',
     'Rename group': '重命名分组',
+    'Rename case': '重命名案例',
+    Rename: '重命名',
+    'New name': '新名称',
+    'letters, numbers, - and _': '字母、数字、- 和 _',
+    'Also rename the folder on disk': '同时重命名磁盘上的文件夹',
+    'A case under the cases folder is renamed together with its folder.':
+      '案例文件夹下的案例会连同其文件夹一起重命名。',
+    'Stop sessions and rename': '停止会话并重命名',
+    'Enter a different name.': '请输入不同的名称。',
+    'Use only letters, numbers, hyphens and underscores.': '只能使用字母、数字、连字符和下划线。',
+    'Failed to rename the case.': '重命名案例失败。',
     'Move group up': '上移分组',
     'Move group down': '下移分组',
     'Delete group': '删除分组',
@@ -94,6 +108,13 @@
     'Move to Ungrouped': '移到未分组',
     'Move to new group': '移到新分组',
     'New session': '新建会话',
+    // The Cmd+K palette's new-session agent switch (panels-ui.js, its title tooltip).
+    'Agent for the new session (Left/Right to change)': '新会话使用的智能体（按左/右方向键切换）',
+    'New session here': '在此新建会话',
+    'New session here…': '在此新建会话…',
+    "New session in this tab's case": '在此标签页的案例中新建会话',
+    "This tab's folder is not a case, so there is nothing to start beside it.":
+      '此标签页的文件夹不是案例，无法在其旁边新建会话。',
     'A session is already starting.': '已有会话正在启动。',
     'Follow parent again': '重新跟随父会话',
     'Parent closed; placed on its own': '父会话已关闭；单独放置',
@@ -224,6 +245,11 @@
     'No full conversation history available for this session': '此会话没有可显示的完整对话历史',
     'Last Response': '最近一次回复',
     More: '更多',
+    'Copy Markdown': '复制 Markdown',
+    'Copy response as Markdown': '将回复复制为 Markdown',
+    'Copied response as Markdown': '已将回复复制为 Markdown',
+    'Failed to copy response as Markdown': '无法将回复复制为 Markdown',
+    'No response content to copy': '没有可复制的回复内容',
     'Codeman version': '{name}版本',
     Stop: '停止',
     Watching: '监视中',
@@ -254,6 +280,8 @@
     'Run Grok': '运行 Grok',
     'Run DeepSeek': '运行 DeepSeek',
     'Run OMP': '运行 OMP',
+    'Run GitHub Copilot': '运行 GitHub Copilot',
+    'Run jcode': '运行 jcode',
     'Run Shell': '运行 Shell',
     'More tools': '更多工具',
     'Select AI backend': '选择 AI 后端',
@@ -337,6 +365,7 @@
     Delete: '删除',
     Remove: '移除',
     Edit: '编辑',
+    Fetch: '拉取',
     Refresh: '刷新',
     Back: '返回',
     Next: '下一步',
@@ -448,6 +477,8 @@
     'Header Displays': '顶部栏显示',
     'Font Controls': '字体控制',
     'System Stats': '系统状态',
+    'GPU Stats': 'GPU 状态',
+    'CPU MHz': 'CPU 频率',
     'Lifecycle Log': '生命周期日志',
     'Response Viewer': '回复查看器',
     'Story Mode': '故事模式',
@@ -468,6 +499,9 @@
       '会话列表显示为顶栏横向标签条，或左侧可折叠侧边栏（Alt+B）。完整侧边栏为每个会话显示与主界面相同的详细信息。',
     'Tall Tabs (Name + Folder)': '双行标签（名称 + 文件夹）',
     'Pop-out Button on Tabs': '标签页弹出窗口按钮',
+    'New Session Button on Tabs': '标签页新建会话按钮',
+    'A + on the tab that starts a session in the same case and group, in any installed CLI.':
+      '标签页上的 + 按钮，可在同一案例和分组中，用任一已安装的 CLI 启动新会话。',
     'CLI Logos on Tabs': '标签页上的 CLI 图标',
     "Show each agent's CLI logo before the session name on tabs and the home screen's tab list. Off leaves the status dot and the shell's SH badge. Tiles, split headers and the Run menus keep their logos.":
       '在标签页和主界面的标签列表中，于会话名称前显示每个智能体的 CLI 图标。关闭后仍保留状态圆点和 Shell 的 SH 标记。平铺、分屏标题栏和运行菜单中的图标不受影响。',
@@ -504,12 +538,13 @@
     'Connection tile: offline': '离线',
     'Connection tile: queued': '已排队',
     'Connection tile: retry': '重连中',
-    // App Settings → Bottom bar, translated as one group (the Git status rows,
-    // #543's two included). Keys are the trimmed label text, without the scope tag.
+    // App Settings → Bottom bar, translated as one group (the Git status rows, #543's two included, and the
+    // two Git fetch rows, in the order the page lists them). Keys are the trimmed label text, without the
+    // scope tag. The Session Options → Git strings are in that group's own block further down.
     'Bottom bar': '底部栏',
     'Git status': 'Git 状态',
-    "Shows, at the right of the bottom bar, when the active session's repository (or each repository inside its folder, up to two levels down) has uncommitted files or commits that are not pushed. Click it for the list. Read-only: Codeman never fetches or changes the repository. Not shown for Docker or remote sessions. Off by default.":
-      '在底部栏右侧显示当前会话的仓库（或其文件夹内向下两层以内的每个仓库）是否有未提交的文件或未推送的提交。点击可查看列表。只读：{name} 从不拉取或更改仓库。Docker 和远程会话不显示。默认关闭。',
+    "Shows, at the right of the bottom bar, when the active session's repository (or each repository inside its folder, up to two levels down) has uncommitted files or commits that are not pushed. Click it for the list. Read-only apart from Fetch: Codeman never commits or changes the repository, and `git fetch` runs only when you click Fetch in that window, or on the interval below if you turned it on. It is the only git command the Git window runs that writes, and the only one Codeman runs on a timer (cloning and worktree management write too, but only when you asked for them at the moment you asked). Not shown for Docker or remote sessions. Off by default.":
+      '在底部栏右侧显示当前会话的仓库（或其文件夹内向下两层以内的每个仓库）是否有未提交的文件或未推送的提交。点击可查看列表。除拉取外只读：{name} 从不提交或更改仓库，而拉取是 Git 窗口运行的唯一会写入的 git 命令，也是 {name} 唯一会按间隔自行运行的命令（克隆和工作树管理也会写入，但只在您当时要求时才运行），它只在您点击该窗口中的拉取按钮时运行，或在您开启了下方的定时后按间隔运行。Docker 和远程会话不显示。默认关闭。',
     'Git status: group files by folder': 'Git 状态：按文件夹分组显示文件',
     'In the Git window, show changed files under their folders, collapsed until you click a folder. Off lists every file by its full path. On by default.':
       '在 Git 窗口中，将更改的文件显示在各自的文件夹下，点击文件夹前保持折叠。关闭时按完整路径列出每个文件。默认开启。',
@@ -519,8 +554,53 @@
     'Git status: git timeout': 'Git 状态：git 超时',
     'Seconds one git command may run before that repository is reported as unreadable (5 to 120, default 30). Raise it for repositories on a slow network share.':
       '单条 git 命令可运行的秒数，超时后该仓库会被报告为无法读取（5 到 120，默认 30）。仓库位于较慢的网络共享上时请调高此值。',
+    'Git fetch on an interval': 'Git 定时拉取',
+    'Runs `git fetch` for the repositories the Git window lists on a timer, so the "behind" number is current without a click. Off by default: this is the only git command the Git panel runs that writes, and the only one Codeman runs on a timer (cloning and worktree management write too, but only when you asked for them at the moment you asked), so nothing runs until you turn it on. A session can override both the switch and the interval in Session Options → Git.':
+      '按间隔为 Git 窗口列出的仓库运行拉取，这样“落后”的数字无需点击就是最新的。默认关闭：这是 Git 窗口运行的唯一会写入的 git 命令，也是 {name} 唯一会按间隔自行运行的命令（克隆和工作树管理也会写入，但只在您当时要求时才运行），所以在您开启之前不会有任何运行。会话可以在“会话选项 → Git”中同时覆盖开关和间隔。',
+    'Git fetch: how often': 'Git 定时拉取：多久一次',
+    'Seconds between runs for a session that has no override of its own (30 to 3600, default 300). Only a session that is on (here, or in Session Options → Git) is fetched, and sessions sharing one folder are fetched by one run.':
+      '没有自己覆盖设置的会话，两次运行之间的秒数（30 到 3600，默认 300）。只有已开启的会话（这里，或在“会话选项 → Git”）才会被拉取，共用一个文件夹的会话由一次运行拉取。',
+    'Fetch git status': '拉取 Git 状态',
     'Refresh git status': '刷新 Git 状态',
     'Close git status': '关闭 Git 状态',
+    // Edit history (edit-history-ui.js): settings chip, header button and panel.
+    // The two row badges use scoped keys: a bare "new"/"edit" key would also
+    // translate unrelated words elsewhere (the lookup is case-insensitive).
+    'Edit history': '编辑历史',
+    'Open edit history': '打开编辑历史',
+    'Refresh edit history': '刷新编辑历史',
+    'Close edit history': '关闭编辑历史',
+    'Group by file': '按文件分组',
+    'Main agent only': '仅主智能体',
+    'Open a session to see its edits.': '打开一个会话以查看其编辑。',
+    'Reading the edit history…': '正在读取编辑历史…',
+    'Could not read the edit history.': '无法读取编辑历史。',
+    'Edit history is only available for Claude sessions outside Docker.':
+      '编辑历史仅适用于 Docker 之外的 Claude 会话。',
+    'Edit history is not available for a tmux session opened outside Codeman.':
+      '在 Codeman 之外打开的 tmux 会话无法使用编辑历史。',
+    'Showing saved entries only: {reason}': '仅显示已保存的条目：{reason}',
+    'No transcript found for this session yet. It is picked up with the next prompt; until then a CLAUDE_CONFIG_DIR set outside Codeman cannot be found.':
+      '尚未找到此会话的记录。它会在下一次提示时被识别；在此之前，在 Codeman 之外设置的 CLAUDE_CONFIG_DIR 无法被找到。',
+    'No transcript found on the remote host yet (Claude writes it with the first prompt). A CLAUDE_CONFIG_DIR set only in a shell profile (.profile, .bash_profile, .zshrc) cannot be found.':
+      '远程主机上尚未找到记录（Claude 会在第一次提示时写入）。仅在 shell 配置文件（.profile、.bash_profile、.zshrc）中设置的 CLAUDE_CONFIG_DIR 无法被找到。',
+    'No edits yet.': '暂无编辑。',
+    'No edits by the main agent.': '主智能体没有编辑。',
+    'Load older': '加载更早的编辑',
+    'Loading older edits…': '正在加载更早的编辑…',
+    'Edit history badge: new': '新建',
+    'Edit history badge: edit': '编辑',
+    'File created': '已创建文件',
+    'File edited ({tool})': '已编辑文件（{tool}）',
+    Image: '图片',
+    Subagent: '子智能体',
+    'Open in the file preview': '在文件预览中打开',
+    'Show what changed': '显示更改内容',
+    'Hide the diff': '隐藏差异',
+    'Reading the diff…': '正在读取差异…',
+    'Could not read the diff.': '无法读取差异。',
+    'No textual changes.': '没有文本更改。',
+    'Diff cut short: it is larger than the viewer shows.': '差异已截断：内容超出查看器可显示的范围。',
     Panels: '面板',
     Monitor: '监视器',
     'Project Insights': '项目洞察',
@@ -547,7 +627,6 @@
     Send: '发送',
     Permission: '权限',
     Question: '问题',
-    Idle: '空闲',
     'Read My Mind': '读心术',
     'Read My Mind: predict your next prompt': '读心术：预测您的下一条提示',
     'Predict my next prompt': '预测我的下一条提示',
@@ -584,6 +663,9 @@
     'API key': 'API 密钥',
     'Optional. Left blank on edit keeps the existing key.': '可选。编辑时留空将保留现有密钥。',
     'Auth header': '认证请求头',
+    'Default context length (tokens)': '默认上下文长度（token 数）',
+    "Used for models whose size cannot be discovered. The model's whole window; the Claude floor check divides it by any stored slot count. Leave empty to let each CLI assume its own default.":
+      '用于无法自动发现上下文大小的模型。这是模型的完整窗口；Claude 下限检查会将其除以已存储的槽位数。留空则让各个 CLI 使用其自身的默认值。',
     'Never send both — some servers hang indefinitely.': '切勿同时发送两者 — 部分服务器会因此无限期挂起。',
     'Authorization: Bearer (default)': 'Authorization: Bearer（默认）',
     'api-key header (Azure)': 'api-key 请求头（Azure）',
@@ -593,9 +675,15 @@
     'Custom Endpoints': '自定义端点',
     'Choose a model': '选择模型',
     'Currently loaded': '当前已加载',
+    'In use by a session': '会话正在使用',
     'Last used': '上次使用',
+    'Nothing is marked: this endpoint did not report which model it has loaded, and none of your running sessions uses one. Pick the model to launch.':
+      '未标记任何模型：此端点没有报告它已加载了哪个模型，你运行中的会话也没有在使用它。请选择要启动的模型。',
     'That endpoint no longer exists': '该端点已不存在',
     'No models discovered for this endpoint yet': '此端点尚未发现任何模型',
+    // Model picker search box (index.html placeholder/aria-label and the no-matches line)
+    'Search models': '搜索模型',
+    'No models match': '没有匹配的模型',
     'Subagent Options': '子智能体选项',
     'Enable Tracking': '启用跟踪',
     'Active Tab Only': '仅活动标签页',
@@ -652,6 +740,9 @@
     'Weight for bold terminal text. Only useful with a family carrying something heavier than its bold face.':
       '终端粗体文本的字重。仅当字体提供比其粗体更重的字形时才有意义。',
     'Local Echo': '本地回显',
+    'Keep Size Under Keyboard': '键盘弹出时保持尺寸',
+    "For local Claude sessions, opening the on-screen keyboard keeps the session's size and scrolls the view instead, so Claude does not reprint its screen and lose transcript lines. Full-screen interfaces (Codex, Claude's fullscreen mode) are resized as before.":
+      '对于本地 Claude 会话，打开屏幕键盘时会保持会话尺寸并改为滚动视图，这样 Claude 不会重绘屏幕而丢失对话记录行。全屏界面（Codex、Claude 的全屏模式）仍像以前一样调整尺寸。',
     'CJK Input': '中日韩输入',
     'Extended Keyboard Bar': '扩展键盘栏',
     'Gesture Control (beta)': '手势控制（测试版）',
@@ -678,7 +769,16 @@
     'Agent Teams': '智能体团队',
     'Claude Model': 'Claude 模型',
     '1M Opus Context': 'Opus 100 万上下文',
+    'Default session group': '默认会话分组',
+    'New sessions for this case land in this group': '此案例的新会话将放入此分组',
+    'Could not save the default session group.': '无法保存默认会话分组。',
     'Remote auto-reconnect': '远程自动重连',
+    'Experimental agent coordination': '实验性智能体协作',
+    "Lets agents read another session's output in bounded pages and type a prompt into a local Codex composer, then press Enter once after checking it is unchanged (the inspect, stage and submit commands). Experimental: the commands and their HTTP routes may change in any release. Off by default; while off those routes refuse every request.":
+      '允许智能体分页读取另一个会话的输出（每页有上限），并把提示词输入本地 Codex 输入框，确认未被改动后只按一次 Enter（即 inspect、stage 和 submit 命令）。实验性功能：这些命令及其 HTTP 路由可能在任何版本中变化。默认关闭；关闭时这些路由拒绝所有请求。',
+    'Pin tab names on the CLI': '在 CLI 上固定标签名',
+    "Launch every Claude session with its tab name, so the CLI's prompt label and /resume list match your tabs. Claude then stops generating its own titles for those sessions, and a rename in Codeman holds only until the next turn. Applies from the next session start or respawn, no server restart needed.":
+      '以标签名启动每个 Claude 会话，让 CLI 的提示框标签和 /resume 列表与你的标签一致。Claude 随后不再为这些会话生成自己的标题，在 Codeman 中的重命名也只保留到下一轮。从下一次会话启动或重新生成时生效，无需重启服务器。',
     'Thinking Effort': '思考强度',
     Low: '低',
     Medium: '中',
@@ -811,6 +911,24 @@
     Memory: '内存',
     GPUs: 'GPU',
 
+    // Session Options → Git (the tab's blurb, its group head, its hint and its three rows in index.html, plus
+    // the save toast session-ui.js raises). 'Status' is not a key here: that row's text is built at runtime
+    // by updateGitFetchStatus, and 'Git' stays a technical name.
+    "Whether Codeman fetches this session's repositories on a timer.": '{name} 是否按间隔拉取此会话的仓库。',
+    'Fetch on an interval': '按间隔拉取',
+    "Fetching is the only git command the Git panel runs that writes, and the only one Codeman runs on a timer, so nothing runs until you turn it on (here, or in App Settings → Bottom bar). Cloning and worktree management write too, but only when you asked for them at the moment you asked. The panel's Fetch button is always just a click.":
+      '拉取是 Git 窗口运行的唯一会写入的 git 命令，也是 {name} 唯一会按间隔自行运行的命令，所以在您开启之前（这里，或“应用设置 → 底部栏”）不会有任何运行。克隆和工作树管理也会写入，但只在您当时要求时才运行。该窗口中的拉取按钮始终只是一次点击。',
+    'Follow the app setting': '跟随应用设置',
+    'Uses the app-wide switch and interval for this session. Switch it off to pick your own.':
+      '为此会话使用应用级的开关和间隔。关闭它即可自行选择。',
+    'Fetch this session': '拉取此会话',
+    "Runs on its own even while the app-wide switch is off: a session that turned itself on means exactly that. Sessions sharing one folder share one run, and each sees that run's result.":
+      '即使应用级开关关闭也自行运行：一个自己开启的会话正是这个意思。共用一个文件夹的会话共享一次运行，每个会话都会看到该运行的结果。',
+    'How often': '多久一次',
+    '30 sec to 1 hr, timed from the start of a run, so a slow repository does not push the next one out.':
+      '30 秒到 1 小时，从一次运行的开始计时，所以较慢的仓库不会把下一次推远。',
+    'Git fetch settings saved': 'Git 定时拉取设置已保存',
+
     // Cron / lifecycle / panels
     'Cron Jobs': '定时任务',
     '+ New Job': '+ 新建任务',
@@ -845,6 +963,9 @@
     'Settings saved': '设置已保存',
     // The once-per-release toast (settings-ui.js checkWhatsNew); its highlights stay English.
     "See what's new": '查看更新内容',
+    // The security-notice cards' own eyebrow (panels-ui.js showSecurityNotice/showUpdateNotice);
+    // each notice's title, message and link label carry their own zh-CN text and are skipped.
+    'Security notice': '安全提示',
     'Settings applied': '设置已应用',
     'Save and keep Settings open': '保存并保持设置打开',
     'Settings saved locally': '设置已保存到本机',
@@ -853,6 +974,8 @@
     'Saved on this device. Server-wide settings can only be changed by an admin.':
       '已保存到本设备。服务器全局设置只能由管理员更改。',
     'Server-wide settings can only be changed by an admin': '服务器全局设置只能由管理员更改',
+    // The reason a settings write gives when no answer came back (settings-ui.js _settingsWriteError).
+    'the server could not be reached': '无法连接到服务器',
     'Tunnel active': '隧道已启用',
     'Tunnel starting — QR code will appear when ready...': '隧道正在启动，准备好后将显示二维码…',
     'Push notifications enabled': '推送通知已启用',
@@ -875,6 +998,14 @@
     'Could not open a new window for this session': '无法在新窗口中打开此会话',
     'Could not open a new window for this preview': '无法在新窗口中打开此预览',
     'Could not open a new window for this dashboard': '无法在新窗口中打开此网页标签',
+    // The Codeman desktop app's shim when the app would not open the window a
+    // page asked for (packages/desktop/src/assets.rs).
+    'Could not open a new window': '无法打开新窗口',
+    // A subagent transcript or a detached preview whose window.open came back
+    // null (panels-ui.js viewSubagentTranscript / detachFilePreview).
+    'Could not open the transcript window: pop-up windows are blocked here': '无法打开对话记录窗口：此处已阻止弹出窗口',
+    'Pop-up blocked: allow pop-ups for this site to detach previews':
+      '弹出窗口已被阻止：请允许此网站的弹出窗口以分离预览',
     // Dictation whose session closed before the text was sent (voice-input.js).
     'That session has closed; dictation not sent': '该会话已关闭，语音输入未发送',
     // Terminal touch-selection bar (long-press to select). The bar is a sibling of
@@ -956,6 +1087,19 @@
     'Enable Respawn': '启用重生',
     'Stop Respawn': '停止重生',
     'Auto-resume when usage limit resets': '使用限制重置后自动继续',
+    // Prompt-cache keep-warm (Session Options → Respawn, App Settings → System → Automation, session-ui.js toasts).
+    'Keep the cache warm while idle': '空闲时保持缓存预热',
+    "Sends a one-line keep-alive just before the cache expires, so your next prompt still reads from cache. Runs only while idle, up to the limit in App Settings → System → Automation; switch on before launch to also stop Claude Code's own idle compaction.":
+      '在缓存即将过期前发送一行保活消息，让您的下一条提示仍能从缓存读取。仅在空闲时运行，最长不超过“应用设置 → 系统 → 自动化”中的上限；在启动前开启还会关闭 Claude Code 自带的空闲压缩。',
+    'Keep prompt caches warm': '保持提示缓存预热',
+    "Default for Claude sessions that have not chosen on their Respawn tab (a session an agent started needs its own switch): shortly before an idle session's prompt cache would expire, send a one-line keep-alive turn so the next prompt still reads the conversation from cache instead of re-processing it.":
+      '未在“重生”标签页中单独设置的 Claude 会话的默认值（由智能体启动的会话需单独开启）：在空闲会话的提示缓存即将过期前发送一行保活消息，让下一条提示仍从缓存读取对话，而不必重新处理。',
+    'Keep warm for at most': '最长保持预热',
+    'Hours after your last prompt in a session during which keep-alives are sent; past that the cache is left to expire. A keep-alive costs a small fraction of the re-write it prevents, so a few hours of them pay off, an overnight gap does not.':
+      '会话中最后一条提示之后发送保活消息的小时数；超过之后任由缓存过期。一次保活的开销只是它所避免的重新写入的一小部分，因此几个小时的保活是值得的，整夜的空档则不值得。',
+    hours: '小时',
+    'Prompt-cache keep-warm enabled': '提示缓存预热已开启',
+    'Prompt-cache keep-warm disabled': '提示缓存预热已关闭',
     'Auto-restart sessions when context fills up (usually not needed)': '上下文已满时自动重启会话（通常不需要）',
     'Auto-Compact': '自动压缩',
     'Auto-Clear': '自动清空',
@@ -989,7 +1133,6 @@
     'When to use this preset': '此预设的适用场景',
     'Start Loop': '启动循环',
     'Start Ralph Loop': '启动 Ralph 循环',
-    'Start Ralph Loop →': '启动 Ralph 循环 →',
     'Enable Tracker': '启用跟踪器',
     'Ralph / Todo': 'Ralph / 待办',
     'Ralph / Todo Tracker': 'Ralph / 待办跟踪器',
@@ -1012,6 +1155,10 @@
     'Filter by date range': '按日期范围筛选',
     'Filter by session status': '按会话状态筛选',
     'Filter files...': '筛选文件…',
+    Worktree: '工作树',
+    'Session folder': '会话文件夹',
+    'Back to worktree': '返回工作树',
+    'Not fully scanned': '未完全扫描',
     'Any status': '任意状态',
     'Any time': '任意时间',
     'Last hour': '最近一小时',
@@ -1033,6 +1180,12 @@
     'Source type filter': '来源类型筛选',
     'Copy content': '复制内容',
     'Edit file': '编辑文件',
+    'Back (Alt+←)': '后退 (Alt+←)',
+    'Forward (Alt+→)': '前进 (Alt+→)',
+    'Back to the previous file': '返回上一个文件',
+    'Forward to the next file': '前进到下一个文件',
+    Expand: '展开',
+    'Drag to resize': '拖动以调整大小',
     'Rendered markdown': '渲染 Markdown',
     'Line numbers': '行号',
     'Wrap lines': '自动换行',
@@ -1229,6 +1382,7 @@
     'Voice input (Ctrl+Shift+V)': '语音输入（Ctrl+Shift+V）',
     'Insert Newline': '插入换行',
     'Close Panels': '关闭面板',
+    'File Viewer Back / Forward': '文件查看器后退 / 前进',
     'Previous / Next Session': '上一个 / 下一个会话',
     'Next Session': '下一个会话',
     'Previous Session': '上一个会话',
@@ -1244,6 +1398,265 @@
     'Remove Tab': '移除标签页',
     'Remove All Tabs': '移除所有标签页',
     'Use arrows to reorder. Changes are saved automatically.': '使用方向键重新排序；更改会自动保存。',
+    // Sessions opened outside Codeman (foreign-sessions.js, the close dialog and Session Options).
+    'Opened outside Codeman': '在 Codeman 之外打开',
+    'Also scan containers and remote hosts (slower)': '同时扫描容器和远程主机（较慢）',
+    'Scan containers and remote hosts again': '重新扫描容器和远程主机',
+    '⟳ all': '⟳ 全部',
+    '⟳ local': '⟳ 本机',
+    'Scanning…': '扫描中…',
+    Rescan: '重新扫描',
+    'Opening…': '正在打开…',
+    'Go to tab': '转到标签页',
+    'this machine': '本机',
+    container: '容器',
+    remote: '远程',
+    'No sessions found outside Codeman.': '未发现在 Codeman 之外打开的会话。',
+    'Could not reach the server.': '无法连接服务器。',
+    'Could not open that session. Refreshing the list.': '无法打开该会话，正在刷新列表。',
+    'Close Tab': '关闭标签页',
+    'Detaches only. The tmux session keeps running for whoever started it.':
+      '仅断开连接。该 tmux 会话会继续运行，供其启动者使用。',
+    'Where the tmux session was when it was opened here. It was started outside Codeman and keeps running if this tab closes.':
+      '该 tmux 会话在此处打开时所在的位置。它是在 Codeman 之外启动的，关闭此标签页后仍会继续运行。',
+    'Git status is not available for a tmux session opened outside Codeman.':
+      '在 Codeman 之外打开的 tmux 会话无法使用 Git 状态。',
+    // Run a model on this Mac (local-model-ui.js: the welcome button, the chooser window and its
+    // App Settings group). The first block is the page's and the module's own text; sizes and
+    // names fill the {placeholder} slots.
+    'Model on this Mac': '此 Mac 上的模型',
+    'Run a coding model on the Mac that Codeman runs on. No account and no API key.':
+      '在运行 {name} 的这台 Mac 上运行编程模型。无需账号，也无需 API 密钥。',
+    'Run a model on this Mac': '在此 Mac 上运行模型',
+    'Run a local model': '运行本地模型',
+    'Local model': '本地模型',
+    'The Mac that Codeman runs on, which is not always the device you are reading on.':
+      '指运行 {name} 的那台 Mac，不一定是你正在使用的这台设备。',
+    '{chip}, {memory} GB memory, {free} GB free': '{chip}，内存 {memory} GB，可用磁盘空间 {free} GB',
+    '{chip}, {memory} GB memory': '{chip}，内存 {memory} GB',
+    '{memory} GB memory, {free} GB free': '内存 {memory} GB，可用磁盘空间 {free} GB',
+    '{memory} GB memory': '内存 {memory} GB',
+    // The App Settings row: where the install stands, in a few words.
+    'No model installed': '尚未安装模型',
+    'Installing {model}': '正在安装 {model}',
+    'The install of {model} is paused': '{model} 的安装已暂停',
+    'The install of {model} stopped': '{model} 的安装已中止',
+    // A switch to a model that is on this Mac already: nothing is downloaded.
+    'Switching to {model}': '正在切换到 {model}',
+    'The switch to {model} is paused': '切换到 {model} 的操作已暂停',
+    'The switch to {model} stopped': '切换到 {model} 的操作已中止',
+    'The switch waits until you continue.': '切换会等你点击继续后再进行。',
+    'You can close this window. The switch continues while Codeman is running.':
+      '可以关闭此窗口。只要 {name} 在运行，切换就会继续。',
+    // The models on this Mac: the list of the installed screen, its states and its two actions.
+    'Models on this Mac': '此 Mac 上的模型',
+    'On disk': '占用磁盘',
+    '{context} tokens': '{context} 个令牌',
+    'In use': '使用中',
+    Ready: '就绪',
+    Changed: '已变化',
+    Missing: '已缺失',
+    'Not checked': '未检查',
+    'On this Mac': '已在此 Mac 上',
+    Use: '使用',
+    'Use {model}': '使用 {model}',
+    'Use this model': '使用此模型',
+    'Delete {model}': '删除 {model}',
+    'Delete {model} from this Mac?': '要从此 Mac 删除 {model} 吗？',
+    'This frees {size} GB.': '这会释放 {size} GB。',
+    'Downloaded models use {size} GB on this Mac.': '已下载的模型在此 Mac 上占用 {size} GB。',
+    'Press Start to delete a single model.': '点击“启动”后才能删除单个模型。',
+    'Add a model': '添加模型',
+    'Delete the downloaded models from this Mac?': '要从此 Mac 删除已下载的模型吗？',
+    'Models from an earlier install still use {size} GB on this Mac.':
+      '之前安装留下的模型仍在此 Mac 上占用 {size} GB。',
+    'Delete them': '删除它们',
+    '{model} is running': '{model} 正在运行',
+    '{model} is installed and stopped': '{model} 已安装，当前已停止',
+    'Checking this Mac': '正在检查此 Mac',
+    // The chooser: the memory bar, the list, the coding agent.
+    'About {need} of {budget} GB of memory': '约需 {need} GB 内存，共 {budget} GB 可用',
+    estimated: '估算',
+    'The selected model needs {share}% of the memory this Mac can give a model':
+      '所选模型需要此 Mac 可分配给模型的内存的 {share}%',
+    'The model': '模型',
+    'Context, {context} tokens': '上下文，{context} 个 Token',
+    'Brief peaks': '短时峰值',
+    'Stays free': '剩余可用',
+    'Good fit': '宽裕',
+    'Tight fit': '偏紧',
+    'Models that fit this Mac': '此 Mac 装得下的模型',
+    Speed: '速度',
+    Download: '下载',
+    'speed not known': '速度未知',
+    '{speed} tokens/s': '{speed} Token/秒',
+    'about {speed} tokens/s': '约 {speed} Token/秒',
+    'Runs with': '搭配',
+    'Not on this Mac yet. Codeman installs it for you.': '此 Mac 上尚未安装，{name} 会为你一并安装。',
+    'The first answer can take minutes.': '第一次回答可能需要几分钟。',
+    'No account and no API key. The model runs only on this Mac.': '无需账号，也无需 API 密钥。模型只在此 Mac 上运行。',
+    'Install on this Mac': '安装到此 Mac',
+    // The confirm screen: the download as a table, where it goes.
+    'What will be downloaded': '将下载的内容',
+    'At {context} tokens of context, with {cli}': '上下文 {context} 个 Token，搭配 {cli}',
+    'Ollama {version}': 'Ollama {version}',
+    'The program that runs the model': '用于运行模型的程序',
+    Total: '合计',
+    'Not on this Mac yet. Its own installer fetches it with this command:':
+      '此 Mac 上尚未安装。它自带的安装程序会用以下命令获取它：',
+    'Not on this Mac yet. Its own installer fetches it.': '此 Mac 上尚未安装。它自带的安装程序会获取它。',
+    'Goes into': '存放位置：',
+    'No administrator password.': '无需管理员密码。',
+    'Download and install': '下载并安装',
+    // Progress, and the same picture paused.
+    '{done} of {total} GB': '已下载 {done} GB，共 {total} GB',
+    '{speed} MB per second, {left}': '每秒 {speed} MB，{left}',
+    '{speed} MB per second': '每秒 {speed} MB',
+    'less than a minute left': '剩余不到 1 分钟',
+    'about 1 minute left': '剩余约 1 分钟',
+    'about {minutes} minutes left': '剩余约 {minutes} 分钟',
+    'about 1 hour left': '剩余约 1 小时',
+    'about {hours} hours left': '剩余约 {hours} 小时',
+    'Getting the runtime': '获取运行时',
+    'Downloading the model': '下载模型',
+    'Loading and checking': '加载并检查',
+    'Installing {cli}': '安装 {cli}',
+    Connecting: '正在连接',
+    'Download of the model': '模型下载进度',
+    '0 of {total} GB': '已下载 0 GB，共 {total} GB',
+    'You can close this window. The download continues while Codeman is running.':
+      '你可以关闭此窗口。只要 {name} 在运行，下载就会继续。',
+    'You can close this window. The install continues while Codeman is running.':
+      '你可以关闭此窗口。只要 {name} 在运行，安装就会继续。',
+    'The download waits until you continue.': '下载会等你点击继续后再进行。',
+    'The install waits until you continue.': '安装会等你点击继续后再进行。',
+    Continue: '继续',
+    'Choose another model': '选择其他模型',
+    // After an error: the one action that helps.
+    'Use another port': '改用其他端口',
+    'Try {model}': '试试 {model}',
+    Start: '启动',
+    'The server did not accept that.': '服务器未接受该请求。',
+    // Installed, and the Remove question.
+    '{model} is ready on this Mac.': '{model} 已在此 Mac 上准备就绪。',
+    '{model} is installed on this Mac.': '{model} 已安装在此 Mac 上。',
+    'Runs with {cli}.': '搭配 {cli} 运行。',
+    'Context {context} tokens.': '上下文 {context} 个 Token。',
+    'Takes {memory} GB of memory now, and up to about {peak} GB at its peak, with all of the context in use.':
+      '目前占用 {memory} GB 内存；上下文全部用满时，峰值约为 {peak} GB。',
+    'Takes {memory} GB of memory now.': '目前占用 {memory} GB 内存。',
+    'All of it is on the GPU.': '全部位于 GPU 上。',
+    'Start a session': '开始会话',
+    // The coding agents of an installed model: one chip each, and the line under the selected one.
+    'Start a session with': '开始会话时使用',
+    Installing: '正在安装',
+    'Not installed': '未安装',
+    'Needs setup': '需要设置',
+    'Install {cli}': '安装 {cli}',
+    'Installing {cli}. You can start a session with another agent meanwhile.':
+      '正在安装 {cli}。在此期间，你可以用其他智能体开始会话。',
+    '{cli} is not on this Mac yet. Codeman installs it with this command:':
+      '此 Mac 上尚未安装 {cli}。{name} 会用下面这条命令安装它：',
+    '{cli} needs a setup of its own. Set it up from the Run menu, then start a session with it here.':
+      '{cli} 需要单独设置。请先在"运行"菜单中完成设置，然后就可以在这里用它开始会话。',
+    'Remove the local model from this Mac?': '要从此 Mac 移除本地模型吗？',
+    'Also delete the downloaded model': '同时删除已下载的模型',
+    'The coding agent stays installed.': '编程智能体会保留，不会被卸载。',
+    // The sentences and labels the SERVER picks (LOCAL_MODEL_LABELS in src/types/local-model.ts), keyed
+    // by their exact English text: changing a text there means changing its key here.
+    'Best fit for this Mac': '最适合此 Mac 的选择',
+    'Recommended for this Mac': '为此 Mac 推荐',
+    'This Mac can run a small model. It handles small edits and questions. It does not replace a cloud model.':
+      '此 Mac 可以运行小型模型。它能处理小幅修改和问答，但不能替代云端模型。',
+    'Codeman has not run this on a Mac like this yet.': '{name} 尚未在同类 Mac 上运行过它。',
+    'The best fit is a small model. It handles small edits and questions. It does not replace a cloud model.':
+      '最适合的是一个小型模型。它能处理小幅修改和问答，但不能替代云端模型。',
+    '{model} fits the memory of this Mac too, but its download needs about {missing} GB more free disk space.':
+      '{model} 也能装入此 Mac 的内存，但下载它还需要再腾出约 {missing} GB 的可用磁盘空间。',
+    Good: '良好',
+    Tight: '偏紧',
+    Slow: '较慢',
+    'Speed unknown': '速度未知',
+    'Codeman recommends a local model only on a Mac with Apple silicon.':
+      '{name} 仅在搭载 Apple 芯片的 Mac 上推荐本地模型。',
+    'Local coding models need Apple silicon, and this Mac has an Intel processor.':
+      '本地编程模型需要 Apple 芯片，而此 Mac 使用的是 Intel 处理器。',
+    'With {memory} GB of memory, this Mac cannot run a model that can drive a coding agent.':
+      '此 Mac 只有 {memory} GB 内存，无法运行能够驱动编程智能体的模型。',
+    'This Mac can give a model about {budget} GB of memory, and the smallest model a coding agent can work with needs about {need} GB.':
+      '此 Mac 可分配给模型的内存约为 {budget} GB，而编程智能体能够使用的最小模型约需 {need} GB。',
+    'Codeman could not read how much memory this Mac has, so it recommends no model here.':
+      '{name} 无法读取此 Mac 的内存大小，因此在此不推荐任何模型。',
+    'Free up about {missing} GB of disk space to install the smallest model that fits this Mac.':
+      '请腾出约 {missing} GB 磁盘空间，以便安装适合此 Mac 的最小模型。',
+    'Local models need macOS {minimum} or newer, and this Mac runs macOS {version}.':
+      '本地模型需要 macOS {minimum} 或更高版本，而此 Mac 运行的是 macOS {version}。',
+    'No coding agent that Codeman can connect to a local model is available on this Mac.':
+      '此 Mac 上没有 {name} 可以连接到本地模型的编程智能体。',
+    // The tag of a model row (LOCAL_MODEL_TAG_LABELS in src/types/local-model.ts). Tight and Slow are
+    // the entries above.
+    'Tested on a Mac like this': '已在同类 Mac 上测试',
+    'Best fit': '最适合',
+    'Best fit, tight': '最适合，内存偏紧',
+    'Small model': '小型模型',
+    // The sentences of the install (LOCAL_MODEL_INSTALL_LABELS in src/types/local-model-install.ts):
+    // why a job stopped, why a request was refused, and the one sentence about the developer tools.
+    'The download of the runtime stopped and could not be continued. Check the network connection, then try again.':
+      '运行时的下载已中断，且无法继续。请检查网络连接，然后重试。',
+    'The runtime download was damaged and has been deleted. Try again.': '下载的运行时已损坏，已被删除。请重试。',
+    'The runtime could not be unpacked on this Mac.': '无法在此 Mac 上解压运行时。',
+    'The runtime did not start on this Mac.': '运行时未能在此 Mac 上启动。',
+    'The runtime keeps stopping, so Codeman no longer restarts it.': '运行时反复停止，因此 {name} 不再重新启动它。',
+    'The model on this Mac is not running. Start it first.': '此 Mac 上的模型没有在运行。请先启动它。',
+    'Port {port} is in use by another program.': '端口 {port} 已被其他程序占用。',
+    'The disk is full. Free up space, then try again.': '磁盘已满。请腾出空间，然后重试。',
+    'The download keeps stopping. The network may be damaging data. Try again or use another network.':
+      '下载反复中断。网络可能正在损坏数据。请重试，或换一个网络。',
+    '{model} is no longer offered under this name. Update Codeman or pick another model.':
+      '{model} 已不再以此名称提供。请更新 {name}，或选择其他模型。',
+    '{model} does not fit in the memory of this Mac after all.': '{model} 终究装不进此 Mac 的内存。',
+    '{model} loaded with a context of {actual} tokens instead of {wanted}.':
+      '{model} 加载时的上下文为 {actual} 个 Token，而不是 {wanted} 个。',
+    '{model} did not load on this Mac.': '{model} 未能在此 Mac 上加载。',
+    '{model} loaded but did not call a tool, so a coding agent cannot work with it.':
+      '{model} 已加载，但没有调用工具，因此编程智能体无法使用它。',
+    'The check of {model} did not finish.': '对 {model} 的检查没有完成。',
+    '{cli} could not be installed.': '无法安装 {cli}。',
+    'A saved model connection named {id} already exists and was not created here. Rename or delete it in App Settings, then try again.':
+      '已存在名为 {id} 的已保存模型连接，而它不是在这里创建的。请在“应用设置”中重命名或删除它，然后重试。',
+    'Codeman could not save the connection to the model.': '{name} 无法保存与模型的连接。',
+    'The model on this Mac changed since it was installed. Remove it and install it again.':
+      '此 Mac 上的模型在安装后发生了变化。请移除后重新安装。',
+    'The model on this Mac is being changed and is not ready. Finish or undo that in the local model window first.':
+      '此 Mac 上的模型正在更换，尚未就绪。请先在本地模型窗口中完成或撤销这一操作。',
+    'The install stopped on an unexpected error.': '安装因意外错误而中止。',
+    'An install is already running.': '已有一个安装正在进行。',
+    'This model is already in use on this Mac.': '此 Mac 已在使用这个模型。',
+    '{model} is the model in use. Switch to another model first, or remove the local model.':
+      '{model} 是正在使用的模型。请先切换到其他模型，或移除本地模型。',
+    'The download is {size} GB now. Check the sizes and confirm again.':
+      '现在的下载大小为 {size} GB。请核对大小后再次确认。',
+    'Sessions are still using this model: {sessions}. Close them first.':
+      '仍有会话在使用此模型：{sessions}。请先关闭它们。',
+    'That is not possible in the current state.': '当前状态下无法执行此操作。',
+    'This model at this context is not offered for this Mac right now.':
+      '目前不为此 Mac 提供这一上下文大小下的该模型。',
+    'This coding agent is not offered for this model.': '该模型不提供这个编程智能体。',
+    '{cli} is not installed and cannot be installed from here.': '{cli} 尚未安装，也无法从这里安装。',
+    'Only {model} is in use on this Mac. Switch models in the local model window first.':
+      '此 Mac 目前只使用 {model}。请先在本地模型窗口中切换模型。',
+    'This model is not one of the checked models on this Mac.': '该模型不在此 Mac 上已检查的模型之列。',
+    'This model is not on this Mac.': '此 Mac 上没有这个模型。',
+    '{cli} is not installed on this Mac. Install a coding agent in the local model window first.':
+      '此 Mac 上没有安装 {cli}。请先在本地模型窗口中安装一个编程智能体。',
+    '{model} could not be deleted from this Mac.': '无法从此 Mac 删除 {model}。',
+    // What the endpoint routes answer for the record of the model on this Mac (shown as a toast).
+    'This endpoint belongs to the model Codeman runs on this Mac. Change or remove it in the local model window.':
+      '此端点属于 {name} 在此 Mac 上运行的模型。请在本地模型窗口中更改或移除它。',
+    'This endpoint id is reserved for the model Codeman runs on this Mac. Pick another id.':
+      '此端点标识已保留给 {name} 在此 Mac 上运行的模型。请换一个标识。',
+    'Coding agents use git and Python. This Mac has no developer tools yet, so macOS will offer to install them the first time an agent needs one.':
+      '编程智能体会用到 git 和 Python。此 Mac 尚未安装开发者工具，因此在智能体首次需要时，macOS 会提示安装。',
   });
 
   const ZH_CN_LOWER = new Map(Object.entries(ZH_CN).map(([key, value]) => [key.toLocaleLowerCase('en'), value]));
@@ -1295,6 +1708,7 @@
       [/^Lifetime: (\d+) sessions created$/, (_m, count) => `累计已创建 ${count} 个会话`],
       [/^Tunnel active: (.+)$/, (_m, url) => `隧道已启用：${url}`],
       [/^Tunnel error: (.+)$/, (_m, error) => `隧道错误：${error}`],
+      [/^Tunnel not stopped: ([\s\S]+)$/, (_m, why) => `隧道未停止：${why}`],
       [/^Update to v(.+)$/, (_m, version) => `更新到 v${version}`],
       [/^You're up to date \(v(.+)\)\.$/, (_m, version) => `已是最新版本（v${version}）。`],
       [/^Update available: v(.+)$/, (_m, version) => `有可用更新：v${version}`],
@@ -1303,6 +1717,12 @@
         (_m, version, shown, more) => `Codeman 已更新到 v${version}：${shown}${more ? `（另有 ${more} 项）` : ''}`,
       ],
       [/^Selected: (.+)$/, (_m, value) => `已选择：${value}`],
+      [/^Case renamed to "(.+)"$/, (_m, name) => `案例已重命名为“${name}”`],
+      [/^New name for "(.+)"$/, (_m, name) => `“${name}”的新名称`],
+      [
+        /^These sessions have the folder open: (.+)\. They will be closed \(their tabs go away and nothing is restarted\) before the folder is renamed\.$/,
+        (_m, list) => `这些会话正在使用该文件夹：${list}。重命名前将关闭它们（其标签页会消失，不会重新启动）。`,
+      ],
       [/^Failed to (.+)$/, (_m, action) => `操作失败：${action}`],
       [/^Will create: (.+)$/, (_m, path) => `将创建：${path}`],
       // The spreadsheet preview: an HTTP status, and the notice bar's counts.
@@ -1320,6 +1740,17 @@
       [/^Worktree (\S+) and branch (\S+) removed$/, (_m, wt, branch) => `已移除工作树 ${wt} 和分支 ${branch}`],
       [/^Worktree (\S+) removed$/, (_m, wt) => `已移除工作树 ${wt}`],
       [/^Worktree (\S+) was kept: ([\s\S]+)$/, (_m, wt, why) => `工作树 ${wt} 已保留：${why}`],
+      // A pick, drop or paste that mixed admitted files with refused ones (image-input.js).
+      [/^(\d+) files? skipped: unsupported type$/, (_m, n) => `已跳过 ${n} 个不支持类型的文件`],
+      // The Codeman desktop app's download toasts (packages/desktop/src/assets.rs).
+      // The file name is user text: it passes through untranslated.
+      [/^Downloaded (.+) to Downloads$/, (_m, name) => `已将 ${name} 下载到“下载”文件夹`],
+      [/^Download of (.+) failed$/, (_m, name) => `下载 ${name} 失败`],
+      // The Files panel's delete button (panels-ui.js): the path is user text, and the server's
+      // reason passes through untranslated.
+      [/^Delete the file ([\s\S]+)\? This cannot be undone\.$/, (_m, path) => `删除文件 ${path}？此操作无法撤销。`],
+      [/^File deleted: ([\s\S]+)$/, (_m, path) => `已删除文件：${path}`],
+      [/^Delete failed: ([\s\S]+)$/, (_m, why) => `删除失败：${why}`],
       // Group names are user text: they pass through untranslated.
       [/^Move to "(.+)"$/, (_m, group) => `移到“${group}”`],
       // Session names are user text too.
@@ -1355,6 +1786,22 @@
         (_m, n) => `窗口太小，容纳不下 ${n} 个窗格：只显示聚焦的窗格`,
       ],
       [/^The agent exited \((-?\d+)\)$/, (_m, code) => `智能体已退出（${code}）`],
+      // A settings write the server did not store (settings-ui.js). The server's reason passes
+      // through untranslated; the one the page supplies itself has its own entry.
+      [
+        /^Saved on this device, not on the server: ([\s\S]+)$/,
+        (_m, why) => `已保存到本设备，但未保存到服务器：${ZH_CN[why] || why}`,
+      ],
+      [
+        /^(Run mode|Respawn presets) saved on this device, not on the server: ([\s\S]+)$/,
+        (_m, what, why) =>
+          `${what === 'Run mode' ? '运行模式' : '重生预设'}已保存到本设备，但未保存到服务器：${ZH_CN[why] || why}`,
+      ],
+      // The case-options save (session-ui.js _pushCaseSettings): the case name passes through.
+      [
+        /^Options for "([^"]+)" \(until the next sync\) saved on this device, not on the server: ([\s\S]+)$/,
+        (_m, name, why) => `案例“${name}”的选项已保存到本设备（同步前有效），但未保存到服务器：${ZH_CN[why] || why}`,
+      ],
       // A dialog read off a hook-less CLI's screen (src/web/screen-blocked.ts), as the
       // notification drawer shows it. The CLI's label passes through.
       [/^(.+) is waiting for your answer in the terminal$/, (_m, cli) => `${cli} 正在终端中等待你的回答`],

@@ -72,7 +72,7 @@ import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { join, delimiter, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { enabledClis } from '../src/config/cli-registry/index.js';
+import { enabledClis } from '../src/config/cli-registry/registry.js';
 import type { CliEntry } from '../src/config/cli-registry/types.js';
 import {
   buildCustomModelInjection,

@@ -34,13 +34,18 @@ function methodBody(signature: string): string {
   return sessionUi.slice(start, sessionUi.indexOf('\n  },', start));
 }
 
-const TABS = ['respawn', 'context', 'ralph', 'summary'];
+const TABS = ['respawn', 'context', 'ralph', 'summary', 'git'];
 
 describe('Session Options modal structure', () => {
   it('keeps every element openSessionOptions and switchOptionsTab touch by id', () => {
     const modal = optionsModal();
     const ids = new Set<string>();
-    for (const sig of ['openSessionOptions(sessionId)', 'switchOptionsTab(tabName)', 'getRalphConfig()']) {
+    for (const sig of [
+      'openSessionOptions(sessionId)',
+      'switchOptionsTab(tabName)',
+      'getRalphConfig()',
+      'updateGitFetchStatus(sessionId)',
+    ]) {
       for (const m of methodBody(sig).matchAll(/getElementById\('([A-Za-z0-9_-]+)'\)/g)) ids.add(m[1]);
     }
     // openSessionOptions also drives elements outside this modal (tabs, toasts);
@@ -83,6 +88,42 @@ describe('Session Options modal structure', () => {
     expect(modal.match(/<button[^>]*data-tab="context"[^>]*>/)?.[0]).not.toContain('data-claude-only');
   });
 
+  it('keeps the Git rail entry for every local session, and hides it for the ones nothing is ever fetched for', () => {
+    const modal = optionsModal();
+    // A shell session has repositories too, so Git must not ride the Claude-only flag.
+    expect(modal.match(/<button[^>]*data-tab="git"[^>]*>/)?.[0]).not.toContain('data-claude-only');
+    const open = methodBody('openSessionOptions(sessionId)');
+    expect(open).toContain('.set-rail-item[data-tab="git"]');
+    // Remote, Docker and adopted sessions answer 'unsupported' on both git routes and the scheduler never fetches
+    // them, so the entry goes the same way the Claude-only ones do.
+    expect(open).toMatch(
+      /gitTabBtn\.style\.display = session\.remote \|\| session\.docker \|\| session\.adopt \? 'none' : ''/
+    );
+  });
+
+  it('makes the Git rows inert while a session follows the app, the way the keep-warm rows go inert', () => {
+    const modal = optionsModal();
+    const update = methodBody('updateGitFetchStatus(sessionId)');
+    expect(update).toContain('set-row-disabled');
+    expect(update).toContain('el.disabled = follows');
+    // Decided from BOTH fields: a half-choice means the session is not following, and the half that still
+    // follows shows the app's value while the other shows its own; a switch-only check would gray out a live row.
+    expect(update).toMatch(
+      /follows = session\.gitFetchEnabled === undefined && session\.gitFetchIntervalSeconds === undefined/
+    );
+    // Following saves null on both halves, which is what clears the override on the route.
+    const save = methodBody('async autoSaveGitFetch()');
+    expect(save).toContain('{ enabled: null, intervalSeconds: null }');
+    // Saves through the helper that says whether the call went through: `_apiPost` hands back the Response
+    // without checking it, so a body the route refused (a 400) read as a save, and the panel showed a choice
+    // the server never took.
+    expect(save).toContain('this._apiJson(`/api/sessions/${this.editingSessionId}/git-fetch-settings`');
+    expect(save).toContain('if (!data)');
+    expect(save).not.toMatch(/await this\._apiPost\(/);
+    // The status row is runtime text this method writes, so translating it would rewrite the stamp.
+    expect(modal).toContain('id="gitFetchStatus" data-i18n-skip hidden');
+  });
+
   it('uses the shared settings surface rather than the modal-tab chrome', () => {
     const modal = optionsModal();
     expect(modal).toContain('class="modal-content modal-lg set-shell"');
@@ -111,6 +152,10 @@ describe('Session Options modal structure', () => {
     const open = methodBody('openSessionOptions(sessionId)');
     expect(open).toContain("getElementById('modalSessionPath')");
     expect(open).toContain('session.workingDir');
-    expect(methodBody('async copySessionPath()')).toContain('_copyText(session.workingDir)');
+    // An adopted session's workingDir is the neutral wrapper folder, so the row shows where the pane was.
+    expect(open).toContain('session.adopt?.paneCurrentPath || session.workingDir');
+    const copy = methodBody('async copySessionPath()');
+    expect(copy).toContain('session?.adopt?.paneCurrentPath || session?.workingDir');
+    expect(copy).toContain('_copyText(path)');
   });
 });

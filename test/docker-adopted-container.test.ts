@@ -218,8 +218,15 @@ describe('adopted container: the host is not required to have the CLI', () => {
     expect(src.match(/if \(mode === '[a-z]+' && !cliDir\)/g)).toBeNull();
   });
 
-  it('derives the flag from the docker metadata the session already carries', () => {
-    expect(src).toContain('const cliRunsInContainer = !!docker;');
+  it('derives the flag from the location metadata the session already carries', () => {
+    // Adoption joined the condition for the same reason docker is in it: an
+    // adopted session's CLI was started by a human in a process Codeman never
+    // spawned, so the host binary is irrelevant there too, and demanding it
+    // would reject adopting a claude that lives in a container, on an ssh host,
+    // or simply outside the server process's PATH (the systemd/launchd case).
+    // What the assertion still pins is that the flag comes from the session's
+    // OWN metadata rather than from anything ambient.
+    expect(src).toContain('const cliRunsInContainer = !!docker || !!adopt;');
   });
 });
 
@@ -299,8 +306,8 @@ describe('adopted container: run modes come from the CONTAINER, not the host', (
    * exactly what happened twice: a comment added above the assertion pushed the
    * asserted line past the cutoff and CI failed on a test that was still true.
    */
-  const refreshFn = (src) => {
-    const start = src.indexOf('_refreshRunModeAvailability(menu) {');
+  const methodFn = (src, signature) => {
+    const start = src.indexOf(signature);
     expect(start).toBeGreaterThan(-1);
     const open = src.indexOf('{', start);
     let depth = 0;
@@ -308,23 +315,30 @@ describe('adopted container: run modes come from the CONTAINER, not the host', (
       if (src[i] === '{') depth++;
       else if (src[i] === '}' && --depth === 0) return src.slice(start, i + 1);
     }
-    throw new Error('unbalanced braces in _refreshRunModeAvailability');
+    throw new Error(`unbalanced braces in ${signature}`);
   };
+  // The per-mode decision lives in ONE helper, shared by the Run menu and the
+  // Cmd+K new-session row (panels-ui.js), so the two cannot drift apart.
+  const ruleFn = (src) => methodFn(src, '_runModeAvailableForCase(mode, caseName) {');
 
   it('gates a docker case on availableModes instead of host CLI probes', () => {
     // The sandbox host had codex but no claude while the adopted container had
     // claude and no codex; gating on the host hid the only mode that worked.
-    const fn = refreshFn(ui);
+    const fn = ruleFn(ui);
     expect(fn).toContain("location === 'docker'");
     expect(fn).toContain('availableModes');
     // Non-docker cases must keep the original host probe (#201).
     expect(fn).toContain('this.isCliAvailable(mode)');
+    // And the Run menu asks that helper rather than keeping its own copy.
+    expect(methodFn(ui, '_refreshRunModeAvailability(menu) {')).toContain(
+      'this._runModeAvailableForCase(mode, caseName)'
+    );
   });
 
   it('leaves an owned container ungated when nothing was probed', () => {
     // Our base image ships every CLI, so an absent list means "unknown", and
     // treating unknown as "nothing available" would empty the menu.
-    expect(refreshFn(ui)).toMatch(/containerModes \?[^:]*:\s*true/);
+    expect(ruleFn(ui)).toMatch(/containerModes \?[^:]*:\s*true/);
   });
 });
 

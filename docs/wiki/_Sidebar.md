@@ -14,6 +14,7 @@
 - [Tile Grid](Tile-Grid)
 - [Agent CLIs](Agent-CLIs)
 - [Custom Model Endpoints](Custom-Model-Endpoints)
+- [Local Models](Local-Models)
 - [Working With Files](Working-With-Files)
 - [Git Worktrees](Git-Worktrees)
 - [Input And Voice](Input-And-Voice)
@@ -25,6 +26,7 @@
 
 - [Unattended Runs](Keeping-Agents-Running)
 - [Notifications & Approvals](Notifications-And-Approvals)
+- [Discord Bridge](Discord-Bridge)
 - [Cron Jobs](Cron-Jobs)
 - [Autonomous Loops](Autonomous-Loops)
 - [Watching Agents Work](Watching-Agents-Work)
@@ -51,6 +53,7 @@
 **Operating it**
 
 - [Running As A Service](Running-As-A-Service)
+- [Config Backups](Config-Backups)
 - [Troubleshooting](Troubleshooting)
 - [FAQ](FAQ)
 - [Contributing](Contributing)

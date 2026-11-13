@@ -74,13 +74,15 @@ const PathPicker = {
   _previewOverlay: null,
   _previewRequestSequence: 0,
   _previewPreviousFocus: null,
+  _previewImageCleanup: null,
+  _previewImageZoom: null,
   _showHidden: false,
   _sortMode: PATH_PICKER_DEFAULT_SORT,
 
   /**
    * Open the lazy filesystem browser.
    * @param {{sessionId?: string, initialPath?: string, directoriesOnly?: boolean,
-   *   title?: string, onSelect: (path: string) => void}} options
+   *   allowNewFolder?: boolean, title?: string, onSelect: (path: string) => void}} options
    */
   open(options) {
     this.close(false);
@@ -114,9 +116,15 @@ const PathPicker = {
             <input type="text" class="path-picker-current" aria-label="Current folder path" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="go">
             <button type="submit" class="path-picker-go" title="Go to this path" aria-label="Go to this path">Go</button>
           </form>
+          <button type="button" class="path-picker-newfolder" title="New folder" aria-label="New folder" hidden>+&#x1F4C1;</button>
           <button type="button" class="path-picker-hidden" title="Show hidden files and folders" aria-label="Show hidden files and folders" aria-pressed="false">.*</button>
           <button type="button" class="path-picker-refresh" title="Refresh" aria-label="Refresh">&#x21BB;</button>
         </div>
+        <form class="path-picker-newfolder-form" hidden>
+          <input type="text" class="path-picker-newfolder-name" aria-label="New folder name" placeholder="New folder name" maxlength="255" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="done">
+          <button type="submit" class="path-picker-newfolder-create">Create</button>
+          <button type="button" class="path-picker-newfolder-cancel">Cancel</button>
+        </form>
         <div class="path-picker-toolbar">
           <div class="path-picker-status" aria-live="polite">Loading...</div>
           <label class="path-picker-sort-label">Sort
@@ -147,6 +155,7 @@ const PathPicker = {
     overlay.querySelector('.path-picker-refresh').addEventListener('click', () => this.load(this._currentPath));
     overlay.querySelector('.path-picker-hidden').addEventListener('click', () => this.toggleHidden());
     this._syncHiddenButton();
+    this._wireNewFolder(overlay, !!options.allowNewFolder);
     // Typing a path is the fast way there. The listing is loaded ONLY on Enter/Go,
     // never on each keystroke: a half-typed path is a 404 the server has to
     // answer for nothing, and jumping mid-edit would yank the field around.
@@ -181,6 +190,70 @@ const PathPicker = {
     document.addEventListener('keydown', this._keydownHandler);
     document.body.appendChild(overlay);
     this.load(options.initialPath || '');
+  },
+
+  /**
+   * "New folder": opt-in per caller (`allowNewFolder`), so a picker that browses somewhere the host
+   * filesystem route cannot create in (the container-workdir picker) never shows it. The folder is made
+   * inside the folder being viewed and is selected once it exists.
+   */
+  _wireNewFolder(overlay, enabled) {
+    const button = overlay.querySelector('.path-picker-newfolder');
+    const form = overlay.querySelector('.path-picker-newfolder-form');
+    const input = overlay.querySelector('.path-picker-newfolder-name');
+    if (!enabled) return;
+    button.hidden = false;
+    const close = () => {
+      form.hidden = true;
+      input.value = '';
+    };
+    button.addEventListener('click', () => {
+      form.hidden = !form.hidden;
+      if (!form.hidden) input.focus();
+    });
+    overlay.querySelector('.path-picker-newfolder-cancel').addEventListener('click', close);
+    input.addEventListener('keydown', (event) => {
+      // Escape closes the form first; the document handler would close the whole picker.
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      close();
+    });
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const name = input.value.trim();
+      if (!name || !this._currentPath) return;
+      const status = overlay.querySelector('.path-picker-status');
+      const create = overlay.querySelector('.path-picker-newfolder-create');
+      const parent = this._currentPath;
+      // One request at a time: a double tap would send a second one whose 409 shows after the first succeeded.
+      create.disabled = true;
+      try {
+        const res = await fetch('/api/filesystem/mkdir', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            path: parent,
+            name,
+            sessionId: this._options?.sessionId || undefined,
+            showHidden: this._showHidden ? 'true' : undefined,
+          }),
+        });
+        const result = await res.json();
+        if (!result?.success) throw new Error(result?.error || 'Could not create the folder');
+        if (!this.overlay) return;
+        close();
+        await this.load(parent);
+        // The listing may have moved on while the request ran; only select it if it is still on screen.
+        if (this._currentPath === parent) this.select(result.data.path);
+      } catch (error) {
+        if (!this.overlay) return;
+        status.textContent = error.message || 'Could not create the folder';
+        status.classList.add('error');
+      } finally {
+        create.disabled = false;
+      }
+    });
   },
 
   _loadShowHidden() {
@@ -492,6 +565,11 @@ const PathPicker = {
             <strong class="path-preview-title"></strong>
             <span class="path-preview-path"></span>
           </div>
+          <div class="path-preview-zoom" hidden aria-label="Image zoom controls">
+            <button type="button" data-zoom="out" aria-label="Zoom out">−</button>
+            <button type="button" data-zoom="fit" aria-label="Fit image">Fit</button>
+            <button type="button" data-zoom="in" aria-label="Zoom in">+</button>
+          </div>
           <a class="path-preview-open" target="_blank" rel="noopener noreferrer">Open</a>
           <button type="button" class="path-preview-close" aria-label="Close preview">&times;</button>
         </div>
@@ -509,13 +587,30 @@ const PathPicker = {
 
     const body = overlay.querySelector('.path-preview-body');
     if (entry.previewKind === 'image') {
+      const zoomControls = overlay.querySelector('.path-preview-zoom');
+      body.classList.add('path-preview-image-viewport');
       const image = document.createElement('img');
       image.className = 'path-preview-image';
       image.alt = entry.name;
-      image.addEventListener('load', () => body.querySelector('.path-preview-loading')?.remove());
-      image.addEventListener('error', () => this.showPreviewError('Image preview failed to load'));
+      image.draggable = false;
+      // Both handlers check the sequence like the text branch: an image whose preview was already
+      // replaced can still finish loading, and `this._previewOverlay` and the zoom state are then
+      // the newer preview's. The controls show only once there is an image to zoom.
+      image.addEventListener('load', () => {
+        if (requestSequence !== this._previewRequestSequence) return;
+        body.querySelector('.path-preview-loading')?.remove();
+        zoomControls.hidden = false;
+        this._setPreviewImageZoom(1);
+      });
+      image.addEventListener('error', () => {
+        if (requestSequence !== this._previewRequestSequence) return;
+        zoomControls.hidden = true;
+        this._previewImageCleanup?.();
+        this.showPreviewError('Image preview failed to load');
+      });
       image.src = previewUrl;
       body.appendChild(image);
+      this._bindPreviewImageGestures(image, body, zoomControls);
     } else if (entry.previewKind === 'text') {
       fetch(previewUrl)
         .then(async (response) => {
@@ -559,8 +654,142 @@ const PathPicker = {
     body.replaceChildren(error);
   },
 
+  _setPreviewImageZoom(scale, focalPoint) {
+    const state = this._previewImageZoom;
+    if (!state) return;
+    const nextScale = Math.max(1, Math.min(6, scale));
+    if (focalPoint) {
+      const rect = state.body.getBoundingClientRect();
+      const qx = focalPoint.x - (rect.left + rect.width / 2);
+      const qy = focalPoint.y - (rect.top + rect.height / 2);
+      const ratio = nextScale / state.scale;
+      state.x = qx + (state.x - qx) * ratio;
+      state.y = qy + (state.y - qy) * ratio;
+    }
+    state.scale = nextScale;
+    this._clampPreviewImagePan();
+    state.image.style.transform = `translate(${state.x}px, ${state.y}px) scale(${state.scale})`;
+    const fitButton = state.controls.querySelector('[data-zoom="fit"]');
+    if (fitButton) fitButton.textContent = `${Math.round(state.scale * 100)}%`;
+    state.image.classList.toggle('is-zoomed', state.scale > 1);
+  },
+
+  /** Size the image is drawn at before zoom: `object-fit: scale-down` in the viewport box, so never
+   *  larger than its natural size. The box until the image has loaded (no natural size yet). */
+  _previewImageFitSize(state, rect) {
+    const naturalWidth = state.image.naturalWidth;
+    const naturalHeight = state.image.naturalHeight;
+    if (!naturalWidth || !naturalHeight) return { width: rect.width, height: rect.height };
+    const fit = Math.min(1, rect.width / naturalWidth, rect.height / naturalHeight);
+    return { width: naturalWidth * fit, height: naturalHeight * fit };
+  },
+
+  /** Keep the zoomed image covering the viewport: it may move until its edge reaches the viewport's
+   *  edge, never further, and an axis on which it is still smaller than the viewport stays centred.
+   *  Clamping to the image box instead let a small or letterboxed image be panned out of view. */
+  _clampPreviewImagePan() {
+    const state = this._previewImageZoom;
+    if (!state) return;
+    const rect = state.body.getBoundingClientRect();
+    const fitted = this._previewImageFitSize(state, rect);
+    const maxX = Math.max(0, (fitted.width * state.scale - rect.width) / 2);
+    const maxY = Math.max(0, (fitted.height * state.scale - rect.height) / 2);
+    state.x = Math.max(-maxX, Math.min(maxX, state.x));
+    state.y = Math.max(-maxY, Math.min(maxY, state.y));
+  },
+
+  /** Zoom factor for one wheel event, proportional to `deltaY` (d3-zoom's scale: about 15% per
+   *  100px mouse notch, ten times that for ctrl+wheel, which is how Chrome and Firefox deliver a
+   *  trackpad pinch), so a trackpad's stream of small deltas zooms smoothly instead of 20% per
+   *  event. Clamped per event so one large delta cannot jump to the maximum; no vertical delta
+   *  (a sideways scroll) zooms nothing. */
+  _previewWheelZoomFactor(event) {
+    const deltaY = Number(event?.deltaY) || 0;
+    if (!deltaY) return 1;
+    const perUnit = event.deltaMode === 1 ? 0.05 : event.deltaMode ? 1 : 0.002;
+    const exponent = -deltaY * perUnit * (event.ctrlKey ? 10 : 1);
+    return 2 ** Math.max(-0.5, Math.min(0.5, exponent));
+  },
+
+  _bindPreviewImageGestures(image, body, controls) {
+    this._previewImageZoom = { image, body, controls, scale: 1, x: 0, y: 0, pointers: new Map(), gesture: null };
+    const state = this._previewImageZoom;
+    const cleanups = [];
+    const listen = (target, name, handler, options) => {
+      target.addEventListener(name, handler, options);
+      cleanups.push(() => target.removeEventListener(name, handler, options));
+    };
+    const pointer = (event) => ({ x: event.clientX, y: event.clientY });
+    const midpoint = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+    const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+    const startGesture = () => {
+      const points = Array.from(state.pointers.values());
+      if (points.length > 1) {
+        state.gesture = {
+          kind: 'pinch',
+          scale: state.scale,
+          distance: Math.max(1, distance(points[0], points[1])),
+          midpoint: midpoint(points[0], points[1]),
+        };
+      } else if (points.length === 1) {
+        state.gesture = { kind: 'pan', point: points[0], x: state.x, y: state.y };
+      }
+    };
+    listen(image, 'pointerdown', (event) => {
+      event.preventDefault();
+      image.setPointerCapture?.(event.pointerId);
+      state.pointers.set(event.pointerId, pointer(event));
+      startGesture();
+    });
+    listen(image, 'pointermove', (event) => {
+      if (!state.pointers.has(event.pointerId) || !state.gesture) return;
+      event.preventDefault();
+      state.pointers.set(event.pointerId, pointer(event));
+      if (state.pointers.size > 1) {
+        const points = Array.from(state.pointers.values());
+        this._setPreviewImageZoom(
+          state.gesture.scale * distance(points[0], points[1]) / state.gesture.distance,
+          state.gesture.midpoint
+        );
+      } else if (state.gesture.kind === 'pan' && state.scale > 1) {
+        const point = state.pointers.values().next().value;
+        state.x = state.gesture.x + point.x - state.gesture.point.x;
+        state.y = state.gesture.y + point.y - state.gesture.point.y;
+        this._setPreviewImageZoom(state.scale);
+      }
+    });
+    const endPointer = (event) => {
+      state.pointers.delete(event.pointerId);
+      startGesture();
+    };
+    listen(image, 'pointerup', endPointer);
+    listen(image, 'pointercancel', endPointer);
+    listen(image, 'lostpointercapture', endPointer);
+    listen(image, 'dblclick', (event) => {
+      event.preventDefault();
+      this._setPreviewImageZoom(state.scale > 1 ? 1 : 2, pointer(event));
+    });
+    listen(body, 'wheel', (event) => {
+      event.preventDefault();
+      const factor = this._previewWheelZoomFactor(event);
+      if (factor !== 1) this._setPreviewImageZoom(state.scale * factor, pointer(event));
+    }, { passive: false });
+    listen(controls, 'click', (event) => {
+      const button = event.target.closest('[data-zoom]');
+      if (!button) return;
+      if (button.dataset.zoom === 'fit') this._setPreviewImageZoom(1);
+      else this._setPreviewImageZoom(state.scale * (button.dataset.zoom === 'in' ? 1.5 : 1 / 1.5));
+    });
+    this._previewImageCleanup = () => {
+      cleanups.forEach((cleanup) => cleanup());
+      this._previewImageZoom = null;
+      this._previewImageCleanup = null;
+    };
+  },
+
   closePreview(restoreFocus = true) {
     this._previewRequestSequence += 1;
+    this._previewImageCleanup?.();
     this._previewOverlay?.remove();
     this._previewOverlay = null;
     const previousFocus = this._previewPreviousFocus;
@@ -646,6 +875,9 @@ function applyOneShotCtrl(data) {
 const COMPOSER_INPUT_FRAME_LIMIT = 64 * 1024;
 const COMPOSER_PASTE_START = '\x1b[200~';
 const COMPOSER_PASTE_END = '\x1b[201~';
+
+// Accessory keys that act on the terminal and leave the keyboard up.
+const ACCESSORY_REFOCUS_ACTIONS = new Set(['scroll-up', 'scroll-down', 'arrow-left', 'arrow-right', 'tab', 'shift-tab', 'shift-left', 'shift-right', 'ctrl', 'ctrl-o', 'opt-enter', 'esc', 'effort-max', 'clear-input']);
 
 /**
  * KeyboardAccessoryBar - Quick action buttons shown above keyboard when typing.
@@ -802,6 +1034,21 @@ const KeyboardAccessoryBar = {
     this.syncCodexKeys();
     this._syncComposerDraftIndicator();
 
+    // A key that keeps the keyboard up must not take focus on press at all.
+    // Letting the tap blur the terminal and refocusing it in the click handler
+    // (kept below as the fallback) made every such key start a keyboard
+    // dismissal: a blur/focus pair per tap. Same pattern as the Attach input
+    // (image-input.js). A first tap on clear/compact only arms the confirm.
+    this.element.addEventListener('mousedown', (e) => {
+      const btn = e.target.closest('.accessory-btn');
+      if (!btn) return;
+      const action = btn.dataset.action;
+      if (ACCESSORY_REFOCUS_ACTIONS.has(action) ||
+          ((action === 'clear' || action === 'compact') && this._confirmAction !== action)) {
+        e.preventDefault();
+      }
+    });
+
     // Add click handlers — preventDefault stops event from reaching terminal
     this.element.addEventListener('click', (e) => {
       const btn = e.target.closest('.accessory-btn');
@@ -813,8 +1060,7 @@ const KeyboardAccessoryBar = {
       this.handleAction(action, btn);
 
       // Refocus terminal so keyboard stays open (tap blurs terminal → keyboard dismisses → toolbar shifts)
-      const refocusActions = new Set(['scroll-up', 'scroll-down', 'arrow-left', 'arrow-right', 'tab', 'shift-tab', 'shift-left', 'shift-right', 'ctrl', 'ctrl-o', 'opt-enter', 'esc', 'effort-max', 'clear-input']);
-      if (refocusActions.has(action) ||
+      if (ACCESSORY_REFOCUS_ACTIONS.has(action) ||
           ((action === 'clear' || action === 'compact') && this._confirmAction)) {
         if (typeof app !== 'undefined' && app.terminal) {
           app.terminal.focus();
@@ -1229,7 +1475,11 @@ const KeyboardAccessoryBar = {
     // the single-line input transport and is what terminal.paste() emitted.
     // Paste markers inside the text are dropped first: a clipboard carrying
     // `ESC[201~` would end the bracket early and run the rest without Enter.
-    const pasteText = text.replace(/\x1b\[20[01]~/g, '').replace(/\r?\n/g, '\r');
+    // Strip until none is left: one pass over `ESC[20` + `ESC[201~` + `1~` leaves
+    // an `ESC[201~` behind.
+    let pasteText = text;
+    while (/\x1b\[20[01]~/.test(pasteText)) pasteText = pasteText.replace(/\x1b\[20[01]~/g, '');
+    pasteText = pasteText.replace(/\r?\n/g, '\r');
     if (pasteText.length > this._composerMaxLength) {
       app.showToast?.(`${label} is too long to send (maximum ${this._composerMaxLength.toLocaleString()} characters)`, 'error');
       return false;
@@ -1279,7 +1529,7 @@ const KeyboardAccessoryBar = {
           <strong>Compose prompt</strong>
           <span>Enter adds a new line</span>
         </div>
-        <textarea class="paste-textarea prompt-composer-textarea" aria-label="Prompt" placeholder="Write your prompt…" autocorrect="on" autocapitalize="sentences" spellcheck="true"></textarea>
+        <textarea class="paste-textarea prompt-composer-textarea" dir="auto" aria-label="Prompt" placeholder="Write your prompt…" autocorrect="on" autocapitalize="sentences" spellcheck="true"></textarea>
         <div class="paste-actions prompt-composer-actions">
           <button type="button" class="prompt-composer-terminal">Use terminal keyboard</button>
           <button type="button" class="paste-image">📎 Attach</button>
@@ -1292,6 +1542,8 @@ const KeyboardAccessoryBar = {
 
     this._composerOverlay = overlay;
     const textarea = overlay.querySelector('.prompt-composer-textarea');
+    // The textarea's dir="auto" lays a prompt written in Persian, Arabic or
+    // Hebrew out right to left, from its first letter (#715).
     // i18n.js skips <textarea> subtrees (what is typed there is user content),
     // so the placeholder and label are translated here, when the dialog is built.
     const i18n = typeof window !== 'undefined' ? window.CodemanI18n : undefined;
@@ -1339,8 +1591,9 @@ const KeyboardAccessoryBar = {
       this._syncComposerDraftIndicator();
       close({ preserveDraft: false });
     };
-    const handleImages = async (files) => {
-      const images = Array.from(files || []).filter((file) => app._promptAttachKind(file));
+    // Takes files already admitted by app._admitPromptAttachments (the picker and
+    // the paste below), which also toasts whatever it refused.
+    const handleImages = async (images) => {
       if (images.length === 0 || typeof app._uploadAndInsertImages !== 'function') return;
       saveDraft();
       this._composerUploads.set(sessionId, (this._composerUploads.get(sessionId) || 0) + 1);
@@ -1381,7 +1634,6 @@ const KeyboardAccessoryBar = {
         if (remaining > 0) this._composerUploads.set(sessionId, remaining);
         else this._composerUploads.delete(sessionId);
         syncUploadUi();
-        if (overlay.isConnected) fileInput.value = '';
       }
     };
 
@@ -1389,9 +1641,11 @@ const KeyboardAccessoryBar = {
     textarea.addEventListener('paste', (event) => {
       const items = event.clipboardData?.items;
       if (!items) return;
-      const images = Array.from(items)
+      const files = Array.from(items)
         .map((item) => item.getAsFile())
-        .filter((file) => file && app._promptAttachKind(file));
+        .filter(Boolean);
+      // Pasted text with no admitted file lands in the textarea natively: no toast.
+      const images = app._admitPromptAttachments(files, { textPasted: !!event.clipboardData.getData('text/plain') });
       if (images.length > 0) {
         event.preventDefault();
         void handleImages(images);
@@ -1404,13 +1658,19 @@ const KeyboardAccessoryBar = {
       }
     });
     imageButton.addEventListener('click', () => fileInput.click());
-    fileInput.addEventListener('change', () => void handleImages(fileInput.files));
+    fileInput.addEventListener('change', () => {
+      const files = Array.from(fileInput.files || []);
+      // Reset so picking the same refused file again still fires change (and its toast).
+      fileInput.value = '';
+      void handleImages(app._admitPromptAttachments(files));
+    });
     overlay.querySelector('.prompt-composer-terminal').addEventListener('click', () => {
       // Hand the text BACK to the terminal prompt so both surfaces hold the same
       // prompt, the mirror of the adoption composePrompt() does on open. Only a
-      // single-line draft can make the trip: the prompt transport is single-line
-      // and strips embedded newlines, so a multi-line draft would arrive mangled
-      // and instead stays parked as a draft (the dot on the Compose key shows it).
+      // single-line draft can make the trip: the terminal prompt is one line and
+      // its text reaches the PTY as typed input, where an embedded newline is a
+      // key, so a multi-line draft would arrive mangled and instead stays parked
+      // as a draft (the dot on the Compose key shows it).
       const text = textarea.value;
       if (!text || text.includes('\n')) {
         close({ focusTerminal: true });
@@ -1519,10 +1779,11 @@ const KeyboardAccessoryBar = {
       if (this._sendBracketedPaste(sessionId, text, 'Paste')) close();
     };
 
-    // Filter to what the server admits, close the dialog, and hand off to the
-    // shared upload+insert pipeline. Returns true if any file was handled.
-    const handleImages = (files) => {
-      const images = Array.from(files || []).filter((f) => app._promptAttachKind(f));
+    // Filter to what the server admits (app._admitPromptAttachments toasts what it
+    // refuses), close the dialog, and hand off to the shared upload+insert
+    // pipeline. Returns true if any file was handled.
+    const handleImages = (files, options) => {
+      const images = app._admitPromptAttachments(Array.from(files || []), options);
       if (images.length === 0) return false;
       close();
       // Upload to, and insert into, the shell this overlay was opened for.
@@ -1532,21 +1793,24 @@ const KeyboardAccessoryBar = {
 
     // File picker (camera / photo library / files) — the reliable mobile path.
     overlay.querySelector('.paste-image').addEventListener('click', () => fileInput.click());
-    fileInput.addEventListener('change', () => handleImages(fileInput.files));
+    fileInput.addEventListener('change', () => {
+      const files = Array.from(fileInput.files || []);
+      // Reset so picking the same refused file again still fires change (and its toast).
+      fileInput.value = '';
+      handleImages(files);
+    });
 
     // Best-effort: capture images pasted straight into the textarea.
     textarea.addEventListener('paste', (e) => {
       const items = e.clipboardData && e.clipboardData.items;
       if (!items) return;
-      const imageFiles = [];
+      const files = [];
       for (let i = 0; i < items.length; i++) {
         const blob = items[i].getAsFile();
-        if (blob && app._promptAttachKind(blob)) imageFiles.push(blob);
+        if (blob) files.push(blob);
       }
-      if (imageFiles.length > 0) {
-        e.preventDefault();
-        handleImages(imageFiles);
-      }
+      // Pasted text with no admitted file lands in the textarea natively: no toast.
+      if (handleImages(files, { textPasted: !!e.clipboardData.getData('text/plain') })) e.preventDefault();
     });
 
     overlay.querySelector('.paste-cancel').addEventListener('click', close);

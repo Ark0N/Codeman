@@ -11,7 +11,8 @@
  *
  * That contract is load-bearing: assets are served `immutable` for a year, and
  * `index.html` must revalidate every time or a deploy leaves browsers on stale
- * markup (see `cacheBustAssets` in server.ts). No HTML is left behind the static
+ * markup (see `cacheBustAssets` in server.ts). The JSON data files the page fetches at
+ * runtime (whats-new.json, security-notices.json) revalidate too. No HTML is left behind the static
  * plugin (every page has its own route), so the HTML half is asserted on the route.
  *
  * These tests drive a REAL WebServer on purpose. Asserting against an inline
@@ -71,6 +72,17 @@ describe('static asset Cache-Control headers', () => {
     const res = await get(`${baseUrl}/sw.js`);
     expect(res.status).toBe(200);
     expect(res.headers.get('cache-control')).toBe('no-cache, no-store');
+  });
+
+  it('makes the runtime JSON data files revalidate instead of pinning them for a year', async () => {
+    // whats-new.json is rewritten every release and security-notices.json by hand; neither is
+    // content-hashed or `?v=`-busted, so an `immutable` copy could outlive the release that
+    // replaced it, and a security notice added later would never reach that browser.
+    for (const file of ['security-notices.json', 'whats-new.json', 'manifest.json']) {
+      const res = await get(`${baseUrl}/${file}`);
+      expect(res.status, file).toBe(200);
+      expect(res.headers.get('cache-control'), file).toBe('no-cache');
+    }
   });
 
   it('serves the rendered index with no-cache too, via its own route', async () => {

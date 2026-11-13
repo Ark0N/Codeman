@@ -158,10 +158,73 @@ describe('connection indicator — keystroke backlog threshold', () => {
     expect(els.connectionText.textContent).toBe('WS');
   });
 
-  it('annotates a genuine backlog (>4B) with a queued byte count', () => {
-    const { app, els } = makeApp({ activeSessionId: 's1', _wsState: 'connected', queuedBytes: 40 });
+  it('annotates a genuine backlog (>4B) with a queued byte count once it has persisted', () => {
+    const { app, els } = makeApp({
+      activeSessionId: 's1',
+      _wsState: 'connected',
+      queuedBytes: 40,
+      // The backlog has been above the threshold for well over the hold.
+      _backlogOverSince: Date.now() - 5000,
+    } as never);
     app._updateConnectionIndicator();
     expect(els.connectionText.textContent).toMatch(/^WS · 40B queued$/);
+    app._pendingDeliveries.clear();
+    app._updateConnectionIndicator(); // drains: clears the hold timer
+  });
+});
+
+// A paste, an IME commit or a fast word is a few dozen bytes for a few milliseconds until its ACK
+// lands. Showing " · NB queued" for that made the "WS" pill widen and shrink on every burst.
+describe('connection indicator — a brief burst does not widen the pill', () => {
+  it('keeps the plain "WS" while a >4B burst is still inside the hold window', () => {
+    const { app, els } = makeApp({ activeSessionId: 's1', _wsState: 'connected', queuedBytes: 40 });
+    app._updateConnectionIndicator();
+    expect(els.connectionText.textContent).toBe('WS');
+    app._pendingDeliveries.clear();
+    app._updateConnectionIndicator();
+    expect(els.connectionText.textContent).toBe('WS');
+  });
+
+  it('forgets the burst when it drains, so a later one starts a fresh hold', () => {
+    const { app } = makeApp({ activeSessionId: 's1', _wsState: 'connected', queuedBytes: 40 });
+    app._updateConnectionIndicator();
+    expect((app as unknown as { _backlogOverSince: number | null })._backlogOverSince).not.toBeNull();
+    app._pendingDeliveries.clear();
+    app._updateConnectionIndicator();
+    expect((app as unknown as { _backlogOverSince: number | null })._backlogOverSince).toBeNull();
+    expect((app as unknown as { _backlogHoldTimer: unknown })._backlogHoldTimer).toBeNull();
+  });
+
+  it('schedules the re-render for when the hold elapses, with no keystroke or ACK needed', () => {
+    const { app } = makeApp({ activeSessionId: 's1', _wsState: 'connected', queuedBytes: 40 });
+    app._updateConnectionIndicator();
+    expect((app as unknown as { _backlogHoldTimer: unknown })._backlogHoldTimer).not.toBeNull();
+    app._pendingDeliveries.clear();
+    app._updateConnectionIndicator(); // cancels it
+  });
+
+  it('shows the count by itself once the hold elapses, and the timer is spent', async () => {
+    // A real wait, on purpose: the vm context runs on its own Date and the real setTimeout, so this
+    // exercises the shipped timer callback rather than a manual re-render.
+    const { app, els } = makeApp({ activeSessionId: 's1', _wsState: 'connected', queuedBytes: 40 });
+    app._updateConnectionIndicator();
+    expect(els.connectionText.textContent).toBe('WS');
+    await new Promise((r) => setTimeout(r, 1400));
+    expect(els.connectionText.textContent).toBe('WS · 40B queued');
+    expect((app as unknown as { _backlogHoldTimer: unknown })._backlogHoldTimer).toBeNull();
+    app._pendingDeliveries.clear();
+    app._updateConnectionIndicator();
+  });
+
+  it('shows the count once the same backlog has stayed up past the hold', () => {
+    const { app, els } = makeApp({ activeSessionId: 's1', _wsState: 'connected', queuedBytes: 40 });
+    app._updateConnectionIndicator();
+    expect(els.connectionText.textContent).toBe('WS');
+    (app as unknown as { _backlogOverSince: number })._backlogOverSince = Date.now() - 1500;
+    app._updateConnectionIndicator();
+    expect(els.connectionText.textContent).toBe('WS · 40B queued');
+    app._pendingDeliveries.clear();
+    app._updateConnectionIndicator();
   });
 });
 
@@ -458,3 +521,4 @@ describe('_updateConnectionIndicator — COD-136 unchanged-skip', () => {
     expect(els.connectionText.textContent).toBe('WS');
   });
 });
+

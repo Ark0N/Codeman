@@ -7,12 +7,13 @@
  * The routes read the process-wide `approvalInbox` singleton, so every test
  * drains it in afterEach; a leaked pending item would bleed into the next test.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyCookie from '@fastify/cookie';
 import { registerApprovalRoutes } from '../../src/web/routes/approval-routes.js';
 import { registerHookEventRoutes } from '../../src/web/routes/hook-event-routes.js';
 import { approvalInbox } from '../../src/web/approval-inbox.js';
+import { sessionWaits } from '../../src/web/session-wait-registry.js';
 import { raiseScreenBlocked } from '../../src/web/screen-blocked.js';
 import { installRouteErrorHandler } from '../../src/web/route-error-handler.js';
 import { httpStatusForErrorCode, type ApiErrorCode } from '../../src/types.js';
@@ -285,6 +286,10 @@ describe('approval routes', () => {
   });
 
   describe('staleness sweep on GET /api/approvals', () => {
+    /** Past the delay `notePrompt` waits before it judges a new dialog. */
+    const pastTheDelay = () => vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 3_100);
+    afterEach(() => vi.restoreAllMocks());
+
     it('resolves an item whose dialog left the pane, and tells the other clients', async () => {
       const resolved: Array<Record<string, unknown>> = [];
       await postHook(harness, 'permission_prompt', { tool_name: 'Bash' });
@@ -294,9 +299,22 @@ describe('approval routes', () => {
       // the pane knows. The dialog is gone from the frame the next capture sees.
       approvalInbox.onResolved = (info) => resolved.push({ ...info });
       session.terminalBuffer = 'claude> back at the composer';
+      pastTheDelay();
 
       expect(await listApprovals(harness)).toHaveLength(0);
       expect(resolved).toEqual([expect.objectContaining({ resolution: 'resolved_in_terminal' })]);
+    });
+
+    it('leaves a dialog too new to judge, however often it is listed', async () => {
+      // The hook beat Ink's paint: the frame still shows the turn, which alone
+      // would count as proof that no dialog is up.
+      session.terminalBuffer = '✻ Actualizing… (13s · esc to interrupt)';
+      await postHook(harness, 'permission_prompt', { tool_name: 'Bash' });
+      expect(await listApprovals(harness)).toHaveLength(1);
+      expect(await listApprovals(harness)).toHaveLength(1);
+
+      pastTheDelay();
+      expect(await listApprovals(harness)).toHaveLength(0);
     });
 
     it('keeps an item whose dialog is still on screen', async () => {
@@ -502,6 +520,113 @@ describe('approval routes: supervised-hook (DeepSeek) alert-only items', () => {
     expect(session.writeBuffer).toEqual([]);
     // Item stays pending — it is an alert, not a failed answer.
     expect(await listApprovals(harness)).toHaveLength(1);
+  });
+});
+
+describe('approval routes: approval-only hook module (omp) alert-only items', () => {
+  let harness: RouteTestHarness;
+  let session: MockSession;
+
+  beforeEach(async () => {
+    harness = await createEnvelopeHarness();
+    session = harness.ctx.sessions.get(SESSION_ID)!;
+    session.mode = 'omp';
+    // A Claude-shaped frame on purpose: even when the capture parses into options, an
+    // omp item must stay alert-only, because omp's composer takes the keystroke.
+    session.terminalBuffer = PERMISSION_DIALOG;
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    for (const item of approvalInbox.listPending()) {
+      approvalInbox.resolveForSession(item.sessionId, 'dismissed');
+    }
+    approvalInbox.onPending = approvalInbox.onUpdated = approvalInbox.onResolved = undefined;
+    await harness.app.close();
+  });
+
+  it('creates an answerInTerminal item and omits approvalId from push', async () => {
+    await postHook(harness, 'permission_prompt', { tool_name: 'bash', message: 'restricted folder' });
+    const approvals = await listApprovals(harness);
+    expect(approvals).toHaveLength(1);
+    expect(approvals[0]).toMatchObject({
+      sessionId: SESSION_ID,
+      kind: 'permission',
+      toolName: 'bash',
+      message: 'restricted folder',
+      answerInTerminal: true,
+    });
+    const push = harness.ctx.sendPushNotifications.mock.calls.find((c) => c[0] === 'hook:permission_prompt');
+    expect(push?.[1]).toBeDefined();
+    expect(push?.[1]).not.toHaveProperty('approvalId');
+  });
+
+  it('refuses Approve with a terminal-only error and writes nothing into the pane', async () => {
+    await postHook(harness, 'permission_prompt', { tool_name: 'bash' });
+    const [item] = await listApprovals(harness);
+    for (const payload of [{ action: 'approve' }, { action: 'deny' }, { action: 'option', option: 1 }]) {
+      const res = await harness.app.inject({ method: 'POST', url: `/api/approvals/${item.id}/answer`, payload });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toMatch(/answered in the terminal/i);
+    }
+    expect(session.writeBuffer).toEqual([]);
+    expect(await listApprovals(harness)).toHaveLength(1);
+  });
+
+  it('resolves the item on elicitation_complete', async () => {
+    await postHook(harness, 'permission_prompt', { tool_name: 'bash' });
+    await postHook(harness, 'elicitation_complete', { tool_name: 'bash', approved: true });
+    expect(await listApprovals(harness)).toHaveLength(0);
+  });
+
+  it('wakes a blocked waiter, and never a stop waiter', async () => {
+    const notify = vi.spyOn(sessionWaits, 'notifySignal');
+    await postHook(harness, 'permission_prompt', { tool_name: 'bash' });
+    await postHook(harness, 'stop', {});
+    expect(notify.mock.calls).toEqual([[SESSION_ID, 'blocked']]);
+  });
+
+  it('drops events the module never sends (stop, idle_prompt) instead of opening items', async () => {
+    await postHook(harness, 'idle_prompt', {});
+    expect(await listApprovals(harness)).toHaveLength(0);
+    await postHook(harness, 'permission_prompt', { tool_name: 'bash' });
+    // A forged stop must not clear a real pending dialog either.
+    await postHook(harness, 'stop', {});
+    expect(await listApprovals(harness)).toHaveLength(1);
+  });
+
+  it('keeps the alert while a numbered list above the dialog scrolls out of the frame', async () => {
+    // A stand-in for omp's dialog: it has no numbered rows. An agent's plan above it
+    // does, and Claude's dialog parser took that list for the item's options. Once the
+    // list scrolled out of the frame, the next read took the dialog for answered and
+    // cleared the alert while omp was still waiting.
+    const dialog = [' Allow bash?', ' rm -rf build', ' > Approve', '   Deny', '   Deny and send message'].join('\n');
+    const plan = ['Plan:', ' 1. Remove the build folder', ' 2. Run the build', ' 3. Run the tests', ''].join('\n');
+    session.terminalBuffer = `${plan}\n${dialog}`;
+    await postHook(harness, 'permission_prompt', { tool_name: 'bash' });
+    const [item] = await listApprovals(harness);
+    // The frame is kept once, as the card's context, and never read for options.
+    expect(item.options).toBeUndefined();
+    expect(item.context).toContain('Allow bash?');
+
+    const resolved: Array<Record<string, unknown>> = [];
+    approvalInbox.onResolved = (info) => resolved.push({ ...info });
+    session.terminalBuffer = dialog;
+    // Past the delay `notePrompt` waits before it judges a new dialog.
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 3_100);
+    expect(await listApprovals(harness)).toHaveLength(1);
+    expect(await listApprovals(harness)).toHaveLength(1);
+    expect(resolved).toEqual([]);
+
+    // The module's own report is what clears it.
+    await postHook(harness, 'elicitation_complete', { tool_name: 'bash', approved: true });
+    expect(await listApprovals(harness)).toHaveLength(0);
+  });
+
+  it('opens nothing for a remote omp session, where no module was installed', async () => {
+    (session as unknown as { remote: unknown }).remote = { host: 'box' };
+    await postHook(harness, 'permission_prompt', { tool_name: 'bash' });
+    expect(await listApprovals(harness)).toHaveLength(0);
   });
 });
 

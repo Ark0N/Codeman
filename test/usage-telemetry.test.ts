@@ -188,6 +188,15 @@ describe('parsePromptCache', () => {
 });
 
 describe('parseSessionStatus', () => {
+  it('reads the context window size, and drops a value that is no size', () => {
+    const size = (context_window_size: number) => parseSessionStatus({ context_window: { context_window_size } });
+    expect(size(1000000)?.contextWindowSize).toBe(1000000);
+    expect(parseSessionStatus({ context_window: {} })).toBeNull();
+    expect(size(0)).toBeNull();
+    expect(size(-1)).toBeNull();
+    expect(size(Number.POSITIVE_INFINITY)).toBeNull();
+  });
+
   it('carries the prompt-cache state into the footer status', () => {
     expect(parseSessionStatus({ ...REAL, ...WARM_CACHE })?.cache).toEqual(parsePromptCache(WARM_CACHE));
     // prompt_cache alone IS session status (a cold flip arrives with nothing else changed)

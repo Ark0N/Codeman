@@ -77,4 +77,21 @@ describe('every terminal response feeds it (static guard)', () => {
     expect(methodSource(APP, '_onSessionNeedsRefresh')).toContain('this._notePaneHistory?.(sessionId, data);');
     expect(methodSource(APP, '_maybeRefetchFullHistory')).toContain('this._notePaneHistory?.(sessionId, payload);');
   });
+
+  it('the refresh records the pane only once it still owns the terminal, and no caller records an error envelope', () => {
+    // A refresh that lost its owner is older than what the switch back read; an
+    // error envelope has no count, and forgetting on it would hand a scroll back
+    // to the paging fallback (see _maybePageCliTranscript).
+    const refresh = methodSource(APP, '_onSessionNeedsRefresh');
+    const ownerCheck = refresh.indexOf('this._terminalRefreshOwner !== refreshOwner) return false;');
+    expect(ownerCheck).toBeGreaterThan(-1);
+    expect(refresh.indexOf('this._notePaneHistory?.(sessionId, data);')).toBeGreaterThan(ownerCheck);
+    expect(refresh).toContain('capture.json?.success !== false) this._notePaneHistory?.(sessionId, data);');
+    expect(methodSource(APP, 'selectSession')).toContain(
+      'capture.json?.success !== false) this._notePaneHistory?.(sessionId, data);'
+    );
+    expect(methodSource(APP, '_maybeRefetchFullHistory')).toContain(
+      'capture.json?.success !== false) this._notePaneHistory?.(sessionId, payload);'
+    );
+  });
 });

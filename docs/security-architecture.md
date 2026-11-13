@@ -105,7 +105,9 @@ The warning points at three ways to secure the instance:
 2. `--host 127.0.0.1` + an authenticated tunnel (`cloudflared` / `tailscale serve`).
 3. `--allow-unauthenticated-network` / `CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK=1`
    — explicitly accept the risk (downgrades the warning to a one‑line note). This
-   flag is **only** an acknowledgement; it does not change reachability.
+   flag is **only** an acknowledgement; it does not change reachability. It covers
+   the bind and nothing else: it does **not** let the managed Cloudflare tunnel
+   start without a password, which has its own opt‑in (§2, the tunnel caveat).
 
 `CODEMAN_API_URL` (used by hooks/child processes) is always derived as a loopback
 address (`0.0.0.0`/`localhost`/`::1` → `127.0.0.1`) so in‑process hooks reach the
@@ -149,7 +151,7 @@ by presence in a server‑side map, so they cannot be forged offline.
 
 ### Rate limiting / lockout recovery
 
-Failed auth is tracked **per IP**: 10 failures → `429`, with a 15‑minute decay.
+Failed logins are tracked **per IP**: 10 failures (`AUTH_FAILURE_MAX`) → `429`, with a 15‑minute decay. Multi-user mode replaces that with three buckets, all with the same decay: a wider per-IP **pre-gate** of 50 failures (`AUTH_IP_FAILURE_MAX`), checked before the scrypt verify, which bounds scrypt cost from one source and tolerates many users behind one egress IP; a **per-(username, IP)** gate of 10 failures (`AUTH_FAILURE_MAX`), also checked before the verify, which is what caps verified guesses against one account from one source; and a **per-username** bucket, checked after the verify, that answers `429` to failed guesses from the 10th on, from any IP (the count is incremented before the check). The last two exist in multi-user mode only. So the wider per-IP cap does not widen guessing against any one account from one IP, and other IPs cannot lock an account out.
 The QR path has its own separate limiter.
 
 The lockout check sits **after** the cookie/credential checks (step 4, not first).
@@ -158,6 +160,22 @@ immediately** even while an attacker is hammering the same IP — important beca
 all traffic through a tunnel shares one source IP (loopback). Wrong credentials
 are still counted and still hit the `429` at the threshold, so brute‑force
 protection is unchanged.
+The two multi-user pre-verify gates are the exception: once the per-IP pre-gate
+or an account's (username, IP) gate trips, even a correct password from that IP
+gets `429` until the decay (for the pair gate, only for that account; the same
+account from another IP still logs in), which is why the per-IP cap is the
+widest. The per-username bucket stays after the verify on purpose: checked
+first, a username-wide lockout let throwaway IPs keep a known account (admin
+included) locked out even with the right password.
+Both pre-verify gates count a request the moment it passes them, before its
+verify starts, so a burst of concurrent attempts cannot all slip through on one
+stale count; a correct password then clears its slot with the rest, and a
+failure is not counted a second time. A verify still in flight therefore holds a
+slot, even one carrying the right password, but identical credentials from the
+same IP that arrive during it share that verify, its slot and its outcome, and
+skip both gates: they add no guess and no scrypt work. So a browser replaying its
+cached login on many parallel requests after a restart (cookie sessions live in
+memory) is not refused by the slots its own password filled.
 
 ---
 
@@ -193,8 +211,15 @@ requests as local:
 **Mitigation:** set `CODEMAN_PASSWORD` whenever a loopback‑connecting tunnel is
 up — it gates everything except the (secret‑gated) hook exemption and is the
 documented practice; since COD‑55 enabling the managed tunnel **refuses** to start
-without it unless `CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK=1` explicitly
-acknowledges the exposure. Prefer `tailscale serve` (below), which authenticates
+without a login (`CODEMAN_PASSWORD` or multi‑user mode) unless
+`CODEMAN_ALLOW_UNAUTHENTICATED_TUNNEL=1` / `--allow-unauthenticated-tunnel`
+acknowledges the exposure, or the request carries `acknowledgeUnauthTunnel: true`
+(what the browser sends after its confirm). The network acknowledgement
+(`CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK`) does **not** count: the installer writes
+it for every LAN install without a password, so it once turned a click on the
+welcome screen's tunnel link into a public, login‑free URL with no confirm. With
+no login the browser asks before every enable, whatever the server would accept,
+reading `loginConfigured` from `GET /api/tunnel/status`. Prefer `tailscale serve` (below), which authenticates
 at the tailnet layer so untrusted clients never reach the loopback port at all.
 
 ### Host‑header & Origin allowlist (DNS‑rebinding & CSRF defense)
@@ -316,6 +341,25 @@ it `realpath`s the target **before** the boundary check and rejects anything tha
 escapes the session working directory (`..`, absolute paths, and symlinks that
 resolve outside). The realpath‑before‑check ordering closes the validation‑time
 TOCTOU window.
+
+A local session has one more root while its agent works in a git worktree of the
+same repository OUTSIDE its folder (published as `outsideWorktree`). An absolute path inside
+that worktree is confined to it by `validateLocalSessionFilePath()`, and only while the
+worktree folder still `realpath`s to the path recorded for it. The edit route
+(`PUT /api/sessions/:id/file-content`) uses the same check, so a file in that worktree can be
+written as well as read. Codeman records such a
+worktree only after the session's own repository vouches for it, and never `/`, the
+home folder or above, a folder holding the working directory, or a folder at, inside or
+around a Docker case workspace (`src/live-worktree.ts`). It also refuses a folder that is
+itself a sensitive folder such as `.ssh`, and `validateLocalSessionFilePath()` never serves a
+file from the worktree that `isSensitivePath()` blocklists. In multi-user mode a regular
+owner's session also needs the owner's folder rule (their own space or the working directory);
+an admin's does not. It follows nothing while attachment workspace confinement is on, and
+nothing at, inside or around a blocked attachment tree. Codeman judges these rules when the pane
+changes directory, and the routes judge confinement and the blocked trees again on every request,
+so turning confinement on or blocking the folder stops serving it at once. The multi-user rule is
+judged only when the pane changes directory. On every request the routes also check that the
+folder still resolves to its recorded path. A relative path is still confined to the working directory alone.
 
 | Route | Cap | Notes |
 |-------|-----|-------|
@@ -458,6 +502,15 @@ transient mount blip at launch poisons tmux's long‑lived cwd and crashes
   never executes. Large hand‑formatted/generated assets (`app.js`, the gesture
   bundle, vendored libs) are `.prettierignore`d for the style pass, but the NUL +
   syntax checks still cover them.
+- **Installer downloads without a package manager:** on the no-admin route
+  (`docs/wiki/Installation.md`) `install.sh` fetches and runs software no system
+  package manager vetted, each checked before it is unpacked or run. The Node.js
+  tarball is checked against the `SHASUMS256.txt` fetched from nodejs.org over the
+  same TLS connection, which proves integrity, not independent provenance: the
+  signature on that file is not checked. The tmux build is checked against a
+  SHA-256 pinned per platform in the installer. `install.sh cloudflared` takes the
+  latest cloudflared release into `~/.local/bin` unverified, as the system routes
+  take the same release, because Cloudflare publishes no checksum file.
 
 ---
 
@@ -533,7 +586,7 @@ Full feature guide: [`docker-cases.md`](docker-cases.md).
 - **It strictly improves network posture.** It removes the single shared `CODEMAN_PASSWORD` and gives each person a revocable credential; a non‑loopback bind and the tunnel‑enable guard are satisfied by "multi‑user with ≥1 enabled user" without a shared password.
 - **Auth is a parallel branch** (`middleware/auth.ts`) that leaves the single‑user path untouched: per‑user scrypt verify (`timingSafeEqual`, timing‑equalized against user enumeration), identity‑carrying cookies, a per‑username failure bucket (a botnet can't brute one account across IPs; one NATed user can't lock out the rest), and a `mustChangePassword` lockbox. The hook‑secret loopback bypass, host guard, and Origin/CSRF guard are unchanged (hooks authenticate the INSTANCE, not a user).
 - **Ownership is enforced server‑side only** and fails closed: `req.authUser` (a synthetic admin in single‑user), `findSessionOrFail` returns NOT_FOUND (never 403) for a foreign session, list/SSE/WS/file‑preview/search all filter by `session.owner`, and SSE routing defaults session‑scoped events to their owner (unresolved owner → withheld). The load‑bearing rule is **non‑admin `workingDir` confinement**: a non‑admin's session/one‑shot working dir must realpath‑resolve inside `~/codeman-users/<name>/cases`, checked BEFORE any disk write.
-- **Privileged actions are a one‑bit grant** (`canBypassPermissions`, default off): only granted users (and admins) get `--dangerously-skip-permissions` (others are silently downgraded to `--permission-mode auto`), shell‑mode sessions, cron `launchCommand`, and other CLIs' bypass flags. Machine‑level resources (remote/Docker host definitions, tunnel, self‑update, settings writes) are admin‑only.
+- **Privileged actions are a one‑bit grant** (`canBypassPermissions`, default off): only granted users (and admins) get `--dangerously-skip-permissions` (others are silently downgraded to `--permission-mode auto`), shell‑mode sessions, cron `launchCommand`, other CLIs' bypass flags, and Codex's **Allow network access** (`networkAccess`, forced off for a user without the grant, since it lets a command in Codex's sandbox call Codeman's API and start a session outside that sandbox). Machine‑level resources (remote/Docker host definitions, tunnel, self‑update, settings writes) are admin‑only.
 - **Clone Repo does not lend the server's git sign-in to non-admins.** A clone writes only inside the caller's own case space, so it is not admin-gated, but the server account's git credential helpers (the Docker image's opt-in `gh`/`az` helpers, or any `gh auth setup-git`) are shared by every user. A non-admin's clone and preflight therefore run with `git -c credential.helper=`, which empties the helper list including the URL-scoped entries (`cloneWithoutCredentialHelpers` in `case-routes.ts`, argv pinned in `test/git-clone.test.ts`). This closes the Clone Repo path only: the account's SSH keys still apply to an `ssh://` URL, and a non-admin's agent sessions run as the same account, consistent with the first bullet above. Docker cases are a second route to the same sign-in: with `CODEMAN_AGENT_IMAGE_INSTALL_GH`/`_AZ` on, a non-admin's Docker case with credential seeding on (the default) receives a copy of the server account's `gh`/`az` sign-in, exactly as it receives the Claude and Codex credentials.
 - **Admin actions are audited** append‑only to `~/.codeman/admin-audit.jsonl` (acting admin, action, target, IP). Passwords set by an admin create/reset are one‑time (returned once, force change). Under Basic auth, `logout` only truly ends QR‑issued sessions — to lock someone out, disable the account or reset the password (a proper login form is a deferred Phase 6).
 
@@ -557,7 +610,17 @@ Opt-in and off by default: the server POSTs the Web Push events (permission prom
 
 - **A second server-side outbound channel through the web-tab egress guard (§10b).** Delivery goes through `webviewFetch`, so link-local and cloud-metadata targets are refused at save time and again on the RESOLVED address at connect time; redirects are not followed (`redirect: 'manual'`) and each send is bounded by a 5 s timeout. Loopback and RFC1918 stay allowed on purpose (a self-hosted ntfy is the point), so **Send test** works as a blind reachability probe (status, refused or timed out, never a response body) for whoever may call it. Web tabs already give that caller full LAN reach with bodies, so nothing new is exposed.
 - **The URL is a bearer secret** (anyone holding a Slack or Discord webhook URL can post as it). It lives in `~/.codeman/webhook.json` (0600, tmp+rename), is kept out of `settings.json` (which every logged-in user reads through `GET /api/settings`), is never returned (`GET /api/webhook` gives scheme + host only), and never appears in a log line, a delivery result or an error message.
+- **Discord bridge** (`src/discord-bridge.ts`, [setup](discord-bridge.md)): the bot token lives in `~/.codeman/discord.json` (0600, tmp+rename) and is never returned by the Discord routes, logged or put in an error, and the attachment, folder and download routes refuse the file. A session whose folder is the home directory can still read it through its own file viewer, which serves that workspace without the blocklist. Inbound replies are typed into a session only from `allowedUserIds`, in the configured guild, inside a thread the bridge created; anything else is dropped unread. A reply becomes one printable line plus Enter, capped at 1000 characters and one per second per tab. Posts send `allowed_mentions` limited to the allowlisted ids, so agent output cannot ping a server. **Files:** an attachment is fetched only from Discord's own HTTPS hosts (no redirects followed), at most 5 per reply and 8 MB each, saved 0600 under `<tab folder>/.codeman-discord/` with the name reduced to `[A-Za-z0-9._-]`; a file a CLI sends must be a regular file whose real path (symlinks followed) lies inside its own tab's folder and is not on the attachment blocklist (`isBlockedAttachmentPath`, since a tab's folder can be the home directory), which stops a sensitive file being uploaded by mistake, and remote sessions send and receive none. A received file is untrusted content to whatever opens it. **What the checks do not stop:** the agent runs as the same OS user, so the path check prevents accidental uploads, not a determined agent that pastes a file's contents into the message. **What leaves the machine:** a permission or question alert sends the rendered screen (whatever the agent printed), and a finished turn or an error sends the CLI's whole last message, read from its transcript (up to 8 posts of 1,900 characters). `idle_prompt` is a warning, so with the default scope every Claude turn left unanswered for a minute is posted, and with **Which events** set to Everything every turn end is; treat the Discord server as holding that output. **Multi-user:** the bridge is one allowlist for the whole server, so an allowlisted Discord account can type into every user's sessions; only an admin can configure it. **Startup hint:** a fixed text (no user input) is added to Claude's system prompt; no other CLI is sent it. The bridge only dials out (REST and the gateway WebSocket), so it needs no inbound exposure. A Discord account on the allowlist can drive agents that run shell commands: it needs 2FA.
 - **It carries session data to a third party.** Titles and bodies include session names, tool names and error text, all agent- or user-controlled, so Discord gets `allowed_mentions: { parse: [] }` and Slack's `& < >` are escaped: agent output cannot ping a channel. In multi-user mode all three routes are admin-only and the channel is instance-wide: it receives every user's session events, the same reach an admin's own Web Push has, which means non-admins' session details leave the box at the admin's choice.
+
+## 10d. The model on this Mac (local model install)
+
+Opt-in by a click, macOS only, admin-only in multi-user mode on every verb. The server downloads one pinned runtime build, runs it as its own child, pulls one model into it, installs the coding agent when it is missing, and saves one endpoint record. Source: `src/local-model/`, routes in `src/web/routes/local-model-routes.ts`. Guide: [`local-models.md`](local-models.md).
+
+- **Supply chain: a compiled pin.** The runtime's URL, size and sha256 are a constant in `src/local-model/runtime.ts` that no file, setting or request can change; the archive is hashed while it streams and compared BEFORE anything is unpacked, a mismatch deletes it, and only `/usr/bin/tar` unpacks it into a folder under the data dir. The model comes from the runtime's own registry under the name the catalogue pins; the digest the runtime reports after the pull is stored, and a model whose digest changed under that name is refused at the next start.
+- **A loopback port without a login.** The runtime listens on `127.0.0.1:<port>` (chosen once from 11435) with no authentication, like every model server of its kind: any program of any account on the Mac, and any web page served from `localhost`, can use it and change its models. What limits that: the endpoint record lists ONE model and the discovery sweep leaves it alone, the digest is compared before an agent is started on it (every start path, see the guide), and a listener on the port that is not our own child (judged by the stored pid's command line, never by the port alone) is reported as `port-in-use` and never signalled. An open session keeps calling the port while the runtime is stopped, which is why Stop and a port change are refused while one uses the model.
+- **A second install path for a coding agent, without `cliManagementEnabled`.** The job runs the COMPILED stock install command of a catalogue harness row (never a `clis.json` override, never a custom entry) through the same runner as CLI management, only after the consent screen showed the literal command, and writes the admin audit entry (`cli_install`, `via: 'local-model'`). The installer runs as the server's user with the same reach as every other spawn.
+- **The runtime's own files stay inside `~/.codeman/local-model/`**: its private HOME (so no `~/.ollama` is created), its model store and its unpacked folder; its environment is an allowlist (no `CODEMAN_*`). Remove deletes only inside that folder, refuses a folder that is a symbolic link, and ends the runtime (ours by its command line) before any file goes.
 
 ---
 
@@ -569,7 +632,8 @@ Opt-in and off by default: the server POSTs the Web Push events (permission prom
 | `--host` / `CODEMAN_HOST` | Bind host (default `127.0.0.1`) |
 | `CODEMAN_ALLOWED_HOSTS` | Extra `Host`/`Origin` allowlist entries for reverse proxies (comma‑separated; exact host, or leading‑dot `.suffix` for subdomains) — see §3 |
 | `--base-url` / `CODEMAN_BASE_URL` | Sub‑path prefix Codeman is mounted under behind a reverse proxy, e.g. `/codeman` (default `/`); the proxy must forward the prefix unchanged. Independent of `CODEMAN_ALLOWED_HOSTS` |
-| `--allow-unauthenticated-network` / `CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK` | Acknowledge an unauthenticated non‑loopback bind (downgrades the warning) |
+| `--allow-unauthenticated-network` / `CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK` | Acknowledge an unauthenticated non‑loopback bind (downgrades the warning). Does not cover the tunnel |
+| `--allow-unauthenticated-tunnel` / `CODEMAN_ALLOW_UNAUTHENTICATED_TUNNEL` | Let the managed Cloudflare tunnel start without a login (the browser still asks first). Never written by the installer |
 | `--https` | Enable TLS (adds HSTS) |
 | `CODEMAN_INSTANCE` | Scope tmux socket + data dir for isolation |
 | `CODEMAN_GESTURE=1` | Make the gesture overlay available (widens CSP) |

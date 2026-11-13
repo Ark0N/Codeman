@@ -23,14 +23,18 @@ stores, or refreshes your credentials.
 
 ### Which agent CLIs does it support?
 
-Claude Code, OpenCode, Codex, Gemini, Antigravity, Pi, Grok Build, DeepSeek Harness and
-OMP, plus a plain shell, chosen per session. Claude is the reference mode and a few features
+Claude Code, OpenCode, Codex, Gemini, Antigravity, Pi, Grok Build, DeepSeek Harness,
+OMP, GitHub Copilot CLI and jcode, plus a plain shell, chosen per session. Claude is the reference mode and a few features
 are Claude-only; [Agent CLIs](Agent-CLIs) has the table.
 
 ### Does Codeman send my code or prompts anywhere?
 
-No. There is no telemetry, no analytics, and no phone-home. The only network traffic
-Codeman itself makes is between your browser and your server.
+No. There is no telemetry, no analytics, and no phone-home. Beyond the traffic between
+your browser and your server, the server makes a few requests of its own for features you use
+(the Codex usage poll, web push, webhooks). One is on by default: while GitHub Copilot CLI is
+installed and signed in, every 10 minutes the server asks `api.github.com` for your own
+premium-request quota with Copilot's own token. Turn off Plan Usage Limits in App Settings to
+stop it (see [Agent CLIs](Agent-CLIs)).
 
 Your agent CLI is a separate matter: Claude Code talks to Anthropic, Codex talks to OpenAI,
 and so on. That traffic is the CLI's, on your own account, exactly as it would be in a
@@ -175,12 +179,13 @@ the defaults discovers and attaches your live sessions.
 | Install route | Update with                                                                 |
 | ------------- | --------------------------------------------------------------------------- |
 | Installer     | Re-run the install one-liner, or **App Settings → System → Updates**.         |
+| Installer, without git | Re-run the install one-liner. The in-app updater says so instead of offering an update. |
 | npm           | `npm update -g aicodeman`                                                     |
 | git clone     | `git pull && npm install && npm run build`, then restart the service.         |
 
 The in-app updater covers git-clone installs supervised by systemd or launchd. It stashes a
 dirty tree rather than discarding it, and streams progress across the restart. npm installs
-report as non-updatable.
+and installs without git report as non-updatable.
 
 ### Will updating kill my running sessions?
 
@@ -210,7 +215,9 @@ Yes. Codeman ships an agent skill that lets an agent inside a session drive the 
 list sessions, spawn workers in any installed CLI, send prompts, and block until a worker's
 turn finishes. Install it once with `codeman skill install` or the Claude Code plugin, then
 ask in plain English, for example *"use codeman to start 5 claude workers, one per TODO
-item"*. The web UI setting that injects it into every new session's case is off by default.
+item"*. Since 1.50.0 Codeman also injects it into every new session's case by default, so an
+agent inside Codeman usually has it already (App Settings → Agents & CLIs → **Codeman Agent
+Skill** turns that off).
 
 See [The Codeman Skill](Codeman-Skill), with recordings of real runs, and
 [Driving Codeman From An Agent](Driving-Codeman-From-An-Agent) for the other routes.

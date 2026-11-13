@@ -49,6 +49,7 @@ export interface WebLaunchOptions {
   basePath?: string;
   titleHostname?: string;
   allowUnauthenticatedNetwork?: boolean;
+  allowUnauthenticatedTunnel?: boolean;
   multiuser?: boolean;
 }
 
@@ -92,6 +93,7 @@ export function buildWebArgs(options: WebLaunchOptions): string[] {
   if (options.basePath) args.push('--base-url', options.basePath);
   if (options.titleHostname) args.push('--title-hostname', options.titleHostname);
   if (options.allowUnauthenticatedNetwork) args.push('--allow-unauthenticated-network');
+  if (options.allowUnauthenticatedTunnel) args.push('--allow-unauthenticated-tunnel');
   if (options.multiuser) args.push('--multiuser');
   return args;
 }

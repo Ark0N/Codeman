@@ -2,15 +2,21 @@
  * @fileoverview `codeman agent …` — session-to-session verbs for the agent running
  * inside a Codeman session, in every CLI mode.
  *
- * A thin HTTP client over endpoints that already exist (`quick-start`, `input`,
- * `wait`, `wait-output`, `last-response`, `terminal`, `DELETE sessions/:id`). It
- * invents no route and no transport: everything goes through `CODEMAN_API_URL`, so
- * auth, ownership and the per-session waiter cap apply unchanged. The behaviour is
+ * A thin HTTP client over the server's endpoints (`quick-start` for a named
+ * case, `POST sessions` + `sessions/:id/interactive|shell` for a worker in an
+ * existing directory, `input`, `wait`, `wait-output`, `last-response`, `terminal`,
+ * `DELETE sessions/:id`, the agent inbox: `inbox`, `inbox/ack`,
+ * `agent-inbox/summary`, and the experimental, opt-in
+ * `inspect`/`stage`/`submit` of `web/routes/agent-session-routes.ts`, which answer 403
+ * until `agentCoordinationEnabled` is on; that refusal is printed verbatim). It uses no
+ * transport of its own: everything goes through `CODEMAN_API_URL`, so auth, ownership
+ * and the per-session waiter cap apply unchanged. The behaviour is
  * the packaged agent skill's (`skills/codeman`), ported from shell prose into code
  * with tests, so a `codex`/`opencode`/`pi` agent — which never gets the claude-only
  * preamble — has the same verbs from one line in its AGENTS.md.
  *
- * Invariants (each asserted in `test/cli-agent.test.ts`):
+ * Invariants (each asserted in `test/cli-agent.test.ts` or
+ * `test/cli-agent-project-spawn.test.ts`):
  * 1. Refuses outside a Codeman session (`CODEMAN_MUX=1` + `CODEMAN_API_URL`); it
  *    never guesses a URL — a server you are not part of is not yours to drive.
  * 2. `send` transmits printable text plus `\r` only. ESC exists solely as
@@ -22,14 +28,26 @@
  * 4. An id shorter than 8 characters refuses (exit 4) before any request, on every
  *    verb. `9` would resolve to whichever session is alone with that first
  *    character, the user's own interactive tab included.
+ * 5. `spawn` without a case starts the worker in an existing directory (cwd, or
+ *    `--working-dir`) via `POST sessions` + `interactive|shell`, without the
+ *    `X-Codeman-Agent-Origin` header, so no agent-case marker is written. It refuses
+ *    (exit 4, before any request) an empty `--working-dir` and a bare spawn from a
+ *    HOME cwd: it always sends an explicit `workingDir`, so the server's skip of
+ *    workspace hooks for a request that names none cannot protect `~/.claude`.
  *
  * Commands live here as functions returning an exit code, not calling
  * `process.exit`, so the whole surface is unit-testable against a fake server.
  *
  * @module cli-agent
  */
+import { open, realpath, stat } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { resolve } from 'node:path';
 import http from 'node:http';
 import https from 'node:https';
+import { isUtf8 } from 'node:buffer';
+import { STAGE_MAX_BYTES } from './agent-staging.js';
+import { INSPECT_MAX_BYTES } from './agent-inspection.js';
 import type { Command } from 'commander';
 import {
   basicAuthHeader,
@@ -129,16 +147,18 @@ export function sendPromptFromArgs(words: readonly string[]): { text: string } |
 }
 
 /**
- * Why `send` refuses this text, or `undefined` when it is printable. The composer
- * takes one line; the server strips `\r`/`\n` but everything else below 0x20 (and
- * DEL) reaches the pane as a keypress. None of that is a prompt.
+ * Why `send` refuses this text, or `undefined` when it is printable. A line break is
+ * refused for the reason below; everything else below 0x20 (and DEL) reaches the pane
+ * as a keypress. None of that is a prompt.
  */
 export function inputRefusal(text: string): string | undefined {
   if (text.length === 0) return 'refusing: empty input (use `interrupt` for ESC, `send <id> ""` is never a prompt)';
-  // The composer is one line: the server strips newlines, which silently joins the
-  // lines into one prompt, and a tab reaches the pane as a keypress (claude: mode toggle).
+  // The server pastes a multi-line prompt as one block, but the check that re-presses
+  // a stranded Enter cannot reliably recognise that block in the composer, so a wait
+  // could burn its timeout on a prompt that never went out. A tab reaches the pane as
+  // a keypress (claude: mode toggle).
   if (/[\n\r\t]/.test(text)) {
-    return 'refusing: input must be a single line (the composer strips newlines and would join your lines) — join them yourself, or write a file into the workspace and send its path';
+    return 'refusing: input must be a single line (a multi-line paste cannot be confirmed as submitted) — join them yourself, or write a file into the workspace and send its path';
   }
   // C0, DEL and C1 (U+0080–U+009F: an 8-bit CSI is still a CSI to a terminal).
   // eslint-disable-next-line no-control-regex
@@ -186,6 +206,22 @@ export function defaultClientId(selfId: string, suffix = ''): string {
 export function stripAnsi(text: string): string {
   // eslint-disable-next-line no-control-regex
   return stripAnsiSequences(text).replace(/\x1b[()][AB0]/g, '');
+}
+
+/**
+ * Inbox message text for a terminal. Another session wrote it, so an escape sequence
+ * in it would otherwise reach the reader's terminal (retitle it, or move the cursor
+ * over the `from` line above it). ANSI sequences go as in `read --tail`, and every
+ * control character left (C0 other than newline and tab, DEL, C1) is shown as `\xHH`,
+ * so a bare `\r` or backspace cannot overwrite the header either. A CRLF line end
+ * stays a line end. `--json` prints the text as stored.
+ */
+export function terminalSafeText(text: string): string {
+  return (
+    stripAnsi(text.replace(/\r\n/g, '\n'))
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, (c) => `\\x${c.charCodeAt(0).toString(16).padStart(2, '0')}`)
+  );
 }
 
 /** Parse a positive-integer option (`--timeout` ms, `--tail` bytes); the server rejects anything else. */
@@ -324,6 +360,18 @@ export const httpRequest: ApiRequest = (ctx, options) => {
   });
 };
 
+/**
+ * One line describing a thrown request error. Node 22 rejects a refused connection to a host
+ * that resolves to both ::1 and 127.0.0.1 with an AggregateError whose `message` is empty, so
+ * fall back to its `code` (ECONNREFUSED) before a generic line rather than printing nothing.
+ */
+export function describeRequestError(error: unknown): string {
+  const message = getErrorMessage(error);
+  if (message) return message;
+  const code = (error as { code?: unknown } | null | undefined)?.code;
+  return code ? String(code) : 'request failed without a message';
+}
+
 /** One line describing a failed response, for humans. Plain-text guards (401/403/429) have no envelope. */
 export function describeFailure(res: ApiResponse): string {
   if (res.json && !res.json.success) {
@@ -353,7 +401,13 @@ export interface AgentDeps {
   now?: () => number;
 }
 
-/** Print `data` as JSON (the `--json` path) — always the envelope's `data`, never a reshaped copy. */
+/**
+ * Print `data` as JSON (the `--json` path): the envelope's `data`, never a reshaped copy,
+ * except a directory spawn, which prints `{ sessionId, workingDir, created: true }` plus
+ * `ready` when a readiness wait ran, `readinessError` when that call failed, and
+ * `startupError` when its start fails, because `POST /api/sessions` answers with the
+ * whole session row.
+ */
 function emitJson(deps: AgentDeps, data: unknown): void {
   deps.io.out(JSON.stringify(data, null, 2));
 }
@@ -414,15 +468,55 @@ export async function resolveSessionId(
   return { error: `"${id}" is ambiguous: ${matches.map((s) => s.id.slice(0, 13)).join(', ')}`, code: EXIT.error };
 }
 
-/** `agent ls` — every session the caller can see, self marked. */
+/** One session's row in `GET /api/agent-inbox/summary`. */
+export interface InboxSummaryRow {
+  pending: number;
+  unseen: number;
+  oldestUnseenAt: number | null;
+  parked: boolean;
+}
+
+/**
+ * The inbox summary, or undefined when it cannot be had (a server without the route,
+ * a transient error). `ls` must still list sessions then, so this never fails the verb.
+ */
+async function fetchInboxSummary(deps: AgentDeps): Promise<Record<string, InboxSummaryRow> | undefined> {
+  try {
+    const res = await deps.request(deps.ctx, { method: 'GET', path: '/api/v1/agent-inbox/summary' });
+    if (!res.json?.success) return undefined;
+    return (res.json.data as { sessions?: Record<string, InboxSummaryRow> } | undefined)?.sessions ?? {};
+  } catch {
+    return undefined;
+  }
+}
+
+/** The INBOX cell of `ls`: `3 (1 new)`, `parked`, both, or empty. */
+export function inboxCell(row: InboxSummaryRow | undefined): string {
+  if (!row) return '';
+  const parts: string[] = [];
+  if (row.pending > 0) parts.push(row.unseen > 0 ? `${row.pending} (${row.unseen} new)` : String(row.pending));
+  if (row.parked) parts.push('parked');
+  return parts.join(', ');
+}
+
+/** `agent ls` — every session the caller can see, self marked, with its inbox counts. */
 export async function agentLs(deps: AgentDeps): Promise<number> {
-  const res = await deps.request(deps.ctx, { method: 'GET', path: '/api/v1/sessions' });
+  const [res, inbox] = await Promise.all([
+    deps.request(deps.ctx, { method: 'GET', path: '/api/v1/sessions' }),
+    fetchInboxSummary(deps),
+  ]);
   if (!res.json?.success) return fail(deps, describeFailure(res));
   const sessions = (res.json.data as SessionRow[] | undefined) ?? [];
   if (deps.json) {
     emitJson(
       deps,
-      sessions.map((s) => ({ ...s, self: isSelfSession(deps.ctx.selfId, s.id) }))
+      sessions.map((s) => ({
+        ...s,
+        self: isSelfSession(deps.ctx.selfId, s.id),
+        // null = empty inbox and not parked. The key is absent when the server did
+        // not answer the summary, so "no data" never reads as "no mail".
+        ...(inbox ? { inbox: inbox[s.id] ?? null } : {}),
+      }))
     );
     return EXIT.ok;
   }
@@ -430,22 +524,28 @@ export async function agentLs(deps: AgentDeps): Promise<number> {
     deps.io.out(palette.muted('(no sessions)'));
     return EXIT.ok;
   }
-  const rows = sessions.map((s) => [
-    isSelfSession(deps.ctx.selfId, s.id) ? '*' : ' ',
-    s.id.slice(0, 8),
-    s.mode ?? '?',
-    s.status ?? '?',
-    s.name || s.workingDir || '',
-  ]);
-  deps.io.out(table([[' ', 'ID', 'MODE', 'STATUS', 'NAME'], ...rows], { gap: 2 }));
+  const rows = sessions.map((s) => {
+    const row = [isSelfSession(deps.ctx.selfId, s.id) ? '*' : ' ', s.id.slice(0, 8), s.mode ?? '?', s.status ?? '?'];
+    if (inbox) row.push(inboxCell(inbox[s.id]));
+    row.push(s.name || s.workingDir || '');
+    return row;
+  });
+  const header = inbox ? [' ', 'ID', 'MODE', 'STATUS', 'INBOX', 'NAME'] : [' ', 'ID', 'MODE', 'STATUS', 'NAME'];
+  deps.io.out(table([header, ...rows], { gap: 2 }));
   deps.io.out(
     palette.muted(`* = this session (${deps.ctx.selfId.slice(0, 8)}). status is a UI hint, never a sync signal.`)
   );
+  if (inbox) {
+    deps.io.out(
+      palette.muted('INBOX: pending (unseen), parked = the session is waiting on `agent inbox --wait` right now.')
+    );
+  }
   return EXIT.ok;
 }
 
 export interface SpawnOptions {
-  caseName: string;
+  caseName?: string;
+  workingDir?: string;
   mode: string;
   name?: string;
   /** Wait for the composer before returning, where the registry gives the mode a ready mark. */
@@ -468,44 +568,135 @@ export const AGENT_ORIGIN_HEADER = { 'X-Codeman-Agent-Origin': 'codeman-agent-cl
 export function composerReadyMark(mode: string): string | undefined {
   return getCli(mode)?.capabilities.composerReadyMark;
 }
-/** `agent spawn` — quick-start with lineage, then the readiness ladder where the mode has one. */
+
+/** realpath, or the plain resolved path when it cannot be resolved; never throws. */
+async function canonicalPath(path: string): Promise<string> {
+  try {
+    return await realpath(path);
+  } catch {
+    return resolve(path);
+  }
+}
+
+/**
+ * Whether `directory` is the user's home directory, comparing realpaths so a symlinked
+ * HOME (or a cwd reached through a symlink) still matches. False when HOME is unknown.
+ */
+export async function isHomeDirectory(directory: string): Promise<boolean> {
+  let home: string;
+  try {
+    home = homedir();
+  } catch {
+    return false;
+  }
+  if (!home) return false;
+  const [a, b] = await Promise.all([canonicalPath(directory), canonicalPath(home)]);
+  return a === b;
+}
+
+/** `agent spawn`: start in a project directory or named case, preserving lineage and mode readiness. */
 export async function agentSpawn(deps: AgentDeps, options: SpawnOptions): Promise<number> {
+  const cli = getCli(options.mode);
+  if (!cli) return fail(deps, `Unknown mode: ${options.mode}`, EXIT.refused);
+  if (options.caseName !== undefined && options.workingDir !== undefined)
+    return fail(deps, 'Use a case OR --working-dir, not both', EXIT.refused);
+  // Same rule for the flag: `--working-dir "$WT"` with WT empty (a failed
+  // `git worktree add`) must not fall through to the caller's own checkout, which
+  // `resolve('')` would make it.
+  if (options.workingDir !== undefined && options.workingDir.trim() === '')
+    return fail(deps, 'refusing: --working-dir is empty; pass an existing directory or omit the flag', EXIT.refused);
+  // Only an OMITTED case means "use a directory": an empty one (`spawn "$CASE"` with
+  // CASE unset) still goes to quick-start, whose schema refuses it.
+  const workingDir = options.caseName !== undefined ? undefined : resolve(options.workingDir ?? process.cwd());
+  if (workingDir) {
+    // eslint-disable-next-line no-control-regex
+    if (/[\x00-\x1f\x7f]/.test(workingDir))
+      return fail(deps, 'Working directory contains control characters', EXIT.refused);
+    try {
+      if (!(await stat(workingDir)).isDirectory()) throw new Error('not a directory');
+    } catch {
+      return fail(deps, 'Working directory must be an existing local directory', EXIT.refused);
+    }
+    // The server installs workspace hooks (and, with agent skill injection on, the
+    // skill) into the directory it is given, and it skips that only when the caller
+    // names no workingDir, because the cwd fallback is $HOME under installer-created
+    // services. This CLI always sends its directory explicitly, so an implicit cwd of
+    // HOME must be refused here or it would write ~/.claude/settings.local.json and
+    // ~/.claude/skills. An explicit `--working-dir ~` is the caller's choice and stays.
+    if (options.workingDir === undefined && (await isHomeDirectory(workingDir)))
+      return fail(
+        deps,
+        'refusing: the current directory is your home directory; pass --working-dir ~ to start a worker there on purpose',
+        EXIT.refused
+      );
+  }
   const body: Record<string, unknown> = {
-    caseName: options.caseName,
+    ...(workingDir ? { workingDir } : { caseName: options.caseName }),
     mode: options.mode,
     parentSessionId: deps.ctx.selfId,
   };
-  if (options.name) body.sessionName = options.name;
+  if (options.name) body[workingDir ? 'name' : 'sessionName'] = options.name;
   const res = await deps.request(deps.ctx, {
     method: 'POST',
-    path: '/api/v1/quick-start',
+    path: workingDir ? '/api/v1/sessions' : '/api/v1/quick-start',
     body,
-    headers: { ...AGENT_ORIGIN_HEADER },
+    headers: workingDir ? undefined : { ...AGENT_ORIGIN_HEADER },
   });
-  const data = res.json?.data as { sessionId?: string; caseName?: string; casePath?: string } | undefined;
+  const created = res.json?.data as
+    | { session?: { id?: string }; sessionId?: string; caseName?: string; casePath?: string }
+    | undefined;
+  // `POST /api/sessions` answers `{ session: { id, ... } }`; quick-start answers `{ sessionId, ... }`.
+  const createdId = created?.session?.id;
+  const data:
+    | { sessionId?: string; caseName?: string; casePath?: string; workingDir?: string; created?: boolean }
+    | undefined = workingDir && createdId ? { sessionId: createdId, workingDir, created: true } : created;
   if (!res.json?.success || !data?.sessionId) return fail(deps, describeFailure(res));
   const sid = data.sessionId;
+  if (workingDir) {
+    // Creation alone leaves a session without a pane. Report the exact created id
+    // on an ambiguous or rejected start; never retry a start or hide a leaked tab.
+    let startupError: string | undefined;
+    try {
+      const started = await deps.request(deps.ctx, {
+        method: 'POST',
+        path: `/api/v1/sessions/${encodeURIComponent(sid)}/${cli.capabilities.startMode}`,
+      });
+      if (!started.json?.success) startupError = describeFailure(started);
+    } catch (error) {
+      startupError = getErrorMessage(error) || 'Startup request failed';
+    }
+    if (startupError) {
+      if (deps.json) emitJson(deps, { ...data, ready: false, startupError });
+      else deps.io.out(sid);
+      deps.io.err(`Session ${sid} was created but startup failed or is ambiguous: ${startupError}`);
+      return EXIT.error;
+    }
+  }
 
   let ready: boolean | undefined;
   let readinessError: string | undefined;
   let dead = false;
   const mark = composerReadyMark(options.mode);
   if (options.ready && mark) {
-    const wait = await deps.request(deps.ctx, {
-      method: 'GET',
-      path: `/api/v1/sessions/${encodeURIComponent(sid)}/wait-output`,
-      query: { match: mark, from: 'buffer', timeout: options.timeoutMs },
-      timeoutMs: options.timeoutMs + 10_000,
-    });
-    // A failed readiness call (waiter cap, 400, network) is its own error, not "the
-    // composer never showed up": report the real reason instead of the trust-dialog hint.
-    if (!wait.json?.success) readinessError = describeFailure(wait);
-    else {
-      const result = (wait.json.data as { wait?: WaitResult } | undefined)?.wait;
-      // A worker that died while we waited is exit 3 like every other wait, not a
-      // "composer not seen" timeout that sends the caller looking for a dialog.
-      dead = waitExitCode(result) === EXIT.dead;
-      ready = !dead && Boolean(result?.matched);
+    try {
+      const wait = await deps.request(deps.ctx, {
+        method: 'GET',
+        path: `/api/v1/sessions/${encodeURIComponent(sid)}/wait-output`,
+        query: { match: mark, from: 'buffer', timeout: options.timeoutMs },
+        timeoutMs: options.timeoutMs + 10_000,
+      });
+      // A failed readiness call (waiter cap, 400, network) is its own error, not "the
+      // composer never showed up": report the real reason instead of the trust-dialog hint.
+      if (!wait.json?.success) readinessError = describeFailure(wait);
+      else {
+        const result = (wait.json.data as { wait?: WaitResult } | undefined)?.wait;
+        // A worker that died while we waited is exit 3 like every other wait, not a
+        // "composer not seen" timeout that sends the caller looking for a dialog.
+        dead = waitExitCode(result) === EXIT.dead;
+        ready = !dead && Boolean(result?.matched);
+      }
+    } catch (error) {
+      readinessError = describeRequestError(error);
     }
   }
 
@@ -514,7 +705,7 @@ export async function agentSpawn(deps: AgentDeps, options: SpawnOptions): Promis
   } else {
     // Human lines go to stderr so `SID=$(codeman agent spawn …)` captures the id alone.
     const say = (line: string) => deps.io.err(line);
-    say(palette.ok(`${GLYPH.ok} spawned ${sid} (${options.mode}, case ${data.caseName ?? options.caseName})`));
+    say(palette.ok(`${GLYPH.ok} spawned ${sid} (${options.mode}, ${workingDir ?? data.caseName ?? options.caseName})`));
     if (ready === true) say(palette.muted('  composer up: the worker can take a prompt'));
     if (dead) say(palette.err(`${GLYPH.fail} the worker exited during the readiness wait`));
     if (ready === false && !dead) {
@@ -693,6 +884,103 @@ export async function agentWait(deps: AgentDeps, options: WaitOptions): Promise<
   return waitExitCode(data?.wait);
 }
 
+/** Bounded incremental evidence, with an opaque server-owned cursor. */
+export async function agentInspect(
+  deps: AgentDeps,
+  options: { id: string; maxBytes: number; since?: string }
+): Promise<number> {
+  if (!Number.isInteger(options.maxBytes) || options.maxBytes < 1 || options.maxBytes > INSPECT_MAX_BYTES)
+    return fail(deps, '--max-bytes must be between 1 and 65536', EXIT.refused);
+  const target = await resolveSessionId(deps, options.id);
+  if ('error' in target) return fail(deps, target.error, target.code);
+  const response = await deps.request(deps.ctx, {
+    method: 'GET',
+    path: `/api/v1/sessions/${encodeURIComponent(target.id)}/inspect`,
+    query: { maxBytes: options.maxBytes, since: options.since },
+  });
+  if (!response.json?.success) return fail(deps, describeFailure(response));
+  if (deps.json) emitJson(deps, response.json.data);
+  else {
+    const data = response.json.data as {
+      source?: string;
+      evidence?: string;
+      truncated?: boolean;
+      cursor?: string;
+      blockedReason?: string;
+    };
+    deps.io.out(
+      `[${data.source ?? 'unknown'}]${data.truncated ? ' truncated' : ''}${data.blockedReason ? ` (${data.blockedReason})` : ''}`
+    );
+    deps.io.out(data.evidence ?? '');
+    if (data.cursor) deps.io.out(`cursor: ${data.cursor}`);
+  }
+  return EXIT.ok;
+}
+
+/** Stage exactly the printable UTF8 file contents; never sends Enter. */
+export async function agentStage(deps: AgentDeps, options: { id: string; messageFile: string }): Promise<number> {
+  if (isSelfSession(deps.ctx.selfId, options.id)) return fail(deps, `refusing: ${options.id} is me`, EXIT.refused);
+  let message: string;
+  try {
+    const info = await stat(options.messageFile);
+    if (!info.isFile() || info.size > STAGE_MAX_BYTES)
+      return fail(deps, 'message file must be a regular file within 8192 UTF8 bytes', EXIT.refused);
+    const handle = await open(options.messageFile, 'r');
+    try {
+      const buffer = Buffer.alloc(STAGE_MAX_BYTES + 1);
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+      const bytes = buffer.subarray(0, bytesRead);
+      if (bytesRead > STAGE_MAX_BYTES || !isUtf8(bytes))
+        return fail(deps, 'message file must contain at most 8192 bytes of UTF8', EXIT.refused);
+      message = bytes.toString('utf8');
+    } finally {
+      await handle.close();
+    }
+  } catch (error) {
+    return fail(deps, `cannot read message file: ${getErrorMessage(error)}`, EXIT.refused);
+  }
+  const refusal = inputRefusal(message);
+  if (refusal || message !== message.trimEnd())
+    return fail(deps, refusal ?? 'stage refuses trailing whitespace', EXIT.refused);
+  const target = await resolveSessionId(deps, options.id);
+  if ('error' in target) return fail(deps, target.error, target.code);
+  const response = await deps.request(deps.ctx, {
+    method: 'POST',
+    path: `/api/v1/sessions/${encodeURIComponent(target.id)}/stage`,
+    body: { message },
+  });
+  if (!response.json?.success) return fail(deps, describeFailure(response));
+  if (deps.json) emitJson(deps, response.json.data);
+  else {
+    const data = response.json.data as { stageId: string; sha256: string; expiresAt: number };
+    deps.io.out(
+      `staged (no Enter): ${data.stageId}\nsha256: ${data.sha256}\nexpires: ${new Date(data.expiresAt).toISOString()}`
+    );
+  }
+  return EXIT.ok;
+}
+
+/** Submit one verified staged composer; failure never automatically replays Enter. */
+export async function agentSubmit(
+  deps: AgentDeps,
+  options: { id: string; stageId: string; confirmSha: string }
+): Promise<number> {
+  if (isSelfSession(deps.ctx.selfId, options.id)) return fail(deps, `refusing: ${options.id} is me`, EXIT.refused);
+  if (!/^[a-f0-9]{64}$/.test(options.confirmSha) || !/^[a-f0-9-]{36}$/.test(options.stageId))
+    return fail(deps, 'submit requires a stage UUID and its exact SHA-256', EXIT.refused);
+  const target = await resolveSessionId(deps, options.id);
+  if ('error' in target) return fail(deps, target.error, target.code);
+  const response = await deps.request(deps.ctx, {
+    method: 'POST',
+    path: `/api/v1/sessions/${encodeURIComponent(target.id)}/submit`,
+    body: { stageId: options.stageId, confirmSha: options.confirmSha },
+  });
+  if (!response.json?.success) return fail(deps, describeFailure(response));
+  if (deps.json) emitJson(deps, response.json.data);
+  else deps.io.out('Enter delivered once; inspect or wait for acceptance (no automatic retry).');
+  return EXIT.ok;
+}
+
 export interface ReadOptions {
   id: string;
   /** Bytes of raw terminal to fetch; ANSI is stripped for humans. */
@@ -789,6 +1077,158 @@ export async function agentRm(deps: AgentDeps, options: { id: string }): Promise
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Agent inbox
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** A message as `GET …/inbox` hands it out. */
+export interface InboxMessageRow {
+  id: string;
+  from: string | null;
+  text: string;
+  createdAt: number;
+  seen: boolean;
+}
+
+/**
+ * The message `post` was given, which must be ONE argument, as with `send`: several
+ * would be an unquoted `$(cat notes.md)` split by the shell, and joining the pieces
+ * with spaces loses its newlines. Unlike `send`, newlines inside the one argument are
+ * fine: the inbox stores text as data and never types it.
+ */
+export function postTextFromArgs(words: readonly string[]): { text: string } | { error: string } {
+  if (words.length === 1) return { text: words[0] };
+  return { error: `refusing: the message must be ONE argument, got ${words.length} — quote it` };
+}
+
+/** `agent post` — store a message in another session's inbox. Never types into its pane. */
+export async function agentPost(deps: AgentDeps, options: { id: string; text: string }): Promise<number> {
+  if (options.text.length === 0) return fail(deps, 'refusing: empty message', EXIT.refused);
+  const target = await resolveSessionId(deps, options.id);
+  if ('error' in target) return fail(deps, target.error, target.code);
+  const res = await deps.request(deps.ctx, {
+    method: 'POST',
+    path: `/api/v1/sessions/${encodeURIComponent(target.id)}/inbox`,
+    body: { text: options.text },
+  });
+  // 409 = the receiver's inbox is full; nothing was stored. Passed through as an error.
+  if (!res.json?.success) return fail(deps, describeFailure(res));
+  const data = res.json.data as { message?: InboxMessageRow; pending?: number; unseen?: number } | undefined;
+  if (deps.json) emitJson(deps, data ?? {});
+  else
+    deps.io.out(
+      palette.ok(
+        `${GLYPH.ok} posted to ${target.id.slice(0, 8)} (${data?.pending ?? '?'} pending, ${data?.unseen ?? '?'} unseen)`
+      )
+    );
+  return EXIT.ok;
+}
+
+export interface InboxReadOptions {
+  /** Another session's inbox (a peek); omitted = this session's own. */
+  id?: string;
+  /** Long-poll budget in ms; the read parks while nothing is unseen. */
+  waitMs?: number;
+}
+
+/** True only when the session list was read and does not contain `id`. */
+async function sessionIsGone(deps: AgentDeps, id: string): Promise<boolean> {
+  try {
+    const res = await deps.request(deps.ctx, { method: 'GET', path: '/api/v1/sessions' });
+    if (!res.json?.success) return false;
+    return !((res.json.data as SessionRow[] | undefined) ?? []).some((s) => s.id === id);
+  } catch {
+    return false;
+  }
+}
+
+/** Relative age for humans: `12s`, `4m`, `3h`. */
+function age(createdAt: number, now: number): string {
+  const s = Math.max(0, Math.round((now - createdAt) / 1000));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.round(s / 60)}m`;
+  return `${Math.round(s / 3600)}h`;
+}
+
+/**
+ * `agent inbox` — read this session's inbox (or peek at another's). Removes nothing:
+ * a message stays until `agent ack <id>`. Only reading your OWN inbox marks messages
+ * seen. Exit 0 with mail, 2 when a `--wait` ran out with nothing unseen or the server
+ * cut it short (restart, detach), 3 when the session is gone from the list.
+ */
+export async function agentInboxRead(deps: AgentDeps, options: InboxReadOptions): Promise<number> {
+  const target = await resolveSessionId(deps, options.id ?? deps.ctx.selfId);
+  if ('error' in target) return fail(deps, target.error, target.code);
+  const res = await deps.request(deps.ctx, {
+    method: 'GET',
+    path: `/api/v1/sessions/${encodeURIComponent(target.id)}/inbox`,
+    query: { wait: options.waitMs },
+    timeoutMs: options.waitMs !== undefined ? options.waitMs + 10_000 : undefined,
+  });
+  if (!res.json?.success) return fail(deps, describeFailure(res));
+  const data = res.json.data as
+    | {
+        receiver?: boolean;
+        messages?: InboxMessageRow[];
+        pending?: number;
+        unseen?: number;
+        wait?: { timedOut?: boolean; ended?: boolean };
+      }
+    | undefined;
+  const messages = data?.messages ?? [];
+  // `ended` is also what a server restart or a detach answers. Exit 3 tells a receiver
+  // loop to stop, so it needs the session list to confirm the session is gone; while
+  // it is still listed (or the list cannot be had, as during a restart) the wait was
+  // only cut short, which is exit 2: loop again.
+  const gone = data?.wait?.ended ? await sessionIsGone(deps, target.id) : false;
+  const code = gone ? EXIT.dead : data?.wait?.timedOut || data?.wait?.ended ? EXIT.timeout : EXIT.ok;
+  if (deps.json) {
+    emitJson(deps, data ?? {});
+    return code;
+  }
+  const now = (deps.now ?? Date.now)();
+  for (const m of messages) {
+    const sender = m.from ? m.from.slice(0, 8) : 'user';
+    const tag = m.seen ? palette.muted('seen') : palette.emph('new');
+    deps.io.out(palette.muted(`── ${m.id} from ${sender}, ${age(m.createdAt, now)} ago, `) + tag);
+    deps.io.out(terminalSafeText(m.text));
+  }
+  if (gone) {
+    deps.io.err(palette.err(`${GLYPH.fail} the session went away during the wait`));
+  } else if (data?.wait?.ended) {
+    deps.io.err(palette.muted('(the server ended the wait early, e.g. a restart; exit 2, wait again)'));
+  } else if (messages.length === 0) {
+    deps.io.err(palette.muted(data?.wait?.timedOut ? '(no mail; wait timed out, exit 2)' : '(no mail)'));
+  } else if (data?.receiver) {
+    deps.io.err(
+      palette.muted(
+        `${messages.length} pending. Nothing is removed by reading: when done, \`codeman agent ack <id>…\` (full ids above).`
+      )
+    );
+  } else {
+    deps.io.err(palette.muted(`${messages.length} pending (peek: nothing was marked seen).`));
+  }
+  return code;
+}
+
+/** `agent ack` — remove messages from THIS session's inbox by id. Idempotent. */
+export async function agentAck(deps: AgentDeps, options: { ids: string[] }): Promise<number> {
+  const ids = options.ids.map((id) => id.trim()).filter(Boolean);
+  if (ids.length === 0) return fail(deps, 'refusing: no message ids', EXIT.refused);
+  const self = await resolveSessionId(deps, deps.ctx.selfId);
+  if ('error' in self) return fail(deps, self.error, self.code);
+  const res = await deps.request(deps.ctx, {
+    method: 'POST',
+    path: `/api/v1/sessions/${encodeURIComponent(self.id)}/inbox/ack`,
+    body: { ids },
+  });
+  if (!res.json?.success) return fail(deps, describeFailure(res));
+  const data = res.json.data as { removed?: number; pending?: number } | undefined;
+  if (deps.json) emitJson(deps, data ?? {});
+  else deps.io.out(palette.ok(`${GLYPH.ok} acked ${data?.removed ?? 0} (${data?.pending ?? '?'} still pending)`));
+  return EXIT.ok;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Commander wiring
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -822,7 +1262,7 @@ async function run(json: boolean, verb: (deps: AgentDeps) => Promise<number>): P
   try {
     process.exitCode = await verb(deps);
   } catch (err) {
-    console.error(palette.err(`${GLYPH.fail} ${getErrorMessage(err)}`));
+    console.error(palette.err(`${GLYPH.fail} ${describeRequestError(err)}`));
     process.exitCode = EXIT.error;
   }
 }
@@ -831,7 +1271,9 @@ async function run(json: boolean, verb: (deps: AgentDeps) => Promise<number>): P
 export function registerAgentCommands(program: Command): Command {
   const agent = program
     .command('agent')
-    .description('Talk to other sessions from inside one (any CLI mode): list, spawn, send, wait, read, interrupt, rm');
+    .description(
+      'Talk to other sessions from inside one (any CLI mode): list, spawn, send, wait, read, interrupt, rm, the inbox: post, inbox, ack, and the experimental, opt-in inspect, stage, submit'
+    );
 
   agent
     .command('ls')
@@ -841,20 +1283,26 @@ export function registerAgentCommands(program: Command): Command {
     .action((options: { json?: boolean }) => run(Boolean(options.json), agentLs));
 
   agent
-    .command('spawn <case>')
-    .description(
-      'Start a worker session in a case (created if missing) and wait for its composer where the mode draws one'
-    )
+    .command('spawn [case]')
+    .description('Start a worker in cwd, an existing directory, or a named case; wait for its composer where supported')
     .option('-m, --mode <mode>', 'Run mode id, as the Run menu names it', 'claude')
     .option('-n, --name <name>', 'Session name shown in the UI')
+    .option(
+      '--working-dir <directory>',
+      'Existing project directory (defaults to cwd when no case is given; a cwd of HOME is refused, pass it explicitly)'
+    )
     .option('--no-ready', 'Return as soon as the session exists, without the readiness wait')
     .option('-t, --timeout <ms>', 'Readiness budget in ms', String(DEFAULT_WAIT_MS))
     .option('--json', 'Machine-readable output')
     .action(
-      (caseName: string, options: { mode: string; name?: string; ready: boolean; timeout?: string; json?: boolean }) =>
+      (
+        caseName: string | undefined,
+        options: { mode: string; name?: string; workingDir?: string; ready: boolean; timeout?: string; json?: boolean }
+      ) =>
         run(Boolean(options.json), (deps) =>
           agentSpawn(deps, {
             caseName,
+            workingDir: options.workingDir,
             mode: options.mode,
             name: options.name,
             ready: options.ready,
@@ -952,6 +1400,49 @@ export function registerAgentCommands(program: Command): Command {
     );
 
   agent
+    .command('inspect <id>')
+    .description(
+      'Experimental, opt-in (agentCoordinationEnabled): bounded transcript evidence or a labeled pane snapshot; opaque incremental cursors'
+    )
+    .option('--max-bytes <n>', 'UTF8 evidence budget (1–65536)', '8192')
+    .option('--since <cursor>', 'Resume a cursor from the same owner, pane and transcript')
+    .option('--json', 'Machine-readable output')
+    .action((id: string, options: { maxBytes: string; since?: string; json?: boolean }) =>
+      run(Boolean(options.json), (deps) =>
+        agentInspect(deps, {
+          id,
+          maxBytes: parsePositiveInt(options.maxBytes, 8192, '--max-bytes'),
+          since: options.since,
+        })
+      )
+    );
+
+  agent
+    .command('stage <id>')
+    .description(
+      'Experimental, opt-in (agentCoordinationEnabled): type a printable single-line UTF8 file without Enter; requires a verifiable local Codex composer, and refuses slash or shell commands and a last word starting with @ or $ (use send)'
+    )
+    .requiredOption('--message-file <path>', 'Regular UTF8 file, at most 8192 bytes, no trailing newline')
+    .option('--json', 'Machine-readable output')
+    .action((id: string, options: { messageFile: string; json?: boolean }) =>
+      run(Boolean(options.json), (deps) => agentStage(deps, { id, messageFile: options.messageFile }))
+    );
+
+  agent
+    .command('submit <id>')
+    .description(
+      'Experimental, opt-in (agentCoordinationEnabled): send Enter once only when the staged composer, pane and hash still match'
+    )
+    .requiredOption('--stage-id <receipt>', 'One-shot stage receipt')
+    .requiredOption('--confirm-sha <hash>', 'Exact SHA-256 returned by stage')
+    .option('--json', 'Machine-readable output')
+    .action((id: string, options: { stageId: string; confirmSha: string; json?: boolean }) =>
+      run(Boolean(options.json), (deps) =>
+        agentSubmit(deps, { id, stageId: options.stageId, confirmSha: options.confirmSha })
+      )
+    );
+
+  agent
     .command('read <id>')
     .description("Print a session's last answer (as the server reads it for that mode) or, with --tail, its terminal")
     .option('--tail <bytes>', 'Raw terminal tail in bytes, ANSI stripped (works in every mode)')
@@ -973,6 +1464,49 @@ export function registerAgentCommands(program: Command): Command {
     .option('--json', 'Machine-readable output')
     .action((id: string, options: { json?: boolean }) =>
       run(Boolean(options.json), (deps) => agentInterrupt(deps, { id }))
+    );
+
+  agent
+    .command('post <id> <text...>')
+    .description(
+      "Leave a message in another session's inbox (ONE quoted argument; multi-line is fine). Nothing is typed into its pane: it reads with `agent inbox`"
+    )
+    .option('--json', 'Machine-readable output')
+    // A message is often a file (`"$(cat task.md)"`) and markdown starts with `- ` or
+    // `---` often enough; without this commander takes it for an unknown option.
+    // `--json` and `-h` are still options: text that is exactly one goes after `--`.
+    .allowUnknownOption()
+    .action((id: string, words: string[], options: { json?: boolean }) =>
+      run(Boolean(options.json), (deps) => {
+        const message = postTextFromArgs(words);
+        if ('error' in message) return Promise.resolve(fail(deps, message.error, EXIT.refused));
+        return agentPost(deps, { id, text: message.text });
+      })
+    );
+
+  agent
+    .command('inbox [id]')
+    .description(
+      "Read this session's inbox (or peek at another's with [id]). Reading removes nothing; `agent ack` does. --wait blocks while nothing is new: exit 2 on timeout"
+    )
+    .option('-w, --wait', 'Block until a new (unseen) message arrives')
+    .option('-t, --timeout <ms>', 'Wait budget in ms (with --wait)', String(DEFAULT_WAIT_MS))
+    .option('--json', 'Machine-readable output')
+    .action((id: string | undefined, options: { wait?: boolean; timeout?: string; json?: boolean }) =>
+      run(Boolean(options.json), (deps) =>
+        agentInboxRead(deps, {
+          id,
+          waitMs: options.wait ? parsePositiveInt(options.timeout, DEFAULT_WAIT_MS) : undefined,
+        })
+      )
+    );
+
+  agent
+    .command('ack <ids...>')
+    .description("Remove messages from this session's inbox by id, once handled (unknown ids are not an error)")
+    .option('--json', 'Machine-readable output')
+    .action((ids: string[], options: { json?: boolean }) =>
+      run(Boolean(options.json), (deps) => agentAck(deps, { ids }))
     );
 
   agent

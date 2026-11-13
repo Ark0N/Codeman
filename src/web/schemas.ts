@@ -20,9 +20,11 @@ import {
 import { MAX_EDITABLE_BYTES } from '../config/file-editing.js';
 import { CODEX_REASONING_EFFORTS } from '../types/session.js';
 import { WEBHOOK_KINDS, WEBHOOK_SCOPES } from '../types/push.js';
+import { DISCORD_ON_DELETE, DISCORD_PING_MODES, DISCORD_THREAD_CREATION } from '../types/discord.js';
 import { MIN_MATCH_LENGTH, MAX_MATCH_LENGTH } from '../config/agent-wait.js';
 import { MAX_WAKE_MACS } from '../config/remote-wake-limits.js';
 import { MAX_INPUT_LENGTH } from '../config/terminal-limits.js';
+import { MAX_MESSAGE_BYTES } from './agent-inbox.js';
 import { enabledCliIds, enabledClis } from '../config/cli-registry/registry.js';
 import type { SessionMode } from '../types.js';
 import { isAdvisorModel } from '../types/session.js';
@@ -80,6 +82,35 @@ const filesystemPickerPathSchema = z
  * means off) so a client can send the flag unconditionally.
  */
 const showHiddenQuerySchema = z.enum(['true', 'false']).optional();
+
+/**
+ * Body for the path picker's "New folder": one folder name created directly inside `path`. The name is held
+ * to the character set `safePathSchema` accepts (letters, digits, `_ - . ~` and space, no `..`), so every
+ * name it accepts is one Link Existing and a session working directory accept (the parent's own path is
+ * judged there separately), and never a control character. It is also one path segment, not dot-prefixed (the picker hides those by default) and not tilde-prefixed (a folder named `~` is an `rm -rf ~` accident), and at
+ * most 255 BYTES, the usual filesystem limit.
+ */
+export const FilesystemMkdirSchema = z.object({
+  path: filesystemPickerPathSchema,
+  name: z
+    .string()
+    .trim()
+    .min(1, 'Folder name is required')
+    .refine((n) => Buffer.byteLength(n) <= 255, { message: 'Folder name is too long' })
+    .refine((n) => /^[\p{L}\p{N}_\-. ~]+$/u.test(n), {
+      message: 'Folder name can only use letters, numbers, spaces and _ - . ~',
+    })
+    .refine((n) => !n.includes('..') && !n.startsWith('.') && !n.startsWith('~'), {
+      message: 'Folder name cannot contain "..", or start with a dot or a tilde',
+    }),
+  sessionId: z
+    .string()
+    .max(100)
+    .regex(/^[a-zA-Z0-9_-]+$/, 'Invalid session id')
+    .optional(),
+  /** Same opt-in flag as browse: lets the picker create inside a hidden folder it is showing. */
+  showHidden: showHiddenQuerySchema,
+});
 
 /** Query validation for the lazy, allowlisted filesystem path picker. */
 export const FilesystemBrowseQuerySchema = z.object({
@@ -194,7 +225,7 @@ function sessionModeSchema(): z.ZodType<SessionMode> {
 /**
  * Allowlisted env var key prefixes, contributed by the ENABLED CLIs in the registry
  * (`env.allowedPrefixes`) — `CLAUDE_CODE_`, `OPENCODE_`, `CODEX_`, `GEMINI_`, `GOOGLE_`,
- * `ANTIGRAVITY_`, `PI_`, `GROK_`, `XAI_`, `DSH_`, `DEEPSEEK_` as shipped.
+ * `ANTIGRAVITY_`, `PI_`, `GROK_`, `XAI_`, `DSH_`, `DEEPSEEK_`, `OMP_`, `COPILOT_` as shipped.
  *
  * ⚠️ Resolved AT PARSE TIME, not at module load. This used to be a frozen array computed
  * once when the module was imported, which meant a CLI enabled while the server was running
@@ -259,7 +290,7 @@ const safeEnvOverridesSchema = z
     },
     {
       message:
-        'envOverrides contains blocked or disallowed env var keys. Only CLAUDE_CODE_*, OPENCODE_*, CODEX_*, GEMINI_*, GOOGLE_*, ANTIGRAVITY_*, PI_*, GROK_*, XAI_*, DSH_*, DEEPSEEK_*, OMP_* keys and CLAUDE_CONFIG_DIR are allowed.',
+        'envOverrides contains blocked or disallowed env var keys. Only CLAUDE_CODE_*, OPENCODE_*, CODEX_*, GEMINI_*, GOOGLE_*, ANTIGRAVITY_*, PI_*, GROK_*, XAI_*, DSH_*, DEEPSEEK_*, OMP_*, COPILOT_* keys and CLAUDE_CONFIG_DIR are allowed.',
     }
   );
 
@@ -340,6 +371,7 @@ const CodexConfigSchema = z
       .regex(/^[a-zA-Z0-9_-]+$/)
       .optional(),
     dangerouslyBypassApprovals: z.boolean().optional(),
+    networkAccess: z.boolean().optional(),
     animations: z.boolean().optional(),
     renderMode: z
       .enum(['scrollback', 'hybrid'])
@@ -435,6 +467,52 @@ const GrokConfigSchema = z
       .string()
       .max(100)
       .regex(/^[a-zA-Z0-9._-]+$/)
+      .optional(),
+  })
+  .optional();
+
+const CopilotConfigSchema = z
+  .object({
+    // A leading alphanumeric, like resumeSessionId below: a value like `--yolo` would otherwise be read
+    // as its own flag after `--model` (bypassing the allowAll clamp). `/` stays for provider/id.
+    model: z
+      .string()
+      .max(100)
+      .regex(/^[a-zA-Z0-9][a-zA-Z0-9._\-/]*$/)
+      .optional(),
+    allowAll: z.boolean().optional(),
+    continueSession: z.boolean().optional(),
+    // A single plain word with a leading alphanumeric: --resume also matches session NAMES, so
+    // `my-feature` is accepted, but a value like `--yolo` must not be, because --resume's value is
+    // optional and the next token would be read as its own flag (bypassing the allowAll clamp).
+    resumeSessionId: z
+      .string()
+      .max(100)
+      .regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/)
+      .optional(),
+  })
+  .optional();
+
+/**
+ * Schema for jcode (1jehuang/jcode)-specific configuration.
+ *
+ * jcode has no approval prompts and no bypass flag, so there is nothing for the
+ * multi-user clamp to touch.
+ */
+const JcodeConfigSchema = z
+  .object({
+    model: z
+      .string()
+      .max(100)
+      .regex(/^[a-zA-Z0-9._\-/]+$/)
+      .optional(),
+    // A session id (`session_fox_<ms>_<hex>`) or short name (`fox`). Leading
+    // alphanumeric: --resume's value is optional, so a value starting with `-`
+    // would be parsed as a flag of its own.
+    resumeSessionId: z
+      .string()
+      .max(100)
+      .regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/)
       .optional(),
   })
   .optional();
@@ -596,6 +674,8 @@ export const CreateSessionSchema = z.object({
   antigravityConfig: AntigravityConfigSchema,
   piConfig: PiConfigSchema,
   grokConfig: GrokConfigSchema,
+  copilotConfig: CopilotConfigSchema,
+  jcodeConfig: JcodeConfigSchema,
   deepSeekConfig: DeepSeekConfigSchema,
   ompConfig: OmpConfigSchema,
   /** Resume a previous Claude conversation by its session ID (used for reboot recovery) */
@@ -678,6 +758,7 @@ export const StatusTelemetrySchema = z.object({
           used_percentage: z.number().nullish(),
           total_input_tokens: z.number().nullish(),
           total_output_tokens: z.number().nullish(),
+          context_window_size: z.number().nullish(),
         })
         .nullish(),
       cost: z.object({ total_cost_usd: z.number().nullish() }).nullish(),
@@ -761,6 +842,12 @@ export const CloneCaseSchema = z.object({
   /** `--depth 1`. */
   shallow: z.boolean().optional(),
   description: z.string().max(1000).optional(),
+  /**
+   * Clone into this exact folder (the folder itself, no case-name subfolder is added) instead of under the cases directory, and
+   * register it as a linked case. Absolute or starting with `~`; only length-bounded here, since
+   * `prepareNewCasePath()` (web/case-path.ts) judges it and produces the user-facing reason.
+   */
+  path: z.string().min(1).max(1000).optional(),
 });
 
 /** Schema for POST /api/cases/clone-preflight — ask the remote what it has, clone nothing. */
@@ -807,6 +894,9 @@ const RemoteCommandOverridesSchema = z
     pi: z.string().min(1).max(300).optional(),
     grok: z.string().min(1).max(300).optional(),
     deepseek: z.string().min(1).max(300).optional(),
+    omp: z.string().min(1).max(300).optional(),
+    copilot: z.string().min(1).max(300).optional(),
+    jcode: z.string().min(1).max(300).optional(),
   })
   .strict()
   .optional();
@@ -818,11 +908,11 @@ const RemoteCommandOverridesSchema = z
 const NO_SHELL_INJECTION = /^[^\n\r\0`]*$/;
 const noCommandSubstitution = (s: string) => !s.includes('$(');
 
-// `remotePath`/`identityFile` are shell-escaped, then the whole launch command is
-// embedded via `JSON.stringify(...)` inside `bash -c "..."` (tmux-manager). That
-// outer DOUBLE-quote layer re-exposes `$(...)`, backticks, and `$VAR` even though
-// the inner value is single-quoted — so a `$(cmd)` in the path would run LOCALLY at
-// launch. Reject `$` and backtick (and newline/CR/NUL) entirely at the boundary.
+// `remotePath`/`identityFile` are shell-escaped, and a remote launch reaches `bash -c`
+// single-quoted (`bashCArg()` in tmux-manager). They are also pasted into strings the
+// far end's shells parse, and hosts stored before a launch-quoting change are read with
+// no schema, so `$` and backtick (and newline/CR/NUL) stay rejected at the boundary as
+// defense in depth, whatever the current quoting does with them.
 const NO_SHELL_META = /^[^\n\r\0`$]*$/;
 
 export const RemoteHostSchema = z.object({
@@ -922,10 +1012,10 @@ export const RemoteCaseLinkSchema = z.object({
 //
 // Docker mode is a location overlay on cases (see docs/docker-cases-plan.md),
 // the analog of the remote-SSH schemas above. `image`, `hostWorkspacePath`,
-// `containerWorkdir`, and `container` all reach the outer `bash -c "..."` launch
-// layer, so they carry NO_SHELL_META (rejects `$`/backtick that survive the
-// double-quote layer) exactly like remotePath/identityFile. `--privileged` and
-// any docker-socket mount are structurally unrepresentable (never accepted).
+// `containerWorkdir`, and `container` all reach the `bash -c` launch layer, so they
+// carry NO_SHELL_META (rejects `$`/backtick) exactly like remotePath/identityFile.
+// `--privileged` and any docker-socket mount are structurally unrepresentable
+// (never accepted).
 
 const DockerResourceLimitsSchema = z
   .object({
@@ -1195,6 +1285,8 @@ export const QuickStartSchema = z.object({
   antigravityConfig: AntigravityConfigSchema,
   piConfig: PiConfigSchema,
   grokConfig: GrokConfigSchema,
+  copilotConfig: CopilotConfigSchema,
+  jcodeConfig: JcodeConfigSchema,
   deepSeekConfig: DeepSeekConfigSchema,
   ompConfig: OmpConfigSchema,
   envOverrides: safeEnvOverridesSchema,
@@ -1397,6 +1489,18 @@ export const SettingsUpdateSchema = z
     defaultClaudeMdPath: z.string().max(500).optional(),
     defaultWorkingDir: z.string().max(500).optional(),
     lastUsedCase: z.string().max(200).optional(),
+    /** The case a person last picked in a case picker; what other devices follow while `syncCaseState` is on. */
+    lastPickedCase: z.string().max(200).optional(),
+    /**
+     * Opt-in, SYNCED, default OFF: per-case run options (Agent Teams, Opus 1M) are kept here instead of
+     * only in each browser, and a device follows the selected case another device chose.
+     */
+    syncCaseState: z.boolean().optional(),
+    /** Per-case run options, by case name; read and written only while `syncCaseState` is on. */
+    caseSettings: z
+      .record(z.string().max(200), z.object({ agentTeams: z.boolean(), opusContext1m: z.boolean() }).strict())
+      .refine((m) => Object.keys(m).length <= 500, 'too many cases')
+      .optional(),
     // Feature toggles
     ralphTrackerEnabled: z.boolean().optional(),
     subagentTrackingEnabled: z.boolean().optional(),
@@ -1407,11 +1511,13 @@ export const SettingsUpdateSchema = z
     ultracodeFloatingWindows: z.boolean().optional(),
     imageWatcherEnabled: z.boolean().optional(),
     /**
-     * Inject the Codeman agent skill (`skills/codeman`) into `<case>/.claude/skills/`
-     * on Claude session create, so an agent inside the session can drive the API
-     * (see docs/agent-control-plan.md §2). SYNCED, default OFF: every skill's
-     * name+description costs context on every turn, so it is opt-in. Injection is
-     * add-only at create; a marker keeps user-authored copies untouched.
+     * Inject the Codeman agent skill (`skills/codeman`) into each new session's case, in
+     * the directory its CLI scans for skills (`capabilities.agentSkillDir`), so an agent
+     * inside the session can drive the API (see docs/agent-control-plan.md §2). SYNCED,
+     * default ON since 1.50.0: an absent key is on, only an explicit false is off, and a
+     * false stored by 1.49.0 or earlier is switched on once at the first 1.50.0 start
+     * (agent-skill-default-migration.ts). Injection is add-only at create; a marker keeps
+     * user-authored copies untouched.
      */
     agentSkillEnabled: z.boolean().optional(),
     /**
@@ -1425,6 +1531,14 @@ export const SettingsUpdateSchema = z
      * never added — for a user who wants Codeman to leave their repos alone.
      */
     workspaceHooksEnabled: z.boolean().optional(),
+    /**
+     * Launch every Claude session with `--name` set to its tab name (default OFF: only a
+     * name the user chose is pinned). Nothing acts on it in `PUT /api/settings`: it is read
+     * fresh from disk by readPinCliSessionNameEnabled() (hooks-config.ts) at every claude
+     * create and respawn, like readPlanUsageTelemetryEnabled(), so a toggle applies from the
+     * next spawn with no restart.
+     */
+    pinCliSessionName: z.boolean().optional(),
     /**
      * Let browser dictation transcribe through this machine's Claude Code login,
      * the same speech-to-text service the CLI's own `/voice` mode uses
@@ -1451,6 +1565,23 @@ export const SettingsUpdateSchema = z
      * broadcast and /api/search, which is the user's choice to make.
      */
     autoNameSessions: z.boolean().optional(),
+    /** Prompt-cache keep-warm default for sessions that have not chosen (Session Options overrides it). */
+    promptCacheKeepWarm: z.boolean().optional(),
+    /** Hours after the last real prompt during which keep-alives are sent (default 2, DEFAULT_KEEP_WARM_MAX_HOURS). */
+    promptCacheKeepWarmMaxHours: z.number().min(0.5).max(24).optional(),
+    /**
+     * Git fetch on an interval (src/git-fetch-scheduler.ts): `git fetch` for the repositories the Git panel
+     * lists, run on a timer instead of only on the panel's Fetch click. SYNCED, default OFF, because the
+     * server is what runs it: `git fetch` is the only git command the Git panel runs that writes (cloning
+     * and worktree management write too, but only when the user asked for them at the moment they asked), and
+     * the only one that can run later by itself, on a timer, and the only one that can run a repository's own
+     * hooks (`reference-transaction`, `pre-auto-gc` through the automatic maintenance a fetch triggers, config
+     * commands such as `credential.helper`), so nothing runs on a timer until the user turns this on. Cap in seconds between runs (30 to 3600, default 300). A
+     * session can override both in Session Options → Git; `null` there clears the override, and sessions
+     * sharing one folder are fetched by one run.
+     */
+    gitFetchEnabled: z.boolean().optional(),
+    gitFetchIntervalSeconds: z.number().int().min(30).max(3600).optional(),
     /**
      * Spawned tabs follow their parent: a session created by another one keeps
      * following its parent's tab (into its group, moving with it) until moved by
@@ -1490,6 +1621,31 @@ export const SettingsUpdateSchema = z
      */
     mcpSyncEnabled: z.boolean().optional(),
     /**
+     * Config backups (src/config-backup.ts): timestamped snapshots of the customized config files,
+     * taken at startup and whenever their content changes. SYNCED. Absent means ON (the feature
+     * protects against an event nobody schedules); the folder defaults to `<data dir>/backups/config`.
+     */
+    configBackupEnabled: z.boolean().optional(),
+    /** Absolute folder (a leading `~` is expanded); empty or absent = the default folder. */
+    configBackupDir: z.string().max(1024).optional(),
+    /** Keep at most this many snapshots. */
+    configBackupKeepCount: z.number().int().min(2).max(500).optional(),
+    /** Also drop snapshots older than this many days; 0 = no age limit. */
+    configBackupKeepDays: z.number().int().min(0).max(3650).optional(),
+    /**
+     * Agent inbox snapshot on disk (src/web/agent-inbox-persistence.ts). SYNCED, default OFF:
+     * off means no file is written, and switching it off deletes the snapshot (the in-memory
+     * inboxes stay). On, pending messages between agents survive a server restart.
+     */
+    agentInboxPersistEnabled: z.boolean().optional(),
+    /**
+     * Experimental agent coordination (src/web/routes/agent-session-routes.ts): bounded
+     * inspection and the guarded stage/submit routes behind `codeman agent inspect|stage|submit`.
+     * SYNCED, default OFF: the routes are labeled experimental and may change in a minor or
+     * patch release, so automation has to opt in. While OFF, all three routes answer 403.
+     */
+    agentCoordinationEnabled: z.boolean().optional(),
+    /**
      * Read My Mind predictor model override. Empty/absent = the AI-checker
      * default (opus: prediction quality is the product and it runs only on an
      * explicit press). Shell-safety is validated again at spawn time.
@@ -1499,7 +1655,7 @@ export const SettingsUpdateSchema = z
     // Action field (NOT persisted): explicit per-request acknowledgment that the
     // operator accepts exposing an UNAUTHENTICATED public tunnel (no CODEMAN_PASSWORD).
     // Lets the UI enable a tunnel after a confirm dialog without the
-    // CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK env var. Stripped before persisting.
+    // CODEMAN_ALLOW_UNAUTHENTICATED_TUNNEL opt-in. Stripped before persisting.
     acknowledgeUnauthTunnel: z.boolean().optional(),
     tabTwoRows: z.boolean().optional(),
     /**
@@ -1611,6 +1767,7 @@ export const SettingsUpdateSchema = z
       .optional(),
     codexReasoningEffort: z.enum(['', ...CODEX_REASONING_EFFORTS]).optional(),
     codexDangerouslyBypassApprovals: z.boolean().optional(),
+    codexNetworkAccess: z.boolean().optional(),
     codexAnimationsEnabled: z.boolean().optional(),
     // Terminal history and retention
     terminalScrollbackLines: z
@@ -1667,6 +1824,8 @@ export const SettingsUpdateSchema = z
         language: z.string().max(20).optional(),
         keyterms: z.string().max(500).optional(),
         insertMode: z.string().max(20).optional(),
+        /** Silence timeout in seconds; 0 disables automatic stopping. Omitted keeps provider defaults. */
+        silenceTimeout: z.union([z.literal(0), z.literal(3), z.literal(6), z.literal(15), z.literal(30)]).optional(),
       })
       .optional(),
     // Run mode preference (cross-device sync)
@@ -1789,6 +1948,37 @@ export const SessionWaitOutputQuerySchema = z.object({
   timeout: z.coerce.number().int().positive().optional(),
 });
 
+// ========== Agent Inbox Routes ==========
+
+/**
+ * Body for `POST /api/sessions/:id/inbox`. The byte cap (`MAX_MESSAGE_BYTES`) is the
+ * store's, checked there in UTF-8 bytes; this bound is only the outer fence so a
+ * multi-megabyte body never reaches it. It is 4× the byte cap in characters (a UTF-8
+ * character is at most 4 bytes), so every over-size message gets the store's answer,
+ * which tells the sender what to do instead. Multi-line text is fine: it is stored and
+ * handed back as data, never typed.
+ */
+export const InboxPostSchema = z
+  .object({
+    text: z
+      .string()
+      .min(1, 'text must not be empty')
+      .max(4 * MAX_MESSAGE_BYTES),
+  })
+  .strict();
+
+/** Query for `GET /api/sessions/:id/inbox`. `wait` follows the wait routes' `timeout`: clamped, never a 400 for size. */
+export const InboxReadQuerySchema = z.object({
+  wait: z.coerce.number().int().positive().optional(),
+});
+
+/** Body for `POST /api/sessions/:id/inbox/ack`: the ids a read handed out. */
+export const InboxAckSchema = z
+  .object({
+    ids: z.array(z.string().min(1).max(64)).min(1).max(200),
+  })
+  .strict();
+
 // ========== Session Mutation Routes ==========
 
 /** PUT /api/sessions/:id/name */
@@ -1840,6 +2030,18 @@ export const AutoResumeSchema = z.object({
   enabled: z.boolean(),
 });
 
+/** `POST /api/sessions/:id/keep-warm`: `null` clears the session's choice so the app-wide default applies. */
+export const KeepWarmSchema = z.object({ enabled: z.boolean().nullable() });
+
+/**
+ * `POST /api/sessions/:id/git-fetch-settings`: `null` clears the session's choice so the app-wide default
+ * applies. Both fields are optional, so a row that saves on its own does not clear the other.
+ */
+export const GitFetchSettingsSchema = z.object({
+  enabled: z.boolean().nullable().optional(),
+  intervalSeconds: z.number().int().min(30).max(3600).nullable().optional(),
+});
+
 /** POST /api/sessions/:id/pin (COD-139) — explicit pin state for idempotency. */
 export const PinSessionSchema = z.object({
   pinned: z.boolean(),
@@ -1874,7 +2076,7 @@ export const ScheduledRunSchema = z.object({
 /** 'HH:MM' 24-hour time. */
 const hhmmSchema = z.string().regex(/^([01]?\d|2[0-3]):[0-5]\d$/, 'Time must be HH:MM (24-hour)');
 
-/** Prompt delivery is single-line only (writeViaMux/Ink constraint) — reject newlines outright. */
+/** Prompt delivery is single-line only (the submit check cannot reliably recognise a multi-line paste) — reject newlines outright. */
 const noNewlines = (v: string) => !/[\r\n]/.test(v);
 
 /** Shared field shape for creating/updating a scheduled job. */
@@ -1942,15 +2144,40 @@ export const LinkCaseSchema = z.object({
   path: safePathSchema,
 });
 
+/** POST /api/cases/:name/rename */
+export const RenameCaseSchema = z
+  .object({
+    newName: z
+      .string()
+      .min(1)
+      .max(100)
+      .regex(/^[a-zA-Z0-9_-]+$/, 'Invalid case name format. Use only letters, numbers, hyphens, underscores.'),
+    /** Linked cases only: also rename the real folder on disk (a case under the cases directory always moves). */
+    renameFolder: z.boolean().optional(),
+    /** Stop the live sessions that have the folder open, instead of refusing with the list of them. */
+    stopSessions: z.boolean().optional(),
+  })
+  .strict();
+
 /** PUT /api/cases/order */
 export const CaseOrderSchema = z.object({
   order: z.array(z.string().regex(/^[a-zA-Z0-9_-]+$/, 'Invalid case name format')),
 });
 
+/**
+ * PUT /api/cases/:name/default-group — the tab group new sessions of this case
+ * land in: one of the caller's own group ids, or null for Ungrouped. Same bounds
+ * as tabGroupIdSchema; the route checks the id against the caller's layout.
+ */
+export const CaseDefaultGroupSchema = z.object({
+  groupId: z.string().min(1).max(100).nullable(),
+});
+
 /** PUT /api/session-order — global tab order (ordered sessionIds), COD-131 */
 export const SessionOrderUpdateSchema = z.object({
   // Bounded defensively: ids are uuid-ish (<=100 chars) and the client pushes only
-  // its open-tab order (max sessions is 50) — 500 leaves ample headroom while
+  // its open-tab order (max sessions is 50 by default, at most 462 via CODEMAN_MAX_SESSIONS,
+  // see MAX_CONCURRENT_SESSIONS_CEILING) — 500 leaves enough room while
   // keeping a hostile/buggy client from persisting megabytes into state.json.
   order: z.array(z.string().max(100)).max(500),
 });
@@ -2069,6 +2296,37 @@ export const WebhookUpdateSchema = z
     kind: z.enum(WEBHOOK_KINDS).optional(),
     scope: z.enum(WEBHOOK_SCOPES).optional(),
     url: z.string().max(2048).optional(),
+  })
+  .strict();
+
+/**
+ * PUT /api/discord. `.strict()` and every field optional, so a change of one option never needs the
+ * token re-sent; an empty `token` clears it. Option lists are the bridge's own, so the schema cannot
+ * accept a value the store would coerce away. Ids are checked again (as snowflakes) by the route.
+ */
+export const DiscordUpdateSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    token: z.string().max(200).optional(),
+    guildId: z.string().max(25).optional(),
+    parentChannelId: z.string().max(25).optional(),
+    allowedUserIds: z.array(z.string().max(25)).max(20).optional(),
+    threadCreation: z.enum(DISCORD_THREAD_CREATION).optional(),
+    onSessionDelete: z.enum(DISCORD_ON_DELETE).optional(),
+    staleThreads: z.enum(DISCORD_ON_DELETE).optional(),
+    pingMode: z.enum(DISCORD_PING_MODES).optional(),
+    scope: z.enum(WEBHOOK_SCOPES).optional(),
+    startupHint: z.boolean().optional(),
+  })
+  .strict();
+
+/** POST /api/sessions/:id/discord-notify */
+export const DiscordNotifySchema = z
+  .object({
+    message: z.string().min(1).max(1500),
+    urgent: z.boolean().optional(),
+    /** Absolute path of a file inside the session's working folder, uploaded with the post. */
+    file: z.string().min(1).max(1024).optional(),
   })
   .strict();
 
@@ -2210,6 +2468,14 @@ export const WebviewUpdateSchema = WebviewBaseSchema.partial();
 /** POST /api/webviews/probe: reachability + framing check for the editor's Test button. */
 export const WebviewProbeSchema = z.object({ url: webviewUrlSchema });
 
+/**
+ * Ceiling on a stated context length (tokens), shared between the bounds below and
+ * discovery (`custom-model-routes.ts`): anything above it reads as nonsense and is
+ * ignored, because a bogus figure here overflows the smaller server, which is the exact
+ * failure the discovery field exists to prevent.
+ */
+export const MAX_DISCOVERED_CONTEXT_TOKENS = 100_000_000;
+
 // Custom Model Endpoint Profiles (docs/custom-model-endpoints-plan.md) — a
 // user-configured custom OpenAI-compatible endpoint, local (llama.cpp) or cloud
 // (Azure AI Foundry, etc.). Lives below `webviewUrlSchema` because `baseUrl` IS that
@@ -2233,10 +2499,69 @@ export const CustomModelHostSchema = z.object({
   defaultModelId: z.string().max(200).optional(),
   // Server-populated by discovery (custom-model-routes.ts); accepted here only so a client
   // round-tripping the GET response back through PUT (edit-save) doesn't drop it.
-  modelContextLengths: z.record(z.string().max(200), z.number().int().positive().max(100_000_000)).optional(),
+  modelContextLengths: z
+    .record(z.string().max(200), z.number().int().positive().max(MAX_DISCOVERED_CONTEXT_TOKENS))
+    .optional(),
+  // Same reasoning as modelContextLengths above.
+  modelSlotCounts: z.record(z.string().max(200), z.number().int().positive().max(4096)).optional(),
   // Same reasoning as modelContextLengths above.
   modelSizesGB: z.record(z.string().max(200), z.number().positive().max(100_000)).optional(),
+  // User-set fallback for models discovery has no context length for (session-routes.ts);
+  // discovery never writes it. Same bound as the modelContextLengths values above.
+  defaultContextLength: z.number().int().positive().max(MAX_DISCOVERED_CONTEXT_TOKENS).optional(),
 });
+
+// ---------- Local model install (src/web/routes/local-model-routes.ts) ----------
+
+/**
+ * A model id as the local model catalogue writes it: `name:tag`, lowercase, no slash. The
+ * same pattern as `LOCAL_MODEL_ID_PATTERN` in config/local-model-catalog.ts, repeated here as
+ * a request-shape check: without a slash an id can never name another registry host. The
+ * real gate is the route's own lookup of the id in what the server offers.
+ */
+const localModelId = z
+  .string()
+  .max(200)
+  .regex(/^[a-z0-9][a-z0-9._-]*:[a-z0-9][a-z0-9._-]*$/, 'Invalid model id');
+
+/**
+ * A coding agent as a CLI registry id. A request-shape check only: the real gate is the
+ * service's own lookup of the id among the catalogue harnesses it offers right now.
+ */
+const localModelCli = z
+  .string()
+  .max(64)
+  .regex(/^[a-z0-9][a-z0-9_-]*$/, 'Invalid coding agent id');
+
+/** POST /api/local-model/install: the row the person chose and the size they confirmed. */
+export const LocalModelInstallSchema = z
+  .object({
+    modelId: localModelId,
+    cli: localModelCli,
+    context: z.number().int().positive().max(MAX_DISCOVERED_CONTEXT_TOKENS),
+    acknowledgedBytes: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  })
+  .strict();
+
+/** POST /api/local-model/resume. The body may be empty. */
+export const LocalModelResumeSchema = z.object({ newPort: z.boolean().optional() }).strict();
+
+/** POST /api/local-model/runtime. */
+export const LocalModelRuntimeSchema = z
+  .object({ action: z.enum(['start', 'stop']), newPort: z.boolean().optional() })
+  .strict();
+
+/** DELETE /api/local-model. The body may be empty. */
+export const LocalModelRemoveSchema = z.object({ removeModel: z.boolean().optional() }).strict();
+
+/** POST /api/local-model/use: a checked model of the library to switch to. */
+export const LocalModelUseSchema = z.object({ modelId: localModelId }).strict();
+
+/** DELETE /api/local-model/models: one model of the store, by its name. Never a path. */
+export const LocalModelDeleteSchema = z.object({ modelId: localModelId }).strict();
+
+/** POST /api/local-model/agent: one more coding agent to install beside an installed model. */
+export const LocalModelAgentSchema = z.object({ cli: localModelCli }).strict();
 
 /**
  * A shell-safe bare word, mirroring `config/cli-registry/schema.ts`'s own `shellToken` —
@@ -2295,3 +2620,36 @@ export const CustomModelSelectionSchema = z.union([
   }),
   z.object({ clear: z.literal(true) }),
 ]);
+/**
+ * Adopt a FOREIGN tmux session (one a human started outside Codeman).
+ *
+ * ⚠️ The body carries ONLY the opaque candidate id from `GET /api/mux/foreign`.
+ * The socket path, session name and host are re-resolved server-side by re-running
+ * discovery, so a browser can never hand the launch chain a path or a session name
+ * to interpolate. That is the same discipline that keeps the docker-adopt and
+ * remote-attach paths free of caller-supplied command fragments.
+ */
+export const AdoptForeignSessionSchema = z
+  .object({
+    id: z.string().min(1).max(64),
+    /** Optional tab name; defaults to the foreign session's own name. */
+    name: z.string().max(128).optional(),
+    /** Include docker locations in the re-resolve (must match the listing call). */
+    docker: z.boolean().optional(),
+    /** Include remote locations in the re-resolve. */
+    remote: z.boolean().optional(),
+    parentSessionId: z.string().max(64).optional(),
+  })
+  .strict();
+
+/** Agent inspection bounds are bytes of evidence, independent of the JSON envelope. */
+export const AgentInspectQuerySchema = z
+  .object({
+    maxBytes: z.coerce.number().int().min(1).max(65536).default(8192),
+    since: z.string().uuid().optional(),
+  })
+  .strict();
+export const AgentStageSchema = z.object({ message: z.string().min(1).max(8192) }).strict();
+export const AgentSubmitSchema = z
+  .object({ stageId: z.string().uuid(), confirmSha: z.string().regex(/^[a-f0-9]{64}$/) })
+  .strict();

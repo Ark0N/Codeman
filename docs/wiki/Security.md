@@ -20,7 +20,8 @@ In order of how much they matter:
 
 1. **Do not expose it without `CODEMAN_PASSWORD`.** Binding a non-loopback host without one
    starts, but warns loudly. A tunnel refuses outright unless you acknowledge the exposure
-   in the UI.
+   in the UI, which asks every time, or set `CODEMAN_ALLOW_UNAUTHENTICATED_TUNNEL`. The
+   installer's `CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK` covers the LAN bind only.
 2. **Prefer Tailscale over a public tunnel.** Keeping the loopback bind and putting a
    private network in front of it removes the public attack surface entirely, and gives you
    real HTTPS. See [Remote Access](Remote-Access).
@@ -53,7 +54,7 @@ When authentication is enabled:
 | ------------------- | ------------------------------------------------------------------------------------------------ |
 | **HTTP Basic**      | `CODEMAN_USERNAME` (default `admin`) and `CODEMAN_PASSWORD`.                                      |
 | **Session cookie**  | A 256-bit opaque token validated server side, so it cannot be forged offline. 24 hours, extended on activity, with a device-context audit trail. |
-| **Rate limiting**   | Ten failed attempts per IP produce a `429` with a 15 minute decay. A correct password or valid cookie recovers immediately even under attack, which matters because all tunnel traffic shares one loopback address. |
+| **Rate limiting**   | Ten failed attempts per IP produce a `429` with a 15 minute decay. A correct password or valid cookie recovers immediately even under attack, which matters because all tunnel traffic shares one loopback address. In multi-user mode the per-IP cap is 50, and each account allows ten failed guesses from any one IP. Both are checked before the password, so past either a correct password from that IP also waits for the decay (the account still logs in from another IP, and a valid cookie keeps working). From the tenth failed guess on, an account's wrong guesses get a `429` from every IP, which never refuses a correct password. |
 | **QR auth**         | Single-use 60-second tokens with their own separate rate limiter, so a mistyped password cannot lock out QR login. |
 | **Hook endpoints**  | The hook and telemetry endpoints skip Basic auth because they are called from localhost by the CLI, but when auth is on, that bypass additionally requires a per-instance hook secret. |
 
@@ -67,7 +68,7 @@ be wrong for at least one of them:
 | **File Viewer**      | Real path resolution before boundary checks, so symlinks cannot escape. Sensitive trees blocked. Edit mode adds an extension allowlist, a size cap, `.git` denial, and optimistic concurrency. It never creates files. |
 | **Attachments**      | An id-based registry, so browser requests never carry absolute paths. The magic-link scanner is prompt-injectable by nature and is therefore force-confined to the session's workspace. Extension allowlist, not a blocklist. |
 | **Path picker**      | Its own root allowlist rather than the workspace confinement. In multi-user mode a non-admin gets only their own user space, because per-user spaces live inside the home directory. |
-| **Remote cases**     | Reads go over the session's own ssh connection and are resolved and contained on the remote host, with a bounded number of ssh children. Nothing is copied to the Codeman host; writes, Office previews and thumbnails are refused. |
+| **Remote cases**     | Reads go over the session's own ssh connection and are resolved and contained on the remote host, with a bounded number of ssh children. Nothing is copied to the Codeman host, apart from the diffs the Edit history panel reads from a remote Claude session's transcripts while it is open, kept in a private bounded store (0600) that is deleted with the session's record. Writes, Office previews and thumbnails are refused. |
 
 Downloads block sensitive paths outright (`.env`, credentials files, `~/.ssh`, AWS
 credentials), and SVG and HTML are served as downloads with `nosniff` so they cannot execute
@@ -98,14 +99,32 @@ Stated plainly, because a security page that only lists strengths is not useful:
   bypass requires a secret unconditionally when auth is on.
 - **The agent CLIs have their own trust models.** Pi's project trust executes repo-local
   TypeScript, for instance. See [Agent CLIs](Agent-CLIs).
+- **Allow network access takes Codex's sandbox out of the picture.** The setting (App
+  Settings, Codex, off by default) lets commands in Codex's sandbox call Codeman's API,
+  which can start a session outside the sandbox with no approval prompt. A password does
+  not stop this, because a session inherits the server's password. It applies to every new
+  local Codex session, so a prompt-injected command in any of them can run anything you
+  can. Leave it off unless you trust what those sessions run.
 
 ## Privacy
 
-No telemetry, no analytics, no phone-home. Codeman's only network traffic is between your
-browser and your server. Your agent CLI's traffic is its own, on your account.
+No telemetry, no analytics, no phone-home. Your agent CLI's traffic is its own, on your
+account. Beyond the traffic between your browser and your server, the server itself makes a few
+requests for features you use: the Codex usage poll, web push, and webhooks if you set one up.
+
+The GitHub Copilot quota read behind the plan usage chip's **Copilot** row is **on by default
+while Copilot CLI is installed and signed in** (an absent plan-usage setting reads as on, even
+for a phone-only user whose chip is hidden). Every 10 minutes the server asks `api.github.com`,
+and nothing else, for your premium-request quota, with Copilot's own sign-in token. The token is
+never logged and redirects are refused. Turn off **Plan Usage Limits** in App Settings to stop it.
 
 Two features send data outward, both off by default and both stated where they appear: voice
 dictation through your Claude login, and the Read My Mind prediction call.
+
+[Config Backups](Config-Backups) copies some credential-bearing files (`.env`, `users.json`,
+`custom-model-hosts.json`, `push-keys.json`, `webhook.json`) into a backup folder. The default folder is inside
+the data directory, and every backup is mode `0700`/`0600`, so nothing new is exposed. Only a
+folder you choose yourself can move them somewhere less private; admin only in multi-user mode.
 
 ## Reporting a vulnerability
 

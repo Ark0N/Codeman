@@ -346,12 +346,9 @@ Object.assign(CodemanApp.prototype, {
       if (!sessionId || files.length === 0) return;
       // The one classifier every pick and drop filter reads (image-input.js):
       // MIME first, then the name's extension, so documents and videos count too.
-      const media = files.filter((f) => this._promptAttachKind?.(f));
-      if (media.length === 0) {
-        this.showToast?.('Unsupported file type', 'error');
-        return;
-      }
-      this._uploadAndInsertImages?.(media, { sessionId });
+      // It toasts what it refuses.
+      const media = this._admitPromptAttachments(files);
+      if (media.length > 0) this._uploadAndInsertImages?.(media, { sessionId });
     });
   },
 

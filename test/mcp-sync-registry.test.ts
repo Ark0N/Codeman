@@ -18,7 +18,7 @@ function withMcp(mcpConfig: unknown) {
 describe('capabilities.mcpConfig', () => {
   it('is declared by exactly the CLIs whose format is verified', () => {
     const declared = STOCK_CLIS.filter((e) => e.capabilities.mcpConfig).map((e) => e.id as string);
-    expect(declared.sort()).toEqual(['antigravity', 'claude', 'codex', 'gemini', 'opencode']);
+    expect(declared.sort()).toEqual(['antigravity', 'claude', 'codex', 'copilot', 'gemini', 'opencode']);
   });
 
   it('every stock declaration passes the schema, with a distinct file per CLI', () => {
@@ -41,6 +41,7 @@ describe('capabilities.mcpConfig', () => {
       claude: { envVar: 'CLAUDE_CONFIG_DIR', path: '.claude.json' },
       opencode: { envVar: 'XDG_CONFIG_HOME', path: 'opencode/opencode.json' },
       codex: { envVar: 'CODEX_HOME', path: 'config.toml' },
+      copilot: { envVar: 'COPILOT_HOME', path: 'mcp-config.json' },
       gemini: { envVar: 'GEMINI_CLI_HOME', path: '.gemini/settings.json' },
       antigravity: undefined,
     });

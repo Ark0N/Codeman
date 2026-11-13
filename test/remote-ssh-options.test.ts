@@ -13,7 +13,7 @@
  *    `-o ProxyCommand=…` token; the local shell must not expand/mangle them).
  *  - a leading `~`/`$HOME` in `identityFile` is expanded to an absolute path at
  *    build time (ssh does NOT expand `~` in `-i`), then shellescaped.
- *  - empty options ⇒ byte-identical ssh to today (full back-compat).
+ *  - empty options retain the SSH option order; tmux gets the shared PATH wrapper.
  *
  * Pure command-string construction; no real tmux, no ssh. Port: N/A.
  */
@@ -25,6 +25,8 @@ import {
   buildRemoteTmuxCheckCommand,
   buildRemoteCliVersionProbeCommand,
   remoteSshTarget,
+  shellescape,
+  withRemoteTmuxPath,
 } from '../src/remote-hosts.js';
 import { buildRemoteLaunchCommand } from '../src/tmux-manager.js';
 import type { SessionRemote } from '../src/types.js';
@@ -146,31 +148,41 @@ describe('COD-107 buildRemoteLaunchCommand — threads connection args', () => {
     expect(idxProxy).toBeLessThan(idxTarget);
   });
 
-  it('a remote with no advanced options is byte-identical to the expected form', () => {
+  it('preserves the no-options launch command inside the shared remote PATH wrapper', () => {
     const command = buildRemoteLaunchCommand({ mode: 'shell', remote: baseRemote, sessionId: SESSION_ID });
     // Reconstruct the command using the SAME nested POSIX single-quote escaping the
-    // production code uses, to prove byte-identity. Session runs on the DEDICATED
+    // production code uses, preserving the payload inside the PATH wrapper. The DEDICATED
     // `-L codeman-remote` socket under a `codeman-ssh-` name that a remote Codeman's
     // discovery ignores; set-options are scoped per-session (never `-g`).
     const sh = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'";
     const remoteName = `codeman-ssh-${SESSION_ID.slice(0, 8)}`;
     const path = sh('/home/ubuntu/work');
-    const paneCommand = `cd ${path} && exec "\${SHELL:-/bin/sh}" -i -l`;
+    const flags = 'set -- -i -l; case ${SHELL##*/} in csh|tcsh) set --;; esac';
+    const paneCommand = `cd ${path} && { ${flags}; exec "\${SHELL:-/bin/sh}" "$@"; }`;
     const tmuxInvocation = [
-      `tmux -L codeman-remote new-session -A -s ${remoteName} -c ${path} ${sh(paneCommand)}`,
+      `tmux -L codeman-remote new-session -A -s ${remoteName} -c ${path} /bin/sh -c ${sh(paneCommand)}`,
       `set -t ${remoteName} status off`,
       `set -t ${remoteName} mouse off`,
       `set -t ${remoteName} prefix C-q`,
       'set -s escape-time 0',
       // COD-106 — shared/collaborative sizing, per-session scoped (never -g).
       `set -t ${remoteName} window-size latest`,
+      // #671 — the nested server's prefix table is stock unless this chain
+      // reduces it. Ctrl+Q then ) would switch-client onto a sibling session.
+      // Bind first: a user config that emptied the prefix table makes
+      // `unbind-key -a` fail and tmux drops the rest of the `\;` chain,
+      // including the bind and remain-on-exit. That option stays last because
+      // a remote tmux that rejects `failed` aborts the rest of the chain.
+      'bind-key -T prefix C-q send-prefix',
+      'unbind-key -a -T prefix',
+      'bind-key -T prefix C-q send-prefix',
       // #210 — keep a CRASHED pane for diagnosis. `failed` (not `on`, which would
       // also strand a pane after a clean `exit`), and LAST because tmux aborts the
       // remaining commands of a `\;` chain on error and `failed` needs tmux >= 3.2.
       `set -t ${remoteName} remain-on-exit failed`,
     ].join(' \\; ');
     // Connection args (with the default -o ConnectTimeout=10) sit after -t.
-    const expected = `ssh -o BatchMode=yes -t -o ConnectTimeout=10 ${remoteSshTarget(baseRemote)} ${sh(tmuxInvocation)}`;
+    const expected = `ssh -o BatchMode=yes -t -o ConnectTimeout=10 ${remoteSshTarget(baseRemote)} ${sh(withRemoteTmuxPath(tmuxInvocation))}`;
     expect(command).toBe(expected);
   });
 
@@ -193,12 +205,12 @@ describe('COD-107 buildRemoteTmuxCheckCommand — same connection options as the
     expect(cmd).toContain(`-i '${HOME}/.ssh/remote_ed25519'`);
     expect(cmd).toContain("-o 'ProxyCommand=nc -X 5 -x 127.0.0.1:1080 %h %p'");
     expect(cmd).toContain('aakht@192.168.55.170');
-    expect(cmd).toContain("'command -v tmux'");
+    expect(cmd).toContain(shellescape(withRemoteTmuxPath('command -v tmux')));
   });
 
-  it('back-compat: no advanced options ⇒ unchanged probe string', () => {
+  it('no advanced options preserve the ssh prefix and wrap the tmux probe', () => {
     expect(buildRemoteTmuxCheckCommand({ username: 'ubuntu', host: '10.0.0.42' })).toBe(
-      "ssh -o BatchMode=yes -o ConnectTimeout=10 ubuntu@10.0.0.42 'command -v tmux'"
+      `ssh -o BatchMode=yes -o ConnectTimeout=10 ubuntu@10.0.0.42 ${shellescape(withRemoteTmuxPath('command -v tmux'))}`
     );
     expect(buildRemoteTmuxCheckCommand({ username: 'ubuntu', host: '10.0.0.42', port: 2222 })).toContain('-p 2222');
   });

@@ -145,15 +145,16 @@ log stream --predicate 'process == "node"'   # macOS, noisy
 | Install route | Update with                                                             |
 | ------------- | ------------------------------------------------------------------------ |
 | Installer     | Re-run the one-liner, or **App Settings → System → Updates**.             |
+| Installer, without git | Re-run the one-liner. The in-app updater says so instead of offering an update. |
 | npm           | `npm update -g aicodeman`                                                 |
 | git clone     | `git pull && npm install && npm run build`, then restart.                 |
-| Docker Compose | Re-run `Start-Codeman.sh`, or the in-app updater, which restarts the container in place. |
+| Docker Compose | The in-app updater, which restarts the container in place, or `git pull`, then re-run `Start-Codeman.sh`. |
 
 ### The in-app updater
 
 **App Settings → System → Updates**, for git-clone installs supervised by systemd or
-launchd. npm installs report as non-updatable, and an unsupervised install is told to
-restart manually.
+launchd. npm installs and installs without git report as non-updatable, and an unsupervised
+install is told to restart manually.
 
 The interesting part is that the update restarts the very process running it. So the real
 work runs in a **detached script that outlives the restart** and writes progress to a status
@@ -188,7 +189,13 @@ the bind-mounted directories with the right owner, honours a `docker-compose.ove
 and refreshes the build volumes when the checkout moved under them. The in-app updater
 applies code only and restarts by letting the container exit, so it refuses a release that
 changes the Dockerfile, the compose file, or adds a new `.env` key, until you re-run the
-script. Guide:
+script.
+
+With no `docker/.env` yet, the script first asks for a data folder, a port and a password and
+writes that file. It then waits up to 180 seconds for Codeman to answer and exits 1 if the
+container crash-loops or never answers; pass `--no-wait` for scripted use. `Start-Codeman.sh`
+and `Update-Codeman.sh` both refuse to run while `CODEMAN_PASSWORD` is still the example
+`changeme`. Guide:
 [`docker/README.md`](https://github.com/Ark0N/Codeman/blob/master/docker/README.md).
 
 ## The tunnel as a service

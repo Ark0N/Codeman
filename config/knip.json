@@ -1,16 +1,19 @@
 {
-  "$schema": "https://unpkg.com/knip@5/schema.json",
-  "entry": [
-    "scripts/*.mjs",
-    "scripts/*.js",
-    "scripts/watch-subagents.ts",
-    "scripts/remotion/Root.tsx",
-    "scripts/remotion/index.ts",
-    "test/**/*.test.ts",
-    "test/mobile/vitest.config.ts",
-    "test/**/*.mjs"
-  ],
-  "project": ["src/**/*.{ts,tsx}", "scripts/**/*.{ts,tsx,mjs,js}", "test/**/*.{ts,mjs}"],
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "workspaces": {
+    ".": {
+      "entry": [
+        "scripts/*.{mjs,js,mts,ts}",
+        "scripts/dev/*.mjs",
+        "scripts/remotion/Root.tsx",
+        "scripts/remotion/index.ts",
+        "test/**/*.test.ts"
+      ],
+      "project": ["src/**/*.{ts,tsx}", "scripts/**/*.{ts,tsx,mjs,js,mts}", "!scripts/remotion/**", "test/**/*.{ts,mjs}"]
+    }
+  },
   "ignoreExportsUsedInFile": true,
-  "ignoreDependencies": ["@remotion/cli", "@remotion/transitions", "esbuild", "agent-browser"]
+  "ignoreDependencies": ["@remotion/cli", "@remotion/transitions"],
+  "ignoreBinaries": ["ffprobe", "ffmpeg", "wslpath", "vm_stat", "jq", "codex", "script", "mkfifo"],
+  "tags": ["-knipignore"]
 }

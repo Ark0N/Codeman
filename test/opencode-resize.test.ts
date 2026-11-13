@@ -70,11 +70,9 @@ describe('OpenCode session initial resize', () => {
     // NOT pre-set activeSessionId before calling selectSession. If it did,
     // selectSession would early-return and skip sendResize.
     //
-    // PR B2 consolidated runOpenCode() (and 7 siblings) into one shared
-    // _runCliMode(mode) — runOpenCode is now a one-line wrapper
-    // (`return this._runCliMode('opencode')`), so inspecting ITS source would
-    // never see the real launch logic and this check would pass vacuously
-    // regardless of what _runCliMode actually does. Inspect _runCliMode itself.
+    // PR B2 consolidated the per-CLI launchers into one shared
+    // _runCliMode(mode), so that is where the real launch logic lives and
+    // what this check inspects.
     ({ context, page } = await freshPage());
     await navigateAndWait(page);
 
@@ -151,7 +149,7 @@ describe('OpenCode session initial resize', () => {
 
     expect(sessionId).toBeTruthy();
 
-    // Call selectSession (which is what runOpenCode does after fix)
+    // Call selectSession (which is what the opencode launch does after fix)
     await page.evaluate(async (sid: string) => {
       const app = (window as unknown as { app: { selectSession: (id: string) => Promise<void> } }).app;
       await app.selectSession(sid);

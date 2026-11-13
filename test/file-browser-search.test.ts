@@ -30,6 +30,9 @@ interface FakeRow {
   dataset: Record<string, string>;
   addEventListener: (type: string, handler: ClickHandler) => void;
   click: () => void;
+  // The row's delete button is looked up per row; the fake rows carry none (file-delete-ui.test.ts
+  // drives it over a real DOM).
+  querySelector: (selector: string) => null;
 }
 
 interface FakeElement {
@@ -105,6 +108,7 @@ function fakeElement(initialClasses: string[] = []): FakeElement {
           click() {
             clickHandler?.();
           },
+          querySelector: () => null,
         });
       }
     },
@@ -387,7 +391,9 @@ describe('File Viewer server search', () => {
 
     await vi.advanceTimersByTimeAsync(1);
     expect(pending).toHaveLength(1);
-    expect(pending[0].url).toBe('/api/sessions/session%2FA/files?depth=5&showHidden=false&q=src%20%26%20docs');
+    expect(pending[0].url).toBe(
+      '/api/sessions/session%2FA/files?depth=5&showHidden=false&q=src%20%26%20docs&root=live-any'
+    );
   });
 
   it('is a safe no-op without a panel or session and can lazily adopt a later active owner', async () => {
@@ -399,7 +405,9 @@ describe('File Viewer server search', () => {
     app.activeSessionId = 'session/B';
     app.filterFileBrowser('after-session');
     await vi.advanceTimersByTimeAsync(250);
-    expect(pending[0].url).toBe('/api/sessions/session%2FB/files?depth=5&showHidden=false&q=after-session');
+    expect(pending[0].url).toBe(
+      '/api/sessions/session%2FB/files?depth=5&showHidden=false&q=after-session&root=live-any'
+    );
 
     pending[0].reply.resolve(response(successfulData()));
     await vi.advanceTimersByTimeAsync(0);
@@ -450,7 +458,7 @@ describe('File Viewer server search', () => {
     expect(pending).toHaveLength(0);
     await vi.advanceTimersByTimeAsync(1);
     expect(pending.map(({ url }) => url)).toEqual([
-      '/api/sessions/session%2FA/files?depth=5&showHidden=false&q=second%20query',
+      '/api/sessions/session%2FA/files?depth=5&showHidden=false&q=second%20query&root=live-any',
     ]);
   });
 
@@ -659,7 +667,7 @@ describe('File Viewer server search', () => {
     await vi.advanceTimersByTimeAsync(250);
 
     expect(pending).toHaveLength(1);
-    expect(pending[0].url.endsWith(`&q=${'x'.repeat(256)}`)).toBe(true);
+    expect(pending[0].url.endsWith(`&q=${'x'.repeat(256)}&root=live-any`)).toBe(true);
   });
 
   it('rejects 257 trimmed characters without a request', async () => {
@@ -786,7 +794,7 @@ describe('File Viewer server search', () => {
       expect(elements.fileBrowserTree.innerHTML).toContain('Loading files');
       expect(elements.fileBrowserTree.innerHTML).not.toContain('old-result.ts');
       expect(elements.fileBrowserTree.innerHTML).not.toContain('old-preference.ts');
-      expect(pending[1].url).toBe('/api/sessions/session%2FA/files?depth=5&showHidden=true');
+      expect(pending[1].url).toBe('/api/sessions/session%2FA/files?depth=5&showHidden=true&root=live-any');
 
       pending[1].reply.resolve(response(successfulTree('new-preference.ts')));
       await toggle;
@@ -794,7 +802,7 @@ describe('File Viewer server search', () => {
       expect(app._fileBrowserState.view).toBe('search-pending');
       expect(elements.fileBrowserTree.innerHTML).toContain('Searching');
       await vi.advanceTimersByTimeAsync(250);
-      expect(pending[2].url).toBe('/api/sessions/session%2FA/files?depth=5&showHidden=true&q=widget');
+      expect(pending[2].url).toBe('/api/sessions/session%2FA/files?depth=5&showHidden=true&q=widget&root=live-any');
       pending[2].reply.resolve(
         response(
           successfulData({
@@ -877,8 +885,8 @@ describe('File Viewer server search', () => {
       const firstToggle = app.toggleFileBrowserHidden();
       const secondToggle = app.toggleFileBrowserHidden();
       expect(pending.slice(1).map(({ url }) => url)).toEqual([
-        '/api/sessions/session%2FA/files?depth=5&showHidden=true',
-        '/api/sessions/session%2FA/files?depth=5&showHidden=false',
+        '/api/sessions/session%2FA/files?depth=5&showHidden=true&root=live-any',
+        '/api/sessions/session%2FA/files?depth=5&showHidden=false&root=live-any',
       ]);
 
       pending[1].reply.resolve(response(successfulTree('stale-hidden.ts')));
@@ -891,7 +899,7 @@ describe('File Viewer server search', () => {
       await vi.advanceTimersByTimeAsync(250);
 
       expect(pending).toHaveLength(4);
-      expect(pending[3].url).toBe('/api/sessions/session%2FA/files?depth=5&showHidden=false&q=widget');
+      expect(pending[3].url).toBe('/api/sessions/session%2FA/files?depth=5&showHidden=false&q=widget&root=live-any');
       expect(app.fileBrowserShowHidden).toBe(false);
     });
 
@@ -1674,7 +1682,9 @@ describe('File Viewer server search', () => {
       expect(immediateState.activeSessionId).toBe('session/B');
       expect(immediateState.ownerSessionId).toBe('session/B');
       expect(immediateState.resizeCalls).toBe(1);
-      expect(immediateState.fileUrls).toEqual(['/api/sessions/session%2FB/files?depth=5&showHidden=false']);
+      expect(immediateState.fileUrls).toEqual([
+        '/api/sessions/session%2FB/files?depth=5&showHidden=false&root=live-any',
+      ]);
 
       expect(filePending).toHaveLength(1);
       expect(app._fileBrowserState.ownerSessionId).toBe('session/B');
@@ -1755,7 +1765,9 @@ describe('File Viewer server search', () => {
       expect(elements.fileBrowserExpandBtn.innerHTML).toBe('\u229E');
       expect(elements.fileBrowserTree.querySelectorAll('.file-tree-item')).toHaveLength(0);
       expect(elements.fileBrowserTree.innerHTML).toContain('Loading files');
-      expect(pending.map(({ url }) => url)).toEqual(['/api/sessions/session%2FB/files?depth=5&showHidden=false']);
+      expect(pending.map(({ url }) => url)).toEqual([
+        '/api/sessions/session%2FB/files?depth=5&showHidden=false&root=live-any',
+      ]);
 
       await vi.advanceTimersByTimeAsync(250);
       expect(pending).toHaveLength(1);
@@ -1797,8 +1809,8 @@ describe('File Viewer server search', () => {
       await vi.advanceTimersByTimeAsync(250);
 
       expect(pending.map(({ url }) => url)).toEqual([
-        '/api/sessions/session%2FB/files?depth=5&showHidden=false',
-        '/api/sessions/session%2FB/files?depth=5&showHidden=false&q=during%20load',
+        '/api/sessions/session%2FB/files?depth=5&showHidden=false&root=live-any',
+        '/api/sessions/session%2FB/files?depth=5&showHidden=false&q=during%20load&root=live-any',
       ]);
       expect(pending.every(({ url }) => !url.includes('session%2FA'))).toBe(true);
     });
@@ -1815,9 +1827,9 @@ describe('File Viewer server search', () => {
 
       expect(secondA).not.toBe(firstA);
       expect(pending.map(({ url }) => url)).toEqual([
-        '/api/sessions/session%2FA/files?depth=5&showHidden=false',
-        '/api/sessions/session%2FB/files?depth=5&showHidden=false',
-        '/api/sessions/session%2FA/files?depth=5&showHidden=false',
+        '/api/sessions/session%2FA/files?depth=5&showHidden=false&root=live-any',
+        '/api/sessions/session%2FB/files?depth=5&showHidden=false&root=live-any',
+        '/api/sessions/session%2FA/files?depth=5&showHidden=false&root=live-any',
       ]);
 
       pending[0].reply.resolve(response(successfulTree('stale-A.ts')));

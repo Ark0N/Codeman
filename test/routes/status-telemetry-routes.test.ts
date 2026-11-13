@@ -52,6 +52,35 @@ describe('POST /api/status-telemetry', () => {
     });
   });
 
+  describe('context report (auto-compact and auto-clear)', () => {
+    const noted = () => h.ctx._session.noteContextReport as ReturnType<typeof vi.fn>;
+    const context = (cw: Record<string, unknown>) => ({ sessionId: SID, data: { context_window: cw } });
+
+    it('hands the context size and the window to the session', async () => {
+      const res = await post(context({ total_input_tokens: 562411, context_window_size: 1000000 }));
+      expect(res.statusCode).toBe(200);
+      expect(noted()).toHaveBeenCalledWith({ tokens: 562411, windowSize: 1000000 });
+    });
+
+    it('accepts a null window and passes the tokens on without one', async () => {
+      const res = await post(context({ total_input_tokens: 5, context_window_size: null }));
+      expect(res.statusCode).toBe(200);
+      expect(noted()).toHaveBeenCalledWith({ tokens: 5, windowSize: undefined });
+    });
+
+    it('keeps the last report when a render carries no context size', async () => {
+      await post(context({ used_percentage: 10 }));
+      await post({ sessionId: SID, data: {} });
+      expect(noted()).not.toHaveBeenCalled();
+    });
+
+    it('takes no report from a CLI without a statusline exporter', async () => {
+      h.ctx._session.mode = 'shell';
+      await post(context({ total_input_tokens: 562411 }));
+      expect(noted()).not.toHaveBeenCalled();
+    });
+  });
+
   it('does not broadcast for an unknown session; returns an EMPTY footer, never a brand word', async () => {
     const res = await post({ sessionId: 'does-not-exist', data: REAL });
     expect(res.statusCode).toBe(200);

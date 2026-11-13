@@ -12,7 +12,7 @@ import { execFileSync } from 'node:child_process';
 import { delimiter, join } from 'node:path';
 import { homedir } from 'node:os';
 import { EXEC_TIMEOUT_MS } from '../config/exec-timeout.js';
-import { createCliExecutableResolver, formatCliNotFoundMessage } from './cli-executable-resolver.js';
+import { createCliExecutableResolver } from './cli-executable-resolver.js';
 
 /** Common directories where the Claude CLI binary may be installed */
 const CLAUDE_SEARCH_DIRS = [
@@ -24,7 +24,6 @@ const CLAUDE_SEARCH_DIRS = [
 ];
 
 const claudeResolver = createCliExecutableResolver({ binary: 'claude', searchDirs: CLAUDE_SEARCH_DIRS });
-const CLAUDE_NOT_FOUND = 'Claude CLI not found. Install it with: curl -fsSL https://claude.ai/install.sh | bash';
 
 /**
  * Returns true if the Claude CLI binary can be located (via `which` or one of
@@ -44,10 +43,6 @@ export function isClaudeAvailable(): boolean {
  */
 export function findClaudeDir(): string | null {
   return claudeResolver.resolve()?.directory ?? null;
-}
-
-export function getClaudeNotFoundMessage(): string {
-  return formatCliNotFoundMessage(CLAUDE_NOT_FOUND, claudeResolver.diagnostics());
 }
 
 /**

@@ -115,8 +115,10 @@ There is also a toggle in **App Settings → System → Remote access**.
 
 **The tunnel refuses to start without a password.** That is on purpose: a public URL with no
 authentication is a terminal on your machine handed to the internet. Acknowledging the risk
-explicitly is possible from the UI toggle, and only from there; the API will not do it for
-you.
+explicitly is possible from the UI toggle, which asks you every time, or for the whole server
+with `CODEMAN_ALLOW_UNAUTHENTICATED_TUNNEL=1` (or `codeman web --allow-unauthenticated-tunnel`).
+`CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK`, which the installer sets for a LAN install without a
+password, does not count.
 
 ## LAN plus password
 
@@ -238,6 +240,12 @@ minute decay.
 
 A valid cookie or a correct password recovers immediately even while an attacker is hammering
 the same IP, which matters because all tunnel traffic arrives from one loopback address.
+
+Multi-user mode is different: there the per-IP cap is 50, each account allows ten failed
+guesses from one IP, and both are checked before the password. Behind a tunnel every client
+shares the loopback address, so past 50 failures in total a correct password waits for the
+decay for everyone, and past ten failures for one account it waits for that account (the
+account still logs in from another IP). A valid cookie keeps working throughout.
 
 ## Terminal alternatives
 

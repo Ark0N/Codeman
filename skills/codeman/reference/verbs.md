@@ -31,7 +31,7 @@ wrong directory.** `quick-start` with a new `caseName` does not find your repo: 
 |-------------------|------|------------------------------|
 | a fresh scratch dir (throwaway experiments) | `POST /api/v1/quick-start {"caseName":"scratch-1","mode":"claude"}` with a **new** case name | Codeman creates the directory and **writes hooks**: `stop` and `blocked` fire, send-and-wait is trustworthy |
 | a linked case (a real repo in the linked-cases registry) | same call with the linked name | **hooks installed at session create**, so `stop` fires here too. Not guaranteed: the operator can turn it off. Check |
-| any other absolute path, e.g. a git worktree you made | `POST /api/v1/sessions {"workingDir":"/abs/path","mode":"claude"}` then `POST /api/v1/sessions/:id/interactive` | same: **hooks installed at session create**, subject to the same setting. Check |
+| any other absolute path, e.g. a git worktree you made | `POST /api/v1/sessions {"workingDir":"/abs/path","mode":"claude"}` then `POST /api/v1/sessions/:id/interactive` (what `codeman agent spawn --working-dir /abs/path` sends) | same: **hooks installed at session create**, subject to the same setting. Check |
 
 Read `.data.casePath` back from the `quick-start` response and check it is where you
 meant. `caseName` accepts letters, digits, `-` and `_` only, and it resolves through
@@ -101,8 +101,9 @@ Differences from `quick-start` worth knowing before you debug one:
 - hitting the session cap here is `OPERATION_FAILED`, where `quick-start` returns
   `SESSION_BUSY` for the identical condition.
 
-`quick-start` failure codes are `SESSION_BUSY` (the global 50-session cap, or the
-per-user cap of 25 in multi-user mode), `FORBIDDEN`, `CONFLICT`, `NOT_FOUND` (a
+`quick-start` failure codes are `SESSION_BUSY` (the global session cap, 50 by default via
+`CODEMAN_MAX_SESSIONS`, or the per-user cap in multi-user mode, half the global cap,
+25 by default), `FORBIDDEN`, `CONFLICT`, `NOT_FOUND` (a
 remote or docker host named by the case no longer exists), `OPERATION_FAILED` and
 `INVALID_INPUT`. **None of them are retryable in a loop.** Always branch on
 `.success` before reading `.data.sessionId`: on failure the field is absent, `jq -r`
@@ -303,10 +304,16 @@ duplicate resend costs nothing.
 Codeman types the text and sends Enter **only when the input contains a carriage
 return**; without it your command sits unsubmitted on the worker's prompt and
 everything downstream times out. No response field catches this: `delivered:true`
-means "written to the pane", **not** "submitted". Newlines are stripped, so input is
-single-line by construction. Build the body with `jq -n` for any prompt you did not
-author as a literal, because the inline `-d '{"input":"'"$P"'\r"}'` pattern breaks on
-the first double quote, backslash or `$` in a real prompt:
+means "written to the pane", **not** "submitted". With `useMux`, newlines are kept: the
+text goes in as one paste, and the `\r` submits all of it. **`sendwait` sends one line,
+though:** its Enter loop and the server's submit check cannot reliably recognise a
+multi-line paste, so a multi-line prompt to a freshly spawned worker could sit unsent in
+Claude Code's Enter-ignore window. `sendwait` therefore joins the lines with a space,
+which loses their layout; put long multi-line content in a file
+([§5.9](#59-big-input-via-the-workspace)). Build the body with `jq -n`
+for any prompt you did not author as a literal, because the inline
+`-d '{"input":"'"$P"'\r"}'` pattern breaks on the first double quote, backslash or `$`
+in a real prompt:
 
 ```bash
 BODY=$(jq -n --arg p "$PROMPT" '{input:($p+"\r"),useMux:true,clientId:"agent-1",seq:1,wait:true,waitTimeout:60000}')
@@ -376,11 +383,16 @@ recovered by submitting it with `{"input":"\r"}`.
 only when the workspace actually has them, see [§5.1](#51-where-to-spawn)) **and for
 `deepseek`** — the one external CLI that reports its own lifecycle, so its `stop` is a
 real end-of-turn signal rather than a guess. On
-`shell`/`opencode`/`codex`/`gemini`/`antigravity`/`pi`/`grok`/`omp`, requesting them explicitly is a
+`shell`/`opencode`/`codex`/`gemini`/`antigravity`/`pi`/`grok`/`omp`/`copilot`/`jcode`, requesting them explicitly is a
 400 (except `blocked` on `codex`, which Codeman reads off its screen when an approval,
-question or trust dialog is up; a wait for it answers at once if one already is), and
+question or trust dialog is up; a wait for it answers at once if one already is; and
+`blocked` on a local `omp` session, next paragraph), and
 lifecycle transitions there are coarse (a short shell command may emit **no**
 `idle` transition at all, verified live), so synchronize those with markers.
+
+`blocked` also works on a local `omp` session: Codeman installs a hook module into its
+workspace that reports omp's approval dialogs (the inbox item is alert-only, so answer in
+the pane). `stop` stays a 400 there, so wait on `idle` or a marker for end-of-turn.
 
 ⚠️ A dsh session can still refuse them for a per-SESSION reason: `statusReporting:
 false` at create time disarms the bridge, and an explicit `until=stop` is then a 400
@@ -430,7 +442,7 @@ from the transcript file, which is flushed slightly *after* the `stop` hook fire
 single read taken the instant send-and-wait returns comes back `""` even though the
 turn finished (verified live: empty on the first call, full text seconds later). `text`
 is also `""` before the worker's first completed turn, and always `""` for modes with
-no transcript (`shell`, `opencode`, `gemini`, `antigravity`, `pi`, `grok`, `omp`; the first four
+no transcript (`shell`, `opencode`, `gemini`, `antigravity`, `pi`, `grok`, `omp`, `copilot`, `jcode`; the first four
 verified live, pi from the same source path), which is
 why the loop above is bounded rather than open-ended. A dsh worker lags too, for its own
 reason: the harness finalizes the assistant message just after it reports `idle`. Fall back to the terminal buffer
@@ -477,7 +489,10 @@ snippet carries the exit code back to you.
 
 For a **claude** worker with no hooks, ask for the marker in halves in the prompt
 itself ("print the word WORKDONE immediately followed by `_<token>`") for the same
-reason, and match the joined token. ⚠️ Against a TUI, match a single space-free token:
+reason, and match the joined token. For any **agent** worker without `stop` (a hook-less
+claude, a worker on the local model, every external agent mode but deepseek), the
+preamble's `sendmark <sid> "<prompt>"` is exactly that in one call, and also asks for the
+answer in a file it reads back: [§5.16](#516-a-worker-on-the-local-model). ⚠️ Against a TUI, match a single space-free token:
 a full-screen TUI positions text with cursor movements rather than literal spaces, so
 the stripped stream can read `Yes,Itrustthisfolder`, and whether a phrase keeps its
 spaces depends on how the TUI happened to draw it (observed live: some match, some
@@ -516,7 +531,7 @@ turn), and both better than diffing terminal samples:
 ```
 
 ⚠️ `active-tools` is parsed out of Claude's own output format, so it is **empty for
-`opencode`/`codex`/`gemini`/`antigravity`/`pi`/`grok`/`deepseek`/`omp`** (those parsers are skipped wholesale) and
+`opencode`/`codex`/`gemini`/`antigravity`/`pi`/`grok`/`deepseek`/`omp`/`copilot`/`jcode`** (those parsers are skipped wholesale) and
 in practice empty for `shell`. Source-verified, not measured live.
 
 Only if neither helps: sample `terminal?tail=` twice a few seconds apart. A changing
@@ -543,8 +558,10 @@ this (`src/web/routes/approval-routes.ts:43`). ESC is then claude's own interrup
 that half is the CLI's behavior, not something this API guarantees.
 
 - **This is not the composer-clearing tool.** Esc (and Ctrl+U) do **not** clear a
-  typed-but-unsubmitted prompt, verified live. The only recovery there is to submit it
-  with `{"input":"\r"}` and let the worker read the junk line.
+  typed-but-unsubmitted Claude prompt, verified live. Do not submit an unverified
+  draft merely to clear it. For a refused guarded local Codex stage or submit, use the
+  verified-unsent recovery in [inspection and staging](inspection-and-staging.md#recover-a-stranded-draft);
+  when the composer is unclear, ask the user to clear it in the terminal.
 - The interrupted turn already burned its tokens. Interrupting early saves the rest.
 - `POST /api/sessions/:id/send-key` is a different endpoint and cannot do this: its
   allowlist is S-Enter / C-Enter only.
@@ -587,9 +604,10 @@ allowlist in §4.
 
 ### 5.9 Big input via the workspace
 
-The composer is a single line capped at 65536 characters with newlines stripped, which
-makes it a bad channel for a spec, a diff or a file list. The workspace is the good
-one, and for a local or docker case you are on the same filesystem as the worker.
+The composer is capped at 65536 characters, and a multi-line paste cannot be confirmed
+as submitted, which makes it a bad channel for a spec, a diff or a file list. The
+workspace is the good one, and for a local or docker case you are on the same
+filesystem as the worker.
 
 1. Write `TASK.md` into the worker's workspace with your own file tools. The path is
    `.data.casePath` from `quick-start`, or the `workingDir` you passed to
@@ -599,10 +617,10 @@ one, and for a local or docker case you are on the same filesystem as the worker
 3. Wait on `DONE_<token>` with `wait-output` ([§5.5](#55-markers-for-hook-less-workers)),
    then read `RESULT.json` back with your own tools.
 
-This sidesteps the byte cap, the newline stripping and the quoting hazards in one
-move, and it makes the marker **split by construction**: the token lives in the file,
-never in the line you type, so the echo of your own keystrokes cannot match it. The
-worker also gets to re-read the task instead of holding it in one echoed line.
+This sidesteps the byte cap, the unconfirmed multi-line paste and the quoting hazards
+in one move, and it makes the marker **split by construction**: the token lives in the
+file, never in the line you type, so the echo of your own keystrokes cannot match it.
+The worker also gets to re-read the task instead of holding it in one echoed line.
 
 ⚠️ Two places it does not work: a **remote-SSH case** runs on another host whose
 filesystem you cannot see, and any worker **currently editing** the directory you are
@@ -699,7 +717,7 @@ The shape, each step verified live (probes, failure modes and safety detail in
    column; the row's `name [ref]` is the address. On Codeman 1.16+ with claude
    2.1.224+ a worker's peer name is its Codeman session name, so pass a DESCRIPTIVE
    `sessionName` in quick-start to pick it (a `w<N>-` placeholder-shaped name is not
-   pinned, so it lists derived); older setups list a name derived from the case folder.
+   pinned by default, so it lists derived); older setups list a name derived from the case folder.
    No row = messaging is off for that worker (it is feature-flagged even on matching
    CLI versions, observed live): fall back to the HTTP recipes without complaint.
 3. `SendMessage` the task; first contact must use the `name [ref]` form copied from
@@ -756,3 +774,186 @@ Confirm cleanup with `GET /api/v1/sessions`, never with `/api/v1/sessions/unifie
 (that one folds in transcript history from the whole machine and will keep showing
 your worker forever).
 
+### 5.15 Agent inbox
+
+Every session has an inbox. A message posted there is stored, not typed: the receiver's
+pane is untouched, no turn starts, and the text may span several lines. The receiver
+reads when it is ready. Use it for results a worker hands back, for a follow-up task a
+busy worker should pick up after its current one, and for anything longer than one
+composer line. Use `send` when you want a turn to start now.
+
+```bash
+codeman agent post "$WORKER" "$(cat task.md)"   # ONE quoted argument; prints pending/unseen
+codeman agent inbox --wait --timeout 300000     # your own inbox; blocks while nothing is new
+codeman agent ack <id> [<id>…]                  # remove what you handled, by the full id inbox printed
+codeman agent inbox "$WORKER"                   # peek at someone else's: marks nothing
+codeman agent ls                                # INBOX column: pending (new), parked
+```
+
+The same over HTTP: `POST /api/v1/sessions/:id/inbox {"text":…}`, `GET
+/api/v1/sessions/:id/inbox?wait=<ms>`, `POST /api/v1/sessions/:id/inbox/ack {"ids":[…]}`,
+`GET /api/v1/agent-inbox/summary`. The preamble's `CURL` already sends
+`X-Codeman-Parent-Session`, which is how the server knows who you are.
+
+Rules that matter:
+
+- **Reading removes nothing.** Every read returns every pending message until you ack
+  it, so a crash between reading and doing loses nothing. Ack once the work is done,
+  not when you have read it: a sender looking at `ls` sees unacked mail as not done.
+- **Only the receiver's own read counts.** Your read of your own inbox marks messages
+  seen (`seen: true` on the next read); reading another session's inbox is a peek and
+  changes nothing for it. Only the receiver can ack (403 otherwise).
+- **`--wait` waits for something new.** It returns at once when there is unseen mail
+  and otherwise blocks until a post arrives; seen but unacked messages come back with it
+  and do not end the wait. Timeout is exit 2, and so is a wait the server cut short
+  (a restart): loop again. Exit 3 means the session list no longer has the session.
+  `--wait` on someone else's inbox returns at once while they have unseen mail (only
+  their read clears it); check `ls` instead.
+- **The sender is resolved, not claimed.** `from` is the session the header resolves to,
+  or `null` (the user). In single-user mode that is a hint, since every local process
+  holds the same credentials. In multi-user mode it is checked against the owner;
+  an admin can still act as any session of the receiver's owner.
+- **Full means refused.** 200 messages or 512 KiB per inbox, 16 KiB per message. A full
+  inbox answers 409 and stores nothing; the oldest is never dropped. Messages expire 12
+  hours after they were posted.
+- **Nobody is woken.** An idle receiver does not look at its inbox by itself, and the
+  server never types into its pane. When `ls` shows a worker idle with unread mail and
+  not parked, `send` it one line ("read your inbox: `codeman agent inbox`").
+- **Lifetime.** An inbox goes with its session on delete. A server restart empties all
+  inboxes unless the user turned on *Keep agent inbox across restarts* in Settings.
+
+### 5.16 A worker on the local model
+
+The detail behind [Claude in the cloud, a local model on this
+Mac](../SKILL.md#claude-in-the-cloud-a-local-model-on-this-mac). Three preamble functions,
+all read from source and pinned by `test/agent-skill-local-model.test.ts` against a fake
+server; the local model routes themselves are experimental.
+
+**`local_model`** is one `GET /api/v1/local-model` (the `/api/v1` alias reaches the
+experimental route like any other) and prints one JSON line. Exit 0 means a `local` worker
+can be spawned now (`running: true`) or once `spawn_worker` has started the runtime
+(`running: false`):
+
+```json
+{"spawnable":true,"state":"installed","running":true,"cli":"opencode","cliLabel":"OpenCode",
+ "endpointId":"local-ollama","modelId":"qwen3.6:35b-a3b","modelLabel":"Qwen3.6 35B-A3B",
+ "agents":[{"cli":"opencode","cliLabel":"OpenCode","status":"ready","default":true,"readyMark":"┃"},
+           {"cli":"pi","cliLabel":"Pi","status":"installable","default":false}],
+ "models":[{"id":"qwen3.6:35b-a3b","label":"Qwen3.6 35B-A3B","active":true,"status":"ready","sizeGb":"23.1"}]}
+```
+
+`cli` is the default coding agent. `agents` is every agent the model can be run with
+(`install.harnesses` of the route): `ready` can be started, `installable` and `installing`
+are an install a person makes or made in the window, `setup-needed` is an agent with a setup
+of its own (DeepSeek Harness without a terminal profile). `models` is what is on the Mac
+(`install.library`); only the `active` one runs. A Codeman older than 1.51 sends neither
+list, and both keys are then absent.
+
+Exit 1 carries `reason` and `message` (the server's own sentence where it has one):
+
+| `reason` | What it means | What to tell the user |
+|----------|---------------|-----------------------|
+| `not-mac` | the server is not on macOS | local models need a Mac with Apple silicon |
+| `not-installed` | nothing installed; on a Mac where no model fits, `message` says why | install one with **Run a local model** on the welcome screen |
+| `install-unfinished` | a job is installing, paused or failed (`state`, `step`, `errorCode`) | finish it in that window; nothing here continues it |
+| `no-agent` | installed, and `agents` holds none that is `ready` | install a coding agent in that window (a chip that says "Not installed") |
+| `blocked` | installed, but the server refuses a session now (`errorCode`: `model-changed`, `port-in-use`, `runtime-start-failed`, `runtime-stopped`) | the window shows the one button that helps |
+| `admin-only` | multi-user mode, and you are not an admin (403) | ask an admin |
+| `unsupported` | the server has no local model routes (404) | it predates the feature |
+| `unauthorized`, `unreachable`, `error` | the request itself failed | §6 for a 401 |
+
+It never downloads, installs or starts anything. Installing is many gigabytes the person
+confirms in the window, and no route this skill calls can do it.
+
+**`spawn_worker <name> local`** (also `name:local` in `spawn_workers`), and
+**`spawn_worker <name> local:<cli>`** to choose the coding agent, in order:
+
+1. `local_model`; anything but exit 0 fails the spawn with that reason. With `local:<cli>`
+   the agent must be a row of `agents` whose status is `ready`; any other status, or an
+   agent the model cannot be run with, fails the spawn with the ones that are startable.
+   On a Codeman that lists no agents only its one `cli` can be named. No agent is ever
+   installed from here.
+2. Runtime stopped: `POST /api/v1/local-model/runtime {"action":"start"}`, what the
+   window's Start button sends, then `local_model` again until it reports `running`
+   (about 30 s at most). This undoes a Stop the person made. Concurrent spawns may both
+   send it; the server runs one runtime verb at a time and keeps a runtime that runs.
+3. `POST /api/v1/quick-start {"caseName":…,"mode":"<cli>","parentSessionId":…,
+   "customModel":{"endpointId":…,"modelId":…}}`: the launch of the window's "Start a
+   session", with the chosen agent as the mode. No advisor, which is a cloud model. A Pi
+   worker also carries `"piConfig":{"approveProjectTrust":false}` (`--no-approve`): on a
+   custom model Pi keeps no home, so it would ask to trust the folder in every session with
+   Trust preselected, and the task prompt's Enter would answer it.
+   The server checks again that its own runtime runs and that the model on disk is the one
+   it installed, and refuses otherwise (`OPERATION_FAILED`, with the reason).
+4. An answer of `requiresContextWarning` or `requiresConfirmation` is a question for a
+   person (a context below the agent's safe floor, a model swap that would evict another
+   session's model). It fails the spawn with the answer on stderr and nothing on stdout,
+   and no `confirmed*` flag is ever sent.
+5. Readiness: a token the agent's composer draws once it takes input, through
+   `wait-output`, 45 s, and the session deleted on a miss. The token is the agent's
+   `readyMark` from `local_model` when the server sends one, else the one measured for this
+   skill, and `LOCAL_READY_MARK` overrides both. All of it was measured on Linux through a
+   custom model launch, none of it on a Mac yet:
+
+   | Agent | Token | What was measured |
+   |-------|-------|-------------------|
+   | OpenCode | `┃` | 1.3.0 and 1.19.5: nothing draws it before the composer, no first-run screen, and a prompt pasted at the first `┃` was submitted (2 of 2 on 1.19.5) |
+   | DeepSeek Harness | `❯`, then a look at the pane | 0.1.1-rc.2 with dsh-TUI 0.10.0-beta.1: splash, composer and status line arrive in one frame; a prompt sent at the mark was submitted (2 of 2). The harness reports idle about 150 ms BEFORE that frame, so `stop` is no readiness signal. 0.2.2-rc.1 with dsh-TUI 0.19.0: a setup guide ("Step 1 of 4") opens in every session until a person has finished it once, and its cursor is `❯` too (the mark matched on it, 2 of 2), so after the mark the rendered pane is read and a worker that shows the guide is deleted, never handed back; with the guide finished, a prompt sent at the mark was submitted |
+   | Pi | `extended-keys` | 1.5.2: Pi paints its composer rules in its first frame and ignores Enter until startup has finished, so the rule `─` is NOT a mark (a prompt sent at it stayed in the composer, 2 of 2). The last line of its startup is a warning that tmux's `extended-keys` option is off, which it is on Codeman's socket; a prompt sent once that word showed was submitted (4 of 4). A side effect, not a contract: a Pi that stops printing it fails the spawn until `LOCAL_READY_MARK` names what it draws instead |
+
+   A claude agent takes the claude path instead (hooks vetted, `shift+tab`, the trust
+   dialog). An agent with no token at all is refused before a session exists.
+
+**`sendmark <sid> <prompt> [timeoutSec]`** drives it, and any other agent worker without
+an end-of-turn signal ([§5.5](#55-markers-for-hook-less-workers)):
+
+- It joins the prompt onto one line and adds one sentence: write the complete answer to
+  `codeman-answer-<token>.md` in the working directory, and only then end the reply with
+  the word DONE immediately followed by `_<token>`. The typed text never holds the joined
+  marker, so its echo cannot match.
+- It sends once with the exactly-once body (`$CID-<sid>`, an epoch-second `seq`, one `\r`)
+  and a one-second `exit` wait, so `delivered` is the pane's answer, not a guess.
+- It waits on `wait-output?match=DONE_<token>&from=buffer` in rounds of at most 10 s until
+  the timeout (default 600 s), then reads the answer file from this machine's disk: only a
+  regular file (a symlink is refused), at most 256 KB.
+- ⚠️ A full-screen agent can print the marker without it ever matching. OpenCode redraws
+  its spinner between the pieces a model streams, so with a reply streamed a character or
+  two at a time the stripped stream read `D⬝⬝O⬝⬝N⬝⬝E_⬝⬝m…` while the screen showed the whole
+  token (measured on OpenCode 1.3.0 on Linux). So between rounds it also looks at the answer file:
+  once it is non-empty and its checksum held still from one round to the next, it is read
+  and the wait ends with `matched: false`.
+
+| exit | JSON | Meaning |
+|------|------|---------|
+| 0 | `answer` holds the file | the file was read: after the marker (`matched: true`), or once it held still (`matched: false`) |
+| 2 | `matched: false` | neither the marker nor a settled file before the timeout. The worker may still be working: re-check the pane, never resend blindly |
+| 3 | `ended: true` or `delivered: false` | the worker's pane ended. A pane that ended after it wrote the file but before the marker matched leaves `codeman-answer-<token>.md` in its folder: look there yourself |
+| 4 | `matched: true, answer: null` | the marker printed, but no file within `SENDMARK_FILE_WAIT` s (default 120): the model ignored the instruction, or a reasoning model restated the marker while planning and is still at work |
+| 1 | `detail` | the send or a wait failed |
+
+What a marker proves, and what it does not: the model printed the token. Not that the
+work is done, not that it is right, and with a reasoning model not even that the turn is
+over, which is why the file is the second gate. What a small local model writes is a
+first draft; review it before you build on it. The answer files stay in the worker's
+folder, a scratch case that [§5.14](#514-clean-up) lists for cleanup.
+`SENDMARK_ANSWER_FILE=0` asks for the marker alone, for a worker that cannot write where
+it runs (codex in a folder it runs read-only, an agent that asks before it writes a file,
+a worker on another host): exit 0 then means only that the marker printed, and with no
+file to fall back on, a full-screen agent can answer exit 2 for a reply that finished. A
+worker that stops on such a question shows up here as exit 2, not as an error.
+
+Close every local worker you opened: while one is open the window refuses Stop and
+Remove, naming it.
+
+## Experimental bounded inspection and guarded submission
+
+These three commands and their HTTP routes are labeled experimental, so they may
+change or be removed in minor or patch releases. They are also opt-in
+(`agentCoordinationEnabled`, off by default: a 403 naming it until the user turns
+it on). Use `codeman agent inspect` for bounded evidence and incremental local
+Codex cursors.
+Use `codeman agent stage --message-file` followed by one hash-confirmed
+`codeman agent submit --stage-id --confirm-sha` when the exact local Codex
+composer and caret can be verified. Other targets provide labeled snapshots or
+refuse guarded input. See [inspection and staging](inspection-and-staging.md)
+for budgets, receipt expiry, conflict handling and supported composers.

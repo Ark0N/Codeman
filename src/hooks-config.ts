@@ -13,7 +13,6 @@
  * - `applyWorkspaceHooks(workspace, install?)` — the ONE install-vs-refresh decision
  *   point every claude-session create path routes through (see its doc comment)
  * - `ensureCodemanHooks(casePath)` — safely installs/updates hooks for a managed case
- * - `updateCaseEnvVars(casePath, envVars)` — merges env vars into settings
  *
  * Hook events generated: `idle_prompt`, `permission_prompt`, `elicitation_dialog`,
  * `elicitation_complete`, `elicitation_response`, `stop`, `teammate_idle`,
@@ -41,6 +40,8 @@ import { HOOK_TIMEOUT_SECONDS } from './config/auth-config.js';
 import { dataPath } from './config/instance.js';
 import { readJsonConfig, SETTINGS_PATH } from './web/route-helpers.js';
 import { isNearStalledPath, probePath } from './utils/index.js';
+import { DEFAULT_KEEP_WARM_MAX_HOURS, type KeepWarmSettings } from './prompt-cache-keepwarm.js';
+import { gitFetchSettingsFrom, type GitFetchSettings } from './git-fetch.js';
 
 /**
  * Existence check for a WRITER. Unlike the bounded read-side probe (`probePath`),
@@ -631,37 +632,6 @@ export async function stripCaseEnvKeys(casePath: string, keysToRemove: readonly 
 }
 
 /**
- * Updates env vars in .claude/settings.local.json for the given case path.
- * Merges with existing env field; removes vars set to empty string.
- */
-export async function updateCaseEnvVars(casePath: string, envVars: Record<string, string>): Promise<void> {
-  await withSafeSettingsWrite(casePath, 'env vars', async (claudeDir, settingsPath) => {
-    if (!(await pathExistsForWrite(claudeDir))) {
-      await mkdir(claudeDir, { recursive: true });
-    }
-
-    let existing: Record<string, unknown> = {};
-    try {
-      existing = JSON.parse(await readFile(settingsPath, 'utf-8'));
-    } catch {
-      existing = {};
-    }
-
-    const currentEnv = (existing.env as Record<string, string>) || {};
-    for (const [key, value] of Object.entries(envVars)) {
-      if (value) {
-        currentEnv[key] = value;
-      } else {
-        delete currentEnv[key];
-      }
-    }
-    existing.env = currentEnv;
-
-    await writeFile(settingsPath, JSON.stringify(existing, null, 2) + '\n');
-  });
-}
-
-/**
  * Updates the `model` field in .claude/settings.local.json for the given case path.
  * Pass a non-empty string to set, or empty/null to remove.
  */
@@ -1132,6 +1102,88 @@ export async function readPlanUsageTelemetryEnabled(): Promise<boolean> {
 }
 
 /**
+ * Whether every Claude session is launched with `--name` set to its tab name
+ * (the `pinCliSessionName` setting). Read FRESH from settings.json at every
+ * claude create and respawn, like {@link readPlanUsageTelemetryEnabled}, so a
+ * toggle applies from the next spawn with no server restart. An ABSENT key
+ * means OFF: only a name the user chose is pinned, and Claude titles the
+ * placeholder- and auto-named conversations itself (see `Session.cliPinnedName`).
+ */
+export async function readPinCliSessionNameEnabled(): Promise<boolean> {
+  const settings = await readJsonConfig<Record<string, unknown>>(SETTINGS_PATH, 'settings.json', {});
+  return settings.pinCliSessionName === true;
+}
+
+/**
+ * The prompt-cache keep-warm's app-wide default (`promptCacheKeepWarm`, absent = OFF) and its
+ * cap (`promptCacheKeepWarmMaxHours`, hours after the last real prompt). Read FRESH like
+ * {@link readPinCliSessionNameEnabled} at every claude create and respawn, which decides the
+ * launch's `idleCompaction` opt-out.
+ */
+export async function readKeepWarmSettings(): Promise<KeepWarmSettings> {
+  return keepWarmSettingsFrom(await readJsonConfig<Record<string, unknown>>(SETTINGS_PATH, 'settings.json', {}));
+}
+
+/**
+ * The same two keys for the keep-warm service, which keeps what it reads until the next
+ * settings change. A missing file is the defaults, but any other read or parse failure rejects
+ * rather than falling back: settings.json is replaced atomically, so such a failure is a real
+ * read error or a file that does not parse (a hand edit), never a write in progress, and a
+ * fallback kept from it would hold keep-warm off until the next keep-warm settings change.
+ */
+export async function readKeepWarmSettingsOrThrow(): Promise<KeepWarmSettings> {
+  let text: string;
+  try {
+    text = await readFile(SETTINGS_PATH, 'utf-8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return keepWarmSettingsFrom({});
+    throw err;
+  }
+  return keepWarmSettingsFrom(parseSettingsText(text));
+}
+
+/**
+ * The Git fetch interval's app-wide default (`gitFetchEnabled`, absent = OFF) and its cap
+ * (`gitFetchIntervalSeconds`, seconds between runs). Read FRESH on every tick by the scheduler, so a live
+ * toggle takes effect on the next tick and turning it off actually stops the fetching. A missing file is
+ * the defaults (OFF), but any other read or parse failure rejects and the scheduler skips that tick rather
+ * than deciding from defaults. settings.json is replaced atomically (a temp file renamed into place, see
+ * settings-writer.ts), so such a failure is a real read error or a file that does not parse (a hand edit),
+ * never a write in progress, and the scheduler logs it once rather than every tick.
+ */
+export async function readGitFetchSettings(): Promise<GitFetchSettings> {
+  let text: string;
+  try {
+    text = await readFile(SETTINGS_PATH, 'utf-8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return gitFetchSettingsFrom({});
+    throw err;
+  }
+  return gitFetchSettingsFrom(parseSettingsText(text));
+}
+
+/**
+ * settings.json's text for the two readers above, which reject a file that does not parse. The parser's
+ * own message is never repeated, as in settings-writer.ts: V8 quotes the text around the fault, settings.json
+ * can hold an API key (`voiceSettings.apiKey`), and both callers log the error they get.
+ */
+function parseSettingsText(text: string): Record<string, unknown> {
+  try {
+    return JSON.parse(text) as Record<string, unknown>;
+  } catch {
+    throw new Error(`${SETTINGS_PATH} is not valid JSON`);
+  }
+}
+
+function keepWarmSettingsFrom(settings: Record<string, unknown>): KeepWarmSettings {
+  const hours = settings?.promptCacheKeepWarmMaxHours;
+  return {
+    keepWarmDefault: settings?.promptCacheKeepWarm === true,
+    maxHours: typeof hours === 'number' && Number.isFinite(hours) && hours > 0 ? hours : DEFAULT_KEEP_WARM_MAX_HOURS,
+  };
+}
+
+/**
  * Resolve the statusLine command to pass as an EPHEMERAL `claude --settings`
  * CLI flag for this one process (see buildSpawnCommandFromRegistry in
  * session-cli-registry-bridge.ts) — never written to disk. This supersedes
@@ -1274,6 +1326,87 @@ async function isSymlink(path: string): Promise<boolean> {
   }
 }
 
+/**
+ * Whether a folder INSIDE the copy that holds skill files (today only `reference/`) is a
+ * symlink. The checks on the copy and its parent stop at the copy itself, and a write or
+ * unlink of `reference/<name>.md` follows a linked `reference/` wherever it points:
+ * measured, `reference -> <elsewhere>` made install overwrite a `history.md` there and
+ * uninstall delete it. A cloned repository can commit that link, and a Docker case's
+ * container can plant it in the bind-mounted workspace that the host injects into, so
+ * both are refused like a linked copy. Checked once before the first write or unlink; a
+ * link swapped in after the check (a race against the container) is not covered.
+ */
+async function agentSkillSubdirIsSymlink(skillDir: string, files: AgentSkillFile[]): Promise<boolean> {
+  const subdirs = new Set<string>(['reference']);
+  for (const file of files) {
+    // Every folder on the way to the file, outermost first: `a/b/x.md` checks `a`, then `a/b`.
+    const parts = dirname(file.relPath)
+      .split(/[\\/]/)
+      .filter((part) => part !== '' && part !== '.');
+    for (let i = 1; i <= parts.length; i++) subdirs.add(join(...parts.slice(0, i)));
+  }
+  for (const subdir of subdirs) {
+    if (await isSymlink(join(skillDir, subdir))) return true;
+  }
+  return false;
+}
+
+/**
+ * The ignore file every Codeman-managed skill copy carries, and what it holds: `*`
+ * matches everything in the copy's own folder (the ignore file included), so a user's
+ * repository never lists `.claude/skills/codeman/` (or `.agents/skills/codeman/`) as
+ * untracked, without Codeman touching the repository's own `.gitignore` or
+ * `info/exclude`. Same idea as the prompt-uploads folder (`ensureUploadDir`).
+ *
+ * Deliberately NOT part of `readAgentSkillSource()`: it is written once with O_EXCL and
+ * never compared or rewritten, so a file the user put there (or edited) is theirs.
+ *
+ * Measured against Claude Code 2.1.319, whose skill discovery runs `git check-ignore`
+ * only on directories at or above `.claude/skills` (the nested-skills walk), never on a
+ * skill folder or its SKILL.md: a `*` inside `codeman/` ignores the folder's CONTENTS,
+ * not the folder, so the skill still loads. Codex 0.162 does no gitignore check on skills.
+ */
+const AGENT_SKILL_GITIGNORE = '.gitignore';
+const AGENT_SKILL_GITIGNORE_CONTENT = '*\n';
+
+/**
+ * Write the copy's `.gitignore` if none is there. Returns whether it wrote one.
+ * 'wx' (O_CREAT|O_EXCL) never replaces an existing file and refuses a symlink at the
+ * name. A create that succeeded before the write failed (ENOSPC) would leave an empty
+ * file that reads as the user's next time, so it is taken back; that cleanup's own
+ * failure must not replace the cause.
+ */
+async function ensureAgentSkillGitignore(skillDir: string): Promise<boolean> {
+  const ignoreFile = join(skillDir, AGENT_SKILL_GITIGNORE);
+  try {
+    await writeFile(ignoreFile, AGENT_SKILL_GITIGNORE_CONTENT, { flag: 'wx' });
+    return true;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'EEXIST') return false;
+    await unlink(ignoreFile).catch(() => {});
+    throw err;
+  }
+}
+
+/**
+ * Remove the copy's `.gitignore` only when it is the LAST thing in the folder and holds
+ * exactly what Codeman writes. Anything else in the folder (a user's own notes) keeps
+ * the ignore file, so those files stay out of `git status` as they were, and a
+ * `.gitignore` with other content is the user's.
+ */
+async function removeAgentSkillGitignoreIfLast(skillDir: string): Promise<void> {
+  const ignoreFile = join(skillDir, AGENT_SKILL_GITIGNORE);
+  try {
+    const entries = await readdir(skillDir);
+    if (entries.length !== 1 || entries[0] !== AGENT_SKILL_GITIGNORE) return;
+    if (!(await lstat(ignoreFile)).isFile()) return;
+    if ((await readFile(ignoreFile, 'utf-8')) !== AGENT_SKILL_GITIGNORE_CONTENT) return;
+    await unlink(ignoreFile);
+  } catch {
+    // best-effort: a folder that stays behind holds only an ignore file
+  }
+}
+
 /** What an install/remove actually did, so callers (CLI, logs) can say so. */
 export type AgentSkillApplyResult =
   | 'installed' // fresh copy written
@@ -1282,22 +1415,30 @@ export type AgentSkillApplyResult =
   | 'removed' // our copy deleted
   | 'absent' // nothing there to remove
   | 'foreign' // a copy exists but is not ours; left untouched
-  | 'symlink'; // the skill dir (or its parent) is a symlink; left untouched
+  | 'symlink'; // the skill dir, its parent or a folder inside it is a symlink; left untouched
 
 /**
  * Install or refresh the Codeman agent skill into `skillDir` (a `.../codeman`
  * directory, e.g. `<case>/.claude/skills/codeman`, `~/.claude/skills/codeman` or
  * `<case>/.agents/skills/codeman`).
  *
- * Refuses two shapes rather than writing through them:
+ * Refuses these shapes rather than writing through them:
  * - a SYMLINK at the skill dir or its `skills/` parent: this repo's own dogfooding
  *   layout (`.claude/skills/codeman -> ../../skills/codeman`) would otherwise have
  *   the injector overwrite the repo source through the link;
+ * - a SYMLINK at a folder inside the copy (`reference/`), which would carry the skill's
+ *   files to wherever it points (`agentSkillSubdirIsSymlink`);
  * - a FOREIGN copy (SKILL.md present without our marker): that is the user's own
  *   skill, and per the statusLine rule we never clobber what we did not write.
  *
  * Idempotent and cheap: unchanged files are not rewritten, so calling on every
  * session create causes no mtime churn.
+ *
+ * The copy ignores itself in git: a `.gitignore` of `*` is written FIRST, before any
+ * skill file, so a `git status` that runs mid-install never lists the folder either
+ * (`ensureAgentSkillGitignore`). It is written once and never rewritten; a copy made
+ * before this existed gains it on its next install or refresh, which then reports
+ * 'refreshed'.
  *
  * Serialized on the skill dir through the same lock the settings writers use: two
  * sessions created at once in one repo both inject this skill, and interleaving their
@@ -1318,7 +1459,9 @@ export async function installAgentSkillInto(skillDir: string): Promise<AgentSkil
     if (existing !== null && !existing.includes(AGENT_SKILL_MARKER_PREFIX)) return 'foreign';
 
     const files = await readAgentSkillSource();
-    let changed = false;
+    if (await agentSkillSubdirIsSymlink(skillDir, files)) return 'symlink';
+    await mkdir(skillDir, { recursive: true });
+    let changed = await ensureAgentSkillGitignore(skillDir);
     for (const file of files) {
       const target = join(skillDir, file.relPath);
       let current: string | null = null;
@@ -1349,7 +1492,8 @@ export async function installAgentSkillInto(skillDir: string): Promise<AgentSkil
  * the skill (`agentSkillDir()` non-null, any CLI: the preamble is bash + curl + jq, nothing
  * claude-specific; a remote or in-container HOME is not this filesystem) and treat it as
  * best-effort: the skill's §0 fallback block self-heals a missing or stale file. Codex
- * caveat: codex 0.162 runs tool commands in a shared app-server daemon whose
+ * caveat: a local codex started without `--no-daemon` (older than 0.162, or its version
+ * probe failed) can run tool commands in a shared app-server daemon whose
  * `CODEMAN_SESSION_ID` is the starting session's, so its loader looks for that session's
  * file and its self id is wrong; the skill tells the agent how to notice.
  */
@@ -1459,7 +1603,8 @@ export async function refreshUserAgentSkill(): Promise<AgentSkillApplyResult | '
  * Remove a Codeman-managed skill copy from `skillDir`. Same ownership and symlink
  * refusals as the install path. Deletes only files the packaged source would have
  * written (never `rm -rf`, so a user's extra files in the directory survive), then
- * prunes the directories bottom-up if they emptied.
+ * the copy's own `.gitignore` when nothing else is left beside it, then prunes the
+ * directories bottom-up if they emptied.
  *
  * Shares the install path's per-dir lock so an uninstall can't run between an install's
  * ownership read and its writes, which would leave half the skill back on disk.
@@ -1479,13 +1624,178 @@ export async function removeAgentSkillFrom(skillDir: string): Promise<AgentSkill
     // Manifest-based, with SKILL.md as the fallback when the packaged source is
     // unreadable: removal must still work on an install whose skills/ dir went missing.
     const files = await readAgentSkillSource().catch((): AgentSkillFile[] => [{ relPath: 'SKILL.md', content: '' }]);
+    // An unlink through a linked `reference/` deletes files wherever it points.
+    if (await agentSkillSubdirIsSymlink(skillDir, files)) return 'symlink';
     for (const file of files) {
       await unlink(join(skillDir, file.relPath)).catch(() => {});
     }
     await rmdir(join(skillDir, 'reference')).catch(() => {}); // fails when non-empty, fine
+    await removeAgentSkillGitignoreIfLast(skillDir);
     await rmdir(skillDir).catch(() => {});
     await rmdir(dirname(skillDir)).catch(() => {}); // prune `.claude/skills` (or the CLI's own dir) if now empty
     return 'removed';
+  });
+}
+
+// ============================================================================
+// omp approval hooks
+// ============================================================================
+
+/** Marks the hook file this module owns inside a workspace. */
+const OMP_APPROVAL_HOOK_MARKER = 'CODEMAN_OMP_APPROVAL_HOOK_V1';
+
+/**
+ * omp's own hook directory, workspace-relative. omp scans `<cwd>/.claude/hooks/pre`
+ * and `<cwd>/.claude/hooks/post` (`projectDir` for the `claude` persona) plus a
+ * user-level `<agentDir>/hooks`, and loads each `.ts`/`.js` file's default export as
+ * `(pi: HookAPI) => void`. A project-level `pre` hook is deliberately the target: it
+ * travels with the workspace the session actually runs in, so no per-machine or
+ * per-user install is needed and removing the workspace removes the hook.
+ */
+export const OMP_APPROVAL_HOOK_DIR = '.claude/hooks/pre';
+export const OMP_APPROVAL_HOOK_FILE = 'codeman-approval.ts';
+
+/**
+ * Source of the hook that turns omp's own approval events into Codeman hook events.
+ *
+ * WHY this exists: omp installs no Claude-style `settings.local.json` hook block — its
+ * hooks are modules — so without this file an omp pane asking for tool approval is
+ * silent: `/api/approvals` stays empty, the tab never goes red and no notification
+ * fires. The registry declares it through `capabilities.approvalHookFile`, NOT
+ * `hooks: 'always'` (which would also promise `stop` and answerable dialogs).
+ *
+ * The mapping uses Claude's event names, because the server routes on them
+ * (`APPROVAL_KIND_BY_EVENT` in web/routes/hook-event-routes.ts):
+ *  - `tool_approval_requested` -> `permission_prompt` (opens an alert-only inbox item)
+ *  - `tool_approval_resolved`  -> `elicitation_complete` (resolves it, whether the user
+ *    approved or denied, so a denied dialog does not leave a red tab forever)
+ *
+ * Several calls in one batch can each wait on their own prompt, and the inbox keeps one
+ * item per session, so the module tracks pending `toolCallId`s and reports the close only
+ * when the last one resolves. That set drains because omp pairs every request with a
+ * resolve, an aborted prompt included (its approval wrapper emits `approved: false` from
+ * the catch, omp 18.18.6 `extensibility/extensions/wrapper.ts`); only omp dying mid-prompt
+ * skips it, which leaves the alert up exactly as it would without the set. Reports go out
+ * in order (one chain), so a fast approve cannot overtake the prompt that opened it.
+ *
+ * `reason` is omp's POLICY note (a restricted folder, a critical-pattern match), not the
+ * command, and is absent on an ordinary mode-raised prompt, so it rides `message`.
+ *
+ * HTTPS: `CODEMAN_API_URL` is loopback HTTPS with a self-signed certificate on `--https`
+ * and tailscale installs (Codeman's own hook curl passes `-k`, the DeepSeek shim sets
+ * `rejectUnauthorized: false`). omp runs on Bun, whose fetch verifies certificates by
+ * default, so an `https:` URL gets Bun's `tls: { rejectUnauthorized: false }`.
+ *
+ * ⚠️ Fails OPEN and SILENT, like the memory-gate hook: a hook that throws would break
+ * the approval flow it exists to report. Every path catches, and nothing is awaited
+ * unbounded — each POST carries a short AbortSignal and the handlers never await it.
+ */
+export function generateOmpApprovalHook(): string {
+  return `// ${OMP_APPROVAL_HOOK_MARKER} — auto-generated by Codeman; safe to delete, rewritten when a session is created.
+//
+// Reports omp's tool-approval dialogs to Codeman's /api/hook-event so an omp pane
+// raises a tab alert and a desktop notification. Answer the dialog in the terminal.
+// Codeman owns this file: a foreign file of the same name is never overwritten.
+import { readFile } from "node:fs/promises";
+import type { HookAPI } from "@oh-my-pi/pi-coding-agent/extensibility/hooks";
+
+const API_URL = process.env.CODEMAN_API_URL;
+const SESSION_ID = process.env.CODEMAN_SESSION_ID;
+const SECRET_FILE = process.env.CODEMAN_HOOK_SECRET_FILE;
+// Loopback HTTPS (--https, tailscale) uses a self-signed certificate, which Bun's fetch
+// refuses by default; Codeman's own hook curl passes -k for the same reason.
+const TLS = API_URL?.startsWith("https:") ? { tls: { rejectUnauthorized: false } } : {};
+
+/** POST one Codeman hook event. Never throws; bounded by its timeout. */
+async function send(event: string, data: Record<string, unknown>): Promise<void> {
+  if (!API_URL || !SESSION_ID) return;
+  try {
+    const secret = SECRET_FILE ? (await readFile(SECRET_FILE, "utf8")).trim() : "";
+    await fetch(\`\${API_URL}/api/hook-event\`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Codeman-Hook-Secret": secret },
+      body: JSON.stringify({ event, sessionId: SESSION_ID, data }),
+      signal: AbortSignal.timeout(5000),
+      ...TLS,
+    });
+  } catch {
+    // Best effort by contract: a failed report must never disturb the dialog itself.
+  }
+}
+
+// One chain, so reports arrive in the order omp raised them: a fast approve must not
+// overtake the prompt it answers and leave the alert up.
+let chain: Promise<void> = Promise.resolve();
+function report(event: string, data: Record<string, unknown>): void {
+  chain = chain.then(() => send(event, data));
+}
+
+export default function codemanApprovalHook(pi: HookAPI): void {
+  // Calls in one batch can each wait on their own prompt, and Codeman keeps one alert per
+  // session, so it is cleared only when the LAST pending approval resolves.
+  const pending = new Set<string>();
+
+  pi.on("tool_approval_requested", (event) => {
+    pending.add(event.toolCallId);
+    // \`reason\` is omp's policy note (restricted folder, critical pattern), not the command.
+    report("permission_prompt", {
+      tool_name: event.toolName,
+      ...(event.reason ? { message: event.reason } : {}),
+    });
+  });
+
+  pi.on("tool_approval_resolved", (event) => {
+    pending.delete(event.toolCallId);
+    if (pending.size > 0) return;
+    report("elicitation_complete", {
+      tool_name: event.toolName,
+      approved: event.approved,
+    });
+  });
+}
+`;
+}
+
+export type ApprovalHookApplyResult = 'installed' | 'refreshed' | 'unchanged' | 'foreign' | 'symlink';
+
+/**
+ * Install or refresh the omp approval hook in `<workspace>/.claude/hooks/pre/`.
+ *
+ * Ownership: the file carries `OMP_APPROVAL_HOOK_MARKER` (the generated module has it
+ * in its header, and the check takes it anywhere in the file). A file
+ * WITHOUT the marker is somebody else's hook and is left untouched (`foreign`) — the
+ * same posture `installAgentSkillInto` takes, so Codeman never clobbers user work.
+ * EVERY component below the workspace (`.claude`, `.claude/hooks`, `.claude/hooks/pre`)
+ * and the target file itself is `lstat`ed, and a symlink anywhere is refused rather than
+ * written through: a linked `.claude/hooks` once put `pre/<file>` in the link's target.
+ *
+ * Idempotent: an unchanged file is not rewritten (`unchanged`), so this is safe to call
+ * on every omp session create.
+ */
+export async function applyApprovalHookFile(workspace: string, fileName: string): Promise<ApprovalHookApplyResult> {
+  const hookDir = join(workspace, OMP_APPROVAL_HOOK_DIR);
+  const target = join(hookDir, fileName);
+  return withSettingsLock(target, async () => {
+    let component = workspace;
+    for (const part of [...OMP_APPROVAL_HOOK_DIR.split('/'), fileName]) {
+      component = join(component, part);
+      if (await isSymlink(component)) return 'symlink';
+    }
+
+    let existing: string | null = null;
+    try {
+      existing = await readFile(target, 'utf-8');
+    } catch {
+      // absent: fresh install
+    }
+    if (existing !== null && !existing.includes(OMP_APPROVAL_HOOK_MARKER)) return 'foreign';
+
+    const content = generateOmpApprovalHook();
+    if (existing === content) return 'unchanged';
+
+    await mkdir(hookDir, { recursive: true });
+    await writeSkillFileAtomic(target, content);
+    return existing === null ? 'installed' : 'refreshed';
   });
 }
 
@@ -1516,7 +1826,10 @@ export function agentSkillDirFor(casePath: string, dir: AgentSkillDir): string {
  * Add or remove the Codeman agent skill in `<case>/<dir>/codeman`, where `dir` is the
  * skills directory the session's CLI scans (default: Claude Code's `.claude/skills`;
  * callers resolve it with `agentSkillDir()`), mirroring `applyStatusLineConfig`'s
- * shape. Gated by the synced `agentSkillEnabled` app setting (default OFF).
+ * shape. Gated by the synced `agentSkillEnabled` app setting: default ON since 1.50.0
+ * (an absent key is on, only an explicit false is off; `getAgentSkillEnabled()` in
+ * server.ts), which is safe for a user's repository because the copy ignores itself
+ * in git (`ensureAgentSkillGitignore`).
  *
  * Call-site policy is ADD-ONLY on session create (callers pass `enabled: true` or
  * skip the call), for the statusLine reason: sessions in a repo share one workspace,

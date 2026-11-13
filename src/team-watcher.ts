@@ -15,7 +15,7 @@ import { join } from 'node:path';
 
 import { watch as chokidarWatch, type FSWatcher as ChokidarWatcher } from 'chokidar';
 
-import type { TeamConfig, TeamMember, TeamTask, InboxMessage } from './types.js';
+import type { TeamConfig, TeamTask, InboxMessage } from './types.js';
 import { LRUMap } from './utils/lru-map.js';
 import { TEAM_POLL_INTERVAL_MS, MAX_CACHED_TEAMS, MAX_CACHED_TASKS } from './config/team-config.js';
 
@@ -173,17 +173,6 @@ export class TeamWatcher extends EventEmitter {
     // Check if team has active (non-completed) tasks
     const activeTasks = this.getActiveTaskCount(team.name);
     return activeTasks > 0;
-  }
-
-  /** Get teammates that have real tmux panes (not in-process) */
-  getTmuxPaneTeammates(teamName: string): Array<TeamMember & { tmuxPaneId: string }> {
-    const team = this.teams.get(teamName);
-    if (!team) return [];
-
-    return team.members.filter(
-      (m): m is TeamMember & { tmuxPaneId: string } =>
-        m.agentType !== 'team-lead' && !!m.tmuxPaneId && m.tmuxPaneId !== 'in-process'
-    );
   }
 
   /** Get count of active teammates for a session */

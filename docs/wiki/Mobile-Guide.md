@@ -37,7 +37,9 @@ a bottom sheet rather than a dropdown. On a folding phone (iPhone Duo) dialogs s
 the hinge, and opening or closing the device is treated as the device changing shape, never
 as the keyboard appearing.
 
-**Swipe left and right** on the terminal to switch sessions.
+**Swipe left and right** on the terminal to switch sessions, in the order the tabs are shown
+(a grouped or sorted tab layout included). A visible text selection pauses the swipe, and a
+terminal wider than the screen pans sideways instead.
 
 ## The home screen
 
@@ -64,8 +66,9 @@ A row of keys above the virtual keyboard, and what it contains depends on the se
 **Agent sessions** get quick actions: `/init`, `/clear`, `/compact`, a Compose key, `Esc`,
 a path picker, and 🧠 when Read My Mind is on. Compose opens a multiline editor with
 autocorrect: Enter adds a new line, and only Send delivers the text, as one paste followed
-by Enter, so your line breaks reach the agent intact. Anything already typed on the terminal
-prompt moves into the editor when it opens. Drafts are kept per session and in memory only,
+by Enter, so your line breaks reach the agent intact. A prompt written in Persian, Arabic or
+Hebrew lays out right to left. Anything already typed on the terminal prompt moves into the
+editor when it opens. Drafts are kept per session and in memory only,
 so switching tabs keeps them and a page reload forgets them; a dot on the key shows a draft
 is parked. The editor's Attach button attaches photos, videos or documents and puts their paths
 into the draft.
@@ -131,11 +134,12 @@ already writing in the editor.
 
 ## Tapping, links and copying
 
-- **Tap a link** in terminal output and it opens in a new tab. Same for a link in an agent's
+- **Tap a link** in terminal output and it opens in a new tab. Same for a web link in an agent's
   answer in the response viewer — it opens a tab rather than navigating the dashboard away,
   which on a phone would unload the whole session view.
-- **Tap a file path** an agent printed and the file-preview overlay opens (Markdown rendered,
-  HTML as a page); a log or other plain-text path opens the log viewer. Works in scrolled-up
+- **Tap a file path** an agent printed, or a link to one in its answer (Codex writes
+  `[report](/tmp/report.json)`), and the file-preview overlay opens (Markdown rendered, HTML
+  as a page); a log or other plain-text path opens the log viewer. Works in scrolled-up
   transcript too.
 - A tap on the prose *beside* a link still places the cursor as usual, and a tap on a dialog's
   numbered choice still answers the dialog even when the row contains a path — the dialog wins,
@@ -150,6 +154,12 @@ already writing in the editor.
 
 - The terminal and toolbar shift up when the keyboard opens, tracked through the browser's
   visual viewport rather than guessed.
+- **Opening the keyboard does not resize a Claude session.** Each resize made Claude reprint
+  its screen at the new height and drop transcript lines from the session's history, so for a
+  local Claude session the terminal keeps its size while the keyboard is up and the view
+  scrolls instead, with the prompt and the line under it just above the keyboard. Codex,
+  Claude's fullscreen mode, remote and Docker sessions still resize. **Keep Size Under
+  Keyboard** in App Settings turns it off on this device.
 - **Two ways to dismiss the keyboard**: tap outside the terminal on inert space, or tap twice
   on inert terminal content. Tapping a control never dismisses it, and tapping the prompt row
   keeps focus so you can place the caret.
@@ -177,15 +187,19 @@ Setup in [Notifications And Approvals](Notifications-And-Approvals).
 ## Reading long answers
 
 The terminal viewport is small. **Last Response** (opt-in header button) renders the agent's
-last answer as scrollable text instead, with a **More** button for additional context.
+last answer as scrollable text instead, with a **More** button for additional context and a
+**Copy Markdown** button for its raw source. Persian, Arabic and Hebrew answers read right to
+left there.
 
 The [File Viewer](Working-With-Files) works on phones too, including edit mode, which is
-enough to fix a typo an agent introduced while you are away from your desk.
+enough to fix a typo an agent introduced while you are away from your desk. Its header button
+is off on a phone until you turn on **File Viewer** under **App Settings → Header & Panels**
+on that phone.
 
 ## What is deliberately not on phones
 
 - Extra header buttons. New header controls are kept off phones by policy, with a test that
-  enforces it.
+  enforces it. The one exception is File Viewer, which you can switch on (see above).
 - The Approvals bell. Phones get the NEEDS YOU strips on the home screen instead.
 - The desktop home tab rail, which needs a wide window.
 - Lineage lines, which are a desktop overlay.

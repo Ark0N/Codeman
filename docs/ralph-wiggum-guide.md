@@ -837,8 +837,6 @@ POST /api/sessions/:id/auto-clear
 - `src/ralph-tracker.ts` - Core detection engine
 - `src/ralph-loop.ts` - Task orchestration
 - `src/respawn-controller.ts` - Session cycling
-- `src/spawn-orchestrator.ts` - Autonomous agent lifecycle (uses RalphTracker for completion)
-- `src/spawn-detector.ts` - Detects `<spawn1337>` tags in terminal output
 - `src/types.ts` - Type definitions
 
 ---

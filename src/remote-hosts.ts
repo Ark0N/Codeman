@@ -66,12 +66,27 @@ export async function writeRemoteCases(configDir: string, cases: RemoteCase[]): 
  * arrival, the #208 failure all over again (verified: `sh -c 'exec $SHELL -i -l'`
  * with SHELL unset prints `exec: -i: not found`). In practice tmux always exports
  * SHELL into a pane from its own `default-shell` option, so the command as USED
- * here is safe either way (also verified). The default matters because these
- * strings are the seed values a per-host `commands.*` override is edited from, and
- * nothing constrains where an edited one ends up running. Quoted for a shell path
- * containing spaces. `/bin/sh` exists on every POSIX host.
+ * here is safe either way (also verified). Quoted for a shell path containing
+ * spaces. `/bin/sh` exists on every POSIX host.
+ *
+ * ⚠️ This is POSIX text. fish refuses `${…}` (status 127), so a launch hands it to
+ * `/bin/sh -c`, never to the remote default-shell (`buildRemoteLaunchCommand`).
  */
 const REMOTE_LOGIN_SHELL = '"${SHELL:-/bin/sh}"';
+
+/**
+ * The remote login shell with the flags that make it one, as ONE compound command, so
+ * `cd <path> && <this>` keeps its short-circuit (a failed `cd` must not start a shell in
+ * the wrong folder). `args` follows the flags verbatim.
+ *
+ * The flags are chosen on the far end: the shell is whatever the REMOTE passwd says, so
+ * this is `loginShellArgs()` run where the answer is known. tcsh honors `-l` only as its
+ * ONLY flag and exits on `-i -l -c`, `-l -c` and `-i -l` (measured on tcsh 6.24), and
+ * `-c` needs no login flag to read `.tcshrc`, so csh and tcsh get neither flag.
+ */
+function remoteLoginShell(args: string): string {
+  return `{ set -- -i -l; case \${SHELL##*/} in csh|tcsh) set --;; esac; exec ${REMOTE_LOGIN_SHELL} "$@"${args}; }`;
+}
 
 /**
  * Run `command` through the remote user's interactive login shell, so per-user
@@ -80,13 +95,28 @@ const REMOTE_LOGIN_SHELL = '"${SHELL:-/bin/sh}"';
  * so a bare `exec claude` sees only sshd's minimal default PATH and dies with
  * "command not found" (exit 127).
  *
- * Shells that take neither flag (nushell, elvish, …) cannot be detected from here
- * the way `loginShellArgs()` detects them locally, since the shell is whatever the
- * REMOTE passwd says. A host like that is what the per-host `commands.*` override
- * is for.
+ * ⚠️ POSIX text, like `REMOTE_LOGIN_SHELL`: only `/bin/sh -c` may parse it.
+ *
+ * Other shells that take neither flag are what the per-host `commands.*` override is
+ * for. It only goes so far: the PATH bootstrap below runs in the login shell first, so
+ * a shell that cannot parse `export` at all (nushell, elvish) cannot be rescued by an
+ * override.
  */
 export function remoteLoginShellCommand(command: string): string {
-  return `exec ${REMOTE_LOGIN_SHELL} -i -l -c ${shellescape(command)}`;
+  return remoteLoginShell(` -c ${shellescape(command)}`);
+}
+
+/**
+ * Remote tmux runs in sshd's non-interactive shell, which may omit Homebrew and
+ * per-user binaries. Keep every remote tmux operation on the same PATH. Quoting
+ * the entire assignment preserves spaces in HOME/inherited PATH under dash too.
+ * CLI commands still use their existing login-shell/configuration handling.
+ */
+export function withRemoteTmuxPath(command: string): string {
+  return (
+    'export PATH="$HOME/.opencode/bin:$HOME/.local/bin:$HOME/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"; ' +
+    command
+  );
 }
 
 /**
@@ -114,8 +144,9 @@ function overlayCliCommand(mode: SessionMode, location: 'remote' | 'docker'): st
  * user's interactive-login shell startup files (~/.zshrc etc.). ssh's remote-command
  * execution is neither interactive nor login, so a bare `exec claude` sees only sshd's
  * minimal default PATH and fails with "command not found" (exit 127) — confirmed via
- * `tmux capture-pane` on the remain-on-exit-preserved dead pane. Route through
- * `$SHELL -i -l -c`, the same fix shell mode uses, so PATH is fully resolved first.
+ * `tmux capture-pane` on the remain-on-exit-preserved dead pane. Route through the
+ * login shell (`remoteLoginShellCommand`), the same fix shell mode uses, so PATH is fully
+ * resolved first.
  *
  * ⚠️ The per-CLI half is now READ FROM THE REGISTRY (`overlays.remote`), not from a
  * hardcoded `Record<RemoteCommandMode, string>`. The table it replaces duplicated the
@@ -130,11 +161,13 @@ function overlayCliCommand(mode: SessionMode, location: 'remote' | 'docker'): st
  * The per-host `commands.*` override remains the escape hatch for every mode.
  */
 export function defaultRemoteCommandForMode(mode: SessionMode): string {
-  // $SHELL, not a hardcoded bash: sshd sets it from the remote user's /etc/passwd entry, so
-  // this launches their actual login shell (zsh, fish, …). `-i -l` so it sources rc files,
-  // matching the local shell-mode launch. Not templatable as overlay data: the shell is
-  // whatever the REMOTE passwd says, which is why `shell` is the one arm still written here.
-  const shellCommand = `exec ${REMOTE_LOGIN_SHELL} -i -l`;
+  // $SHELL, not a hardcoded bash: sshd sets it from the remote user's /etc/passwd entry, and
+  // tmux exports its default-shell as SHELL into the pane, so this launches their actual
+  // login shell, or the default-shell their tmux.conf picks (zsh, fish, …). `-i -l` where it
+  // takes them, so it sources rc files, matching the local shell-mode launch. Not templatable
+  // as overlay data: the shell is whatever the REMOTE passwd says, which is why `shell` is the
+  // one arm still written here.
+  const shellCommand = remoteLoginShell('');
   const cli = overlayCliCommand(mode, 'remote');
   return cli === null ? shellCommand : remoteLoginShellCommand(cli);
 }
@@ -228,7 +261,11 @@ export function buildRemoteTmuxCheckCommand(
   host: Pick<RemoteHost, 'username' | 'host' | 'port'> & RemoteSshOptions
 ): string {
   // ConnectTimeout is now a default of buildSshConnectionArgs (shared with the launch).
-  return [...buildSshConnectionArgs(host), remoteSshTarget(host), "'command -v tmux'"].join(' ');
+  return [
+    ...buildSshConnectionArgs(host),
+    remoteSshTarget(host),
+    shellescape(withRemoteTmuxPath('command -v tmux')),
+  ].join(' ');
 }
 
 export interface RemoteTmuxCheckResult {
@@ -304,13 +341,16 @@ function remoteCliBin(mode: SessionMode): string | undefined {
 
 /**
  * Build the SSH command that reads the remote CLI's version (`claude --version`
- * on the remote host). The version query is routed through
- * `remoteLoginShellCommand` (the SAME `$SHELL -i -l -c` wrapper the real
- * launch uses), because agent CLIs live on PATH only after the remote user's
+ * on the remote host). The version query runs under `$SHELL -i -l -c` like the real
+ * launch, because agent CLIs live on PATH only after the remote user's
  * interactive-login startup files run (see defaultRemoteCommandForMode); a bare
  * `claude --version` over ssh exits 127. Connection options come from the
  * shared `buildSshConnectionArgs`, so the probe reaches exactly the hosts the
  * launch can reach. Returns null for modes with no CLI (shell).
+ *
+ * ⚠️ One statement, never `remoteLoginShellCommand`: nothing hands this text to `/bin/sh`,
+ * the login shell parses it itself. fish and tcsh refuse the `${…}` either way, so such a
+ * host reports no version, the same as a failed probe, and its launch is not affected.
  */
 export function buildRemoteCliVersionProbeCommand(
   host: Pick<RemoteHost, 'username' | 'host' | 'port'> & RemoteSshOptions,
@@ -321,7 +361,7 @@ export function buildRemoteCliVersionProbeCommand(
   return [
     ...buildSshConnectionArgs(host),
     remoteSshTarget(host),
-    shellescape(remoteLoginShellCommand(`${bin} --version`)),
+    shellescape(`exec ${REMOTE_LOGIN_SHELL} -i -l -c ${shellescape(`${bin} --version`)}`),
   ].join(' ');
 }
 
@@ -368,7 +408,7 @@ export function buildRemoteSessionAliveCommand(
 ): string {
   const [ssh, ...connectionArgs] = buildSshConnectionArgs(host);
   const remoteCmd = `tmux -L codeman-remote has-session -t ${shellescape(remoteSessionName)} 2>/dev/null`;
-  return [ssh, ...connectionArgs, remoteSshTarget(host), shellescape(remoteCmd)].join(' ');
+  return [ssh, ...connectionArgs, remoteSshTarget(host), shellescape(withRemoteTmuxPath(remoteCmd))].join(' ');
 }
 
 /**
@@ -453,7 +493,7 @@ export function buildRemoteListSessionsCommand(
   // separators (tmux expands them); `2>/dev/null` is inside the quoted command.
   const remoteCmd =
     'tmux -L codeman list-sessions -F "#{session_name}\\t#{session_attached}\\t#{session_created}\\t#{session_windows}" 2>/dev/null';
-  parts.push(remoteSshTarget(host), shellescape(remoteCmd));
+  parts.push(remoteSshTarget(host), shellescape(withRemoteTmuxPath(remoteCmd)));
   return parts.join(' ');
 }
 

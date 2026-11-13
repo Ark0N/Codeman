@@ -34,6 +34,9 @@ describe('html-view routes', () => {
     writeFileSync(join(root, 'outside.txt'), 'outside');
     symlinkSync(join(root, 'outside.txt'), join(workspace, 'escape.txt'));
 
+    mkdirSync(join(root, 'sibling-feature'));
+    writeFileSync(join(root, 'sibling-feature', 'report.html'), '<p>feature</p>');
+
     harness = await createRouteTestHarness(registerHtmlViewRoutes);
     sid = harness.ctx._sessionId as string;
     (harness.ctx.sessions.get(sid) as { workingDir: string }).workingDir = workspace;
@@ -267,6 +270,64 @@ describe('html-view routes', () => {
       expect((await open(join(outsideDir, 'report.html'))).statusCode).toBe(403);
       // The workspace itself is still fine.
       expect((await open(join(workspace, 'index.html'))).statusCode).toBe(200);
+    });
+  });
+
+  describe('in a worktree outside the workspace (#765 follow-up)', () => {
+    let sibling: string;
+    const saved = {
+      confine: process.env.CODEMAN_ATTACHMENT_CONFINE,
+      blocked: process.env.CODEMAN_ATTACHMENT_BLOCKED_PATHS,
+    };
+
+    beforeEach(() => {
+      sibling = realpathSync(join(root, 'sibling-feature'));
+      Object.assign(harness.ctx.sessions.get(sid) as object, {
+        liveWorktree: { name: 'sibling-feature', path: sibling, outside: true },
+      });
+    });
+
+    afterEach(() => {
+      for (const [key, value] of [
+        ['CODEMAN_ATTACHMENT_CONFINE', saved.confine],
+        ['CODEMAN_ATTACHMENT_BLOCKED_PATHS', saved.blocked],
+      ] as const) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    });
+
+    it('renders a page from the worktree, minted as outside the workspace', async () => {
+      const res = await open(join(sibling, 'report.html'));
+      expect(res.statusCode).toBe(200);
+      const url = JSON.parse(res.body).data.url as string;
+      const page = await harness.app.inject({ method: 'GET', url });
+      expect(page.statusCode).toBe(200);
+      expect(page.body).toBe('<p>feature</p>');
+      // Minted as outside the workspace, so the serve route's per-request confinement check covers it.
+      expect(htmlViewCapabilities.resolve(capabilityFromHtmlViewPath(url) as string)?.outsideWorkspace).toBe(true);
+    });
+
+    it('answers to the attachment guard: confinement on, or a blocked tree', async () => {
+      const res = await open(join(sibling, 'report.html'));
+      const url = JSON.parse(res.body).data.url as string;
+
+      process.env.CODEMAN_ATTACHMENT_CONFINE = '1';
+      expect((await open(join(sibling, 'report.html'))).statusCode).toBe(403);
+      // A page minted before confinement was switched on stops serving too.
+      expect((await harness.app.inject({ method: 'GET', url })).statusCode).toBe(404);
+      delete process.env.CODEMAN_ATTACHMENT_CONFINE;
+
+      process.env.CODEMAN_ATTACHMENT_BLOCKED_PATHS = sibling;
+      expect((await open(join(sibling, 'report.html'))).statusCode).toBe(403);
+    });
+
+    it('leaves a path outside both roots as it was', async () => {
+      mkdirSync(join(root, 'reports'));
+      writeFileSync(join(root, 'reports', 'report.html'), '<p>report</p>');
+      expect((await open(join(root, 'reports', 'report.html'))).statusCode).toBe(200);
+      process.env.CODEMAN_ATTACHMENT_CONFINE = '1';
+      expect((await open(join(root, 'reports', 'report.html'))).statusCode).toBe(403);
     });
   });
 

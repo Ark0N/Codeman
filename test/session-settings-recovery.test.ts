@@ -40,6 +40,7 @@ describe('restoreMuxSessions() hands back every persisted user setting', () => {
     ['auto-compact', /session\.setAutoCompact\(/],
     ['auto-resume', /session\.restoreAutoResume\(/],
     ['nice priority', /session\.setNice\(/],
+    ['git fetch', /gitFetchEnabled:\s*savedState\?\.gitFetchEnabled/],
   ])('%s', (_label, pattern) => {
     expect(body).toMatch(pattern);
   });
@@ -57,6 +58,15 @@ describe('restoreMuxSessions() hands back every persisted user setting', () => {
       expect(reapply, `reapply lacks ${call}`).toContain(call);
       expect(body, `restoreMuxSessions lacks ${call}`).toContain(call);
     }
+  });
+
+  it('re-applies the fetch choice only when the case actually chose one', () => {
+    // `undefined` is what "follows the app" means here, so a restore that called the setter unconditionally
+    // would hand every case the app default as if it had picked it, and the half-choice rows would read wrong.
+    const reapply = functionBody('reapplyPersistedSessionState');
+    expect(reapply).toMatch(
+      /if \(saved\.gitFetchEnabled !== undefined \|\| saved\.gitFetchIntervalSeconds !== undefined\)[\s\S]{0,160}session\.setGitFetchSettings\(saved\.gitFetchEnabled, saved\.gitFetchIntervalSeconds\)/
+    );
   });
 });
 
@@ -82,5 +92,27 @@ describe('the setters round-trip through toState()', () => {
       pinnedAt: state.pinnedAt,
       imageWatcherEnabled: true,
     });
+  });
+
+  it('round-trips the fetch choice, and keeps a case that follows the app unchosen', () => {
+    const chose = new Session({ workingDir: '/tmp', mode: 'shell' });
+    chose.setGitFetchSettings(true, 120);
+    const state = chose.toState();
+    expect(state).toMatchObject({ gitFetchEnabled: true, gitFetchIntervalSeconds: 120 });
+
+    const rebuilt = new Session({
+      workingDir: '/tmp',
+      mode: 'shell',
+      gitFetchEnabled: state.gitFetchEnabled,
+      gitFetchIntervalSeconds: state.gitFetchIntervalSeconds,
+    });
+    expect(rebuilt.toState()).toMatchObject({ gitFetchEnabled: true, gitFetchIntervalSeconds: 120 });
+
+    // Undefined is the whole meaning of "follows the app": a restore that wrote the app default into the
+    // case would make it look like the case had picked it, and the row would stop following.
+    const follower = new Session({ workingDir: '/tmp', mode: 'shell' });
+    follower.setGitFetchSettings(undefined, undefined);
+    expect(follower.toState().gitFetchEnabled).toBeUndefined();
+    expect(follower.toState().gitFetchIntervalSeconds).toBeUndefined();
   });
 });

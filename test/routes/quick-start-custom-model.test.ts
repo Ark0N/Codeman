@@ -21,7 +21,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyCookie from '@fastify/cookie';
 import { rm, readFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { createMockRouteContext, safeRmHomeTree, type MockRouteContext } from '../mocks/index.js';
 import { installRouteErrorHandler } from '../../src/web/route-error-handler.js';
@@ -92,6 +92,35 @@ describe('POST /api/quick-start: customModel (one-shot custom-model launch)', ()
     safeRmHomeTree(CASES_DIR);
   });
 
+  it("learns the caller's own value under an injected key, so a clear can put it back", async () => {
+    const own = join(getDataDir(), 'client-claude');
+    const res = await quickStart({
+      caseName: 'cm-own-home',
+      mode: 'claude',
+      envOverrides: { CLAUDE_CONFIG_DIR: own },
+      customModel: { endpointId: 'ep1', modelId: 'qwen3' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const { sessionId } = res.json();
+    const session = ctx.sessions.get(sessionId) as unknown as Session;
+    const isolatedDir = customModelConfigDir(sessionId);
+    // It launches on the isolated directory, with the caller's value set aside rather
+    // than recorded as the injected one.
+    expect(session.envOverrideValue('CLAUDE_CONFIG_DIR')).toBe(isolatedDir);
+    expect(session.getCustomModelForPersist()?.ownEnv).toEqual({ CLAUDE_CONFIG_DIR: own });
+
+    const clear = await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${sessionId}/custom-model`,
+      payload: { clear: true },
+    });
+    expect(clear.statusCode).toBe(200);
+    expect(session.customModel).toBeUndefined();
+    expect(session.envOverrideValue('CLAUDE_CONFIG_DIR')).toBe(own);
+    expect(existsSync(isolatedDir)).toBe(false);
+  });
+
   it('launches a claude session already pointed at the endpoint — no restart at all', async () => {
     const res = await quickStart({
       caseName: 'cm-claude',
@@ -122,6 +151,9 @@ describe('POST /api/quick-start: customModel (one-shot custom-model launch)', ()
     const { sessionId } = res.json();
     const session = ctx.sessions.get(sessionId) as unknown as Session;
     expect(session.customModel?.endpointId).toBe('ep1');
+    // #750, pinned the same way as the pi/grok/omp one-shot paths below: the FIRST
+    // launch already carries the selected id, not just the file on disk.
+    expect(session.getCustomModelForPersist()?.launchModel).toBe('qwen3');
     expect(restartSpy).not.toHaveBeenCalled();
 
     const configDir = customModelConfigDir(sessionId);
@@ -172,6 +204,34 @@ describe('POST /api/quick-start: customModel (one-shot custom-model launch)', ()
     expect(restartSpy).not.toHaveBeenCalled();
   });
 
+  it("leaves the caller's own model in the stored config, which is what a later clear falls back to", async () => {
+    const res = await quickStart({
+      caseName: 'cm-pi-own-model',
+      mode: 'pi',
+      piConfig: { model: 'anthropic/claude-x' },
+      customModel: { endpointId: 'ep1', modelId: 'qwen3' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const { sessionId } = res.json();
+    const session = ctx.sessions.get(sessionId) as unknown as Session;
+    expect(session.getCustomModelForPersist()?.launchModel).toBe('custom/qwen3');
+    expect(session.toState().piConfig?.model).toBe('anthropic/claude-x');
+  });
+
+  it('stores no model at all for a caller that chose none', async () => {
+    const res = await quickStart({
+      caseName: 'cm-codex-no-model',
+      mode: 'codex',
+      customModel: { endpointId: 'ep1', modelId: 'qwen3' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const session = ctx.sessions.get(res.json().sessionId) as unknown as Session;
+    expect(session.getCustomModelForPersist()?.launchModel).toBe('qwen3');
+    expect(session.toState().codexConfig?.model).toBeUndefined();
+  });
+
   it('404s for an unknown endpoint id', async () => {
     const res = await quickStart({
       caseName: 'cm-ghost',
@@ -192,7 +252,9 @@ describe('POST /api/quick-start: customModel (one-shot custom-model launch)', ()
     expect(res.json().errorCode).toBe('OPERATION_FAILED');
   });
 
-  it('refuses a model id the CLI cannot carry on its command line, cleaning up any written config dir', async () => {
+  it('refuses a model id the CLI cannot carry on its command line, before writing anything', async () => {
+    const dirs = join(getDataDir(), 'custom-model-configs');
+    const before = existsSync(dirs) ? readdirSync(dirs).length : 0;
     const res = await quickStart({
       caseName: 'cm-badmodel',
       mode: 'pi',
@@ -200,6 +262,7 @@ describe('POST /api/quick-start: customModel (one-shot custom-model launch)', ()
     });
     expect(res.json().success).toBe(false);
     expect(res.json().errorCode).toBe('INVALID_INPUT');
+    expect(existsSync(dirs) ? readdirSync(dirs).length : 0).toBe(before);
   });
 
   it('refuses customModel for a remote case', async () => {
@@ -225,6 +288,21 @@ describe('POST /api/quick-start: customModel (one-shot custom-model launch)', ()
         throw new Error(`unexpected request in this test: ${url.href}`);
       });
     }
+
+    it('refuses a model id the CLI cannot launch before asking anyone to evict a model', async () => {
+      const other = ctx.sessions.get('test-session-1')!;
+      (other as unknown as { customModel: unknown }).customModel = { endpointId: 'ep1', modelId: 'llama3' };
+      mockRunning([{ model: 'llama3', state: 'ready' }]);
+
+      const res = await quickStart({
+        caseName: 'cm-badmodel-swap',
+        mode: 'codex',
+        customModel: { endpointId: 'ep1', modelId: 'org/model@q4_k_m' },
+      });
+
+      expect(res.json().requiresConfirmation).toBeUndefined();
+      expect(res.json().errorCode).toBe('INVALID_INPUT');
+    });
 
     it('asks for confirmation instead of launching when another live session is using the currently loaded model', async () => {
       const other = ctx.sessions.get('test-session-1')!;
@@ -316,6 +394,47 @@ describe('POST /api/quick-start: customModel (one-shot custom-model launch)', ()
       expect(ctx.sessions.size).toBe(2);
     });
 
+    describe('parallel slots share the context (the quick-start path has its own slot branch)', () => {
+      const slotEndpoint = (contextLength: number, slots: number): CustomModelHost => ({
+        id: 'ep-slots',
+        label: 'multi-slot box',
+        baseUrl: 'http://192.168.1.52:8080',
+        apiKey: 'k',
+        modelContextLengths: { m: contextLength },
+        modelSlotCounts: { m: slots },
+      });
+
+      it('warns when the context divided across the slots is below the floor, and reports the slot count', async () => {
+        await writeCustomModelHosts(getDataDir(), [ENDPOINT, slotEndpoint(131072, 4)]); // ~33k per slot
+
+        const res = await quickStart({
+          caseName: 'cm-slots-warn',
+          mode: 'claude',
+          customModel: { endpointId: 'ep-slots', modelId: 'm' },
+        });
+
+        const body = res.json();
+        expect(body.requiresContextWarning).toBe(true);
+        expect(body.contextLength).toBe(131072);
+        expect(body.slotCount).toBe(4);
+        expect(ctx.sessions.size).toBe(1); // nothing was created
+      });
+
+      it('launches when every slot can hold the floor', async () => {
+        await writeCustomModelHosts(getDataDir(), [ENDPOINT, slotEndpoint(262144, 4)]); // 65,536 per slot
+
+        const res = await quickStart({
+          caseName: 'cm-slots-ok',
+          mode: 'claude',
+          customModel: { endpointId: 'ep-slots', modelId: 'm' },
+        });
+
+        expect(res.statusCode).toBe(200);
+        expect(res.json().requiresContextWarning).toBeUndefined();
+        expect(ctx.sessions.size).toBe(2);
+      });
+    });
+
     it('does not warn when nothing about context was discovered', async () => {
       const res = await quickStart({
         caseName: 'cm-no-ctx-data',
@@ -325,6 +444,50 @@ describe('POST /api/quick-start: customModel (one-shot custom-model launch)', ()
 
       expect(res.statusCode).toBe(200);
       expect(res.json().requiresContextWarning).toBeUndefined();
+    });
+
+    it('warns using the endpoint defaultContextLength when discovery recorded no per-model figure', async () => {
+      const endpoint: CustomModelHost = {
+        id: 'ep-default',
+        label: 'silent gateway',
+        baseUrl: 'http://192.168.1.53:8080',
+        apiKey: 'k',
+        defaultContextLength: 16384,
+      };
+      await writeCustomModelHosts(getDataDir(), [ENDPOINT, endpoint]);
+
+      const res = await quickStart({
+        caseName: 'cm-default-ctx',
+        mode: 'claude',
+        customModel: { endpointId: 'ep-default', modelId: 'some-unknown-model' },
+      });
+
+      const body = res.json();
+      expect(body.requiresContextWarning).toBe(true);
+      expect(body.contextLength).toBe(16384);
+      expect(ctx.sessions.size).toBe(1); // nothing was created
+    });
+
+    it('a discovered per-model figure wins over the endpoint defaultContextLength', async () => {
+      const endpoint: CustomModelHost = {
+        id: 'ep-precedence',
+        label: 'mixed box',
+        baseUrl: 'http://192.168.1.54:8080',
+        apiKey: 'k',
+        modelContextLengths: { m: 131072 },
+        defaultContextLength: 16384,
+      };
+      await writeCustomModelHosts(getDataDir(), [ENDPOINT, endpoint]);
+
+      const res = await quickStart({
+        caseName: 'cm-precedence',
+        mode: 'claude',
+        customModel: { endpointId: 'ep-precedence', modelId: 'm' },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().requiresContextWarning).toBeUndefined();
+      expect(ctx.sessions.size).toBe(2);
     });
   });
 

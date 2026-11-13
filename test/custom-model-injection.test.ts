@@ -8,6 +8,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { parse as parseToml } from 'smol-toml';
 import { getCli } from '../src/config/cli-registry/index.js';
 import {
   buildCustomModelInjection,
@@ -112,6 +113,31 @@ describe('buildCustomModelInjection', () => {
     expect(parsed.provider.custom.models.qwen3).toEqual({});
   });
 
+  it('opencode: threads a discovered context length into the model limit as the full window (issue #749)', () => {
+    const result = buildCustomModelInjection(entryOrThrow('opencode'), endpoint, 'qwen3', 16384);
+    if (result.kind !== 'env') throw new Error('unreachable');
+    const parsed = JSON.parse(result.envOverrides.OPENCODE_CONFIG_CONTENT);
+    // `limit.context` IS the full window to opencode (it reserves for the reply itself),
+    // so the discovered total passes through; `output` only caps the reply at a quarter.
+    expect(parsed.provider.custom.models.qwen3).toEqual({ limit: { context: 16384, output: 4096 } });
+  });
+
+  it('opencode: caps the response headroom reservation at 8192 for big windows', () => {
+    const result = buildCustomModelInjection(entryOrThrow('opencode'), endpoint, 'qwen3', 262144);
+    if (result.kind !== 'env') throw new Error('unreachable');
+    const parsed = JSON.parse(result.envOverrides.OPENCODE_CONFIG_CONTENT);
+    expect(parsed.provider.custom.models.qwen3).toEqual({ limit: { context: 262144, output: 8192 } });
+  });
+
+  it('opencode: never invents a limit for an unknown or non-finite context length (issue #749 regression)', () => {
+    for (const contextLength of [undefined, NaN]) {
+      const result = buildCustomModelInjection(entryOrThrow('opencode'), endpoint, 'qwen3', contextLength);
+      if (result.kind !== 'env') throw new Error('unreachable');
+      const parsed = JSON.parse(result.envOverrides.OPENCODE_CONFIG_CONTENT);
+      expect(parsed.provider.custom.models.qwen3).toEqual({});
+    }
+  });
+
   it('codex: configDir writes an isolated config.toml with model/base_url, and the key rides as extraEnv (never a literal TOML field)', () => {
     const result = buildCustomModelInjection(entryOrThrow('codex'), endpoint, 'qwen3');
     expect(result.kind).toBe('configDir');
@@ -133,6 +159,30 @@ describe('buildCustomModelInjection', () => {
     expect(result.files[0].content).toContain('model = "weird\\"model"');
   });
 
+  it('codex: writes the discovered window as TOP-LEVEL model_context_window with a 75% compact limit (issue #750)', () => {
+    const result = buildCustomModelInjection(entryOrThrow('codex'), endpoint, 'qwen3', 16384);
+    if (result.kind !== 'configDir') throw new Error('unreachable');
+    const doc = parseToml(result.files[0].content) as Record<string, unknown>;
+    // Top-level is the shape codex reads: parked under [model_providers.custom] (its
+    // provider table) the same keys would be silently ignored by codex itself.
+    expect(doc.model_context_window).toBe(16384);
+    expect(doc.model_auto_compact_token_limit).toBe(12288); // 75% of the window, floored
+    const provider = (doc.model_providers as Record<string, Record<string, unknown>>).custom;
+    expect(provider.model_context_window).toBeUndefined();
+    expect(provider.model_auto_compact_token_limit).toBeUndefined();
+  });
+
+  it('codex: writes neither context line for an unknown, non-finite or zero context length', () => {
+    for (const contextLength of [undefined, NaN, 0]) {
+      const result = buildCustomModelInjection(entryOrThrow('codex'), endpoint, 'qwen3', contextLength);
+      if (result.kind !== 'configDir') throw new Error('unreachable');
+      const doc = parseToml(result.files[0].content) as Record<string, unknown>;
+      expect(doc.model_context_window, String(contextLength)).toBeUndefined();
+      expect(doc.model_auto_compact_token_limit, String(contextLength)).toBeUndefined();
+      expect(doc.model).toBe('qwen3'); // the rest of the file is still written
+    }
+  });
+
   it('pi: configDir writes .pi/agent/models.json, redirected via HOME (verified live — PI_CONFIG_DIR does nothing for pi)', () => {
     const result = buildCustomModelInjection(entryOrThrow('pi'), endpoint, 'qwen3');
     if (result.kind !== 'configDir') throw new Error('unreachable');
@@ -142,6 +192,24 @@ describe('buildCustomModelInjection', () => {
     expect(parsed.providers.custom.baseUrl).toBe('http://192.168.1.50:8080/v1');
     expect(parsed.providers.custom.authHeader).toBe(true);
     expect(parsed.providers.custom.models).toEqual([{ id: 'qwen3' }]); // array, NOT keyed by id
+  });
+
+  it('pi: the model entry carries the endpoint window and a reply share of it, or pi takes the model for a 128k one', () => {
+    const models = (contextLength?: number) => {
+      const result = buildCustomModelInjection(entryOrThrow('pi'), endpoint, 'qwen3.6:35b-a3b', contextLength);
+      if (result.kind !== 'configDir') throw new Error('unreachable');
+      return JSON.parse(result.files[0].content).providers.custom.models;
+    };
+    // The full window, and 8192 reply tokens at most (measured on pi 1.5.2: the request then
+    // carries max_tokens 8192 instead of its own 16384).
+    expect(models(65536)).toEqual([{ id: 'qwen3.6:35b-a3b', contextWindow: 65536, maxTokens: 8192 }]);
+    expect(models(131072.9)).toEqual([{ id: 'qwen3.6:35b-a3b', contextWindow: 131072, maxTokens: 8192 }]);
+    // A small window keeps three quarters for the prompt.
+    expect(models(16384)).toEqual([{ id: 'qwen3.6:35b-a3b', contextWindow: 16384, maxTokens: 4096 }]);
+    // Unknown stays unknown: no limit is invented.
+    for (const contextLength of [undefined, NaN, 0, -1, Infinity]) {
+      expect(models(contextLength), String(contextLength)).toEqual([{ id: 'qwen3.6:35b-a3b' }]);
+    }
   });
 
   it('omp: configDir writes .omp/agent/models.yml, redirected via HOME (verified live end-to-end)', () => {
@@ -179,29 +247,32 @@ describe('buildCustomModelInjection', () => {
     expect(result.extraEnv).toEqual({ XAI_API_KEY: 'my-key' });
   });
 
-  it('deepseek: env kind sets base URL (with a /v1 suffix appended) and key, no model var', () => {
-    // appendV1Suffix is REQUIRED here, not cosmetic: confirmed by reading dsh's own
-    // bundled source (@deepseek-ai/dsh-llm-deepseek) that it builds the request URL as
-    // `${DEEPSEEK_BASE_URL}/chat/completions` with no "/v1" of its own, while
-    // llama-swap/llama.cpp only serves "/v1/chat/completions" — without this, every
-    // request 404s (confirmed live; this is the fix for the originally-reported
-    // "dsh: HTTP_404: DeepSeek API error (HTTP 404)").
+  it('deepseek: isolates the selected model route and passes its key by reference', () => {
     const result = buildCustomModelInjection(entryOrThrow('deepseek'), endpoint, 'qwen3');
-    if (result.kind !== 'env') throw new Error('unreachable');
-    expect(result.envOverrides).toEqual({
-      DEEPSEEK_BASE_URL: 'http://192.168.1.50:8080/v1',
-      DEEPSEEK_API_KEY: 'my-key',
-    });
+    if (result.kind !== 'configDir') throw new Error('Expected isolated DeepSeek config');
+    expect(result.dirEnvVar).toBe('DSH_HOME');
+    expect(result.extraEnv).toEqual({ CODEMAN_CUSTOM_MODEL_API_KEY: 'my-key' });
+    expect(result.files[0].content).not.toContain('my-key');
+    const patch = JSON.parse(result.files[0].content);
+    // The patch references the DEDICATED var by name, never dsh's own DEEPSEEK_API_KEY:
+    // dsh's llm-deepseek/web-search rows read that too and would leak this key to
+    // api.deepseek.com on an in-session /model switch back to the official route.
+    expect(
+      patch.find((row: { id: string }) => row.id === 'llm-pi-ai').config.providers['codeman-custom'].apiKeyEnv
+    ).toBe('CODEMAN_CUSTOM_MODEL_API_KEY');
+    expect(result.files[0].content).not.toContain('DEEPSEEK_API_KEY');
+    expect(patch.find((row: { id: string }) => row.id === 'dsh-tui').config.model).toBe('qwen3');
   });
 
-  it('deepseek: appending the /v1 suffix is idempotent against a baseUrl that already ends in /v1', () => {
+  it('deepseek: preserves an existing version suffix', () => {
     const result = buildCustomModelInjection(
       entryOrThrow('deepseek'),
-      { ...endpoint, baseUrl: 'http://192.168.1.50:8080/v1' },
+      { ...endpoint, baseUrl: endpoint.baseUrl + '/v1' },
       'qwen3'
     );
-    if (result.kind !== 'env') throw new Error('unreachable');
-    expect(result.envOverrides.DEEPSEEK_BASE_URL).toBe('http://192.168.1.50:8080/v1');
+    if (result.kind !== 'configDir') throw new Error('Expected isolated DeepSeek config');
+    expect(result.files[0].content).toContain('http://192.168.1.50:8080/v1');
+    expect(result.files[0].content).not.toContain('/v1/v1');
   });
 
   it('antigravity: unsupported', () => {
@@ -232,7 +303,9 @@ describe('launchModel (the model launch param that selects the injected provider
   });
 
   it('CLIs whose config selects the model on its own declare none', () => {
-    for (const id of ['claude', 'opencode', 'codex', 'gemini', 'deepseek']) {
+    // codex now declares launchModel (selected-model launch override) and is covered by
+    // its own restart coverage, not here.
+    for (const id of ['claude', 'opencode', 'gemini', 'deepseek']) {
       const result = buildCustomModelInjection(entryOrThrow(id), endpoint, 'qwen3');
       if (result.kind === 'unsupported') throw new Error('unreachable');
       expect(result.launchModel, id).toBeUndefined();

@@ -123,6 +123,12 @@ interface NotePromptArgs {
    * `ApprovalItem.answerInTerminal`.
    */
   answerInTerminal?: boolean;
+  /**
+   * An idle prompt that should open ALREADY acknowledged for a reason other than
+   * `watching`, e.g. `cache keep-alive` when the turn that just ended was Codeman's own
+   * prompt-cache nudge. Same consequence as `watching`: the item exists, only its alert is spent.
+   */
+  preAcknowledged?: string;
   /** Returns the raw (ANSI-bearing) pane frame, or null when unavailable. */
   capture?: () => string | null;
   /**
@@ -285,9 +291,9 @@ export class ApprovalInbox {
       cwd: args.cwd,
       ...(args.answerInTerminal ? { answerInTerminal: true } : {}),
     };
-    if (args.kind === 'idle' && args.watching) {
+    if (args.kind === 'idle' && (args.preAcknowledged || args.watching)) {
       item.acknowledgedAt = item.createdAt;
-      item.acknowledgedReason = `watching ${args.watching}`;
+      item.acknowledgedReason = args.preAcknowledged ?? `watching ${args.watching}`;
     }
     if (!args.capture && args.context) item.context = normalizeCapturedFrame(args.context);
     this.applyCapture(item, args.capture);
@@ -365,6 +371,21 @@ export class ApprovalInbox {
     item.context = context;
     item.options = options;
     return true;
+  }
+
+  /**
+   * The list route's sweep: `verifyStillAnswerable`, but never before the delay
+   * `notePrompt` waits out. A frame that shows no dialog proves nothing about a
+   * dialog Ink has not painted yet, and the working line still on screen then
+   * would resolve a live prompt, clearing its red alert on every device. The
+   * list used to run once per page load, which made that rare; a client that
+   * polls it (the macOS app's logo) would hit it on every new dialog. Each
+   * call on an older dialog costs one synchronous pane capture.
+   */
+  sweepForList(id: string): boolean {
+    const item = this.getById(id);
+    if (item && Date.now() - item.createdAt < STALE_CHECK_DELAY_MS) return true;
+    return this.verifyStillAnswerable(id);
   }
 
   /**

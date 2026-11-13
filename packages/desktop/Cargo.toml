@@ -1,0 +1,96 @@
+[package]
+name = "codeman-desktop"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.90"
+description = "Codeman Desktop: a small native window for a Codeman server"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "codeman-desktop"
+path = "src/main.rs"
+
+[dependencies]
+# Window + event loop (tao), the system web view (wry: WKWebView on macOS,
+# WebView2 on Windows, WebKitGTK on Linux) and native menus (muda). Tauri is
+# built on these three; using them directly keeps the app small and gives us
+# `load_url_with_headers`, which Tauri's navigate() does not have (see README).
+tao = "0.37"
+wry = { version = "0.57", features = ["devtools"] }
+muda = "0.21"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+url = "2"
+# The versions ureq and wry already pull in, so neither crate is built twice
+# (ureq builds base64 without its default SIMD engines, and so do we).
+base64 = { version = "0.23", default-features = false, features = ["std"] }
+dirs = "7"
+# The reachability probe. platform-verifier = the OS trust store, the same one
+# WKWebView uses, so the probe and the window agree on which certificates pass.
+ureq = { version = "3", features = ["platform-verifier"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3"
+# Ignoring signals in the logo blinker (src/logo.rs). Already in the tree
+# through wry and tao, so no new crate is added.
+libc = "0.2"
+# JavaScript dialogs, HTTP Basic challenges, clearing cookies and the window's
+# content size (src/macos.rs). The versions wry already pulls in, so no new
+# crate is added.
+objc2 = { version = "0.6.5", default-features = false, features = ["std"] }
+block2 = { version = "0.6.2", default-features = false, features = ["std"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "objc2-core-foundation",
+    "block2",
+    "NSBundle",
+    "NSDate",
+    "NSDictionary",
+    "NSGeometry",
+    "NSObject",
+    "NSOperation",
+    "NSProcessInfo",
+    "NSRange",
+    "NSSet",
+    "NSString",
+    "NSURL",
+    "NSURLAuthenticationChallenge",
+    "NSURLCredential",
+    "NSURLProtectionSpace",
+    "NSURLRequest",
+    "NSURLResponse",
+    "NSURLSession",
+    "NSValue",
+] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "objc2-core-foundation",
+    "NSAlert",
+    "NSApplication",
+    "NSButton",
+    "NSControl",
+    "NSResponder",
+    "NSTextField",
+    "NSView",
+    "NSWindow",
+] }
+objc2-web-kit = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "block2",
+    "objc2-app-kit",
+    "WKFrameInfo",
+    "WKNavigationDelegate",
+    "WKSecurityOrigin",
+    "WKUIDelegate",
+    "WKWebView",
+    "WKWebsiteDataRecord",
+    "WKWebsiteDataStore",
+] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

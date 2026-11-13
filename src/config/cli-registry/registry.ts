@@ -32,17 +32,9 @@
 
 import { existsSync, readFileSync, renameSync, statSync } from 'node:fs';
 import { dataPath } from '../instance.js';
-import type { CliEntry, CliId, CliRegistryFile } from './types.js';
+import type { CliEntry, CliRegistryFile } from './types.js';
 import { CliEntrySchema } from './schema.js';
 import { STOCK_CLIS } from './stock.js';
-
-/** Construct a validated CliId. Throws if `raw` is not a well-formed id — call at API boundaries. */
-export function asCliId(raw: string): CliId {
-  if (!/^[a-z][a-z0-9-]{0,23}$/.test(raw)) {
-    throw new Error(`invalid CLI id: ${JSON.stringify(raw)}`);
-  }
-  return raw as CliId;
-}
 
 function filePath(): string {
   return dataPath('clis.json');
@@ -225,10 +217,6 @@ export function enabledClis(): CliEntry[] {
 
 export function getCli(id: string): CliEntry | undefined {
   return listClis().find((e) => (e.id as string) === id);
-}
-
-export function cliIds(): string[] {
-  return listClis().map((e) => e.id as string);
 }
 
 /** Every enabled entry's id, in registry order. */

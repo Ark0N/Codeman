@@ -4,6 +4,9 @@
  * A small defense-in-depth blocklist of absolute paths that must never be
  * served to the browser regardless of how the path was obtained (workspace
  * download, cross-workspace attachment registration, raw/preview serving).
+ * The workspace preview routes (`file-content`, `file-raw`) do not consult it,
+ * since realpath containment is their control, and the File Viewer editor
+ * skips only the dotenv entries (`allowDotenv`).
  *
  * This is intentionally a BLOCKLIST, not a workspace-confinement check:
  * cross-workspace attachment is a supported feature (codeman-publish skill +
@@ -45,10 +48,6 @@ const SENSITIVE_PATTERNS: RegExp[] = [
   /\/\.ssh\//,
   /\/\.gnupg\//,
 
-  // Dotenv, in every conventional spelling (.env, .env.local, .env.production).
-  /\/\.env$/,
-  /\/\.env\./,
-
   // Generic credential files, plus the per-vendor spellings that do not match it.
   /\/credentials(\.json|\.yml|\.yaml|\.xml|\.toml|\.db)?$/i,
   /\/\.aws\/(credentials|config)$/,
@@ -83,6 +82,13 @@ const SENSITIVE_PATTERNS: RegExp[] = [
   /\/\.claude\/\.credentials\.json$/,
   /\/\.codeman[^/]*\/hook-secret$/,
   /\/\.codeman[^/]*\/users\.json$/,
+  // The data dir's `.env` is the CODEMAN_USERNAME/PASSWORD fallback `codeman attach`
+  // reads. Named here as well as in DOTENV_PATTERNS so `allowDotenv` (the File
+  // Viewer editor) cannot reach it from a session whose workspace is $HOME.
+  // Case-insensitive, unlike its neighbours: the editor's name rule lowercases
+  // (`isEditableFileName`), so `.codeman/.ENV` passes it, and on a case-insensitive
+  // filesystem (the macOS default) that IS this file.
+  /\/\.codeman[^/]*\/\.env$/i,
   // Codeman's own state files. Named once `.json` became previewable outside
   // the workspace: `SessionState.envOverrides` persists whatever the user set
   // for a session, and the env allowlist admits key-shaped names
@@ -100,7 +106,38 @@ const SENSITIVE_PATTERNS: RegExp[] = [
   /\/\.codeman[^/]*\/settings\.json$/,
   /\/\.codeman[^/]*\/push-keys\.json$/,
   /\/\.codeman[^/]*\/intents\.json$/,
+  // Pending agent-inbox messages (opt-in snapshot): same text as prompts, same 0600.
+  /\/\.codeman[^/]*\/agent-inbox\.json$/,
+  // The edit history panel's stores (edit-history-store.ts) hold every diff an
+  // agent wrote, keys and .env contents included; written 0600 and kept out of
+  // /api/search for the same reason as intents.json.
+  /\/\.codeman[^/]*\/edit-history\//,
+  // Credentials kept outside settings.json: the Discord bot token, the webhook URL
+  // (a bearer secret), the custom endpoints' API keys, and the generated per-session
+  // configs, some of which carry that key inline.
+  /\/\.codeman[^/]*\/discord\.json$/,
+  /\/\.codeman[^/]*\/webhook\.json$/,
+  /\/\.codeman[^/]*\/custom-model-hosts\.json$/,
+  /\/\.codeman[^/]*\/custom-model-configs\//,
+  // The local model runtime (src/local-model/) is started with a private HOME inside the data
+  // dir and makes a key pair for itself there (`home/.ollama/id_ed25519`). A runtime the user
+  // runs on their own keeps the same key under their real home.
+  /\/\.codeman[^/]*\/local-model\/home\//,
+  /\/\.ollama\/id_ed25519$/,
+  // Config backups are dated COPIES of the files above (users.json and settings.json
+  // included), which the name-anchored patterns do not match. A custom
+  // `configBackupDir` is outside what a pattern here can name.
+  /\/\.codeman[^/]*\/backups\//,
 ];
+
+/**
+ * Dotenv, in every conventional spelling (.env, .env.local, .env.production).
+ * Kept apart from SENSITIVE_PATTERNS so the File Viewer editor can skip them
+ * (`allowDotenv`): the plain preview already shows a workspace dotenv file to
+ * the same user, so refusing the edit protected nothing. Every other surface
+ * (download, attachments, path picker) still blocks them.
+ */
+const DOTENV_PATTERNS: RegExp[] = [/\/\.env$/, /\/\.env\./];
 
 /**
  * Claude config members that are credential-bearing ONLY under the user's real
@@ -119,8 +156,11 @@ const HOME_SENSITIVE_MEMBERS = ['.claude.json', '.claude/settings.json', '.claud
 /**
  * Returns true if the given ABSOLUTE, symlink-resolved path matches the
  * sensitive-file blocklist and must not be served to the browser.
+ * `allowDotenv` skips only DOTENV_PATTERNS: a dotenv file inside a blocked tree
+ * (`.ssh/.env`, a config backup) still matches its tree's pattern.
  */
-export function isSensitivePath(absPath: string): boolean {
+export function isSensitivePath(absPath: string, opts: { allowDotenv?: boolean } = {}): boolean {
+  if (!opts.allowDotenv && DOTENV_PATTERNS.some((pattern) => pattern.test(absPath))) return true;
   if (SENSITIVE_PATTERNS.some((pattern) => pattern.test(absPath))) return true;
   const home = homedir();
   return HOME_SENSITIVE_MEMBERS.some((member) => absPath === join(home, member));

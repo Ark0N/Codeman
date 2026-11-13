@@ -1,13 +1,13 @@
 /**
  * @fileoverview Token validation constants.
  *
- * Claude's context window is ~200k tokens, so 500k is a generous upper bound.
+ * Claude's context window is 200k tokens, or 1M with extended context.
  *
  * @module utils/token-validation
  */
 
 /**
  * Maximum tokens allowed per session.
- * Claude's context is ~200k, so 500k is a safe upper bound for validation.
+ * The largest context Claude reports today is 1M, the upper bound for validation.
  */
-export const MAX_SESSION_TOKENS = 500_000;
+export const MAX_SESSION_TOKENS = 1_000_000;

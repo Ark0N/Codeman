@@ -13,9 +13,10 @@
  * - `{"type":"KeepAlive"}` on open and every 8s, or upstream drops the socket
  *   between utterances.
  * - Audio frames go up as raw binary.
- * - Downstream, `TranscriptText`/`TranscriptInterim` carry the RUNNING transcript
- *   (each frame supersedes the previous one — they are not deltas to concatenate),
- *   and `TranscriptEndpoint` promotes the pending interim to final.
+ * - Downstream, `TranscriptText`/`TranscriptInterim` carry the current utterance
+ *   so far (each frame supersedes the previous one; they are not deltas to
+ *   concatenate), and `TranscriptEndpoint` promotes the pending interim to final,
+ *   which ends that utterance.
  * - `{"type":"CloseStream"}` finalizes; the endpoint frame that follows is the
  *   last transcript, so `finalize()` waits briefly for it rather than closing.
  *
@@ -244,7 +245,7 @@ export class VoiceStreamRelay {
     switch (msg.type) {
       case 'TranscriptText':
       case 'TranscriptInterim': {
-        // Each frame is the whole running transcript, not a delta.
+        // Each frame is the current utterance so far, not a delta; endpoints commit it.
         if (typeof msg.data === 'string' && msg.data) {
           this.pendingTranscript = msg.data;
           this.opts.onTranscript(msg.data, false);

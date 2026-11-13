@@ -17,7 +17,7 @@ lists mark a session that runs in one with a `⑂ <name>` pill.
 
 The main checkout does not show the worktrees as untracked: Codeman adds `/.claude/worktrees/`
 (and `/.claude/settings.local.json`, the hooks file it writes for every Claude session, plus the
-`codeman` folder it writes when **Codeman Agent Skill** is on) to the repository's local
+`codeman` folder it writes while **Codeman Agent Skill** is on, the default) to the repository's local
 `.git/info/exclude` when git does not ignore them already. Without that, those files would make
 every worktree look modified and git would refuse to remove it. Your tracked `.gitignore` is
 never touched.
@@ -38,6 +38,36 @@ from another branch, tag or commit. An existing branch is never reused or reset:
 name.
 
 **Open** on a worktree's row starts another session in it, with the CLI chosen above.
+
+## When an agent moves into a worktree
+
+Claude Code can move a running session into a worktree part way through (its EnterWorktree tool),
+and the session's tab stays on the case. While the session's pane is in a worktree inside the
+session's folder, the **Files** panel lists that worktree, so you see the files the agent is
+editing. A strip under the panel's title names the worktree, and its **Session folder** button
+switches to the session's own folder (**Back to worktree** returns). The panel follows the agent
+in and back out on its own while it is open.
+
+Only the Files panel moves. The **Git** panel stays on the session's folder, so it can show
+`main` while the strip names the worktree. And `.claude` is a hidden folder of the session's
+folder, so an `.html` file in `.claude/worktrees/<name>` opens as source rather than as a
+rendered page. A session started in the worktree does not have that limit.
+
+A worktree beside the repository (`git worktree add ../feature`, or a setup that makes
+EnterWorktree put worktrees there) is followed too, as long as the session was started at the top
+of the repository or of one of its worktrees. The panel then lists that folder with full paths,
+and you can preview and edit its files there. Codeman follows such a worktree only when the
+session's own repository lists it. Codeman never follows one of these:
+
+- your home folder or above it, or a folder that holds the session's folder;
+- a folder at, inside or around a Docker case's workspace;
+- in multi-user mode, unless the session's owner is an admin, a folder outside the owner's own space and the session's folder;
+- any worktree beside the repository while the server confines attachments to the workspace;
+- a folder at, inside or around a tree the server blocks for attachments, or a folder that is itself a credential folder such as `.ssh`.
+
+A session started in a subfolder of the repository follows no worktree outside that subfolder,
+including the one Claude Code creates at the top of the repository. Open such a worktree as a case
+of its own with Add Case > Link Existing.
 
 ## Removing one
 

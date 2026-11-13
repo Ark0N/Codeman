@@ -33,8 +33,11 @@ const FILE_PREVIEW_PREF_KEYS = {
   htmlRendered: 'codeman:filePreviewHtmlRendered',
   lineNumbers: 'codeman:filePreviewLineNumbers',
   wrap: 'codeman:filePreviewWrap',
+  expanded: 'codeman:filePreviewExpanded',
 };
-const FILE_PREVIEW_PREF_DEFAULTS = { mdRendered: true, htmlRendered: true, lineNumbers: false, wrap: true };
+const FILE_PREVIEW_PREF_DEFAULTS = { mdRendered: true, htmlRendered: true, lineNumbers: false, wrap: true, expanded: false };
+// Back/forward list of previews opened from one overlay session (links between documents).
+const FILE_PREVIEW_HISTORY_MAX = 50;
 const AWAY_DIGEST_SECTIONS = [
   ['needsAttention', 'Needs Attention'],
   ['completed', 'Completed'],
@@ -421,6 +424,7 @@ Object.assign(CodemanApp.prototype, {
     if (!modal || !search) return;
 
     this.commandPaletteActiveIndex = 0;
+    this._resetCommandPaletteAgent();
     search.value = '';
     modal.classList.add('active');
 
@@ -462,6 +466,11 @@ Object.assign(CodemanApp.prototype, {
     });
 
     search?.addEventListener('keydown', async (e) => {
+      if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && this._commandPaletteArrowCyclesAgent(e)) {
+        e.preventDefault();
+        this._cycleCommandPaletteAgent(e.key === 'ArrowRight' ? 1 : -1);
+        return;
+      }
       if (e.key === 'ArrowDown') {
         e.preventDefault();
         this.moveCommandPaletteSelection(1);
@@ -491,7 +500,22 @@ Object.assign(CodemanApp.prototype, {
       }
     });
 
+    // Clicking an agent arrow must leave focus in the search box, or the
+    // Left/Right/Enter keys stop reaching the palette after the first click.
+    list?.addEventListener?.('mousedown', (e) => {
+      if (e.target?.closest?.('[data-palette-agent-cycle]')) e.preventDefault?.();
+    });
+
     list?.addEventListener?.('click', (e) => {
+      // The agent arrows sit inside the new-session row: they change the agent
+      // and must not also activate (launch) the row they are drawn in.
+      const cycle = e.target?.closest?.('[data-palette-agent-cycle]');
+      if (cycle) {
+        e.preventDefault?.();
+        e.stopPropagation?.();
+        this._cycleCommandPaletteAgent(cycle.dataset.paletteAgentCycle === 'prev' ? -1 : 1);
+        return;
+      }
       const row = e.target?.closest?.('[data-command-index]');
       if (!row) return;
       this.commandPaletteActiveIndex = Number(row.dataset.commandIndex) || 0;
@@ -532,16 +556,108 @@ Object.assign(CodemanApp.prototype, {
   },
 
   _buildCommandPaletteNewSessionItem(query = '') {
-    const mode = this.runMode || this._runMode || 'claude';
-    const labels = { claude: 'Claude', opencode: 'OpenCode', codex: 'Codex', gemini: 'Gemini', antigravity: 'Antigravity', pi: 'Pi', grok: 'Grok', deepseek: 'DeepSeek', omp: 'OMP' };
-    const caseName = this._findCommandPaletteCaseMatch(query) || document.getElementById('quickStartCase')?.value || 'testcase';
+    const caseName = this._commandPaletteCaseName(query);
+    const agent = this._commandPaletteAgent(caseName);
+    const mode = agent?.id || this.runMode || this._runMode || 'claude';
+    const labels = { claude: 'Claude', opencode: 'OpenCode', codex: 'Codex', gemini: 'Gemini', antigravity: 'Antigravity', pi: 'Pi', grok: 'Grok', deepseek: 'DeepSeek', omp: 'OMP', copilot: 'Copilot', jcode: 'jcode' };
     return {
       id: 'new-session',
       type: 'new-session',
       caseName,
+      mode,
       title: 'New session',
-      subtitle: `Run ${labels[mode] || mode} in ${caseName}`,
+      subtitle: `Run ${agent?.label || labels[mode] || mode} in ${caseName}`,
     };
+  },
+
+  /** The case a new session from the palette starts in: the case the query names, else the Run button's case. */
+  _commandPaletteCaseName(query = '') {
+    return this._findCommandPaletteCaseMatch(query) || document.getElementById('quickStartCase')?.value || 'testcase';
+  },
+
+  /** The case of the new-session row on screen (the palette's last render), for the agent switch. */
+  _commandPaletteRowCase() {
+    const row = (this.commandPaletteItems || []).find((item) => item?.type === 'new-session');
+    return row ? row.caseName : this._commandPaletteCaseName(document.getElementById('commandPaletteSearch')?.value || '');
+  },
+
+  /**
+   * The agents the new-session row can start in `caseName`: the server-injected
+   * CLI catalog's enabled entries that the toolbar Run menu offers for that case,
+   * in catalog order. An agent entry goes through the Run menu's own rule,
+   * _runModeAvailableForCase (session-ui.js): the host's CLIs for a local or
+   * remote case, the container's for a Docker case. A non-agent entry (Shell) is
+   * never gated, as in the Run menu. The vm test harness may load this file
+   * without session-ui.js, and then the host's isCliAvailable() decides. The ids
+   * are DATA from the registry, never a list kept here. Empty on a page rendered
+   * without the catalog; that and a single entry both leave the row on the Run
+   * button's mode (see _commandPaletteAgent).
+   */
+  _commandPaletteAgentChoices(caseName = this._commandPaletteRowCase()) {
+    const catalog = typeof window !== 'undefined' && Array.isArray(window.__codemanCliCatalog) ? window.__codemanCliCatalog : [];
+    const offered = (id) =>
+      typeof this._runModeAvailableForCase === 'function'
+        ? this._runModeAvailableForCase(id, caseName)
+        : (this.isCliAvailable?.(id) ?? true);
+    return catalog
+      .filter((cli) => cli && typeof cli.id === 'string' && cli.enabled && (cli.kind !== 'agent' || offered(cli.id)))
+      .map((cli) => ({ id: cli.id, label: (typeof cli.label === 'string' && cli.label.trim()) || cli.id }));
+  },
+
+  /**
+   * The agent the new-session row will start in `caseName`: the one picked with
+   * the switch since the palette opened, else the Run button's mode, else the
+   * first offered. Null when fewer than two are offered: with one entry there is
+   * nothing to pick, so the row keeps the Run button's mode as it did before the
+   * switch existed, and a Run mode the case cannot start fails the way the Run
+   * button would, instead of the palette quietly starting the one entry offered
+   * (often Shell).
+   */
+  _commandPaletteAgent(caseName = this._commandPaletteRowCase()) {
+    const choices = this._commandPaletteAgentChoices(caseName);
+    if (choices.length < 2) return null;
+    const runMode = this.runMode || this._runMode;
+    return (
+      choices.find((c) => c.id === this._commandPaletteAgentId) || choices.find((c) => c.id === runMode) || choices[0]
+    );
+  },
+
+  /**
+   * Each time the palette opens it forgets the last pick, so the row starts on
+   * the Run button's mode (see _commandPaletteAgent). That default is resolved
+   * per render, not here: the query can move the row to another case, which may
+   * offer the Run button's mode when the first case did not.
+   */
+  _resetCommandPaletteAgent() {
+    this._commandPaletteAgentId = null;
+  },
+
+  _cycleCommandPaletteAgent(delta) {
+    const caseName = this._commandPaletteRowCase();
+    const choices = this._commandPaletteAgentChoices(caseName);
+    if (choices.length < 2) return;
+    const at = Math.max(0, choices.findIndex((c) => c.id === this._commandPaletteAgent(caseName)?.id));
+    this._commandPaletteAgentId = choices[(((at + delta) % choices.length) + choices.length) % choices.length].id;
+    this.renderCommandPalette();
+  },
+
+  /**
+   * Left/Right change the agent only while the new-session row is highlighted,
+   * and the caret is at either query boundary, with no selection. Both arrows
+   * stay in picker navigation after typing a case name; inside the query they
+   * still edit text, as do modified arrows and selection changes.
+   */
+  _commandPaletteArrowCyclesAgent(e) {
+    const active = (this.commandPaletteItems || [])[this.commandPaletteActiveIndex || 0];
+    if (active?.type !== 'new-session') return false;
+    if (this._commandPaletteAgentChoices(active.caseName).length < 2) return false;
+    if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return false;
+    const input = e.target;
+    const value = typeof input?.value === 'string' ? input.value : '';
+    const start = Number.isFinite(input?.selectionStart) ? input.selectionStart : value.length;
+    const end = Number.isFinite(input?.selectionEnd) ? input.selectionEnd : start;
+    if (start !== end) return false;
+    return start <= 0 || end >= value.length;
   },
 
   _findCommandPaletteCaseMatch(query = '') {
@@ -597,17 +713,38 @@ Object.assign(CodemanApp.prototype, {
         const active = index === this.commandPaletteActiveIndex ? ' active' : '';
         const icon = item.type === 'new-session' ? '+' : item.type === 'browse-sessions' ? '≡' : '›';
         const browse = item.type === 'browse-sessions' ? ' command-palette-item--browse' : '';
+        const agent = item.type === 'new-session' ? this._renderCommandPaletteAgentPicker(item.mode, item.caseName) : '';
         return `
-          <button class="command-palette-item${active}${browse}" type="button" data-command-index="${index}">
+          <button class="command-palette-item${active}${browse}${agent ? ' command-palette-item--agent' : ''}" type="button" data-command-index="${index}">
             <span class="command-palette-icon" aria-hidden="true">${icon}</span>
             <span class="command-palette-text">
               <span class="command-palette-title">${escapeHtml(item.title)}</span>
               <span class="command-palette-subtitle">${escapeHtml(item.subtitle || '')}</span>
-            </span>
+            </span>${agent}
           </button>
         `;
       })
       .join('');
+  },
+
+  /**
+   * The new-session row's agent switch: arrows either side of the agent's logo
+   * and name. Spans, not buttons: the row itself is a <button>. The switch is
+   * aria-hidden (no nested buttons; the row's subtitle already names the agent),
+   * and its arrows work by click through data-palette-agent-cycle. Nothing is
+   * drawn when there is nothing to choose between.
+   */
+  _renderCommandPaletteAgentPicker(mode, caseName) {
+    const choices = this._commandPaletteAgentChoices(caseName);
+    if (choices.length < 2) return '';
+    const agent = choices.find((c) => c.id === mode) || choices[0];
+    return `
+            <span class="command-palette-agent" aria-hidden="true" title="Agent for the new session (Left/Right to change)">
+              <span class="command-palette-agent-arrow" data-palette-agent-cycle="prev">&lsaquo;</span>
+              <span class="run-mode-dot ${escapeHtml(agent.id)}" aria-hidden="true"></span>
+              <span class="command-palette-agent-label">${escapeHtml(agent.label)}</span>
+              <span class="command-palette-agent-arrow" data-palette-agent-cycle="next">&rsaquo;</span>
+            </span>`;
   },
 
   moveCommandPaletteSelection(delta) {
@@ -652,7 +789,16 @@ Object.assign(CodemanApp.prototype, {
           caseSelect.value = item.caseName;
         }
       }
-      await this.run();
+      // A one-shot launch of the picked agent: the same temporary _runMode swap
+      // the custom-model entries and worktree launches use, so run() keeps its
+      // launch lock and per-mode paths and the Run button's mode is untouched.
+      const previousRunMode = this._runMode;
+      if (item.mode) this._runMode = item.mode;
+      try {
+        await this.run();
+      } finally {
+        this._runMode = previousRunMode;
+      }
     }
   },
 
@@ -1242,12 +1388,21 @@ Object.assign(CodemanApp.prototype, {
   },
 
   // ═══════════════════════════════════════════════════════════════
-  // Monitor Panel Detach & Drag
+  // Monitor and Subagents Panel Detach & Drag
   // ═══════════════════════════════════════════════════════════════
 
   toggleMonitorDetach() {
-    const panel = document.getElementById('monitorPanel');
-    const detachBtn = document.getElementById('monitorDetachBtn');
+    this._togglePanelDetach('monitorPanel', 'monitorPanelHeader', 'monitorDetachBtn');
+  },
+
+  toggleSubagentsDetach() {
+    this._togglePanelDetach('subagentsPanel', 'subagentsPanelHeader', 'subagentsDetachBtn');
+  },
+
+  /** Float a bottom panel as a draggable window, or dock it back. */
+  _togglePanelDetach(panelId, headerId, detachBtnId) {
+    const panel = document.getElementById(panelId);
+    const detachBtn = document.getElementById(detachBtnId);
 
     if (panel.classList.contains('detached')) {
       // Re-attach to bottom
@@ -1268,111 +1423,14 @@ Object.assign(CodemanApp.prototype, {
         detachBtn.innerHTML = '&#x229E;'; // Attach icon (squared plus - dock back)
         detachBtn.title = 'Attach panel';
       }
-      // Setup drag functionality
-      this.setupMonitorDrag();
+      this._setupPanelDrag(panelId, headerId);
     }
   },
 
-  setupMonitorDrag() {
-    const panel = document.getElementById('monitorPanel');
-    const header = document.getElementById('monitorPanelHeader');
-
-    if (!panel || !header) return;
-
-    let isDragging = false;
-    let startX, startY, startLeft, startTop;
-
-    const onStart = (e) => {
-      // Only drag from header, not from buttons
-      if (e.target.closest('button')) return;
-      if (!panel.classList.contains('detached')) return;
-
-      isDragging = true;
-      const coords = getEventCoords(e);
-      startX = coords.clientX;
-      startY = coords.clientY;
-      const rect = panel.getBoundingClientRect();
-      startLeft = rect.left;
-      startTop = rect.top;
-
-      document.addEventListener('mousemove', onMove);
-      document.addEventListener('mouseup', onEnd);
-      document.addEventListener('touchmove', onMove, { passive: false });
-      document.addEventListener('touchend', onEnd);
-      e.preventDefault();
-    };
-
-    const onMove = (e) => {
-      if (!isDragging) return;
-
-      const coords = getEventCoords(e);
-      const dx = coords.clientX - startX;
-      const dy = coords.clientY - startY;
-
-      let newLeft = startLeft + dx;
-      let newTop = startTop + dy;
-
-      // Keep within viewport bounds
-      const rect = panel.getBoundingClientRect();
-      newLeft = Math.max(0, Math.min(window.innerWidth - rect.width, newLeft));
-      newTop = Math.max(0, Math.min(window.innerHeight - rect.height, newTop));
-
-      panel.style.left = newLeft + 'px';
-      panel.style.top = newTop + 'px';
-    };
-
-    const onEnd = () => {
-      isDragging = false;
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onEnd);
-      document.removeEventListener('touchmove', onMove);
-      document.removeEventListener('touchend', onEnd);
-    };
-
-    // Remove existing listeners before adding new ones
-    header.removeEventListener('mousedown', header._dragHandler);
-    header.removeEventListener('touchstart', header._touchDragHandler);
-    header._dragHandler = onStart;
-    header._touchDragHandler = onStart;
-    header.addEventListener('mousedown', onStart);
-    header.addEventListener('touchstart', onStart, { passive: false });
-  },
-
-  // ═══════════════════════════════════════════════════════════════
-  // Subagents Panel Detach & Drag
-  // ═══════════════════════════════════════════════════════════════
-
-  toggleSubagentsDetach() {
-    const panel = document.getElementById('subagentsPanel');
-    const detachBtn = document.getElementById('subagentsDetachBtn');
-
-    if (panel.classList.contains('detached')) {
-      // Re-attach to bottom
-      panel.classList.remove('detached');
-      panel.style.top = '';
-      panel.style.left = '';
-      panel.style.width = '';
-      panel.style.height = '';
-      if (detachBtn) {
-        detachBtn.innerHTML = '&#x29C9;'; // Detach icon
-        detachBtn.title = 'Detach panel';
-      }
-    } else {
-      // Detach as floating window
-      panel.classList.add('detached');
-      panel.classList.add('open'); // Ensure it's visible
-      if (detachBtn) {
-        detachBtn.innerHTML = '&#x229E;'; // Attach icon
-        detachBtn.title = 'Attach panel';
-      }
-      // Setup drag functionality
-      this.setupSubagentsDrag();
-    }
-  },
-
-  setupSubagentsDrag() {
-    const panel = document.getElementById('subagentsPanel');
-    const header = document.getElementById('subagentsPanelHeader');
+  /** Let a detached panel be dragged by its header, kept inside the viewport. */
+  _setupPanelDrag(panelId, headerId) {
+    const panel = document.getElementById(panelId);
+    const header = document.getElementById(headerId);
 
     if (!panel || !header) return;
 
@@ -1521,11 +1579,6 @@ Object.assign(CodemanApp.prototype, {
   // ═══════════════════════════════════════════════════════════════
   // Subagent Panel (Claude Code Background Agents)
   // ═══════════════════════════════════════════════════════════════
-
-  // Legacy alias
-  toggleSubagentPanel() {
-    this.toggleSubagentsPanel();
-  },
 
   updateSubagentBadge() {
     const badge = this.$('subagentCountBadge');
@@ -1817,7 +1870,16 @@ Object.assign(CodemanApp.prototype, {
 
       // Show in a modal or new window
       const content = data.data.formatted.join('\n');
-      const win = window.open('', '_blank', 'width=800,height=600');
+      // This open runs after the fetch above, so a pop-up blocker that wants a
+      // click can refuse it, and the Codeman desktop app always refuses an
+      // empty window. Both return null; say so instead of throwing into the
+      // catch below, whose 'Failed to load transcript' would be wrong.
+      let win = null;
+      try { win = window.open('', '_blank', 'width=800,height=600'); } catch {}
+      if (!win) {
+        this.showToast('Could not open the transcript window: pop-up windows are blocked here', 'error');
+        return;
+      }
       win.document.write(`
         <html>
           <head>
@@ -2098,7 +2160,7 @@ Object.assign(CodemanApp.prototype, {
   // If cleanupData is true, also remove activity and toolResults data to prevent memory leaks
   closeSessionSubagentWindows(sessionId, cleanupData = false) {
     const toClose = [];
-    for (const [agentId, _windowData] of this.subagentWindows) {
+    for (const agentId of this.subagentWindows.keys()) {
       const agent = this.subagents.get(agentId);
       // Check both subagent parentSessionId and subagentParentMap
       // (standalone pane windows use subagentParentMap, not subagents map)
@@ -2160,19 +2222,6 @@ Object.assign(CodemanApp.prototype, {
       this.teammateTerminals.delete(agentId);
     }
   },
-
-
-  minimizeSubagentWindow(agentId) {
-    const windowData = this.subagentWindows.get(agentId);
-    if (windowData) {
-      // Dispose teammate terminal on minimize to free DOM/memory (lazy re-creation on restore)
-      this._disposeTeammateTerminalForMinimize(agentId);
-      windowData.element.style.display = 'none';
-      windowData.minimized = true;
-      this.updateConnectionLines();
-    }
-  },
-
 
   // Debounced wrapper — coalesces rapid subagent events (tool_call, progress,
   // message) into a single DOM update per 100ms per agent window.
@@ -2345,15 +2394,6 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
-  // Open windows for all active subagents
-  openAllActiveSubagentWindows() {
-    for (const [agentId, agent] of this.subagents) {
-      if (agent.status === 'active' && !this.subagentWindows.has(agentId)) {
-        this.openSubagentWindow(agentId);
-      }
-    }
-  },
-
 
   // ═══════════════════════════════════════════════════════════════
   // Agent Teams
@@ -2494,155 +2534,6 @@ Object.assign(CodemanApp.prototype, {
     });
   },
 
-  /** Open a standalone terminal window for a tmux-pane teammate (no subagent entry needed) */
-  openTeammateTerminalWindow(paneData) {
-    // Only open if the session has a tab in Codeman
-    if (!this.sessions.has(paneData.sessionId)) return;
-
-    // Use pane target as the unique ID for this window
-    const windowId = `pane-${paneData.paneTarget}`;
-
-    // If window already exists, focus it
-    if (this.subagentWindows.has(windowId)) {
-      const existing = this.subagentWindows.get(windowId);
-      if (existing.hidden) {
-        existing.element.style.display = 'flex';
-        existing.hidden = false;
-      }
-      existing.element.style.zIndex = ++this.subagentWindowZIndex;
-      if (existing.minimized) {
-        this.restoreSubagentWindow(windowId);
-      }
-      return;
-    }
-
-    // Calculate position
-    const windowCount = this.subagentWindows.size;
-    const windowWidth = 550;
-    const windowHeight = 400;
-    const gap = 20;
-    const viewportWidth = window.innerWidth;
-    const viewportHeight = window.innerHeight;
-    const startX = 50;
-    const startY = 120;
-    const maxCols = Math.floor((viewportWidth - startX - 50) / (windowWidth + gap)) || 1;
-    const maxRows = Math.floor((viewportHeight - startY - 50) / (windowHeight + gap)) || 1;
-    const col = windowCount % maxCols;
-    const row = Math.floor(windowCount / maxCols) % maxRows;
-    let finalX = startX + col * (windowWidth + gap);
-    let finalY = startY + row * (windowHeight + gap);
-    finalX = Math.max(10, Math.min(finalX, viewportWidth - windowWidth - 10));
-    finalY = Math.max(10, Math.min(finalY, viewportHeight - windowHeight - 10));
-
-    // Color badge
-    const colorClass = paneData.color || 'blue';
-
-    // Create window element
-    const win = document.createElement('div');
-    win.className = 'subagent-window has-terminal';
-    win.id = `subagent-window-${windowId}`;
-    win.style.zIndex = ++this.subagentWindowZIndex;
-    win.style.left = `${finalX}px`;
-    win.style.top = `${finalY}px`;
-    win.style.width = `${windowWidth}px`;
-    win.style.height = `${windowHeight}px`;
-    win.innerHTML = `
-      <div class="subagent-window-header">
-        <div class="subagent-window-title" title="Teammate terminal: ${escapeHtml(paneData.teammateName)} (pane ${paneData.paneTarget})">
-          <span class="icon" style="color: var(--team-color-${colorClass}, #339af0)">⬤</span>
-          <span class="id">${escapeHtml(paneData.teammateName)}</span>
-          <span class="status running">terminal</span>
-        </div>
-        <div class="subagent-window-actions">
-          <button onclick="app.closeSubagentWindow(${escapeHtml(JSON.stringify(windowId))})" title="Minimize to tab">─</button>
-        </div>
-      </div>
-      <div class="subagent-window-body teammate-terminal-body" id="subagent-window-body-${windowId}">
-      </div>
-    `;
-
-    document.body.appendChild(win);
-
-    // Make draggable
-    const dragListeners = this.makeWindowDraggable(win, win.querySelector('.subagent-window-header'));
-
-    // Make resizable if method exists
-    if (typeof this.makeWindowResizable === 'function') {
-      this.makeWindowResizable(win);
-    }
-
-    // Check visibility based on active session
-    const settings = this.loadAppSettingsFromStorage();
-    const activeTabOnly = settings.subagentActiveTabOnly ?? true;
-    const shouldHide = activeTabOnly && paneData.sessionId !== this.activeSessionId;
-
-    // Store reference
-    this.subagentWindows.set(windowId, {
-      element: win,
-      minimized: false,
-      hidden: shouldHide,
-      dragListeners,
-      description: `Teammate: ${paneData.teammateName}`,
-    });
-
-    // Also add to subagentParentMap for tab-based visibility
-    this.subagentParentMap.set(windowId, paneData.sessionId);
-
-    if (shouldHide) {
-      win.style.display = 'none';
-    }
-
-    // Focus on click
-    win.addEventListener('mousedown', () => {
-      win.style.zIndex = ++this.subagentWindowZIndex;
-    });
-
-    // Resize observer for connection lines
-    const resizeObserver = new ResizeObserver(() => {
-      this.updateConnectionLines();
-    });
-    resizeObserver.observe(win);
-    this.subagentWindows.get(windowId).resizeObserver = resizeObserver;
-
-    // Init the xterm.js terminal (lazy if hidden)
-    if (shouldHide) {
-      // Window starts hidden — defer terminal creation until visible (lazy init)
-      const windowEntry = this.subagentWindows.get(windowId);
-      if (windowEntry) {
-        windowEntry._lazyTerminal = true;
-        windowEntry._lazyPaneTarget = paneData.paneTarget;
-        windowEntry._lazySessionId = paneData.sessionId;
-      }
-    } else {
-      this.initTeammateTerminal(windowId, paneData, win);
-    }
-
-    // Animate in
-    requestAnimationFrame(() => {
-      win.style.transition = 'transform 0.3s ease, opacity 0.3s ease';
-      win.style.transform = 'scale(1)';
-      win.style.opacity = '1';
-    });
-  },
-
-  /** Rebuild the teammate lookup map from all team configs */
-  rebuildTeammateMap() {
-    this.teammateMap.clear();
-    for (const [teamName, team] of this.teams) {
-      for (const member of team.members) {
-        if (member.agentType !== 'team-lead') {
-          // Use name as key prefix for matching subagent descriptions
-          this.teammateMap.set(member.name, {
-            name: member.name,
-            color: member.color || 'blue',
-            teamName,
-            agentId: member.agentId,
-          });
-        }
-      }
-    }
-  },
-
   /** Check if a subagent is a teammate and return its info */
   getTeammateInfo(agent) {
     if (!agent?.description) return null;
@@ -2652,7 +2543,7 @@ Object.assign(CodemanApp.prototype, {
     const teammateId = match[1];
     // Extract name from teammate_id (format: name@teamName)
     const name = teammateId.split('@')[0];
-    return this.teammateMap.get(name) || { name, color: 'blue', teamName: 'unknown' };
+    return { name, color: 'blue', teamName: 'unknown' };
   },
 
   /** Get teammate badge HTML for a subagent */
@@ -2660,117 +2551,6 @@ Object.assign(CodemanApp.prototype, {
     const info = this.getTeammateInfo(agent);
     if (!info) return '';
     return `<span class="teammate-badge teammate-color-${info.color}" title="Team: ${escapeHtml(info.teamName)}">@${escapeHtml(info.name)}</span>`;
-  },
-
-  /** Render the team tasks panel */
-  renderTeamTasksPanel() {
-    const panel = document.getElementById('teamTasksPanel');
-    if (!panel) return;
-
-    // Find team for active session
-    let activeTeam = null;
-    let activeTeamName = null;
-    if (this.activeSessionId) {
-      for (const [name, team] of this.teams) {
-        if (team.leadSessionId === this.activeSessionId) {
-          activeTeam = team;
-          activeTeamName = name;
-          break;
-        }
-      }
-    }
-
-    if (!activeTeam) {
-      panel.style.display = 'none';
-      return;
-    }
-
-    // Set initial position and make draggable on first show
-    const wasHidden = panel.style.display === 'none';
-    panel.style.display = 'flex';
-
-    if (wasHidden && !this.teamTasksDragListeners) {
-      // Position bottom-right
-      const panelWidth = 360;
-      const panelHeight = 300;
-      panel.style.left = `${Math.max(10, window.innerWidth - panelWidth - 20)}px`;
-      panel.style.top = `${Math.max(10, window.innerHeight - panelHeight - 70)}px`;
-      // Make draggable
-      const header = panel.querySelector('.team-tasks-header');
-      if (header) {
-        this.teamTasksDragListeners = this.makeWindowDraggable(panel, header);
-      }
-    }
-
-    const tasks = this.teamTasks.get(activeTeamName) || [];
-    const completed = tasks.filter(t => t.status === 'completed').length;
-    const total = tasks.length;
-    const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
-
-    const headerEl = panel.querySelector('.team-tasks-header-text');
-    if (headerEl) {
-      const teammateCount = activeTeam.members.filter(m => m.agentType !== 'team-lead').length;
-      headerEl.textContent = `Team Tasks (${teammateCount} teammates)`;
-    }
-
-    const progressEl = panel.querySelector('.team-tasks-progress-fill');
-    if (progressEl) {
-      progressEl.style.width = `${pct}%`;
-    }
-
-    const progressText = panel.querySelector('.team-tasks-progress-text');
-    if (progressText) {
-      progressText.textContent = `${completed}/${total}`;
-    }
-
-    const listEl = panel.querySelector('.team-tasks-list');
-    if (!listEl) return;
-
-    if (tasks.length === 0) {
-      listEl.innerHTML = '<div class="team-task-empty">No tasks yet</div>';
-      return;
-    }
-
-    const html = tasks.map(task => {
-      const statusIcon = task.status === 'completed' ? '✓' : task.status === 'in_progress' ? '◉' : '○';
-      const statusClass = task.status.replace('_', '-');
-      const ownerBadge = task.owner
-        ? `<span class="team-task-owner teammate-color-${this.getTeammateColor(task.owner)}">${escapeHtml(task.owner)}</span>`
-        : '';
-      return `<div class="team-task-item ${statusClass}">
-        <span class="team-task-status">${statusIcon}</span>
-        <span class="team-task-subject">${escapeHtml(task.subject)}</span>
-        ${ownerBadge}
-      </div>`;
-    }).join('');
-
-    listEl.innerHTML = html;
-  },
-
-  /** Hide team tasks panel and clean up drag listeners */
-  hideTeamTasksPanel() {
-    const panel = document.getElementById('teamTasksPanel');
-    if (panel) panel.style.display = 'none';
-    if (this.teamTasksDragListeners) {
-      document.removeEventListener('mousemove', this.teamTasksDragListeners.move);
-      document.removeEventListener('mouseup', this.teamTasksDragListeners.up);
-      if (this.teamTasksDragListeners.touchMove) {
-        document.removeEventListener('touchmove', this.teamTasksDragListeners.touchMove);
-        document.removeEventListener('touchend', this.teamTasksDragListeners.up);
-        document.removeEventListener('touchcancel', this.teamTasksDragListeners.up);
-      }
-      if (this.teamTasksDragListeners.handle) {
-        this.teamTasksDragListeners.handle.removeEventListener('mousedown', this.teamTasksDragListeners.handleMouseDown);
-        this.teamTasksDragListeners.handle.removeEventListener('touchstart', this.teamTasksDragListeners.handleTouchStart);
-      }
-      this.teamTasksDragListeners = null;
-    }
-  },
-
-  /** Get teammate color by name */
-  getTeammateColor(name) {
-    const info = this.teammateMap.get(name);
-    return info?.color || 'blue';
   },
 
 
@@ -2881,37 +2661,6 @@ Object.assign(CodemanApp.prototype, {
     if (shallow2 && inWorkDir1) return true;
 
     return false;
-  },
-
-  /**
-   * Pick the "better" of two paths that resolve to the same file.
-   * Prefers paths inside the case folder, longer/more explicit paths, and absolute paths.
-   */
-  pickBetterPath(path1, path2, workingDir) {
-    // Prefer paths inside the case folder (working directory)
-    if (workingDir) {
-      const inWorkDir1 = this.isPathInWorkingDir(path1, workingDir);
-      const inWorkDir2 = this.isPathInWorkingDir(path2, workingDir);
-      if (inWorkDir1 && !inWorkDir2) return path1;
-      if (inWorkDir2 && !inWorkDir1) return path2;
-    }
-
-    // Prefer absolute paths
-    const abs1 = path1.startsWith('/');
-    const abs2 = path2.startsWith('/');
-    if (abs1 && !abs2) return path1;
-    if (abs2 && !abs1) return path2;
-
-    // Both absolute or both relative - prefer longer (more explicit)
-    if (path1.length !== path2.length) {
-      return path1.length > path2.length ? path1 : path2;
-    }
-
-    // Prefer paths without ~
-    if (!path1.includes('~') && path2.includes('~')) return path1;
-    if (!path2.includes('~') && path1.includes('~')) return path2;
-
-    return path1;
   },
 
   /**
@@ -3136,6 +2885,10 @@ Object.assign(CodemanApp.prototype, {
         matches: [],
         deferredDirectoryTarget: null,
         filter: typeof this.fileBrowserFilter === 'string' ? this.fileBrowserFilter : '',
+        // The person asked for the session folder while the agent is in a worktree (#765).
+        sessionRootPinned: false,
+        // The worktree on screen when the pin was set: a pinned listing omits an outside worktree.
+        pinnedWorktree: null,
       };
     }
     return this._fileBrowserState;
@@ -3158,6 +2911,8 @@ Object.assign(CodemanApp.prototype, {
     state.deferredDirectoryTarget = null;
     state.filter = '';
     state.view = 'normal';
+    state.sessionRootPinned = false;
+    state.pinnedWorktree = null;
     this.fileBrowserData = null;
     this.fileBrowserFilter = '';
     this.fileBrowserExpandedDirs?.clear?.();
@@ -3168,6 +2923,7 @@ Object.assign(CodemanApp.prototype, {
     this._syncFileBrowserExpandBtn();
     const expandBtn = this.$?.('fileBrowserExpandBtn');
     if (expandBtn) expandBtn.innerHTML = '\u229E';
+    this._renderFileBrowserRoot(null);
 
     const panel = this.$?.('fileBrowserPanel');
     const treeEl = this.$?.('fileBrowserTree');
@@ -3200,6 +2956,8 @@ Object.assign(CodemanApp.prototype, {
     state.deferredDirectoryTarget = null;
     state.filter = '';
     state.view = 'normal';
+    state.sessionRootPinned = false;
+    state.pinnedWorktree = null;
     this.fileBrowserData = null;
     this.fileBrowserFilter = '';
     this.fileBrowserExpandedDirs?.clear?.();
@@ -3210,6 +2968,7 @@ Object.assign(CodemanApp.prototype, {
     this._syncFileBrowserExpandBtn();
     const expandBtn = this.$?.('fileBrowserExpandBtn');
     if (expandBtn) expandBtn.innerHTML = '\u229E';
+    this._renderFileBrowserRoot(null);
     const treeEl = this.$?.('fileBrowserTree');
     if (treeEl) treeEl.innerHTML = '';
     const statusEl = this.$?.('fileBrowserStatus');
@@ -3302,6 +3061,69 @@ Object.assign(CodemanApp.prototype, {
     this._syncFileBrowserExpandBtn();
     this.renderFileBrowserTree(normalState.sessionId);
     this._renderFileBrowserNormalStatus(normalState.data, normalState.showHidden);
+    this._renderFileBrowserRoot(normalState.data);
+  },
+
+  // The strip under the panel header, present only while the session's pane is in a linked
+  // worktree (#765): it says which of the two folders is listed and switches between them.
+  // Everything here comes from GET .../files, so the strip describes the tree on screen rather
+  // than the session's state a moment later.
+  _renderFileBrowserRoot(data) {
+    const strip = this.$?.('fileBrowserRoot');
+    if (!strip) return;
+    const worktree =
+      data?.worktree ?? (this._fileBrowserState?.sessionRootPinned ? this._fileBrowserState.pinnedWorktree : null);
+    if (typeof worktree?.path !== 'string' || typeof worktree?.name !== 'string') {
+      strip.hidden = true;
+      return;
+    }
+    const inWorktree = data?.root === worktree.path;
+    const label = this.$?.('fileBrowserRootLabel');
+    const name = this.$?.('fileBrowserRootName');
+    const button = this.$?.('fileBrowserRootSwitch');
+    if (label) label.textContent = inWorktree ? 'Worktree' : 'Session folder';
+    if (name) name.textContent = inWorktree ? worktree.name : '';
+    if (button) button.textContent = inWorktree ? 'Session folder' : 'Back to worktree';
+    strip.title = typeof data?.root === 'string' ? data.root : '';
+    strip.hidden = false;
+  },
+
+  // The `root` parameter of a listing or search. The server ignores it while the pane is not in
+  // a worktree, so the panel always asks unless the person chose the session folder.
+  _fileBrowserRootParam() {
+    return this._ensureFileBrowserState().sessionRootPinned ? '' : '&root=live-any';
+  },
+
+  toggleFileBrowserRoot() {
+    const state = this._ensureFileBrowserState();
+    state.sessionRootPinned = !state.sessionRootPinned;
+    const shown = this.fileBrowserData?.worktree;
+    state.pinnedWorktree =
+      state.sessionRootPinned && typeof shown?.path === 'string' && typeof shown?.name === 'string'
+        ? { name: shown.name, path: shown.path }
+        : null;
+    return this._reloadFileBrowserKeepingQuery();
+  },
+
+  // Called on every session update of the active session. Compares with what the listing on
+  // screen reported rather than with the previous update, so a load already in flight when the
+  // pane moved is corrected by the next update, and an answer that matches ends it. A listing
+  // reports the session's worktree whichever folder it walked, except that a listing without
+  // root=live-any omits an outside worktree. While the person has pinned the session folder, the
+  // panel compares with the worktree it pinned away from, so this cannot loop.
+  _followFileBrowserWorktree(session) {
+    const state = this._fileBrowserState;
+    if (!state || state.ownerSessionId !== session.id) return;
+    if (this.$?.('fileBrowserPanel')?.classList.contains('visible') !== true) return;
+    const normal = state.normalState;
+    if (normal?.phase !== 'ready' || normal.sessionId !== session.id) return;
+    const live = (session.liveWorktree ?? session.outsideWorktree)?.path ?? null;
+    const listed = (normal.data?.worktree ?? (state.sessionRootPinned ? state.pinnedWorktree : null))?.path ?? null;
+    if (live === listed) return;
+    // The pin was about the worktree the agent has just left.
+    state.sessionRootPinned = false;
+    state.pinnedWorktree = null;
+    this._reloadFileBrowserKeepingQuery();
   },
 
   _validateFileBrowserTreeEnvelope(result) {
@@ -3406,14 +3228,20 @@ Object.assign(CodemanApp.prototype, {
   },
 
   async toggleFileBrowserHidden() {
-    const state = this._ensureFileBrowserState();
-    const rawInput = typeof state.filter === 'string' ? state.filter : '';
-    const query = rawInput.trim();
     this.fileBrowserShowHidden = !this.fileBrowserShowHidden;
     try {
       localStorage.setItem(FILE_BROWSER_SHOW_HIDDEN_KEY, this.fileBrowserShowHidden ? '1' : '0');
     } catch {}
     this._syncFileBrowserHiddenBtn();
+    return this._reloadFileBrowserKeepingQuery();
+  },
+
+  // Re-fetch the tree after something the server filters on changed (hidden files, the listing's
+  // root), then re-run the search in the box against the new tree.
+  async _reloadFileBrowserKeepingQuery() {
+    const state = this._ensureFileBrowserState();
+    const rawInput = typeof state.filter === 'string' ? state.filter : '';
+    const query = rawInput.trim();
 
     if (state.inFlight?.timer !== undefined && state.inFlight?.timer !== null) {
       clearTimeout(state.inFlight.timer);
@@ -3487,7 +3315,7 @@ Object.assign(CodemanApp.prototype, {
     const request = (async () => {
       try {
         const res = await fetch(
-          `/api/sessions/${encodeURIComponent(sessionId)}/files?depth=5&showHidden=${showHidden}`,
+          `/api/sessions/${encodeURIComponent(sessionId)}/files?depth=5&showHidden=${showHidden}${this._fileBrowserRootParam()}`,
         );
         if (!res.ok) throw new Error('Failed to load files');
         const result = await res.json();
@@ -3543,6 +3371,7 @@ Object.assign(CodemanApp.prototype, {
     }
 
     const html = [];
+    const canDelete = this._fileBrowserCanDelete(owner);
 
     const renderNode = (node, depth) => {
       const isDir = node.type === 'directory';
@@ -3565,6 +3394,13 @@ Object.assign(CodemanApp.prototype, {
       const downloadBtn = !isDir
         ? `<a class="file-tree-download" href="${escapeHtml(CodemanBase.url(`/api/sessions/${encodeURIComponent(owner)}/file-raw?path=${encodeURIComponent(node.path)}&download=true`))}" title="Download" onclick="event.stopPropagation()">&#x2B07;</a>`
         : '';
+      // No inline handler: the path is a workspace file name, which an agent or a cloned repo
+      // chose, and `encodeURIComponent` leaves `'` alone, so a quoted string in an onclick ran
+      // whatever a file name like `x'-alert(1)-'.txt` held (#529's review). The click is bound
+      // below from the row's already-escaped `data-path`.
+      const deleteBtn = !isDir && canDelete
+        ? `<button type="button" class="file-tree-delete" title="Delete" aria-label="Delete ${escapeHtml(node.name)}">&times;</button>`
+        : '';
 
       html.push(`
         <div class="file-tree-item" data-path="${escapeHtml(node.path)}" data-type="${escapeHtml(node.type)}" data-depth="${depth}">
@@ -3573,6 +3409,7 @@ Object.assign(CodemanApp.prototype, {
           <span class="${nameClass}">${escapeHtml(node.name)}</span>
           ${sizeStr}
           ${downloadBtn}
+          ${deleteBtn}
         </div>
       `);
 
@@ -3581,6 +3418,12 @@ Object.assign(CodemanApp.prototype, {
         for (const child of node.children) {
           renderNode(child, depth + 1);
         }
+      }
+
+      // The scan stopped at a limit or the folder did not answer, so what is listed above is not all
+      // of it. Not a .file-tree-item: the click wiring below would try to open it as a file.
+      if (isDir && isExpanded && node.incomplete === true) {
+        html.push(`<div class="file-tree-incomplete" data-depth="${depth + 1}">${escapeHtml('Not fully scanned')}</div>`);
       }
     };
 
@@ -3602,7 +3445,19 @@ Object.assign(CodemanApp.prototype, {
           this.openFilePreview(path, owner);
         }
       });
+      item.querySelector('.file-tree-delete')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.deleteFileFromBrowser(owner, item.dataset.path);
+      });
     });
+  },
+
+  // The delete button is offered only where the route can act: never for a remote (SSH) session,
+  // whose files live on another host, nor for an adopted one, whose folder is not a workspace of
+  // ours (`session.remote` is undefined on an adopted session, so both are tested).
+  _fileBrowserCanDelete(sessionId) {
+    const session = this.sessions?.get?.(sessionId);
+    return !session?.remote && !session?.adopt;
   },
 
   toggleFileBrowserFolder(path) {
@@ -3674,6 +3529,7 @@ Object.assign(CodemanApp.prototype, {
       showHidden: this.fileBrowserShowHidden === true,
       rawInput,
       query,
+      rootParam: this._fileBrowserRootParam(),
       timer: null,
     };
     state.view = 'search-pending';
@@ -3688,7 +3544,7 @@ Object.assign(CodemanApp.prototype, {
       request.timer = null;
       try {
         const res = await fetch(
-          `/api/sessions/${encodeURIComponent(ownerSessionId)}/files?depth=5&showHidden=${request.showHidden}&q=${encodeURIComponent(query)}`,
+          `/api/sessions/${encodeURIComponent(ownerSessionId)}/files?depth=5&showHidden=${request.showHidden}&q=${encodeURIComponent(query)}${request.rootParam}`,
         );
         if (!res.ok) throw new Error('Search failed');
         const result = await res.json();
@@ -3729,6 +3585,7 @@ Object.assign(CodemanApp.prototype, {
       treeEl.innerHTML = `<div class="file-browser-empty">${escapeHtml('No matches')}</div>`;
     } else {
       const ownerPath = encodeURIComponent(ownerSessionId);
+      const canDelete = this._fileBrowserCanDelete(ownerSessionId);
       treeEl.innerHTML = matches
         .map(match => {
           const isDir = match.type === 'directory';
@@ -3740,6 +3597,10 @@ Object.assign(CodemanApp.prototype, {
           const downloadBtn = !isDir
             ? `<a class="file-tree-download" href="${escapeHtml(CodemanBase.url(`/api/sessions/${ownerPath}/file-raw?path=${encodeURIComponent(match.path)}&download=true`))}" title="Download" onclick="event.stopPropagation()">&#x2B07;</a>`
             : '';
+          // Bound below from `data-path`, never an inline handler (see renderFileBrowserTree).
+          const deleteBtn = !isDir && canDelete
+            ? `<button type="button" class="file-tree-delete" title="Delete" aria-label="Delete ${escapeHtml(match.name)}">&times;</button>`
+            : '';
           return `
             <div class="file-tree-item" data-path="${escapeHtml(match.path)}" data-type="${escapeHtml(match.type)}" data-owner="${escapeHtml(ownerSessionId)}">
               <span class="file-tree-expand"></span>
@@ -3747,6 +3608,7 @@ Object.assign(CodemanApp.prototype, {
               <span class="${nameClass}">${escapeHtml(match.name)}</span>
               ${sizeStr}
               ${downloadBtn}
+              ${deleteBtn}
             </div>
           `;
         })
@@ -3762,6 +3624,10 @@ Object.assign(CodemanApp.prototype, {
           this.openFilePreview(path, ownerSessionId);
         }
       });
+      item.querySelector('.file-tree-delete')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.deleteFileFromBrowser(ownerSessionId, item.dataset.path);
+      });
     });
 
     const statusEl = this.$('fileBrowserStatus');
@@ -3769,6 +3635,33 @@ Object.assign(CodemanApp.prototype, {
       const count = data.matchCount === undefined ? matches.length : data.matchCount;
       statusEl.textContent = `${count} ${count === 1 ? 'match' : 'matches'}${data.truncated ? ' (truncated)' : ''}`;
     }
+  },
+
+  // The Files panel's delete button (DELETE .../files?path=): asks first, in the same native
+  // dialog the panel's other destructive actions use, then reloads the listing. With a search in
+  // the box the reload re-runs it, so the deleted row leaves the results too; a plain reload
+  // would refresh the tree behind them and leave the row on screen.
+  async deleteFileFromBrowser(sessionId, filePath) {
+    if (!sessionId || !filePath) return;
+    if (!confirm(`Delete the file ${filePath}? This cannot be undone.`)) return;
+    let result = null;
+    try {
+      const response = await fetch(
+        `/api/sessions/${encodeURIComponent(sessionId)}/files?path=${encodeURIComponent(filePath)}`,
+        { method: 'DELETE' },
+      );
+      result = await response.json().catch(() => null);
+      if (!response.ok || result?.success !== true) {
+        throw new Error(result?.error || `HTTP ${response.status}`);
+      }
+    } catch (error) {
+      console.error('File browser delete failed:', error);
+      this.showToast(`Delete failed: ${error?.message || 'network error'}`, 'error');
+      return;
+    }
+    this.showToast(`File deleted: ${filePath}`, 'success');
+    const state = this._ensureFileBrowserState();
+    if (state.ownerSessionId === sessionId) await this._reloadFileBrowserKeepingQuery();
   },
 
   _findFileBrowserDirectory(nodes, targetPath, ancestors = []) {
@@ -4028,10 +3921,12 @@ Object.assign(CodemanApp.prototype, {
   /**
    * Whether a path is absolute and provably OUTSIDE this session's workspace.
    *
-   * `file-content` / `file-raw` resolve every path against `workingDir` and
-   * refuse anything that escapes it, so an absolute path elsewhere on the host
-   * (an agent's `/tmp` scratchpad capture, a screenshot, another checkout) can
-   * only ever 404 there — it has to go through the attachment routes instead.
+   * `file-content` / `file-raw` serve paths inside `workingDir` and, as a second
+   * root, an absolute path inside a followed worktree outside it
+   * (`outsideWorktree`). They refuse every other path that escapes
+   * `workingDir`, so an absolute path elsewhere on the host (an agent's `/tmp`
+   * scratchpad capture, a screenshot, another checkout) can only ever 404 there
+   * — it has to go through the attachment routes instead.
    *
    * A string compare is enough for ROUTING; the real containment decision stays
    * server-side (realpath + guard) on whichever route the request lands on. An
@@ -4045,11 +3940,28 @@ Object.assign(CodemanApp.prototype, {
     const workingDir = this.sessions.get(sessionId)?.workingDir;
     if (!workingDir) return false;
     const root = workingDir.endsWith('/') ? workingDir : `${workingDir}/`;
-    return filePath !== workingDir && !filePath.startsWith(root);
+    if (filePath === workingDir || filePath.startsWith(root)) return false;
+    // A worktree outside `workingDir` that the agent is in (#765) is a second root the file
+    // routes serve, so a path inside it previews (and edits) like a workspace path.
+    return this._isOutsideWorktreePath(filePath, sessionId) !== true;
   },
 
   /**
-   * Register an out-of-workspace path as a live external attachment and return
+   * Whether an absolute path lies inside the worktree OUTSIDE `workingDir` that the session's agent
+   * is in (`outsideWorktree`, #765). The file routes serve it as a second root, while the log
+   * viewer's `tail-file` stays confined to `workingDir`, so the terminal opens such a path in the
+   * file preview.
+   */
+  _isOutsideWorktreePath(filePath, sessionId) {
+    if (typeof filePath !== 'string' || !filePath.startsWith('/')) return false;
+    const worktree = this.sessions.get(sessionId)?.outsideWorktree;
+    if (worktree?.outside !== true || typeof worktree.path !== 'string' || !worktree.path) return false;
+    const root = worktree.path.endsWith('/') ? worktree.path : `${worktree.path}/`;
+    return filePath === worktree.path || filePath.startsWith(root);
+  },
+
+  /**
+   * Register a file path as a live external attachment and return
    * its id, so the preview can render it through the by-id attachment routes.
    *
    * `notify: false` keeps this quiet: the caller is already opening the file in
@@ -4058,7 +3970,7 @@ Object.assign(CodemanApp.prototype, {
    * full attachment guard (blocked secret trees, extension allowlist, symlinks
    * resolved), so a refusal here is a policy answer worth showing verbatim.
    *
-   * @returns {Promise<{attachmentId?: string, size?: number, error?: string}>}
+   * @returns {Promise<{attachmentId?: string, size?: number, error?: string, status?: number}>}
    */
   async _registerExternalPreview(filePath, sessionId) {
     try {
@@ -4074,14 +3986,18 @@ Object.assign(CodemanApp.prototype, {
       const reason = result?.error || `Cannot open this file (HTTP ${res.status})`;
       // The registry's type answer is a policy term, not an explanation, and the
       // user just clicked a file they can see on disk. Say what IS previewable
-      // from outside the workspace instead.
+      // through this lookup instead, using the path's actual workspace scope.
       if (/unsupported/i.test(reason)) {
         const ext = (filePath.split('.').pop() || '').toLowerCase();
+        const target = this._isExternalPreviewPath(filePath, sessionId)
+          ? `.${ext} from outside the session workspace`
+          : `"${filePath}" through the attachment lookup`;
         return {
-          error: `Cannot preview .${ext} from outside the session workspace (images, video, audio, PDF, Office documents and text files only).`,
+          status: res.status,
+          error: `Cannot preview ${target} (images, video, audio, PDF, Office documents and text files only).`,
         };
       }
-      return { error: reason };
+      return { error: reason, status: res.status };
     } catch (err) {
       return { error: err.message || 'Cannot open this file' };
     }
@@ -4108,6 +4024,9 @@ Object.assign(CodemanApp.prototype, {
 
     if (!overlay || !bodyEl) return;
 
+    this._recordFilePreviewHistory(filePath, sessionId, attachmentId, options);
+    this._bindFilePreviewChrome();
+
     // Only the newest load may write: paging ←/→ through a folder starts the next
     // load while the previous one still awaits its fetch, and its late answer would
     // put the previous file's text under the next file's title.
@@ -4133,6 +4052,7 @@ Object.assign(CodemanApp.prototype, {
 
     // Show overlay with loading state
     overlay.classList.add('visible');
+    this._applyFilePreviewExpanded();
     titleEl.textContent = filePath;
     bodyEl.innerHTML = '<div class="binary-message">Loading...</div>';
     footerEl.textContent = '';
@@ -4537,6 +4457,148 @@ Object.assign(CodemanApp.prototype, {
     this._openFolderGridFile(next);
   },
 
+  // ═══════════════════════════════════════════════════════════════
+  // File Viewer window: back/forward between previews, expand, resize
+  // ═══════════════════════════════════════════════════════════════
+
+  /**
+   * Remember a preview in the back/forward list. A navigation that came FROM the
+   * list (stepFilePreviewHistory) is not recorded again, and neither is a reload
+   * of the file already showing (the MD/Page toggles reopen the same file). Opening
+   * something new while standing mid-list drops the forward entries, as a browser does.
+   */
+  _recordFilePreviewHistory(filePath, sessionId, attachmentId, options) {
+    const h = (this.filePreviewHistory = this.filePreviewHistory || { entries: [], index: -1 });
+    if (!this._filePreviewHistoryStepping) {
+      const cur = h.entries[h.index];
+      const same =
+        cur && cur.filePath === filePath && cur.sessionId === sessionId && (cur.attachmentId || null) === (attachmentId || null);
+      if (!same) {
+        h.entries.length = h.index + 1;
+        h.entries.push({ filePath, sessionId, attachmentId: attachmentId || null, options });
+        if (h.entries.length > FILE_PREVIEW_HISTORY_MAX) h.entries.shift();
+        h.index = h.entries.length - 1;
+      }
+    }
+    this._updateFilePreviewHistoryNav();
+  },
+
+  /** Back (-1) / forward (+1) through the previews opened in this overlay session. */
+  stepFilePreviewHistory(delta) {
+    const h = this.filePreviewHistory;
+    if (!h) return;
+    const target = h.index + delta;
+    if (target < 0 || target >= h.entries.length) return;
+    if (this.filePreviewEdit?.dirty && !confirm('Discard unsaved changes?')) return;
+    h.index = target;
+    const e = h.entries[target];
+    // openFilePreview records synchronously, before its first await, so the flag
+    // only needs to cover the call itself.
+    this._filePreviewHistoryStepping = true;
+    try {
+      // A folder-grid page goes through the grid so index, lastIndex and the highlighted
+      // tile follow; otherwise the next ‹ › would continue from the newer file.
+      const folderFile = e.options?.folderFile;
+      if (folderFile && folderFile.folderId === this.folderGrid?.folderId) {
+        const index = this.folderGrid.files.findIndex((f) => f.name === folderFile.name);
+        if (index !== -1) return this._openFolderGridFile(index);
+      }
+      return this.openFilePreview(e.filePath, e.sessionId, e.attachmentId, e.options || {});
+    } finally {
+      this._filePreviewHistoryStepping = false;
+    }
+  },
+
+  /** Buttons show once there is somewhere to go; each is disabled at its end of the list. */
+  _updateFilePreviewHistoryNav() {
+    const h = this.filePreviewHistory;
+    const multi = !!h && h.entries.length > 1;
+    const back = this.$('filePreviewBackBtn');
+    const fwd = this.$('filePreviewForwardBtn');
+    if (back) {
+      back.hidden = !multi;
+      back.disabled = !multi || h.index <= 0;
+    }
+    if (fwd) {
+      fwd.hidden = !multi;
+      fwd.disabled = !multi || h.index >= h.entries.length - 1;
+    }
+  },
+
+  /** Expand button: fill the screen, remembered across opens. */
+  toggleFilePreviewExpanded() {
+    this._setFilePreviewPref('expanded', !this._filePreviewPref('expanded'));
+    this._applyFilePreviewExpanded();
+  },
+
+  _applyFilePreviewExpanded() {
+    const on = this._filePreviewPref('expanded');
+    const win = this.$('filePreviewOverlay')?.querySelector?.('.file-preview-window');
+    win?.classList?.toggle('expanded', on);
+    // The label stays "Expand" and aria-pressed carries the state, like MD, Lines and
+    // Wrap, so a screen reader never announces "Restore size, pressed".
+    this.$('filePreviewExpandBtn')?.setAttribute('aria-pressed', on ? 'true' : 'false');
+  },
+
+  /**
+   * One-time wiring for the window chrome: Alt+←/→ for back/forward (capture phase
+   * so the terminal behind the overlay never types the arrow) and the corner grip.
+   */
+  _bindFilePreviewChrome() {
+    if (this._filePreviewChromeBound) return;
+    this._filePreviewChromeBound = true;
+    document.addEventListener(
+      'keydown',
+      (ev) => {
+        if (!ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey) return;
+        if (ev.key !== 'ArrowLeft' && ev.key !== 'ArrowRight') return;
+        if (!this.$('filePreviewOverlay')?.classList.contains('visible')) return;
+        const t = ev.target;
+        if (t && (t.isContentEditable || (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) && !t.classList?.contains('xterm-helper-textarea')))) return;
+        // Swallowed even at the ends of the list: otherwise the terminal behind the overlay
+        // types it as word-left/right, and on a header button the browser's own Alt+← goes Back.
+        ev.preventDefault();
+        ev.stopPropagation();
+        const h = this.filePreviewHistory;
+        const delta = ev.key === 'ArrowLeft' ? -1 : 1;
+        if (!h || h.index + delta < 0 || h.index + delta >= h.entries.length) return;
+        this.stepFilePreviewHistory(delta);
+      },
+      true
+    );
+    this._bindFilePreviewResize();
+  },
+
+  /** Drag the corner grip to size the window; the window is centred, so the delta counts twice. */
+  _bindFilePreviewResize() {
+    const grip = this.$('filePreviewResize');
+    const win = grip?.parentElement;
+    if (!grip || !win) return;
+    grip.addEventListener('pointerdown', (ev) => {
+      if (ev.button !== 0) return; // a right-click on the grip must not start a resize
+      ev.preventDefault();
+      const startX = ev.clientX;
+      const startY = ev.clientY;
+      const startW = win.offsetWidth;
+      const startH = win.offsetHeight;
+      grip.setPointerCapture?.(ev.pointerId);
+      const move = (e) => {
+        const w = Math.max(320, Math.min(window.innerWidth * 0.96, startW + 2 * (e.clientX - startX)));
+        const h = Math.max(240, Math.min(window.innerHeight * 0.94, startH + 2 * (e.clientY - startY)));
+        win.style.width = `${Math.round(w)}px`;
+        win.style.height = `${Math.round(h)}px`;
+      };
+      const up = () => {
+        grip.removeEventListener('pointermove', move);
+        grip.removeEventListener('pointerup', up);
+        grip.removeEventListener('pointercancel', up);
+      };
+      grip.addEventListener('pointermove', move);
+      grip.addEventListener('pointerup', up);
+      grip.addEventListener('pointercancel', up);
+    });
+  },
+
   /** "Show folder" in the preview: the grid of the previewed file's folder. */
   openFolderOfPreview() {
     const target = this.filePreviewFolderTarget;
@@ -4617,6 +4679,8 @@ Object.assign(CodemanApp.prototype, {
     // Back on the grid (if one is open underneath): its current tile stays marked.
     if (this.folderGrid) this.folderGrid.index = null;
     this._updateFolderPreviewNav(null);
+    this.filePreviewHistory = null;
+    this._updateFilePreviewHistoryNav();
     const overlay = this.$('filePreviewOverlay');
     if (overlay) {
       overlay.classList.remove('visible');
@@ -4773,6 +4837,7 @@ Object.assign(CodemanApp.prototype, {
       const doc = tmpl.content.firstElementChild;
       this._rebaseFilePreviewMarkdownRefs(doc, info);
       this._linkifyFilePaths(doc);
+      this._applyBlockDirection(doc);
       // The linkifier's absolute paths name no session; give them the
       // preview's, like the rebased links, or they open in the active tab's.
       for (const a of doc.querySelectorAll('a.rv-path:not([data-session-id])')) a.dataset.sessionId = info.sessionId;
@@ -4825,6 +4890,13 @@ Object.assign(CodemanApp.prototype, {
   _rebaseFilePreviewMarkdownRefs(root, { sessionId, filePath, attachmentId }) {
     const dir = filePath.includes('/') ? filePath.slice(0, filePath.lastIndexOf('/') + 1) : '';
     const unresolvable = !!attachmentId && !filePath.startsWith('/');
+    // A root-relative ref (`/docs/x.png`) resolves from the workspace root, as on GitHub, or from
+    // the top of the worktree outside the workspace that the agent is in (#765).
+    const worktree = this.sessions.get(sessionId)?.outsideWorktree;
+    const rootPrefix =
+      worktree?.outside === true && this._isOutsideWorktreePath(filePath, sessionId)
+        ? `${worktree.path.replace(/\/+$/, '')}/`
+        : '';
     // Workspace ref = no scheme, not protocol-relative (//host), not a fragment.
     const isWorkspaceRef = (ref) =>
       !!ref && !/^[a-z][a-z0-9+.-]*:/i.test(ref) && !ref.startsWith('//') && !ref.startsWith('#');
@@ -4844,7 +4916,7 @@ Object.assign(CodemanApp.prototype, {
         /* malformed escape: keep the ref as written */
       }
       const parts = [];
-      for (const seg of (rel.startsWith('/') ? rel.slice(1) : dir + rel).split('/')) {
+      for (const seg of (rel.startsWith('/') ? rootPrefix + rel.slice(1) : dir + rel).split('/')) {
         if (seg === '.' || (seg === '' && parts.length)) continue;
         if (seg === '..' && parts.length && parts[parts.length - 1] !== '..' && parts[parts.length - 1] !== '') parts.pop();
         else parts.push(seg);
@@ -5685,6 +5757,7 @@ Object.assign(CodemanApp.prototype, {
       CodemanBase.url(`/api/sessions/${sessionId}/tail-file?path=${encodeURIComponent(filePath)}&lines=50`)
     );
 
+    let connected = false;
     eventSource.onmessage = (e) => {
       const data = JSON.parse(e.data);
       const body = document.getElementById(`log-viewer-body-${windowId}`);
@@ -5692,6 +5765,7 @@ Object.assign(CodemanApp.prototype, {
 
       switch (data.type) {
         case 'connected':
+          connected = true;
           body.innerHTML = '';
           break;
         case 'data':
@@ -5711,6 +5785,7 @@ Object.assign(CodemanApp.prototype, {
           this.updateLogViewerStatus(windowId, 'disconnected', 'ended');
           break;
         case 'error':
+          if (!connected) eventSource.close();
           body.innerHTML += `<div class="log-error">${escapeHtml(data.error)}</div>`;
           this.updateLogViewerStatus(windowId, 'error', 'error');
           break;
@@ -6249,16 +6324,7 @@ Object.assign(CodemanApp.prototype, {
     closeBtn.onclick = (e) => { e.stopPropagation(); dismiss(); };
     toast.appendChild(closeBtn);
 
-    // Cache toast container reference
-    if (!this._toastContainer) {
-      this._toastContainer = document.querySelector('.toast-container');
-      if (!this._toastContainer) {
-        this._toastContainer = document.createElement('div');
-        this._toastContainer.className = 'toast-container';
-        document.body.appendChild(this._toastContainer);
-      }
-    }
-    this._toastContainer.appendChild(toast);
+    this._toastStack().appendChild(toast);
 
     requestAnimationFrame(() => toast.classList.add('show'));
 
@@ -6270,6 +6336,189 @@ Object.assign(CodemanApp.prototype, {
     // to update or dismiss itself once its own condition resolves (e.g. a "loading model"
     // toast a poll loop dismisses once the model reports ready).
     return { dismiss, setMessage: (text) => { msgSpan.textContent = text; } };
+  },
+
+  /** The fixed toast stack (`.toast-container`), created on first use and cached. */
+  _toastStack() {
+    if (!this._toastContainer) {
+      this._toastContainer = document.querySelector('.toast-container');
+      if (!this._toastContainer) {
+        this._toastContainer = document.createElement('div');
+        this._toastContainer.className = 'toast-container';
+        document.body.appendChild(this._toastContainer);
+      }
+    }
+    return this._toastContainer;
+  },
+
+  /**
+   * A security notice (security-notices.json) as its own card in the toast stack: shield,
+   * "Security notice" eyebrow, the notice's title and message, its link as the primary
+   * button, a quiet Dismiss and the ×. Same container as every toast, so it never fights
+   * the z-index stack. Sticky: only the user ends it.
+   *
+   * The notice's own text (title, message, link label) is already in the UI language, so it
+   * is set with textContent and carries `data-i18n-skip`; the card's own copy ("Security
+   * notice", "Dismiss", the × label) is application text and translates as usual.
+   *
+   * `opts.onClose(reason)` fires ONCE, and only on a user action: `'link'`, `'dismiss'` or
+   * `'close'`. Never on the handle's own `dismiss()`, which does not mean the user saw it.
+   *
+   * @param {{id: string, title: string, message: string, label: string, url: string}} notice
+   * @param {{onClose?: (reason: string) => void}} [opts]
+   */
+  showSecurityNotice(notice, opts = {}) {
+    const card = this._noticeCard('security-notice', opts.onClose);
+    const main = this._noticeEl('div', 'security-notice-main');
+    main.append(this._noticeEl('div', 'security-notice-eyebrow', 'Security notice'));
+    main.append(...this._noticeTextBlock(notice));
+    const actions = this._noticeEl('div', 'security-notice-actions');
+    const link = this._noticeLinkButton(notice, card, () => card.close('link'));
+    if (link) actions.append(link);
+    actions.append(this._noticeButton('security-notice-quiet', 'Dismiss', () => card.close('dismiss')));
+    main.append(actions);
+    card.el.append(this._noticeIcon('shield', 'security-notice-icon'), main, card.closeButton);
+    card.mount();
+    return { dismiss: () => card.close(null) };
+  },
+
+  /**
+   * The once-per-release update toast when security notices ride INSIDE it
+   * (CodemanSecurityNotices.plan in constants.js decides that; with no notice the plain
+   * showToast toast is used, unchanged). Styled as the security card: the release text as
+   * before (translated by the same i18n.js pattern), one warning section per notice, then
+   * each notice's link button beside "See what's new".
+   *
+   * Sticky, since it carries a warning. `onNoticeSeen(id)` records a notice: the × records
+   * every notice in the card, a notice's link records that one and closes the card. "See
+   * what's new" opens the release notes and leaves the card up, because the warning in it
+   * has not been answered yet.
+   *
+   * @param {{text: string, releaseUrl: string, notices: Array<object>, onNoticeSeen: (id: string) => void}} opts
+   */
+  showUpdateNotice({ text, releaseUrl, notices, onNoticeSeen }) {
+    const seen = (id) => { try { onNoticeSeen?.(id); } catch (err) { console.error('[notice] onNoticeSeen failed:', err); } };
+    const card = this._noticeCard('security-notice update-notice', (reason) => {
+      if (reason === 'close') for (const notice of notices) seen(notice.id);
+    });
+    const main = this._noticeEl('div', 'security-notice-main');
+    main.append(this._noticeEl('p', 'update-notice-text', text));
+    const actions = this._noticeEl('div', 'security-notice-actions');
+    for (const notice of notices) {
+      const section = this._noticeEl('section', 'security-notice-section');
+      const head = this._noticeEl('div', 'security-notice-section-head');
+      head.append(this._noticeIcon('shield'), this._noticeEl('span', 'security-notice-eyebrow', 'Security notice'));
+      section.append(head, ...this._noticeTextBlock(notice));
+      main.append(section);
+      const link = this._noticeLinkButton(notice, card, () => { seen(notice.id); card.close('link'); });
+      if (link) actions.append(link);
+    }
+    actions.append(
+      this._noticeButton(
+        'security-notice-secondary',
+        "See what's new",
+        card.act(() => window.open(releaseUrl, '_blank', 'noopener,noreferrer'))
+      )
+    );
+    main.append(actions);
+    card.el.append(this._noticeIcon('update', 'security-notice-icon update-notice-icon'), main, card.closeButton);
+    card.mount();
+    return { dismiss: () => card.close(null) };
+  },
+
+  /**
+   * The shell both notice cards share: role=alert, the ×, mount and a once-only close.
+   * A closing card stays in the DOM for its 200 ms fade, so close() also makes it inert, and
+   * `act(fn)` wraps a button's handler to do nothing once the card is closing (a double click
+   * on a link used to open it twice; the × and Dismiss go through close(), already once-only).
+   */
+  _noticeCard(className, onUserClose) {
+    const el = this._noticeEl('div', className);
+    el.setAttribute('role', 'alert');
+    el.setAttribute('aria-live', 'assertive');
+    let closed = false;
+    const close = (reason) => {
+      if (closed) return;
+      closed = true;
+      el.inert = true;
+      el.classList.remove('show');
+      setTimeout(() => el.remove(), 200);
+      if (reason && typeof onUserClose === 'function') {
+        try { onUserClose(reason); } catch (err) { console.error('[notice] onClose failed:', err); }
+      }
+    };
+    const closeButton = this._noticeButton('security-notice-close', '×', () => close('close'));
+    closeButton.setAttribute('aria-label', 'Close');
+    const mount = () => {
+      this._toastStack().appendChild(el);
+      requestAnimationFrame(() => el.classList.add('show'));
+    };
+    const act = (fn) => () => { if (!closed) fn(); };
+    return { el, closeButton, close, mount, act };
+  },
+
+  /** The notice's own title (when it has one) and message: textContent, never translated. */
+  _noticeTextBlock(notice) {
+    const parts = [];
+    if (notice.title) parts.push(this._noticeEl('div', 'security-notice-title', notice.title, true));
+    parts.push(this._noticeEl('p', 'security-notice-body', notice.message, true));
+    return parts;
+  },
+
+  /**
+   * The notice's link as the primary button, or null when the link is not https.
+   * selectSecurityNotices() already drops such a notice; the URL is checked again here, at the
+   * sink, because showSecurityNotice/showUpdateNotice take any object. Opened with noopener
+   * AND noreferrer: noopener alone still sends this instance's origin (a tailnet name, a tunnel
+   * URL) to the linked site as the Referer.
+   */
+  _noticeLinkButton(notice, card, after) {
+    const url = notice.url;
+    if (!window.CodemanSecurityNotices?.urlOk?.(url)) return null;
+    return this._noticeButton(
+      'security-notice-primary',
+      notice.label,
+      card.act(() => { window.open(url, '_blank', 'noopener,noreferrer'); after(); }),
+      true
+    );
+  },
+
+  _noticeButton(className, label, onClick, untranslated = false) {
+    const btn = this._noticeEl('button', className, label, untranslated);
+    btn.type = 'button';
+    btn.onclick = (e) => { e.stopPropagation(); onClick(); };
+    return btn;
+  },
+
+  _noticeEl(tag, className, text, untranslated = false) {
+    const el = document.createElement(tag);
+    el.className = className;
+    if (text !== undefined) el.textContent = text;
+    if (untranslated) el.setAttribute('data-i18n-skip', '');
+    return el;
+  },
+
+  /** Inline SVG icons (no asset): `shield` (with an exclamation) or `update` (arrow up). */
+  _noticeIcon(kind, wrapperClass) {
+    const NS = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(NS, 'svg');
+    for (const [k, v] of Object.entries({
+      viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '2',
+      'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true', focusable: 'false',
+    })) svg.setAttribute(k, v);
+    const shapes = kind === 'shield'
+      ? [['path', { d: 'M12 3 4.5 6v5.2c0 4.5 3.1 8.4 7.5 9.8 4.4-1.4 7.5-5.3 7.5-9.8V6L12 3z' }], ['path', { d: 'M12 8.5v4.5' }], ['path', { d: 'M12 16.5h.01' }]]
+      : [['circle', { cx: '12', cy: '12', r: '9' }], ['path', { d: 'M12 16.5v-9' }], ['path', { d: 'm8.5 11 3.5-3.5 3.5 3.5' }]];
+    for (const [tag, attrs] of shapes) {
+      const shape = document.createElementNS(NS, tag);
+      for (const [k, v] of Object.entries(attrs)) shape.setAttribute(k, v);
+      svg.appendChild(shape);
+    }
+    if (!wrapperClass) return svg;
+    const wrap = this._noticeEl('span', wrapperClass);
+    wrap.setAttribute('aria-hidden', 'true');
+    wrap.appendChild(svg);
+    return wrap;
   },
 
   /**
@@ -6391,13 +6640,29 @@ Object.assign(CodemanApp.prototype, {
     // Skip polling when system stats display is hidden
     const statsEl = document.getElementById('headerSystemStats');
     if (!statsEl || statsEl.style.display === 'none') return;
+    // One request at a time: the poll fires every 2 s, and a slow answer (a cold WSL sampler, a hung
+    // server) must not pile up requests behind it.
+    if (this._systemStatsPending) return;
+    this._systemStatsPending = true;
 
     try {
-      const res = await fetch('/api/system/stats');
+      // Opt-in readings are only requested while their header setting is on (default off).
+      const settings = this.loadAppSettingsFromStorage?.() ?? {};
+      const wanted = ['gpu', settings.showGpuStats, 'cpumhz', settings.showCpuMhz];
+      const query = [];
+      for (let i = 0; i < wanted.length; i += 2) if (wanted[i + 1] === true) query.push(`${wanted[i]}=1`);
+      const res = await fetch('/api/system/stats' + (query.length ? '?' + query.join('&') : ''), {
+        signal:
+          typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+            ? AbortSignal.timeout(8000)
+            : undefined,
+      });
       const stats = await res.json();
       this.updateSystemStatsDisplay(stats.data);
     } catch (err) {
       // Silently fail - system stats are not critical
+    } finally {
+      this._systemStatsPending = false;
     }
   },
 
@@ -6442,6 +6707,60 @@ Object.assign(CodemanApp.prototype, {
         memBar.classList.add('medium');
       }
     }
+
+    // After the MEM block, so nothing in the optional readings can stop MEM updating.
+    this._updateHostSensors(stats);
+  },
+
+  /**
+   * The opt-in readings after CPU and MEM: GPU load, GPU memory and GPU clock (the GPU Stats setting) and the CPU clock. An item
+   * shows only while its setting is on AND the host reported it, so a machine without a readable GPU just
+   * has nothing extra in the header.
+   */
+  _updateHostSensors(stats) {
+    const settings = this.loadAppSettingsFromStorage?.() ?? {};
+    const show = (id, visible) => {
+      const el = this.$(id);
+      if (el) el.hidden = !visible;
+    };
+    const fill = (valueId, ringId, barId, percent, text) => {
+      const value = this.$(valueId);
+      if (value) {
+        value.textContent = text;
+        value.classList.toggle('high', percent > 80);
+      }
+      this._setStatRing(ringId, percent);
+      const bar = this.$(barId);
+      if (bar) bar.style.width = `${Math.min(100, percent)}%`;
+    };
+    const gpu = settings.showGpuStats === true ? stats.gpu : undefined;
+    show('statGpuItem', Boolean(gpu));
+    if (gpu) fill('statGpu', 'statGpuRing', 'statGpuBar', gpu.percent, `${gpu.percent}%`);
+    // Graphics memory: the amount in use whenever it is known, with a ring only when the total is too (an
+    // integrated GPU under WSL, where Windows reports usage but the share of RAM is a guess, may have none).
+    show('statVramItem', Boolean(gpu && gpu.memUsedMB !== undefined));
+    if (gpu && gpu.memUsedMB !== undefined) {
+      const used = `${(gpu.memUsedMB / 1024).toFixed(1)}G`;
+      const ring = this.$('statVramRing');
+      // Ringless, the Compact style's rings-only step hides the whole item (styles.css) instead of an empty one.
+      this.$('statVramItem')?.classList.toggle('stat-item--ringless', gpu.memPercent === undefined);
+      if (gpu.memPercent !== undefined) {
+        fill('statVram', 'statVramRing', 'statVramBar', gpu.memPercent, used);
+        if (ring) ring.style.display = '';
+      } else {
+        const vram = this.$('statVram');
+        if (vram) vram.textContent = used;
+        if (ring) ring.style.display = 'none';
+      }
+    }
+    // The GPU clock is a third GPU Stats item (the host may not report one: Windows has none for Intel).
+    show('statGpuMhzItem', Boolean(gpu && gpu.mhz !== undefined));
+    const gpuMhzEl = gpu && gpu.mhz !== undefined ? this.$('statGpuMhz') : null;
+    if (gpuMhzEl) gpuMhzEl.textContent = `${gpu.mhz} MHz`;
+    const cpuMhz = settings.showCpuMhz === true && stats.cpuMhz !== undefined ? stats.cpuMhz : undefined;
+    show('statCpuMhzItem', cpuMhz !== undefined);
+    const cpuMhzEl = cpuMhz !== undefined ? this.$('statCpuMhz') : null;
+    if (cpuMhzEl) cpuMhzEl.textContent = `${cpuMhz} MHz`;
   },
 
   /**

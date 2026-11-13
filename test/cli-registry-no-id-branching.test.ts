@@ -95,15 +95,19 @@ const ALLOWED_BRANCHES: Record<string, Allowance> = {
   "web/routes/session-routes.ts::mode === 'antigravity'": allow(2, 'legacy <Mode>Config plumbing'),
   "web/routes/session-routes.ts::mode === 'pi'": allow(2, 'legacy <Mode>Config plumbing'),
   "web/routes/session-routes.ts::mode === 'grok'": allow(2, 'legacy <Mode>Config plumbing'),
+  "web/routes/session-routes.ts::mode === 'copilot'": allow(2, 'legacy <Mode>Config plumbing'),
   "web/routes/session-routes.ts::mode === 'deepseek'": allow(2, 'legacy <Mode>Config plumbing'),
+  "web/routes/session-routes.ts::mode === 'jcode'": allow(2, 'legacy <Mode>Config plumbing'),
   "web/server.ts::mode === 'opencode'": allow(1, 'legacy <Mode>Config plumbing (session recovery)'),
   "web/server.ts::mode === 'codex'": allow(1, 'legacy <Mode>Config plumbing (session recovery)'),
   "web/server.ts::mode === 'gemini'": allow(1, 'legacy <Mode>Config plumbing (session recovery)'),
   "web/server.ts::mode === 'antigravity'": allow(1, 'legacy <Mode>Config plumbing (session recovery)'),
   "web/server.ts::mode === 'pi'": allow(1, 'legacy <Mode>Config plumbing (session recovery)'),
   "web/server.ts::mode === 'grok'": allow(1, 'legacy <Mode>Config plumbing (session recovery)'),
+  "web/server.ts::mode === 'copilot'": allow(1, 'legacy <Mode>Config plumbing (session recovery)'),
   "web/server.ts::mode === 'deepseek'": allow(1, 'legacy <Mode>Config plumbing (session recovery)'),
   "web/server.ts::mode === 'omp'": allow(1, 'legacy <Mode>Config plumbing (session recovery)'),
+  "web/server.ts::mode === 'jcode'": allow(1, 'legacy <Mode>Config plumbing (session recovery)'),
 
   // --- Claude's remote/docker command construction ---
   "tmux-manager.ts::mode === 'claude'": allow(
@@ -165,7 +169,6 @@ const ALLOWED_BRANCHES: Record<string, Allowance> = {
   ),
   "tui/tui-render.ts::mode !== 'claude'": allow(1, 'cosmetic: suppress the mode badge for the default mode'),
 
-
   // Legacy <Mode>Config plumbing, same category as the `===` entries above.
   "web/routes/session-routes.ts::mode !== 'omp'": allow(
     2,
@@ -173,7 +176,7 @@ const ALLOWED_BRANCHES: Record<string, Allowance> = {
       'chain (see the opencode entry below)'
   ),
 
-  // ⚠️ Scaffolded-case hooks. This chain excludes seven CLIs but NOT `deepseek`, while its
+  // ⚠️ Scaffolded-case hooks. This chain excludes eight CLIs but NOT `deepseek`, while its
   // own comment says DeepSeek uses its own system — so a scaffolded deepseek case gets a
   // Claude hooks block written into it. That inconsistency is UPSTREAM's and predates this
   // change; expressing the chain as a capability would have to pick a side and would
@@ -188,6 +191,7 @@ const ALLOWED_BRANCHES: Record<string, Allowance> = {
   "web/routes/session-routes.ts::mode !== 'antigravity'": allow(1, 'scaffolded-case hooks (see the opencode entry)'),
   "web/routes/session-routes.ts::mode !== 'pi'": allow(1, 'scaffolded-case hooks (see the opencode entry)'),
   "web/routes/session-routes.ts::mode !== 'grok'": allow(1, 'scaffolded-case hooks (see the opencode entry)'),
+  "web/routes/session-routes.ts::mode !== 'jcode'": allow(1, 'scaffolded-case hooks (see the opencode entry)'),
 };
 
 /** Every stock CLI id, derived rather than restated so a new entry is covered automatically. */
@@ -210,8 +214,10 @@ const ID_ALT = IDS.join('|');
  */
 const BRANCH_PATTERN = new RegExp(
   [
-    // mode === 'codex'  /  mode !== 'codex'
-    `\\b(?:mode|id|agentType)\\s*[!=]==\\s*'(?:${ID_ALT})'`,
+    // mode === 'codex'  /  mode !== 'codex'. `cli` is the name the local model catalogue gives
+    // the same thing (`LocalHarnessEntry.cli`, `Candidate.cli`), so `harness.cli === 'claude'`
+    // is the same banned branch under another field name.
+    `\\b(?:mode|id|agentType|cli)\\s*[!=]==\\s*'(?:${ID_ALT})'`,
     // case 'codex':
     `\\bcase\\s+'(?:${ID_ALT})'\\s*:`,
     // ['codex', 'gemini'].includes(mode) — the id list IS the branch, wherever `mode` sits
@@ -265,7 +271,7 @@ function scan(): { findings: Finding[]; filesScanned: number } {
     lines.forEach((line, i) => {
       BRANCH_PATTERN.lastIndex = 0; // shared /g regex — see utils/regex-patterns.ts
       for (const match of line.matchAll(BRANCH_PATTERN)) {
-        const expression = match[0].replace(/\s+/g, ' ').replace(/^(?:id|agentType)/, 'mode');
+        const expression = match[0].replace(/\s+/g, ' ').replace(/^(?:id|agentType|cli)/, 'mode');
         const posix = rel.split(sep).join('/');
         findings.push({ file: posix, expression, line: i + 1, key: `${posix}::${expression}` });
       }
@@ -335,6 +341,8 @@ describe('no CLI-id branching outside the stock catalog', () => {
       "if (mode !== 'shell' && mode !== 'deepseek') { doSomething(); }",
       "switch (mode) { case 'gemini': return 1; }",
       "if (['codex', 'gemini'].includes(mode)) { doSomething(); }",
+      "if (harness.cli === 'claude') { doSomething(); }",
+      "const others = candidates.filter((c) => c.cli !== 'opencode');",
     ];
     for (const sample of samples) {
       BRANCH_PATTERN.lastIndex = 0;

@@ -20,11 +20,14 @@ import type {
   AntigravityConfig,
   PiConfig,
   GrokConfig,
+  CopilotConfig,
+  JcodeConfig,
   DeepSeekConfig,
   OmpConfig,
   SessionRemote,
   SessionDocker,
   PaneExit,
+  SessionAdopt,
   StatusLineExporter,
 } from './types.js';
 
@@ -46,6 +49,13 @@ export interface MuxSession {
   remote?: SessionRemote;
   /** Docker execution metadata for local tmux sessions wrapping `docker exec` */
   docker?: SessionDocker;
+  /**
+   * Adoption metadata for a wrapper session around a human-started tmux session.
+   * Round-trips through `mux-sessions.json` like remote/docker: without it a
+   * restored wrapper would not know what to re-attach to, and `killSession`
+   * would lose the detach-not-kill guard.
+   */
+  adopt?: SessionAdopt;
   /** Owning username in multi-user mode (round-tripped through recovery like remote/docker) */
   owner?: string;
   /** Session mode */
@@ -61,8 +71,14 @@ export interface MuxSession {
   /** Whether the current launch carries the statusLine exporter; set on every create and respawn. */
   statusLine?: StatusLineExporter;
   /**
+   * Whether the current launch carries `idleCompaction: false` in its `--settings` JSON (keep-warm
+   * on at launch, the exporter injected, Claude Code new enough); set on every create and respawn.
+   */
+  idleCompactionOff?: boolean;
+  /**
    * This record was rebuilt from the tmux socket rather than from Codeman's own
-   * bookkeeping, so everything on it but the name and the pid is a guess. Its
+   * bookkeeping, so everything on it but the name, the pid and, when tmux
+   * reported a usable one, the directory is a guess. Its
    * synthetic `restored-<fragment>` id cannot find the session's `state.json`
    * entry either, which means a remote or docker session rediscovered this way
    * arrives with no `remote`/`docker` metadata and looks local. Anything that
@@ -97,7 +113,8 @@ export interface CreateSessionOptions {
    * Name pinned on a claude spawn as `--name` (version-gated, sanitized, local only).
    * Deliberately NOT `name`: `--name` owns the prompt-box label, the `/resume` picker
    * entry and the terminal title, and a pinned title stops Claude generating its own,
-   * so only a user-chosen name belongs here (see `Session.cliPinnedName`).
+   * so by default only a user-chosen name belongs here; the opt-in `pinCliSessionName`
+   * setting pins every tab name (see `Session.cliPinnedName`).
    */
   cliName?: string;
   niceConfig?: NiceConfig;
@@ -110,6 +127,8 @@ export interface CreateSessionOptions {
   antigravityConfig?: AntigravityConfig;
   piConfig?: PiConfig;
   grokConfig?: GrokConfig;
+  copilotConfig?: CopilotConfig;
+  jcodeConfig?: JcodeConfig;
   deepSeekConfig?: DeepSeekConfig;
   ompConfig?: OmpConfig;
   /** When restoring after reboot, resume a previous Claude conversation by its session ID */
@@ -120,12 +139,18 @@ export interface CreateSessionOptions {
   effort?: EffortLevel;
   /** Claude advisor model, merged into the same `--settings` JSON (overridable via /advisor in-session) */
   advisorModel?: string;
+  /** The session's own prompt-cache keep-warm choice (undefined = app default); decides the `idleCompaction` opt-out. */
+  keepWarm?: boolean;
+  /** Spawned by another session: it does not inherit the keep-warm app default (`keepWarmOn`). */
+  spawnedByAgent?: boolean;
   /** tmux history-limit (scrollback lines) allocated when this session is created. */
   historyLimit?: number;
   /** Remote execution metadata for local tmux sessions wrapping SSH */
   remote?: SessionRemote;
   /** Docker execution metadata for local tmux sessions wrapping `docker exec` */
   docker?: SessionDocker;
+  /** Adoption metadata; its presence selects the foreign-attach launch command. */
+  adopt?: SessionAdopt;
   /** Owning username in multi-user mode; persisted for recovery. */
   owner?: string;
 }
@@ -141,7 +166,8 @@ export interface RespawnPaneOptions {
    * Name pinned on a respawned claude as `--name` (version-gated, sanitized, local only).
    * Deliberately NOT `name`: `--name` owns the prompt-box label, the `/resume` picker
    * entry and the terminal title, and a pinned title stops Claude generating its own,
-   * so only a user-chosen name belongs here (see `Session.cliPinnedName`).
+   * so by default only a user-chosen name belongs here; the opt-in `pinCliSessionName`
+   * setting pins every tab name (see `Session.cliPinnedName`).
    */
   cliName?: string;
   niceConfig?: NiceConfig;
@@ -154,6 +180,8 @@ export interface RespawnPaneOptions {
   antigravityConfig?: AntigravityConfig;
   piConfig?: PiConfig;
   grokConfig?: GrokConfig;
+  copilotConfig?: CopilotConfig;
+  jcodeConfig?: JcodeConfig;
   deepSeekConfig?: DeepSeekConfig;
   ompConfig?: OmpConfig;
   /** Resume a previous Claude conversation when respawning */
@@ -171,12 +199,18 @@ export interface RespawnPaneOptions {
   effort?: EffortLevel;
   /** Claude advisor model (preserved across respawns, merged into the same `--settings` JSON) */
   advisorModel?: string;
+  /** The session's own prompt-cache keep-warm choice, re-read at every relaunch (see CreateSessionOptions). */
+  keepWarm?: boolean;
+  /** Spawned by another session (see CreateSessionOptions). */
+  spawnedByAgent?: boolean;
   /** Original tmux history-limit retained for config parity; respawn cannot resize the existing pane. */
   historyLimit?: number;
   /** Remote execution metadata for local tmux sessions wrapping SSH */
   remote?: SessionRemote;
   /** Docker execution metadata for local tmux sessions wrapping `docker exec` */
   docker?: SessionDocker;
+  /** Adoption metadata; a respawn of an adopted wrapper RE-ATTACHES, it never relaunches an agent. */
+  adopt?: SessionAdopt;
   /** Owning username (multi-user); redundant on respawn since the Session object survives, kept for shape parity. */
   owner?: string;
 }
@@ -252,7 +286,7 @@ export interface PaneCaptureOptions {
  * - `sessionKilled` (data: { sessionId: string }) - Session terminated
  * - `sessionDied` (data: { sessionId: string }) - Session died unexpectedly
  * - `statsUpdated` (sessions: MuxSessionWithStats[]) - Stats refreshed
- * - `paneExitsUpdated` () - A pane read finished; ask `getPaneExit()` per session
+ * - `paneExitsUpdated` () - A pane read finished; ask `getPaneExit()` (and `getPaneCurrentPath()`) per session
  */
 export interface TerminalMultiplexer extends EventEmitter {
   /** Which backend this instance uses */
@@ -295,9 +329,10 @@ export interface TerminalMultiplexer extends EventEmitter {
   // ========== Input ==========
 
   /**
-   * Send input to a session via tmux send-keys.
+   * Send input to a session via tmux send-keys. The optional internal Enter-only
+   * guard runs synchronously immediately before transport dispatch.
    */
-  sendInput(sessionId: string, input: string): Promise<boolean>;
+  sendInput(sessionId: string, input: string, options?: { beforeDispatch?: () => boolean }): Promise<boolean>;
 
   // ========== Metadata ==========
 
@@ -377,6 +412,16 @@ export interface TerminalMultiplexer extends EventEmitter {
   getPaneExit?(muxName: string): PaneExit | undefined;
 
   /**
+   * The directory the session's pane was in at the last pane read
+   * (`#{pane_current_path}`), or `undefined` when unknown. Read from the same
+   * batched watcher as {@link getPaneExit}, so it costs no tmux call. A relative
+   * path printed in the terminal resolves against it; it is never a
+   * confinement root. A multiplexer without it leaves relative paths resolving
+   * against `workingDir`.
+   */
+  getPaneCurrentPath?(muxName: string): string | undefined;
+
+  /**
    * How many authoritative pane reads have agreed on the exit `getPaneExit()`
    * reports, or 0 when it reports none. The exited-agent sweep closes a session
    * only once this reaches `CLEAN_EXIT_CONFIRMING_READS` (`pane-exit-sweep.ts`),
@@ -410,11 +455,12 @@ export interface TerminalMultiplexer extends EventEmitter {
   captureActivePaneBuffer?(muxName: string, opts?: PaneCaptureOptions): string | null;
 
   /**
-   * Plain text of the visible frame: no styles, no cursor query, no repaint
-   * reconstruction. Deliberately cheaper than `capturePaneBuffer` because idle
+   * Plain text of the visible frame: no cursor query, no repaint
+   * reconstruction, and no styles unless `styles` asks for them (SGR only, lines
+   * still `\n`-separated). Deliberately cheaper than `capturePaneBuffer` because idle
    * detection calls it on a timer: it only needs to read what the CLI is
    * currently rendering, never to replay it into an xterm. Returns null when the
    * pane cannot be read.
    */
-  capturePaneText?(muxName: string, paneTarget?: string): string | null;
+  capturePaneText?(muxName: string, paneTarget?: string, opts?: { styles?: boolean }): string | null;
 }

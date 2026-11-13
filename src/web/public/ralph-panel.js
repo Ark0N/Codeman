@@ -953,11 +953,6 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
-  // Legacy method for backwards compatibility
-  getTodoIcon(status) {
-    return this.getRalphTaskIcon(status);
-  },
-
 
   // ═══════════════════════════════════════════════════════════════
   // Plan Versioning

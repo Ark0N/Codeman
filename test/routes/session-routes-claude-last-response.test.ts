@@ -598,3 +598,141 @@ describe('GET /api/sessions/:id/last-response (claude conversation pinning)', ()
     expect(near.adoptClaudeSessionId).toHaveBeenCalledWith('fresh-conversation');
   });
 });
+
+describe('GET /api/sessions/:id/last-response (relocated Claude config folder, #701)', () => {
+  let harness: LocalHarness;
+  let testHome: string;
+  let relocated: string;
+  let previousHome: string | undefined;
+  let previousConfigDir: string | undefined;
+  const WORKDIR = '/workspace';
+  const NOW = 1_770_000_000_000;
+
+  beforeEach(async () => {
+    testHome = mkdtempSync(join(tmpdir(), 'codeman-claude-relocated-'));
+    relocated = join(testHome, 'claude-clients', 'acme');
+    previousHome = process.env.HOME;
+    previousConfigDir = process.env.CLAUDE_CONFIG_DIR;
+    process.env.HOME = testHome;
+    delete process.env.CLAUDE_CONFIG_DIR;
+    harness = await createEnvelopeHarness();
+  });
+
+  afterEach(async () => {
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+    if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = previousConfigDir;
+    rmSync(testHome, { recursive: true, force: true });
+    await harness.app.close();
+  });
+
+  /** A one-answer transcript under `<configDir>/projects`, stamped at `mtimeMs`. */
+  function writeTranscript(configDir: string, conversationId: string, text: string, mtimeMs = NOW - 60_000): void {
+    const projectDir = join(configDir, 'projects', '-workspace');
+    mkdirSync(projectDir, { recursive: true });
+    const path = join(projectDir, `${conversationId}.jsonl`);
+    writeFileSync(
+      path,
+      JSON.stringify({
+        type: 'assistant',
+        timestamp: new Date(mtimeMs).toISOString(),
+        message: { content: [{ type: 'text', text }] },
+      })
+    );
+    utimesSync(path, mtimeMs / 1000, mtimeMs / 1000);
+  }
+
+  function writeHistory(configDir: string, sessionId: string, timestamp: number): void {
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'history.jsonl'),
+      JSON.stringify({ display: 'prompt', project: WORKDIR, sessionId, timestamp })
+    );
+  }
+
+  /** Replaces the pre-seeded mock session with a Claude pane in WORKDIR. */
+  function addPane(conversationId: string, opts: { configDir?: string; lastSubmitAt?: number; docker?: boolean } = {}) {
+    const base = harness.ctx._session;
+    const pane = Object.create(Object.getPrototypeOf(base)) as typeof base & {
+      claudeSessionId: string;
+      lastSubmitAt: number;
+      claudeSessionIdIsFirstHand: boolean;
+      claudeConfigDirOverride: string | undefined;
+      adoptClaudeSessionId: ReturnType<typeof vi.fn>;
+    };
+    Object.assign(pane, base, {
+      id: 'pane-1',
+      mode: 'claude',
+      workingDir: WORKDIR,
+      docker: opts.docker ? { containerName: 'codeman-case-acme' } : undefined,
+    });
+    pane.claudeSessionId = conversationId;
+    pane.lastSubmitAt = opts.lastSubmitAt ?? 0;
+    pane.claudeSessionIdIsFirstHand = false;
+    pane.claudeConfigDirOverride = opts.configDir;
+    pane.adoptClaudeSessionId = vi.fn((newId: string) => {
+      pane.claudeSessionId = newId;
+    });
+    harness.ctx.sessions.set(pane.id, pane);
+    return pane;
+  }
+
+  async function getLastResponse(query = '') {
+    const response = await harness.app.inject({ method: 'GET', url: `/api/sessions/pane-1/last-response${query}` });
+    return JSON.parse(response.body).data as { text: string; messages?: unknown[] };
+  }
+
+  it("reads the answer from the session's own config folder", async () => {
+    addPane('conversation-a', { configDir: relocated });
+    writeTranscript(relocated, 'conversation-a', 'the answer in the relocated folder');
+
+    expect((await getLastResponse()).text).toBe('the answer in the relocated folder');
+    expect((await getLastResponse('?context=full')).messages).toHaveLength(1);
+  });
+
+  it("reads the server's own CLAUDE_CONFIG_DIR for a session without an override", async () => {
+    process.env.CLAUDE_CONFIG_DIR = relocated;
+    addPane('conversation-a');
+    writeTranscript(relocated, 'conversation-a', 'the answer in the server folder');
+
+    expect((await getLastResponse()).text).toBe('the answer in the server folder');
+  });
+
+  it('never shows a conversation of the same id from ~/.claude instead', async () => {
+    const home = join(testHome, '.claude');
+    writeTranscript(home, 'conversation-a', 'an answer from another account');
+
+    // The relocated folder has conversations, but not this one.
+    addPane('conversation-a', { configDir: relocated });
+    writeTranscript(relocated, 'another-conversation', 'not this pane');
+    expect(await getLastResponse('?context=turn')).toEqual({ text: '', timestamp: '', messages: [] });
+
+    // And a relocated folder that is not there at all.
+    addPane('conversation-a', { configDir: join(testHome, 'not-created-yet') });
+    expect(await getLastResponse()).toEqual({ text: '', timestamp: '' });
+  });
+
+  it("follows /clear through the relocated folder's history, not the one under ~/.claude", async () => {
+    const pane = addPane('before-clear', { configDir: relocated, lastSubmitAt: NOW });
+    writeTranscript(relocated, 'before-clear', 'answer before clear', NOW - 60_000);
+    writeTranscript(relocated, 'after-clear', 'answer after clear', NOW + 500);
+    writeHistory(relocated, 'after-clear', NOW + 120);
+    // The default account typed in the same folder at the same moment.
+    const home = join(testHome, '.claude');
+    writeTranscript(home, 'default-account', 'an answer from the default account', NOW + 500);
+    writeHistory(home, 'default-account', NOW + 100);
+
+    expect((await getLastResponse()).text).toBe('answer after clear');
+    expect(pane.adoptClaudeSessionId).toHaveBeenCalledWith('after-clear');
+  });
+
+  it("keeps a Docker session off its override, which names a folder inside the container", async () => {
+    const home = join(testHome, '.claude');
+    writeTranscript(home, 'conversation-a', 'what the host folder holds');
+    writeTranscript(relocated, 'conversation-a', 'a host folder that only shares the path');
+    addPane('conversation-a', { configDir: relocated, docker: true });
+
+    expect((await getLastResponse()).text).toBe('what the host folder holds');
+  });
+});

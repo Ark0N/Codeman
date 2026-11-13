@@ -53,6 +53,15 @@ function loadCodemanAppClass() {
   return (context as { __CodemanApp: { prototype: { _linkifyFilePaths(root: unknown): void } } }).__CodemanApp;
 }
 
+const markedContext = vm.createContext({});
+vm.runInContext(
+  readFileSync(resolve(import.meta.dirname, '../src/web/public/vendor/marked.min.js'), 'utf8'),
+  markedContext
+);
+const marked = markedContext.marked as { parse(text: string, options?: object): string };
+/** The options `_renderMarkdown` passes, so the tests see chat's real markup (a newline becomes `<br>`). */
+const renderChat = (markdown: string) => marked.parse(markdown, { breaks: true, gfm: true });
+
 const CodemanApp = loadCodemanAppClass();
 const APP_SOURCE = readFileSync(resolve(import.meta.dirname, '../src/web/public/app.js'), 'utf8');
 
@@ -69,6 +78,92 @@ function linkify(html: string): HTMLElement {
 const paths = (root: HTMLElement) => Array.from(root.querySelectorAll('a.rv-path'));
 
 describe('response viewer file-path linkifier', () => {
+  it('links a parenthesised configuration filename with spaces without changing the prose', () => {
+    const path = '/mnt/user/Scratch/Kobo/Set-KoboCovers/Kobo eReader.conf';
+    const text = `Prepared a corrected configuration (${path}).`;
+    const root = linkify(`<p>${text}</p>`);
+    expect(paths(root).map((a) => a.dataset.path)).toEqual([path]);
+    expect(paths(root)[0].dataset.folder).toBeUndefined();
+    expect(root.textContent).toBe(text);
+  });
+
+  it.each([
+    ['- 03 Attachments/Build SIPOC Design/Build-SIPOC.pptx', ['Design/Build-SIPOC.pptx']],
+    ['- notes/a b/c.md', ['b/c.md']],
+    [
+      '**Saved to:** 03 Attachments/Build SIPOC Design/Build-SIPOC.pptx',
+      ['03 Attachments/Build SIPOC Design/Build-SIPOC.pptx'],
+    ],
+    ['**Saved to:** ~/My Docs/plan.md', ['~/My Docs/plan.md']],
+    ['- **Path:** notes/a b/c.md', ['notes/a b/c.md']],
+    ['- /mnt/c/My Docs/a.docx', ['/mnt/c/My Docs/a.docx']],
+    ['**Saved to:** /mnt/c/My Docs/a.docx', ['/mnt/c/My Docs/a.docx']],
+    ['**Tests:** 45/45 pass in test/foo.test.ts', ['test/foo.test.ts']],
+    ['**Error:** I/O failure reading data.json', ['data.json']],
+    [
+      'Done.\n**Saved to:** 03 Attachments/Build SIPOC Design/Build-SIPOC.pptx',
+      ['03 Attachments/Build SIPOC Design/Build-SIPOC.pptx'],
+    ],
+    [
+      '**Size:** 2 MB\n**Saved to:** 03 Attachments/Build SIPOC Design/Build-SIPOC.pptx',
+      ['03 Attachments/Build SIPOC Design/Build-SIPOC.pptx'],
+    ],
+  ])('links rendered Markdown with consumed markers and labels: %s', (markdown, expected) => {
+    const html = renderChat(markdown);
+    const original = document.createElement('div');
+    original.innerHTML = html;
+    const root = linkify(html);
+    expect(paths(root).map((a) => a.getAttribute('data-path'))).toEqual(expected);
+    expect(root.textContent).toBe(original.textContent);
+    expect(root.querySelector('strong')?.textContent).toBe(original.querySelector('strong')?.textContent);
+  });
+
+  it.each([
+    ['**Wrote:** 120 lines to src/foo.ts', ['src/foo.ts']],
+    ['- **Output:** stored in dist/app.js', ['dist/app.js']],
+    ['**Created:** new file src/components/Button.tsx', ['src/components/Button.tsx']],
+    ['**Files:** src/components and utils/x.ts', ['utils/x.ts']],
+    ['**Wrote:** 3 files to docs/design notes/overview.md', ['notes/overview.md']],
+    ['**Path:** /home/me/proj/out contains a.md', ['/home/me/proj/out', 'a.md']],
+    ['- /tmp/out has the logs in run.log', ['/tmp/out', 'run.log']],
+  ])('keeps prose out of the link in rendered Markdown: %s', (markdown, expected) => {
+    expect(paths(linkify(renderChat(markdown))).map((a) => a.getAttribute('data-path'))).toEqual(expected);
+  });
+
+  // The terminal splits these lines (`Note:` is not a path label, and the path does
+  // not start the line), so the viewer must split them too.
+  it.each([
+    ['**Note:** /home/me/proj/out report.pdf', ['/home/me/proj/out', 'report.pdf']],
+    ['Use `--config` /home/me/proj/cfg data.json', ['/home/me/proj/cfg', 'data.json']],
+  ])('splits a spaced candidate the terminal splits: %s', (markdown, expected) => {
+    const html = renderChat(markdown);
+    const original = document.createElement('div');
+    original.innerHTML = html;
+    const root = linkify(html);
+    expect(paths(root).map((a) => a.getAttribute('data-path'))).toEqual(expected);
+    expect(root.textContent).toBe(original.textContent);
+  });
+
+  it('still links a spaced path inside inline code whole, after another inline element too', () => {
+    const root = linkify(renderChat('Use `--config` `/home/me/My Docs/cfg data.json`'));
+
+    const links = paths(root);
+    expect(links.map((a) => a.getAttribute('data-path'))).toEqual(['/home/me/My Docs/cfg data.json']);
+    expect(links[0].closest('code')).not.toBeNull();
+  });
+
+  it('does not inherit a bold label from earlier prose or another block', () => {
+    for (const markdown of [
+      'See **Saved to:** 03 Attachments/Build SIPOC Design/Build-SIPOC.pptx',
+      '**Saved to:**\n\n03 Attachments/Build SIPOC Design/Build-SIPOC.pptx',
+      'Done.\nSee **Saved to:** 03 Attachments/Build SIPOC Design/Build-SIPOC.pptx',
+    ]) {
+      expect(paths(linkify(renderChat(markdown))).map((a) => a.getAttribute('data-path'))).toEqual([
+        'Design/Build-SIPOC.pptx',
+      ]);
+    }
+  });
+
   it('links an absolute path written as prose', () => {
     const path = '/tmp/claude-1000/-home-arkon-default-claudeman/7b3fefd2/scratchpad/probe-run-native.png';
     const root = linkify(`<p>Saved the capture to ${path} — have a look.</p>`);
@@ -108,6 +203,84 @@ describe('response viewer file-path linkifier', () => {
     expect(paths(root)).toHaveLength(0);
     expect(root.querySelectorAll('a')).toHaveLength(1);
     expect(root.querySelector('a')!.getAttribute('href')).toBe('https://example.com/tmp/shot.png');
+  });
+
+  it('turns a markdown link to a path into a preview link, not a same-origin navigation', () => {
+    // Codex cites files as `[label](/abs/path)`: left alone, the href resolved
+    // against Codeman's origin and opened a 404 JSON page in a new tab.
+    const path = '/home/me/llm-bench/runs/crash-20261017/incident-summary.json';
+    const root = linkify(
+      `<p><a href="${path}" target="_blank" rel="noopener noreferrer">Our incident record</a> and ` +
+        `<a href="src/a%20b.ts:42:7">a b</a>, <a href="docs/#L3">docs</a>, <a href="/tmp/renders">renders</a>, ` +
+        `<a href="/tmp/release%3A12">release</a>, <a href="/tmp/a.json?raw=true">raw</a>, <a href="/tmp/">tmp</a></p>`
+    );
+
+    const links = paths(root);
+    expect(links.map((a) => a.getAttribute('data-path'))).toEqual([
+      path,
+      'src/a b.ts',
+      'docs/',
+      '/tmp/renders',
+      // An encoded colon is part of the name, never a line suffix.
+      '/tmp/release:12',
+      // A query names a view of the file, not the file.
+      '/tmp/a.json',
+      '/tmp/',
+    ]);
+    for (const a of links) {
+      expect(a.getAttribute('href')).toBe('#');
+      expect(a.hasAttribute('target')).toBe(false);
+      expect(a.hasAttribute('rel')).toBe(false);
+      expect(a.getAttribute('data-linkified')).toBe('1');
+    }
+    expect(links[0].textContent).toBe('Our incident record');
+    // A label, not a path: the second class keeps it in the prose font (styles.css).
+    expect(links.every((a) => a.classList.contains('rv-path-link'))).toBe(true);
+    // A trailing slash and a rooted folder path without one both open the folder grid
+    // (`:` ends a folder match in findFilePathLinks, so `release:12` previews instead).
+    // findFilePathLinks finds no folder in a bare `/tmp/`, so only the trailing-slash
+    // check marks that one.
+    expect(links.map((a) => a.hasAttribute('data-folder'))).toEqual([false, false, true, true, false, false, true]);
+  });
+
+  it('opens a clicked markdown path link in the file preview through the click delegate', () => {
+    const app = Object.create(CodemanApp.prototype) as {
+      activeSessionId: string;
+      openFilePreview: ReturnType<typeof vi.fn>;
+      openFolderGrid: ReturnType<typeof vi.fn>;
+      _linkifyFilePaths(root: unknown): void;
+      _bindResponseViewerInteractions(body: unknown): void;
+    };
+    app.activeSessionId = 'sess-1';
+    app.openFilePreview = vi.fn();
+    app.openFolderGrid = vi.fn();
+    const body = document.createElement('div');
+    body.innerHTML = '<p><a href="/home/me/run/summary.json" target="_blank">Our incident record</a></p>';
+    app._linkifyFilePaths(body);
+    app._bindResponseViewerInteractions(body);
+
+    const click = new dom.window.MouseEvent('click', { bubbles: true, cancelable: true });
+    body.querySelector('a')!.dispatchEvent(click);
+
+    expect(click.defaultPrevented).toBe(true);
+    expect(app.openFilePreview).toHaveBeenCalledWith('/home/me/run/summary.json', 'sess-1');
+    expect(app.openFolderGrid).not.toHaveBeenCalled();
+  });
+
+  it('keeps web, mail, protocol-relative and fragment links as they are', () => {
+    const hrefs = ['https://example.com/a.json', 'mailto:me@example.com', '//cdn.example.com/x.js', '#section'];
+    const root = linkify(`<p>${hrefs.map((h) => `<a href="${h}">x</a>`).join(' ')}</p>`);
+
+    expect(paths(root)).toHaveLength(0);
+    expect(Array.from(root.querySelectorAll('a')).map((a) => a.getAttribute('href'))).toEqual(hrefs);
+  });
+
+  it('reads a scheme split by a tab as the URL the browser would open', () => {
+    // The URL parser drops tabs, so this is http://localhost:5173/a, never a relative file.
+    const root = linkify('<p><a href="http&#9;://localhost:5173/a">local</a></p>');
+
+    expect(paths(root)).toHaveLength(0);
+    expect(root.querySelector('a')!.getAttribute('href')).toBe('http\t://localhost:5173/a');
   });
 
   it('leaves text with no path untouched', () => {

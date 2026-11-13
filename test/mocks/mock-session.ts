@@ -4,7 +4,15 @@
  */
 import { EventEmitter } from 'node:events';
 import { vi } from 'vitest';
-import type { PromptCacheStatus, SessionAttachmentHistoryItem, SessionStatus, SessionRemote } from '../../src/types.js';
+import type {
+  KeepWarmStatus,
+  PromptCacheStatus,
+  SessionAttachmentHistoryItem,
+  SessionStatus,
+  SessionRemote,
+} from '../../src/types.js';
+import type { SessionAdopt } from '../../src/types/session.js';
+import type { GitFetchStatus } from '../../src/git-fetch.js';
 
 /**
  * Enhanced mock session for testing RespawnController.
@@ -19,6 +27,15 @@ export class MockSession extends EventEmitter {
    * over ssh instead of with local `fs` (#415).
    */
   remote?: SessionRemote;
+  /**
+   * Mirrors `Session.isAdopted`: true when this session wraps a process SOMEONE
+   * ELSE started (a hand-opened tmux session Codeman attached to). A plain field
+   * rather than a getter over `adopt`, because the routes only ever read the
+   * boolean and the tests only ever need to set it.
+   */
+  isAdopted: boolean = false;
+  /** Mirrors `Session.adopt`, the record the one-wrapper-per-target check keys on. */
+  adopt?: SessionAdopt;
   /** Mirrors Session.attachmentHistory (the attachment panel's source of truth). */
   attachmentHistory: SessionAttachmentHistoryItem[] = [];
   /** Mirrors Session.getAttachmentHistoryForPersist(). */
@@ -48,6 +65,37 @@ export class MockSession extends EventEmitter {
     this.promptCache = status;
     return changed;
   }
+  /** Mirrors the prompt-cache keep-warm surface on Session (prompt-cache-keepwarm.ts). */
+  keepAliveTurnActive = false;
+  endKeepAliveTurn(): void {
+    this.keepAliveTurnActive = false;
+  }
+  keepWarmEnabled: boolean | undefined = undefined;
+  setKeepWarmEnabled(enabled: boolean | undefined): void {
+    this.keepWarmEnabled = enabled;
+  }
+  keepWarm: KeepWarmStatus | null = null;
+  setKeepWarmStatus(status: KeepWarmStatus): boolean {
+    const changed = JSON.stringify(status) !== JSON.stringify(this.keepWarm);
+    this.keepWarm = status;
+    return changed;
+  }
+  /**
+   * Mirrors the Git fetch interval surface on Session (src/git-fetch.ts): the case's own override, `undefined`
+   * for either half meaning the app-wide setting applies, and what the scheduler last reported.
+   */
+  gitFetchEnabled: boolean | undefined = undefined;
+  gitFetchIntervalSeconds: number | undefined = undefined;
+  setGitFetchSettings(enabled: boolean | undefined, intervalSeconds: number | undefined): void {
+    this.gitFetchEnabled = enabled;
+    this.gitFetchIntervalSeconds = intervalSeconds;
+  }
+  gitFetch: GitFetchStatus | null = null;
+  setGitFetchStatus(status: GitFetchStatus): boolean {
+    const changed = JSON.stringify(status) !== JSON.stringify(this.gitFetch);
+    this.gitFetch = status;
+    return changed;
+  }
   private _activeChildProcesses: { pid: number; command: string }[] = [];
   ralphTracker: null = null;
   writeBuffer: string[] = [];
@@ -60,6 +108,13 @@ export class MockSession extends EventEmitter {
   claudeSessionIdIsFirstHand: boolean = false;
   /** Mirrors Session.claudeSessionChain — oldest first, current last. */
   claudeSessionChain: string[] = [];
+  /** The per-session CLAUDE_CONFIG_DIR override that Session.claudeConfigDir() reads. */
+  claudeConfigDirOverride: string | undefined = undefined;
+
+  /** Mirrors Session.claudeConfigDir: the override, trimmed; undefined when unset. */
+  claudeConfigDir(): string | undefined {
+    return this.claudeConfigDirOverride?.trim() || undefined;
+  }
 
   /** Mirrors Session.adoptClaudeSessionId, including the first-hand chain rule. */
   adoptClaudeSessionId(newId: string, options: { firstHand?: boolean } = {}): void {
@@ -76,13 +131,35 @@ export class MockSession extends EventEmitter {
     this.claudeSessionId = newId;
   }
 
-  /** Mirrors Session.markPromptSubmitted. */
-  markPromptSubmitted(): void {
+  /** Mirrors Session.markPromptSubmitted; records the hook's prompt text it was handed. */
+  submittedPrompts: Array<string | undefined> = [];
+  markPromptSubmitted(prompt?: string): void {
+    this.submittedPrompts.push(prompt);
     this.lastSubmitAt = Date.now();
   }
 
   /** Mirrors Session.trackUserInput (the send-key route feeds it around the write path). */
   trackUserInput(_data: string): void {}
+
+  async performAuxiliaryInput(operation: () => Promise<void>): Promise<void> {
+    await operation();
+  }
+
+  /** Mirrors Session.guardedInputHeld; a route test sets it to stand in for a guarded submit's lease. */
+  guardedInputHeld = false;
+  /** Input held behind that lease, in arrival order (see releaseGuardedLease). */
+  heldGuardedInput: Array<() => void | Promise<unknown>> = [];
+  /** Mirrors Session.holdForGuardedLease, without the cap (a test replaces it to model a full queue). */
+  holdForGuardedLease(run: () => void | Promise<unknown>, _bytes = 0, _data?: string): 'free' | 'held' | 'full' {
+    if (!this.guardedInputHeld) return 'free';
+    this.heldGuardedInput.push(run);
+    return 'held';
+  }
+  /** Ends the stand-in lease and runs the held input in arrival order, as Session does. */
+  releaseGuardedLease(): void {
+    this.guardedInputHeld = false;
+    for (const run of this.heldGuardedInput.splice(0)) void run();
+  }
 
   private _muxName: string | null = null;
 
@@ -107,9 +184,14 @@ export class MockSession extends EventEmitter {
 
   /** Write via mux (used by respawn controller) */
   async writeViaMux(data: string): Promise<boolean> {
-    if (this.failWrites) return false;
-    this.writeBuffer.push(data);
-    return true;
+    const write = (): boolean => {
+      if (this.failWrites) return false;
+      this.writeBuffer.push(data);
+      return true;
+    };
+    // Like Session.writeViaMux, it waits its turn behind a stand-in guarded lease.
+    if (!this.guardedInputHeld) return write();
+    return new Promise<boolean>((resolve) => this.heldGuardedInput.push(() => resolve(write())));
   }
 
   /**
@@ -330,6 +412,18 @@ export class MockSession extends EventEmitter {
   }
 
   /** Auto-resume on usage limit (token pause control) */
+  autoClearEnabled: boolean = false;
+  autoClearThreshold: number = 0;
+  setAutoClear = vi.fn((enabled: boolean, threshold?: number) => {
+    this.autoClearEnabled = enabled;
+    if (typeof threshold === 'number') this.autoClearThreshold = threshold;
+  });
+  autoCompactEnabled: boolean = false;
+  autoCompactThreshold: number = 0;
+  setAutoCompact = vi.fn((enabled: boolean, threshold?: number) => {
+    this.autoCompactEnabled = enabled;
+    if (typeof threshold === 'number') this.autoCompactThreshold = threshold;
+  });
   autoResumeEnabled: boolean = false;
   autoResumeAt: number | null = null;
   isLimitPaused: boolean = false;
@@ -389,7 +483,15 @@ export class MockSession extends EventEmitter {
     }
   );
   restartCli = vi.fn(async () => true);
+  /** Mirrors Session.envOverrideValue; no override map here, so the custom-model
+   *  real-home lookup defaults to "session says nothing" (overridable per test). */
+  envOverrideValue = vi.fn((_key: string): string | undefined => undefined);
+  /** Mirrors Session.ownEnvValue, same default. */
+  ownEnvValue = vi.fn((_key: string): string | undefined => undefined);
   getCustomModelForPersist = vi.fn(() => this._mockCustomModel);
+  /** Mirrors Session.noteContextReport: the statusline route hands over the context size. */
+  noteContextReport = vi.fn();
+
   /** Mirrors Session.noteReportedModel: the statusline route records the CLI's model. */
   reportedModel: { model: string; source: 'statusline' | 'screen' } | null = null;
   noteReportedModel = vi.fn((source: 'statusline' | 'screen', raw: unknown): boolean => {
@@ -431,55 +533,6 @@ export class MockSession extends EventEmitter {
   /** Stub for getMessages */
   getMessages = vi.fn(() => []);
 }
-
-/**
- * Generate realistic terminal output for testing.
- * Must match the patterns used in MockSession's simulate* methods.
- */
-export const terminalOutputs = {
-  /** Standard completion message */
-  completion(duration: string = '2m 46s'): string {
-    return `\n\u273b Worked for ${duration}\n  123.4k tokens used\n`;
-  },
-
-  /** Working spinner output */
-  working(activity: string = 'Thinking'): string {
-    return `${activity}... \u280b`;
-  },
-
-  /** Plan mode prompt */
-  planMode(question: string = 'Would you like to proceed?'): string {
-    return [`\n${question}\n`, '\u276f 1. Yes\n', '  2. No\n', '  3. Type your own\n'].join('');
-  },
-
-  /** Prompt character */
-  prompt(): string {
-    return '\n\u276f ';
-  },
-
-  /** Token count display */
-  tokens(count: number): string {
-    const formatted =
-      count >= 1000000
-        ? `${(count / 1000000).toFixed(1)}M`
-        : count >= 1000
-          ? `${(count / 1000).toFixed(1)}k`
-          : String(count);
-    return `  ${formatted} tokens\n`;
-  },
-
-  /** Large output for buffer testing */
-  largeOutput(sizeKb: number = 100): string {
-    const baseText = 'Lorem ipsum dolor sit amet. '.repeat(100);
-    const repetitions = Math.ceil((sizeKb * 1024) / baseText.length);
-    return baseText.repeat(repetitions).slice(0, sizeKb * 1024);
-  },
-
-  /** ANSI colored output */
-  ansiColored(text: string): string {
-    return `\x1b[32m${text}\x1b[0m`;
-  },
-};
 
 /**
  * Convenience factory.

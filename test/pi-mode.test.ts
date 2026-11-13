@@ -186,7 +186,9 @@ describe('Pi mode gates', () => {
     expect(defaultDockerCommandForMode('pi')).toBe('exec pi');
     // Routed through an interactive login shell so npm's global bin resolves —
     // same fix as the other remote agent CLIs (see defaultRemoteCommandForMode).
-    expect(defaultRemoteCommandForMode('pi')).toBe('exec "${SHELL:-/bin/sh}" -i -l -c \'pi\'');
+    expect(defaultRemoteCommandForMode('pi')).toBe(
+      '{ set -- -i -l; case ${SHELL##*/} in csh|tcsh) set --;; esac; exec "${SHELL:-/bin/sh}" "$@" -c \'pi\'; }'
+    );
   });
 
   it('probes the CLI version on a remote host (REMOTE_CLI_BIN carries pi)', () => {

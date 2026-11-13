@@ -9,7 +9,7 @@
 
 import { getCli } from '../config/cli-registry/registry.js';
 import { expandHome } from './cli-resolver.js';
-import { createCliExecutableResolver, formatCliNotFoundMessage } from './cli-executable-resolver.js';
+import { createCliExecutableResolver } from './cli-executable-resolver.js';
 
 /** Common directories where the OpenCode CLI binary may be installed */
 /**
@@ -20,7 +20,6 @@ import { createCliExecutableResolver, formatCliNotFoundMessage } from './cli-exe
 const OPENCODE_SEARCH_DIRS = (): string[] => (getCli('opencode')?.discovery.searchDirs ?? []).map(expandHome);
 
 const openCodeResolver = createCliExecutableResolver({ binary: 'opencode', searchDirs: OPENCODE_SEARCH_DIRS });
-const OPENCODE_NOT_FOUND = 'OpenCode CLI not found. Install with: curl -fsSL https://opencode.ai/install | bash';
 
 /**
  * Finds the directory containing the `opencode` binary.
@@ -38,8 +37,4 @@ export function resolveOpenCodeDir(): string | null {
  */
 export function isOpenCodeAvailable(): boolean {
   return resolveOpenCodeDir() !== null;
-}
-
-export function getOpenCodeNotFoundMessage(): string {
-  return formatCliNotFoundMessage(OPENCODE_NOT_FOUND, openCodeResolver.diagnostics());
 }

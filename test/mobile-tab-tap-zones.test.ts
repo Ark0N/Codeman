@@ -162,6 +162,17 @@ describe('phone tab tap zones', () => {
     expect(phoneDeclarations('.session-tab .tab-gear').display).toBe('none');
   });
 
+  it('with the opt-in "+" switched on, the wider reserve clears all three icons', () => {
+    // showTabNewButton adds a third icon to the active phone tab (html.tabs-show-new)
+    // and a larger reserve to go with it; the same arithmetic must still hold.
+    const plus = phoneDeclarations('html.tabs-show-new .session-tab.active .tab-new');
+    const wide = len(phoneDeclarations('html.tabs-show-new .session-tab.active .tab-name')['min-width']);
+    expect(len(plus.width)).toBeGreaterThanOrEqual(28);
+    expect(wide).toBeGreaterThanOrEqual(requiredReserve() + len(plus.width) + ROUNDING_ALLOWANCE);
+    expect(wide).toBeLessThanOrEqual(len(nameShared['max-width']));
+    expect(phoneDeclarations('.session-tab .tab-new').display).toBe('none');
+  });
+
   it('the pop-out icon stays out of the cluster on handhelds', () => {
     // `icons` above counts gear + close only. If detach ever became visible on a
     // phone the reserve would be ~30px short and the centre would walk back.

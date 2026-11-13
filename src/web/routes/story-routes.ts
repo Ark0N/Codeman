@@ -139,7 +139,7 @@ async function storySource(ctx: SessionPort & ConfigPort, id: string, req: Fasti
       ctx.getTranscriptPath(id),
       [...new Set([session.claudeSessionId, session.id].filter((v): v is string => !!v))],
       session.id,
-      session.claudeConfigDir
+      session.claudeConfigDir()
     ),
   };
 }

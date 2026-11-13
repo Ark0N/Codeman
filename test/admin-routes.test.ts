@@ -189,10 +189,13 @@ describe('admin case-folder API', () => {
     expect(sl.status).toBe(400);
     await expect(fs.stat(path.join(spacesDir, 'outside'))).resolves.toBeTruthy();
 
-    // A real folder is deleted.
+    // A real folder is deleted, and kim's default session group for it goes with it.
+    const store = (server as unknown as { store: import('../src/state-store.js').StateStore }).store;
+    store.setCaseDefaultGroup('kim', 'proj1', null);
     const del = await fetch(url('/api/admin/users/kim/cases/proj1'), { method: 'DELETE', headers: adminNoBody });
     expect(del.status).toBe(200);
     await expect(fs.stat(path.join(spacesDir, 'kim', 'cases', 'proj1'))).rejects.toBeTruthy();
+    expect(store.getCaseDefaultGroup('kim', 'proj1')).toBeUndefined();
 
     // Deleting it again 404s.
     const gone = await fetch(url('/api/admin/users/kim/cases/proj1'), { method: 'DELETE', headers: adminNoBody });

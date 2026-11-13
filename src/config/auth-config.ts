@@ -21,8 +21,24 @@ export const MAX_AUTH_SESSIONS = 100;
 // Rate Limiting
 // ============================================================================
 
-/** Max failed auth attempts per IP before 429 rejection */
+/**
+ * Max failed auth attempts per bucket before 429 rejection. Applies to the
+ * single-user per-IP bucket, the hook-secret bucket and two multi-user buckets:
+ * the (username, IP) gate, checked before the scrypt verify, and the
+ * per-username bucket, checked after it.
+ */
 export const AUTH_FAILURE_MAX = 10;
+
+/**
+ * Max failed login attempts per client IP for the multi-user pre-gate, which
+ * runs before the scrypt verify and so refuses even a correct password once
+ * reached. It bounds scrypt cost from one source and is wider than
+ * AUTH_FAILURE_MAX because one egress IP (NAT, a tunnel) can carry many users'
+ * failures. Verified guesses against any one account are capped by the
+ * (username, IP) gate at AUTH_FAILURE_MAX, not by this. Single-user mode does
+ * not use this.
+ */
+export const AUTH_IP_FAILURE_MAX = 50;
 
 /** Failed auth attempt tracking window (ms) */
 export const AUTH_FAILURE_WINDOW_MS = 15 * 60 * 1000;

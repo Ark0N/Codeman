@@ -165,10 +165,6 @@ export class AiIdleChecker extends AiCheckerBase<AiCheckVerdict, AiIdleCheckConf
     return 'WORKING';
   }
 
-  protected getErrorVerdict(): AiCheckVerdict {
-    return 'ERROR';
-  }
-
   protected createErrorResult(reasoning: string, durationMs: number): AiCheckResult {
     return { verdict: 'ERROR', reasoning, durationMs };
   }

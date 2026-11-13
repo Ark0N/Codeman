@@ -180,3 +180,101 @@ describe('tab switch to a pane that keeps no scrollback', () => {
     await context.close();
   }, 90_000);
 });
+
+describe('a tab switch whose tail replays no scrollback while the pane holds some', () => {
+  it('scrolls by pulling the full history instead of paging the CLI', async () => {
+    // After a server restart the byte recording is only the tmux client's attach
+    // repaint (home + clear + absolute redraws), so the tail a second select
+    // replays leaves baseY 0 while the response still reports tmux scrollback.
+    // The scroll used to page the CLI (PageUp into an inline Claude's composer);
+    // it now falls through to the local path, whose top-of-buffer pull fetches
+    // `full=1` and the gesture then scrolls real history.
+    const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1 });
+    const page = await context.newPage();
+    await openApp(page);
+    const inline = await createSession(page, 'inline-claude-after-restart');
+    const other = await createSession(page, 'other');
+    const log: string[] = [];
+    const history = Array.from({ length: 200 }, (_, i) => `history line ${i}\r\n`).join('');
+    await page.route('**/api/sessions/*/terminal*', async (route) => {
+      const url = new URL(route.request().url());
+      const id = url.pathname.split('/')[3];
+      const full = url.searchParams.get('full') === '1';
+      log.push(`${id}:${full ? 'full' : 'tail'}`);
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          success: true,
+          data: {
+            terminalBuffer: full ? `${history}frame of ${id}\r\n` : `\x1b[H\x1b[2Jframe of ${id}\r\n`,
+            status: 'idle',
+            fullSize: 4096,
+            retainedBytes: 4096,
+            truncated: false,
+            truncationReason: null,
+            source: full ? 'mux-full-history' : 'mux-visible',
+            paneHistoryLines: 200,
+          },
+        }),
+      });
+    });
+
+    await select(page, inline);
+    await select(page, other);
+    await select(page, inline);
+    expect(log).toEqual([`${inline}:full`, `${other}:full`, `${inline}:tail`]);
+    const baseYAfterTail = await page.evaluate(
+      () => (window as unknown as { app: { terminal: any } }).app.terminal.buffer.active.baseY
+    );
+    expect(baseYAfterTail).toBe(0);
+    // The prerequisite the guard answers: by the old rule this pane IS hollow.
+    expect(await page.evaluate(() => (window as unknown as { app: any }).app._localScrollbackIsHollow())).toBe(true);
+
+    // Record what the scroll sends to the CLI, then wheel up over the terminal.
+    await page.evaluate(() => {
+      const app = (window as unknown as { app: any }).app;
+      app.__sentToCli = [];
+      app._sendInputEphemeral = (_id: string, data: string) => app.__sentToCli.push(data);
+    });
+    log.length = 0;
+    const box = await page.locator('#terminalContainer').boundingBox();
+    if (!box) throw new Error('terminal container not laid out');
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.wheel(0, -400);
+    await page.waitForFunction(
+      () => (window as unknown as { app: { terminal: any } }).app.terminal.buffer.active.baseY > 0,
+      null,
+      { timeout: 10_000 }
+    );
+    expect(log).toEqual([`${inline}:full`]);
+
+    // The next gesture scrolls the recovered history itself: older text comes
+    // into view, nothing further is fetched, and the CLI still receives nothing
+    // (the page-key queue flushes 40 ms after a gesture, so settle first).
+    await page.mouse.wheel(0, -400);
+    await page.waitForFunction(
+      () => {
+        const b = (window as unknown as { app: { terminal: any } }).app.terminal.buffer.active;
+        return b.viewportY < b.baseY;
+      },
+      null,
+      { timeout: 10_000 }
+    );
+    await page.waitForTimeout(200);
+    const view = await page.evaluate(() => {
+      const t = (window as unknown as { app: { terminal: any } }).app.terminal;
+      const b = t.buffer.active;
+      const lines: string[] = [];
+      for (let i = b.viewportY; i < b.viewportY + t.rows; i++) lines.push(b.getLine(i)?.translateToString(true) ?? '');
+      return lines.join('\n');
+    });
+    expect(view).toContain('history line ');
+    expect(log).toEqual([`${inline}:full`]);
+    expect(await page.evaluate(() => (window as unknown as { app: any }).app.__sentToCli)).toEqual([]);
+
+    await deleteSession(page, inline);
+    await deleteSession(page, other);
+    await context.close();
+  }, 90_000);
+});

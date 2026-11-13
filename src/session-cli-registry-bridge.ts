@@ -17,12 +17,13 @@
  * @module session-cli-registry-bridge
  */
 
+import { getDiscordStartupHint } from './discord-bridge.js';
 import type { CliEntry } from './config/cli-registry/types.js';
 import { renderLaunch, type EngineValues, type ParamValues } from './config/cli-registry/argv.js';
 import { matchesPattern } from './config/cli-registry/patterns.js';
 import { buildAdvisorSettings, buildEffortCliArgs, sanitizeCliSessionName } from './session-cli-builder.js';
 import { compareVersions } from './utils/dependency-checker.js';
-import { getClaudeCliVersion } from './utils/claude-cli-resolver.js';
+import { resolveSessionCliVersion } from './utils/cli-resolver.js';
 import { launcherDefaultTarget } from './utils/cli-launcher.js';
 import { getCli } from './config/cli-registry/registry.js';
 import type {
@@ -33,6 +34,8 @@ import type {
   EffortLevel,
   GeminiConfig,
   GrokConfig,
+  CopilotConfig,
+  JcodeConfig,
   OmpConfig,
   OpenCodeConfig,
   PiConfig,
@@ -50,6 +53,8 @@ export interface SpawnBridgeOptions {
   antigravityConfig?: AntigravityConfig;
   piConfig?: PiConfig;
   grokConfig?: GrokConfig;
+  copilotConfig?: CopilotConfig;
+  jcodeConfig?: JcodeConfig;
   deepSeekConfig?: DeepSeekConfig;
   ompConfig?: OmpConfig;
   resumeSessionId?: string;
@@ -66,6 +71,12 @@ export interface SpawnBridgeOptions {
    * rendered as two independent params.
    */
   statusLineCommand?: string;
+  /**
+   * Add `idleCompaction: false` to the same `--settings` JSON: Codeman's prompt-cache keep-warm
+   * owns the idle policy for this launch. Decided (keep-warm on, exporter injected, version gate
+   * passed) by TmuxManager._resolveIdleCompactionOptOut, which records it on the mux record.
+   */
+  idleCompactionOff?: boolean;
 }
 
 /**
@@ -167,6 +178,30 @@ function resolveGatesPassed(entry: CliEntry, resolveVersion: () => string | null
 }
 
 /**
+ * Whether `mode`'s `capabilities.gates[gate]` passes, through the same fail-closed resolution
+ * the launch template uses (an unknown version passes no gate). For a launch-time decision that
+ * is also recorded, like the `idleCompaction` opt-out. `claudeCliVersion` as in
+ * SpawnBridgeOptions: undefined probes the local CLI, null means unknown.
+ */
+export function launchGatePasses(mode: string, gate: string, claudeCliVersion?: string | null): boolean {
+  const entry = getCli(mode);
+  if (!entry?.capabilities.gates[gate]) return false;
+  return resolveGatesPassed(entry, () => gateVersion(entry, claudeCliVersion)).has(gate);
+}
+
+/**
+ * The version a gate of `entry` is measured against: the caller's explicit value (tests, or
+ * null for "known unknown"), else THIS entry's own local CLI via resolveSessionCliVersion.
+ * ⚠️ Never `getClaudeCliVersion()` for every entry, which is what this used to do: codex's
+ * `noDaemonFlag` gate (0.162.0) would then have passed on any claude 2.x and handed an older
+ * codex a flag it exits on. resolveSessionCliVersion still routes claude to its own probe
+ * policy (`retryOnTransientFailure`), so a claude launch is unchanged.
+ */
+function gateVersion(entry: CliEntry, explicit: string | null | undefined): string | null {
+  return explicit !== undefined ? explicit : resolveSessionCliVersion(entry.id);
+}
+
+/**
  * Render the spawn command for `entry` from the legacy option bag. Returns `undefined` for a
  * `shell`-kind entry (or any entry declaring no launch variants), which callers take as "fall
  * back to the local login-shell resolution" — shell has no CLI to template.
@@ -206,10 +241,15 @@ export function buildSpawnCommandFromRegistry(entry: CliEntry, options: SpawnBri
   // rendering them as independent params would let the last one silently win. Claude-only in
   // practice: only claude's launch template renders this engine value, so another CLI's
   // session carrying an advisorModel launches exactly as before.
-  // Key order (ultracode, advisorModel, statusLine) keeps a launch without an advisor
-  // byte-identical to one from before the advisor existed.
+  // Key order (ultracode, advisorModel, statusLine, idleCompaction) keeps a launch without an
+  // advisor or keep-warm byte-identical to one from before either existed.
   const advisorSettings = buildAdvisorSettings(options.advisorModel);
-  if ((effortFlag === '--settings' && effortValue) || advisorSettings.advisorModel || options.statusLineCommand) {
+  if (
+    (effortFlag === '--settings' && effortValue) ||
+    advisorSettings.advisorModel ||
+    options.statusLineCommand ||
+    options.idleCompactionOff
+  ) {
     const settingsObj: Record<string, unknown> = {
       ...(effortFlag === '--settings' && effortValue ? JSON.parse(effortValue) : {}),
       ...advisorSettings,
@@ -217,17 +257,20 @@ export function buildSpawnCommandFromRegistry(entry: CliEntry, options: SpawnBri
     if (options.statusLineCommand) {
       settingsObj.statusLine = { type: 'command', command: options.statusLineCommand };
     }
+    if (options.idleCompactionOff) settingsObj.idleCompaction = false;
     engineValues.effortSettingsJson = JSON.stringify(settingsObj);
   }
 
-  // Preserves buildSpawnCommand's original fallback exactly: an EXPLICIT `undefined` probes
-  // the local claude CLI (getClaudeCliVersion, null under vitest); an explicit `null` means
-  // "known to be unresolvable" and must not probe. The probe only ever runs from
-  // resolveGatesPassed, and only for an entry that actually declares a gate, so this stays
-  // generic without spawning a stray `claude --version` for every other CLI's launch.
-  const gatesPassed = resolveGatesPassed(entry, () =>
-    options.claudeCliVersion !== undefined ? options.claudeCliVersion : getClaudeCliVersion()
-  );
+  // The Discord bridge's startup hint: undefined (so the flag is omitted) unless the bridge and its
+  // `startupHint` setting are on. Claude-only in practice, like the settings object above.
+  engineValues.appendSystemPrompt = getDiscordStartupHint();
+
+  // Preserves buildSpawnCommand's original fallback: an EXPLICIT `undefined` probes the
+  // entry's own local CLI (gateVersion: claude's probe for claude, the registry resolver for
+  // the rest, both null under vitest); an explicit `null` means "known to be unresolvable"
+  // and must not probe. The probe only ever runs from resolveGatesPassed, and only for an
+  // entry that actually declares a gate, so a CLI with none never spawns a `--version`.
+  const gatesPassed = resolveGatesPassed(entry, () => gateVersion(entry, options.claudeCliVersion));
 
   return renderLaunch(entry.launch, params, engineValues, gatesPassed);
 }

@@ -21,7 +21,7 @@ by sourcing the preamble file the §0 bootstrap wrote, and checking its version 
 
 ```bash
 . "${XDG_CACHE_HOME:-$HOME/.cache}/codeman-agent-$CODEMAN_SESSION_ID.sh" 2>/dev/null
-[ "${CODEMAN_PREAMBLE:-}" = 1.42.0 ] || { echo "preamble missing or stale; re-run the §0 bootstrap"; exit 1; }
+[ "${CODEMAN_PREAMBLE:-}" = 1.51.0 ] || { echo "preamble missing or stale; re-run the §0 bootstrap"; exit 1; }
 ```
 
 Do **not** re-paste the preamble body into each call. Sourcing it is what retires the
@@ -188,7 +188,7 @@ for _ in $(seq 1 10); do
 done
 printf '%s\n' "$TXT"
 #    (.data is {text,timestamp}; text is also "" before the first completed turn and
-#     always "" for shell/opencode/gemini/antigravity/pi/grok/omp, which have no transcript, use
+#     always "" for shell/opencode/gemini/antigravity/pi/grok/omp/copilot/jcode, which have no transcript, use
 #     the terminal tail there, and here only to diagnose an unsubmitted prompt.)
 
 # 6. clean up: exact id, own list only, through the fail-closed preamble helper

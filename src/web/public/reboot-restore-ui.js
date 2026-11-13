@@ -40,6 +40,8 @@ function rebootSkipReason(reason) {
       return 'already open';
     case 'capacity-reached':
       return 'session limit reached';
+    case 'local-model-not-ready':
+      return 'the local model is not ready';
     case 'rebuild-failed':
       return 'the agent would not start';
     default:

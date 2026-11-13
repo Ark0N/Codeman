@@ -27,7 +27,7 @@
  * @module config/attachment-guard
  */
 
-import { sep } from 'node:path';
+import { join, sep } from 'node:path';
 import { isSensitivePath } from '../web/sensitive-path.js';
 import { readJsonConfig, SETTINGS_PATH } from '../web/route-helpers.js';
 
@@ -126,8 +126,36 @@ export async function loadAttachmentGuardConfig(): Promise<AttachmentGuardConfig
  *
  * NOTE: this is intentionally a SUPERSET of `isSensitivePath` so `/api/download`
  * behavior is NOT changed — only attachment registration/serving uses this.
+ * `opts` passes through to `isSensitivePath` (the File Viewer editor's
+ * `allowDotenv`).
  */
-export function isBlockedAttachmentPath(absPath: string, blockedTrees: readonly string[]): boolean {
-  if (isSensitivePath(absPath)) return true;
+export function isBlockedAttachmentPath(
+  absPath: string,
+  blockedTrees: readonly string[],
+  opts: { allowDotenv?: boolean } = {}
+): boolean {
+  if (isSensitivePath(absPath, opts)) return true;
   return blockedTrees.some((tree) => isUnderTree(absPath, tree));
+}
+
+/**
+ * Like `isBlockedAttachmentPath`, for a directory. The sensitive patterns describe file locations
+ * such as ~/.ssh/<key>, so a child probe is what refuses a folder like ~/.ssh itself.
+ */
+export function isBlockedAttachmentDirectory(dir: string, blockedTrees: readonly string[]): boolean {
+  return (
+    isBlockedAttachmentPath(dir, blockedTrees) ||
+    isBlockedAttachmentPath(join(dir, '__codeman_blocked_dir_probe__'), blockedTrees)
+  );
+}
+
+/**
+ * True when the attachment guard refuses `root` as the root of a worktree outside the session
+ * folder: workspace confinement is on, the folder is blocked or sensitive, or it surrounds a
+ * blocked tree. `root` must be absolute and symlink-resolved.
+ */
+export function isOutsideWorktreeRootRefused(root: string, guard: AttachmentGuardConfig): boolean {
+  if (guard.confineToWorkspace) return true;
+  if (isBlockedAttachmentDirectory(root, guard.blockedTrees)) return true;
+  return guard.blockedTrees.some((tree) => isUnderTree(tree, root));
 }

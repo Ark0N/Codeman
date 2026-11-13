@@ -22,12 +22,19 @@
  */
 
 import { EventEmitter } from 'node:events';
-import { collectDescendants } from './proc-tree.js';
+import { collectDescendants, descendantsInPaneGroup } from './proc-tree.js';
+import {
+  foreignViewSessionName,
+  buildForeignDockerViewKillCommand,
+  buildForeignAttachCommand,
+  buildForeignDockerAttachCommand,
+  buildForeignRemoteAttachCommand,
+} from './foreign-tmux.js';
 import { execSync, exec, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const execAsync = promisify(exec);
-import { existsSync, readFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, mkdirSync, realpathSync } from 'node:fs';
 import { writeFile, rename } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { homedir } from 'node:os';
@@ -53,10 +60,13 @@ import {
   type AntigravityConfig,
   type PiConfig,
   type GrokConfig,
+  type CopilotConfig,
+  type JcodeConfig,
   type DeepSeekConfig,
   type OmpConfig,
   type SessionRemote,
   type SessionDocker,
+  type SessionAdopt,
   type DockerCommandMode,
   type PaneExit,
   type StatusLineExporter,
@@ -66,12 +76,15 @@ import { missingCliMessage, resolveCliBinDir } from './utils/cli-resolver.js';
 import {
   buildSpawnCommandFromRegistry,
   configSetenvValues,
+  launchGatePasses,
   legacyConfigForMode,
 } from './session-cli-registry-bridge.js';
+import { keepWarmOn } from './prompt-cache-keepwarm.js';
 import type { CliEntry } from './config/cli-registry/types.js';
 import {
   resolveStatusLineCliCommand,
   readPlanUsageTelemetryEnabled,
+  readKeepWarmSettings,
   findEffectiveUserStatusLineCommand,
 } from './hooks-config.js';
 import {
@@ -80,6 +93,7 @@ import {
   remoteLoginShellCommand,
   remoteSshTarget,
   remoteTmuxSessionAlive,
+  withRemoteTmuxPath,
 } from './remote-hosts.js';
 import {
   buildDockerBaseArgs,
@@ -124,6 +138,7 @@ import {
 
 import { EXEC_TIMEOUT_MS } from './config/exec-timeout.js';
 import { ensureDeepSeekStatusShim } from './deepseek-status-shim.js';
+import { NESTED_TMUX_PREFIX, nestedPrefixTableResetCommands, restrictTmuxPrefixTable } from './tmux-prefix-table.js';
 
 /** How long a cached process snapshot stays usable. */
 const PROC_SNAPSHOT_TTL_MS = 2000;
@@ -181,6 +196,22 @@ const DEFAULT_REMOTE_RECONNECT_INTERVAL_MS = 5000;
 
 /** Stable cwd for tmux server/pane launch; actual session cwd is reached inside the pane. */
 const TMUX_LAUNCH_CWD = '/tmp';
+
+/**
+ * TMUX_LAUNCH_CWD in every spelling a pane can report it. tmux reads a pane's
+ * directory from its process, which comes back resolved (`/private/tmp` on
+ * macOS, where `/tmp` is a symlink), so the literal and the resolved spelling
+ * both count. Computed once.
+ */
+const TMUX_LAUNCH_CWD_SPELLINGS: ReadonlySet<string> = (() => {
+  const spellings = new Set([TMUX_LAUNCH_CWD]);
+  try {
+    spellings.add(realpathSync(TMUX_LAUNCH_CWD));
+  } catch {
+    // Unresolvable launch directory: the literal spelling is all there is.
+  }
+  return spellings;
+})();
 
 /** Claude Code native macOS recommendation for avoiding low nofile startup failures. */
 export const CLAUDE_CODE_NOFILE_LIMIT = 2147483646;
@@ -251,10 +282,14 @@ const PANE_LIST_SEP = '|';
  * know a variable substitutes the empty string rather than failing, which is how
  * tmux 3.2a answers `#{pane_dead_signal}` (added in 3.4), and the parser reads a
  * short row as "pid known, deadness unknown" rather than discarding it.
+ *
+ * `#{pane_current_path}` comes last on purpose: a directory name may contain the
+ * separator, and only the final field can absorb it without ambiguity.
  */
 const PANE_LIST_FORMAT =
   `#{session_name}${PANE_LIST_SEP}#{pane_pid}` +
-  `${PANE_LIST_SEP}#{pane_dead}${PANE_LIST_SEP}#{pane_dead_status}${PANE_LIST_SEP}#{pane_dead_signal}`;
+  `${PANE_LIST_SEP}#{pane_dead}${PANE_LIST_SEP}#{pane_dead_status}${PANE_LIST_SEP}#{pane_dead_signal}` +
+  `${PANE_LIST_SEP}#{pane_current_path}`;
 
 /**
  * 构建 pane 启动前的 nofile 修复命令。
@@ -281,6 +316,8 @@ export interface PaneRow {
   exitStatus?: number;
   /** `#{pane_dead_signal}` — the killing signal, absent before tmux 3.4 and when unsignalled. */
   exitSignal?: number;
+  /** `#{pane_current_path}` — the pane's current directory, absent when tmux reported none. */
+  currentPath?: string;
 }
 
 /**
@@ -346,6 +383,8 @@ export function parsePaneRows(output: string): PaneRow[] {
       dead: deadFlag === '1' ? true : deadFlag === '0' ? false : undefined,
       exitStatus: paneField(fields, 3),
       exitSignal: paneField(fields, 4),
+      // Everything after the fifth separator, so a path containing `|` stays whole.
+      currentPath: fields.slice(5).join(PANE_LIST_SEP) || undefined,
     });
   }
   return rows;
@@ -393,14 +432,55 @@ export function derivePaneExits(rows: PaneRow[], now: number): Map<string, PaneE
 }
 
 /**
+ * Decide, from every pane tmux listed, which directory each tmux session's pane
+ * is in now (`#{pane_current_path}`). Exported for unit testing.
+ *
+ * This is what a relative path printed in the terminal is relative TO: a
+ * session's `workingDir` is fixed at create time and never follows a `cd`.
+ *
+ * - Only sessions with EXACTLY ONE pane answer, for the reason
+ *   {@link derivePaneExits} gives: a hand-split session has no single "the"
+ *   pane to speak for it.
+ * - Only absolute paths count. A blank field is a tmux that could not read the
+ *   process cwd: usually a pane whose program exited under `remain-on-exit`
+ *   (tmux 3.4 then reports it blank on every read), otherwise a read that
+ *   failed that tick. Either way the directory is unknown, not gone, so a
+ *   single-pane session with a blank field keeps its entry from `previous`.
+ *   A session split into several panes, or one the read no longer lists, gets
+ *   no entry: those are authoritative absences, not unanswered questions.
+ *
+ * The launch directory is NOT filtered here (unlike the rediscovery path): a
+ * remote or docker pane that never leaves it is refused by `Session.setPaneCwd()`,
+ * and a local pane reporting it really is there.
+ */
+export function derivePaneCurrentPaths(
+  rows: PaneRow[],
+  previous: ReadonlyMap<string, string> = new Map()
+): Map<string, string> {
+  const panesPerSession = new Map<string, number>();
+  for (const row of rows) {
+    panesPerSession.set(row.sessionName, (panesPerSession.get(row.sessionName) ?? 0) + 1);
+  }
+  const paths = new Map<string, string>();
+  for (const row of rows) {
+    if (panesPerSession.get(row.sessionName) !== 1) continue;
+    const path = row.currentPath ?? previous.get(row.sessionName);
+    if (!path || !path.startsWith('/')) continue;
+    paths.set(row.sessionName, path);
+  }
+  return paths;
+}
+
+/**
  * Could any of these tmux sessions ever produce a pane-exit answer? Exported
  * for unit testing.
  *
  * Mirrors `Session.paneExitApplies`, which is where the rule is enforced. A
  * remote session's local pane holds the ssh client, a docker case's holds a
- * `docker exec` into the container's own tmux, and a record rebuilt from the
- * socket carries no provenance at all, so the session end forces all three to
- * UNKNOWN whatever tmux reports. A tick that sees only those has nothing to
+ * `docker exec` into the container's own tmux, an ADOPTED session's holds a
+ * `tmux attach` to a session a human started rather than the agent itself, and
+ * a record rebuilt from the socket carries no provenance at all, so the session
+ * end forces all four to UNKNOWN whatever tmux reports. A tick that sees only those has nothing to
  * learn, and `refreshPaneExits()` skips its tmux read rather than paying for
  * the answer.
  *
@@ -413,10 +493,24 @@ export function hasObservablePaneSession(sessions: Iterable<MuxSession>): boolea
   for (const session of sessions) {
     if (session.remote) continue;
     if (session.docker) continue;
+    if (session.adopt) continue;
     if (session.discovered === true) continue;
     return true;
   }
   return false;
+}
+
+/**
+ * Which adopted wrappers have a dead pane with a tmux client still attached, from rows of
+ * `#{pane_dead} #{session_attached} #{session_name}`. Exported for unit testing.
+ */
+export function endedAdoptedAttaches(rows: string, adopted: ReadonlySet<string>): string[] {
+  const ended: string[] = [];
+  for (const row of rows.split('\n')) {
+    const [dead, attached, muxName] = row.trim().split(' ');
+    if (dead === '1' && Number(attached) > 0 && adopted.has(muxName)) ended.push(muxName);
+  }
+  return ended;
 }
 
 /**
@@ -450,9 +544,11 @@ export interface PasteTextCommands {
 
 /**
  * Escape a final `;` for tmux. tmux splits commands on an argument that ENDS in
- * `;` (`set-buffer -- 'a;'` stores `a`, `send-keys -l 'a;'` types `a`, a lone `;`
+ * `;` (`set-buffer -- 'a;'` stores `a`, `send-keys -l -- 'a;'` types `a`, a lone `;`
  * is no argument at all); a final `\;` is its escape for a literal `;`. A `;`
- * anywhere else in the argument is literal already. Exported for unit testing.
+ * anywhere else in the argument is literal already. Every `send-keys -l` passes
+ * `--` before the text, like `set-buffer`, or tmux parses a text that starts with
+ * `-` as its own options. Exported for unit testing.
  */
 export function escapeTmuxTrailingSemicolon(text: string): string {
   return text.endsWith(';') ? `${text.slice(0, -1)}\\;` : text;
@@ -952,6 +1048,20 @@ export function formatCursorRestore(geometry: PaneCursorGeometry): string {
   return `${up > 0 ? `\x1b[${up}A` : ''}\r${right > 0 ? `\x1b[${right}C` : ''}`;
 }
 
+/**
+ * Split the output of `capture-pane -p \; display-message -p '<cursor format>'`
+ * into the captured rows and the cursor line, which tmux prints last. Null unless
+ * that last line has the cursor query's shape (four leading integers), so a query
+ * that printed nothing can never have the frame's own last row taken for it.
+ */
+export function splitFrameAndCursor(output: string): { frame: string; cursor: string } | null {
+  const body = output.endsWith('\n') ? output.slice(0, -1) : output;
+  const split = body.lastIndexOf('\n');
+  const cursor = body.slice(split + 1);
+  if (!/^\d+ \d+ \d+ \d+(?: |$)/.test(cursor)) return null;
+  return { frame: body.slice(0, split + 1), cursor };
+}
+
 export function formatPaneSnapshot(
   lines: string[],
   geometry: { cols: number; rows: number; cursorX: number; cursorY: number }
@@ -1069,6 +1179,28 @@ export function buildCodexCommand(config?: CodexConfig): string {
   return buildSpawnCommandFromRegistry(entry, { mode: 'codex', sessionId: '', codexConfig: config }) ?? 'codex';
 }
 
+/**
+ * Whether a launch carries `idleCompaction: false` in its one `--settings` JSON: keep-warm on
+ * at launch (`keepWarmOn`), the statusLine exporter injected (without its `prompt_cache` reports
+ * keep-warm cannot run, and the opt-out alone would only cost the user Claude Code's own idle
+ * compaction), and the CLI's `idleCompactionSetting` gate passed, fail-closed like `--name`:
+ * an unknown version means no key. Pure; `claudeCliVersion` as in buildSpawnCommand.
+ */
+export function decideIdleCompactionOptOut(o: {
+  mode: SessionMode;
+  statusLine: StatusLineExporter | undefined;
+  keepWarm: boolean | undefined;
+  keepWarmDefault: boolean;
+  spawnedByAgent: boolean | undefined;
+  claudeCliVersion?: string | null;
+}): boolean {
+  return (
+    o.statusLine === 'injected' &&
+    keepWarmOn(o.keepWarm, o.keepWarmDefault, !!o.spawnedByAgent) &&
+    launchGatePasses(o.mode, 'idleCompactionSetting', o.claudeCliVersion)
+  );
+}
+
 export function buildSpawnCommand(options: {
   mode: SessionMode;
   sessionId: string;
@@ -1081,6 +1213,8 @@ export function buildSpawnCommand(options: {
   antigravityConfig?: AntigravityConfig;
   piConfig?: PiConfig;
   grokConfig?: GrokConfig;
+  copilotConfig?: CopilotConfig;
+  jcodeConfig?: JcodeConfig;
   deepSeekConfig?: DeepSeekConfig;
   ompConfig?: OmpConfig;
   resumeSessionId?: string;
@@ -1089,11 +1223,14 @@ export function buildSpawnCommand(options: {
   advisorModel?: string;
   /** Resolved by resolveStatusLineCliCommand (hooks-config.ts) — undefined skips the exporter. Claude only. */
   statusLineCommand?: string;
-  /** Name pinned on claude as `--name` (version-gated, sanitized; local spawns only). Only a user-chosen name: see `Session.cliPinnedName`. */
+  /** Add `idleCompaction: false` to the launch's one `--settings` JSON (see decideIdleCompactionOptOut). */
+  idleCompactionOff?: boolean;
+  /** Name pinned on claude as `--name` (version-gated, sanitized; local spawns only). By default only a user-chosen name; `pinCliSessionName` pins every tab name: see `Session.cliPinnedName`. */
   sessionName?: string;
   /**
-   * Claude CLI version for the `--name` gate. Omitted = probe the local CLI
-   * (getClaudeCliVersion; null under vitest). Tests inject a value here; the
+   * CLI version for the launch template's version gates (claude's `--name`, codex's
+   * `--no-daemon`). Omitted = probe the mode's own local CLI (resolveSessionCliVersion;
+   * null under vitest). The name predates the second gated CLI. Tests inject a value here; the
    * docker/remote paths never see this builder's output, which is what keeps the
    * gate measuring the RIGHT binary, the local one.
    */
@@ -1173,9 +1310,14 @@ export function remoteTmuxLocation(remote: SessionRemote, sessionId: string): { 
  *
  * Emits:
  *   ssh -o BatchMode=yes -t [<COD-107 connection opts>] user@host \
- *     'tmux -L codeman-remote new-session -A -s codeman-ssh-<id> -c <path> "cd <path> && exec <cli>" \
+ *     'tmux -L codeman-remote new-session -A -s codeman-ssh-<id> -c <path> /bin/sh -c <pane-command> \
  *        \; set -t codeman-ssh-<id> status off \; set -t codeman-ssh-<id> mouse off \
- *        \; set -t codeman-ssh-<id> prefix C-q \; set -s escape-time 0'
+ *        \; set -t codeman-ssh-<id> prefix C-q \; set -s escape-time 0 \; \
+ *        bind-key -T prefix C-q send-prefix \; unbind-key -a -T prefix \; \
+ *        bind-key -T prefix C-q send-prefix \; set -t codeman-ssh-<id> remain-on-exit failed'
+ *
+ * `<pane-command>` is `cd <path> && exec <cli>`, quoted as one token. A per-host `commands.*`
+ * override is that one token alone, with no `/bin/sh -c` in front of it.
  *
  * COD-107 — the connection options (`-p`, `-i`, `-J`, SOCKS `-o ProxyCommand`,
  * arbitrary `-o`) come from the shared `buildSshConnectionArgs(remote)`, so the
@@ -1190,10 +1332,12 @@ export function remoteTmuxLocation(remote: SessionRemote, sessionId: string): { 
  * - The `set` options are scoped per-session (`set -t <name>` / server-level
  *   `set -s`), never `-g`, so they never mutate other sessions' prefix/mouse.
  * - The whole tmux invocation is a SINGLE ssh argument (the remote login shell
- *   runs it), so it is shell-quoted as one unit; the `cd && exec` command is in
- *   turn a single tmux argument (tmux runs it via `/bin/sh -c`), so the path is
- *   shell-quoted inside it too. This keeps escaping correct through every layer
- *   even when the remote path contains spaces.
+ *   runs it), so it is shell-quoted as one unit. The `cd && exec` command is the
+ *   pane command: Codeman's own text goes to `/bin/sh -c` as separate tmux
+ *   arguments, and a per-host `commands.*` override stays one argument, which
+ *   tmux hands to the remote default-shell (see the comment at `paneCommand`).
+ *   Each is shell-quoted, so escaping stays correct through every layer even
+ *   when the remote path contains spaces.
  */
 export function buildRemoteLaunchCommand(options: {
   mode: SessionMode;
@@ -1210,9 +1354,9 @@ export function buildRemoteLaunchCommand(options: {
   // hardcoding --dangerously-skip-permissions, so a non-granted multi-user user's
   // downgraded 'auto' actually reaches the remote agent (the default command otherwise
   // ignored claudeMode). A per-host `commands.claude` override stays authoritative
-  // (admin's explicit choice). Wrapped in `$SHELL -i -l -c` for the same reason as
-  // `defaultRemoteCommandForMode`: `claude` lives under a per-user PATH entry that
-  // only an interactive login shell resolves (see that function's comment).
+  // (admin's explicit choice). Wrapped in the login shell (`remoteLoginShellCommand`) for
+  // the same reason as `defaultRemoteCommandForMode`: `claude` lives under a per-user PATH
+  // entry that only an interactive login shell resolves (see that function's comment).
   const override = remote.commands?.[mode];
   let modeCommand: string;
   if (override) {
@@ -1276,20 +1420,28 @@ export function buildRemoteLaunchCommand(options: {
   }
   const remoteName = remoteTmuxSessionName(sessionId);
 
-  // Innermost: the command tmux runs in the new pane. Run via `/bin/sh -c` by
-  // tmux, so the path needs shell-quoting here. `exec` replaces the shell with
-  // the CLI so the pane PID is the agent itself.
+  // Innermost: the command tmux runs in the new pane. `exec` replaces the shell
+  // with the CLI so the pane PID is the agent itself.
+  //
+  // tmux runs a ONE-argument command through the remote default-shell, which is
+  // the user's login shell, and bypasses it for two or more arguments (both
+  // measured on tmux 3.4). Codeman's own text is POSIX (`"${SHELL:-/bin/sh}"` is
+  // a parse error in fish, status 127, a dead pane on every new session), so it
+  // goes to `/bin/sh -c` as separate arguments and no login shell has to parse it.
+  // An override is the user's own text for THEIR shell: it stays one argument,
+  // because `source` and `[[` work in bash and zsh and die in a dash `/bin/sh`.
   const paneCommand = `cd ${shellescape(remote.remotePath)} && ${modeCommand}`;
+  const paneArgv = `${override ? '' : '/bin/sh -c '}${shellescape(paneCommand)}`;
 
   // The tmux command line, with `\;` separating commands so the config `set`s
   // apply on the SAME connection (and are idempotent on reattach). Options are
   // scoped per-session (`set -t <name>` / server `set -s`), NEVER `-g`, so a
   // shared remote tmux server's other sessions keep their own prefix/mouse.
   const tmuxInvocation = [
-    `tmux -L ${REMOTE_TMUX_SOCKET} new-session -A -s ${remoteName} -c ${shellescape(remote.remotePath)} ${shellescape(paneCommand)}`,
+    `tmux -L ${REMOTE_TMUX_SOCKET} new-session -A -s ${remoteName} -c ${shellescape(remote.remotePath)} ${paneArgv}`,
     `set -t ${remoteName} status off`,
     `set -t ${remoteName} mouse off`,
-    `set -t ${remoteName} prefix C-q`,
+    `set -t ${remoteName} prefix ${NESTED_TMUX_PREFIX}`,
     'set -s escape-time 0',
     // COD-106 — shared/collaborative sessions: tmux defaults to sizing a window
     // to the SMALLEST attached client, so two Codemans at different viewports
@@ -1298,6 +1450,15 @@ export function buildRemoteLaunchCommand(options: {
     // Per-session scoped (`set -t <name>`, matching #145's hardening) so a shared
     // remote tmux server's other sessions keep their own sizing behavior.
     `set -t ${remoteName} window-size latest`,
+    // The prefix TABLE is server-global (unlike `prefix C-q`, which is per
+    // session). This socket is dedicated to Codeman's owned sessions, so the
+    // same reduction as the local socket applies: Ctrl+Q then )/(/s/w/L must
+    // not switch-client / choose-tree onto a sibling. Bind, then unbind-all,
+    // then bind again: a user config that left the prefix table empty makes
+    // `unbind-key -a -T prefix` fail and abort the rest of this chain.
+    // BEFORE remain-on-exit, which stays last because an old remote tmux
+    // rejects `failed` and aborts the rest of the chain.
+    ...nestedPrefixTableResetCommands(),
     // #210: keep a CRASHED pane so the failure is still on screen. Without this,
     // tmux destroys the pane -> window -> session (and, being the only session,
     // the whole remote server) the instant the pane command exits, which tears the
@@ -1314,7 +1475,8 @@ export function buildRemoteLaunchCommand(options: {
     // LAST in the chain on purpose: tmux aborts the remaining commands of a `\;`
     // sequence once one errors (also verified), and `failed` needs tmux >= 3.2 on
     // the REMOTE host. Trailing, a rejection costs only this option; leading, it
-    // would silently drop status/mouse/prefix/escape-time/window-size with it.
+    // would silently drop status/mouse/prefix/escape-time/window-size and the
+    // prefix-table reduction with it.
     `set -t ${remoteName} remain-on-exit failed`,
   ].join(' \\; ');
 
@@ -1327,7 +1489,14 @@ export function buildRemoteLaunchCommand(options: {
   // `ssh -o BatchMode=yes` (preserving the historical token order), then the rest
   // of the connection args, then the target and the quoted tmux invocation.
   const [ssh, batchMode, ...connectionArgs] = buildSshConnectionArgs(remote);
-  const sshParts = [ssh, batchMode, '-t', ...connectionArgs, remoteSshTarget(remote), shellescape(tmuxInvocation)];
+  const sshParts = [
+    ssh,
+    batchMode,
+    '-t',
+    ...connectionArgs,
+    remoteSshTarget(remote),
+    shellescape(withRemoteTmuxPath(tmuxInvocation)),
+  ];
   return sshParts.join(' ');
 }
 
@@ -1344,7 +1513,7 @@ export function buildRemoteKillCommand(options: { remote: SessionRemote; session
   const remoteName = remoteTmuxSessionName(sessionId);
   const killCmd = `tmux -L ${REMOTE_TMUX_SOCKET} kill-session -t ${shellescape(remoteName)}`;
   const [ssh, ...connectionArgs] = buildSshConnectionArgs(remote);
-  return [ssh, ...connectionArgs, remoteSshTarget(remote), shellescape(killCmd)].join(' ');
+  return [ssh, ...connectionArgs, remoteSshTarget(remote), shellescape(withRemoteTmuxPath(killCmd))].join(' ');
 }
 
 // ========== Docker cases (COD-Docker) ==========
@@ -1444,7 +1613,7 @@ export interface DockerLaunchOptions {
  * Build the ONE `bash -c` launch string for a docker session: image-check ->
  * ensure (inspect-or-create) -> start -> `exec docker exec -it` into the durable
  * in-container tmux (resume-aware). PURE and unit-testable. The escaping survives
- * four layers: outer `bash -c "…"` (JSON.stringify at respawn-pane) -> the joined
+ * four layers: outer `bash -c '…'` (`bashCArg()` at respawn-pane) -> the joined
  * command -> `docker exec … sh -lc '<tmux>'` -> tmux `'<paneCommand>'`.
  */
 export function buildDockerLaunchCommand(opts: DockerLaunchOptions): string {
@@ -1472,8 +1641,8 @@ export function buildDockerLaunchCommand(opts: DockerLaunchOptions): string {
   } else if (resumeSessionId) {
     modeCommand = appendResumeFlag(modeCommand, mode, resumeSessionId);
   }
-  // Run by tmux via /bin/sh -c, so the path is shell-quoted here. `exec` makes the
-  // pane PID the agent itself.
+  // Run by tmux through the container's default-shell, so the path is shell-quoted
+  // here. `exec` makes the pane PID the agent itself.
   const paneCommand = `cd ${workdir} && ${modeCommand}`;
 
   // `setenv -g` primes the session id so reattaches / newly-created panes inherit
@@ -1486,8 +1655,12 @@ export function buildDockerLaunchCommand(opts: DockerLaunchOptions): string {
     `new-session -A -s ${dkrName} -c ${workdir} ${shellescape(paneCommand)}`,
     `set -t ${dkrName} status off`,
     `set -t ${dkrName} mouse off`,
-    `set -t ${dkrName} prefix C-q`,
+    `set -t ${dkrName} prefix ${NESTED_TMUX_PREFIX}`,
     'set -s escape-time 0',
+    // Same reduction as the owned-remote chain: the in-container server is
+    // Codeman's (`-L codeman-docker`), and its stock prefix table would move
+    // the inner client to a sibling session on Ctrl+Q then )/(/s/w/L.
+    ...nestedPrefixTableResetCommands(),
   ].join(' \\; ');
 
   const execEnvFlags: string[] = [];
@@ -1531,11 +1704,10 @@ export function buildDockerLaunchCommand(opts: DockerLaunchOptions): string {
   const ensure = adopted
     ? `${base} inspect ${name} >/dev/null 2>&1 || { echo ${notFoundMsg}; exit 1; }`
     : `${base} inspect ${name} >/dev/null 2>&1 || ${createCommand}`;
-  // ⚠️ No double quotes and no `$(…)` in the ADOPTED arms. This whole chain is
-  // embedded in an outer `bash -c "…"`, so an unescaped `"` closes that string early,
-  // the rest is re-tokenized, and tmux fails to exec with a bare `execvp(3) failed`.
-  // A `grep -qx` pipeline reads the same answer using only the single-quoted form
-  // every other line in this builder already uses.
+  // A `grep -qx` pipeline, in the single-quoted form every other line in this builder
+  // uses. This chain reaches `bash -c` verbatim now (`bashCArg()`), but it went through
+  // a double-quoted layer for a long time, where a `"` closed that string early and tmux
+  // failed with a bare `execvp(3) failed`, so keep it free of double quotes and `$(…)`.
   const start = adopted
     ? `${base} inspect -f ${shellescape('{{.State.Running}}')} ${name} 2>/dev/null | grep -qx true || { echo ${notRunningMsg}; exit 1; }`
     : `${base} start ${name} >/dev/null 2>&1 || { echo ${startFailMsg}; exit 1; }`;
@@ -1723,7 +1895,14 @@ export function resolveDockerLaunchOptions(
 export function buildRemoteAttachCommand(remote: SessionRemote, remoteSessionName: string): string {
   const tmuxInvocation = `tmux -L codeman attach -t ${shellescape(remoteSessionName)}`;
   const [ssh, batchMode, ...connectionArgs] = buildSshConnectionArgs(remote);
-  const sshParts = [ssh, batchMode, '-t', ...connectionArgs, remoteSshTarget(remote), shellescape(tmuxInvocation)];
+  const sshParts = [
+    ssh,
+    batchMode,
+    '-t',
+    ...connectionArgs,
+    remoteSshTarget(remote),
+    shellescape(withRemoteTmuxPath(tmuxInvocation)),
+  ];
   return sshParts.join(' ');
 }
 
@@ -1751,6 +1930,45 @@ function buildRemoteSessionCommand(options: {
     return buildRemoteAttachCommand(remote, target);
   }
   return buildRemoteLaunchCommand(options);
+}
+
+/**
+ * ADOPTION: the pane command for a wrapper session around a tmux session a
+ * human started. Sibling of `buildRemoteSessionCommand` and
+ * `buildDockerLaunchCommand`, and the same shape of decision: the wrapper is an
+ * ordinary `codeman-<8hex>` session on OUR socket, and only what runs INSIDE its
+ * pane differs per location.
+ *
+ * That indirection is what makes adoption safe by construction rather than by
+ * discipline: `killSession` only ever kills the wrapper on our own socket, so
+ * there is no shape of caller bug that reaches the foreign server with a
+ * `kill-session`. It is the same reasoning that keeps a non-owned REMOTE session
+ * safe (see the detach-not-kill early return in `killSession`).
+ */
+export function buildAdoptSessionCommand(adopt: SessionAdopt, sessionId: string): string {
+  const target = {
+    socketPath: adopt.socketPath,
+    targetSession: adopt.targetSession,
+    // Derived rather than required: the view name is a function of the Codeman
+    // session id, so a record that predates it (or one whose creator filled it in
+    // after construction) still produces the right name instead of an empty `-s`.
+    viewSession: adopt.viewSession || foreignViewSessionName(sessionId),
+  };
+  if (adopt.location === 'docker' && adopt.docker) {
+    return buildForeignDockerAttachCommand({
+      ...target,
+      dockerBase: buildDockerBaseArgs(adopt.docker).join(' '),
+      containerName: adopt.docker.containerName,
+    });
+  }
+  if (adopt.location === 'remote' && adopt.remote) {
+    return buildForeignRemoteAttachCommand({
+      ...target,
+      sshArgs: buildSshConnectionArgs(adopt.remote),
+      sshTarget: remoteSshTarget(adopt.remote),
+    });
+  }
+  return buildForeignAttachCommand(target);
 }
 
 /**
@@ -1904,6 +2122,13 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    * raw pane reading.
    */
   private paneExits: Map<string, TrackedPaneExit> = new Map();
+  /**
+   * muxName -> `#{pane_current_path}` from the last authoritative pane read
+   * ({@link derivePaneCurrentPaths}). Replaced wholesale by each non-empty read,
+   * so it is bounded by the panes on the socket. Like {@link paneExits} it holds
+   * the raw reading; `Session.setPaneCwd()` decides which sessions may use it.
+   */
+  private paneCurrentPaths: Map<string, string> = new Map();
   /** The pane-exit watcher's own interval. Runs whether or not stats are on. */
   private paneExitInterval: NodeJS.Timeout | null = null;
   /**
@@ -2265,6 +2490,28 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
   }
 
   /**
+   * Whether this launch carries `idleCompaction: false` (decideIdleCompactionOptOut), with the
+   * keep-warm app default read fresh like the plan-usage switch above. Logged when keep-warm is
+   * on but the version gate keeps the key off, so a session that may still idle-compact says why.
+   */
+  private async _resolveIdleCompactionOptOut(
+    mode: SessionMode,
+    statusLine: StatusLineExporter | undefined,
+    keepWarm: boolean | undefined,
+    spawnedByAgent: boolean | undefined
+  ): Promise<boolean> {
+    if (statusLine !== 'injected') return false; // no settings read for a launch that can never carry it
+    const { keepWarmDefault } = await readKeepWarmSettings();
+    const off = decideIdleCompactionOptOut({ mode, statusLine, keepWarm, keepWarmDefault, spawnedByAgent });
+    if (!off && keepWarmOn(keepWarm, keepWarmDefault, !!spawnedByAgent)) {
+      console.log(
+        `[TmuxManager] Keep-warm is on but Claude Code's version is unknown or predates the idleCompaction setting; launching without the opt-out`
+      );
+    }
+    return off;
+  }
+
+  /**
    * Export the user's own REAL statusLine command (found by
    * findEffectiveUserStatusLineCommand) via tmux setenv, so the shared
    * exporter script (statusLineExporterScriptContent in hooks-config.ts) can
@@ -2317,15 +2564,20 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       antigravityConfig,
       piConfig,
       grokConfig,
+      copilotConfig,
+      jcodeConfig,
       deepSeekConfig,
       ompConfig,
       resumeSessionId,
       envOverrides,
       effort,
       advisorModel,
+      keepWarm,
+      spawnedByAgent,
       historyLimit = DEFAULT_TMUX_HISTORY_LIMIT,
       remote,
       docker,
+      adopt,
       owner,
     } = options;
     const muxName = `codeman-${sessionId.slice(0, 8)}`;
@@ -2347,6 +2599,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         workingDir,
         remote,
         docker,
+        adopt,
         owner,
         mode,
         attached: false,
@@ -2373,7 +2626,13 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     // surfacing as a bare `execvp(3) failed: No such file or directory` with nothing
     // pointing at the real cause. The container's own CLIs are verified by the adoption
     // preflight / image gate before launch instead.
-    const cliRunsInContainer = !!docker;
+    //
+    // ⚠️ Skipped for an ADOPTED session for the mirror-image reason: its CLI was started by
+    // a human in a process we did not spawn, and our pane only runs `tmux attach`. Requiring
+    // the binary here would reject adopting a claude that lives in a container or on an ssh
+    // host, and (worse) reject a LOCAL adoption whenever the agent is outside the server
+    // process's PATH, which is the usual systemd/launchd situation.
+    const cliRunsInContainer = !!docker || !!adopt;
     if (!cliRunsInContainer && !cliDir) {
       const message = missingCliMessage(mode);
       if (message) throw new Error(message);
@@ -2384,8 +2643,10 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     const { command: statusLineCommand, state: statusLine } = await this._resolveStatusLine(
       mode,
       workingDir,
-      !!(remote || docker)
+      // An adopted wrapper launches no agent, so nothing can carry the exporter.
+      !!(remote || docker || adopt)
     );
+    const idleCompactionOff = await this._resolveIdleCompactionOptOut(mode, statusLine, keepWarm, spawnedByAgent);
     // The user's own REAL statusLine, if any (walked via Claude Code's own
     // settings precedence) — exported below so the shared exporter script
     // can wrap it. Only worth discovering when we're actually injecting.
@@ -2403,12 +2664,15 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       antigravityConfig,
       piConfig,
       grokConfig,
+      copilotConfig,
+      jcodeConfig,
       deepSeekConfig,
       ompConfig,
       resumeSessionId,
       effort,
       advisorModel,
       statusLineCommand,
+      idleCompactionOff,
       sessionName: cliName,
     });
 
@@ -2418,11 +2682,21 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     try {
       // Build the full command to run inside tmux
       const localFullCmd = `${buildNofileLimitCommand()} && ${pathExport}${envExportsStr} && ${cmd}`;
-      const fullCmd = docker
-        ? buildDockerLaunchCommand(resolveDockerLaunchOptions(mode, docker, sessionId, resumeSessionId))
-        : remote
-          ? buildRemoteSessionCommand({ mode, remote, sessionId, claudeMode, allowedTools, ompConfig, resumeSessionId })
-          : localFullCmd;
+      const fullCmd = adopt
+        ? buildAdoptSessionCommand(adopt, sessionId)
+        : docker
+          ? buildDockerLaunchCommand(resolveDockerLaunchOptions(mode, docker, sessionId, resumeSessionId))
+          : remote
+            ? buildRemoteSessionCommand({
+                mode,
+                remote,
+                sessionId,
+                claudeMode,
+                allowedTools,
+                ompConfig,
+                resumeSessionId,
+              })
+            : localFullCmd;
 
       // Create tmux session in three steps to handle cold-start (no server running)
       // and avoid the race where the command exits before remain-on-exit is set:
@@ -2463,6 +2737,10 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         /* Non-critical */
       }
 
+      // Browser keystrokes reach the attach client, so tmux's stock prefix table would
+      // let Ctrl+B ( or s move a tab onto another session. Before the agent starts.
+      restrictTmuxPrefixTable(this.tmux());
+
       // Per-CLI env: API keys, config blobs, config-sourced vars, status bridges. All of
       // it is registry data, so this is one unconditional call rather than a per-mode ladder.
       this._configureCliEnv(
@@ -2479,9 +2757,11 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
       // Replace the shell with the actual command (no echo in terminal). Keep
       // pane launch in /tmp, then cd inside bash against the current mount table.
-      const launchCmd = remote || docker ? fullCmd : `cd ${JSON.stringify(workingDir)} && ${fullCmd}`;
+      // ⚠️ An adopted pane is never `cd`'d: it only attaches, and its `workingDir`
+      // is the neutral wrapper folder, not where the foreign pane is.
+      const launchCmd = remote || docker || adopt ? fullCmd : `cd ${JSON.stringify(workingDir)} && ${fullCmd}`;
       execSync(
-        `${this.tmux()} respawn-pane -k -c ${TMUX_LAUNCH_CWD} -t "${muxName}" bash -c ${JSON.stringify(launchCmd)}`,
+        `${this.tmux()} respawn-pane -k -c ${TMUX_LAUNCH_CWD} -t "${muxName}" bash -c ${bashCArg(launchCmd, !!(remote || docker || adopt))}`,
         {
           timeout: EXEC_TIMEOUT_MS,
           stdio: 'ignore',
@@ -2545,11 +2825,13 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         workingDir,
         remote,
         docker,
+        adopt,
         owner,
         mode,
         attached: false,
         name,
         statusLine,
+        idleCompactionOff,
       };
 
       this.sessions.set(sessionId, session);
@@ -2652,6 +2934,8 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       antigravityConfig,
       piConfig,
       grokConfig,
+      copilotConfig,
+      jcodeConfig,
       deepSeekConfig,
       ompConfig,
       resumeSessionId,
@@ -2659,12 +2943,19 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       unsetEnvKeys,
       effort,
       advisorModel,
+      keepWarm,
+      spawnedByAgent,
       remote,
       docker,
       cliName,
     } = options;
     const session = this.sessions.get(sessionId);
     if (!session) return null;
+    // Adoption metadata comes from the tracked session, not the caller: a respawn
+    // of an adopted wrapper RE-ATTACHES to the same foreign target. It must never
+    // be able to become "launch a fresh agent here" because a caller forgot to
+    // pass the field through.
+    const adopt = options.adopt ?? session.adopt;
     const muxName = session.muxName;
 
     if (!isValidMuxName(muxName) || !isValidPath(workingDir)) return null;
@@ -2677,8 +2968,10 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     const { command: statusLineCommand, state: statusLine } = await this._resolveStatusLine(
       mode,
       workingDir,
-      !!(remote || docker)
+      // An adopted wrapper launches no agent, so nothing can carry the exporter.
+      !!(remote || docker || adopt)
     );
+    const idleCompactionOff = await this._resolveIdleCompactionOptOut(mode, statusLine, keepWarm, spawnedByAgent);
     const userStatusLineCommand = statusLineCommand ? await findEffectiveUserStatusLineCommand(workingDir) : undefined;
 
     const baseCmd = buildSpawnCommand({
@@ -2693,22 +2986,27 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       antigravityConfig,
       piConfig,
       grokConfig,
+      copilotConfig,
+      jcodeConfig,
       deepSeekConfig,
       ompConfig,
       resumeSessionId,
       effort,
       advisorModel,
       statusLineCommand,
+      idleCompactionOff,
       sessionName: cliName,
     });
     const config = niceConfig || DEFAULT_NICE_CONFIG;
     const cmd = wrapWithNice(baseCmd, config);
     const localFullCmd = `${buildNofileLimitCommand()} && ${pathExport}${envExportsStr} && ${cmd}`;
-    const fullCmd = docker
-      ? buildDockerLaunchCommand(resolveDockerLaunchOptions(mode, docker, sessionId, resumeSessionId))
-      : remote
-        ? buildRemoteSessionCommand({ mode, remote, sessionId, claudeMode, allowedTools, ompConfig, resumeSessionId })
-        : localFullCmd;
+    const fullCmd = adopt
+      ? buildAdoptSessionCommand(adopt, sessionId)
+      : docker
+        ? buildDockerLaunchCommand(resolveDockerLaunchOptions(mode, docker, sessionId, resumeSessionId))
+        : remote
+          ? buildRemoteSessionCommand({ mode, remote, sessionId, claudeMode, allowedTools, ompConfig, resumeSessionId })
+          : localFullCmd;
 
     try {
       // Same per-CLI env setup as createSession, re-applied so the respawned pane inherits it.
@@ -2725,9 +3023,11 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       this.applyEnvOverrides(muxName, envOverrides, unsetEnvKeys);
 
       // -c /tmp + cd bounce — see createSession() for rationale (stale FUSE state).
-      const launchCmd = remote || docker ? fullCmd : `cd ${JSON.stringify(workingDir)} && ${fullCmd}`;
+      // ⚠️ An adopted pane is never `cd`'d: it only attaches, and its `workingDir`
+      // is the neutral wrapper folder, not where the foreign pane is.
+      const launchCmd = remote || docker || adopt ? fullCmd : `cd ${JSON.stringify(workingDir)} && ${fullCmd}`;
       await execAsync(
-        `${this.tmux()} respawn-pane -k -c ${TMUX_LAUNCH_CWD} -t "${muxName}" bash -c ${JSON.stringify(launchCmd)}`,
+        `${this.tmux()} respawn-pane -k -c ${TMUX_LAUNCH_CWD} -t "${muxName}" bash -c ${bashCArg(launchCmd, !!(remote || docker || adopt))}`,
         {
           timeout: EXEC_TIMEOUT_MS,
         }
@@ -2741,8 +3041,9 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       this.clearPaneExit(muxName);
       const pid = this.getPanePid(muxName);
       if (pid) session.pid = pid;
-      if (session.statusLine !== statusLine) {
+      if (session.statusLine !== statusLine || session.idleCompactionOff !== idleCompactionOff) {
         session.statusLine = statusLine;
+        session.idleCompactionOff = idleCompactionOff;
         this.saveSessions();
       }
       return pid;
@@ -2865,6 +3166,45 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     });
   }
 
+  /**
+   * Narrow a pane's descendants to the ones a kill may signal, for a CLI that runs a
+   * shared daemon (`capabilities.sharedDaemon`): those still in the pane's process group
+   * (see `descendantsInPaneGroup()`). One bounded `ps` for the pane and its descendants,
+   * as an argv (no shell). Any other CLI, or a lookup that failed, gets the list back
+   * unchanged, which is the kill as it always was.
+   */
+  private async killableDescendants(mode: SessionMode, panePid: number, descendants: number[]): Promise<number[]> {
+    if (descendants.length === 0 || !getCli(mode)?.capabilities.sharedDaemon) return descendants;
+    try {
+      const { stdout } = await new Promise<{ stdout: string }>((resolve, reject) => {
+        execFile(
+          'ps',
+          ['-o', 'pid=,pgid=', '-p', [panePid, ...descendants].join(',')],
+          { timeout: EXEC_TIMEOUT_MS },
+          // `ps -p` exits non-zero when some pid is already gone; what it printed still counts.
+          (err, out) => (out ? resolve({ stdout: out }) : reject(err ?? new Error('ps printed nothing')))
+        );
+      });
+      const groupOf = new Map<number, number>();
+      for (const line of stdout.split('\n')) {
+        const [pid, pgid] = line.trim().split(/\s+/).map(Number);
+        if (Number.isInteger(pid) && Number.isInteger(pgid)) groupOf.set(pid, pgid);
+      }
+      const paneGroup = groupOf.get(panePid);
+      if (paneGroup === undefined) return descendants;
+      const killable = descendantsInPaneGroup(descendants, groupOf, paneGroup);
+      if (killable.length < descendants.length) {
+        console.log(
+          `[TmuxManager] Sparing ${descendants.length - killable.length} process(es) outside pane ${panePid}'s group (the CLI's shared daemon)`
+        );
+      }
+      return killable;
+    } catch (err) {
+      console.warn(`[TmuxManager] Could not read process groups for pane ${panePid}; killing every descendant:`, err);
+      return descendants;
+    }
+  }
+
   // Check if a process is still alive. Signal decisions only: an unreaped zombie
   // counts here, so its process group still gets the SIGKILL below. The WAITS use
   // waitForProcessesExit(), which counts a zombie as exited.
@@ -2932,6 +3272,59 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     // for a non-owned session. The only `kill-session` we run is on OUR LOCAL
     // socket (`this.tmux()` = `tmux -L codeman` on THIS host), which kills the
     // local pane — it does NOT reach the REMOTE socket.
+    // ADOPTION: DETACH-NOT-KILL, by construction rather than by discipline.
+    //
+    // An adopted session's wrapper is an ordinary session on OUR socket whose
+    // pane runs `tmux attach` (or `docker exec …`/`ssh …` then attach) against a
+    // FOREIGN server. Killing the wrapper kills our attach client, which is a
+    // DETACH on the foreign side; the human's session keeps running, and our
+    // grouped view session self-destroys via `destroy-unattached on`.
+    //
+    // The guard below is a formality more than a fence: `this.tmux()` only ever
+    // addresses our own socket, so no code path here CAN reach the foreign
+    // server. It is written out anyway so the intent survives future edits, the
+    // same way the non-owned-remote early return does.
+    if (session.adopt) {
+      console.log(`[TmuxManager] DETACH (adopted): tearing down wrapper only for ${session.muxName}`);
+      // A `docker exec` survives its client, so the in-container view would stay
+      // attached forever and leak. Best-effort, and it can only reach OUR view.
+      // See buildForeignDockerViewKillCommand for why local/remote need nothing.
+      // Fire and forget like the owned docker branch below: a daemon that stopped
+      // answering must not hold the event loop for the whole timeout.
+      if (session.adopt.location === 'docker' && session.adopt.docker) {
+        try {
+          exec(
+            buildForeignDockerViewKillCommand({
+              dockerBase: buildDockerBaseArgs(session.adopt.docker).join(' '),
+              containerName: session.adopt.docker.containerName,
+              socketPath: session.adopt.socketPath,
+              viewSession: session.adopt.viewSession || foreignViewSessionName(sessionId),
+            }),
+            { timeout: EXEC_TIMEOUT_MS },
+            () => {}
+          );
+        } catch {
+          // Best-effort: the container may be gone, or the view already collected.
+        }
+      }
+      if (isValidMuxName(session.muxName)) {
+        try {
+          await execAsync(`${this.tmux()} kill-session -t "${session.muxName}" 2>/dev/null`, {
+            timeout: EXEC_TIMEOUT_MS,
+          });
+        } catch {
+          // Wrapper may already be gone.
+        }
+      }
+      this.lastPaneCount.delete(session.muxName);
+      this.clearPaneExit(session.muxName);
+      this.sessions.delete(sessionId);
+      this.clearRemoteReconnectState(sessionId);
+      this.saveSessions();
+      this.emit('sessionKilled', { sessionId });
+      return true;
+    }
+
     if (session.remote && session.remote.owned === false) {
       console.log(`[TmuxManager] DETACH (non-owned remote): tearing down local pane only for ${session.muxName}`);
       if (isValidMuxName(session.muxName)) {
@@ -2960,8 +3353,9 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
     const allPids: number[] = [currentPid];
 
-    // Strategy 1: Kill all child processes recursively
-    let childPids = await this.getChildPidsFresh(currentPid);
+    // Strategy 1: Kill all child processes recursively (but never a shared daemon the
+    // pane's CLI started for every session of that CLI: see killableDescendants)
+    let childPids = await this.killableDescendants(session.mode, currentPid, await this.getChildPidsFresh(currentPid));
     if (childPids.length > 0) {
       console.log(`[TmuxManager] Found ${childPids.length} child processes to kill`);
       allPids.push(...childPids);
@@ -2980,7 +3374,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       // catch anything spawned since the first one.
       await waitForProcessesExit(childPids, { timeoutMs: TMUX_KILL_WAIT_MS });
 
-      childPids = await this.getChildPidsFresh(currentPid);
+      childPids = await this.killableDescendants(session.mode, currentPid, await this.getChildPidsFresh(currentPid));
       for (const childPid of childPids) {
         if (this.isProcessAlive(childPid)) {
           try {
@@ -3109,13 +3503,32 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     // socket tag to reconcile and no cross-socket ambiguity that could mark a
     // live session dead (the root cause of vanished/duplicate tabs).
     let active: Map<string, number>;
+    const paneDirs = new Map<string, string>();
     try {
       const output = execSync(`${this.tmux()} list-panes -a -F '${PANE_LIST_FORMAT}' 2>/dev/null || true`, {
         encoding: 'utf-8',
         timeout: EXEC_TIMEOUT_MS,
-      }).trim();
+      });
+      // Not trimmed: the directory is the last field, so trimming would cut a
+      // trailing space off the last row's path. parsePaneRows skips empty lines.
       const rows = parsePaneRows(output);
       active = new Map(rows.map((row) => [row.sessionName, row.pid]));
+      // A discovered session's directory, from its first pane with a usable path.
+      // The path is admitted only if it passes the same check createSession and
+      // respawnPane apply, since it was set by whoever owns the pane, not by us.
+      // The launch directory counts as no answer: every pane starts there, and a
+      // remote or docker pane never cds out of it, so for such a session it is
+      // not the workspace — and a rediscovered record cannot tell it is one.
+      for (const row of rows) {
+        if (
+          row.currentPath &&
+          !TMUX_LAUNCH_CWD_SPELLINGS.has(row.currentPath) &&
+          !paneDirs.has(row.sessionName) &&
+          isValidPath(row.currentPath)
+        ) {
+          paneDirs.set(row.sessionName, row.currentPath);
+        }
+      }
       // The same read answers both questions, so recovery starts with a pane-exit
       // reading rather than waiting for the first stats tick — which may never
       // come, since the collector only starts when boot found a live session.
@@ -3126,6 +3539,11 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       console.error('[TmuxManager] Failed to list tmux panes:', err);
       active = new Map();
     }
+
+    // Sessions that survived an upgrade may sit on a server whose prefix table was never
+    // reduced (createSession does it for new ones), so cover them at boot too. Only with
+    // panes listed: on an empty socket `list-keys` spins up a throwaway server instead.
+    if (active.size > 0) restrictTmuxPrefixTable(this.tmux());
 
     // Check tracked sessions against the live pane list.
     for (const [sessionId, session] of this.sessions) {
@@ -3169,11 +3587,13 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         muxName: sessionName,
         pid,
         createdAt: Date.now(),
-        workingDir: process.cwd(),
+        // Where the pane actually works, when tmux said; the server's cwd is only a fallback.
+        workingDir: paneDirs.get(sessionName) ?? process.cwd(),
         mode: 'claude',
         attached: false,
         name: `Restored: ${sessionName}`,
-        // Every field above except the name and the pid is a guess: this record
+        // Every field above except the name, the pid and, when tmux reported a
+        // usable one, the directory is a guess: this record
         // was rebuilt from the socket because Codeman's own bookkeeping did not
         // have it. The synthetic id also cannot find the session's state.json
         // entry, so a remote or docker session rediscovered this way arrives
@@ -3341,6 +3761,19 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
   }
 
   /**
+   * The directory the session's pane was in at the last authoritative pane
+   * read, or `undefined` when unknown. Costs nothing: it reads the map the
+   * pane-exit watcher's batched `list-panes -a` fills, so no tmux call is made
+   * per click. A failed or empty read keeps the previous answers, and so does
+   * a blank `#{pane_current_path}` on a single-pane session. After a successful
+   * read, `undefined` means that read listed no single directory for the
+   * session: it was split into several panes or is no longer on the socket.
+   */
+  getPaneCurrentPath(muxName: string): string | undefined {
+    return this.paneCurrentPaths.get(muxName);
+  }
+
+  /**
    * What the last pane read saw of this tmux session's agent. `undefined` is
    * the UNKNOWN answer and must never be rendered as "alive": it covers a pane
    * that is running, a tmux session that no longer exists, a probe that failed,
@@ -3401,6 +3834,11 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       this.paneExitReadInFlight = false;
     }
     if (rows.length === 0) return;
+    // The directory reading rides the same read. It is applied before the
+    // generation check below: a respawn invalidates an exit observation, but the
+    // pane's directory at read time is still the best answer there is. A blank
+    // field on a single-pane session carries the previous answer forward.
+    this.paneCurrentPaths = derivePaneCurrentPaths(rows, this.paneCurrentPaths);
     // A pane was respawned or killed while this read was out, so what it saw is
     // already history. Dropping it is what stops a freshly respawned pane from
     // being republished as exited.
@@ -3610,7 +4048,49 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       } catch (err) {
         console.error('[TmuxManager] Remote reconnect watcher error:', err);
       }
+      void this.detachEndedAdoptedAttaches().catch((err) => {
+        console.error('[TmuxManager] Adopted attach watcher error:', err);
+      });
     }, intervalMs);
+  }
+
+  /**
+   * Let go of a wrapper whose pane died (#510). That pane holds the attach to someone
+   * else's tmux session, so it dies when that session ends, the transport drops or the
+   * view gets detached, and `paneExit` rightly reports none of them. But `remain-on-exit`
+   * keeps Codeman's own tmux client on the dead pane, so the tab kept its pid and `busy`,
+   * input went nowhere and both attach routes refused it.
+   *
+   * Detaching that client is an ordinary PTY exit with status 0: the pid goes null, the tab
+   * stays open, and selecting it starts the wrapper again, which joins the target if it is
+   * back and otherwise prints that it is gone. Only Codeman's own socket is touched.
+   */
+  async detachEndedAdoptedAttaches(): Promise<void> {
+    const adopted = new Set<string>();
+    for (const session of this.sessions.values()) {
+      if (session.adopt) adopted.add(session.muxName);
+    }
+    if (adopted.size === 0) return;
+    for (const muxName of endedAdoptedAttaches(await this.readAttachRows(), adopted)) {
+      await this.detachClients(muxName);
+    }
+  }
+
+  /** Rows for {@link endedAdoptedAttaches}. Empty when tmux did not answer. */
+  protected async readAttachRows(): Promise<string> {
+    if (IS_TEST_MODE) return '';
+    const format = '#{pane_dead} #{session_attached} #{session_name}';
+    const { stdout } = await execAsync(`${this.tmux()} list-panes -a -F '${format}' 2>/dev/null || true`, {
+      encoding: 'utf-8',
+      timeout: EXEC_TIMEOUT_MS,
+    });
+    return stdout;
+  }
+
+  /** Detach every tmux client from one of Codeman's own sessions. */
+  protected async detachClients(muxName: string): Promise<void> {
+    if (IS_TEST_MODE || !isValidMuxName(muxName)) return;
+    await execAsync(`${this.tmux()} detach-client -s "${muxName}"`, { timeout: EXEC_TIMEOUT_MS });
   }
 
   stopRemoteReconnectWatcher(): void {
@@ -3821,11 +4301,17 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    * - Text followed by `\r` goes in as ONE bracketed paste (buildPasteTextCommands),
    *   so Codex cannot fold the Enter into a paste burst; a single character is typed
    *   with `send-keys -l` instead, so a dialog answer selects (submitsAsKeys)
-   * - Text without `\r` is typed literally with `send-keys -l` (no key interpretation)
+   * - Single-line text without `\r` is typed literally with `send-keys -l` (no key
+   *   interpretation)
+   * - A `\n` inside the text is kept (`\r\n` loses only its `\r`), and multi-line text
+   *   always goes in as ONE bracketed paste, with or without a following Enter: inside
+   *   the paste markers a CLI that enabled bracketed paste receives the line breaks as
+   *   pasted text, where typed as keys each one could submit a line on its own
    * - `Enter` key is sent as a SEPARATE tmux invocation after a small delay
    * - Ink (Claude CLI) needs text and Enter split to avoid treating Enter as a newline
    */
-  async sendInput(sessionId: string, input: string): Promise<boolean> {
+  async sendInput(sessionId: string, input: string, options?: { beforeDispatch?: () => boolean }): Promise<boolean> {
+    if (options?.beforeDispatch && input !== '\r') return false;
     const session = this.sessions.get(sessionId);
     if (!session) {
       console.error(
@@ -3834,9 +4320,11 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       return false;
     }
 
-    // TEST MODE: No-op — don't send input to real tmux sessions
-    if (IS_TEST_MODE) {
-      return true;
+    // TEST MODE: No-op — don't send input to real tmux sessions. The gate lives in
+    // inputRunner() so a test subclass can record what WOULD reach tmux.
+    const run = this.inputRunner();
+    if (!run) {
+      return options?.beforeDispatch?.() ?? true;
     }
 
     console.log(
@@ -3850,7 +4338,14 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
     try {
       const hasCarriageReturn = input.includes('\r');
-      const textPart = input.replace(/\r/g, '').replace(/\n/g, '').trimEnd();
+      // Leading and trailing blank lines are dropped, so neither `"\nfix it\r"` nor
+      // `"  \nfix it\r"` pastes an empty first line (nor `"fix it\n\r"` an empty last
+      // one). The leading match ends at a line break, so the first real line keeps its
+      // indentation.
+      const textPart = input
+        .replace(/\r/g, '')
+        .replace(/^\s*\n/, '')
+        .trimEnd();
 
       if (textPart && hasCarriageReturn) {
         // Send text first, then Enter as a SEPARATE tmux command after a short delay.
@@ -3862,31 +4357,30 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         // selection dialog ignores a pasted `3` and Enter then confirms the
         // highlighted option (see submitsAsKeys).
         if (submitsAsKeys(textPart)) {
-          await execAsync(
-            `${this.tmux()} send-keys -t "${session.muxName}" -l ${shellescape(escapeTmuxTrailingSemicolon(textPart))}`,
-            { timeout: EXEC_TIMEOUT_MS }
+          await run(
+            `${this.tmux()} send-keys -t "${session.muxName}" -l -- ${shellescape(escapeTmuxTrailingSemicolon(textPart))}`
           );
         } else {
-          await pasteText(
-            (cmd) => execAsync(cmd, { timeout: EXEC_TIMEOUT_MS }),
-            buildPasteTextCommands(this.tmux(), session.muxName, textPart)
-          );
+          await pasteText(run, buildPasteTextCommands(this.tmux(), session.muxName, textPart));
         }
         await new Promise((resolve) => setTimeout(resolve, 50));
-        await execAsync(`${this.tmux()} send-keys -t "${session.muxName}" Enter`, {
-          timeout: EXEC_TIMEOUT_MS,
-        });
+        await run(`${this.tmux()} send-keys -t "${session.muxName}" Enter`);
+      } else if (textPart.includes('\n')) {
+        // Multi-line text, no Enter: pasted, because typed as keys every `\n` would
+        // reach the pane as a key the CLI may read as submit. A pane that has not
+        // enabled bracketed paste (POSIX sh, macOS /bin/bash 3.2) still gets every line
+        // break as a CR, so there every line but the last runs; before line breaks were
+        // kept, the joined text was typed and nothing ran.
+        await pasteText(run, buildPasteTextCommands(this.tmux(), session.muxName, textPart));
       } else if (textPart) {
         // Text only, no Enter
-        await execAsync(
-          `${this.tmux()} send-keys -t "${session.muxName}" -l ${shellescape(escapeTmuxTrailingSemicolon(textPart))}`,
-          { timeout: EXEC_TIMEOUT_MS }
+        await run(
+          `${this.tmux()} send-keys -t "${session.muxName}" -l -- ${shellescape(escapeTmuxTrailingSemicolon(textPart))}`
         );
       } else if (hasCarriageReturn) {
-        // Enter only
-        await execAsync(`${this.tmux()} send-keys -t "${session.muxName}" Enter`, {
-          timeout: EXEC_TIMEOUT_MS,
-        });
+        // Enter only: no await between the guard and dispatch.
+        if (options?.beforeDispatch && !options.beforeDispatch()) return false;
+        await run(`${this.tmux()} send-keys -t "${session.muxName}" Enter`);
       }
 
       return true;
@@ -3894,6 +4388,16 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       console.error('[TmuxManager] Failed to send input:', err);
       return false;
     }
+  }
+
+  /**
+   * How {@link sendInput} reaches tmux, or null where it must not (vitest). Split
+   * out like {@link readPaneRows}: with the test-mode gate at the top of sendInput,
+   * no test could see which commands a submit actually sends.
+   */
+  protected inputRunner(): ((cmd: string) => Promise<unknown>) | null {
+    if (IS_TEST_MODE) return null;
+    return (cmd) => execAsync(cmd, { timeout: EXEC_TIMEOUT_MS });
   }
 
   // ========== Pane Methods (for Agent Team teammate panes) ==========
@@ -3948,21 +4452,6 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
   }
 
   /**
-   * Sync mouse mode based on pane count: enable if split (>1 pane), disable if single.
-   * Called by TeamWatcher when teammates spawn/despawn panes.
-   * Uses `tmux list-panes` for bulletproof detection — counts actual panes, not config.
-   */
-  async syncMouseMode(muxName: string): Promise<boolean> {
-    if (IS_TEST_MODE) return true;
-    const panes = await this.listPanes(muxName);
-    if (panes.length > 1) {
-      return this.enableMouseMode(muxName);
-    } else {
-      return this.disableMouseMode(muxName);
-    }
-  }
-
-  /**
    * List all panes in a tmux session.
    * Returns structured info for each pane.
    */
@@ -4001,7 +4490,9 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
   /**
    * Send input to a specific pane within a tmux session.
-   * Uses the same literal text approach as sendInput() but targets a specific pane.
+   * Types the text literally with `send-keys -l`, line breaks stripped, then Enter
+   * when the input carried a `\r`. Unlike sendInput(), it neither pastes nor keeps
+   * the line breaks of multi-line text.
    */
   sendInputToPane(muxName: string, paneTarget: string, input: string): boolean {
     if (IS_TEST_MODE) return true;
@@ -4024,7 +4515,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
       if (textPart && hasCarriageReturn) {
         execSync(
-          `${tmux} send-keys -t ${shellescape(target)} -l ${shellescape(escapeTmuxTrailingSemicolon(textPart))}`,
+          `${tmux} send-keys -t ${shellescape(target)} -l -- ${shellescape(escapeTmuxTrailingSemicolon(textPart))}`,
           {
             encoding: 'utf-8',
             timeout: EXEC_TIMEOUT_MS,
@@ -4036,7 +4527,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         });
       } else if (textPart) {
         execSync(
-          `${tmux} send-keys -t ${shellescape(target)} -l ${shellescape(escapeTmuxTrailingSemicolon(textPart))}`,
+          `${tmux} send-keys -t ${shellescape(target)} -l -- ${shellescape(escapeTmuxTrailingSemicolon(textPart))}`,
           {
             encoding: 'utf-8',
             timeout: EXEC_TIMEOUT_MS,
@@ -4078,17 +4569,19 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
   /**
    * Plain visible-frame text for the working/idle probe (see `session.ts`).
    *
-   * One `capture-pane` and nothing else: no `-e` styles, no `display-message`
-   * cursor query, no repaint reconstruction: this feeds a regex, not a
-   * terminal. Returns null in tests (no tmux) so callers fall back to their
-   * stream heuristics rather than reading an empty screen as "not working".
+   * One `capture-pane` and nothing else: no `display-message` cursor query, no
+   * repaint reconstruction: this feeds a regex, not a terminal. `styles` adds
+   * `-e` for a reader that must tell faint text from typed text (the keep-warm
+   * composer check); lines stay `\n`-separated either way. Returns null in tests
+   * (no tmux) so callers fall back to their stream heuristics rather than
+   * reading an empty screen as "not working".
    */
-  capturePaneText(muxName: string, paneTarget?: string): string | null {
+  capturePaneText(muxName: string, paneTarget?: string, opts?: { styles?: boolean }): string | null {
     if (IS_TEST_MODE) return null;
     const target = resolveTmuxPaneTarget(muxName, paneTarget);
     if (!target) return null;
     try {
-      return execSync(`${this.tmux()} capture-pane -p -t ${shellescape(target)}`, {
+      return execSync(`${this.tmux()} capture-pane -p${opts?.styles ? ' -e' : ''} -t ${shellescape(target)}`, {
         encoding: 'utf-8',
         timeout: EXEC_TIMEOUT_MS,
       });
@@ -4100,7 +4593,8 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
   }
 
   capturePaneBuffer(muxName: string, paneTarget?: string, opts?: PaneCaptureOptions): string | null {
-    if (IS_TEST_MODE) return '';
+    const exec = this.captureRunner();
+    if (!exec) return '';
     const target = resolveTmuxPaneTarget(muxName, paneTarget);
     if (!target) {
       console.error('[TmuxManager] Invalid pane target in capturePaneBuffer:', { muxName, paneTarget });
@@ -4138,9 +4632,28 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         execOpts.maxBuffer =
           (opts?.maxCaptureBytes ?? DEFAULT_TERMINAL_BUFFER_MAX_BYTES) + FULL_HISTORY_CAPTURE_SLACK_BYTES;
       }
+      const cursorQuery = `display-message -p -t ${shellescape(target)} '#{cursor_x} #{cursor_y} #{pane_width} #{pane_height} #{history_size} #{alternate_on}'`;
+      const captureCommand = `${this.tmux()} ${captureFlags} -t ${shellescape(target)}`;
+      // The visible frame and its caret come from ONE tmux invocation
+      // (the capture, `\;`, then the cursor query): tmux runs a command list back to back
+      // in its command queue, with no pane output parsed between the two, so the
+      // caret belongs to the frame. Two separate calls raced the CLI's repaint: a
+      // CLI that redraws its composer a few ms after input arrives (codex) could be
+      // captured before the redraw and its caret queried after it, and guarded
+      // stage then refused a frame the keys had already reached. Only output that
+      // splitFrameAndCursor() cannot split (a last line that is not the query's)
+      // falls back to the two separate calls, which is what this always did. A call
+      // that THREW (a hung tmux timing out) goes to the catch below like any other
+      // capture failure: retrying it would block the event loop for a second timeout
+      // on every `GET .../terminal` load.
+      const combined = fullHistory
+        ? null
+        : splitFrameAndCursor(
+            exec(`${captureCommand} \\; ${cursorQuery}`, { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS })
+          );
       const rawCapture = joinScrollbackAndFrame(
         scrollbackOverride,
-        execSync(`${this.tmux()} ${captureFlags} -t ${shellescape(target)}`, execOpts),
+        combined?.frame ?? exec(captureCommand, execOpts),
         scrollbackOverride !== undefined ? opts?.scrollbackOverrideScreen : undefined
       );
       // Query the cursor BEFORE deciding anything else. On the full-history path
@@ -4148,10 +4661,9 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       // appended, and those two have to agree: trailing blank rows are only safe
       // to keep when a move follows to put the caret back above them.
       const geometry = queryPaneCursor(() =>
-        execSync(
-          `${this.tmux()} display-message -p -t ${shellescape(target)} '#{cursor_x} #{cursor_y} #{pane_width} #{pane_height} #{history_size} #{alternate_on}'`,
-          { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
-        )
+        combined
+          ? combined.cursor
+          : exec(`${this.tmux()} ${cursorQuery}`, { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS })
       );
       // Report the size the pane was really drawing at. The visible-frame path
       // below addresses every row absolutely, so a consumer whose terminal is
@@ -4218,6 +4730,18 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
   }
 
   /**
+   * How {@link capturePaneBuffer} runs tmux, or null where it must not (vitest).
+   * Split out like {@link inputRunner} so a test subclass can count and script the
+   * calls a capture makes.
+   */
+  protected captureRunner():
+    | ((cmd: string, opts: { encoding: 'utf-8'; timeout: number; maxBuffer?: number }) => string)
+    | null {
+    if (IS_TEST_MODE) return null;
+    return (cmd, opts) => execSync(cmd, opts);
+  }
+
+  /**
    * Capture the active pane for a tmux session.
    *
    * Pane ids are not stable across respawns or restores, so callers should not
@@ -4240,67 +4764,6 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     } catch (err) {
       console.error('[TmuxManager] Failed to resolve active pane for capture:', err);
       return null;
-    }
-  }
-
-  /**
-   * Start piping pane output to a file using tmux pipe-pane.
-   * Only pipes output direction (-O) to avoid echoing input.
-   */
-  startPipePane(muxName: string, paneTarget: string, outputFile: string): boolean {
-    if (IS_TEST_MODE) return true;
-    if (!isValidMuxName(muxName)) {
-      console.error('[TmuxManager] Invalid session name in startPipePane:', muxName);
-      return false;
-    }
-    if (!SAFE_PANE_TARGET_PATTERN.test(paneTarget)) {
-      console.error('[TmuxManager] Invalid pane target:', paneTarget);
-      return false;
-    }
-    if (!isValidPath(outputFile)) {
-      console.error('[TmuxManager] Invalid output file path:', outputFile);
-      return false;
-    }
-
-    const target = paneTarget.startsWith('%') ? `${muxName}.${paneTarget}` : `${muxName}.%${paneTarget}`;
-
-    try {
-      execSync(`${this.tmux()} pipe-pane -O -t ${shellescape(target)} ${shellescape('cat >> ' + outputFile)}`, {
-        encoding: 'utf-8',
-        timeout: EXEC_TIMEOUT_MS,
-      });
-      return true;
-    } catch (err) {
-      console.error('[TmuxManager] Failed to start pipe-pane:', err);
-      return false;
-    }
-  }
-
-  /**
-   * Stop piping pane output (calling pipe-pane with no command stops piping).
-   */
-  stopPipePane(muxName: string, paneTarget: string): boolean {
-    if (IS_TEST_MODE) return true;
-    if (!isValidMuxName(muxName)) {
-      console.error('[TmuxManager] Invalid session name in stopPipePane:', muxName);
-      return false;
-    }
-    if (!SAFE_PANE_TARGET_PATTERN.test(paneTarget)) {
-      console.error('[TmuxManager] Invalid pane target:', paneTarget);
-      return false;
-    }
-
-    const target = paneTarget.startsWith('%') ? `${muxName}.${paneTarget}` : `${muxName}.%${paneTarget}`;
-
-    try {
-      execSync(`${this.tmux()} pipe-pane -t ${shellescape(target)}`, {
-        encoding: 'utf-8',
-        timeout: EXEC_TIMEOUT_MS,
-      });
-      return true;
-    } catch (err) {
-      console.error('[TmuxManager] Failed to stop pipe-pane:', err);
-      return false;
     }
   }
 
@@ -4370,6 +4833,29 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       return false;
     }
   }
+}
+
+/**
+ * The `bash -c` argument of a pane launch (`respawn-pane … bash -c <arg>`, run through the
+ * local sh). A remote, docker or adopted command is already quoted for the shell at the far
+ * end and must reach bash verbatim, so it goes in single quotes. Double quotes
+ * (JSON.stringify) let the local sh expand every `$` first: the PATH bootstrap of
+ * `withRemoteTmuxPath` (`$HOME/.local/bin:…:$PATH`) arrived on the remote host as this
+ * host's home and PATH, so a remote user with another home found no tmux and every new
+ * remote pane exited 127. `${SHELL:-/bin/sh}` in the remote launch was the local shell for
+ * the same reason, and an adopted ssh attach carries the same bootstrap, so a tmux in the
+ * remote `~/.local/bin` was found by discovery and then missed by the attach. Single quotes
+ * also keep a real newline, which JSON escaping left as the two characters `\n`.
+ * An adopted attach goes verbatim at all three locations, the local one included: every
+ * value in it is already quoted by `foreign-tmux.ts`, and nothing in it is for this shell.
+ * An agent launched on this host keeps its double-quoted form.
+ *
+ * ⚠️ So nothing in a verbatim launch is expanded on this host any more, the docker client's
+ * own arguments included: a bare `$VAR` in `extraCreateArgs`/`extraExecArgs` reaches docker
+ * as those literal characters.
+ */
+export function bashCArg(launchCmd: string, verbatim: boolean): string {
+  return verbatim ? shellescape(launchCmd) : JSON.stringify(launchCmd);
 }
 
 /**

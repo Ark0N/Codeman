@@ -322,13 +322,6 @@ export const STANDARD_TABLETS: DeviceEntry[] = DEVICE_REGISTRY.filter((d) => d.c
 export const LARGE_TABLETS: DeviceEntry[] = DEVICE_REGISTRY.filter((d) => d.category === 'large-tablet');
 
 // ---------------------------------------------------------------------------
-// Platform exports
-// ---------------------------------------------------------------------------
-
-export const IOS_DEVICES: DeviceEntry[] = DEVICE_REGISTRY.filter((d) => d.isIOS);
-export const ANDROID_DEVICES: DeviceEntry[] = DEVICE_REGISTRY.filter((d) => !d.isIOS);
-
-// ---------------------------------------------------------------------------
 // Representative devices — one per category for quick smoke tests
 // ---------------------------------------------------------------------------
 

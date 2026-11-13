@@ -13,8 +13,15 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { WebServer } from '../src/web/server.js';
 import { safeRmHomeTree } from './mocks/index.js';
-import { homedir } from 'node:os';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
+
+// A folder of this file's own for the sessions below, never the machine's real `/tmp`:
+// a create writes the workspace hooks and the agent skill (on by default) into its
+// working dir, and those would outlive the run there.
+const WORK_DIR = mkdtempSync(join(tmpdir(), 'codeman-lightspeed-'));
+afterAll(() => rmSync(WORK_DIR, { recursive: true, force: true }));
 
 // Helper to parse SSE events from raw text
 function parseSSEEvents(text: string): Array<{ event: string; data: unknown }> {
@@ -86,7 +93,7 @@ async function createSession(baseUrl: string): Promise<string> {
   const res = await fetch(`${baseUrl}/api/sessions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ workingDir: '/tmp' }),
+    body: JSON.stringify({ workingDir: WORK_DIR }),
   });
   const data = await res.json();
   if (!data.data?.session?.id) {
@@ -1226,7 +1233,7 @@ describe('Operation Lightspeed', () => {
           fetch(`${baseUrl}/api/sessions`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ workingDir: '/tmp' }),
+            body: JSON.stringify({ workingDir: WORK_DIR }),
           }).then((r) => r.json())
         )
       );

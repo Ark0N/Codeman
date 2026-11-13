@@ -8,7 +8,7 @@
  * - SessionConfig — creation-time config (id, workingDir, createdAt)
  * - SessionOutput — captured stdout/stderr/exitCode
  * - SessionStatus — 'idle' | 'busy' | 'stopped' | 'error'
- * - SessionMode — 'claude' | 'shell' | 'opencode' | 'codex' | 'gemini' | 'antigravity' | 'pi' | 'grok' | 'deepseek' | 'omp' (which CLI backend)
+ * - SessionMode — 'claude' | 'shell' | 'opencode' | 'codex' | 'gemini' | 'antigravity' | 'pi' | 'grok' | 'deepseek' | 'omp' | 'copilot' | 'jcode' (which CLI backend)
  * - ClaudeMode — CLI permission mode ('dangerously-skip-permissions' | 'auto' | 'normal' | 'allowedTools')
  * - SessionColor — visual differentiation color
  * - OpenCodeConfig — OpenCode-specific settings (model, autoAllowTools, continueSession)
@@ -17,7 +17,9 @@
  * - AntigravityConfig — Antigravity CLI (agy) settings (model, dangerouslySkipPermissions, resumeConversationId)
  * - PiConfig — Pi CLI (pi.dev) settings (model, provider, thinking, resume/continue, project trust)
  * - GrokConfig — Grok Build CLI (xAI `grok`) settings (model, alwaysApprove, resume/continue)
+ * - CopilotConfig — GitHub Copilot CLI settings (model, allowAll, resume/continue)
  * - DeepSeekConfig — DeepSeek Harness (`dsh`) settings (profile, permissionMode, resume, status bridge)
+ * - JcodeConfig: jcode settings (model, resume)
  *
  * Cross-domain relationships:
  * - SessionState.respawnConfig embeds RespawnConfig (respawn domain)
@@ -32,6 +34,8 @@
 
 import type { RespawnConfig } from './respawn.js';
 import type { AttachmentDetectedType } from './tools.js';
+import type { GitFetchStatus } from '../git-fetch.js';
+import type { LiveWorktree } from '../live-worktree.js';
 
 /** Status of a Claude session */
 export type SessionStatus = 'idle' | 'busy' | 'stopped' | 'error';
@@ -56,7 +60,9 @@ export type SessionMode =
   | 'pi'
   | 'grok'
   | 'deepseek'
-  | 'omp';
+  | 'omp'
+  | 'copilot'
+  | 'jcode';
 
 /**
  * Who owns a session's name. `placeholder`: Codeman's own `w<n>-<case>` (or no
@@ -78,7 +84,18 @@ export interface SessionWriteOptions {
 
 export type RemoteCommandMode = Extract<
   SessionMode,
-  'shell' | 'claude' | 'opencode' | 'codex' | 'gemini' | 'antigravity' | 'pi' | 'grok' | 'deepseek' | 'omp'
+  | 'shell'
+  | 'claude'
+  | 'opencode'
+  | 'codex'
+  | 'gemini'
+  | 'antigravity'
+  | 'pi'
+  | 'grok'
+  | 'deepseek'
+  | 'omp'
+  | 'copilot'
+  | 'jcode'
 >;
 
 /**
@@ -213,7 +230,18 @@ export interface RemoteSessionInfo {
 /** Which CLI backends a Docker case can run (same set as remote). */
 export type DockerCommandMode = Extract<
   SessionMode,
-  'shell' | 'claude' | 'opencode' | 'codex' | 'gemini' | 'antigravity' | 'pi' | 'grok' | 'deepseek' | 'omp'
+  | 'shell'
+  | 'claude'
+  | 'opencode'
+  | 'codex'
+  | 'gemini'
+  | 'antigravity'
+  | 'pi'
+  | 'grok'
+  | 'deepseek'
+  | 'omp'
+  | 'copilot'
+  | 'jcode'
 >;
 
 /** Container engine. Docker and Podman differ in the uid/userns + host-gateway alias. */
@@ -363,6 +391,74 @@ export interface SessionDocker {
 }
 
 /**
+ * Connection facts needed to reach an adopted foreign tmux server. Deliberately
+ * the exact `Pick`s that `buildSshConnectionArgs` / `buildDockerBaseArgs` consume,
+ * so an adopted session can rebuild its command after a server restart without
+ * re-reading a registry that may have been edited in the meantime.
+ */
+export interface AdoptRemoteConnection extends RemoteSshOptions {
+  hostId: string;
+  label: string;
+  host: string;
+  username: string;
+  port?: number;
+}
+
+export interface AdoptDockerConnection {
+  hostId: string;
+  label: string;
+  engine: DockerEngine;
+  containerName: string;
+  daemonHost?: string;
+  context?: string;
+}
+
+/**
+ * ADOPTION overlay: a tmux session a HUMAN started, that Codeman attached to.
+ *
+ * This is the FOURTH location overlay, alongside remote-SSH and Docker, and it
+ * obeys the same rule they do: it is **not** a `SessionMode`. The mode is still
+ * claude / codex / shell / …, decided by the process-tree probe rather than by
+ * the user.
+ *
+ * Shape of an adopted session: Codeman creates a NORMAL wrapper session on its
+ * OWN socket (`codeman-<8hex>`, so `isValidMuxName` and every capture/input/
+ * recovery path is untouched) whose single pane runs a command that attaches to
+ * the foreign target. Killing the tab kills only the wrapper: the foreign
+ * session is structurally out of reach, exactly like a non-owned remote session.
+ *
+ * ⚠️ There is no `owned` field here, unlike `SessionRemote`/`SessionDocker`: an
+ * adopted session is *by definition* someone else's. A field that could be true
+ * would invite a code path that kills it.
+ */
+export interface SessionAdopt {
+  /** Where the foreign tmux server lives. */
+  location: 'local' | 'docker' | 'remote';
+  /** Absolute socket path as seen FROM that location (passed to `tmux -S`). */
+  socketPath: string;
+  /** The foreign session we attach to. Never Codeman-named, never name-validated. */
+  targetSession: string;
+  /**
+   * Our own grouped VIEW session on the foreign server. Grouping (rather than a
+   * bare `attach`) buys `status off` and an independent CURRENT WINDOW, both of
+   * which land on our session instead of mutating the owner's.
+   *
+   * ⚠️ It does NOT buy an independent size, and the comment here used to claim it
+   * did. A window is one object with one size and a group shares that object, so
+   * our attach resizes the owner's view exactly as any second tmux client does
+   * (measured on 3.3a: bare attach and grouped both shrink a 200x49 target to
+   * 80x23; only `window-size largest` holds it, and that is a shared window
+   * option which survives our detach, see foreign-tmux.ts for why it is not set).
+   * Created with `destroy-unattached on` so it evaporates with our pane.
+   */
+  viewSession: string;
+  /** The pane cwd at adoption time. Informational: an adopted pane is never `cd`'d. */
+  paneCurrentPath?: string;
+  remote?: AdoptRemoteConnection;
+  docker?: AdoptDockerConnection;
+}
+
+/**
  * Valid Claude CLI effort levels (claude >= 2.1.154).
  * `ultracode` = xhigh effort + standing dynamic-workflow orchestration; it is a
  * separate `ultracode` settings key rather than an `effortLevel` value.
@@ -434,6 +530,14 @@ export interface CodexConfig {
   resumeSessionId?: string;
   /** Bypass approval prompts (passes --dangerously-bypass-approvals-and-sandbox) */
   dangerouslyBypassApprovals?: boolean;
+  /**
+   * Let commands in codex's workspace-write sandbox use the network, Codeman's loopback API
+   * included (passes --config sandbox_workspace_write.network_access=true). Never changes the
+   * sandbox mode: a folder codex runs read-only keeps the network closed and asks per command.
+   * Filled from the synced `codexNetworkAccess` setting when unset; clamped off for a
+   * non-granted owner.
+   */
+  networkAccess?: boolean;
   /** Enable Codex's decorative TUI animations. Disable to reduce remote terminal redraws. */
   animations?: boolean;
   /** Browser rendering strategy for Codex sessions. Hybrid TUI is the only supported mode. */
@@ -522,6 +626,50 @@ export interface GrokConfig {
   /** Continue the most recent session for the working directory (-c). Skipped when resumeSessionId is set. */
   continueSession?: boolean;
   /** Resume a specific session by ID (--resume). Ids only, never titles or paths. */
+  resumeSessionId?: string;
+}
+
+/**
+ * GitHub Copilot CLI (`copilot`) session configuration.
+ *
+ * Copilot asks before running tools ("Manual Approval") and before touching paths
+ * outside the trusted folder. `--yolo` is its allow-all switch (tools, paths and URLs),
+ * the one the Run button opts into like the other agent CLIs' bypass switches. Verified
+ * against copilot 1.0.94.
+ */
+export interface CopilotConfig {
+  /** Model ID passed via --model (e.g. "claude-sonnet-5.5", or "auto"). */
+  model?: string;
+  /**
+   * Allow every tool, path and URL without asking (passes --yolo). Absent = Copilot's own
+   * Manual Approval mode. Multi-user: forced off for non-granted owners by the only-if-sent
+   * clamp branch, like codex/antigravity/grok.
+   */
+  allowAll?: boolean;
+  /** Resume the most recent session (--continue). Skipped when resumeSessionId is set. */
+  continueSession?: boolean;
+  /**
+   * Resume a specific session (--resume <value>): an id, id prefix or session name, as ONE plain word
+   * starting with a letter or digit (a leading `-` would make the value its own flag).
+   */
+  resumeSessionId?: string;
+}
+
+/**
+ * jcode (1jehuang/jcode) session configuration.
+ *
+ * jcode has no approval prompts and no bypass flag, so there is nothing
+ * privileged to configure; the provider and its login come from jcode's own
+ * `~/.jcode/config.toml`. Verified against jcode 0.98.1.
+ */
+export interface JcodeConfig {
+  /** Model ID passed via --model (e.g. "claude-opus-4-8", "gpt-5.5"). */
+  model?: string;
+  /**
+   * Resume a jcode session (--resume): its id (`session_fox_<ms>_<hex>`) or its
+   * short name (`fox`), as ONE plain word starting with a letter or digit, since
+   * --resume's value is optional and a leading `-` would make it its own flag.
+   */
   resumeSessionId?: string;
 }
 
@@ -673,6 +821,20 @@ export interface CustomModelBookkeeping extends CustomModelSelection {
   configDir?: string;
   /** Value forced onto the CLI's `model` launch param (pi/omp `custom/<id>`, grok's block name). */
   launchModel?: string;
+  /**
+   * The variable that moves the CLI's home, when the recipe redirects one (`DSH_HOME`,
+   * `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `GROK_HOME`). Its value is a path, which is what
+   * lets {@link CustomModelBookkeeping.ownEnv} keep that one entry on disk.
+   */
+  homeEnvVar?: string;
+  /**
+   * What the session itself had set under keys the selection replaced, put back when the
+   * selection goes. In memory this can hold a credential (a session's own `GEMINI_API_KEY`),
+   * so `Session.getCustomModelForPersist()` writes `homeEnvVar`'s entry, when it is an absolute
+   * path, and nothing else: tmux keeps only the injected value, so state.json is the one copy
+   * left after a restart.
+   */
+  ownEnv?: Record<string, string>;
 }
 
 /**
@@ -769,6 +931,33 @@ export interface PromptCacheStatus {
  */
 export type StatusLineExporter = 'injected' | 'collection-off' | 'workspace-statusline' | 'remote';
 
+/**
+ * What the prompt-cache keep-warm (`prompt-cache-keepwarm.ts`) is doing for a session, for
+ * the Session Options readout. Ephemeral: published through `toState()` and the
+ * `session:keepWarm` event, never restored.
+ */
+export interface KeepWarmStatus {
+  /** Effective opt-in: the session's own flag, else the app-wide default (see `keepWarmOn`). */
+  enabled: boolean;
+  /**
+   * Whether this launch carries `idleCompaction: false` (`MuxSession.idleCompactionOff`). False
+   * on a session switched on after launch: Claude Code's own idle compaction may still run
+   * until its next launch.
+   */
+  idleCompactionOff: boolean;
+  /** `armed` = waiting for the due time, `waiting` = due but deferred by a guard, `nudged` = sent, waiting for the next cache report. */
+  state: 'off' | 'armed' | 'waiting' | 'nudged' | 'stopped';
+  /** Next evaluation, epoch ms (armed, waiting, nudged). */
+  nextCheckAt?: number;
+  /** Why it is waiting or stopped, in words. */
+  reason?: string;
+  /** Nudges sent this session so far. */
+  nudges: number;
+  lastNudgeAt?: number;
+  /** When the keep-warm window after the last real prompt closes, epoch ms. */
+  budgetEndsAt?: number;
+}
+
 export interface SessionState {
   /** Unique session identifier */
   id: string;
@@ -778,10 +967,50 @@ export interface SessionState {
   status: SessionStatus;
   /** Working directory path */
   workingDir: string;
+  /**
+   * The directory the session's local tmux pane is in NOW (`#{pane_current_path}`),
+   * when known. `workingDir` is fixed at create time and never follows a `cd`;
+   * this is what a relative path printed in the terminal is relative to.
+   *
+   * Runtime-only: refreshed from the pane-exit watcher's read and never restored
+   * from disk, so a restart starts blank. Absent for remote and docker sessions
+   * (their local pane runs the ssh / docker-exec client) and for direct-PTY or
+   * rediscovered sessions. NOT a confinement root: the file routes stay confined
+   * to `workingDir`, except for an absolute path inside an
+   * {@link outsideWorktree}. Any other path resolved outside `workingDir` goes
+   * through the attachment routes like any other out-of-workspace path.
+   */
+  paneCwd?: string;
+  /**
+   * The linked git worktree inside `workingDir` that the pane is in NOW, when there is one:
+   * Claude Code's `.claude/worktrees/<name>`, or any other worktree of the repository under
+   * the session's folder. Derived from {@link paneCwd} by `live-worktree.ts`, so it is
+   * runtime-only and absent wherever `paneCwd` is, and always a folder strictly below
+   * `workingDir`: a worktree elsewhere is reported in {@link outsideWorktree}, never here. NOT a
+   * confinement root; the Files panel only starts its listing here, after `GET .../files` has
+   * checked that the real folder still lies inside `workingDir`, since a symlink can replace it
+   * without moving the pane.
+   */
+  liveWorktree?: LiveWorktree;
+  /**
+   * The worktree of the session's repository outside `workingDir` that the pane is in NOW, when
+   * there is one: a linked worktree, or the repository's main worktree for a session started in a
+   * linked one. It carries `outside: true`, and its `path` is a real path that the repository
+   * itself vouched for. The file routes serve absolute paths inside it as a second root while it
+   * still resolves to that same path. Runtime-only, like {@link liveWorktree}; at most one of
+   * the two fields is set.
+   */
+  outsideWorktree?: LiveWorktree;
   /** Remote execution metadata, present when this session runs over SSH through local tmux */
   remote?: SessionRemote;
   /** Docker execution metadata, present when this session runs inside a container via local tmux + docker exec */
   docker?: SessionDocker;
+  /**
+   * Adoption metadata, present when this session is a wrapper around a tmux
+   * session a human started outside Codeman. Its presence is what disables
+   * respawn/Ralph/orchestrator and hook-backed waits for the session.
+   */
+  adopt?: SessionAdopt;
   /** Owning username in multi-user mode; undefined in single-user (ignored when the flag is off) */
   owner?: string;
   /**
@@ -791,7 +1020,9 @@ export interface SessionState {
    *
    * ⚠️ UI DECORATION ONLY — it draws the lineage lines between tabs. It is never an
    * ownership, permission, or lifecycle signal: a child outlives its parent, and an
-   * unresolvable value is dropped rather than failing the spawn.
+   * unresolvable value is dropped rather than failing the spawn. Its one non-visual reader
+   * picks a default, nothing more: a session an agent spawned does not inherit the app-wide
+   * prompt-cache keep-warm default (`keepWarmOn`), though its own switch still works.
    */
   parentSessionId?: string;
   /** ID of currently assigned task, null if none */
@@ -828,8 +1059,28 @@ export interface SessionState {
    * `expiresAt` has passed reads as cold rather than as a stale warm.
    */
   promptCache?: PromptCacheStatus;
+  /** The model's context window in tokens from the last statusline report; absent until one arrives. */
+  contextWindowSize?: number;
   /** Why a cache report will or will not arrive (see `StatusLineExporter`); absent when unknown. */
   statusLineExporter?: StatusLineExporter;
+  /** Prompt-cache keep-warm opt-in; absent = follow the app-wide `promptCacheKeepWarm` default. */
+  keepWarmEnabled?: boolean;
+  /** What the keep-warm is doing right now; ephemeral, never restored. */
+  keepWarm?: KeepWarmStatus;
+  /**
+   * Git fetch on an interval for this session's repositories; absent = follow the app-wide
+   * `gitFetchEnabled` default. Restored on a restart, like `keepWarmEnabled`, because the choice is the
+   * user's and outlives the run.
+   */
+  gitFetchEnabled?: boolean;
+  /** Seconds between this session's runs; absent = follow the app-wide `gitFetchIntervalSeconds` default. */
+  gitFetchIntervalSeconds?: number;
+  /**
+   * What this session's last fetch did. Written to disk with the rest of the record, but the restore copies
+   * only the fields its own config lists and this is not one of them, so it is the panel's truth for the
+   * life of the session, not across a restart.
+   */
+  gitFetch?: GitFetchStatus;
   /** Pinned to the top of the session manager list (COD-139) */
   pinned?: boolean;
   /** When the session was pinned (epoch ms) — orders the pinned group, most-recent-first */
@@ -852,10 +1103,6 @@ export interface SessionState {
   ralphAutoEnableDisabled?: boolean;
   /** Ralph completion phrase (if set) */
   ralphCompletionPhrase?: string;
-  /** Parent agent ID if this session is a spawned agent */
-  parentAgentId?: string;
-  /** Child agent IDs spawned by this session */
-  childAgentIds?: string[];
   /** Nice priority enabled */
   niceEnabled?: boolean;
   /** Nice value (-20 to 19) */
@@ -867,8 +1114,8 @@ export interface SessionState {
   /**
    * True while the CLI in the pane has a mouse-tracking DECSET on, as observed
    * by the server on its way out of the stream (those sequences are stripped for
-   * the strip-full and strip-mux-and-mouse modes, claude/codex/gemini and opencode
-   * under tmux, so the browser can never see them itself). The browser
+   * the strip-full and strip-mux-and-mouse modes under tmux, so the browser can
+   * never see them itself). The browser
    * hand-encodes a click report ONLY when this is true; without it, every click
    * sent mouse reports to a CLI that never asked for them.
    */
@@ -893,10 +1140,14 @@ export interface SessionState {
   piConfig?: PiConfig;
   /** Grok-specific configuration (only for mode === 'grok') */
   grokConfig?: GrokConfig;
+  /** GitHub Copilot CLI configuration (only for mode === 'copilot') */
+  copilotConfig?: CopilotConfig;
   /** DeepSeek Harness configuration (only for mode === 'deepseek') */
   deepSeekConfig?: DeepSeekConfig;
   /** OMP-specific configuration (only for mode === 'omp') */
   ompConfig?: OmpConfig;
+  /** jcode configuration (only for mode === 'jcode') */
+  jcodeConfig?: JcodeConfig;
   /** Claude conversation session ID to resume after reboot (set by restore script) */
   resumeSessionId?: string;
   /** Claude CLI effort level (soft default via --settings, switchable in-session via /effort) */
@@ -942,6 +1193,13 @@ export interface SessionState {
    * again until the pane's own Enter is known.
    */
   lastSubmitAt?: number;
+  /**
+   * Wall-clock ms of the last submit that was NOT the prompt-cache keep-alive
+   * (Session.lastRealPromptAt): the keep-warm cap's clock. Persisted so a restart
+   * does not reopen the window, which `lastSubmitAt` cannot do since every nudge
+   * moves it.
+   */
+  lastRealPromptAt?: number;
   /**
    * Claude conversations this pane has been on, oldest first, current last.
    * Written ONLY from a first-hand `UserPromptSubmit`/`Stop` hook payload —

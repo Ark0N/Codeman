@@ -40,12 +40,20 @@ export interface UsageWindow {
   usedPercentage: number;
   /** Epoch MILLISECONDS when the window resets (statusline reports seconds). */
   resetAt: number;
+  /**
+   * Absolute counts, for a window measured in requests rather than as a bare percent (Copilot's
+   * monthly premium-request quota). Absent for the Claude and Codex windows.
+   */
+  used?: number;
+  limit?: number;
 }
 
 /** Normalized telemetry Codeman broadcasts to the UI. */
 export interface StatusTelemetry {
   fiveHour?: UsageWindow;
   sevenDay?: UsageWindow;
+  /** A calendar-month quota (GitHub Copilot's premium requests); not a rolling 5h/7d window. */
+  monthly?: UsageWindow;
   /** Context-window percent used, 0–100 (bonus field from the same payload). */
   contextUsedPercentage?: number;
   /** Session cost in USD (bonus field). */
@@ -60,7 +68,12 @@ export interface RawStatuslinePayload {
     five_hour?: { used_percentage?: number; resets_at?: number };
     seven_day?: { used_percentage?: number; resets_at?: number };
   };
-  context_window?: { used_percentage?: number; total_input_tokens?: number; total_output_tokens?: number };
+  context_window?: {
+    used_percentage?: number;
+    total_input_tokens?: number;
+    total_output_tokens?: number;
+    context_window_size?: number;
+  };
   cost?: { total_cost_usd?: number };
   model?: { display_name?: string };
   /** Main-conversation prompt-cache statistics (Claude Code v2.1.251+); absent before the first API response. */
@@ -197,6 +210,51 @@ export function parseCodexRateLimitsResponse(value: unknown): StatusTelemetry | 
 }
 
 /**
+ * Normalize GitHub Copilot's quota snapshot (`GET /copilot_internal/user`) into the chip's monthly
+ * window. Only `premium_interactions` is a metered quota: `chat` and `completions` report
+ * `unlimited: true` on every plan seen, and an unlimited premium quota has nothing to meter, so it
+ * yields null and the chip shows no Copilot row rather than a bar stuck at 0%.
+ */
+export function parseCopilotQuotaResponse(value: unknown): StatusTelemetry | null {
+  if (!value || typeof value !== 'object') return null;
+  const raw = value as {
+    quota_snapshots?: {
+      premium_interactions?: {
+        entitlement?: unknown;
+        remaining?: unknown;
+        percent_remaining?: unknown;
+        unlimited?: unknown;
+      };
+    };
+    quota_reset_date_utc?: unknown;
+    quota_reset_date?: unknown;
+  };
+  const snap = raw.quota_snapshots?.premium_interactions;
+  if (!snap || typeof snap !== 'object' || snap.unlimited === true) return null;
+  // A zero (or negative) quota that is not 'unlimited' would show a stuck 0% or 100% row.
+  if (typeof snap.entitlement === 'number' && snap.entitlement <= 0) return null;
+
+  const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+  const limit = finite(snap.entitlement) && snap.entitlement > 0 ? snap.entitlement : undefined;
+  let usedPct: number | null = null;
+  if (finite(snap.percent_remaining)) usedPct = 100 - snap.percent_remaining;
+  else if (limit !== undefined && finite(snap.remaining)) usedPct = (1 - snap.remaining / limit) * 100;
+  if (usedPct === null) return null;
+
+  const resetRaw = typeof raw.quota_reset_date_utc === 'string' ? raw.quota_reset_date_utc : raw.quota_reset_date;
+  const parsedReset = typeof resetRaw === 'string' ? Date.parse(resetRaw) : NaN;
+  const monthly: UsageWindow = {
+    usedPercentage: clampPct(usedPct),
+    resetAt: Number.isFinite(parsedReset) && parsedReset > 0 ? parsedReset : 0,
+  };
+  if (limit !== undefined && finite(snap.remaining)) {
+    monthly.limit = limit;
+    monthly.used = Math.max(0, Math.round(limit - snap.remaining));
+  }
+  return { monthly };
+}
+
+/**
  * Current-session status for the in-terminal statusline footer. This is the
  * "status of the current session" the user sees in Claude's footer — distinct
  * from the account-wide plan limits, which live ONLY in the Codeman header chip.
@@ -206,6 +264,8 @@ export interface SessionStatus {
   inputTokens?: number;
   outputTokens?: number;
   contextUsedPercentage?: number;
+  /** The model's context window in tokens (200k, or 1M with extended context). */
+  contextWindowSize?: number;
   /** Prompt-cache state of the main conversation, when the statusline reports it. */
   cache?: PromptCacheStatus;
 }
@@ -233,6 +293,10 @@ export function parseSessionStatus(data: RawStatuslinePayload | undefined): Sess
   }
   if (typeof cw?.used_percentage === 'number') {
     s.contextUsedPercentage = clampPct(cw.used_percentage);
+  }
+  const windowSize = cw?.context_window_size;
+  if (typeof windowSize === 'number' && Number.isFinite(windowSize) && windowSize > 0) {
+    s.contextWindowSize = windowSize;
   }
   const cache = parsePromptCache(data);
   if (cache) s.cache = cache;
@@ -286,10 +350,21 @@ export function formatSessionStatusText(s: SessionStatus | null, now: number = D
  * localStorage write + identical chip re-render each time.
  */
 export function telemetrySignature(t: StatusTelemetry): string {
-  return JSON.stringify([
+  const parts: Array<number | null> = [
     t.fiveHour ? Math.round(t.fiveHour.usedPercentage) : null,
     t.fiveHour?.resetAt ?? null,
     t.sevenDay ? Math.round(t.sevenDay.usedPercentage) : null,
     t.sevenDay?.resetAt ?? null,
-  ]);
+  ];
+  // Appended only when present, so the Claude and Codex signatures are byte-identical to before.
+  // The limit is part of it: a plan change mid-month (300 to 1500 with 100 used) keeps `used` and the reset.
+  if (t.monthly) {
+    parts.push(
+      Math.round(t.monthly.usedPercentage),
+      t.monthly.used ?? null,
+      t.monthly.limit ?? null,
+      t.monthly.resetAt
+    );
+  }
+  return JSON.stringify(parts);
 }

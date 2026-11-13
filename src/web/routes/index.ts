@@ -12,9 +12,11 @@ export { registerCronRoutes } from './cron-routes.js';
 export { registerSystemRoutes } from './system-routes.js';
 export { registerHookEventRoutes } from './hook-event-routes.js';
 export { registerApprovalRoutes } from './approval-routes.js';
+export { registerInboxRoutes } from './inbox-routes.js';
 export { registerRebootRestoreRoutes } from './reboot-restore-routes.js';
 export { registerReadMyMindRoutes } from './readmymind-routes.js';
 export { registerGitStatusRoutes } from './git-status-routes.js';
+export { registerEditHistoryRoutes } from './edit-history-routes.js';
 export { registerStoryRoutes } from './story-routes.js';
 export { registerStatusTelemetryRoutes } from './status-telemetry-routes.js';
 export { registerCaseRoutes } from './case-routes.js';
@@ -33,7 +35,9 @@ export { registerVoiceRoutes } from './voice-routes.js';
 export { registerWebviewRoutes, tryWebviewRefererFallback } from './webview-routes.js';
 export { registerTabLayoutRoutes } from './tab-layout-routes.js';
 export { registerMcpSyncRoutes } from './mcp-sync-routes.js';
+export { registerConfigBackupRoutes, runConfigBackup } from './config-backup-routes.js';
 export { registerWebhookRoutes } from './webhook-routes.js';
+export { registerDiscordRoutes } from './discord-routes.js';
 export { registerDoctorRoutes } from './doctor-routes.js';
 export {
   registerCustomModelRoutes,
@@ -42,7 +46,8 @@ export {
   closeAllLlamaSwapLogTails,
   detectCustomModelSwapDisplacements,
   pruneIdleLlamaSwapLogTails,
-  type CustomModelSessionLike,
-  type CustomModelSwapDisplacement,
 } from './custom-model-routes.js';
-export { registerCliRegistryRoutes, readCliManagementEnabled, type CliListItem } from './cli-registry-routes.js';
+export { registerCliRegistryRoutes } from './cli-registry-routes.js';
+export { registerLocalModelRoutes } from './local-model-routes.js';
+
+export { registerAgentSessionRoutes } from './agent-session-routes.js';

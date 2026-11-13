@@ -276,6 +276,16 @@ describe('TerminalTile wheel paging in a real browser', () => {
       const down = `\x1b[<65;${expected.col};${expected.row}M`;
       expect(after.sent.map(([, data]) => data)).toEqual([up.repeat(4), down.repeat(2)]);
 
+      // A slow macOS mouse click is only ~4px. Each isolated click must report,
+      // not lose its fraction during the 300ms pause between clicks.
+      await page.waitForTimeout(300);
+      for (let click = 0; click < 5; click++) {
+        await page.mouse.wheel(0, -4);
+        await page.waitForTimeout(300);
+      }
+      const afterSlow = await snap();
+      expect(afterSlow.sent.slice(after.sent.length).map(([, data]) => data)).toEqual(Array(5).fill(up));
+
       // Shift+wheel is the explicit "local scrollback" gesture: scrolled locally
       // by the tile (xterm alone turns it into a horizontal no-op), unforwarded.
       await page.keyboard.down('Shift');
@@ -283,7 +293,7 @@ describe('TerminalTile wheel paging in a real browser', () => {
       await page.keyboard.up('Shift');
       await page.waitForTimeout(150);
       const shifted = await snap();
-      expect(shifted.sent.length).toBe(after.sent.length);
+      expect(shifted.sent.length).toBe(afterSlow.sent.length);
       expect(shifted.viewportY).toBeLessThan(before.baseY);
     } finally {
       await page.evaluate((id) => {
@@ -295,6 +305,125 @@ describe('TerminalTile wheel paging in a real browser', () => {
         w.app._sendInputEphemeral = probe.realEphemeral;
         delete w.__tileProbe;
       }, PROBE_ID);
+    }
+  });
+
+  it('preserves local Ctrl/sideways scrolling and forwards small native clicks without amplifying touchpad streams', async () => {
+    const id = 'primary-wheel-probe';
+    await page.evaluate(async (id) => {
+      const a = (window as any).app;
+      const t = a.terminal;
+      (window as any).__primaryWheelProbe = {
+        sent: [],
+        activeId: a.activeSessionId,
+        realEphemeral: a._sendInputEphemeral,
+        point: a._clientPointToCell,
+      };
+      a._sendInputEphemeral = (sid: string, data: string) => (window as any).__primaryWheelProbe.sent.push([sid, data]);
+      a._clientPointToCell = () => ({ col: 1, row: 1 });
+      a.sessions.set(id, { id, mode: 'shell' });
+      a.activeSessionId = id;
+      t.reset();
+      await new Promise<void>((resolve) =>
+        t.write(Array.from({ length: 100 }, (_, i) => `LOCAL_${i}\r\n`).join(''), resolve)
+      );
+      t.scrollToBottom();
+    }, id);
+    const fire = async (options: { deltaY: number; deltaX?: number; ctrlKey?: boolean }) => {
+      await page.evaluate((options) => {
+        const t = (window as any).app.terminal;
+        t.element.dispatchEvent(new WheelEvent('wheel', { ...options, deltaMode: 0, bubbles: true, cancelable: true }));
+      }, options);
+      await page.waitForTimeout(80); // actual 40ms batch and animation frames
+    };
+    try {
+      for (const options of [
+        { deltaY: -25, ctrlKey: true },
+        { deltaY: -25, deltaX: 100 },
+      ]) {
+        const before = await page.evaluate(() => {
+          const t = (window as any).app.terminal;
+          t.scrollToBottom();
+          return t.buffer.active.viewportY;
+        });
+        expect(before).toBeGreaterThan(0);
+        await fire(options);
+        const after = await page.evaluate(() => (window as any).app.terminal.buffer.active.viewportY);
+        expect(after).toBe(before - 1); // local shell behavior matches master
+      }
+      for (const mode of ['claude', 'codex', 'copilot']) {
+        await page.evaluate(
+          ({ id, mode }) => {
+            const a = (window as any).app;
+            a.sessions.set(id, {
+              id,
+              mode,
+              cliVersion: mode === 'claude' ? '2.1.300' : undefined,
+              cliMouseTracking: true,
+            });
+            a._wheelTickGesture = null;
+            a._wheelTickSession = null;
+            a._selectGeneration++;
+            (window as any).__primaryWheelProbe.sent.length = 0;
+          },
+          { id, mode }
+        );
+        for (const options of [
+          { deltaY: -25, ctrlKey: true },
+          { deltaY: -25, deltaX: 100 },
+        ])
+          await fire(options);
+        expect(await page.evaluate(() => (window as any).__primaryWheelProbe.sent.length)).toBe(0);
+        for (let click = 0; click < 5; click++) {
+          await fire({ deltaY: -4 });
+          await page.waitForTimeout(220);
+        }
+        expect(await page.evaluate(() => (window as any).__primaryWheelProbe.sent)).toEqual(
+          Array.from({ length: 5 }, () => [id, '\x1b[<64;1;1M'])
+        );
+        await page.waitForTimeout(200);
+        await page.evaluate(() => {
+          (window as any).__primaryWheelProbe.sent.length = 0;
+        });
+        await page.evaluate(() => {
+          const t = (window as any).app.terminal;
+          for (let event = 0; event < 10; event++)
+            t.element.dispatchEvent(
+              new WheelEvent('wheel', {
+                deltaY: -2.5,
+                deltaMode: 0,
+                bubbles: true,
+                cancelable: true,
+              })
+            );
+        });
+        await page.waitForTimeout(80);
+        expect(await page.evaluate(() => (window as any).__primaryWheelProbe.sent)).toEqual([[id, '\x1b[<64;1;1M']]);
+      }
+      await page.evaluate((id) => {
+        const a = (window as any).app;
+        a.sessions.set(id, { id, mode: 'codex', cliMouseTracking: false });
+        a.terminal.clear();
+        a.terminal.scrollToBottom();
+        (window as any).__primaryWheelProbe.sent.length = 0;
+      }, id);
+      expect(await page.evaluate(() => (window as any).app.terminal.buffer.active.baseY)).toBe(0);
+      for (const options of [
+        { deltaY: -25, ctrlKey: true },
+        { deltaY: -25, deltaX: 100 },
+      ])
+        await fire(options);
+      expect(await page.evaluate(() => (window as any).__primaryWheelProbe.sent.length)).toBe(0);
+    } finally {
+      await page.evaluate((id) => {
+        const a = (window as any).app,
+          p = (window as any).__primaryWheelProbe;
+        a.activeSessionId = p.activeId;
+        a._sendInputEphemeral = p.realEphemeral;
+        a._clientPointToCell = p.point;
+        a.sessions.delete(id);
+        delete (window as any).__primaryWheelProbe;
+      }, id);
     }
   });
 });

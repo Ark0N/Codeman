@@ -4,9 +4,10 @@
  * auto-clear, auto-compact, image watcher, flicker filter, and logout.
  */
 
-import { FastifyInstance, type FastifyReply } from 'fastify';
+import { claudeProjectDirName } from '../../case-rename.js';
+import { FastifyInstance, type FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { join, dirname, extname, basename } from 'node:path';
+import { join, dirname, extname, basename, isAbsolute, resolve as resolvePath } from 'node:path';
 import { homedir } from 'node:os';
 import { existsSync, statSync, mkdirSync, writeFileSync } from 'node:fs';
 import { execFile } from 'node:child_process';
@@ -28,11 +29,24 @@ import {
   type AntigravityConfig,
   type PiConfig,
   type GrokConfig,
+  type CopilotConfig,
   type DeepSeekConfig,
   type OmpConfig,
   type RemoteHost,
 } from '../../types.js';
+import { AdoptForeignSessionSchema } from '../schemas.js';
 import {
+  discoverForeignSessions,
+  invalidateForeignCache,
+  readAllDockerCases,
+  readAllRemoteHosts,
+} from '../../foreign-tmux-discovery.js';
+import { adoptTargetIdentity, foreignTargetKey, foreignViewSessionName } from '../../foreign-tmux.js';
+import { requireAdmin } from '../route-helpers.js';
+import type { SessionAdopt } from '../../types/session.js';
+import type { ForeignTmuxSession } from '../../types/foreign-tmux.js';
+import {
+  GuardedInputBusyError,
   Session,
   cliTakesSessionModel,
   isAltScreenStripMode,
@@ -54,6 +68,8 @@ import {
   AutoClearSchema,
   AutoCompactSchema,
   AutoResumeSchema,
+  KeepWarmSchema,
+  GitFetchSettingsSchema,
   PinSessionSchema,
   ImageWatcherSchema,
   FlickerFilterSchema,
@@ -65,8 +81,10 @@ import {
   SessionWaitOutputQuerySchema,
   CustomModelSelectionSchema,
 } from '../schemas.js';
-import { readCustomModelHosts } from '../../custom-model-hosts.js';
+import { readCustomModelHosts, resolveCustomModelContextLength } from '../../custom-model-hosts.js';
+import { getLocalModelService } from '../../local-model/install-job.js';
 import { applyCustomModelInjection, removeConfigDir } from '../../custom-model-injection-apply.js';
+import { buildCustomModelInjection } from '../../custom-model-injection.js';
 import {
   getLlamaSwapStatus,
   triggerLlamaSwapLoad,
@@ -75,7 +93,7 @@ import {
 } from './custom-model-routes.js';
 import { matchesPattern } from '../../config/cli-registry/patterns.js';
 import { ownerLayoutKey } from '../../tab-layout-persistence.js';
-import { TabLayoutValidationError } from '../../tab-layout.js';
+import { TabLayoutValidationError, type TabLayout } from '../../tab-layout.js';
 import {
   sessionWaits,
   resolveWaitSignals,
@@ -106,18 +124,22 @@ import {
   ownerFor,
   parseBody,
   persistAndBroadcastSession,
+  readJsonConfig,
   resolveAgentCaseOrigin,
   resolveCasesDir,
   resolveParentSessionId,
   sessionCapacityMessage,
-  SETTINGS_PATH,
   validatePathWithinBase,
+  waitCapacityResponse,
+  abortOnClientHangUp,
 } from '../route-helpers.js';
+import { mutateSettingsFile } from '../settings-writer.js';
 import { buildAgentCaseMarker, writeAgentCaseMarker } from '../../agent-case-marker.js';
+import { agentInbox } from '../agent-inbox.js';
 import { canUsernameRunPrivilegedCommands, resolveClaudeModeForUsername } from '../../user-store.js';
 import { clampEnvOverridesForOwner } from '../../session-env-clamp.js';
 import { enabledClis, getCli } from '../../config/cli-registry/registry.js';
-import type { AgentSkillDir, NewlineSequence } from '../../config/cli-registry/types.js';
+import type { AgentSkillDir, CliEntry, NewlineSequence } from '../../config/cli-registry/types.js';
 import { resolveCliLaunchError } from '../../utils/cli-launcher.js';
 import { applyLaunchDefaults } from '../launch-defaults.js';
 import { legacyConfigForMode } from '../../session-cli-registry-bridge.js';
@@ -134,6 +156,7 @@ import {
   seedAgentSessionPreamble,
   applyWorkspaceHooks,
   refreshStaleCodemanHooks,
+  applyApprovalHookFile,
 } from '../../hooks-config.js';
 import { generateClaudeMd } from '../../templates/claude-md.js';
 import { imageWatcher } from '../../image-watcher.js';
@@ -154,7 +177,15 @@ import {
   setHistoryIndexRefresher,
   setHistorySessionIndex,
 } from '../session-history-index.js';
-import type { SessionPort, EventPort, ConfigPort, InfraPort, AuthPort, TabLayoutPort } from '../ports/index.js';
+import type {
+  SessionPort,
+  EventPort,
+  ConfigPort,
+  InfraPort,
+  AuthPort,
+  TabLayoutPort,
+  KeepWarmPort,
+} from '../ports/index.js';
 import { RunSummaryTracker } from '../../run-summary.js';
 
 import { MAX_INPUT_LENGTH, MAX_SESSION_NAME_LENGTH } from '../../config/terminal-limits.js';
@@ -184,11 +215,13 @@ import {
 } from '../../docker-hosts.js';
 import { resolveCaseRepository, resolveManagedWorktree } from '../../git-worktrees.js';
 import { LRUMap } from '../../utils/lru-map.js';
-import { describeUnknownPath, probePathKind } from '../../utils/index.js';
+import { describeUnknownPath, probePathKind, type PathProbeOptions } from '../../utils/index.js';
+import { claudeProjectsDir } from '../../utils/claude-transcript.js';
 import { findLatestOmpSessionId } from '../../utils/omp-session-resolver.js';
 import { scanOmpSessionsHistory } from '../../omp-transcript.js';
 import { scanCodexSessionsHistory, codexThreadBySessionId } from '../../codex-transcript.js';
 import {
+  transcriptNeedsScreenCapture,
   getLastTranscriptResponse,
   isExternalCliTranscriptMode,
   parseExternalCliTranscript,
@@ -201,6 +234,83 @@ import { UPLOADS_DIR } from '../paste-image-gc.js';
 // Path to linked-cases registry (same file used by case-routes resolveCasePath)
 const LINKED_CASES_FILE = dataPath('linked-cases.json');
 const CODEMAN_CONFIG_DIR = getDataDir();
+
+const SAFE_CASE_NAME = /^[a-zA-Z0-9_-]+$/;
+
+/** `<repo>/.claude/worktrees/<name>`: the layout Claude Code's own worktree feature creates. */
+const CLAUDE_WORKTREE_PATH = /^(.*)\/\.claude\/worktrees\/([^/]+)\/?$/;
+
+/** Did the committed layout put this session in a named group (not Ungrouped)? */
+function landedInGroup(layout: TabLayout | undefined, sessionId: string): boolean {
+  return !!layout?.groups.some((group) => group.refs.some((ref) => ref.kind === 'session' && ref.id === sessionId));
+}
+
+/**
+ * Guard a session-supplied configDir home BEFORE `applyCustomModelInjection` runs.
+ *
+ * The apply resolves the CLI's real home from this session's env override and then runs
+ * synchronous `existsSync`/`mkdirSync` on it (deepseek `DSH_HOME`, any future
+ * `linkFromRealHome` recipe, and claude's `CLAUDE_CONFIG_DIR` for `projects`). A path on an
+ * unreachable network mount makes a synchronous stat wait forever, and this runs INSIDE a
+ * request handler, so it would freeze the whole web server (CLAUDE.md, the #516 rule on
+ * user-chosen paths). A relative home is left to the apply, which already refuses to join
+ * non-absolute values.
+ *
+ * Probe the session's own home with `probePathKind(..., { pastCap: true })` first: on
+ * `'unknown'` (a dead mount that never answered) hand the apply a lookup that hides that
+ * one env var, so linking falls through to the server's own environment and the unresponsive
+ * path is never touched. Any other entry's lookup passes through untouched. Boot recovery
+ * passes `probeOptions` of `{}`: it walks every saved session, so it keeps the bulk cap.
+ */
+export async function guardSessionConfigDirHome(
+  entry: Pick<CliEntry, 'capabilities'>,
+  baseLookup: (envVar: string) => string | undefined,
+  probeOptions: PathProbeOptions = { pastCap: true }
+): Promise<(envVar: string) => string | undefined> {
+  const recipe = entry.capabilities.customModelInjection;
+  const dirEnvVar =
+    recipe?.kind === 'env'
+      ? recipe.configDirVar
+      : recipe?.kind === 'configDir' && recipe.linkFromRealHome?.length
+        ? recipe.dirEnvVar
+        : undefined;
+  if (!dirEnvVar) return baseLookup;
+  const supplied = baseLookup(dirEnvVar)?.trim();
+  if (!supplied || !isAbsolute(supplied)) return baseLookup;
+  if ((await probePathKind(supplied, probeOptions)) === 'unknown') {
+    console.warn(
+      `[custom-model] ${dirEnvVar} (${supplied}) did not answer; linking from the server's own home instead`
+    );
+    return (envVar: string) => (envVar === dirEnvVar ? undefined : baseLookup(envVar));
+  }
+  return baseLookup;
+}
+
+/**
+ * The case a POST /api/sessions `workingDir` belongs to, for its default session
+ * group: a direct child of the caller's case space, or (admin / single-user, as
+ * GET /api/cases lists them) a linked case's exact path, or a Claude worktree
+ * (`<case>/.claude/worktrees/<name>`) of either. Lexical only: the browser sends
+ * the path the case list gave it, and this must never touch a possibly-dead
+ * mount. Anything else is no case, which keeps today's placement.
+ */
+async function inferLocalCaseName(req: FastifyRequest, workingDir: string): Promise<string | undefined> {
+  // The Git worktrees modal launches Claude through this route in the worktree, and every other CLI
+  // through quick-start with the case name: both are sessions of that case.
+  const resolved = resolvePath(workingDir);
+  const target = CLAUDE_WORKTREE_PATH.exec(resolved)?.[1] || resolved;
+  const user = getAuthUser(req);
+  if (dirname(target) === resolvePath(resolveCasesDir(user))) {
+    const name = basename(target);
+    if (SAFE_CASE_NAME.test(name)) return name;
+  }
+  if (isMultiUserMode() && !isAdmin(req)) return undefined;
+  const linked = await readJsonConfig<Record<string, string>>(LINKED_CASES_FILE, 'linked cases', {});
+  for (const [name, path] of Object.entries(linked)) {
+    if (SAFE_CASE_NAME.test(name) && typeof path === 'string' && resolvePath(path) === target) return name;
+  }
+  return undefined;
+}
 
 // Pre-compiled regex for terminal buffer cleaning (avoids per-request compilation)
 // eslint-disable-next-line no-control-regex
@@ -244,7 +354,7 @@ const MOUSE_TRACKING_PATTERN = /\x1b\[\?(?:1000|1001|1002|1003|1005|1006|1007)[h
  * - `strip-full` (claude/codex/gemini): alt-screen toggles, `3J` and mouse DECSETs.
  *   xterm obeys the toggles by switching to its scrollback-less alt buffer and wiping
  *   saved lines, so history disappeared on tab switch.
- * - `strip-mux-and-mouse` (opencode, tmux-backed): alt-screen toggles and mouse DECSETs.
+ * - `strip-mux-and-mouse` (tmux-backed): alt-screen toggles and mouse DECSETs.
  *   A replayed tracking enable parks xterm in report mode, where a drag goes to the CLI
  *   instead of selecting text (and Ctrl+C without a selection is opencode's app_exit).
  *   `3J` stays: a TUI is not a `clear` consumer.
@@ -329,6 +439,23 @@ export function stripInkRedrawBloat(buffer: string): string {
  * (valid UTF-8, no NUL byte) rather than on a signature, since plain text has none.
  */
 const TEXT_UPLOAD_EXTS = new Set(['.txt', '.md', '.csv', '.tsv', '.json', '.log', '.yaml', '.yml', '.xml']);
+
+/**
+ * Documents a user hands an agent to read: the office formats plus the text
+ * family. Curated on purpose, never SUPPORTED_ATTACHMENT_EXTENSIONS or
+ * EDITABLE_EXTENSIONS, which carry sh/py/js/html; a prompt upload is a thing
+ * to read, not a thing to run or serve. Each is judged on its bytes by
+ * imageMagicMatchesExt (signature, or UTF-8 without NUL for text). The browser
+ * keeps its own copies (test/upload-document-list-parity.test.ts pins them).
+ */
+export const ALLOWED_DOCUMENT_EXTS: ReadonlySet<string> = new Set([
+  '.pdf',
+  '.docx',
+  '.pptx',
+  '.xlsx',
+  '.zip',
+  ...TEXT_UPLOAD_EXTS,
+]);
 
 /**
  * Validate upload bytes against a declared extension. Sniffs the first ~12 bytes
@@ -611,7 +738,8 @@ export async function _clampExternalCliBypassForOwner(
   antigravityConfig?: AntigravityConfig,
   piConfig?: PiConfig,
   grokConfig?: GrokConfig,
-  deepSeekConfig?: DeepSeekConfig
+  deepSeekConfig?: DeepSeekConfig,
+  copilotConfig?: CopilotConfig
 ): Promise<{
   codexConfig: CodexConfig | undefined;
   geminiConfig: GeminiConfig | undefined;
@@ -619,6 +747,7 @@ export async function _clampExternalCliBypassForOwner(
   piConfig: PiConfig | undefined;
   grokConfig: GrokConfig | undefined;
   deepSeekConfig: DeepSeekConfig | undefined;
+  copilotConfig: CopilotConfig | undefined;
 }> {
   const out = await clampExternalCliBypassForOwner(owner, {
     codexConfig,
@@ -627,6 +756,7 @@ export async function _clampExternalCliBypassForOwner(
     piConfig,
     grokConfig,
     deepSeekConfig,
+    copilotConfig,
   });
   return out as {
     codexConfig: CodexConfig | undefined;
@@ -635,6 +765,7 @@ export async function _clampExternalCliBypassForOwner(
     piConfig: PiConfig | undefined;
     grokConfig: GrokConfig | undefined;
     deepSeekConfig: DeepSeekConfig | undefined;
+    copilotConfig: CopilotConfig | undefined;
   };
 }
 
@@ -667,23 +798,6 @@ function parseWaitQuery<T>(schema: z.ZodType<T>, query: unknown, label: string):
     statusCode: 400,
     body: createErrorResponse(ApiErrorCode.INVALID_INPUT, message),
   });
-}
-
-/**
- * Map a waiter-cap rejection to the code that tells the caller the truth.
- *
- * The two caps mean different things and warrant different recovery: `session` is
- * genuinely about THIS session, while `owner` and `total` are process-wide budgets
- * that say nothing about it. Reporting a global cap as `SESSION_BUSY` (409,
- * documented as "Session is busy") sent an agent off to a different session to hit
- * the identical error. `RATE_LIMITED` is the code whose whole meaning is "come back
- * later", and clients and proxies already treat 429 that way.
- */
-function waitCapacityResponse(err: WaitCapacityError): ApiResponse<never> {
-  const code = err.scope === 'session' ? ApiErrorCode.SESSION_BUSY : ApiErrorCode.RATE_LIMITED;
-  // The registry's message already names the scope and the limit; passing it through
-  // verbatim keeps the wording in one place.
-  return createErrorResponse(code, err.message);
 }
 
 /**
@@ -863,40 +977,12 @@ export function _paneDeathWatcherCount(): number {
 }
 
 /**
- * An `AbortController` that fires when the CLIENT goes away, and only then.
- *
- * Freeing an abandoned waiter matters because the documented pattern is a loop of
- * short waits: `curl --max-time 30 ".../wait?timeout=600000"` abandons a live waiter
- * every iteration until the cap is hit and an innocent session reports busy. Same for
- * any proxy that cuts the connection.
- *
- * ⚠️ **It must listen on the RESPONSE, not the request.** `req.raw` emits `'close'`
- * as soon as the request body has finished streaming, which on a POST is BEFORE the
- * handler ever blocks — measured at +1ms with `aborted: false`, indistinguishable
- * from a real hang-up at +0ms. Wiring the abort there cancels every send-and-wait
- * instantly and silently kills the feature (it survives on GET only because a GET has
- * no body to finish). `reply.raw` emits `'close'` both when the response completes
- * and when the socket dies, and `writableFinished` is what tells those apart: true
- * only if the response actually went out. The guard is load-bearing, not defensive.
- *
- * `app.inject()` never emits `'close'` at all, so this is only observable over real
- * HTTP — which is why the regression test for it binds a port.
- */
-function abortOnClientHangUp(reply: FastifyReply): AbortController {
-  const controller = new AbortController();
-  reply.raw.on('close', () => {
-    if (!reply.raw.writableFinished) controller.abort();
-  });
-  return controller;
-}
-
-/**
  * Inject the agent skill into a case on create, surfacing only the REFUSALS.
  *
  * `applyAgentSkill` declines two shapes rather than writing through them ('foreign':
  * an unmarked skills/codeman the user authored; 'symlink': the skill dir or its
- * parent is a link). Both were silent: the user flips `agentSkillEnabled` on, nothing
- * appears in the case, and there is nowhere to look for why. The ordinary outcomes
+ * parent is a link). Both were silent: `agentSkillEnabled` is on (the default since
+ * 1.50.0), nothing appears in the case, and there is nowhere to look for why. The ordinary outcomes
  * ('installed'/'refreshed'/'unchanged') stay unlogged since they would print on every
  * single session create.
  *
@@ -920,7 +1006,7 @@ async function injectAgentSkill(casePath: string, dir: AgentSkillDir): Promise<v
       );
     } else if (result === 'symlink') {
       console.warn(
-        `[agent-skill] not injected: ${skillDir} (or its parent) is a symlink, refusing to write through it. Replace it with a real directory to let Codeman install the skill.`
+        `[agent-skill] not injected: ${skillDir}, its parent or its reference folder is a symlink, refusing to write through it. Replace it with a real directory to let Codeman install the skill.`
       );
     }
   } catch (err: unknown) {
@@ -1001,10 +1087,23 @@ function wakeableHost(host: RemoteHost): WakeableRemote {
 
 export function registerSessionRoutes(
   app: FastifyInstance,
-  ctx: SessionPort & EventPort & ConfigPort & InfraPort & AuthPort & TabLayoutPort,
+  ctx: SessionPort & EventPort & ConfigPort & InfraPort & AuthPort & TabLayoutPort & KeepWarmPort,
   /** Test seam: inject a registry with fake IO instead of the real TCP/WoL probes. */
   options: { remoteWake?: RemoteWakeRegistry } = {}
 ): RemoteWakeRegistry {
+  /**
+   * Install the approval hook MODULE a CLI declares (`capabilities.approvalHookFile`,
+   * omp) into a LOCAL workspace, so its approval dialogs raise an alert. Shared by
+   * POST /api/sessions and POST /api/quick-start so the two cannot drift; callers own
+   * the remote/Docker/named-workspace conditions and call it only after the launch
+   * pre-flight. Gated on `workspaceHooksEnabled` like Claude's block. Best-effort: a
+   * failure here must not fail the create.
+   */
+  const installApprovalHook = async (mode: SessionMode, workspace: string): Promise<void> => {
+    const fileName = getCli(mode)?.capabilities.approvalHookFile;
+    if (!fileName || !(await ctx.getWorkspaceHooksEnabled())) return;
+    await applyApprovalHookFile(workspace, fileName).catch(() => {});
+  };
   // Wake-on-LAN for sleeping remote hosts (see remote-wake.ts). One registry per
   // route registration (= one web server) — the same shape as the process-wide
   // `sessionWaits` singleton, but without the global.
@@ -1268,6 +1367,13 @@ export function registerSessionRoutes(
       }
     }
 
+    // Approval hook module (omp): after the pre-flight, like the agent skill below, so a
+    // CLI that cannot start leaves nothing in the workspace. Same remote and
+    // named-workingDir conditions as the hooks above.
+    if (!remote && body.workingDir) {
+      await installApprovalHook(body.mode ?? 'claude', workingDir);
+    }
+
     // Agent skill (docs/agent-control-plan.md §2): ADD-ONLY on create, same shared-
     // workspace rationale as the statusLine above: a create must never remove the
     // skill from under other live sessions in the repo. Marker-guarded, so a user's
@@ -1313,8 +1419,9 @@ export function registerSessionRoutes(
     const globalNice = await ctx.getGlobalNiceConfig();
     const modelConfig = await ctx.getModelConfig();
     const mode = body.mode || 'claude';
-    // Synced App Settings launch defaults (capabilities.launchDefaults, codex's model and
-    // effort today) fill the CLI's own config object where the caller left it unset.
+    // Synced App Settings launch defaults (capabilities.launchDefaults, codex's model,
+    // effort and network access today) fill the CLI's own config object where the caller
+    // left it unset.
     // Local launches only: a remote attach runs whatever the remote pane already runs.
     const launchBody = remote ? body : await applyLaunchDefaults(mode, body);
     // Where a model override comes from is a capability, and the three answers are
@@ -1348,6 +1455,7 @@ export function registerSessionRoutes(
       piConfig: gatedPiConfig,
       grokConfig: gatedGrokConfig,
       deepSeekConfig: gatedDeepSeekConfig,
+      copilotConfig: gatedCopilotConfig,
     } = await _clampExternalCliBypassForOwner(
       owner,
       launchBody.codexConfig,
@@ -1355,7 +1463,8 @@ export function registerSessionRoutes(
       launchBody.antigravityConfig,
       launchBody.piConfig,
       launchBody.grokConfig,
-      launchBody.deepSeekConfig
+      launchBody.deepSeekConfig,
+      launchBody.copilotConfig
     );
     const terminalHistoryConfig = await ctx.getTerminalHistoryConfig();
     const session = new Session({
@@ -1374,6 +1483,9 @@ export function registerSessionRoutes(
       antigravityConfig: mode === 'antigravity' ? gatedAntigravityConfig : undefined,
       piConfig: mode === 'pi' ? gatedPiConfig : undefined,
       grokConfig: mode === 'grok' ? gatedGrokConfig : undefined,
+      copilotConfig: mode === 'copilot' ? gatedCopilotConfig : undefined,
+      // No bypass switch to clamp (jcode has no approval prompts), so the body's own config.
+      jcodeConfig: mode === 'jcode' ? launchBody.jcodeConfig : undefined,
       deepSeekConfig: mode === 'deepseek' ? gatedDeepSeekConfig : undefined,
       ompConfig: resolveOmpConfigForCreate(mode, workingDir, launchBody.ompConfig),
       resumeSessionId: validatedResumeId,
@@ -1386,9 +1498,14 @@ export function registerSessionRoutes(
       parentSessionId: resolveParentSessionId(ctx, req, body.parentSessionId, owner),
     });
 
-    const tabLayout = body.tabGroupId
-      ? await ctx.addSession(session, { tabGroupId: body.tabGroupId })
-      : await ctx.addSession(session);
+    // Only a named workingDir: without one the session starts in the server's own cwd, which is no case.
+    const placementCase = remote || !body.workingDir ? undefined : await inferLocalCaseName(req, workingDir);
+    const placement = {
+      ...(body.tabGroupId ? { tabGroupId: body.tabGroupId } : {}),
+      ...(placementCase ? { caseName: placementCase } : {}),
+    };
+    const tabLayout =
+      Object.keys(placement).length > 0 ? await ctx.addSession(session, placement) : await ctx.addSession(session);
     ctx.store.incrementSessionsCreated();
     ctx.persistSessionState(session);
     await ctx.setupSessionListeners(session);
@@ -1406,10 +1523,195 @@ export function registerSessionRoutes(
     // Avoids serializing 2-3MB of terminal+text buffers per session creation.
     const lightState = ctx.getSessionStateWithRespawn(session);
     ctx.broadcast(SseEvent.SessionCreated, lightState);
-    // A grouped creation also returns the layout that placed it, so the browser
-    // draws the tab inside its group at once instead of after a re-read.
-    return { session: lightState, ...(body.tabGroupId ? { tabLayout } : {}) };
+    // A grouped creation (asked for, or its case's default group) also returns the
+    // layout that placed it, so the browser draws the tab inside its group at once
+    // instead of after a re-read.
+    return {
+      session: lightState,
+      ...(body.tabGroupId || landedInGroup(tabLayout, session.id) ? { tabLayout } : {}),
+    };
   });
+
+  // ========== Adopt a foreign tmux session ==========
+
+  /**
+   * The wrapper pane for an adopted session runs `tmux attach`, never the agent,
+   * so it needs no workspace, and must not borrow the foreign one. Same value
+   * `resolveMuxAttachCwd()` gives remote and docker panes.
+   */
+  const ADOPTED_WRAPPER_WORKING_DIR = '/tmp';
+
+  /**
+   * Targets with a wrapper being created right now. The live-session check alone
+   * leaves a gap: between it and `addSession` the route awaits the host registries,
+   * the history config and the owner's layout lock, so two devices opening one row
+   * could each pass it.
+   */
+  const adoptsInFlight = new Set<string>();
+
+  /**
+   * Wrap a tmux session a HUMAN started (local, in a container, or over ssh) in a
+   * Codeman session, so it appears as a tab and can be driven from the browser.
+   *
+   * Four things make this safe, and each is load-bearing:
+   *
+   * 1. **The body carries only an opaque id.** The socket path, session name and
+   *    host are re-resolved by re-running discovery here. A browser therefore
+   *    never supplies a fragment of the command we are about to run, which is the
+   *    same rule that keeps docker-adopt and remote-attach injection-free.
+   * 2. **The candidate must still exist.** Discovery is re-run rather than cached,
+   *    so a session that died between the listing and the click fails with a 404
+   *    instead of producing a wrapper attached to nothing.
+   * 3. **One wrapper per target.** Two wrappers on one foreign session would each
+   *    create their own grouped view and each think they own the tab; the guard
+   *    is here rather than in the button's in-flight lock, which only stops a
+   *    double-click on one device.
+   * 4. **Admin-only under multi-user.** Discovery already is (it exposes other
+   *    users' processes), and adopting someone's `shell` is arbitrary execution
+   *    as the server account, which is exactly what the `can-bypass-permissions`
+   *    grant gates elsewhere. The admin gate subsumes it, so there is deliberately
+   *    no second grant check here.
+   */
+  app.post('/api/sessions/adopt', async (req, reply) => {
+    if (isMultiUserMode() && !requireAdmin(req, reply)) return;
+
+    const owner = ownerFor(req);
+    const body = parseBody(AdoptForeignSessionSchema, req.body, 'Invalid request body');
+
+    // Re-resolve rather than trust: point 1 and 2 above.
+    const found = await discoverForeignSessions({
+      local: true,
+      force: true,
+      dockerCases: body.docker ? await readAllDockerCases() : undefined,
+      remoteHosts: body.remote ? await readAllRemoteHosts() : undefined,
+    });
+    const target = found.sessions.find((f) => f.id === body.id);
+    if (!target) {
+      // ⚠️ "Not in the re-resolve" has two very different causes and they must not
+      // be reported as one. The session really being gone is the ordinary case;
+      // the OTHER case is a location we could not reach this time, which on a
+      // flaky link makes a perfectly live remote session read as deleted. Measured
+      // against a real VM whose ssh path dropped ~10% of connections: clicking
+      // Open failed with "no longer there" while the session was sitting right
+      // there. Discovery already knows which it was: it wrote a note, so say so.
+      const reach = found.notes.filter((n) => !/skipped/.test(n));
+      return createErrorResponse(
+        ApiErrorCode.NOT_FOUND,
+        reach.length
+          ? `Could not reach it just now (${reach.join('; ')}). It may still be running, try again.`
+          : 'That tmux session is no longer there. Refresh the list and try again.'
+      );
+    }
+
+    // Point 3: one wrapper per target. Live sessions and not mux records, which
+    // only exist once the first attach starts the pane, so reading those let a
+    // second adopt through before the first tab had started.
+    const targetKey = foreignTargetKey(target);
+    for (const session of ctx.sessions.values()) {
+      if (session.adopt && foreignTargetKey(adoptTargetIdentity(session.adopt)) === targetKey) {
+        return { session: ctx.getSessionStateWithRespawn(session), alreadyAdopted: true };
+      }
+    }
+    if (adoptsInFlight.has(targetKey)) {
+      return createErrorResponse(ApiErrorCode.SESSION_BUSY, 'That tmux session is already being opened');
+    }
+
+    // After the reuse above, which creates nothing and so must not be refused at capacity.
+    const capMsg = sessionCapacityMessage(ctx.sessions, owner);
+    if (capMsg) return createErrorResponse(ApiErrorCode.SESSION_BUSY, capMsg);
+
+    adoptsInFlight.add(targetKey);
+    try {
+      return await createAdoptedSession(req, target, owner, body);
+    } finally {
+      adoptsInFlight.delete(targetKey);
+    }
+  });
+
+  /** Everything past the guards in `POST /api/sessions/adopt`, held under its in-flight mark. */
+  async function createAdoptedSession(
+    req: FastifyRequest,
+    target: ForeignTmuxSession,
+    owner: string | undefined,
+    body: { name?: string; parentSessionId?: string }
+  ) {
+    // Connection facts are copied onto the session rather than referenced by id:
+    // a wrapper restored after a server restart must be able to rebuild its
+    // command even if the host registry was edited in the meantime.
+    const adopt: SessionAdopt = {
+      location: target.location,
+      socketPath: target.socketPath,
+      targetSession: target.sessionName,
+      viewSession: '',
+      paneCurrentPath: target.workingDir,
+    };
+
+    if (target.location === 'docker') {
+      const hosts = await readDockerHosts(CODEMAN_CONFIG_DIR);
+      const host = hosts.find((h) => h.id === target.hostId);
+      if (!target.containerName) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Container name missing for a docker candidate');
+      }
+      adopt.docker = {
+        hostId: target.hostId ?? '',
+        label: target.hostLabel ?? target.containerName,
+        engine: host?.engine ?? 'docker',
+        containerName: target.containerName,
+        daemonHost: host?.daemonHost,
+        context: host?.context,
+      };
+    } else if (target.location === 'remote') {
+      const host = (await readRemoteHosts(CODEMAN_CONFIG_DIR)).find((h) => h.id === target.hostId);
+      if (!host) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Remote host not found');
+      adopt.remote = {
+        hostId: host.id,
+        label: host.label,
+        host: host.host,
+        username: host.username,
+        port: host.port,
+        identityFile: host.identityFile,
+        socksProxy: host.socksProxy,
+        jumpHost: host.jumpHost,
+        extraSshOptions: host.extraSshOptions,
+      };
+    }
+
+    const adoptHistoryConfig = await ctx.getTerminalHistoryConfig();
+
+    // ⚠️ The wrapper's `workingDir` is a NEUTRAL LOCAL path, never the foreign
+    // pane's cwd. That cwd is an observation about another machine: it can carry
+    // characters outside SAFE_PATH_PATTERN (`~/c++`, `Program Files (x86)`), which
+    // makes `createSession` throw so the tab never starts at all, and when it is a
+    // container or ssh path every local consumer of `workingDir` (the Files panel,
+    // the boot hook sweep, the fs watchers) reads it as a path on THIS host. The
+    // foreign cwd stays on `adopt.paneCurrentPath`, which is for display only.
+    // `/tmp` is the same neutral cwd `resolveMuxAttachCwd` already gives the pane.
+    const session = new Session({
+      workingDir: ADOPTED_WRAPPER_WORKING_DIR,
+      mode: target.mode,
+      name: body.name || target.sessionName,
+      mux: ctx.mux,
+      useMux: true,
+      tmuxHistoryLimit: adoptHistoryConfig.tmuxHistoryLimit,
+      adopt,
+      owner,
+      parentSessionId: resolveParentSessionId(ctx, req, body.parentSessionId, owner),
+    });
+    // The view session name is derived from the Codeman session id, so it can only
+    // be filled once the Session exists.
+    adopt.viewSession = foreignViewSessionName(session.id);
+
+    await ctx.addSession(session);
+    ctx.store.incrementSessionsCreated();
+    ctx.persistSessionState(session);
+    await ctx.setupSessionListeners(session);
+    getLifecycleLog().log({ event: 'created', sessionId: session.id, name: session.name });
+    invalidateForeignCache();
+
+    const lightState = ctx.getSessionStateWithRespawn(session);
+    ctx.broadcast(SseEvent.SessionCreated, lightState);
+    return { session: lightState, adopted: true };
+  }
 
   // ========== Rename Session ==========
 
@@ -1474,6 +1776,13 @@ export function registerSessionRoutes(
         'Custom model endpoints are not supported for remote (SSH) or Docker sessions yet'
       );
     }
+    // Its own check: this restarts the CLI in the pane, and an adopted pane's CLI is not ours to restart.
+    if (session.isAdopted) {
+      return createErrorResponse(
+        ApiErrorCode.INVALID_INPUT,
+        'Custom model endpoints are not available for adopted sessions: Codeman did not start this agent'
+      );
+    }
     if (session.isBusy()) {
       return createErrorResponse(ApiErrorCode.SESSION_BUSY, 'Session is busy');
     }
@@ -1499,7 +1808,40 @@ export function registerSessionRoutes(
     if (!endpoint) {
       return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Model endpoint not found');
     }
-    const contextLength = endpoint.modelContextLengths?.[body.modelId];
+    // The model Codeman runs on this Mac: only while its own runtime is up, and only the model
+    // that was installed, with the digest stored then (undefined for every other endpoint).
+    // Before anything is written or restarted.
+    const localModelRefusal = await getLocalModelService().launchRefusalMessage(endpoint.id, body.modelId);
+    if (localModelRefusal) return createErrorResponse(ApiErrorCode.OPERATION_FAILED, localModelRefusal);
+    // Discovery's per-model figure wins; the endpoint's user-set default covers models
+    // whose size discovery could not determine (a gateway that states none, say). With
+    // neither, the existing "no override, CLI assumes its own default" behaviour stands.
+    const contextLength = resolveCustomModelContextLength(endpoint, body.modelId);
+    const slotCount = endpoint.modelSlotCounts?.[body.modelId];
+
+    // A CLI whose config alone cannot select the model also gets its `model` launch param
+    // forced (pi/omp `custom/<id>`, grok's block name, and codex now carries its bare
+    // selected id too). The argv engine DROPS a token that
+    // fails its pattern rather than quoting it, which would silently launch the CLI on its
+    // own default provider again, so refuse an id the pattern cannot carry up front.
+    // The check runs on the PURE build result, before applyCustomModelInjection below:
+    // the forced launch id only comes out of that build, and writing first would mean a
+    // refused id already replaced the config dir a live codex session uses as CODEX_HOME.
+    // It also runs before the two confirmations, so nobody agrees to evict a model only
+    // to be told the id was never usable.
+    const modelSpec = entry.launch.params.model;
+    const injection = buildCustomModelInjection(entry, endpoint, body.modelId, contextLength);
+    const forcedLaunchModel = injection.kind === 'unsupported' ? undefined : injection.launchModel;
+    if (
+      forcedLaunchModel !== undefined &&
+      modelSpec?.type === 'token' &&
+      !matchesPattern(modelSpec.pattern, forcedLaunchModel)
+    ) {
+      return createErrorResponse(
+        ApiErrorCode.INVALID_INPUT,
+        `Model id ${JSON.stringify(body.modelId)} cannot be passed to ${session.mode} on its command line`
+      );
+    }
 
     // Some CLIs (today: only claude) carry enough of their own fixed system-prompt/tool-
     // schema overhead that a small enough real context guarantees a first-message failure
@@ -1510,12 +1852,13 @@ export function registerSessionRoutes(
     // `confirmed`, which still means both) — NOT by `confirmedSwap`: this warning is
     // about the caller's own session, and the swap warning below is about someone
     // else's, so an answer to one is not consent to the other.
-    if (!(body.confirmed || body.confirmedContext) && exceedsSafeContextFloor(entry, contextLength)) {
+    if (!(body.confirmed || body.confirmedContext) && exceedsSafeContextFloor(entry, contextLength, slotCount)) {
       return {
         requiresContextWarning: true,
         modelId: body.modelId,
         contextLength,
         minSafeContextTokens: CLAUDE_MIN_SAFE_CONTEXT_TOKENS,
+        ...(slotCount && slotCount > 1 ? { slotCount } : {}),
       };
     }
 
@@ -1563,32 +1906,17 @@ export function registerSessionRoutes(
       }
     }
 
-    // A CLI whose config alone cannot select the model also gets its `model` launch param
-    // forced (pi/omp `custom/<id>`, grok's block name). The argv engine DROPS a token that
-    // fails its pattern rather than quoting it, which would silently launch the CLI on its
-    // own default provider again, so refuse an id the pattern cannot carry up front.
-    const modelSpec = entry.launch.params.model;
     const applied = applyCustomModelInjection(
       entry,
       endpoint,
       body.modelId,
       session.id,
       contextLength,
-      session.workingDir
+      session.workingDir,
+      await guardSessionConfigDirHome(entry, (envVar) => session.ownEnvValue(envVar))
     );
     if (!applied) {
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `${session.mode} has no known custom-model mechanism`);
-    }
-    if (
-      applied.launchModel !== undefined &&
-      modelSpec?.type === 'token' &&
-      !matchesPattern(modelSpec.pattern, applied.launchModel)
-    ) {
-      removeConfigDir(applied.configDir);
-      return createErrorResponse(
-        ApiErrorCode.INVALID_INPUT,
-        `Model id ${JSON.stringify(body.modelId)} cannot be passed to ${session.mode} on its command line`
-      );
     }
 
     const { previousConfigDir } = session.setCustomModel(
@@ -1599,6 +1927,7 @@ export function registerSessionRoutes(
         envKeys: applied.envKeys,
         configDir: applied.configDir,
         launchModel: applied.launchModel,
+        homeEnvVar: applied.homeEnvVar,
       },
       applied.envOverrides
     );
@@ -1639,7 +1968,11 @@ export function registerSessionRoutes(
       // Called for its existence/ownership 404 side effect only — demoteOrRemoveSession
       // below re-looks-up the record by id, so the returned SessionState is unused here.
       findPersistedSessionOrFail(ctx.store, id, req);
-      ctx.store.demoteOrRemoveSession(id);
+      // The edit history goes with the record (same rule as `cleanupSession`).
+      if (ctx.store.demoteOrRemoveSession(id) === 'removed') ctx.forgetEditHistory(id);
+      // A detached session kept its agent inbox (server.ts _doCleanupSession drops it
+      // only on killMux); retiring the row is the delete, so the mail goes now.
+      agentInbox.drop(id);
       // Mirrors the broadcast at the tail of the live-session cleanup path
       // (_doCleanupSession in server.ts) — without it, other open tabs keep
       // showing the retired row until their next unrelated fetch.
@@ -1767,6 +2100,15 @@ export function registerSessionRoutes(
     const { prompt } = parseBody(RunPromptSchema, req.body);
     const session = findSessionOrFail(ctx, id, req);
 
+    // Its own check: `runPrompt` starts a new local claude, and the answer has to say so
+    // here rather than as a `session:error` after a success.
+    if (session.isAdopted) {
+      return createErrorResponse(
+        ApiErrorCode.INVALID_INPUT,
+        'One-shot prompts are not available for adopted sessions: Codeman did not start this agent'
+      );
+    }
+
     if (session.isBusy()) {
       return createErrorResponse(ApiErrorCode.SESSION_BUSY, 'Session is busy');
     }
@@ -1814,6 +2156,10 @@ export function registerSessionRoutes(
       // and belongs in its own PR, not in a refactor that is meant to change nothing.
       if (
         !isExternalCliMode(session.mode) &&
+        // ⚠️ And never for an adopted session, whose mode can be claude while the
+        // agent in that pane belongs to someone else. Kept as its own clause for
+        // the same reason the respawn and Ralph routes keep theirs separate.
+        !session.isAdopted &&
         ctx.store.getConfig().ralphEnabled &&
         !session.ralphTracker.autoEnableDisabled
       ) {
@@ -2032,6 +2378,32 @@ export function registerSessionRoutes(
       }
     }
 
+    // A guarded submit (agent-staging.ts) holds the input lease for the few
+    // milliseconds of its conditional Enter, and input that arrives meanwhile is held
+    // and written in arrival order after it. A TAGGED request is refused for that span
+    // (the lease plus the held input's drain) rather than overtake held input: say so
+    // instead of answering 200 for bytes that were never written, and give the seq
+    // back so the browser's durable queue (which keeps a frame on any 409, and whose
+    // POST drainer sends one frame at a time) delivers it on its next retry. An
+    // UNTAGGED request has no retry behind it (the phone accessory keys and the Stop
+    // button's Ctrl+C are fire-and-forget POSTs that never read the answer), so it is
+    // held instead, like a WebSocket frame: `writeViaMux` takes its own turn behind
+    // the lease, and the raw write below is held explicitly. Nothing from here to the
+    // write below awaits, so the lease cannot be taken in between.
+    const refuseGuarded = () =>
+      reply
+        .code(409)
+        .send(
+          createErrorResponse(
+            ApiErrorCode.CONFLICT,
+            'A guarded submit is in progress on this session; nothing was written. Retry the input.'
+          )
+        );
+    if (!duplicate && tagged && session.guardedInputHeld === true) {
+      session.forgetInputSeq(clientId as string, seq as number);
+      return refuseGuarded();
+    }
+
     // Only a waiting request pays for the tmux probe: the browser's plain input path
     // (thousands of calls per session) must stay exec-free.
     const workerDead = wantsWait && workerIsDead(ctx.mux, session);
@@ -2142,7 +2514,38 @@ export function registerSessionRoutes(
       // Same rollback. NOT an error response, deliberately: a session can
       // legitimately have no PTY yet (created but not started), and callers have
       // always been able to write to one without a 4xx.
-      delivered = session.write(inputStr, { fromUser: true });
+      //
+      // During a guarded submit (untagged only: a tagged one was refused above) the
+      // write is held and runs in arrival order once the lease is released. The answer
+      // is a 200 once held; a send-and-wait reads `delivered` from the held write. Only
+      // a full hold queue refuses, after releasing the waiter registered above.
+      let heldWrite: Promise<boolean> | null = null;
+      if (session.guardedInputHeld === true) {
+        let settle!: (written: boolean) => void;
+        const written = new Promise<boolean>((resolve) => {
+          settle = resolve;
+        });
+        const held = session.holdForGuardedLease(
+          () => {
+            let ok = false;
+            try {
+              ok = session.write(inputStr, { fromUser: true });
+            } finally {
+              settle(ok);
+            }
+          },
+          inputStr.length,
+          inputStr
+        );
+        if (held === 'full') {
+          abort.abort();
+          stopDeathWatch();
+          return refuseGuarded();
+        }
+        if (held === 'held') heldWrite = written;
+      }
+      if (heldWrite && !waitPromise) return {};
+      delivered = heldWrite ? await heldWrite : session.write(inputStr, { fromUser: true });
       if (!delivered && tagged) {
         session.forgetInputSeq(clientId as string, seq as number);
       }
@@ -2353,7 +2756,7 @@ export function registerSessionRoutes(
   // own `capabilities.newline`. Claude Code's Ink input recognizes 0x0a as "insert newline" vs
   // 0x0d (carriage return = submit).
 
-  app.post('/api/sessions/:id/send-key', async (req) => {
+  app.post('/api/sessions/:id/send-key', async (req, reply) => {
     const { id } = req.params as { id: string };
     const body = req.body as Record<string, unknown>;
     const key = typeof body?.key === 'string' ? body.key : '';
@@ -2383,18 +2786,26 @@ export function registerSessionRoutes(
     try {
       // Route through the dedicated Codeman socket — bare `tmux` would target the
       // user's default server and never find this session (same #80 regression class).
-      await new Promise<void>((resolve, reject) => {
-        execFile(
-          'tmux',
-          ['-L', ctx.mux.muxSocket, 'send-keys', '-H', '-t', muxName, ...hex],
-          { timeout: 5000 },
-          (err) => {
-            if (err) reject(err);
-            else resolve();
-          }
-        );
-      });
+      await session.performAuxiliaryInput(
+        () =>
+          new Promise<void>((resolve, reject) => {
+            execFile(
+              'tmux',
+              ['-L', ctx.mux.muxSocket, 'send-keys', '-H', '-t', muxName, ...hex],
+              { timeout: 5000 },
+              (err) => {
+                if (err) reject(err);
+                else resolve();
+              }
+            );
+          })
+      );
     } catch (err) {
+      // A guarded submit's lease holds the key until its Enter is out; only a full
+      // hold queue refuses it, and that is a retryable conflict, not a tmux failure.
+      if (err instanceof GuardedInputBusyError) {
+        return reply.code(409).send(createErrorResponse(ApiErrorCode.CONFLICT, err.message));
+      }
       console.error('[Server] send-key failed:', err);
       return createErrorResponse(ApiErrorCode.INTERNAL_ERROR, 'tmux send-keys failed');
     }
@@ -2449,7 +2860,8 @@ export function registerSessionRoutes(
   const claudeHistoryPinCache = new LRUMap<string, { submitAt: number; claudeSessionId: string }>({ maxSize: 1024 });
   async function resolveActiveClaudeSessionIdFromHistory(
     session: Session,
-    projectsDir: string
+    projectsDir: string,
+    historyPath: string
   ): Promise<string | null> {
     // A pane whose conversation id came from its OWN hook needs no correlation:
     // $CODEMAN_SESSION_ID (the pane's env) -> data.session_id (the CLI's own
@@ -2476,7 +2888,6 @@ export function registerSessionRoutes(
       if (s.lastSubmitAt) otherSubmits.push(s.lastSubmitAt);
     }
 
-    const historyPath = join(homedir(), '.claude', 'history.jsonl');
     const stat = await fs.stat(historyPath).catch(() => null);
     if (!stat || stat.size === 0) return null;
     const tail = await readFileTail(historyPath, Buffer.alloc(CLAUDE_HISTORY_TAIL_BYTES), stat.size);
@@ -2681,19 +3092,53 @@ export function registerSessionRoutes(
   }
 
   /**
+   * Where THIS session's claude keeps its conversations: `<config dir>/projects` and
+   * `<config dir>/history.jsonl`. The session's own `CLAUDE_CONFIG_DIR` override (#255) comes
+   * first, then the server's (a pane inherits it through tmux), then `~/.claude`: the order
+   * `claudeProjectsDir()` gives the relaunch pin and the Edit history panel. Looking under
+   * `~/.claude` alone showed "No response yet" for every session on a relocated folder (#701).
+   *
+   * ⚠️ A relocated folder is a path somebody chose, and it can sit on a mount that stopped
+   * answering, so it is probed bounded first (#516, without `pastCap`: agents poll this).
+   * Anything but a directory answers null, which callers read as "no transcript", never as a
+   * reason to look under `~/.claude` instead: a file of the same name there is another
+   * conversation. The default folder is not probed, so that path is unchanged.
+   *
+   * ⚠️ Local sessions only read their own override: in a Docker case or on a remote host the
+   * value names a folder over there, and the same path on this host is somebody else's.
+   */
+  async function claudeConversationDirs(
+    session: Session
+  ): Promise<{ projectsDir: string; historyPath: string } | null> {
+    const local = !session.remote && !session.docker;
+    const projectsDir = claudeProjectsDir(local ? session.claudeConfigDir() : undefined);
+    const relocated = projectsDir !== join(homedir(), '.claude', 'projects');
+    if (relocated && (await probePathKind(projectsDir)) !== 'directory') return null;
+    return { projectsDir, historyPath: join(dirname(projectsDir), 'history.jsonl') };
+  }
+
+  /**
    * Mirror a rename into the conversation's `/resume` title (claude-session-title.ts).
    * Local Claude-format transcripts only: a remote pane's transcript lives on the remote host and a
    * docker pane's inside the container (HOME=/home/agent), never under the host's projects dir. Best
    * effort: the tab rename has already happened and must not fail on this.
    */
   async function syncClaudeTitle(session: Session): Promise<void> {
-    if (getCli(session.mode)?.capabilities.transcript !== 'claude-jsonl' || session.remote || session.docker) return;
+    if (
+      getCli(session.mode)?.capabilities.transcript !== 'claude-jsonl' ||
+      session.remote ||
+      session.docker ||
+      session.isAdopted
+    )
+      return;
     try {
-      const projectsDir = join(process.env.HOME || '/tmp', '.claude', 'projects');
       const hookPath = ctx.getTranscriptPath(session.id);
+      const dirs = hookPath ? null : await claudeConversationDirs(session);
       const transcript = hookPath
         ? { sessionId: basename(hookPath, '.jsonl'), path: hookPath }
-        : await findClaudeTranscript(projectsDir, session.claudeSessionId || session.id, session.id);
+        : dirs
+          ? await findClaudeTranscript(dirs.projectsDir, session.claudeSessionId || session.id, session.id)
+          : null;
       if (transcript) await appendClaudeCustomTitle(transcript.path, transcript.sessionId, session.name);
     } catch (err) {
       console.warn(`[Session] Could not carry rename into the Claude transcript for ${session.id}:`, err);
@@ -2762,16 +3207,25 @@ export function registerSessionRoutes(
     return candidates[0] ?? null;
   }
 
-  app.get('/api/sessions/:id/last-response', async (req) => {
-    const { id } = req.params as { id: string };
-    const session = findSessionOrFail(ctx, id, req);
+  // The body of GET /api/sessions/:id/last-response, so the Discord bridge reads the same transcript
+  // the response viewer does (per-CLI reader, pane fallback) without a second copy of this logic.
+  const lastResponseFor = async (session: Session, context?: string) => {
+    // ⚠️ An adopted session has no transcript Codeman can name. Every reader below pairs one by
+    // the id Codeman launched the CLI with or by the session's folder, and neither means anything
+    // here: the CLI chose its own id, and the folder is the neutral `/tmp`, so the newest file for
+    // that folder would be another conversation's answer shown as this one's. Nothing said yet is
+    // the honest answer.
+    if (session.isAdopted) {
+      return context === 'full' || context === 'turn'
+        ? { text: '', timestamp: '', messages: [] }
+        : { text: '', timestamp: '' };
+    }
 
     // Codex sessions don't write to ~/.claude/projects — their transcripts
     // live in ~/.codex/sessions/**. Branch to a Codex-specific reader so the
     // response-viewer works for Codex panes too.
     if (getCli(session.mode)?.capabilities.transcript === 'codex-rollout') {
-      const codexQuery = req.query as { context?: string };
-      return await readCodexLastResponse(session, codexQuery.context === 'full');
+      return await readCodexLastResponse(session, context === 'full');
     }
 
     // DeepSeek Harness writes a real structured transcript under
@@ -2790,8 +3244,7 @@ export function registerSessionRoutes(
     // would starve on an answer that exists. Those configurations keep the
     // pane segmenter below: coarse, but the real conversation.
     if (getCli(session.mode)?.capabilities.transcript === 'deepseek-zstd' && !session.docker && !session.remote) {
-      const deepSeekQuery = req.query as { context?: string };
-      const full = deepSeekQuery.context === 'full';
+      const full = context === 'full';
       const transcript = await readDeepSeekLastResponse(session, { blocks: full });
       if (transcript) {
         return {
@@ -2809,23 +3262,52 @@ export function registerSessionRoutes(
     // the pane IS the transcript for these CLIs. Codex is already handled above,
     // where a real rollout file is the better source.
     if (isExternalCliTranscriptMode(session.mode)) {
-      const externalQuery = req.query as { context?: string };
-      const blocks = parseExternalCliTranscript(session.terminalBuffer, session.mode);
+      // A repainting full-screen TUI (copilot) streams absolute cursor moves, not lines, so the
+      // buffer cannot be segmented; read the pane's visible screen instead, and fall back to the
+      // buffer when there is no tmux pane to ask (direct PTY, tests).
+      const screen =
+        transcriptNeedsScreenCapture(session.mode) && session.muxName
+          ? (ctx.mux.capturePaneText?.(session.muxName) ?? null)
+          : null;
+      const blocks = parseExternalCliTranscript(screen ?? session.terminalBuffer, session.mode);
       return {
         text: getLastTranscriptResponse(blocks),
         timestamp: '',
         hasContext: blocks.length > 0,
-        messages: externalQuery.context === 'full' ? blocks : undefined,
+        messages: context === 'full' ? blocks : undefined,
       };
     }
 
-    // Scan ~/.claude/projects/*/ for the transcript file
-    const projectsDir = join(process.env.HOME || '/tmp', '.claude', 'projects');
+    // An external CLI with no transcript reader that the pane segmenter cannot read either
+    // (jcode: a repainting alternate-screen TUI, whose segmented stream served its welcome
+    // banner as "the answer", measured) has nothing honest to return. Empty, "nothing said
+    // yet", like the DeepSeek reader above: the Claude scan below would otherwise go looking
+    // in ~/.claude/projects and could adopt a Claude conversation from the same folder.
+    // `codeman agent read --source terminal` / MCP `read_output` still read the screen.
+    {
+      const caps = getCli(session.mode)?.capabilities;
+      if (caps?.external && caps.transcript === 'none') {
+        return context === 'full' || context === 'turn'
+          ? { text: '', timestamp: '', messages: [] }
+          : { text: '', timestamp: '' };
+      }
+    }
+
+    // `turn` is the brief view's context: the last ANSWERED turn's assistant
+    // messages, so a multi-row answer is not reduced to its final row. `text`
+    // stays the last assistant row in every mode (agent pollers hash it).
+    const wantsMessages = context === 'full' || context === 'turn';
+
+    // Scan <config dir>/projects/*/ for the transcript file: the session's own Claude config
+    // folder when it was relocated, else the server's, else ~/.claude.
+    const dirs = await claudeConversationDirs(session);
+    if (!dirs) return wantsMessages ? { text: '', timestamp: '', messages: [] } : { text: '', timestamp: '' };
+    const { projectsDir, historyPath } = dirs;
 
     // Adopt the current conversation id if the user ran `/clear` — Claude CLI's
     // interactive PTY emits no JSON on stdout, so without this lookup the
     // stored id stays pinned to the pre-/clear transcript.
-    const activeId = await resolveActiveClaudeSessionIdFromHistory(session, projectsDir);
+    const activeId = await resolveActiveClaudeSessionIdFromHistory(session, projectsDir, historyPath);
     if (activeId && activeId !== session.claudeSessionId) {
       session.adoptClaudeSessionId(activeId);
       // Flush the Enter that vouched for this adoption to state.json. A `/clear`
@@ -2841,11 +3323,6 @@ export function registerSessionRoutes(
       }
     }
 
-    const query = req.query as { context?: string };
-    // `turn` is the brief view's context: the last ANSWERED turn's assistant
-    // messages, so a multi-row answer is not reduced to its final row. `text`
-    // stays the last assistant row in every mode (agent pollers hash it).
-    const wantsMessages = query.context === 'full' || query.context === 'turn';
     const claudeSessionId = session.claudeSessionId || session.id;
     const transcript = await findClaudeTranscript(projectsDir, claudeSessionId, session.id);
     if (!transcript) {
@@ -2866,7 +3343,7 @@ export function registerSessionRoutes(
     try {
       const content = await fs.readFile(transcript.path, 'utf8');
       const parsed = parseClaudeResponseTranscript(content, wantsMessages);
-      if (query.context === 'turn') {
+      if (context === 'turn') {
         return {
           text: parsed.text,
           timestamp: parsed.timestamp,
@@ -2877,6 +3354,13 @@ export function registerSessionRoutes(
     } catch {
       return wantsMessages ? { text: '', timestamp: '', messages: [] } : { text: '', timestamp: '' };
     }
+  };
+  ctx.lastResponseFor = lastResponseFor;
+
+  app.get('/api/sessions/:id/last-response', async (req) => {
+    const { id } = req.params as { id: string };
+    const session = findSessionOrFail(ctx, id, req);
+    return lastResponseFor(session, (req.query as { context?: string }).context);
   });
 
   function isCodexInjectedContext(text: string): boolean {
@@ -3486,6 +3970,16 @@ export function registerSessionRoutes(
     const { id } = req.params as { id: string };
     const body = parseBody(AutoClearSchema, req.body, 'Invalid request body');
     const session = findSessionOrFail(ctx, id, req);
+    // ⚠️ Separate from the external-CLI gate on purpose: an adopted session's mode
+    // can perfectly well BE claude, and this drives the pane of a session someone
+    // else is using. Merging the two checks means a future change to the
+    // external-CLI rule silently reopens this one.
+    if (session.isAdopted) {
+      return createErrorResponse(
+        ApiErrorCode.INVALID_INPUT,
+        'Auto-clear is not available for adopted sessions: Codeman did not start this agent and must not drive it'
+      );
+    }
 
     session.setAutoClear(body.enabled, body.threshold);
     persistAndBroadcastSession(ctx, session);
@@ -3507,6 +4001,16 @@ export function registerSessionRoutes(
     const { id } = req.params as { id: string };
     const body = parseBody(AutoCompactSchema, req.body, 'Invalid request body');
     const session = findSessionOrFail(ctx, id, req);
+    // ⚠️ Separate from the external-CLI gate on purpose: an adopted session's mode
+    // can perfectly well BE claude, and this drives the pane of a session someone
+    // else is using. Merging the two checks means a future change to the
+    // external-CLI rule silently reopens this one.
+    if (session.isAdopted) {
+      return createErrorResponse(
+        ApiErrorCode.INVALID_INPUT,
+        'Auto-compact is not available for adopted sessions: Codeman did not start this agent and must not drive it'
+      );
+    }
 
     session.setAutoCompact(body.enabled, body.threshold, body.prompt);
     persistAndBroadcastSession(ctx, session);
@@ -3523,12 +4027,92 @@ export function registerSessionRoutes(
     };
   });
 
+  // ========== Prompt-cache keep-warm ==========
+
+  // Per-session opt-in for the keep-alive nudge (prompt-cache-keepwarm.ts). `enabled: null`
+  // clears the choice so the app-wide default applies again. Refused for a CLI that reports
+  // no cache telemetry on its statusline: without `expires_at` there is nothing to schedule.
+  app.post('/api/sessions/:id/keep-warm', async (req) => {
+    const { id } = req.params as { id: string };
+    const body = parseBody(KeepWarmSchema, req.body, 'Invalid request body');
+    const session = findSessionOrFail(ctx, id, req);
+    if (!getCli(session.mode)?.capabilities.statusLineTelemetry) {
+      return createErrorResponse(
+        ApiErrorCode.INVALID_INPUT,
+        'Prompt-cache keep-warm needs the cache telemetry this CLI does not report'
+      );
+    }
+
+    session.setKeepWarmEnabled(body.enabled ?? undefined);
+    // Re-evaluate BEFORE the state broadcast and the response: both carry `keepWarm`, and a
+    // page that received the previous status would overwrite the one the toggle just produced.
+    await ctx.keepWarm.schedule(id);
+    persistAndBroadcastSession(ctx, session);
+
+    return {
+      success: true,
+      data: {
+        keepWarm: {
+          enabled: session.keepWarmEnabled ?? null,
+          status: session.keepWarm,
+        },
+      },
+    };
+  });
+
+  // ========== Git fetch on an interval ==========
+
+  // Per-session override for the fetch interval (src/git-fetch-scheduler.ts), which is what the Session
+  // Options rows say it is: two sessions on one folder can hold different choices, and that folder is
+  // fetched when the first of them is due. `null` on either field clears this session's choice so the
+  // app-wide setting applies again, and a field left out of the body leaves the other half as it was: the
+  // Session Options rows save on their own. Refused for a remote or Docker session, exactly as the Git
+  // panel excludes them: a container can write to the repository it mounts, so git there would run that
+  // repository's own configuration on the host.
+  app.post('/api/sessions/:id/git-fetch-settings', async (req) => {
+    const { id } = req.params as { id: string };
+    const body = parseBody(GitFetchSettingsSchema, req.body, 'Invalid request body');
+    const session = findSessionOrFail(ctx, id, req);
+    if (session.remote || session.docker || session.isAdopted) {
+      return createErrorResponse(
+        ApiErrorCode.INVALID_INPUT,
+        'Git fetch does not run for remote, Docker or adopted sessions'
+      );
+    }
+
+    const enabled = 'enabled' in body ? (body.enabled ?? undefined) : session.gitFetchEnabled;
+    const intervalSeconds =
+      'intervalSeconds' in body ? (body.intervalSeconds ?? undefined) : session.gitFetchIntervalSeconds;
+    session.setGitFetchSettings(enabled, intervalSeconds);
+    persistAndBroadcastSession(ctx, session);
+
+    return {
+      success: true,
+      data: {
+        gitFetchSettings: {
+          enabled: session.gitFetchEnabled ?? null,
+          intervalSeconds: session.gitFetchIntervalSeconds ?? null,
+        },
+      },
+    };
+  });
+
   // ========== Auto-Resume (usage-limit pause) ==========
 
   app.post('/api/sessions/:id/auto-resume', async (req) => {
     const { id } = req.params as { id: string };
     const body = parseBody(AutoResumeSchema, req.body, 'Invalid request body');
     const session = findSessionOrFail(ctx, id, req);
+    // ⚠️ Separate from the external-CLI gate on purpose: an adopted session's mode
+    // can perfectly well BE claude, and this drives the pane of a session someone
+    // else is using. Merging the two checks means a future change to the
+    // external-CLI rule silently reopens this one.
+    if (session.isAdopted) {
+      return createErrorResponse(
+        ApiErrorCode.INVALID_INPUT,
+        'Auto-resume is not available for adopted sessions: Codeman did not start this agent and must not drive it'
+      );
+    }
 
     session.setAutoResume(body.enabled);
     persistAndBroadcastSession(ctx, session);
@@ -3594,6 +4178,15 @@ export function registerSessionRoutes(
     const { id } = req.params as { id: string };
     const body = parseBody(ImageWatcherSchema, req.body, 'Invalid request body');
     const session = findSessionOrFail(ctx, id, req);
+    // A remote session's workingDir is a path on the remote host; the watcher would watch it on the
+    // LOCAL disk (a missing folder, or a same-named local one whose images are not the session's).
+    if (body.enabled && session.remote) {
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Image watching does not run for remote sessions');
+    }
+    // An adopted session's folder is the neutral wrapper folder, not the foreign pane's work.
+    if (body.enabled && session.isAdopted) {
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Image watching does not run for adopted sessions');
+    }
 
     if (body.enabled) {
       imageWatcher.watchSession(session.id, session.workingDir);
@@ -3725,6 +4318,8 @@ export function registerSessionRoutes(
       antigravityConfig,
       piConfig,
       grokConfig,
+      copilotConfig,
+      jcodeConfig,
       deepSeekConfig,
       ompConfig,
       envOverrides,
@@ -3796,6 +4391,8 @@ export function registerSessionRoutes(
         antigravityConfig ||
         piConfig ||
         grokConfig ||
+        copilotConfig ||
+        jcodeConfig ||
         deepSeekConfig ||
         ompConfig ||
         openCodeConfig ||
@@ -3866,6 +4463,8 @@ export function registerSessionRoutes(
         antigravityConfig ||
         piConfig ||
         grokConfig ||
+        copilotConfig ||
+        jcodeConfig ||
         deepSeekConfig ||
         ompConfig ||
         openCodeConfig ||
@@ -3966,6 +4565,8 @@ export function registerSessionRoutes(
             antigravityConfig,
             piConfig,
             grokConfig,
+            copilotConfig,
+            jcodeConfig,
             deepSeekConfig,
           } as unknown as Record<string, unknown>)
         );
@@ -4053,7 +4654,7 @@ export function registerSessionRoutes(
         writeFileSync(join(resolvedCasePath, 'CLAUDE.md'), claudeMd);
 
         // Write .claude/settings.local.json with hooks for desktop notifications
-        // (Claude-specific — OpenCode, Codex, Gemini, Antigravity, Pi, Grok, DeepSeek and OMP use their own systems)
+        // (Claude-specific — OpenCode, Codex, Gemini, Antigravity, Pi, Grok, DeepSeek, OMP and jcode use their own systems)
         if (
           mode !== 'opencode' &&
           mode !== 'codex' &&
@@ -4061,7 +4662,8 @@ export function registerSessionRoutes(
           mode !== 'antigravity' &&
           mode !== 'pi' &&
           mode !== 'grok' &&
-          mode !== 'omp'
+          mode !== 'omp' &&
+          mode !== 'jcode'
         ) {
           await writeHooksConfig(resolvedCasePath);
         }
@@ -4102,6 +4704,13 @@ export function registerSessionRoutes(
       } else {
         await refreshStaleCodemanHooks(workspacePath).catch(() => {});
       }
+    }
+
+    // Approval hook module (omp), for a new AND an existing case. The launch pre-flight
+    // above has passed. Local only: a remote case path lives on another host, and a Docker
+    // pane cannot reach the loopback API (`approvalHookAvailableForMode()` answers no there).
+    if (!remote && !docker) {
+      await installApprovalHook(mode, workspacePath);
     }
 
     // Agent skill injection (docs/agent-control-plan.md §2): ADD-ONLY on create,
@@ -4168,6 +4777,8 @@ export function registerSessionRoutes(
       antigravityConfig,
       piConfig,
       grokConfig,
+      copilotConfig,
+      jcodeConfig,
       deepSeekConfig,
       ompConfig,
     };
@@ -4197,6 +4808,7 @@ export function registerSessionRoutes(
       piConfig: qsGatedPiConfig,
       grokConfig: qsGatedGrokConfig,
       deepSeekConfig: qsGatedDeepSeekConfig,
+      copilotConfig: qsGatedCopilotConfig,
     } = await _clampExternalCliBypassForOwner(
       owner,
       qsLaunchConfigs.codexConfig,
@@ -4204,7 +4816,8 @@ export function registerSessionRoutes(
       qsLaunchConfigs.antigravityConfig,
       qsLaunchConfigs.piConfig,
       qsLaunchConfigs.grokConfig,
-      qsLaunchConfigs.deepSeekConfig
+      qsLaunchConfigs.deepSeekConfig,
+      qsLaunchConfigs.copilotConfig
     );
     const qsTerminalHistoryConfig = await ctx.getTerminalHistoryConfig();
     const qsGatedEnvOverrides = await clampEnvOverridesForOwner(owner, envOverrides);
@@ -4220,14 +4833,13 @@ export function registerSessionRoutes(
     // unknown endpoint, a model id the CLI's argv pattern can't carry) rather than trusting
     // a lighter version of them, since this is the same server-side authority reached a
     // different way, not a separate, less-checked path.
-    let qsCustomModelEnvOverrides = qsGatedEnvOverrides;
-    // Only the INJECTED keys (never the caller's envOverrides merged in) — this is what
-    // setCustomModel() bookkeeping must be given below. The Session constructor already
-    // applies qsCustomModelEnvOverrides (the full merged set) directly; re-merging that
-    // full set into setCustomModel() would put CLAUDE_CODE_EFFORT_LEVEL back after the
-    // constructor stripped it (see setCustomModel()'s own doc comment in session.ts).
+    //
+    // Only the INJECTED keys (never the caller's envOverrides merged in): setCustomModel()
+    // merges these over what the Session constructor took, which is how it learns which of
+    // the caller's values the selection replaced. Handing the constructor the merged set
+    // would hide them, and giving setCustomModel() that set would put
+    // CLAUDE_CODE_EFFORT_LEVEL back after the constructor stripped it.
     let qsCustomModelAppliedEnvOverrides: Record<string, string> | undefined;
-    let qsCustomModelLaunchModel: string | undefined;
     let qsCustomModelSessionId: string | undefined;
     let qsCustomModelSwapInProgress = false;
     let qsCustomModelBookkeeping:
@@ -4238,6 +4850,7 @@ export function registerSessionRoutes(
           envKeys: string[];
           configDir?: string;
           launchModel?: string;
+          homeEnvVar?: string;
         }
       | undefined;
     if (customModel) {
@@ -4249,7 +4862,32 @@ export function registerSessionRoutes(
       const cmHosts = await readCustomModelHosts(CODEMAN_CONFIG_DIR);
       const cmEndpoint = cmHosts.find((h) => h.id === customModel.endpointId);
       if (!cmEndpoint) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Model endpoint not found');
-      const cmContextLength = cmEndpoint.modelContextLengths?.[customModel.modelId];
+      // See the dedicated route: the model Codeman runs on this Mac is launched only while its
+      // own runtime is up and its digest is the one stored at install time. Before any
+      // confirmation is asked for and before a session exists.
+      const cmLocalModelRefusal = await getLocalModelService().launchRefusalMessage(cmEndpoint.id, customModel.modelId);
+      if (cmLocalModelRefusal) return createErrorResponse(ApiErrorCode.OPERATION_FAILED, cmLocalModelRefusal);
+      // Per-model discovery figure first, user-set endpoint default second, nothing third
+      // (see the dedicated route's own comment above).
+      const cmContextLength = resolveCustomModelContextLength(cmEndpoint, customModel.modelId);
+      const cmSlotCount = cmEndpoint.modelSlotCounts?.[customModel.modelId];
+
+      // See the dedicated route: refused on the pure build, before either confirmation, so
+      // nobody agrees to evict a model for an id that could never launch, and before anything
+      // is written.
+      const cmModelSpec = cmEntry.launch.params.model;
+      const cmInjection = buildCustomModelInjection(cmEntry, cmEndpoint, customModel.modelId, cmContextLength);
+      const cmForcedLaunchModel = cmInjection.kind === 'unsupported' ? undefined : cmInjection.launchModel;
+      if (
+        cmForcedLaunchModel !== undefined &&
+        cmModelSpec?.type === 'token' &&
+        !matchesPattern(cmModelSpec.pattern, cmForcedLaunchModel)
+      ) {
+        return createErrorResponse(
+          ApiErrorCode.INVALID_INPUT,
+          `Model id ${JSON.stringify(customModel.modelId)} cannot be passed to ${mode} on its command line`
+        );
+      }
 
       // See the dedicated route's own comment for the full reasoning: some CLIs' own fixed
       // overhead can exceed a small enough real context on the very first message,
@@ -4259,13 +4897,14 @@ export function registerSessionRoutes(
       // `confirmedSwap`.
       if (
         !(customModel.confirmed || customModel.confirmedContext) &&
-        exceedsSafeContextFloor(cmEntry, cmContextLength)
+        exceedsSafeContextFloor(cmEntry, cmContextLength, cmSlotCount)
       ) {
         return {
           requiresContextWarning: true,
           modelId: customModel.modelId,
           contextLength: cmContextLength,
           minSafeContextTokens: CLAUDE_MIN_SAFE_CONTEXT_TOKENS,
+          ...(cmSlotCount && cmSlotCount > 1 ? { slotCount: cmSlotCount } : {}),
         };
       }
 
@@ -4314,27 +4953,13 @@ export function registerSessionRoutes(
         customModel.modelId,
         qsCustomModelSessionId,
         cmContextLength,
-        workspacePath
+        workspacePath,
+        await guardSessionConfigDirHome(cmEntry, (envVar) => qsGatedEnvOverrides?.[envVar])
       );
       if (!cmApplied) {
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `${mode} has no known custom-model mechanism`);
       }
-      const cmModelSpec = cmEntry.launch.params.model;
-      if (
-        cmApplied.launchModel !== undefined &&
-        cmModelSpec?.type === 'token' &&
-        !matchesPattern(cmModelSpec.pattern, cmApplied.launchModel)
-      ) {
-        removeConfigDir(cmApplied.configDir);
-        return createErrorResponse(
-          ApiErrorCode.INVALID_INPUT,
-          `Model id ${JSON.stringify(customModel.modelId)} cannot be passed to ${mode} on its command line`
-        );
-      }
-
-      qsCustomModelEnvOverrides = { ...qsGatedEnvOverrides, ...cmApplied.envOverrides };
       qsCustomModelAppliedEnvOverrides = cmApplied.envOverrides;
-      qsCustomModelLaunchModel = cmApplied.launchModel;
       qsCustomModelBookkeeping = {
         endpointId: cmEndpoint.id,
         modelId: customModel.modelId,
@@ -4342,6 +4967,7 @@ export function registerSessionRoutes(
         envKeys: cmApplied.envKeys,
         configDir: cmApplied.configDir,
         launchModel: cmApplied.launchModel,
+        homeEnvVar: cmApplied.homeEnvVar,
       };
 
       // Actually kick off llama-swap's load now — see the dedicated apply route's own
@@ -4371,9 +4997,11 @@ export function registerSessionRoutes(
       antigravityConfig: mode === 'antigravity' ? qsGatedAntigravityConfig : undefined,
       piConfig: mode === 'pi' ? qsGatedPiConfig : undefined,
       grokConfig: mode === 'grok' ? qsGatedGrokConfig : undefined,
+      copilotConfig: mode === 'copilot' ? qsGatedCopilotConfig : undefined,
+      jcodeConfig: mode === 'jcode' ? qsLaunchConfigs.jcodeConfig : undefined,
       deepSeekConfig: mode === 'deepseek' ? qsGatedDeepSeekConfig : undefined,
       ompConfig: qsResolvedOmpConfig,
-      envOverrides: qsCustomModelEnvOverrides,
+      envOverrides: qsGatedEnvOverrides,
       effort,
       advisorModel,
       remote,
@@ -4382,30 +5010,15 @@ export function registerSessionRoutes(
       tmuxHistoryLimit: qsTerminalHistoryConfig.tmuxHistoryLimit,
       parentSessionId: qsParentSessionId,
     };
-    // Force the custom-model selection's launchModel (pi/omp `custom/<id>`, grok's
-    // `[model.<name>]` block name) onto whichever config field the registry says the
-    // CLI's `model` launch param lives in — mirrors Session._withCustomModelLaunchModel,
-    // which the restart-in-place path already uses, rather than a hardcoded per-CLI
-    // branch here that a CLI landing its injection recipe later would silently miss.
-    if (qsCustomModelLaunchModel !== undefined) {
-      const qsCustomModelField = getCli(mode)?.launch.legacyConfigField;
-      if (qsCustomModelField) {
-        const qsSessionOptionsBag = qsSessionOptions as unknown as Record<string, unknown>;
-        qsSessionOptionsBag[qsCustomModelField] = {
-          ...((qsSessionOptionsBag[qsCustomModelField] as Record<string, unknown>) ?? {}),
-          model: qsCustomModelLaunchModel,
-        };
-      } else {
-        qsSessionOptions.model = qsCustomModelLaunchModel;
-      }
-    }
     const session = new Session(qsSessionOptions);
 
     // Records the selection for session.customModel/getCustomModelForPersist() and future
-    // clear/switch calls — the actual env vars and launch-model config are already part of
-    // the launch above (constructor envOverrides, piConfig/grokConfig/ompConfig.model), so
-    // this is bookkeeping only, never a restart: setCustomModel() is synchronous state, no
-    // tmux IO of its own (see its own doc comment in session.ts).
+    // clear/switch calls, and merges the injected env. The launch below reads both: the
+    // selection's launchModel is forced onto the launch options, never onto the stored
+    // config above, because that config is what a later clear falls back to
+    // (Session._withCustomModelLaunchModel). Nothing has started yet, so this is never a
+    // restart: setCustomModel() is synchronous state, no tmux IO of its own (see its own
+    // doc comment in session.ts).
     if (qsCustomModelBookkeeping) {
       session.setCustomModel(qsCustomModelBookkeeping, qsCustomModelAppliedEnvOverrides);
     }
@@ -4420,7 +5033,7 @@ export function registerSessionRoutes(
       }
     }
 
-    const tabLayout = tabGroupId ? await ctx.addSession(session, { tabGroupId }) : await ctx.addSession(session);
+    const tabLayout = await ctx.addSession(session, { caseName, ...(tabGroupId ? { tabGroupId } : {}) });
     ctx.store.incrementSessionsCreated();
     ctx.persistSessionState(session);
     await ctx.setupSessionListeners(session);
@@ -4481,28 +5094,14 @@ export function registerSessionRoutes(
       // settings.json, readable by every user through GET /api/settings, so a non-admin's
       // case name is not written there in multi-user mode (writes are admin-only, like
       // PUT /api/settings). isAdmin is always true in single-user mode.
+      // Awaited and serialized with every other settings.json writer (mutateSettingsFile): the
+      // un-awaited write this replaced could land after the response, over a settings save.
       if (isAdmin(req)) {
         try {
-          const settingsFilePath = SETTINGS_PATH;
-          let settings: Record<string, unknown> = {};
-          try {
-            settings = JSON.parse(await fs.readFile(settingsFilePath, 'utf-8'));
-          } catch (err) {
-            if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
-          }
-          settings.lastUsedCase = caseName;
-          const dir = dirname(settingsFilePath);
-          if (!existsSync(dir)) {
-            mkdirSync(dir, { recursive: true });
-          }
-          // Use async write to avoid blocking event loop
-          fs.writeFile(settingsFilePath, JSON.stringify(settings, null, 2)).catch((err) => {
-            // Non-critical but log for debugging
-            console.warn('[Server] Failed to save settings (lastUsedCase):', err);
-          });
+          await mutateSettingsFile((settings) => ({ ...settings, lastUsedCase: caseName }));
         } catch (err) {
-          // Non-critical but log for debugging
-          console.warn('[Server] Failed to prepare settings update:', err);
+          // Non-critical: the session is already running.
+          console.warn('[Server] Failed to save settings (lastUsedCase):', getErrorMessage(err));
         }
       }
 
@@ -4512,7 +5111,7 @@ export function registerSessionRoutes(
         caseName,
         ...(worktree ? { worktree, workingDir: workspacePath } : {}),
         ...(customModel ? { modelSwapInProgress: qsCustomModelSwapInProgress } : {}),
-        ...(tabGroupId ? { tabLayout } : {}),
+        ...(tabGroupId || landedInGroup(tabLayout, session.id) ? { tabLayout } : {}),
       };
     } catch (err) {
       // Clean up session on error to prevent orphaned resources
@@ -4642,9 +5241,6 @@ export function registerSessionRoutes(
     /** Main repo root the worktree belongs to. */
     worktreeRepo?: string;
   };
-
-  /** `<repo>/.claude/worktrees/<name>` — the layout Claude Code's own worktree feature creates. */
-  const CLAUDE_WORKTREE_PATH = /^(.*)\/\.claude\/worktrees\/([^/]+)\/?$/;
 
   /**
    * Recover cwd / branch / worktree from a transcript chunk.
@@ -4988,6 +5584,7 @@ export function registerSessionRoutes(
     if (!stat?.isDirectory()) return out;
 
     const workingDir = await decodeProjectKey(projDir);
+    const staleCwd = new Map<string, boolean>();
     const entries = await fs.readdir(projPath).catch(() => [] as string[]);
 
     for (const entry of entries) {
@@ -5092,13 +5689,35 @@ export function registerSessionRoutes(
         worktreeRepo: headGit.worktreeRepo ?? tailGit.worktreeRepo,
       };
 
+      // A case rename moves the project directory but leaves the old path in each transcript's
+      // cwd. When that cwd is gone and the decoded key is a real folder that encodes back to this
+      // very key (not the $HOME collapse of #265), the key is the truer answer.
+      let cwd = git.cwd;
+      if (cwd !== undefined && cwd !== workingDir) {
+        let stale = staleCwd.get(cwd);
+        if (stale === undefined) {
+          stale =
+            claudeProjectDirName(workingDir) === projDir &&
+            (await fs.stat(cwd).then(
+              () => false,
+              () => true
+            )) &&
+            (await fs.stat(workingDir).then(
+              (s) => s.isDirectory(),
+              () => false
+            ));
+          staleCwd.set(cwd, stale);
+        }
+        if (stale) cwd = undefined;
+      }
+
       out.push({
         sessionId,
         // The transcript's literal cwd beats decodeProjectKey's stat-walked guess,
         // which silently collapses to $HOME once the directory is gone (#265).
         // Absent cwd falls back to the old behaviour rather than inventing a path.
-        workingDir: git.cwd ?? workingDir,
-        workingDirExact: git.cwd !== undefined,
+        workingDir: cwd ?? workingDir,
+        workingDirExact: cwd !== undefined,
         projectKey: projDir,
         sizeBytes: fileStat.size,
         lastModified: fileStat.mtime.toISOString(),
@@ -5447,12 +6066,6 @@ export function registerSessionRoutes(
   // so an uploaded video is a type that previews. 3gp/mkv are deliberately out: they
   // would upload but not preview, and a phone's camera roll produces neither.
   const ALLOWED_VIDEO_EXTS = new Set([...VIDEO_ATTACHMENT_EXTENSIONS].map((e) => `.${e}`));
-  // Documents a user hands an agent to read: the office formats plus the text
-  // family. Curated on purpose, never SUPPORTED_ATTACHMENT_EXTENSIONS or
-  // EDITABLE_EXTENSIONS, which carry sh/py/js/html; a prompt upload is a thing
-  // to read, not a thing to run or serve. Each is judged on its bytes by
-  // imageMagicMatchesExt (signature, or UTF-8 without NUL for text).
-  const ALLOWED_DOCUMENT_EXTS = new Set(['.pdf', '.docx', '.pptx', '.xlsx', '.zip', ...TEXT_UPLOAD_EXTS]);
   const VIDEO_MIME_EXT: Record<string, string> = {
     mp4: '.mp4',
     quicktime: '.mov',
@@ -5541,6 +6154,13 @@ export function registerSessionRoutes(
         ApiErrorCode.INVALID_INPUT,
         'Prompt uploads are not supported for remote (SSH) sessions'
       );
+    }
+    // An adopted session has no workspace of ours: its folder is the neutral `/tmp`, shared with
+    // whatever else runs there, and an agent in a container or on an ssh host could not read it.
+    // The foreign pane's own folder is not ours to write into either.
+    if (session.isAdopted) {
+      reply.code(400);
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Prompt uploads are not supported for adopted sessions');
     }
 
     // The upload is written under session.workingDir (ensureUploadDir below), and
@@ -5683,14 +6303,24 @@ export function registerSessionRoutes(
       if (!imageMagicMatchesExt(imageBytes, origExt)) {
         // The first bytes of a text file are user content, so for text the log
         // names the failure and never the bytes; a signature is safe to print.
-        const detail = TEXT_UPLOAD_EXTS.has(origExt)
-          ? `reason=${imageBytes.includes(0) ? 'nul-byte' : 'not-utf8'}`
+        // A text refusal names the encoding, since an Excel or Notepad export
+        // (UTF-16 with a BOM, or Windows-1252) is not a corrupt file.
+        const isText = TEXT_UPLOAD_EXTS.has(origExt);
+        const bom = imageBytes.length >= 2 ? imageBytes.readUInt16BE(0) : 0;
+        const utf16 = bom === 0xfffe || bom === 0xfeff;
+        const detail = isText
+          ? `reason=${utf16 ? 'utf16-bom' : imageBytes.includes(0) ? 'nul-byte' : 'not-utf8'}`
           : `magic=${imageBytes.subarray(0, 12).toString('hex')}`;
         console.warn(
           `[paste-image] document mismatch: filename=${JSON.stringify(part.filename)} mime=${JSON.stringify(part.mimetype)} declaredExt=${origExt} size=${imageBytes.length} ${detail}`
         );
         reply.code(415);
-        return createErrorResponse(ApiErrorCode.INVALID_INPUT, `File bytes do not match declared type ${origExt}`);
+        return createErrorResponse(
+          ApiErrorCode.INVALID_INPUT,
+          isText
+            ? `This ${origExt} file is ${utf16 ? 'UTF-16 text, not UTF-8' : 'not UTF-8 text'}; save it as UTF-8 and attach it again`
+            : `File bytes do not match declared type ${origExt}`
+        );
       }
       const saved = await writeBufferedUpload(
         session.workingDir,

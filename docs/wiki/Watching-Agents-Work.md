@@ -77,7 +77,11 @@ Turning on either starts the watcher.
 
 **Last Response** (header button, opt-in) renders the agent's last answer as scrollable text
 rather than terminal output. It exists mostly for phones, where reading a long answer in a
-terminal viewport is painful. **More** loads additional context.
+terminal viewport is painful. **More** loads additional context. **Copy Markdown** copies the
+newest answer's raw Markdown, every part of its turn, so headings, lists and code fences paste
+intact (the same answer in both views; tool and status blocks are left out). Persian, Arabic
+and Hebrew answers read right to left here, which the terminal cannot do, while code and the
+file paths it links stay left to right.
 
 ## After the fact
 
@@ -104,9 +108,9 @@ are not reading.
 
 - **A session pointed at a relocated Claude config directory goes blind here.** Transcripts
   written outside `~/.claude/projects` are invisible to the watchers, so subagent windows,
-  the ultracode panel, the response viewer, and Read My Mind all stop working for that
-  session. Symlink `projects` back into the shared tree to fix it. See
-  [Agent CLIs](Agent-CLIs).
+  the ultracode panel and Read My Mind stop working for that session. Symlink `projects`
+  back into the shared tree to fix it. The response viewer reads the session's own
+  directory and keeps working. See [Agent CLIs](Agent-CLIs).
 - **Closing a window does not cancel the agent.** Nothing on this page controls agents; it
   observes them.
 - **Windows are opt-in for ultracode, automatic for subagents.**

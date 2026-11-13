@@ -10,7 +10,7 @@
 import { spawn } from 'node:child_process';
 import { getCli } from '../config/cli-registry/registry.js';
 import { expandHome } from './cli-resolver.js';
-import { createCliExecutableResolver, formatCliNotFoundMessage } from './cli-executable-resolver.js';
+import { createCliExecutableResolver } from './cli-executable-resolver.js';
 import { parseCodexRateLimitsResponse, type StatusTelemetry } from '../usage-telemetry.js';
 
 /**
@@ -22,7 +22,6 @@ const CODEX_SEARCH_DIRS = (): string[] => (getCli('codex')?.discovery.searchDirs
 
 const CODEX_BINARY = process.platform === 'win32' ? 'codex.exe' : 'codex';
 const codexResolver = createCliExecutableResolver({ binary: CODEX_BINARY, searchDirs: CODEX_SEARCH_DIRS });
-const CODEX_NOT_FOUND = 'Codex CLI not found. Install with: npm install -g @openai/codex';
 
 /**
  * Finds the directory containing the `codex` binary.
@@ -45,10 +44,6 @@ export function resolveCodexBinaryPath(): string | null {
  */
 export function isCodexAvailable(): boolean {
   return resolveCodexDir() !== null;
-}
-
-export function getCodexNotFoundMessage(): string {
-  return formatCliNotFoundMessage(CODEX_NOT_FOUND, codexResolver.diagnostics());
 }
 
 type CodexRateLimitsRequest = (binaryPath: string, clientVersion: string) => Promise<unknown>;

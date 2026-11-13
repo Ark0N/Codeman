@@ -1,6 +1,6 @@
 # The CLI registry
 
-Every run mode Codeman can launch — Claude Code, Terminal/Shell, OpenCode, Codex, Gemini, Antigravity, Pi, Grok, DeepSeek Harness and OMP — is a `CliEntry`: a data record describing how to find the binary, how to build its command line, what environment it needs, and what it can do. Code that used to ask "which CLI is this?" asks the entry instead.
+Every run mode Codeman can launch — Claude Code, Terminal/Shell, OpenCode, Codex, Gemini, Antigravity, Pi, Grok, DeepSeek Harness, OMP, GitHub Copilot CLI and jcode — is a `CliEntry`: a data record describing how to find the binary, how to build its command line, what environment it needs, and what it can do. Code that used to ask "which CLI is this?" asks the entry instead.
 
 ## Where it lives
 
@@ -25,7 +25,7 @@ Every run mode Codeman can launch — Claude Code, Terminal/Shell, OpenCode, Cod
 App Settings → Agents & CLIs → **CLI management** (`cliManagementEnabled`, default OFF; admin-only in multi-user mode) lists every entry with an installed/not-installed badge and:
 
 - toggles any entry on or off. A `kind: 'shell'` entry cannot be disabled, and the row shows no switch for it. A disabled CLI disappears from the Run menu, the welcome screen and the phone overview, and new session requests for it are rejected.
-- installs a missing **stock** CLI by running its shipped install command, after a confirm that names the exact command. Only one install per CLI runs at a time, and the command runs without any `CODEMAN_*` variable in its environment. An `npm install -g` command is pointed at `~/.local` (which every resolver searches) when the npm global prefix is not writable by the server user, for example a system node under `/usr`; a writable prefix, a prefix that does not exist yet but could be created, and an explicit `NPM_CONFIG_PREFIX` are left alone. A custom entry's install command is never executed.
+- installs a missing **stock** CLI by running its shipped install command (the entry as merged with `clis.json`, so an override of a stock entry's install command is what runs here), after a confirm that names the exact command. Only one install per CLI runs at a time, and the command runs without any `CODEMAN_*` variable in its environment. An `npm install -g` command is pointed at `~/.local` (which every resolver searches) when the npm global prefix is not writable by the server user, for example a system node under `/usr`; a writable prefix, a prefix that does not exist yet but could be created, and an explicit `NPM_CONFIG_PREFIX` are left alone. A custom entry's install command is never executed.
 - adds, edits and deletes **custom** entries (id, label, badge, binaries, launch argv). The server re-validates the whole assembled entry through `CliEntrySchema`, so the form cannot bypass the load-time rules.
 
 These are the only writes to `clis.json`. They are serialized, and a file that does not parse or has unsafe permissions is refused rather than overwritten; fix it (or `chmod 600` it) and retry. The HTTP routes are listed in `docs/api-reference.md` under *CLI management*.
@@ -47,14 +47,21 @@ interface CliEntry {
   env: CliEnv; // exports, tmux setenv keys, the env-override allowlist
   capabilities: CliCapabilities; // what every call site reads instead of the id
   //   .workDetect?: { promptGlyph, workingLine, watchingLine?, watchingLines?, awaitingLine?,
-  //                   blockedLine?, blockedLines? }
+  //                   blockedLine?, blockedLines?, composerFooterLine?, composerPopupLine?,
+  //                   composerCommandPrefixes?, composerCompletionSigils? }
   //   (how this CLI's pane shows work, work it started in the background, a turn
-  //   that ended waiting for workers it will resume from, and a dialog it is blocked on)
+  //   that ended waiting for workers it will resume from, a dialog it is blocked on,
+  //   the rows around its idle composer that guarded input relies on, and what a
+  //   draft can trigger)
   //   .modelDetect?: { screenLine, screenLines? }
   //   (where this CLI's own chrome names the model it runs: SessionState.displayModel)
   //   .launchDefaults?: { [launchParam]: settingsKey }
   //   (synced App Settings that seed a LOCAL launch's params the caller left unset;
-  //   codex's model and reasoning effort, via src/web/launch-defaults.ts)
+  //   codex's model, reasoning effort and network access, via src/web/launch-defaults.ts)
+  //   .gates: { [name]: { minVersion, failClosed } }
+  //   (version gates a `capabilityGate` launch condition names: claude's `--name`,
+  //   codex's `--no-daemon`. Measured against THAT CLI's own version, never claude's:
+  //   resolveSessionCliVersion, so an unknown version passes no fail-closed gate)
   overlays: CliOverlays; // remote-SSH / Docker pane commands, credential store
 }
 ```
@@ -63,7 +70,7 @@ interface CliEntry {
 
 ### Regexes that come from config
 
-Six capability fields carry a regular expression an override file can set: `discovery.version.regex`, `capabilities.workDetect.workingLine`, `capabilities.workDetect.watchingLine`, `capabilities.workDetect.awaitingLine`, `capabilities.workDetect.blockedLine` and `capabilities.modelDetect.screenLine`. All six go through `compileVersionRegex()`, which caps the source at 200 characters, refuses the nested-quantifier shapes that cause catastrophic backtracking, and returns `null` rather than throwing so every caller degrades instead of crashing.
+Eight capability fields carry a regular expression an override file can set: `discovery.version.regex`, `capabilities.workDetect.workingLine`, `capabilities.workDetect.watchingLine`, `capabilities.workDetect.awaitingLine`, `capabilities.workDetect.blockedLine`, `capabilities.workDetect.composerFooterLine`, `capabilities.workDetect.composerPopupLine` and `capabilities.modelDetect.screenLine`. All eight go through `compileVersionRegex()`, which caps the source at 200 characters, refuses the nested-quantifier shapes that cause catastrophic backtracking, and returns `null` rather than throwing so every caller degrades instead of crashing.
 
 `workingLine` is the one that matters most, because it is compiled once per session and then run against every accumulated PTY chunk and every pane capture. A nested quantifier there is a ReDoS against the event loop for the whole server, not just that session. The guard therefore runs in two places, and neither is redundant: `schema.ts` rejects the entry at LOAD time so a bad pattern never reaches a session, and `_workingLinePattern()` in `session.ts` compiles through the same helper so the runtime cannot end up with a pattern the schema would have refused.
 
@@ -123,6 +130,33 @@ IDLE prompt from a codex session ever reaches the approvals inbox (its screen-re
 below, open PERMISSION items, which a watching label never acknowledges), so a forged label
 costs a wrong badge and cannot silence an alert. Before giving a CLI idle signals and a
 pattern, make sure its row is one the agent cannot write.
+
+### The idle composer guarded input reads (`composerFooterLine`)
+
+The experimental guarded `stage`/`submit` routes (`src/agent-staging.ts`, opt-in through
+`agentCoordinationEnabled`) type into a composer only after proving, from a fresh capture,
+that the newest `promptGlyph` row is the CLI's own composer at rest, with the caret at the
+exact end of its text. `composerFooterLine` is the second half of that proof: every
+non-blank row below the composer (at most three) must match it, one row at a time. A CLI
+that declares none never takes guarded input; only codex declares one, built from the same
+effort-word list as its `modelDetect.screenLine` (`CODEX_EFFORT_WORDS` in `stock.ts`), so a
+codex footer change is a one-place edit. Like `blockedLine`, the rows it sees are near the
+foot of the screen, so a pattern must anchor on chrome only that CLI draws there.
+
+Three more fields cover what a draft can do to Enter. Codex draws every suggestion popup
+(its slash-command list, file search, skill and mention lists) ABOVE the composer and
+leaves the footer below it alone, so the footer check reads `› /stat` with the command
+list open as an idle draft, and Enter would run the highlighted `/status`.
+`composerPopupLine` matches a popup row; it is tested against the contiguous block of
+non-blank rows directly above the composer (past at most three blank rows, at most twelve
+rows), never further up, and any match refuses the frame. `composerCommandPrefixes` lists
+the characters that, first in a draft, make Enter run a command (codex: `/!`), and
+`composerCompletionSigils` the ones that, starting the word under the caret, open a popup
+(codex: `@$`); stage refuses such a message before typing, the sigils only on the last
+word since the caret ends there. Both are 1 to 8 ASCII punctuation characters. Codex's
+values were read from `codex-rs/tui/src/bottom_pane` at `rust-v0.162.0`; a file-search
+popup with results shows bare path rows no pattern can tell from prose, which is why the
+trigger refusal is there as well as the frame check.
 
 ### Dialogs a CLI blocks on (`blockedLine`)
 
@@ -189,17 +223,25 @@ still reading. A caller that asked only for `idle` keeps getting `idle`.
 
 `agentSkillInjection` says a CLI's sessions get the agent skill (`skills/codeman`) and its per-session preamble when the synced `agentSkillEnabled` setting is on; `agentSkillDir` says which workspace directory the CLI scans for skills, read through `agentSkillDir()` (hooks-config.ts), so no call site branches on a CLI id. Absent with the boolean on means `.claude/skills`, which is what the boolean meant before the field existed.
 
+`approvalHookFile` names the hook module Codeman installs into a local workspace for a CLI whose hooks are files rather than a settings block (omp: `<workspace>/.claude/hooks/pre/codeman-approval.ts`, written by `applyApprovalHookFile()` in hooks-config.ts from both create paths, after the launch pre-flight and only while `workspaceHooksEnabled` is on). The module forwards the CLI's own tool approval events to `/api/hook-event`, and that is all the field grants: `blocked` can fire and a dialog opens an alert-only Approvals Inbox item (`approvalHookAvailableForMode()` in session-wait-registry.ts, which says no for an adopted, remote or Docker session). It is deliberately not a `hooks` value: every reader of `hooks` takes a yes for Claude's full hook set, so `stop` stays a 400 for such a CLI. ⚠️ A bare `.ts` file name and nothing else (schema.ts): `clis.json` can set it, and it is written into the user's workspace. A file of that name without Codeman's marker is the user's own and is left alone, and a symbolic link at any path component is refused.
+
 | CLI | Skill directory |
 | --- | --- |
 | claude | `.claude/skills/codeman` |
 | codex, gemini, opencode, antigravity, grok, deepseek, omp | `.agents/skills/codeman` |
-| pi, shell | none |
+| pi, shell, jcode | none |
+
+jcode reads `.agents/skills` too, but it is left out (`agentSkillInjection: false`): its tools run in one shared per-user daemon with the CODEMAN_* identity of whichever session started it, so an injected skill would act as that session ([jcode-integration.md](jcode-integration.md#the-shared-daemon)).
 
 Measured 2026-10-11 against the installed builds or their source: every CLI in the middle row scans `<workspace>/.agents/skills/` (gemini only in its cwd, dsh only at the git root, else cwd), and Claude Code does not read it, so a case shared with a claude session lists the skill once there (opencode, grok and omp read both directories and see the same skill twice, identical, under one name). ⚠️ pi is left out on purpose: any project-level `.agents/skills` or `.pi/skills` makes pi ask "Trust project folder?" at startup, which would stall a spawned worker on a dialog; it reads the user-level `~/.agents/skills` without the prompt (`npx skills add Ark0N/Codeman --skill codeman -g`). A codex, gemini or other session's copy in a case that pi sessions also use triggers that prompt once for the human there. ⚠️ `agentSkillDir` is a closed enum (`AGENT_SKILL_DIRS`, schema.ts), never a free path: `clis.json` can set it and it decides where the server writes. ⚠️ Two codex traps the skill names rather than fixes: codex's default sandbox blocks network even to loopback (the skill needs **Bypass approvals and sandbox**), and codex 0.162 runs tool commands through a shared `app-server` daemon whose environment (`CODEMAN_SESSION_ID`, `CODEMAN_API_URL`) is that of the session that started it.
 
 ## The newline chord
 
 `capabilities.newline` (`'line-feed'` | `'esc-enter'`, absent = line feed) is the byte sequence the `send-key` route types into the pane for Shift+Enter. A line feed (`0x0a`, also Ctrl+Enter) is what Claude Code's Ink input reads as "insert a newline"; `esc-enter` (`ESC CR`, the Option/Alt+Enter chord) is there for a composer that ignores a bare line feed. No stock CLI declares it today: the bytes are typed by tmux on the server, so the browser's OS cannot change what a CLI reads, and Codex 0.147.0 was checked to take a line feed (a Shift+Enter that submits is the keypress leak fixed in #520, not a byte problem). A user `clis.json` can set it for a CLI that needs it. It is an enum rather than a byte string on purpose: config never carries bytes that get typed into a pane. Settings → Terminal & Input → **Key tester** prints what a browser reports for keydown/keypress/keyup, to see whether a device is sending what you think.
+
+## A CLI with a shared daemon
+
+`capabilities.sharedDaemon: true` says the CLI's TUI is a client of one per-user daemon that its first client starts (in its own session and process group) and every later session shares. jcode is the one stock entry that declares it. A session kill normally signals every descendant of the pane by parent pid, and the daemon is still a descendant of the pane that started it, so closing that one tab cut every other session of the CLI off (measured with jcode). With the flag set, `killSession` signals only the descendants still in the pane's own process group (`descendantsInPaneGroup()` in `src/proc-tree.ts`, one bounded `ps -o pid=,pgid=` lookup; a lookup that fails keeps the full kill). `test/proc-walk-bounds.test.ts` pins that jcode alone declares it, so no other CLI's kill changes.
 
 ## Arg-template safety
 
@@ -298,7 +340,7 @@ already have.
 
 Three rules, and the middle one is why the embed matters:
 
-1. **The server never executes an entry's `install.command`.** Unchanged, and still enforced by nothing executing it: the field is display text (`CliDiscovery.install.command`).
+1. **The server executes an entry's `install.command` in exactly two places, both behind a consent click that shows the literal text.** CLI management (above, `cliManagementEnabled`, the merged entry's command) and the local model install (`docs/local-models.md`: only the COMPILED stock command of a catalogue harness row, through `stockInstallCommand()`, so no `clis.json` override reaches it; no setting gates that path, the consent screen does). Both run through the one runner in `src/cli-install-runner.ts` (one install per CLI at a time, no `CODEMAN_*` in the environment, the whole process group killed on a timeout or a cancel) and both are written to the admin audit log in multi-user mode. Everywhere else the field is display text (`CliDiscovery.install.command`).
 2. **`install.sh` executes only commands embedded in itself.** Those arrive in the same file, over the same TLS fetch, in the same commit as the `curl \| bash` line that fetched the script — identical trust to the hardcoded vendor one-liners it replaces.
 3. **Nothing fetched at install time is ever executed.** There is no second code path that fetches anything after the script itself has been fetched.
 
@@ -334,11 +376,11 @@ A module-level const freezes at first import, and the failure is asymmetric: a C
 
 ## MCP server sync
 
-`capabilities.mcpConfig` (`{ path, format, relocation? }`, `path` relative to the home directory) names the file a CLI keeps its user-level MCP server list in and the dialect it is written in. `src/mcp-sync.ts` reads that list from every ENABLED CLI that declares one, and that is installed or already has the file (a CLI that is neither is reported `absent`, never created), and adds any server a CLI is missing from the others. It writes other tools' own config, so it is **opt-in**: `mcpSyncEnabled` (synced, default OFF) gates `GET`/`POST /api/mcp-sync` (403 while off) and the Settings → Agents & CLIs → MCP servers controls. Declared today for claude, gemini, codex, opencode and antigravity (plus GitHub Copilot CLI as a sync-only target, below); every format was checked against what the CLI's own `mcp add` writes, except opencode's (documented, not installed to check). A CLI with no entry (pi, grok, omp, deepseek) is not guessed at: it is listed as `unsupported` in the result when enabled. Adding one is a registry entry plus a small adapter in `mcp-sync.ts`, and a verified fixture in `test/mcp-sync.test.ts`.
+`capabilities.mcpConfig` (`{ path, format, relocation? }`, `path` relative to the home directory) names the file a CLI keeps its user-level MCP server list in and the dialect it is written in. `src/mcp-sync.ts` reads that list from every ENABLED CLI that declares one, and that is installed or already has the file (a CLI that is neither is reported `absent`, never created), and adds any server a CLI is missing from the others. It writes other tools' own config, so it is **opt-in**: `mcpSyncEnabled` (synced, default OFF) gates `GET`/`POST /api/mcp-sync` (403 while off) and the Settings → Agents & CLIs → MCP servers controls. Declared today for claude, gemini, codex, opencode and antigravity (and GitHub Copilot CLI, below); every format was checked against what the CLI's own `mcp add` writes, except opencode's (documented, not installed to check). A CLI with no entry (pi, grok, omp, deepseek, jcode) is not guessed at: it is listed as `unsupported` in the result when enabled. Adding one is a registry entry plus a small adapter in `mcp-sync.ts`, and a verified fixture in `test/mcp-sync.test.ts`.
 
-**Tools that are not run modes.** GitHub Copilot CLI keeps an MCP list worth syncing but Codeman does not launch it, so it has no registry entry. `src/mcp-sync-targets.ts` declares such tools as plain data (`MCP_SYNC_ONLY_TOOLS`: id, label, config path, dialect, relocation var, the binary whose presence means "installed"). They join the registry CLIs as sync targets (listed after them, so a registry CLI's definition wins a same-name difference), under the same rules: installed or already configured, otherwise `absent`. Copilot's dialect is `copilot-json` (`~/.copilot/mcp-config.json`, relocated by `COPILOT_HOME`; checked against `copilot mcp add` 1.0.94): `mcpServers`, each entry with `tools` (`["*"]` = all), `type` `local` | `http` | `sse`, `command`/`args`/`env` or `url`/`headers`. `copilot mcp disable` does not mark the entry: it lists the name under `disabledMcpServers` in `settings.json` beside the config. Sync reads that list (never writes it) so a disabled server is not copied, and reports the target `unreadable` if `settings.json` is not valid JSON rather than guessing.
+**Tools that are not run modes, or that declare no `mcpConfig`.** `src/mcp-sync-targets.ts` declares such tools as plain data (`MCP_SYNC_ONLY_TOOLS`: id, label, config path, dialect, relocation var, the binary whose presence means "installed"). They join the registry CLIs as sync targets (listed after them, so a registry CLI's definition wins a same-name difference), under the same rules: installed or already configured, otherwise `absent`. GitHub Copilot CLI is both: its registry entry declares `mcpConfig`, so while the run mode is enabled the sync-only row is skipped, and it applies only if the run mode is disabled. Copilot's dialect is `copilot-json` (`~/.copilot/mcp-config.json`, relocated by `COPILOT_HOME`; checked against `copilot mcp add` 1.0.94): `mcpServers`, each entry with `tools` (`["*"]` = all), `type` `local` | `http` | `sse`, `command`/`args`/`env` or `url`/`headers`. `copilot mcp disable` does not mark the entry: it lists the name under `disabledMcpServers` in `settings.json` beside the config. Sync reads that list (never writes it) so a disabled server is not copied, and reports the target `unreadable` if `settings.json` is not valid JSON rather than guessing.
 
-`relocation` (`{ envVar, path }`) names the env var the CLI itself reads to move that file: claude `CLAUDE_CONFIG_DIR` (`.claude.json` under it), codex `CODEX_HOME` (`config.toml`), opencode `XDG_CONFIG_HOME` (`opencode/opencode.json`), gemini `GEMINI_CLI_HOME` (`.gemini/settings.json`) and, for the sync-only Copilot CLI, `COPILOT_HOME` (`mcp-config.json`); antigravity follows `$HOME` only, so it declares none. The var is read from the SERVER process env at call time, which is the env the CLIs Codeman spawns inherit. An absolute value moves the file to `<value>/<relocation.path>`, an empty one counts as unset (as it does for each CLI), and anything else reports the target `skipped` with the reason instead of writing a file the CLI never reads. A per-session relocation (a session's own `CLAUDE_CONFIG_DIR` in `envOverrides`) is not followed: the sync only knows the server's environment.
+`relocation` (`{ envVar, path }`) names the env var the CLI itself reads to move that file: claude `CLAUDE_CONFIG_DIR` (`.claude.json` under it), codex `CODEX_HOME` (`config.toml`), opencode `XDG_CONFIG_HOME` (`opencode/opencode.json`), gemini `GEMINI_CLI_HOME` (`.gemini/settings.json`) copilot `COPILOT_HOME` (`mcp-config.json`); antigravity follows `$HOME` only, so it declares none. The var is read from the SERVER process env at call time, which is the env the CLIs Codeman spawns inherit. An absolute value moves the file to `<value>/<relocation.path>`, an empty one counts as unset (as it does for each CLI), and anything else reports the target `skipped` with the reason instead of writing a file the CLI never reads. A per-session relocation (a session's own `CLAUDE_CONFIG_DIR` in `envOverrides`) is not followed: the sync only knows the server's environment.
 
 The rules the module keeps and the tests pin: it only ADDS (a name already defined, in any shape, is never edited or removed; a same-name difference is reported as a conflict); a server switched off in its own CLI is not copied; it never writes a file it could not parse (opencode JSONC with comments, a TOML file with a duplicate table) and re-parses the new text before writing; codex TOML is read with a real parser (`smol-toml`), so CRLF files and inline tables are handled; names such as `__proto__` are ignored and every table keyed by an untrusted name has no prototype; a symlinked config is written through, not replaced; a file that receives `env`/`headers` is left `0600`; only one apply runs at a time; and its result carries server names only, never env values or headers, and never file text: a parse failure is reported by line and column, not by the parser's message (smol-toml prints a code frame of the offending lines and V8's JSON errors quote source, either of which can hold a secret). The schema restricts `path` and `relocation.path` to a relative path without `..`, since sync writes to it.
 
@@ -347,3 +389,9 @@ The rules the module keeps and the tests pin: it only ADDS (a name already defin
 - [Agent CLIs](wiki/Agent-CLIs.md) — the user-facing per-CLI guide.
 - `docs/architecture-invariants.md` — the mechanics and the history behind the rules above.
 - `docs/deepseek-integration.md` — why DeepSeek is shaped the way it is.
+
+## GitHub Copilot CLI
+
+`copilot` (npm `@github/copilot`) is a stock entry. A bare launch is `copilot`, in its own Manual Approval mode. The launch parameters follow the grok/omp shape: `model` (`--model`), `resumeId` (`--resume <id>`, an id, id prefix or session name: a single word that starts with a letter or digit, so a flag-shaped value such as `--yolo` is dropped rather than read as its own flag) and `continueSession` (`--continue`, skipped when a resume id is set), plus `allowAll` (`--yolo`: allow every tool, path and URL). The legacy config object is `copilotConfig` (`{ model, allowAll, resumeSessionId, continueSession }`). The Run button sends `allowAll: true` like the other agent CLIs' bypass switches, and `allowAll` is declared in `privilegedParams`, so a non-granted multi-user owner has it forced back to `false` (an absent config is never materialized: a bare spawn is already safe). Session history resume (Past Sessions) sends only `copilotConfig.continueSession`, which continues the most recent conversation Copilot has for that directory; `resumeSessionId` is for API callers. The tab names the model it reads from the footer (`modelDetect`). Its `altScreen` is `strip-mux-and-mouse`, like opencode: Copilot turns mouse tracking on itself, and left in, a plain drag is reported to the TUI instead of selecting (Auto Copy and copy-on-select did nothing); stripped, a drag is a local selection, clicks go through the hand-encoded tap, and the wheel is forwarded as SGR reports while `cliMouseTracking` is on. It declares `mcpConfig` (`~/.copilot/mcp-config.json`, relocated by `COPILOT_HOME`) and no `credStore`: its token sits in `config.json` in plain text on a host without a keyring, so a Docker case is not seeded and you sign in inside the container. `env.allowedKeys` is empty on purpose: a headless host sets `COPILOT_GITHUB_TOKEN`, which the `COPILOT_` prefix admits, and `GH_TOKEN`/`GITHUB_TOKEN` stay out of the one global allowlist. **Plan usage:** the header chip gains a `Copilot` row with one `mo` window, the calendar-month premium-request quota (`quota_snapshots.premium_interactions` from `GET api.github.com/copilot_internal/user`, an undocumented endpoint the editors use; the tooltip also shows the request counts and reset). It is polled every 10 minutes by the host, read-only, and only when the CLI is installed, a token resolves (`COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`, then `authTokens` in `<COPILOT_HOME or ~/.copilot>/config.json`) and plan-usage display is on. Any failure leaves the chip without a Copilot row; an unlimited quota has nothing to meter and is omitted.
+
+Measured on 1.0.94 inside tmux: an alternate-screen TUI with mouse tracking on, whose composer is the `❯` between two rules. While a turn runs the footer reads `◉ Working esc edit prompt` (the dot alternates `◉`/`◎`), which is the `workDetect` working line. Keystrokes sent with `tmux send-keys` reach the composer, Shift+Enter inserts a newline, and a shell tool call completes inside tmux; github/copilot-cli#4180 (a driven PTY ignores input) and #4223 (a shell command never completes under tmux) report both failing on 1.0.70 to 1.0.74 and neither reproduces on 1.0.94. `COPILOT_HOME` and `COPILOT_ALLOW_ALL` are privileged env keys, so a non-granted multi-user owner cannot set them through `envOverrides`, and so are the other `COPILOT_*` variables (read from the 1.0.98 bundle, far more than `copilot help environment` lists) that switch approvals, run code with no approval row or send the sign-in token elsewhere. The `COPILOT_` prefix admits whatever a later release adds, so the list needs a look whenever the measured version moves.

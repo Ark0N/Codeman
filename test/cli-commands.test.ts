@@ -208,3 +208,29 @@ describe('help text', () => {
     }
   });
 });
+
+describe('unauthenticated tunnel launch option', () => {
+  it.each(['web', 'service install'])('registers --allow-unauthenticated-tunnel on %s', (path) => {
+    const command = path === 'web' ? find(program, 'web')! : find(find(program, 'service')!, 'install')!;
+    const options = command.options.filter((option) => option.long === '--allow-unauthenticated-tunnel');
+    expect(
+      options.map((option) => ({
+        flags: option.flags,
+        attribute: option.attributeName(),
+        required: option.required,
+        optional: option.optional,
+      }))
+    ).toEqual([
+      {
+        flags: '--allow-unauthenticated-tunnel',
+        attribute: 'allowUnauthenticatedTunnel',
+        required: false,
+        optional: false,
+      },
+    ]);
+  });
+
+  it('documents --allow-unauthenticated-tunnel in web help', () => {
+    expect(find(program, 'web')!.helpInformation()).toContain('--allow-unauthenticated-tunnel');
+  });
+});

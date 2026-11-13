@@ -13,8 +13,9 @@ import { totalmem, freemem, loadavg, cpus } from 'node:os';
 import { execSync, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { dataPath } from '../../config/instance.js';
+import { readHostSensors } from '../../host-sensors.js';
 import { ApiErrorCode, createErrorResponse, getErrorMessage, type NiceConfig } from '../../types.js';
-import { isUnauthenticatedNetworkAcknowledged } from '../network-auth-policy.js';
+import { isExplicitlyEnabled, isUnauthenticatedTunnelAcknowledged } from '../network-auth-policy.js';
 import { isMultiUserMode } from '../../config/multiuser.js';
 import { findUser, canUsernameRunPrivilegedCommands } from '../../user-store.js';
 import { getAuthUser, isAdmin, requireAdmin, canAccessOwned, revokeUserSessions } from '../route-helpers.js';
@@ -47,15 +48,27 @@ import {
   toggleService,
   SETTINGS_PATH,
 } from '../route-helpers.js';
+import { mutateSettingsFile, settingsWriteErrorResponse } from '../settings-writer.js';
+import { mergeCaseSettings, SharedCaseLimitError } from '../case-state-sync.js';
 import { SseEvent } from '../sse-events.js';
 import { getInstallInfo, checkForUpdate, startUpdate, getUpdateStatusForApi } from '../self-update.js';
 
 import { getRepositoryStatus } from '../repo-status.js';
-import type { SessionPort, EventPort, ConfigPort, InfraPort, AuthPort, TabLayoutPort } from '../ports/index.js';
+import type {
+  SessionPort,
+  EventPort,
+  ConfigPort,
+  InfraPort,
+  AuthPort,
+  TabLayoutPort,
+  KeepWarmPort,
+} from '../ports/index.js';
 import { AUTH_COOKIE_NAME } from '../middleware/auth.js';
 import { QR_AUTH_FAILURE_MAX } from '../../config/tunnel-config.js';
 import { AUTH_SESSION_TTL_MS } from '../../config/auth-config.js';
 import { resolveTerminalHistoryConfig } from '../../config/terminal-history.js';
+import { agentInboxPersistence } from '../agent-inbox-persistence.js';
+import { agentInbox } from '../agent-inbox.js';
 
 /**
  * Defaults for `POST /api/deepseek/install-profile`.
@@ -148,8 +161,8 @@ export function resolveSpanUrl(hostHeader: string | undefined, fallbackPort = '3
  * What GET /api/settings answers a NON-ADMIN in multi-user mode: settings.json minus what
  * belongs to the server's admin rather than to the reader. `voiceSettings.apiKey` is the
  * Deepgram key an admin saved, a credential (the reader's browser seeded it into its own
- * voice config and dictated on the admin's account); `caseOrder` and `lastUsedCase` name the
- * admin's cases. Everything else stays readable, because the page reads the synced feature
+ * voice config and dictated on the admin's account); `caseOrder`, `lastUsedCase`, `lastPickedCase` and `caseSettings` name
+ * the admin's cases. Everything else stays readable, because the page reads the synced feature
  * switches from it. Writes are admin-only there (PUT /api/settings). Exported for unit testing.
  */
 export function settingsForNonAdmin(settings: unknown): unknown {
@@ -157,6 +170,8 @@ export function settingsForNonAdmin(settings: unknown): unknown {
   const out: Record<string, unknown> = { ...(settings as Record<string, unknown>) };
   delete out.caseOrder;
   delete out.lastUsedCase;
+  delete out.lastPickedCase;
+  delete out.caseSettings;
   const voice = out.voiceSettings;
   if (voice && typeof voice === 'object' && !Array.isArray(voice) && 'apiKey' in voice) {
     const voiceOut: Record<string, unknown> = { ...(voice as Record<string, unknown>) };
@@ -166,9 +181,46 @@ export function settingsForNonAdmin(settings: unknown): unknown {
   return out;
 }
 
+/**
+ * True when a login protects the server: CODEMAN_PASSWORD is set, or multi-user mode is
+ * on (every person has their own credential). The tunnel guard and the `loginConfigured`
+ * field of GET /api/tunnel/status both read this, so the page's answer mirrors the guard.
+ */
+function isLoginConfigured(): boolean {
+  return !!process.env.CODEMAN_PASSWORD || isMultiUserMode();
+}
+
+/**
+ * The refusal of a tunnel enable with no login and no tunnel opt-in or acknowledgement: logs
+ * the diagnostic line and returns the message for the 403. `late` is the case where the tunnel
+ * was running when the request arrived and had stopped by the time it would be started; the
+ * request's other settings were saved by then.
+ */
+function unauthenticatedTunnelRefusal(late: boolean): string {
+  // Someone who set the network variable to get here before #706 is told why it stopped working.
+  const networkAcknowledged = isExplicitlyEnabled(process.env.CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK);
+  console.warn(
+    `[tunnel] Refused an unauthenticated tunnel ${late ? 'restart after a concurrent stop' : 'enable'} (no login, no tunnel opt-in, no acknowledgement${networkAcknowledged ? '; CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK does not cover the tunnel' : ''})`
+  );
+  return (
+    (late
+      ? 'The Cloudflare tunnel stopped while these settings were being saved and was not restarted; ' +
+        'the other settings were saved. '
+      : '') +
+    'Refusing to start the Cloudflare tunnel without authentication: it would publish ' +
+    'full terminal control to a public URL with no password. Set CODEMAN_PASSWORD to ' +
+    'require login, set CODEMAN_ALLOW_UNAUTHENTICATED_TUNNEL=1, or resend with ' +
+    'acknowledgeUnauthTunnel:true to acknowledge an unauthenticated public tunnel.' +
+    (networkAcknowledged
+      ? ' CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK is set, but it only acknowledges the network ' +
+        'bind and no longer covers the tunnel.'
+      : '')
+  );
+}
+
 export function registerSystemRoutes(
   app: FastifyInstance,
-  ctx: SessionPort & EventPort & ConfigPort & InfraPort & AuthPort & TabLayoutPort
+  ctx: SessionPort & EventPort & ConfigPort & InfraPort & AuthPort & TabLayoutPort & KeepWarmPort
 ): void {
   const windowStatesPath = dataPath('subagent-window-states.json');
   const parentMapPath = dataPath('subagent-parents.json');
@@ -183,7 +235,14 @@ export function registerSystemRoutes(
 
   // ========== Tunnel ==========
 
-  app.get('/api/tunnel/status', async () => ctx.tunnelManager.getStatus());
+  // `loginConfigured` (#706) tells the page whether a tunnel would have a login in front
+  // of it, so it can ask before an enable even when the server would accept one. It is
+  // the guard's own login test (isLoginConfigured above), never TunnelManager's, which
+  // knows nothing about auth.
+  app.get('/api/tunnel/status', async () => ({
+    ...ctx.tunnelManager.getStatus(),
+    loginConfigured: isLoginConfigured(),
+  }));
 
   app.get('/api/tunnel/info', async (req) => {
     const status = ctx.tunnelManager.getStatus();
@@ -528,6 +587,20 @@ export function registerSystemRoutes(
     };
   });
 
+  // ========== jcode ==========
+
+  // The sibling shape (path + version), answered by the GENERIC registry resolver rather than a
+  // module of its own: it is what a jcode spawn resolves the binary with, and it already applies
+  // the entry's `jcode v<semver>` version anchor (npm carries an unrelated `jcode` package).
+  app.get('/api/jcode/status', async () => {
+    const { isCliAvailable, resolveCliBinDir, resolveCliVersion } = await import('../../utils/cli-resolver.js');
+    return {
+      available: isCliAvailable('jcode'),
+      path: resolveCliBinDir('jcode'),
+      version: resolveCliVersion('jcode'),
+    };
+  });
+
   // ========== DeepSeek Harness ==========
 
   // The widest of the per-CLI status shapes, because this mode has the widest
@@ -762,6 +835,20 @@ export function registerSystemRoutes(
     };
   });
 
+  // ========== GitHub Copilot ==========
+
+  // Carries `version` like pi/grok/omp: `copilot` is a generic binary name, so the resolver
+  // only accepts one whose `--version` says "GitHub Copilot CLI".
+  app.get('/api/copilot/status', async () => {
+    const { isCopilotAvailable, resolveCopilotDir, getCopilotCliVersion } =
+      await import('../../utils/copilot-cli-resolver.js');
+    return {
+      available: isCopilotAvailable(),
+      path: resolveCopilotDir(),
+      version: getCopilotCliVersion(),
+    };
+  });
+
   // ═══════════════════════════════════════════════════════════════
   // State & Lifecycle (cleanup, lifecycle log, stats)
   // ═══════════════════════════════════════════════════════════════
@@ -779,6 +866,14 @@ export function registerSystemRoutes(
     const lifecycleLog = getLifecycleLog();
     for (const s of result.cleaned) {
       lifecycleLog.log({ event: 'stale_cleaned', sessionId: s.id, name: s.name });
+      // A detached session kept its agent inbox. Its record going is the delete only
+      // when no tmux session stands behind it: a detached pane the multiplexer still
+      // lists is re-adopted under the same id at the next boot (restoreMuxSessions,
+      // with or without a state.json record), and its mail must come back with it.
+      // Keeping a pane that died while detached errs toward the 12 h TTL and the boot
+      // prune, the same trade the boot keep set makes.
+      if (!ctx.mux.getSession(s.id)) agentInbox.drop(s.id);
+      ctx.forgetEditHistory(s.id);
     }
     return { cleanedSessions: result.count };
   });
@@ -985,19 +1080,25 @@ export function registerSystemRoutes(
 
   // ========== System Stats ==========
 
-  app.get('/api/system/stats', async () => {
-    return getSystemStats();
+  // GPU (load, memory, clock) and CPU clock readings are opt-in: the browser adds ?gpu=1 and ?cpumhz=1 only while
+  // the matching header setting is on, so a default install never runs nvidia-smi or reads sysfs.
+  app.get('/api/system/stats', async (req) => {
+    const query = req.query as { gpu?: string; cpumhz?: string };
+    const sensors = await readHostSensors({
+      gpu: query.gpu === '1',
+      cpuMhz: query.cpumhz === '1',
+    });
+    return { ...getSystemStats(), ...sensors };
   });
 
   // ========== Settings ==========
 
   app.get('/api/settings', async (req) => {
     // A plain read. This route must NEVER write settings.json: readJsonConfig()
-    // answers `{}` for ANY read failure (a parse error, EACCES, EMFILE, a read
-    // that lands inside PUT's non-atomic write), not only for a missing file,
-    // and every page load calls this route, so a "persist the default when the
-    // key is absent" reconcile here replaced a whole settings file with one key
-    // on the first unlucky read. The plan-usage default is resolved by the
+    // answers `{}` for ANY read failure (a parse error, EACCES, EMFILE), not
+    // only for a missing file, and every page load calls this route, so a
+    // "persist the default when the key is absent" reconcile here replaced a
+    // whole settings file with one key on the first unlucky read. The plan-usage default is resolved by the
     // READERS instead: an absent `showPlanUsageLimits` means ON to
     // readPlanUsageTelemetryEnabled() (hooks-config.ts), the same way an absent
     // `workspaceHooksEnabled` means ON, and the client resolves its own display
@@ -1024,54 +1125,51 @@ export function registerSystemRoutes(
     // tunnel binds to loopback, server.ts's non-loopback bind guard never trips, and
     // with no CODEMAN_PASSWORD the auth middleware is inactive — so the tunnel URL is
     // unauthenticated. Refuse to start a tunnel unless auth is configured OR exposure
-    // is acknowledged: either the CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK env var, or an
+    // is acknowledged: either the CODEMAN_ALLOW_UNAUTHENTICATED_TUNNEL opt-in, or an
     // explicit per-request `acknowledgeUnauthTunnel:true` (the UI sends this after a
     // confirm dialog). This keeps curl/API/CLI callers protected by default while
     // letting an operator opt in from the browser without setting the env var.
     // Guard runs BEFORE persisting so a refused tunnelEnabled:true is not saved.
-    if (settings.tunnelEnabled === true && !ctx.tunnelManager.isRunning()) {
-      // Multi-user mode makes the tunnel authenticated (every person has their own
-      // credential), so it satisfies the same requirement as CODEMAN_PASSWORD.
-      const acknowledged =
-        isMultiUserMode() || isUnauthenticatedNetworkAcknowledged() || settings.acknowledgeUnauthTunnel === true;
-      if (!acknowledged) {
-        const msg =
-          'Refusing to start the Cloudflare tunnel without authentication: it would publish ' +
-          'full terminal control to a public URL with no password. Set CODEMAN_PASSWORD to ' +
-          'require login, set CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK=1, or resend with ' +
-          'acknowledgeUnauthTunnel:true to acknowledge an unauthenticated public tunnel.';
-        throw Object.assign(new Error(msg), {
-          statusCode: 403,
-          body: createErrorResponse(ApiErrorCode.OPERATION_FAILED, msg),
-        });
-      }
-      // Loud warning whenever a public tunnel is started with no password — whether
-      // acknowledged via env var or the per-request UI confirmation.
-      if (!process.env.CODEMAN_PASSWORD) {
-        console.warn(
-          '⚠️  [tunnel] Starting an UNAUTHENTICATED public Cloudflare tunnel — no CODEMAN_PASSWORD set. ' +
-            'Anyone with the tunnel URL gets full terminal control (effectively RCE). ' +
-            'Set CODEMAN_PASSWORD to require login.'
-        );
-      }
+    // The tunnel opt-in is CODEMAN_ALLOW_UNAUTHENTICATED_TUNNEL / --allow-unauthenticated-tunnel,
+    // never the network one (#706): install.sh writes CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK
+    // for every passwordless LAN install, and that acknowledges the LAN bind only.
+    // Decided ONCE per request, whether or not the tunnel is running now, and required again
+    // where the tunnel is really started below: the settings file awaits in between leave room
+    // for a concurrent stop, and a save that found the tunnel running (so nothing was refused
+    // here) must not then restart it unguarded.
+    const tunnelEnableAuthorized =
+      settings.tunnelEnabled === true &&
+      (isLoginConfigured() ||
+        isUnauthenticatedTunnelAcknowledged(ctx.allowUnauthenticatedTunnel) ||
+        settings.acknowledgeUnauthTunnel === true);
+    if (settings.tunnelEnabled === true && !tunnelEnableAuthorized && !ctx.tunnelManager.isRunning()) {
+      const msg = unauthenticatedTunnelRefusal(false);
+      throw Object.assign(new Error(msg), {
+        statusCode: 403,
+        body: createErrorResponse(ApiErrorCode.OPERATION_FAILED, msg),
+      });
     }
 
     try {
-      const dir = dirname(SETTINGS_PATH);
-      if (!existsSync(dir)) {
-        mkdirSync(dir, { recursive: true });
-      }
-      let existing: Record<string, unknown> = {};
-      try {
-        existing = JSON.parse(await fs.readFile(SETTINGS_PATH, 'utf-8'));
-      } catch {
-        /* ignore */
-      }
       // acknowledgeUnauthTunnel is an ACTION field (not a stored setting) — strip
       // it before persisting so settings.json stays clean.
       const { acknowledgeUnauthTunnel, ...settingsToStore } = settings;
-      const merged = { ...existing, ...settingsToStore };
-      await fs.writeFile(SETTINGS_PATH, JSON.stringify(merged, null, 2));
+      // An enable that is not authorized only got this far because the tunnel was running.
+      // It must never write tunnelEnabled:true: a concurrent stop has written false by now,
+      // and true on disk would show a stopped tunnel as on. The stored value stays as it is.
+      if (settings.tunnelEnabled === true && !tunnelEnableAuthorized) delete settingsToStore.tunnelEnabled;
+      // caseSettings merges per case inside the serialised writer, so two devices saving different cases both land.
+      const { caseSettings: incomingCases, ...plainSettings } = settingsToStore;
+      // The map is read and written only while syncCaseState is on, so a PUT that carries it with the setting off
+      // (as stored, or as this same PUT sets it) leaves the stored map alone.
+      const { before: existing, after } = await mutateSettingsFile((current) => ({
+        ...current,
+        ...plainSettings,
+        ...(incomingCases && (plainSettings.syncCaseState ?? current.syncCaseState) === true
+          ? { caseSettings: mergeCaseSettings(current.caseSettings, incomingCases as never) }
+          : {}),
+      }));
+      const merged = after ?? { ...existing, ...plainSettings };
 
       // tmux 3.7+ resizes tracked panes; older versions apply this to new panes.
       // Already-evicted history cannot be recovered on either version.
@@ -1089,6 +1187,15 @@ export function registerSystemRoutes(
       // drift. Same convention as the tmuxHistoryLimit block above.
       // Handle subagent tracking toggle dynamically
       toggleService((merged.subagentTrackingEnabled as boolean) ?? true, subagentWatcher, 'Subagent watcher');
+      // The prompt-cache keep-warm keeps its default and cap in memory; a changed default or cap
+      // makes it re-read them and re-evaluate every session now rather than at its next cache report.
+      // Compared on `merged`, not tested for in the body: the browser sends both keys on every save.
+      if (
+        merged.promptCacheKeepWarm !== existing.promptCacheKeepWarm ||
+        merged.promptCacheKeepWarmMaxHours !== existing.promptCacheKeepWarmMaxHours
+      ) {
+        ctx.keepWarm.rescheduleAll();
+      }
 
       // Handle ultracode/workflow run watcher toggle dynamically (default OFF).
       // Either the docked panel OR the floating windows keep the watcher running.
@@ -1098,11 +1205,17 @@ export function registerSystemRoutes(
         'Workflow run watcher'
       );
 
+      // Agent inbox snapshot (default OFF). From `merged` like the toggles above: a
+      // partial PUT that omits the key must not switch it off and delete the file.
+      agentInboxPersistence.setEnabled(merged.agentInboxPersistEnabled === true);
+
       // Handle image watcher toggle dynamically
       toggleService((merged.imageWatcherEnabled as boolean) ?? false, imageWatcher, 'Image watcher', () => {
-        // Re-watch all active sessions that have image watcher enabled
+        // Re-watch all active sessions that have image watcher enabled (never a remote session: its
+        // workingDir is a path on the remote host, not on this disk; nor an adopted one, whose folder
+        // is the neutral wrapper folder and not the foreign pane's work)
         for (const session of ctx.sessions.values()) {
-          if (session.imageWatcherEnabled) {
+          if (session.imageWatcherEnabled && !session.remote && !session.isAdopted) {
             imageWatcher.watchSession(session.id, session.workingDir);
           }
         }
@@ -1130,6 +1243,20 @@ export function registerSystemRoutes(
       if ('tunnelEnabled' in settings) {
         const tunnelEnabled = settings.tunnelEnabled as boolean;
         if (tunnelEnabled && !ctx.tunnelManager.isRunning()) {
+          // The tunnel stopped since the guard above saw it running: the same authorization applies.
+          if (!tunnelEnableAuthorized) {
+            reply.code(403);
+            return createErrorResponse(ApiErrorCode.OPERATION_FAILED, unauthenticatedTunnelRefusal(true));
+          }
+          // Loud warning whenever a public tunnel is started with no login in front of it, whether
+          // acknowledged via the tunnel opt-in or the per-request UI confirmation.
+          if (!isLoginConfigured()) {
+            console.warn(
+              '⚠️  [tunnel] Starting an UNAUTHENTICATED public Cloudflare tunnel — no CODEMAN_PASSWORD set. ' +
+                'Anyone with the tunnel URL gets full terminal control (effectively RCE). ' +
+                'Set CODEMAN_PASSWORD to require login.'
+            );
+          }
           ctx.tunnelManager.start(ctx.port, ctx.https);
           console.log('Tunnel started via settings change');
         } else if (tunnelEnabled && ctx.tunnelManager.isRunning() && ctx.tunnelManager.getUrl()) {
@@ -1144,7 +1271,13 @@ export function registerSystemRoutes(
 
       return {};
     } catch (err) {
-      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
+      if (err instanceof SharedCaseLimitError) {
+        throw Object.assign(err, {
+          statusCode: 400,
+          body: createErrorResponse(ApiErrorCode.INVALID_INPUT, err.message),
+        });
+      }
+      return settingsWriteErrorResponse(err);
     }
   });
 
@@ -1162,25 +1295,10 @@ export function registerSystemRoutes(
     const modelConfig = parseBody(ModelConfigUpdateSchema, req.body, 'Invalid model config') as Record<string, unknown>;
 
     try {
-      let existingSettings: Record<string, unknown> = {};
-      try {
-        const content = await fs.readFile(SETTINGS_PATH, 'utf-8');
-        existingSettings = JSON.parse(content);
-      } catch {
-        // File doesn't exist yet, start fresh
-      }
-
-      existingSettings.modelConfig = modelConfig;
-
-      const dir = dirname(SETTINGS_PATH);
-      if (!existsSync(dir)) {
-        mkdirSync(dir, { recursive: true });
-      }
-      await fs.writeFile(SETTINGS_PATH, JSON.stringify(existingSettings, null, 2));
-
+      await mutateSettingsFile((current) => ({ ...current, modelConfig }));
       return {};
     } catch (err) {
-      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
+      return settingsWriteErrorResponse(err);
     }
   });
 

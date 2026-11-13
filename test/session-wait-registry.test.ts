@@ -170,6 +170,17 @@ describe('resolveWaitSignals', () => {
     expect(resolveWaitSignals('blocked', { mode: 'gemini' as SessionMode }).error).toBeTruthy();
   });
 
+  it('names adoption, not the mode, when an adopted session refuses `stop`', () => {
+    // An adopted session can be `mode: claude` with no hooks installed, and "no Claude
+    // Code hooks for claude sessions" sent the caller looking for a bug in the wrong place.
+    const refusal = resolveWaitSignals('stop', { ...claude, adopted: true });
+
+    expect(refusal.until).toEqual([]);
+    expect(refusal.error).toContain('adopted session');
+    expect(refusal.error).toContain('idle or exit');
+    expect(refusal.error).not.toContain('claude sessions');
+  });
+
   it('accepts `blocked` on codex, whose dialogs are read off the screen, but still not `stop`', () => {
     // capabilities.workDetect.blockedLine gives codex a source for `blocked`; nothing on a
     // screen says a turn ended, so `stop` keeps its 400.
@@ -1085,6 +1096,69 @@ describe('SessionWaitRegistry: teardown and leak prevention', () => {
     await sleep(60);
     expect(result.signal).toBe('stop');
     expect(result.timedOut).toBe(false);
+    expect(reg.totalWaiterCount()).toBe(0);
+  });
+});
+
+describe('inbox waiters', () => {
+  it('resolve with posted:true on notifyInbox, and only for that session', async () => {
+    const reg = new SessionWaitRegistry();
+    const a = reg.waitForInbox('a', { timeoutMs: 5_000 });
+    const b = reg.waitForInbox('b', { timeoutMs: 50 });
+    expect(reg.notifyInbox('a')).toBe(1);
+    await expect(a).resolves.toMatchObject({ posted: true, timedOut: false, ended: false });
+    await expect(b).resolves.toMatchObject({ posted: false, timedOut: true });
+    expect(reg.totalWaiterCount()).toBe(0);
+  });
+
+  it('count toward the per-session, per-owner and total caps like the other kinds', async () => {
+    const reg = new SessionWaitRegistry({ maxWaitersPerSession: 2, maxWaitersPerOwner: 3, maxWaitersTotal: 4 });
+    const pending = [
+      reg.waitForSignal('s', { until: ['stop'], timeoutMs: 5_000, owner: 'alice' }),
+      reg.waitForInbox('s', { timeoutMs: 5_000, owner: 'alice' }),
+    ];
+    expect(() => reg.assertCapacity('s', 'alice')).toThrow(WaitCapacityError);
+    expect(() => reg.waitForInbox('s', { timeoutMs: 5_000 })).toThrow(/scope: session/);
+    pending.push(reg.waitForInbox('t', { timeoutMs: 5_000, owner: 'alice' }));
+    expect(() => reg.waitForInbox('u', { timeoutMs: 5_000, owner: 'alice' })).toThrow(/scope: owner/);
+    pending.push(reg.waitForInbox('u', { timeoutMs: 5_000, owner: 'bob' }));
+    expect(() => reg.waitForInbox('v', { timeoutMs: 5_000 })).toThrow(/scope: total/);
+    expect(reg.waiterCount('s')).toBe(2);
+    reg.stop();
+    await Promise.all(pending);
+    expect(reg.ownerWaiterCount('alice')).toBe(0);
+  });
+
+  it('counts receiver waiters separately (the summary’s parked)', () => {
+    const reg = new SessionWaitRegistry();
+    void reg.waitForInbox('s', { timeoutMs: 5_000, receiver: false });
+    expect(reg.inboxWaiterCount('s')).toBe(1);
+    expect(reg.inboxWaiterCount('s', true)).toBe(0);
+    void reg.waitForInbox('s', { timeoutMs: 5_000, receiver: true });
+    expect(reg.inboxWaiterCount('s', true)).toBe(1);
+    reg.stop();
+  });
+
+  it('cancelAll ends them with ended:true, and an abort frees the slot at once', async () => {
+    const reg = new SessionWaitRegistry();
+    const ended = reg.waitForInbox('s', { timeoutMs: 5_000 });
+    expect(reg.cancelAll('s')).toBe(1);
+    await expect(ended).resolves.toMatchObject({ ended: true, aborted: false, posted: false });
+
+    const controller = new AbortController();
+    const aborted = reg.waitForInbox('s', { timeoutMs: 5_000, abortSignal: controller.signal });
+    expect(reg.inboxWaiterCount('s')).toBe(1);
+    controller.abort();
+    await expect(aborted).resolves.toMatchObject({ ended: true, aborted: true });
+    expect(reg.inboxWaiterCount('s')).toBe(0);
+  });
+
+  it('after stop() a new inbox wait resolves at once with ended:true', async () => {
+    const reg = new SessionWaitRegistry();
+    const parked = reg.waitForInbox('s', { timeoutMs: 5_000 });
+    reg.stop();
+    await expect(parked).resolves.toMatchObject({ ended: true });
+    await expect(reg.waitForInbox('s', { timeoutMs: 5_000 })).resolves.toMatchObject({ ended: true, posted: false });
     expect(reg.totalWaiterCount()).toBe(0);
   });
 });

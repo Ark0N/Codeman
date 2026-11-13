@@ -19,7 +19,10 @@ import {
   readFileSync,
   symlinkSync,
   chmodSync,
+  chownSync,
   statSync,
+  lstatSync,
+  readlinkSync,
   realpathSync,
   readdirSync,
   rmSync,
@@ -27,7 +30,7 @@ import {
 } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { createRouteTestHarness, type RouteTestHarness } from './_route-test-utils.js';
 import { registerFileRoutes } from '../../src/web/routes/file-routes.js';
 import { MAX_EDITABLE_BYTES } from '../../src/config/file-editing.js';
@@ -209,13 +212,6 @@ describe('file viewer edit mode (real fs)', () => {
       expect(res.statusCode).toBe(403);
     });
 
-    it('rejects a .env file (allowlist first, sensitive-path as backstop)', async () => {
-      writeFileSync(join(workDir, '.env'), 'SECRET=1');
-      const res = await putFile('.env', { content: 'SECRET=2', baseHash: sha256('SECRET=1') });
-      expect([400, 403]).toContain(res.statusCode);
-      expect(readFileSync(join(workDir, '.env'), 'utf8')).toBe('SECRET=1');
-    });
-
     it('400s when the current file contains a NUL byte', async () => {
       writeFileSync(join(workDir, 'weird.txt'), Buffer.from([0x61, 0x00, 0x62]));
       const res = await putFile('weird.txt', { content: 'ab', baseHash: sha256(Buffer.from([0x61, 0x00, 0x62])) });
@@ -321,6 +317,175 @@ describe('file viewer edit mode (real fs)', () => {
       writeFileSync(join(workDir, 'a.md'), 'x');
       const res = await putFile('a.md', { content: 'y', baseHash: sha256('x'), evil: true });
       expect(res.statusCode).toBe(400);
+    });
+  });
+
+  describe('dotenv files', () => {
+    const original = 'TEST_VALUE=original\nTEST_LABEL=café';
+    const updated = 'TEST_VALUE=updated\nTEST_LABEL=été';
+    const editablePaths = ['.env', '.env.local', '.env.example', 'config.env', 'app/.env'];
+    const forbiddenPaths = [
+      '.ssh/.env',
+      '.codeman/.env',
+      '.codeman-dev/.env',
+      // Spelled in capitals: the same login file on a case-insensitive filesystem.
+      '.codeman/.ENV',
+      '.CODEMAN/.env',
+      '.npmrc',
+      'credentials.json',
+    ];
+
+    const getPreview = (path: string) =>
+      harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${sessionId}/file-content?path=${encodeURIComponent(path)}`,
+      });
+
+    describe.each(editablePaths)('%s', (path) => {
+      beforeEach(() => {
+        mkdirSync(dirname(join(workDir, path)), { recursive: true });
+        writeFileSync(join(workDir, path), original);
+      });
+
+      it('plain preview returns exact content and advertises editable:true', async () => {
+        const res = await getPreview(path);
+        expect(res.statusCode).toBe(200);
+        const body = res.json();
+        expect(body.success).toBe(true);
+        expect(body.data.content).toBe(original);
+        expect(body.data.editable).toBe(true);
+      });
+
+      it('edit=1 returns full content and the SHA-256 of the file bytes', async () => {
+        const res = await getEdit(path);
+        expect(res.statusCode).toBe(200);
+        const body = res.json();
+        expect(body.success).toBe(true);
+        expect(body.data.content).toBe(original);
+        expect(body.data.hash).toBe(sha256(Buffer.from(original, 'utf8')));
+        expect(body.data.editable).toBe(true);
+        expect(body.data.truncated).toBe(false);
+        expect(body.data.totalLines).toBe(2);
+        expect(body.data.eol).toBe('lf');
+      });
+
+      it('PUT saves exact bytes and leaves no temp files', async () => {
+        const directory = dirname(join(workDir, path));
+        const before = readdirSync(directory).sort();
+        const res = await putFile(path, { content: updated, baseHash: sha256(original) });
+        expect.soft(res.statusCode).toBe(200);
+        const body = res.json();
+        expect.soft(body.success).toBe(true);
+        expect.soft(body.data?.hash).toBe(sha256(updated));
+        expect.soft(body.data?.eol).toBe('lf');
+        expect.soft(body.data?.size).toBe(Buffer.byteLength(updated));
+        expect.soft(readFileSync(join(workDir, path))).toEqual(Buffer.from(updated));
+        expect(readdirSync(directory).sort()).toEqual(before);
+      });
+    });
+
+    it.each([
+      ['0600', 0o600],
+      ['0640', 0o640],
+    ])('preserves dotenv mode %s across a save', async (_label, mode) => {
+      const path = join(workDir, '.env');
+      writeFileSync(path, original);
+      chmodSync(path, mode);
+      const res = await putFile('.env', { content: updated, baseHash: sha256(original) });
+      expect.soft(res.statusCode).toBe(200);
+      expect.soft(res.json().success).toBe(true);
+      expect.soft(readFileSync(path)).toEqual(Buffer.from(updated));
+      expect(statSync(path).mode & 0o777).toBe(mode);
+    });
+
+    // The save publishes a NEW file. Without help it takes this process's own group, so a
+    // `.env` shared with a web server by group (you:www-data, 0640) came back you:you.
+    const otherGroup = process.getgroups?.().find((gid) => gid !== process.getgid?.());
+    it.skipIf(otherGroup === undefined)('keeps the group of a dotenv file across a save', async () => {
+      const path = join(workDir, '.env');
+      writeFileSync(path, original);
+      chownSync(path, -1, otherGroup!);
+      chmodSync(path, 0o640);
+      const res = await putFile('.env', { content: updated, baseHash: sha256(original) });
+      expect.soft(res.statusCode).toBe(200);
+      expect.soft(readFileSync(path)).toEqual(Buffer.from(updated));
+      expect.soft(statSync(path).mode & 0o777).toBe(0o640);
+      expect(statSync(path).gid).toBe(otherGroup);
+    });
+
+    it('rejects a stale dotenv baseHash with 409 and leaves the bytes unchanged', async () => {
+      writeFileSync(join(workDir, '.env'), original);
+      const res = await putFile('.env', { content: updated, baseHash: sha256('TEST_VALUE=older') });
+      expect.soft(res.statusCode).toBe(409);
+      expect.soft(res.json().success).toBe(false);
+      expect.soft(res.json().errorCode).toBe('CONFLICT');
+      expect(readFileSync(join(workDir, '.env'))).toEqual(Buffer.from(original));
+    });
+
+    describe.each(forbiddenPaths)('protected %s', (path) => {
+      beforeEach(() => {
+        mkdirSync(dirname(join(workDir, path)), { recursive: true });
+        writeFileSync(join(workDir, path), original);
+      });
+
+      it('plain preview advertises editable:false', async () => {
+        const res = await getPreview(path);
+        expect(res.statusCode).toBe(200);
+        expect(res.json().success).toBe(true);
+        expect(res.json().data.editable).toBe(false);
+      });
+
+      it('edit=1 refuses with 403', async () => {
+        const res = await getEdit(path);
+        expect(res.statusCode).toBe(403);
+        expect(res.json().success).toBe(false);
+        expect(res.json().errorCode).toBe('FORBIDDEN');
+      });
+
+      it('PUT refuses with FORBIDDEN and leaves the bytes unchanged', async () => {
+        const res = await putFile(path, { content: updated, baseHash: sha256(original) });
+        expect.soft(res.statusCode).toBe(403);
+        expect.soft(res.json().success).toBe(false);
+        expect.soft(res.json().errorCode).toBe('FORBIDDEN');
+        expect(readFileSync(join(workDir, path))).toEqual(Buffer.from(original));
+      });
+    });
+
+    it('refuses a dotenv symlink to credentials.json with 403 and preserves its target', async () => {
+      const target = join(workDir, 'credentials.json');
+      writeFileSync(target, original);
+      symlinkSync(target, join(workDir, '.env'));
+      const res = await putFile('.env', { content: updated, baseHash: sha256(original) });
+      expect.soft(res.statusCode).toBe(403);
+      expect.soft(res.json().success).toBe(false);
+      expect.soft(res.json().errorCode).toBe('FORBIDDEN');
+      expect(readFileSync(target)).toEqual(Buffer.from(original));
+    });
+
+    it('refuses a dotenv symlink outside the workspace with 404 and preserves its target', async () => {
+      const target = join(outsideDir, 'outside.env');
+      writeFileSync(target, original);
+      symlinkSync(target, join(workDir, '.env'));
+      const res = await putFile('.env', { content: updated, baseHash: sha256(original) });
+      expect.soft(res.statusCode).toBe(404);
+      expect.soft(res.json().success).toBe(false);
+      expect(readFileSync(target)).toEqual(Buffer.from(original));
+    });
+
+    it('writes through a dotenv symlink to real.env and preserves the symlink', async () => {
+      const target = join(workDir, 'real.env');
+      const link = join(workDir, '.env');
+      writeFileSync(target, original);
+      symlinkSync(target, link);
+      const before = readdirSync(workDir).sort();
+      const res = await putFile('.env', { content: updated, baseHash: sha256(original) });
+      expect.soft(res.statusCode).toBe(200);
+      expect.soft(res.json().success).toBe(true);
+      expect.soft(readFileSync(target)).toEqual(Buffer.from(updated));
+      expect.soft(readFileSync(link)).toEqual(Buffer.from(updated));
+      expect.soft(lstatSync(link).isSymbolicLink()).toBe(true);
+      expect.soft(readlinkSync(link)).toBe(target);
+      expect(readdirSync(workDir).sort()).toEqual(before);
     });
   });
 

@@ -5,10 +5,10 @@
  * and referenced by the frontend (`SSE_EVENTS` in `constants.js`).
  * Both files MUST be kept in sync.
  *
- * 162 event constants organized by category:
+ * 163 event constants organized by category:
  * - **Core** (1): init
  * - **Transport** (1): sse:heartbeat
- * - **Session lifecycle** (24): created, updated, deleted, terminal, idle, working, ...
+ * - **Session lifecycle** (25): created, updated, deleted, terminal, idle, working, ...
  * - **Session: Ralph** (6): ralphLoopUpdate, todoUpdate, completionDetected, ...
  * - **Session: Bash tools** (3): bashToolStart, bashToolEnd, bashToolsUpdate
  * - **Session: Plan** (4): planTaskUpdate, planCheckpoint, planRollback, planTaskAdded
@@ -32,7 +32,7 @@
  * - **Custom Model Endpoint Profiles** (1): swapped-out (a session's model got evicted by another session on the same llama-swap endpoint)
  * - **Orchestrator** (12): stateChanged, planProgress, planReady, phase*, verification, task*, completed, error
  * - **Clipboard** (1): write
- * - **Cases** (4): created, linked, deleted, order-changed
+ * - **Cases** (5): created, linked, deleted, renamed, order-changed
  * - **Docker cases** (8): exportComplete/Failed, importComplete, imageBuild*, containerRecreated
  * - **Multi-user** (3): admin:usersChanged, auth:passwordChangeRequired, session:orderChanged
  * - **Web tabs** (2): webview:changed, tab:layoutChanged
@@ -122,6 +122,8 @@ export const SessionRunning = 'session:running' as const;
 export const SessionStatusTelemetry = 'session:statusTelemetry' as const;
 /** Prompt-cache state of one session's main conversation changed (`{ sessionId, ...PromptCacheStatus }`). */
 export const SessionPromptCache = 'session:promptCache' as const;
+/** The prompt-cache keep-warm's status for one session changed (`{ sessionId, ...KeepWarmStatus }`). */
+export const SessionKeepWarm = 'session:keepWarm' as const;
 
 // ─── Session: Ralph ──────────────────────────────────────────────────────────
 
@@ -456,6 +458,8 @@ export const CaseCreated = 'case:created' as const;
 export const CaseLinked = 'case:linked' as const;
 /** Case deleted or unlinked. */
 export const CaseDeleted = 'case:deleted' as const;
+/** Case renamed (name and folder). */
+export const CaseRenamed = 'case:renamed' as const;
 /** Case ordering changed. */
 export const CaseOrderChanged = 'case:order-changed' as const;
 
@@ -534,6 +538,7 @@ export const SseEvent = {
   SessionRunning,
   SessionStatusTelemetry,
   SessionPromptCache,
+  SessionKeepWarm,
 
   // Session: Ralph
   SessionRalphLoopUpdate,
@@ -699,6 +704,7 @@ export const SseEvent = {
   CaseCreated,
   CaseLinked,
   CaseDeleted,
+  CaseRenamed,
   CaseOrderChanged,
 
   // Docker cases

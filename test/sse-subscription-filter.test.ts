@@ -1,8 +1,15 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { WebServer } from '../src/web/server.js';
 import { safeRmHomeTree } from './mocks/index.js';
-import { homedir } from 'node:os';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
+
+// A folder of this file's own for the sessions below, never the machine's real `/tmp`:
+// a create writes the workspace hooks and the agent skill (on by default) into its
+// working dir, and those would outlive the run there.
+const WORK_DIR = mkdtempSync(join(tmpdir(), 'codeman-sse-filter-'));
+afterAll(() => rmSync(WORK_DIR, { recursive: true, force: true }));
 
 // Helper to parse SSE events from raw text
 function parseSSEEvents(text: string): Array<{ event: string; data: unknown }> {
@@ -157,7 +164,7 @@ describe('SSE Subscription Filtering', () => {
     const createRes = await fetch(`${baseUrl}/api/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ workingDir: '/tmp' }),
+      body: JSON.stringify({ workingDir: WORK_DIR }),
     });
     const createData = await createRes.json();
     const sessionId = createData.data.session.id;
@@ -208,7 +215,7 @@ describe('SSE Subscription Filtering', () => {
     const createRes = await fetch(`${baseUrl}/api/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ workingDir: '/tmp' }),
+      body: JSON.stringify({ workingDir: WORK_DIR }),
     });
     const createData = await createRes.json();
     const sessionId = createData.data.session.id;
@@ -263,14 +270,14 @@ describe('SSE Subscription Filtering', () => {
     const createRes1 = await fetch(`${baseUrl}/api/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ workingDir: '/tmp' }),
+      body: JSON.stringify({ workingDir: WORK_DIR }),
     });
     const session1 = (await createRes1.json()).data.session;
 
     const createRes2 = await fetch(`${baseUrl}/api/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ workingDir: '/tmp' }),
+      body: JSON.stringify({ workingDir: WORK_DIR }),
     });
     const session2 = (await createRes2.json()).data.session;
 
@@ -330,14 +337,14 @@ describe('SSE Subscription Filtering', () => {
     const createRes1 = await fetch(`${baseUrl}/api/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ workingDir: '/tmp' }),
+      body: JSON.stringify({ workingDir: WORK_DIR }),
     });
     const session1 = (await createRes1.json()).data.session;
 
     const createRes2 = await fetch(`${baseUrl}/api/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ workingDir: '/tmp' }),
+      body: JSON.stringify({ workingDir: WORK_DIR }),
     });
     const session2 = (await createRes2.json()).data.session;
 

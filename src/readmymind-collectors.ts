@@ -21,6 +21,7 @@ import { open, readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import type { PredictionToolCall, WorkspaceSignals } from './readmymind-context.js';
+import { gitMissingError, gitSpawnAllowed } from './utils/git-availability.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -150,6 +151,8 @@ const MAX_STATUS_LINES = 30;
  */
 export async function collectWorkspaceSignals(workingDir: string): Promise<WorkspaceSignals | null> {
   const git = async (args: string[]): Promise<string> => {
+    // Never Apple's placeholder git on a Mac without developer tools (utils/git-availability.ts).
+    if (!gitSpawnAllowed()) throw gitMissingError();
     const { stdout } = await execFileAsync('git', args, {
       cwd: workingDir,
       timeout: GIT_TIMEOUT_MS,

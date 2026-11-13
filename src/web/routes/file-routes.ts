@@ -1,14 +1,16 @@
 /**
  * @fileoverview File browser and streaming routes.
  * Provides directory listing, file content preview, raw file serving, tail
- * streaming, and the File Viewer edit-mode write path (edit=1 read +
+ * streaming, the File Viewer edit-mode write path (edit=1 read +
  * PUT /api/sessions/:id/file-content; policy in src/config/file-editing.ts,
- * design in docs/file-viewer-edit-plan.md).
+ * design in docs/file-viewer-edit-plan.md), and the Files panel's delete
+ * (DELETE /api/sessions/:id/files?path=: one regular file, the edit route's
+ * confinement and guards, symbolic links refused).
  */
 
 import { FastifyInstance, type FastifyReply } from 'fastify';
 import { basename as pathBasename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { createReadStream, realpathSync } from 'node:fs';
+import { createReadStream, realpathSync, type Dirent } from 'node:fs';
 import type { Readable } from 'node:stream';
 import fs from 'node:fs/promises';
 import { createHash, randomBytes } from 'node:crypto';
@@ -19,6 +21,7 @@ import type {
   FilesystemBrowseEntry,
   FilesystemBrowseRoot,
   FilesystemPreviewKind,
+  FileDeleteData,
   FileWriteData,
 } from '../../types.js';
 import { ApiErrorCode, createErrorResponse, getErrorMessage } from '../../types.js';
@@ -49,7 +52,13 @@ import {
 import { generateFirstPageThumbnail } from '../../document-thumbnailer.js';
 import { getOfficePreviewPdfPath, getPreviewPdfDownloadName } from '../../document-preview-cache.js';
 import { sanitizeAttachmentHistoryItem } from '../../session-attachment-history.js';
-import { isBlockedAttachmentPath, isUnderTree, loadAttachmentGuardConfig } from '../../config/attachment-guard.js';
+import {
+  isBlockedAttachmentDirectory,
+  isBlockedAttachmentPath,
+  isOutsideWorktreeRootRefused,
+  isUnderTree,
+  loadAttachmentGuardConfig,
+} from '../../config/attachment-guard.js';
 import { isMultiUserMode, userSpacePath } from '../../config/multiuser.js';
 import {
   CASES_DIR,
@@ -57,11 +66,14 @@ import {
   findSessionOrFail,
   getAuthUser,
   parseBody,
+  resolveCasesDir,
+  validateLocalSessionFilePath,
   validateSessionFilePath,
   validateSessionFilePathLexical,
 } from '../route-helpers.js';
 import type { FastifyRequest } from 'fastify';
 import type { SessionAttachmentHistoryItem, SessionRemote, SessionState } from '../../types/session.js';
+import type { LiveWorktree } from '../../live-worktree.js';
 import {
   RemoteFileAccessError,
   remoteCreateReadStream,
@@ -74,7 +86,12 @@ import { parseByteRange } from '../http-range.js';
 import { isSensitivePath } from '../sensitive-path.js';
 import { SseEvent } from '../sse-events.js';
 import type { ConfigPort, EventPort, SessionPort } from '../ports/index.js';
-import { FilesystemBrowseQuerySchema, FilesystemPreviewQuerySchema, FileWriteSchema } from '../schemas.js';
+import {
+  FilesystemBrowseQuerySchema,
+  FilesystemMkdirSchema,
+  FilesystemPreviewQuerySchema,
+  FileWriteSchema,
+} from '../schemas.js';
 import {
   MAX_EDITABLE_BYTES,
   applyEol,
@@ -568,6 +585,11 @@ function getKnownSessionWorkingDir(
 /** Where a session's files live: this host, or a host reachable over ssh. */
 interface SessionFileScope {
   workingDir: string;
+  /**
+   * A live local session's worktree (#765). Only one with `outside` set changes anything here: it
+   * is a second root that ABSOLUTE paths inside it are confined to (`validateLocalSessionFilePath`).
+   */
+  liveWorktree?: LiveWorktree;
   remote?: SessionRemote;
   /** The session runs inside a Docker case: a local session for these routes, but `~` is the container's. */
   docker?: boolean;
@@ -600,7 +622,12 @@ function getKnownSessionFileScope(
   const user = getAuthUser(req);
   const liveSession = ctx.sessions.get(sessionId);
   if (liveSession && canAccessOwned(user, liveSession.owner)) {
-    return { workingDir: liveSession.workingDir, remote: liveSession.remote, docker: !!liveSession.docker };
+    return {
+      workingDir: liveSession.workingDir,
+      liveWorktree: liveSession.liveWorktree,
+      remote: liveSession.remote,
+      docker: !!liveSession.docker,
+    };
   }
 
   const stored = ctx.store.getSession(sessionId);
@@ -643,6 +670,19 @@ type FileTargetResolution =
     };
 
 /**
+ * The scope with an outside worktree (#765) dropped when the attachment guard refuses its root
+ * right now. `findOutsideWorktree()` judged the guard when the pane moved, and an admin can turn
+ * on workspace confinement or block the folder afterwards, so every request judges it again. A
+ * scope without an outside worktree comes back unchanged and reads no settings.
+ */
+async function withGuardedOutsideWorktree<T extends { liveWorktree?: LiveWorktree }>(scope: T): Promise<T> {
+  const worktree = scope.liveWorktree;
+  if (!worktree?.outside) return scope;
+  if (!isOutsideWorktreeRootRefused(worktree.path, await loadAttachmentGuardConfig())) return scope;
+  return { ...scope, liveWorktree: undefined };
+}
+
+/**
  * Resolve a request's `?path=` against the session's file scope.
  *
  * Never throws: a transport failure comes back as `status: 502` with the remote
@@ -651,7 +691,7 @@ type FileTargetResolution =
  */
 async function resolveFileTarget(scope: SessionFileScope, filePath: string): Promise<FileTargetResolution> {
   if (!scope.remote) {
-    const validated = validateSessionFilePath(scope.workingDir, filePath);
+    const validated = validateLocalSessionFilePath(await withGuardedOutsideWorktree(scope), filePath);
     if (!validated) {
       return {
         ok: false,
@@ -767,9 +807,123 @@ const FILESYSTEM_IMAGE_PREVIEW_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif'
 const FILESYSTEM_TEXT_PREVIEW_EXTENSIONS = new Set(['md', 'txt', 'json']);
 const FILESYSTEM_DOCUMENT_PREVIEW_EXTENSIONS = new Set(['pdf', 'docx', 'pptx']);
 
-function isPathWithinRoot(root: string, candidate: string): boolean {
+/**
+ * Whether `candidate` is `root` itself or lies beneath it (both already resolved). The one lexical
+ * containment check for workspace confinement; ralph-routes.ts uses it for a remote `@fix_plan.md`.
+ */
+export function isPathWithinRoot(root: string, candidate: string): boolean {
   const rel = relative(root, candidate);
   return rel === '' || (!isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${sep}`));
+}
+
+/**
+ * Folder entries one Files panel listing may read, summed over the folders it opens. The budget of
+ * the walk caps what a listing RETURNS, but taking turns means opening every folder found so far,
+ * so this is what caps the reading: past it, folders not opened yet stay unread and are reported as
+ * unfinished. It also bounds what the walk holds, since a folder keeps only entries it has read. A
+ * folder is read whole, so the one that crosses this line overshoots by its own size.
+ */
+const MAX_WALK_ENTRIES_READ = 250_000;
+
+/** One folder of a Files panel walk, tree or search. */
+interface WalkCursor {
+  dirPath: string;
+  depth: number;
+  /** What the listing can use of this folder, folders first. Unset until its first turn. */
+  entries?: Dirent[];
+  index: number;
+  /** The read kept fewer entries than the folder lists, so running out of `entries` does not finish it. */
+  more?: boolean;
+  /** Its probe answered `unknown`: it may hold anything, so it must not pass for an empty folder. */
+  unanswered?: boolean;
+}
+
+/**
+ * First turn of a folder: reads it and sets `cursor.entries` to the part the listing could use,
+ * which is the entries it lists, sorted, up to what is left of the budget. Leaves `entries` unset
+ * for a folder it could not read, and sets `unanswered` when that was a probe that established
+ * nothing. Answers the number of entries read, for the walk's read ceiling.
+ */
+async function readWalkFolder(
+  cursor: WalkCursor,
+  budgetLeft: number,
+  isListed: (entry: Dirent) => boolean
+): Promise<number> {
+  // The walk's root is the session's own folder. Below it any folder can be a mount that stopped
+  // answering, and a bulk scan keeps the stall cap (#516): an unbounded readdir there would hold a
+  // threadpool worker for good. `unknown` is never `absent`, so only a folder the filesystem says
+  // is gone drops out quietly: one that did not answer goes on the walk's unfinished list.
+  if (cursor.depth > 1) {
+    const kind = await probePathKind(cursor.dirPath);
+    cursor.unanswered = kind === 'unknown';
+    if (kind !== 'directory') return 0;
+  }
+
+  let read: Dirent[];
+  try {
+    read = await fs.readdir(cursor.dirPath, { withFileTypes: true });
+  } catch {
+    // Can't read directory (permission denied, etc.).
+    return 0;
+  }
+  const listed = read.filter(isListed).sort((a, b) => {
+    if (a.isDirectory() && !b.isDirectory()) return -1;
+    if (!a.isDirectory() && b.isDirectory()) return 1;
+    return a.name.localeCompare(b.name);
+  });
+  cursor.more = listed.length > budgetLeft;
+  cursor.entries = cursor.more ? listed.slice(0, budgetLeft) : listed;
+  return read.length;
+}
+
+/**
+ * Where a folder's turn ends, given a `share` of the budget. Folders sort first, and each one found
+ * here waits for a later round, by which time a folder that spent the rest of its share on its own
+ * files has left nothing to read it with. So those files count as one more folder: they take an
+ * equal part of what the subfolders left and the remainder stays in the budget. A turn that found
+ * no subfolder has nothing to hold back for, and a turn always covers at least one entry.
+ */
+function walkTurnEnd(entries: Dirent[], start: number, share: number): number {
+  const end = Math.min(start + share, entries.length);
+  let firstFile = start;
+  while (firstFile < end && entries[firstFile].isDirectory()) firstFile++;
+  return firstFile + Math.floor((end - firstFile) / (firstFile - start + 1));
+}
+
+/**
+ * Whether a `root=live` listing may start at a session's `liveWorktree` (#765). `findLiveWorktree()`
+ * judged that path lexically when the pane moved, and a symlink can take its place, or a parent's,
+ * without moving the pane. The probe and `readdir` both follow one, and the walk's `path`s only look
+ * relative to `workingDir`, so this is the request-time half of the rule, the same one
+ * `validateSessionFilePath()` applies to a file: resolved, the worktree must lie strictly inside the
+ * resolved `workingDir`. Only the CHECK uses the resolved paths: the walk keeps the session's spelling,
+ * or a workspace reached through a symlink would stop producing paths relative to `workingDir`.
+ * Probed first (#516); both realpaths then walk the components that probe has just answered for.
+ */
+async function canWalkLiveWorktree(workingDir: string, worktreePath: string): Promise<boolean> {
+  if ((await probePathKind(worktreePath, { pastCap: true })) !== 'directory') return false;
+  try {
+    const [realRoot, realWorktree] = await Promise.all([fs.realpath(workingDir), fs.realpath(worktreePath)]);
+    return realWorktree !== realRoot && isPathWithinRoot(realRoot, realWorktree);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether a `root=live-any` listing may start at a worktree OUTSIDE `workingDir` (`outside: true`,
+ * published as `outsideWorktree`).
+ * `findOutsideWorktree()` recorded its real path, and a symlink can take the folder's place, or a
+ * parent's, without moving the pane, so the folder must still resolve to exactly that path. Probed
+ * first (#516).
+ */
+async function canWalkOutsideWorktree(worktreePath: string): Promise<boolean> {
+  if ((await probePathKind(worktreePath, { pastCap: true })) !== 'directory') return false;
+  try {
+    return (await fs.realpath(worktreePath)) === worktreePath;
+  } catch {
+    return false;
+  }
 }
 
 function findMatchingPickerRoot(roots: FilesystemBrowseRoot[], candidate: string): FilesystemBrowseRoot | undefined {
@@ -840,11 +994,7 @@ function resolveCandidateRootPaths(candidates: ReadonlyArray<{ path: string }>):
 }
 
 function isBlockedPickerPath(path: string, blockedTrees: readonly string[], directory = false): boolean {
-  if (isBlockedAttachmentPath(path, blockedTrees)) return true;
-  // The shared sensitive-path matcher describes file locations such as
-  // ~/.ssh/<key>. Probe a child path as well so the directory itself cannot be
-  // opened and used to enumerate those filenames.
-  return directory && isBlockedAttachmentPath(join(path, '__codeman_path_picker_probe__'), blockedTrees);
+  return directory ? isBlockedAttachmentDirectory(path, blockedTrees) : isBlockedAttachmentPath(path, blockedTrees);
 }
 
 function extraConfiguredPickerRoots(): Array<{ label: string; path: string }> {
@@ -1050,10 +1200,14 @@ function throwRouteError(statusCode: number, code: ApiErrorCode, message: string
  * Gate a resolved workspace file for edit-mode read/write. Throws a structured
  * error when the file may not be edited; returns void when it may. Order
  * matters for the message a user sees: confinement (the caller's 404) →
- * sensitive/blocked (403) → .git (403) → extension allowlist (400).
+ * sensitive/blocked (403) → .git (403) → extension allowlist (400). Dotenv is
+ * the one sensitive family the editor may open (`allowDotenv`): the plain
+ * preview already serves it to the same user. Keep this and the `editable`
+ * advertisement in the read route in step.
  */
 function assertEditableTarget(resolvedPath: string, relativePath: string, blockedTrees: readonly string[]): void {
-  if (isSensitivePath(resolvedPath) || isBlockedAttachmentPath(resolvedPath, blockedTrees)) {
+  // isBlockedAttachmentPath includes the sensitive-path check.
+  if (isBlockedAttachmentPath(resolvedPath, blockedTrees, { allowDotenv: true })) {
     throwFileEditError(403, ApiErrorCode.FORBIDDEN, 'Editing this file is blocked');
   }
   if (isDeniedEditRelativePath(relativePath)) {
@@ -1444,6 +1598,86 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
     };
   });
 
+  // "New folder" in the path picker: creates ONE folder directly inside a folder the picker may browse.
+  app.post('/api/filesystem/mkdir', async (req, reply): Promise<ApiResponse<{ path: string }>> => {
+    const { path: parentPath, name, sessionId, showHidden } = parseBody(FilesystemMkdirSchema, req.body);
+    // Probed first (#516): the picker's resolver runs realpathSync on this path, which would freeze the
+    // whole server on a mount that stopped answering.
+    if ((await probePathKind(parentPath, { pastCap: true })) === 'unknown') {
+      reply.code(422);
+      return createErrorResponse(
+        ApiErrorCode.OPERATION_FAILED,
+        describeUnknownPath('The folder', parentPath, { pastCap: true })
+      );
+    }
+    const { candidatePath, resolvedPath, blockedTrees } = await resolveFilesystemPickerPath(
+      ctx,
+      req,
+      parentPath,
+      sessionId,
+      wantsHiddenPickerEntries(showHidden)
+    );
+    const target = join(resolvedPath, name);
+    if (isBlockedPickerPath(resolvedPath, blockedTrees, true) || isBlockedPickerPath(target, blockedTrees, true)) {
+      reply.code(403);
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Folders cannot be created here');
+    }
+    // The cases directories (shared, and the caller's own in multi-user mode) are what GET /api/cases lists as
+    // local cases: a folder made there is a case with no scaffold, which Link then refuses by name and which
+    // deleting would take the linked folder with. A case there is made through Add Case > Create New with no
+    // custom folder. The refusal has to read right from every picker that offers New folder: a Create New or
+    // Clone Repo user is already on that tab, with the custom folder ticked, and this is where Browse opens
+    // while the field is empty.
+    const casesDirs = await Promise.all(
+      [...new Set([CASES_DIR, resolveCasesDir(getAuthUser(req))])].map((dir) =>
+        fs.realpath(dir).catch(() => resolve(dir))
+      )
+    );
+    if (casesDirs.includes(resolvedPath)) {
+      reply.code(400);
+      return createErrorResponse(
+        ApiErrorCode.INVALID_INPUT,
+        'This is a cases folder: every folder in it is a case. Pick a folder outside it, or make the case with Add Case > Create New or Clone Repo (no custom folder).'
+      );
+    }
+    // Like browse, a file is not a place to create in.
+    try {
+      if (!(await fs.stat(resolvedPath)).isDirectory()) throw new Error('not a directory');
+    } catch {
+      reply.code(400);
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'The folder to create in must be a directory');
+    }
+    try {
+      // Not recursive: the parent was just resolved inside an allowed root, and an existing folder must be a 409.
+      await fs.mkdir(target);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'EEXIST') {
+        reply.code(409);
+        return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, `"${name}" already exists in this folder`);
+      }
+      if (code === 'EACCES' || code === 'EPERM' || code === 'EROFS') {
+        reply.code(403);
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'This folder is not writable');
+      }
+      if (code === 'ENOENT') {
+        reply.code(404);
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, `Folder not found: ${candidatePath}`);
+      }
+      if (code === 'ENAMETOOLONG') {
+        reply.code(400);
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Folder name is too long');
+      }
+      // Never the errno text: it names the resolved, symlink-followed path, not the one the picker shows.
+      reply.code(500);
+      return createErrorResponse(
+        ApiErrorCode.OPERATION_FAILED,
+        `Could not create the folder${code ? ` (${code})` : ''}`
+      );
+    }
+    return { success: true, data: { path: join(candidatePath, name) } };
+  });
+
   // Inline preview for files selected through the root-confined filesystem picker.
   app.get('/api/filesystem/preview', { compress: false }, async (req, reply): Promise<void> => {
     const { path: requestedPath, sessionId, showHidden } = parseBody(FilesystemPreviewQuerySchema, req.query);
@@ -1508,12 +1742,44 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
   // File tree listing
   app.get('/api/sessions/:id/files', async (req) => {
     const { id } = req.params as { id: string };
-    const { depth, showHidden, q } = req.query as { depth?: string; showHidden?: string; q?: string };
+    const { depth, showHidden, q, root } = req.query as {
+      depth?: string;
+      showHidden?: string;
+      q?: string;
+      root?: string;
+    };
     const session = findSessionOrFail(ctx, id, req);
 
     const maxDepth = Math.min(parseInt(depth || '5', 10), 10);
     const includeHidden = showHidden === 'true';
     const workingDir = session.workingDir;
+    // `root=live` starts the walk at the linked worktree the pane is in (#765), once that folder
+    // proves to be inside `workingDir` right now, and every `path` below stays relative to
+    // `workingDir`, so file-content, file-raw and the edit route need nothing new and judge these
+    // paths against the same root as any other. Only the search predicate reads a path relative
+    // to the listing, since that is the tree the person is looking at.
+    // A worktree OUTSIDE `workingDir` (the session's `outsideWorktree` on the wire) is a second
+    // root, and walking it is opt-in: only `root=live-any` does. `root=live` never walks it (every
+    // `path` stays relative to `workingDir`), so with an outside worktree it walks `workingDir`. The outside
+    // walk happens only while the folder still resolves to the real path recorded for it, and it
+    // lists ABSOLUTE `path`s, since a relative one resolves against `workingDir` on every other
+    // route. Those routes confine an absolute path inside it to it (`validateLocalSessionFilePath`).
+    const liveWorktree = (await withGuardedOutsideWorktree({ liveWorktree: session.liveWorktree })).liveWorktree;
+    const walksOutside =
+      root === 'live-any' && !!liveWorktree?.outside && (await canWalkOutsideWorktree(liveWorktree.path));
+    const walksInside =
+      (root === 'live' || root === 'live-any') &&
+      !!liveWorktree &&
+      !liveWorktree.outside &&
+      (await canWalkLiveWorktree(workingDir, liveWorktree.path));
+    const walkRoot = liveWorktree && (walksOutside || walksInside) ? liveWorktree.path : workingDir;
+    // Only `root=live-any` reports an outside worktree: it is the client that opted in to it.
+    // A listing keeps reporting a worktree the guard refuses to walk, or the panel would reload on
+    // every session update.
+    const sessionWorktree = session.liveWorktree;
+    const reportedWorktree =
+      sessionWorktree && (!sessionWorktree.outside || root === 'live-any') ? sessionWorktree : undefined;
+    const nodePath = (fullPath: string): string => (walksOutside ? fullPath : fullPath.slice(workingDir.length + 1));
     // null for an empty/whitespace query, which is what keeps the default
     // tree response byte-identical when no search is requested.
     const matcher = compileFileQuery(q ?? '');
@@ -1543,12 +1809,17 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
       size?: number;
       extension?: string;
       children?: FileTreeNode[];
+      /** Set only on a folder the walk stopped short of or could not reach, so `children` is not all of it. */
+      incomplete?: boolean;
     }
 
     let totalFiles = 0;
     let totalDirectories = 0;
     let truncated = false;
     const maxFiles = 5000;
+    let entriesRead = 0;
+    const isListed = (entry: Dirent): boolean =>
+      (includeHidden || !entry.name.startsWith('.')) && !(entry.isDirectory() && excludeDirs.has(entry.name));
 
     // ===== Search mode =====
     // A query turns this endpoint into a FLAT match list rather than a nested
@@ -1560,70 +1831,83 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
       const matches: FileTreeNode[] = [];
       const maxMatches = 1000;
 
-      const searchDirectory = async (dirPath: string, currentDepth: number): Promise<void> => {
-        if (currentDepth > maxDepth || totalFiles + totalDirectories > maxFiles || matches.length >= maxMatches) {
-          truncated = true;
-          return;
-        }
+      const queue: WalkCursor[] = [{ dirPath: walkRoot, depth: 1, index: 0 }];
+      // Folders the read ceiling kept shut or that did not answer. What was already read still gets its turns.
+      const unread: WalkCursor[] = [];
+      while (queue.length > 0 && totalFiles + totalDirectories < maxFiles && matches.length < maxMatches) {
+        // Per-directory round-robin (breadth-first): each queued directory gets an equal share of what
+        // is left before any of them gets more, so results arrive shallow-first. Fair per directory,
+        // not per subtree: a folder of thousands of small subfolders queues thousands of directories
+        // and can still take most of the budget one level down. Reading a folder costs the same
+        // whatever its share, so this never bounds the reading: MAX_WALK_ENTRIES_READ does.
+        const directoriesInRound = queue.length;
+        const nodesPerDirectory = Math.max(
+          1,
+          Math.floor((maxFiles - totalFiles - totalDirectories) / directoriesInRound)
+        );
 
-        let entries: import('node:fs').Dirent[];
-        try {
-          entries = await fs.readdir(dirPath, { withFileTypes: true });
-        } catch {
-          // Can't read directory (permission denied, etc.)
-          return;
-        }
-        entries.sort((a, b) => {
-          if (a.isDirectory() && !b.isDirectory()) return -1;
-          if (!a.isDirectory() && b.isDirectory()) return 1;
-          return a.name.localeCompare(b.name);
-        });
-
-        for (const entry of entries) {
-          if (totalFiles + totalDirectories > maxFiles || matches.length >= maxMatches) {
+        for (let directoryIndex = 0; directoryIndex < directoriesInRound; directoryIndex++) {
+          // Spent part way through a round: the rest stay queued unread rather than sorted for nothing.
+          if (totalFiles + totalDirectories >= maxFiles || matches.length >= maxMatches) break;
+          const cursor = queue.shift();
+          if (!cursor) break;
+          if (cursor.depth > maxDepth) {
             truncated = true;
-            break;
+            continue;
           }
-          if (!includeHidden && entry.name.startsWith('.')) continue;
-          if (entry.isDirectory() && excludeDirs.has(entry.name)) continue;
-
-          const fullPath = join(dirPath, entry.name);
-          const relativePath = relative(workingDir, fullPath);
-
-          if (entry.isDirectory()) {
-            totalDirectories++;
-            if (matcher(entry.name, relativePath)) {
-              matches.push({ name: entry.name, path: relativePath, type: 'directory' });
+          if (!cursor.entries) {
+            if (entriesRead >= MAX_WALK_ENTRIES_READ) {
+              unread.push(cursor);
+              continue;
             }
-            // Always recurse, even when this directory does not match.
-            await searchDirectory(fullPath, currentDepth + 1);
-          } else {
-            totalFiles++;
-            if (matcher(entry.name, relativePath)) {
-              let size: number | undefined;
-              try {
-                size = (await fs.stat(fullPath)).size;
-              } catch {
-                // Skip size if we can't stat the match.
+            entriesRead += await readWalkFolder(cursor, maxFiles - totalFiles - totalDirectories, isListed);
+            if (cursor.unanswered) unread.push(cursor);
+            if (!cursor.entries) continue;
+          }
+
+          const endIndex = walkTurnEnd(cursor.entries, cursor.index, nodesPerDirectory);
+          while (cursor.index < endIndex && totalFiles + totalDirectories < maxFiles && matches.length < maxMatches) {
+            const entry = cursor.entries[cursor.index++];
+            const fullPath = join(cursor.dirPath, entry.name);
+            const relativePath = walksOutside ? fullPath : relative(workingDir, fullPath);
+            const listedPath = relative(walkRoot, fullPath);
+
+            if (entry.isDirectory()) {
+              totalDirectories++;
+              if (matcher(entry.name, listedPath)) {
+                matches.push({ name: entry.name, path: relativePath, type: 'directory' });
               }
-              matches.push({
-                name: entry.name,
-                path: relativePath,
-                type: 'file',
-                size,
-                extension: entry.name.includes('.') ? entry.name.split('.').pop()?.toLowerCase() : undefined,
-              });
+              // Queued, not entered: it waits for a later round with every other directory found.
+              queue.push({ dirPath: fullPath, depth: cursor.depth + 1, index: 0 });
+            } else {
+              totalFiles++;
+              if (matcher(entry.name, listedPath)) {
+                let size: number | undefined;
+                try {
+                  size = (await fs.stat(fullPath)).size;
+                } catch {
+                  // Skip size if we can't stat the match.
+                }
+                matches.push({
+                  name: entry.name,
+                  path: relativePath,
+                  type: 'file',
+                  size,
+                  extension: entry.name.includes('.') ? entry.name.split('.').pop()?.toLowerCase() : undefined,
+                });
+              }
             }
           }
+          if (cursor.index < cursor.entries.length || cursor.more) queue.push(cursor);
         }
-      };
-
-      await searchDirectory(workingDir, 1);
+      }
+      if (queue.length > 0 || unread.length > 0) truncated = true;
 
       return {
         success: true,
         data: {
-          root: workingDir,
+          root: walkRoot,
+          ...(reportedWorktree && { worktree: reportedWorktree }),
           tree: [],
           matches,
           totalFiles,
@@ -1636,47 +1920,57 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
       };
     }
 
-    const scanDirectory = async (dirPath: string, currentDepth: number): Promise<FileTreeNode[]> => {
-      if (currentDepth > maxDepth || totalFiles + totalDirectories > maxFiles) {
-        truncated = true;
-        return [];
-      }
+    interface TreeDirectoryCursor extends WalkCursor {
+      /** This directory's node. The root of the walk has none: `tree` is its list of children. */
+      node?: FileTreeNode;
+      nodes: FileTreeNode[];
+    }
 
-      try {
-        const entries = await fs.readdir(dirPath, { withFileTypes: true });
-        const nodes: FileTreeNode[] = [];
+    const tree: FileTreeNode[] = [];
+    const queue: TreeDirectoryCursor[] = [{ dirPath: walkRoot, depth: 1, nodes: tree, index: 0 }];
+    const unread: TreeDirectoryCursor[] = [];
+    while (queue.length > 0 && totalFiles + totalDirectories < maxFiles) {
+      // The same per-directory round-robin as the search walk above, with the same limits.
+      const directoriesInRound = queue.length;
+      const nodesPerDirectory = Math.max(
+        1,
+        Math.floor((maxFiles - totalFiles - totalDirectories) / directoriesInRound)
+      );
 
-        // Sort: directories first, then alphabetically
-        entries.sort((a, b) => {
-          if (a.isDirectory() && !b.isDirectory()) return -1;
-          if (!a.isDirectory() && b.isDirectory()) return 1;
-          return a.name.localeCompare(b.name);
-        });
-
-        for (const entry of entries) {
-          if (totalFiles + totalDirectories > maxFiles) {
-            truncated = true;
-            break;
+      for (let directoryIndex = 0; directoryIndex < directoriesInRound; directoryIndex++) {
+        // Before the shift, so a cursor this skips stays queued and is flagged below.
+        if (totalFiles + totalDirectories >= maxFiles) break;
+        const cursor = queue.shift();
+        if (!cursor) break;
+        if (cursor.depth > maxDepth) {
+          truncated = true;
+          continue;
+        }
+        if (!cursor.entries) {
+          if (entriesRead >= MAX_WALK_ENTRIES_READ) {
+            unread.push(cursor);
+            continue;
           }
+          entriesRead += await readWalkFolder(cursor, maxFiles - totalFiles - totalDirectories, isListed);
+          if (cursor.unanswered) unread.push(cursor);
+          if (!cursor.entries) continue;
+        }
 
-          // Skip hidden files unless requested
-          if (!includeHidden && entry.name.startsWith('.')) continue;
-
-          // Skip excluded directories
-          if (entry.isDirectory() && excludeDirs.has(entry.name)) continue;
-
-          const fullPath = join(dirPath, entry.name);
-          const relativePath = fullPath.slice(workingDir.length + 1);
-
+        const endIndex = walkTurnEnd(cursor.entries, cursor.index, nodesPerDirectory);
+        while (cursor.index < endIndex && totalFiles + totalDirectories < maxFiles) {
+          const entry = cursor.entries[cursor.index++];
+          const fullPath = join(cursor.dirPath, entry.name);
+          const relativePath = nodePath(fullPath);
           if (entry.isDirectory()) {
             totalDirectories++;
-            const children = await scanDirectory(fullPath, currentDepth + 1);
-            nodes.push({
+            const node: FileTreeNode = {
               name: entry.name,
               path: relativePath,
               type: 'directory',
-              children,
-            });
+              children: [],
+            };
+            cursor.nodes.push(node);
+            queue.push({ dirPath: fullPath, depth: cursor.depth + 1, node, nodes: node.children!, index: 0 });
           } else {
             totalFiles++;
             const ext = entry.name.includes('.') ? entry.name.split('.').pop()?.toLowerCase() : undefined;
@@ -1685,37 +1979,129 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
               const stat = await fs.stat(fullPath);
               size = stat.size;
             } catch {
-              // Skip if can't stat
+              // Skip if can't stat.
             }
-            nodes.push({
-              name: entry.name,
-              path: relativePath,
-              type: 'file',
-              size,
-              extension: ext,
-            });
+            cursor.nodes.push({ name: entry.name, path: relativePath, type: 'file', size, extension: ext });
           }
         }
-
-        return nodes;
-      } catch {
-        // Can't read directory (permission denied, etc.)
-        return [];
+        if (cursor.index < cursor.entries.length || cursor.more) queue.push(cursor);
       }
-    };
-
-    const tree = await scanDirectory(workingDir, 1);
+    }
+    // Every directory still queued is unread or half read, and an empty `children` would read as an
+    // empty folder. The root has no node to flag: `truncated` says the same for it.
+    for (const cursor of [...queue, ...unread]) {
+      if (cursor.node) cursor.node.incomplete = true;
+    }
+    if (queue.length > 0 || unread.length > 0) truncated = true;
 
     return {
       success: true,
       data: {
-        root: workingDir,
+        root: walkRoot,
+        ...(reportedWorktree && { worktree: reportedWorktree }),
         tree,
         totalFiles,
         totalDirectories,
         truncated,
       },
     };
+  });
+
+  // The Files panel's delete button: remove ONE regular file from the session's workspace (or from
+  // its outside worktree, for an absolute path inside it). A write surface like the edit route
+  // above, so it takes that route's confinement and guards whole (ownership, realpath + workspace boundary, sensitive and blocked trees, `.git`), and adds
+  // its own rule for links: a symbolic link is REFUSED, never followed. The confinement check
+  // returns the link's realpath, which is its TARGET, so an `unlink` of that path deletes the file
+  // the link points at and leaves the link dangling (#529's review: `AGENTS.md -> CLAUDE.md`
+  // deleted CLAUDE.md). The final component is therefore read with `lstat` on the path as the
+  // client named it, and only a path whose last part is a plain file goes on; `unlink` never
+  // follows a final symlink, so a link swapped in after that check is removed rather than its
+  // target, and the inode is compared again right before the unlink.
+  app.delete('/api/sessions/:id/files', async (req): Promise<ApiResponse<FileDeleteData>> => {
+    const { id } = req.params as { id: string };
+    const { path: filePath } = req.query as { path?: string };
+    const session = findSessionOrFail(ctx, id, req);
+    // Ahead of any path check, as on the edit route: the validation below resolves against the
+    // LOCAL filesystem, so a same-named local directory would take the delete.
+    if (session.remote) {
+      throwRouteError(400, ApiErrorCode.INVALID_INPUT, 'Deleting is not supported for remote (SSH) sessions');
+    }
+    // An adopted session has no workspace of ours: its folder is the neutral `/tmp`. The older
+    // file surfaces keep serving it as a standing exception (root CLAUDE.md, Adopted tmux
+    // sessions), which is not copied to a new surface, least of all one that deletes.
+    if (session.isAdopted) {
+      throwRouteError(400, ApiErrorCode.INVALID_INPUT, 'Deleting is not supported for adopted sessions');
+    }
+    // A repeated `?path=` arrives as an array.
+    if (typeof filePath !== 'string' || !filePath) {
+      throwRouteError(400, ApiErrorCode.INVALID_INPUT, 'Missing path parameter');
+    }
+    // #516: the confinement check below runs realpathSync, which freezes the server on a mount
+    // that stopped answering. Probe the folders it will touch first, bounded.
+    const scope = await withGuardedOutsideWorktree({
+      workingDir: session.workingDir,
+      liveWorktree: session.liveWorktree,
+    });
+    const worktreeRoot = scope.liveWorktree?.outside && isAbsolute(filePath) ? scope.liveWorktree.path : null;
+    for (const folder of worktreeRoot ? [session.workingDir, worktreeRoot] : [session.workingDir]) {
+      if ((await probePathKind(folder, { pastCap: true })) === 'unknown') {
+        throwRouteError(
+          422,
+          ApiErrorCode.OPERATION_FAILED,
+          describeUnknownPath('Workspace', folder, { pastCap: true })
+        );
+      }
+    }
+    const validated = validateLocalSessionFilePath(scope, filePath);
+    if (!validated) {
+      // Missing files, traversal and symlink escapes alike, as on every other file route.
+      throwRouteError(404, ApiErrorCode.NOT_FOUND, 'File not found');
+    }
+    const { resolvedPath, relativePath } = validated;
+    // The path as the client named it: `resolve` keeps an absolute (outside worktree) path as is.
+    const namedPath = resolve(session.workingDir, filePath);
+    const guard = await loadAttachmentGuardConfig();
+    if (
+      isSensitivePath(resolvedPath) ||
+      isSensitivePath(namedPath) ||
+      isBlockedAttachmentPath(resolvedPath, guard.blockedTrees) ||
+      isBlockedAttachmentPath(namedPath, guard.blockedTrees)
+    ) {
+      throwRouteError(403, ApiErrorCode.FORBIDDEN, 'Deleting this file is blocked');
+    }
+    // Both spellings: a `.git` reached through a linked folder, and a linked `.git`.
+    if (isDeniedEditRelativePath(relativePath) || isDeniedEditRelativePath(relative(session.workingDir, namedPath))) {
+      throwRouteError(403, ApiErrorCode.FORBIDDEN, 'Files under .git cannot be deleted');
+    }
+    const named = await fs.lstat(namedPath).catch(() => undefined);
+    if (!named) {
+      throwRouteError(404, ApiErrorCode.NOT_FOUND, 'File not found');
+    }
+    if (named.isSymbolicLink()) {
+      throwRouteError(
+        400,
+        ApiErrorCode.INVALID_INPUT,
+        'Symbolic links are not deleted from the Files panel (deleting one here would remove the file it points to)'
+      );
+    }
+    if (!named.isFile()) {
+      throwRouteError(400, ApiErrorCode.INVALID_INPUT, 'Only regular files can be deleted');
+    }
+    // The same file the checks were made on: realpath of a path whose last part is no link names
+    // the same inode. A change in between (the file replaced) refuses rather than guesses.
+    const real = await fs.lstat(resolvedPath).catch(() => undefined);
+    if (!real || !real.isFile() || real.ino !== named.ino || real.dev !== named.dev) {
+      throwRouteError(409, ApiErrorCode.CONFLICT, 'The file changed while it was being deleted; reload and try again');
+    }
+    try {
+      await fs.unlink(resolvedPath);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT') throwRouteError(404, ApiErrorCode.NOT_FOUND, 'File not found');
+      // The errno text names the resolved path, so only its code goes back.
+      throwRouteError(500, ApiErrorCode.OPERATION_FAILED, `Failed to delete the file (${code ?? 'error'})`);
+    }
+    return { success: true, data: { path: filePath } };
   });
 
   // Get file content for preview (File Browser)
@@ -1736,7 +2122,10 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
     // Validate path is within working directory (security: resolve symlinks to prevent traversal)
     // For a remote (SSH) case the same boundary is resolved on the remote host (#415),
     // where the path actually lives.
-    const resolution = await resolveFileTarget({ workingDir: session.workingDir, remote: session.remote }, filePath);
+    const resolution = await resolveFileTarget(
+      { workingDir: session.workingDir, liveWorktree: session.liveWorktree, remote: session.remote },
+      filePath
+    );
     if (!resolution.ok) {
       // An unreachable remote is thrown so the shared handler answers a real 502 (and
       // the test can assert it); a refusal keeps this route's historical returned
@@ -1947,8 +2336,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
         editable =
           isEditableFileName(pathBasename(target.resolvedPath)) &&
           !isDeniedEditRelativePath(relativePath) &&
-          !isSensitivePath(target.resolvedPath) &&
-          !isBlockedAttachmentPath(target.resolvedPath, guard.blockedTrees) &&
+          !isBlockedAttachmentPath(target.resolvedPath, guard.blockedTrees, { allowDotenv: true }) &&
           stat.size <= MAX_EDITABLE_BYTES &&
           Buffer.from(content, 'utf8').equals(buf);
       }
@@ -2008,7 +2396,10 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
         throwFileEditError(413, ApiErrorCode.INVALID_INPUT, `Content too large (${MAX_EDITABLE_BYTES / 1024}KB limit)`);
       }
 
-      const validated = validateSessionFilePath(session.workingDir, body.path);
+      const validated = validateLocalSessionFilePath(
+        await withGuardedOutsideWorktree({ workingDir: session.workingDir, liveWorktree: session.liveWorktree }),
+        body.path
+      );
       if (!validated) {
         // Covers missing files, traversal, and symlink escapes alike — a write
         // target that fails confinement is reported identically to a missing
@@ -2064,6 +2455,13 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
       // masked by the process umask; fsync so the rename never publishes a
       // partially-durable file. Trade-off (same as vim's default): the inode
       // changes, so hardlinks keep the old content.
+      //
+      // The new file would also take this process's own user and group, so a
+      // `.env` shared by group (you:www-data, 0640) came back you:you and the
+      // web server lost it. fchown puts both back where the account may: the
+      // owner can give a file to a group they belong to, and only root can set
+      // the user. Best effort, since a save that cannot keep the group is still
+      // the save the user asked for.
       const fileMode = stat.mode & 0o777;
       const tmpPath = join(
         dirname(resolvedPath),
@@ -2072,6 +2470,12 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
       let handle;
       try {
         handle = await fs.open(tmpPath, 'wx', fileMode);
+        const tmpHandle = handle;
+        await tmpHandle
+          .chown(stat.uid, stat.gid)
+          .catch(() => tmpHandle.chown(-1, stat.gid))
+          .catch(() => {});
+        // After the chown: changing the owner can clear mode bits.
         await handle.chmod(fileMode);
         await handle.writeFile(outBuf);
         await handle.sync();
@@ -2111,7 +2515,10 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
     }
 
     // Validate path is within working directory (security: resolve symlinks to prevent traversal)
-    const resolution = await resolveFileTarget({ workingDir: session.workingDir, remote: session.remote }, filePath);
+    const resolution = await resolveFileTarget(
+      { workingDir: session.workingDir, liveWorktree: session.liveWorktree, remote: session.remote },
+      filePath
+    );
     if (!resolution.ok) {
       reply.code(resolution.status).send(createErrorResponse(resolution.errorCode, resolution.message));
       return;
@@ -2750,7 +3157,10 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
     }
 
     const session = findSessionOrFail(ctx, sessionId, req);
-    const validated = validateSessionFilePath(session.workingDir, filePath);
+    const validated = validateLocalSessionFilePath(
+      await withGuardedOutsideWorktree({ workingDir: session.workingDir, liveWorktree: session.liveWorktree }),
+      filePath
+    );
     if (!validated) {
       reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, 'File not found'));
       return;

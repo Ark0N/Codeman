@@ -115,6 +115,12 @@ export interface FileWriteData {
   eol: 'lf' | 'crlf';
 }
 
+/** Response payload for `DELETE /api/sessions/:id/files?path=` (the Files panel's delete button). */
+export interface FileDeleteData {
+  /** The path as submitted (workspace-relative, or absolute inside the session's outside worktree) */
+  path: string;
+}
+
 export type CleanupResourceType = 'timer' | 'interval' | 'watcher' | 'listener' | 'stream';
 
 /**

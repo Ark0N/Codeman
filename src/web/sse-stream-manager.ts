@@ -127,10 +127,6 @@ export class SseStreamManager {
     return this.remoteSseClients.size;
   }
 
-  get isTunnelActive(): boolean {
-    return this._isTunnelActive;
-  }
-
   setTunnelActive(active: boolean): void {
     this._isTunnelActive = active;
   }

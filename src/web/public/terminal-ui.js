@@ -98,10 +98,20 @@
   const PAGE_KEY_GESTURE_GAP_MS = 150;
   // ...but not for sub-row jitter (0.1 row, ~2px)...
   const PAGE_KEY_MIN_START_ROWS = 0.1;
-  // ...and only for a trackpad-sized opening event. A mouse-wheel notch (100px,
-  // 4 rows) accumulates toward half a screen as before; paging at once on it made
-  // slow notches, each its own gesture past the gap, page a full screen apiece.
+  // ...for any opening event under one page. A trackpad-sized opener (under this many rows) and a
+  // mouse-wheel notch (100px, 4 rows) both page at once; this size is what tells them apart for the debt
+  // (see PAGE_KEY_NOTCH_DEBT_MS). The signal is the opener's size, not the device: a touch contact whose
+  // first touchmove is this many rows or more is treated as a notch too, and so is a brisk trackpad
+  // flick that opens with a large event. Both are fine, and both get the longer debt.
   const PAGE_KEY_IMMEDIATE_MAX_ROWS = 2;
+  // A mouse-wheel notch used to just accumulate toward half a screen, so a mouse showed nothing for the
+  // first 5 notches (7 on Firefox's 3-line notches) and a gesture of a few notches seemed dead. The first
+  // notch of a gesture now pre-pays its page like a trackpad flick does, and the notches that follow repay
+  // it: the same gesture sends the same pages, the first one sooner. The old objection was slow notches,
+  // each its own gesture past the gap, paging a full screen apiece, so a notch's debt outlives the pauses
+  // between notches for this long (a trackpad's lasts PAGE_KEY_DEBT_MS). It applies to any opener of
+  // PAGE_KEY_IMMEDIATE_MAX_ROWS rows or more, whatever device it came from.
+  const PAGE_KEY_NOTCH_DEBT_MS = 3000;
   // A pre-paid page's debt outlives the gesture gap for this long when the next
   // event goes the SAME way, so slow small wheel ticks (40 px every 250 ms, a
   // Firefox 1-line notch) pay it back instead of each pre-paying a page of its own.
@@ -121,17 +131,7 @@
         : delta / 25; // DOM_DELTA_PIXEL (Chrome/WebKit, and every trackpad)
   }
 
-  // The same travel rounded to whole lines for the SGR wheel reports: a pure
-  // horizontal swipe is 0 (nothing to send), and anything else moves at least
-  // one line, so the small pixel deltas of a precision touchpad still scroll.
-  // The body of the primary pane's _wheelScrollLines.
-  function wheelDeltaWholeLines(ev, rows) {
-    const lines = wheelDeltaLines(ev, rows);
-    if (!lines) return 0;
-    return Math.round(lines) || (lines > 0 ? 1 : -1);
-  }
-
-  // Ticks one gesture batch may report: Claude applies its own scroll-speed
+  // Ticks one input event may report: Claude applies its own scroll-speed
   // multiplier and acceleration on top, so a bigger batch only overshoots.
   const SGR_WHEEL_MAX_TICKS = 5;
 
@@ -145,6 +145,43 @@
     const btn = lines < 0 ? 64 : 65;
     const ticks = Math.min(Math.abs(lines), SGR_WHEEL_MAX_TICKS);
     return `\x1b[<${btn};${pos.col};${pos.row}M`.repeat(ticks);
+  }
+
+  // A deliberate opening event preserves upstream rounding and pre-pays at
+  // least one tick, so isolated clicks retain their travel. The signed remainder
+  // is repaid by subsequent same-direction travel: ten 0.1-line events still total one tick. Debt and
+  // fractions expire with a 150ms gesture gap or reversal; a reversal within
+  // the gesture accumulates without another pre-payment (like page gestures).
+  function wheelTicksForGesture(state, lines, now) {
+    if (!Number.isFinite(lines) || !lines) return { state: state || {}, ticks: 0 };
+    const dir = Math.sign(lines);
+    const fresh = !state || typeof state.lastAt !== 'number' || now - state.lastAt > PAGE_KEY_GESTURE_GAP_MS;
+    const reversed = state?.dir && state.dir !== dir;
+    if (fresh && Math.abs(lines) >= PAGE_KEY_MIN_START_ROWS) {
+      const rounded = dir * Math.max(1, Math.round(Math.abs(lines)));
+      return {
+        state: { dir, lastAt: now, pending: lines - rounded },
+        ticks: dir * Math.min(Math.abs(rounded), SGR_WHEEL_MAX_TICKS),
+      };
+    }
+    const total = (fresh || reversed ? 0 : state.pending || 0) + lines;
+    const whole = Math.trunc(total + Math.sign(total) * 1e-9);
+    return {
+      state: { dir, lastAt: now, pending: Math.abs(total - whole) < 1e-9 ? 0 : total - whole },
+      ticks: whole === 0 ? 0 : Math.sign(whole) * Math.min(Math.abs(whole), SGR_WHEEL_MAX_TICKS),
+    };
+  }
+
+  // Only unsent scroll input can be cancelled. Preserve upstream report density
+  // within each batch, and replace an obsolete direction immediately.
+  // Local and remote transports share the same direction-aware gesture queue.
+  function coalesceScrollBytes(queued, data) {
+    const direction = (bytes) => bytes?.match(/\x1b\[<(64|65);|\x1b\[(5|6)~/)?.[0];
+    const previous = direction(queued);
+    const next = direction(data);
+    const combined = previous && previous === next ? queued + data : data;
+    const reports = combined.match(/\x1b\[<(?:64|65);\d+;\d+M|\x1b\[[56]~/g) || [];
+    return reports.join('');
   }
 
   // Rows of travel per page key for a terminal `rows` tall (half a screen).
@@ -178,19 +215,22 @@
   //    (`ev.touchId`, set by the touch paths per touchstart and carried by that
   //    contact's momentum; a wheel event has none, so wheel and touch never
   //    share a gesture), or, for events outside any contact, after quiet:
-  //    PAGE_KEY_GESTURE_GAP_MS, stretched to PAGE_KEY_DEBT_MS while a pre-paid
-  //    page is still owed in the same direction. One contact is never split by
-  //    time, so a slow drag (one line per 170 ms) is one gesture;
-  //  - a new gesture's trackpad-sized opening event (at least
-  //    PAGE_KEY_MIN_START_ROWS, under PAGE_KEY_IMMEDIATE_MAX_ROWS) pages AT ONCE,
+  //    PAGE_KEY_GESTURE_GAP_MS, stretched to PAGE_KEY_DEBT_MS (PAGE_KEY_NOTCH_DEBT_MS
+  //    when a notch-sized opener pre-paid it) while a pre-paid page is still owed
+  //    in the same direction. One contact is never split by time, so a slow drag
+  //    (one line per 170 ms) is one gesture;
+  //  - a new gesture's opening event (at least PAGE_KEY_MIN_START_ROWS and
+  //    under one page: a trackpad flick, or a mouse notch) pages AT ONCE,
   //    pre-paid: the half screen it skipped is owed back by the rest of the
   //    gesture, so the rate stays one page per half screen. A debt left by a
   //    pre-paid page dies with its gesture;
   //  - a direction change inside a gesture (a reversal within the gap, or
   //    within the same contact) drops a pre-paid debt and accumulates, never
   //    pre-paying, so a +/-3 px trackpad wobble cannot page back and forth;
-  //  - everything else, a wheel notch included, accumulates through
-  //    pageKeysForTravel, carried across notches.
+  //  - a mouse-wheel notch (any opening event under one page, past the trackpad size) pre-pays its page
+  //    the same way, and its debt lasts PAGE_KEY_NOTCH_DEBT_MS, so the notches that follow repay it
+  //    however slowly they come instead of each paging a screen of its own;
+  //  - everything else accumulates through pageKeysForTravel, carried across notches.
   // Returns { state, keys } with keys '' when nothing is due.
   function pageKeysForGesture(state, ev, lines, rows, now) {
     const prev = state || {};
@@ -212,7 +252,8 @@
       gestureStart = false; // the same contact, however long it has been
     } else {
       const quiet = now - prev.lastAt;
-      gestureStart = quiet > (prepaid && !reversed ? PAGE_KEY_DEBT_MS : PAGE_KEY_GESTURE_GAP_MS);
+      const debtMs = prev.notch ? PAGE_KEY_NOTCH_DEBT_MS : PAGE_KEY_DEBT_MS;
+      gestureStart = quiet > (prepaid && !reversed ? debtMs : PAGE_KEY_GESTURE_GAP_MS);
     }
     if (gestureStart || reversed) {
       // A pre-paid debt belongs to its gesture and its direction.
@@ -221,20 +262,34 @@
     }
     if (gestureStart) {
       const size = Math.abs(lines);
-      if (size >= PAGE_KEY_MIN_START_ROWS && size < Math.min(perPage, PAGE_KEY_IMMEDIATE_MAX_ROWS)) {
+      // Plain travel left over from the gesture before (what was left once its debt was repaid) is
+      // not dropped by the new opener: it counts toward the page, so a gesture made of notches pages
+      // once per `perPage` rows of travel, as it did before the first notch paged at once.
+      const carried = pending * dir > 0 ? pending : 0;
+      if (size >= PAGE_KEY_MIN_START_ROWS && size < perPage && (carried + lines) * dir < perPage) {
         // Pre-pay one page; the skipped travel is owed back (pending carries the opposite sign).
         return {
-          state: { pending: lines - dir * perPage, lastAt: now, dir, prepaid: true, touchId },
+          state: {
+            pending: carried + lines - dir * perPage,
+            lastAt: now,
+            dir,
+            prepaid: true,
+            notch: size >= PAGE_KEY_IMMEDIATE_MAX_ROWS,
+            touchId,
+          },
           keys: dir < 0 ? KEY_PAGE_UP : KEY_PAGE_DOWN,
         };
       }
     }
     const step = pageKeysForTravel(pending, lines, rows);
     // A debt carries the sign opposite to its direction; once the travel reaches
-    // or crosses zero it is repaid, and what is left is plain travel (so the
-    // one-second debt lifetime no longer applies).
+    // or crosses zero it is repaid, and what is left is plain travel (so neither
+    // debt lifetime, PAGE_KEY_DEBT_MS or PAGE_KEY_NOTCH_DEBT_MS, applies any more).
     if (prepaid && step.pending * dir >= 0) prepaid = false;
-    return { state: { pending: step.pending, lastAt: now, dir, prepaid, touchId }, keys: step.keys };
+    return {
+      state: { pending: step.pending, lastAt: now, dir, prepaid, notch: prepaid && !!prev.notch, touchId },
+      keys: step.keys,
+    };
   }
 
   const TUI_PROMPT_DEFAULT_ROWS_FROM_BOTTOM = 4;
@@ -287,6 +342,41 @@
       const buf = terminal.buffer.active;
       const line = buf.getLine(buf.baseY + buf.cursorY);
       return !!line && CODEX_COMPOSER_ROW_RE.test(line.translateToString(true));
+    } catch {
+      return false;
+    }
+  }
+
+  // A Codex selection menu on screen: the "Implement this plan?" prompt, the /model, /permissions and
+  // /review pickers, an approval, a question or the trust prompt. Each draws its options as numbered rows
+  // with the selected one marked `› N. ` (a question indents it two spaces, and its notes field reads
+  // `› Add notes`) and a key-hint footer (`enter select · esc back`, `enter
+  // continue · esc back`, `Press enter to confirm ...`). Codex uses PageUp and PageDown there to move
+  // the SELECTION (measured on 0.164.0: PageDown from option 1 lands on option 3), so a wheel turned
+  // into page keys would walk the cursor through the options, one notch onto "Yes, implement this plan".
+  // Read off the live screen rows (the last `rows` rows of the active buffer), counting non-blank rows from
+  // the bottom: the trust prompt is drawn at the TOP of an otherwise blank screen.
+  const CODEX_MENU_OPTION_RE = /^ {0,2}› (?:\d+\. |Add notes)/;
+  // A wrapped key hint continues on rows that start in lower case (`cancel`, `esc to interrupt`) or with a separator.
+  const CODEX_MENU_HINT_WRAP_RE = /^ {2}[a-z←|]/;
+  const CODEX_MENU_FOOTER_RE = /^ {1,4}(?:Press enter to confirm|enter (?:select|continue)|tab (?:to add|or esc to clear) notes)/;
+  function isCodexSelectionMenu(terminal) {
+    try {
+      const buf = terminal.buffer.active;
+      // The non-blank rows from the bottom of the screen up. A menu's key hints are the last thing drawn, and a
+      // narrow pane wraps them over more rows that start in lower case: nothing else may sit under them, so
+      // an answer that quotes the hints (above the composer, a tip and a status row) is not a menu.
+      const rows = [];
+      for (let y = buf.baseY + terminal.rows - 1; y >= buf.baseY; y--) {
+        const text = buf.getLine(y)?.translateToString(true) ?? '';
+        if (text.trim()) rows.push(text);
+      }
+      let footerAt = 0;
+      while (footerAt < rows.length && !CODEX_MENU_FOOTER_RE.test(rows[footerAt])) {
+        if (!CODEX_MENU_HINT_WRAP_RE.test(rows[footerAt])) return false;
+        footerAt++;
+      }
+      return footerAt < rows.length && rows.slice(footerAt + 1).some((text) => CODEX_MENU_OPTION_RE.test(text));
     } catch {
       return false;
     }
@@ -377,6 +467,7 @@
     isComposerNavKey,
     classifyPredictInput,
     isCodexComposerRow,
+    isCodexSelectionMenu,
     cursorViewportRow,
     CODEX_COMPOSER_ROW_RE,
     BRACKETED_PASTE_START,
@@ -388,15 +479,17 @@
     PAGE_KEY_SCREEN_FRACTION,
     PAGE_KEY_MAX_PER_BATCH,
     wheelDeltaLines,
-    wheelDeltaWholeLines,
     SGR_WHEEL_MAX_TICKS,
     sgrWheelReports,
+    wheelTicksForGesture,
+    coalesceScrollBytes,
     pageKeysForTravel,
     pageKeysForGesture,
     PAGE_KEY_GESTURE_GAP_MS,
     PAGE_KEY_MIN_START_ROWS,
     PAGE_KEY_IMMEDIATE_MAX_ROWS,
     PAGE_KEY_DEBT_MS,
+    PAGE_KEY_NOTCH_DEBT_MS,
     TUI_PROMPT_DEFAULT_ROWS_FROM_BOTTOM,
     MOBILE_KEYBOARD_DISMISS_EXEMPT_SELECTOR,
     MOBILE_KEYBOARD_DISMISS_TAP_SLOP,
@@ -674,6 +767,7 @@ Object.assign(CodemanApp.prototype, {
       scrollback: scrollback,
       allowTransparency: true,
       allowProposedApi: true,
+      linkHandler: this._terminalOsc8LinkHandler(),
     });
 
     this.fitAddon = new FitAddon.FitAddon();
@@ -830,7 +924,9 @@ Object.assign(CodemanApp.prototype, {
       // Route through our paste trap which handles both images and text.
       if ((ev.ctrlKey || ev.metaKey) && ev.key === 'v' && ev.type === 'keydown') {
         if (this.activeSessionId && this._handleImagePaste) {
-          this._handleImagePaste();
+          // The trap cancels this keydown itself when execCommand('paste')
+          // already delivered the clipboard (Firefox), so pass the event in.
+          this._handleImagePaste({ keyEvent: ev });
         }
         return false;
       }
@@ -967,6 +1063,9 @@ Object.assign(CodemanApp.prototype, {
     if (MobileDetection.isTouchDevice()) {
       this.terminal.onCursorMove(() => this._syncMobileHelperTextareaToCursor());
       this.terminal.onRender(() => this._syncMobileHelperTextareaToCursor());
+      // Keep the live content above the keyboard while the rows are held.
+      this.terminal.onCursorMove(() => this._applyKeyboardClip());
+      this.terminal.onRender(() => this._applyKeyboardClip());
     }
 
     // Renderer liveness — see _startRenderLivenessWatchdog. Registered for every
@@ -1098,7 +1197,7 @@ Object.assign(CodemanApp.prototype, {
     // and stops propagation, keeping xterm's scroller out of it entirely.
     // Local scrolling goes through terminal.scrollLines() — buffer-level, so
     // it keeps working after resets — with our own deltaMode normalization
-    // (_wheelScrollLines) covering Firefox's line-unit wheels. Two cases still
+    // (_wheelScrollLinesFloat) covering Firefox's line-unit wheels. Two cases still
     // belong to xterm and are passed through untouched:
     //  - mouseTrackingMode active: xterm's own encoder forwards the wheel to
     //    the PTY (htop/vim with mouse on in a shell pane);
@@ -1114,8 +1213,9 @@ Object.assign(CodemanApp.prototype, {
         ev.preventDefault();
         ev.stopPropagation();
         if (this._shouldForwardWheelToApp(ev)) {
+          if (ev.ctrlKey || Math.abs(ev.deltaX || 0) > Math.abs(ev.deltaY || 0)) return;
           this._logScrollRouting('forward-sgr');
-          this._forwardScrollToApp(ev.clientX, ev.clientY, this._wheelScrollLines(ev));
+          this._forwardScrollToApp(ev.clientX, ev.clientY, this._wheelScrollLinesFloat(ev));
           return;
         }
         // Local scrolling accumulates FRACTIONAL lines: a macOS trackpad emits
@@ -1141,9 +1241,13 @@ Object.assign(CodemanApp.prototype, {
     // (_shouldForwardWheelToApp), a touch drag must go there too, or every
     // phone/tablet swipe scrolls the local buffer of stale repaint frames and
     // drags the CLI's pinned input box off the screen (issue #205's mobile
-    // half). Same gate, so Shift has no touch analog but the local-scrollback
-    // opt-out setting and the version/tracking gate apply to touch exactly as they
-    // do to the wheel — including the PageUp/PageDown fallback the wheel uses
+    // half). Touch asks _shouldForwardTouchToApp, which is the wheel's gate
+    // plus one branch of its own: a drag also forwards as SGR wheel reports
+    // while xterm itself tracks the mouse with SGR encoding (an app in the
+    // pane asked for it), since the wheel needs no help there (xterm encodes
+    // it) but a drag does. Shift has no touch analog, but the local-scrollback
+    // opt-out setting and the version/tracking gate apply to touch as they
+    // do to the wheel, including the PageUp/PageDown fallback the wheel uses
     // when that gate is false and there is no local scrollback to scroll
     // (_maybePageCliTranscript), which is what keeps a swipe from being a
     // complete no-op on a phone.
@@ -1152,7 +1256,6 @@ Object.assign(CodemanApp.prototype, {
       let touchLastX = 0;
       let touchLastY = 0;
       let velocity = 0;
-      let lastTime = 0;
       let scrollFrame = null;
       let isTouching = false;
       // One id per touch contact (touchstart), carried by its touchmoves AND its
@@ -1160,15 +1263,12 @@ Object.assign(CodemanApp.prototype, {
       // gesture however slowly the finger moves (pageKeysForGesture).
       let touchContactId = 0;
 
-      const scrollLoop = (timestamp) => {
-        const dt = lastTime ? (timestamp - lastTime) / 16.67 : 1;
-        lastTime = timestamp;
-
+      const scrollLoop = () => {
         if (!isTouching && Math.abs(velocity) > 0.3) {
           // Momentum phase — convert pixel velocity to lines
           const lines = Math.round(velocity / cellHeight());
           if (lines !== 0) {
-            if (this._shouldForwardWheelToApp({ shiftKey: false })) {
+            if (this._shouldForwardTouchToApp()) {
               // Flick momentum keeps feeding the CLI's transcript from the last
               // touch point; the 40ms coalescer batches the per-frame reports.
               this._forwardScrollToApp(touchLastX, touchLastY, lines);
@@ -1196,8 +1296,14 @@ Object.assign(CodemanApp.prototype, {
       let longPressStartY = 0;
       let touchStartY = 0;
       let touchStartX = 0;
-      // 'x' | 'y' | null — locked on the first travel past the tap slop, so a
-      // diagonal drag cannot pan and scroll at the same time.
+      // 'x' | 'y' | 'swipe' | null — locked on the first travel past the tap
+      // slop, so a diagonal drag cannot pan and scroll at the same time. 'swipe'
+      // is a sideways drag on a terminal that cannot pan: it is the session
+      // swipe's (SwipeHandler, mobile-handlers.js), so it neither scrolls nor
+      // ends as a tap on the session being left, until it drifts past the
+      // swipe's vertical limit and becomes a 'y' scroll. Published per gesture as
+      // `this._terminalGestureAxis`, which SwipeHandler reads to stand aside
+      // for a scroll or a pan.
       let panAxis = null;
       /**
        * Can this gesture pan sideways? Only while the terminal is wider than
@@ -1242,6 +1348,7 @@ Object.assign(CodemanApp.prototype, {
             touchStartY = touchLastY;
             touchStartX = touchLastX;
             panAxis = null;
+            this._terminalGestureAxis = null;
             velocity = 0;
             pixelAccum = 0;
             isTouching = true;
@@ -1278,7 +1385,6 @@ Object.assign(CodemanApp.prototype, {
               longPressTimer = null;
               this._beginTouchSelection(longPressStartX, longPressStartY);
             }, window.CodemanTerminalInput.TOUCH_SELECT_LONG_PRESS_MS);
-            lastTime = 0;
             if (scrollFrame) {
               cancelAnimationFrame(scrollFrame);
               scrollFrame = null;
@@ -1315,10 +1421,10 @@ Object.assign(CodemanApp.prototype, {
             if (!didScroll) {
               const travelY = Math.abs(touchY - touchStartY);
               const travelX = Math.abs(touchX - touchStartX);
-              const sideways = canPanHorizontally() && travelX >= TAP_THRESHOLD;
-              if (travelY >= TAP_THRESHOLD || sideways) {
+              if (travelY >= TAP_THRESHOLD || travelX >= TAP_THRESHOLD) {
                 didScroll = true;
-                panAxis = sideways && travelX > travelY ? 'x' : 'y';
+                panAxis = travelX > travelY ? (canPanHorizontally() ? 'x' : 'swipe') : 'y';
+                this._terminalGestureAxis = panAxis;
               }
             }
             // Below the tap threshold, treat the gesture as a potential tap:
@@ -1329,6 +1435,18 @@ Object.assign(CodemanApp.prototype, {
             // fling, so a jittery tap would both position the cursor AND scroll.
             if (!didScroll) return;
             ev.preventDefault();
+            if (panAxis === 'swipe') {
+              // Past the swipe's own vertical drift limit the session swipe has
+              // given up, so the drag is a scroll after all (a thumb arc whose
+              // first move leaned sideways): hand it to 'y'.
+              const drift = typeof SwipeHandler !== 'undefined' ? SwipeHandler.maxVerticalDrift : 50;
+              if (Math.abs(touchY - touchStartY) <= drift) return;
+              panAxis = 'y';
+              this._terminalGestureAxis = 'y';
+              touchLastX = touchX;
+              touchLastY = touchY;
+              return;
+            }
             if (panAxis === 'x') {
               // Pan the container, and touch nothing the vertical path owns —
               // no pixelAccum, no velocity, so touchend cannot turn a sideways
@@ -1347,7 +1465,7 @@ Object.assign(CodemanApp.prototype, {
             const ch = cellHeight();
             const lines = Math.trunc(pixelAccum / ch);
             if (lines !== 0) {
-              if (this._shouldForwardWheelToApp({ shiftKey: false })) {
+              if (this._shouldForwardTouchToApp()) {
                 this._logScrollRouting('forward-sgr');
                 this._forwardScrollToApp(touchLastX, touchLastY, lines);
               } else if (!this._maybePageCliTranscript({ shiftKey: false, touchId: touchContactId }, lines)) {
@@ -1451,8 +1569,8 @@ Object.assign(CodemanApp.prototype, {
     // A real mouse click normally reaches the PTY through xterm's own mouse
     // encoder, but that encoder only runs while mouseTrackingMode is ON — and
     // the server strips the enabling DECSETs from claude/codex/gemini output
-    // (isAltScreenStripMode, session.ts) and from opencode's (isMuxMouseStripMode,
-    // so a drag selects text) so the wheel keeps scrolling
+    // (isAltScreenStripMode, session.ts) and from the mouse-strip modes'
+    // (isMuxMouseStripMode, so a drag selects text) so the wheel keeps scrolling
     // scrollback. Desktop clicks therefore stopped reporting entirely (the
     // same breakage the mobile touchend tap branch above works around).
     // Hand-encode the SGR report for plain left-clicks on those sessions.
@@ -1987,6 +2105,7 @@ Object.assign(CodemanApp.prototype, {
     // Twin: TerminalTile (terminal-tile.js _createKeyCode229Recovery and its
     // connect() key handler and onData) wires its own controller the same way
     // for every grid tile and the split's Pane B; keep the two in step.
+    // create() returns null unless the primary pointer is coarse (#716).
     try {
       this._keyCode229Recovery = window.CodemanKeyCode229Recovery?.create?.({
         textarea: this.terminal.textarea,
@@ -2024,13 +2143,16 @@ Object.assign(CodemanApp.prototype, {
 
   /**
    * A clicked path as the preview needs it: relative paths resolved against the
-   * session's working directory, absolute and `~/` paths unchanged
+   * directory the session's pane is in now, else its working directory
+   * (`relativeResolutionBase`), absolute and `~/` paths unchanged
    * (`resolveLinkedFilePath`, constants.js). Shared by the terminal link
    * provider and the response viewer, so one path opens the same file in both.
    */
   _resolveLinkedFilePath(filePath, sessionId) {
     if (typeof resolveLinkedFilePath !== 'function') return filePath;
-    return resolveLinkedFilePath(filePath, this.sessions?.get?.(sessionId)?.workingDir);
+    const session = this.sessions?.get?.(sessionId);
+    const base = typeof relativeResolutionBase === 'function' ? relativeResolutionBase(session) : session?.workingDir;
+    return resolveLinkedFilePath(filePath, base);
   },
 
   /**
@@ -2091,8 +2213,11 @@ Object.assign(CodemanApp.prototype, {
         // links as the one file it is.
         // Bounded so a screenful of full-width output (wide tables, box drawing)
         // cannot make every hover stitch and re-scan the entire viewport.
+        // `terminalLinkLine` widens that once more to the rows of a URL the CLI
+        // wrapped short of the edge (a table cell or an indented paragraph),
+        // where nothing marks the break and no row is full width.
         const MAX_STITCHED_ROWS = 12;
-        const logical = window.CodemanTerminalLines?.terminalPathLine(
+        const logical = window.CodemanTerminalLines?.terminalLinkLine(
           buffer,
           bufferLineNumber - 1,
           terminal.cols,
@@ -2110,8 +2235,16 @@ Object.assign(CodemanApp.prototype, {
           return { x: cell.col + 1, y: cell.row + 1 };
         };
 
+        // Paths a CLI word-wrapped inside a table cell (terminalCellWrappedPaths,
+        // constants.js). They follow their own cell down the rows, which the
+        // linear stitch above cannot do for a multi-column table, so they are
+        // found from the buffer directly and claim their cells over the rest.
+        const cellWrappedPaths = (
+          window.CodemanTerminalLines?.terminalCellWrappedPaths?.(buffer, bufferLineNumber - 1, 4) ?? []
+        ).filter((hit) => !/(^|\/)\.\.(\/|$)/.test(hit.path));
+
         // A path needs a `/` or an extension's `.`; a line with neither has no link.
-        if (!lineText || (!lineText.includes('/') && !lineText.includes('.'))) {
+        if (!lineText || (!lineText.includes('/') && !lineText.includes('.') && cellWrappedPaths.length === 0)) {
           callback(undefined);
           return;
         }
@@ -2123,44 +2256,46 @@ Object.assign(CodemanApp.prototype, {
         const taken = [];
         const isTaken = (start, length) => taken.some((t) => start < t.end && t.start < start + length);
 
-        // Pattern 0: URLs (https://, http://) — matched first so they take priority
-        //
-        // A single `&` is PART of the URL: it separates query parameters, so excluding
-        // it truncated every real query string (`?post=1479&action=edit` linked only
-        // through `1479`, landing on the wrong page). `&&` is still a boundary, since
-        // that is the shell operator and never appears inside a URL. A lone trailing
-        // `&` is trimmed below with the other trailing punctuation.
-        const urlPattern = /https?:\/\/(?:[^\s"'<>|;&)\]\x00-\x1f]|&(?!&))+/g;
-
-        const addUrlLink = (url, matchIndex) => {
-          // Strip trailing punctuation that's likely not part of the URL
-          const cleaned = url.replace(/[.,;:!?)&]+$/, '');
-          const startCol = lineText.indexOf(cleaned, matchIndex);
-          if (startCol === -1) return;
-
-          const start = coordAt(startCol);
-          const end = coordAt(startCol + cleaned.length);
+        // Pattern 0: URLs (https://, http://) — matched first so they take priority.
+        // The grammar (balanced parens, `&` vs `&&`, trailing punctuation) is
+        // findTerminalUrls() in constants.js, which the wrap-continuation extent
+        // above reads URLs with too, so the two cannot disagree.
+        const addUrlLink = ({ url, startIndex }) => {
+          const start = coordAt(startIndex);
           if (links.some((l) => l.range.start.x === start.x && l.range.start.y === start.y)) return;
-          taken.push({ start: startCol, end: startCol + cleaned.length });
+          taken.push({ start: startIndex, end: startIndex + url.length });
 
-          links.push({
-            text: cleaned,
-            range: { start, end },
-            decorations: { pointerCursor: true, underline: true },
-            activate(_event, text) {
-              // A `localhost` link tapped from another device can only work
-              // through the server: route it into a proxied web tab
-              // (webview-tabs.js). Anything else opens as before.
-              if (self.openLinkThroughWebTabIfLoopback?.(text)) return;
-              window.open(text, '_blank', 'noopener,noreferrer');
-            },
-            hover() {
-              setHovered(true);
-            },
-            leave() {
-              setHovered(false);
-            },
-          });
+          // One link per terminal row the URL occupies, each opening the WHOLE
+          // URL. A single range spanning rows would also underline (and make
+          // clickable) the indent and table columns between the pieces of a
+          // URL the CLI wrapped. A single-row URL keeps its original range.
+          const endIndex = startIndex + url.length;
+          const pieces = [];
+          let pieceStart = startIndex;
+          for (let i = startIndex + 1; i < endIndex; i++) {
+            if (coordAt(i).y !== coordAt(i - 1).y) {
+              pieces.push([pieceStart, i]);
+              pieceStart = i;
+            }
+          }
+          pieces.push([pieceStart, endIndex]);
+          for (let n = 0; n < pieces.length; n++) {
+            const [from, to] = pieces[n];
+            links.push({
+              text: url,
+              range: { start: coordAt(from), end: pieces.length === 1 ? coordAt(to) : coordAt(to - 1) },
+              decorations: { pointerCursor: true, underline: true },
+              activate() {
+                self._openTerminalUrl(url);
+              },
+              hover() {
+                setHovered(true);
+              },
+              leave() {
+                setHovered(false);
+              },
+            });
+          }
         };
 
         // Pattern 1: Commands with file paths (tail -f, cat, head, grep pattern, etc.)
@@ -2183,6 +2318,65 @@ Object.assign(CodemanApp.prototype, {
         // Pattern 3: Bash() tool output
         const bashPattern = /Bash\([^)]*?(\/(?:home|tmp|var|etc|opt)[^\s"'<>|;&\)\n\x00-\x1f]+)/g;
 
+        const activateFilePath = (text, folder = false, verifiedSessionId = null) => {
+          // Tailing a PNG in the log viewer shows binary noise; the file preview
+          // already renders images, PDFs, documents and media inline — and it
+          // now reaches files outside the workspace too, which is where an
+          // agent's screenshots and scratchpad captures actually land.
+          //
+          // Text goes to the log viewer, which follows a file that is still
+          // being written — but ONLY where it can actually read: it spawns
+          // `tail -f` and allows the workspace, /var/log and ~/logs, so an
+          // out-of-workspace path there answered "Path must be within
+          // working directory or allowed log directories" while the SAME
+          // path clicked in the response viewer previewed fine. The preview
+          // reads those through the guarded attachment routes, so external
+          // paths route there and the two surfaces agree.
+          //
+          // A relative path is resolved against the session's working
+          // directory first, and a `~/` path always previews (only the
+          // server knows that host's home, and the log viewer cannot ask).
+          const sessionId = verifiedSessionId || getSessionId();
+          if (!sessionId) return;
+          const target = self._resolveLinkedFilePath(text, sessionId);
+          const alternative = !folder && logical.pathAlternatives?.find((candidate) => candidate.path === text);
+          if (alternative && !verifiedSessionId) {
+            return (async () => {
+              const original = await self._registerExternalPreview(target, sessionId);
+              // Attachment policy must not gate the workspace's normal opener.
+              if (original.status !== 404) return activateFilePath(target, false, sessionId);
+              const path = self._resolveLinkedFilePath(alternative.spacedPath, sessionId);
+              const registered = await self._registerExternalPreview(path, sessionId);
+              if (registered.status === 404) return activateFilePath(target, false, sessionId);
+              if (!registered.attachmentId) {
+                self.showToast(registered.error || 'Cannot open this file', 'error');
+                return;
+              }
+              // The normal opener rechecks its guards; attachment registration deduplicates the path.
+              return activateFilePath(path, false, sessionId);
+            })();
+          }
+          // A folder path opens the folder grid (which falls back to the
+          // preview if the server finds a file there after all).
+          if (folder) {
+            self.openFolderGrid(target, sessionId);
+            return;
+          }
+          // An HTML file renders as a page in the preview, never as source
+          // in the log viewer (markdown is in FILE_PREVIEW_EXTENSIONS).
+          // The log viewer's tail-file stays confined to workingDir, so a path in a worktree outside it previews.
+          if (
+            previewsInFileViewer(target) ||
+            rendersAsPage(target) ||
+            self._isExternalPreviewPath(target, sessionId) ||
+            self._isOutsideWorktreePath(target, sessionId)
+          ) {
+            self.openFilePreview(target, sessionId);
+            return;
+          }
+          self.openLogViewerWindow(target, sessionId);
+        };
+
         const addLink = (filePath, matchIndex, folder = false) => {
           const startCol = lineText.indexOf(filePath, matchIndex);
           if (startCol === -1) return;
@@ -2201,43 +2395,8 @@ Object.assign(CodemanApp.prototype, {
               pointerCursor: true,
               underline: true,
             },
-            activate(event, text) {
-              // Tailing a PNG in the log viewer shows binary noise; the file preview
-              // already renders images, PDFs, documents and media inline — and it
-              // now reaches files outside the workspace too, which is where an
-              // agent's screenshots and scratchpad captures actually land.
-              //
-              // Text goes to the log viewer, which follows a file that is still
-              // being written — but ONLY where it can actually read: it spawns
-              // `tail -f` and allows the workspace, /var/log and ~/logs, so an
-              // out-of-workspace path there answered "Path must be within
-              // working directory or allowed log directories" while the SAME
-              // path clicked in the response viewer previewed fine. The preview
-              // reads those through the guarded attachment routes, so external
-              // paths route there and the two surfaces agree.
-              //
-              // A relative path is resolved against the session's working
-              // directory first, and a `~/` path always previews (only the
-              // server knows that host's home, and the log viewer cannot ask).
-              const sessionId = getSessionId();
-              const target = self._resolveLinkedFilePath(text, sessionId);
-              // A folder path opens the folder grid (which falls back to the
-              // preview if the server finds a file there after all).
-              if (folder) {
-                self.openFolderGrid(target, sessionId);
-                return;
-              }
-              // An HTML file renders as a page in the preview, never as source
-              // in the log viewer (markdown is in FILE_PREVIEW_EXTENSIONS).
-              if (
-                previewsInFileViewer(target) ||
-                rendersAsPage(target) ||
-                self._isExternalPreviewPath(target, sessionId)
-              ) {
-                self.openFilePreview(target, sessionId);
-                return;
-              }
-              self.openLogViewerWindow(target, sessionId);
+            activate(_event, text) {
+              return activateFilePath(text, folder);
             },
             hover() {
               setHovered(true);
@@ -2251,9 +2410,8 @@ Object.assign(CodemanApp.prototype, {
         // Match all patterns — URLs first so they take priority
         let match;
 
-        urlPattern.lastIndex = 0;
-        while ((match = urlPattern.exec(lineText)) !== null) {
-          addUrlLink(match[0], match.index);
+        for (const reference of window.CodemanTerminalLines?.findTerminalUrls?.(lineText) ?? []) {
+          addUrlLink(reference);
         }
 
         cmdPattern.lastIndex = 0;
@@ -2268,6 +2426,54 @@ Object.assign(CodemanApp.prototype, {
         bashPattern.lastIndex = 0;
         while ((match = bashPattern.exec(lineText)) !== null) {
           addLink(match[1], match.index);
+        }
+
+        // One link per row segment, each opening the WHOLE path (as for a wrapped
+        // URL). A fragment of the same cells linked by another detector (a
+        // relative `243/after-overview.png`, say) would open the wrong file, so
+        // the cell-wrapped path displaces it.
+        // A path the line stitch already joined whole (a single-column wrap, which
+        // terminalPathLine handles) keeps its one link.
+        const cellOnlyPaths = cellWrappedPaths.filter(
+          (hit) =>
+            !links.some(
+              (l) =>
+                l.text === hit.path &&
+                l.range.start.y === hit.segments[0].row + 1 &&
+                l.range.start.x === hit.segments[0].startCol + 1
+            )
+        );
+        if (cellOnlyPaths.length > 0) {
+          const claimed = cellOnlyPaths.flatMap((hit) => hit.segments);
+          const overlapsClaim = (link) =>
+            claimed.some((seg) => {
+              const y = seg.row + 1;
+              if (y < link.range.start.y || y > link.range.end.y) return false;
+              const from = y === link.range.start.y ? link.range.start.x : 1;
+              const to = y === link.range.end.y ? link.range.end.x : Number.MAX_SAFE_INTEGER;
+              return from <= seg.endCol && to >= seg.startCol + 1;
+            });
+          for (let i = links.length - 1; i >= 0; i--) {
+            if (overlapsClaim(links[i])) links.splice(i, 1);
+          }
+          for (const hit of cellOnlyPaths) {
+            for (const seg of hit.segments) {
+              links.push({
+                text: hit.path,
+                range: { start: { x: seg.startCol + 1, y: seg.row + 1 }, end: { x: seg.endCol, y: seg.row + 1 } },
+                decorations: { pointerCursor: true, underline: true },
+                activate() {
+                  activateFilePath(hit.path);
+                },
+                hover() {
+                  setHovered(true);
+                },
+                leave() {
+                  setHovered(false);
+                },
+              });
+            }
+          }
         }
 
         if (links.length > 0) {
@@ -2290,6 +2496,30 @@ Object.assign(CodemanApp.prototype, {
 
     console.log('[LinkProvider] File path link provider registered');
     return provider;
+  },
+
+  /**
+   * xterm's handler for OSC 8 hyperlinks (a program's own `ESC ]8;;url` links),
+   * which take precedence over the text link provider. Routed through the same
+   * opener after confirming the real target (the label may hide it), and only
+   * for web URLs: any other scheme a program sends is ignored.
+   */
+  _terminalOsc8LinkHandler() {
+    return {
+      activate: (_event, text) => {
+        if (!/^https?:\/\/[^\s\x00-\x1f]+$/i.test(text)) return;
+        if (window.confirm(`Open this link?\n\n${text}`)) this._openTerminalUrl(text);
+      },
+    };
+  },
+
+  /** Open a URL clicked in a terminal (text link or OSC 8). */
+  _openTerminalUrl(text) {
+    // A `localhost` link tapped from another device can only work through the
+    // server: route it into a proxied web tab (webview-tabs.js). Anything else
+    // opens in a new tab.
+    if (this.openLinkThroughWebTabIfLoopback?.(text)) return;
+    window.open(text, '_blank', 'noopener,noreferrer');
   },
 
   /**
@@ -2356,15 +2586,17 @@ Object.assign(CodemanApp.prototype, {
     if (!buffer?.getLine) return false;
     const pos = this._clientPointToCell(clientX, clientY);
     if (!pos) return false;
-    const rows = Math.max(1, this.terminal.rows || 1);
-    const cursorRow = Math.max(0, Math.min(rows - 1, buffer.cursorY || 0));
-    const tappedRow = pos.row - 1;
-    if (tappedRow === cursorRow) return true;
-    let start = cursorRow;
-    while (start > 0 && buffer.getLine(buffer.viewportY + start)?.isWrapped) start--;
-    let end = cursorRow;
-    while (end + 1 < rows && buffer.getLine(buffer.viewportY + end + 1)?.isWrapped) end++;
-    return tappedRow >= start && tappedRow <= end;
+    // Compare ABSOLUTE buffer lines: cursorY is baseY-relative and the tap is
+    // viewport-relative, so they only agree while the viewport sits at the bottom
+    // (a tab switch parks it above, see scrollToLastNonEmptyLine).
+    const cursorLine = buffer.baseY + (buffer.cursorY || 0);
+    const tappedLine = buffer.viewportY + pos.row - 1;
+    let start = cursorLine;
+    while (start > 0 && buffer.getLine(start)?.isWrapped) start--;
+    let end = cursorLine;
+    // Bounded by length: xterm's getLine wraps around its circular list past the end.
+    while (end + 1 < buffer.length && buffer.getLine(end + 1)?.isWrapped) end++;
+    return tappedLine >= start && tappedLine <= end;
   },
 
   /**
@@ -2714,6 +2946,9 @@ Object.assign(CodemanApp.prototype, {
       if (overlay) overlay.classList.remove('visible');
       this.hideHomeSessions?.();
       this.showMobileOverview();
+      // The phone overview hosts the same list in its own container.
+      this.wireForeignSessions?.();
+      this.startForeignPolling?.();
       this._updateCjkInputState?.();
       return;
     }
@@ -2728,6 +2963,14 @@ Object.assign(CodemanApp.prototype, {
       // Open tabs down the left gutter. Self-gating: a window too narrow to hold
       // the column without overlapping the content leaves it hidden.
       this.showHomeSessions?.();
+      // Sessions a human opened outside Codeman. Polls only while this screen is
+      // up (stopped in hideWelcome), see foreign-sessions.js.
+      this.wireForeignSessions?.();
+      this.startForeignPolling?.();
+      // The "Run a local model" button (local-model-ui.js). One request, at most
+      // once a minute, no timer here: only its open window polls, and closing
+      // that window stops it, so there is nothing to stop in hideWelcome.
+      this.loadLocalModel?.();
     }
     // Home screen has no input target — hide the CJK textarea (activeSessionId
     // is null by the time we get here). Guarded: defined on the app object.
@@ -2737,6 +2980,7 @@ Object.assign(CodemanApp.prototype, {
   hideWelcome() {
     this.hideMobileOverview?.();
     this.hideHomeSessions?.();
+    this.stopForeignPolling?.();
     const overlay = document.getElementById('welcomeOverlay');
     if (overlay) {
       overlay.classList.remove('visible');
@@ -3670,6 +3914,7 @@ Object.assign(CodemanApp.prototype, {
         opencode: 'openCodeConfig',
         pi: 'piConfig',
         grok: 'grokConfig',
+        copilot: 'copilotConfig',
         omp: 'ompConfig',
       }[effectiveMode];
       // codex names a thread by an id of its own, not by Codeman's session id,
@@ -5712,8 +5957,8 @@ Object.assign(CodemanApp.prototype, {
    * literal text (`[<0;88;20M`) and they garble the next line typed.
    *
    * Fails toward silence: an unknown or stale flag reports nothing rather than
-   * injecting bytes. After a server restart the flag is false until the CLI
-   * re-emits its DECSET, which closing and reopening a dialog does.
+   * injecting bytes. After a server restart the flag is false until the DECSET
+   * passes again, which tmux does itself when the server re-attaches to the pane.
    *
    * `sessionId` defaults to the primary pane's session; a TerminalTile passes
    * its own (through _handleDesktopTerminalClick's target), never the active one.
@@ -5783,41 +6028,6 @@ Object.assign(CodemanApp.prototype, {
     return true;
   },
 
-  // Wheel forwarding gate for the container wheel handler: no Shift override,
-  // xterm's own encoder dormant, viewport at the bottom, and a TUI VERIFIED to
-  // scroll its transcript on SGR wheel reports, which today is claude 2.1.187+
-  // with mouse tracking on (fullscreen) and nothing else (older Claude Code
-  // captures wheel as select-menu option navigation, an unknown version is
-  // treated as older, and inline Claude ignores it). Gemini and codex are
-  // strip modes too but keep the local wheel — taps/clicks are still forwarded
-  // for them (harmless no-ops at worst).
-  //
-  // Codex USED to forward here and was the #227 regression (DodgyBadger, Codex
-  // latest / Chrome / Win11: dead wheel in codex, working scrollbar drag).
-  // Measured on codex-cli 0.147.0 in a bare tmux: it never enables mouse
-  // tracking (`mouse_any_flag=0`) and SGR wheel reports fed to its PTY change
-  // NOTHING on screen — it runs an inline viewport (`alternate_on=0`) and pushes
-  // its transcript into the terminal's own scrollback (tmux `history_size`
-  // grows), so there is no in-app pager to drive and local scrollback IS the
-  // codex transcript. Forwarding therefore swallowed every tick.
-  // Wheel delta → whole scroll lines. macOS trackpads turn Shift+two-finger
-  // scroll into a HORIZONTAL wheel (deltaY≈0, deltaX carries the magnitude), and
-  // Shift routes the wheel to local scrollback (_shouldForwardWheelToApp returns
-  // false on Shift). So under Shift, read whichever axis dominates — otherwise
-  // deltaY≈0 collapses to a fixed ±1 line/tick and the gesture can't page through
-  // history on a trackpad (issue #154). Non-Shift and mouse-wheel paths are
-  // unchanged (they carry deltaY). The `|| ±1` keeps sub-25px deltas moving.
-  //
-  // `deltaMode` says what UNIT the delta is in, and ignoring it made every
-  // non-pixel browser scroll ~4x too slowly: Firefox reports DOM_DELTA_LINE (1)
-  // with deltaY≈3 per notch, so the pixel math rounded to 0 and fell through to
-  // the ±1 fallback — one line per notch, versus 4-5 for Chrome's ~110px. In
-  // Claude mode the same value also capped the forwarded SGR report at one tick.
-  _wheelScrollLines(ev) {
-    // Pure horizontal swipe: 0, never the ±1 fallback (wheelDeltaWholeLines).
-    return window.CodemanTerminalInput.wheelDeltaWholeLines(ev, this.terminal?.rows);
-  },
-
   /** Unrounded variant for the smooth local-scroll path, which accumulates
    *  sub-line fractions across events instead of forcing every tiny trackpad
    *  delta to a whole ±1 line. Same unit handling and Shift-axis trap. The
@@ -5825,6 +6035,24 @@ Object.assign(CodemanApp.prototype, {
    *  which a TerminalTile calls with its own row count. */
   _wheelScrollLinesFloat(ev) {
     return window.CodemanTerminalInput.wheelDeltaLines(ev, this.terminal?.rows);
+  },
+
+  // The touch listeners' forwarding gate: the wheel's gate below, plus one
+  // branch of its own. While xterm itself tracks the mouse (an app in the pane
+  // asked for it, a shell's htop or vim), xterm encodes a native wheel event on
+  // its own, but the touch listeners consume finger drags themselves, so those
+  // are forwarded explicitly. Scrolling locally instead shows nothing useful in
+  // either kind of session: on a direct PTY the app draws on xterm's alternate
+  // screen, which scrollLines() cannot move, and in a tmux-backed session xterm
+  // stays in the normal buffer, so a local scroll only drags stale tmux
+  // repaints up the screen.
+  _shouldForwardTouchToApp() {
+    if (this.loadAppSettingsFromStorage?.()?.terminalWheelLocalScrollback) return false;
+    const mode = this.terminal?.modes?.mouseTrackingMode;
+    // The existing synthetic sender uses SGR; tracking alone does not imply
+    // that encoding (legacy/X10 applications must not receive SGR bytes).
+    const sgr = this.terminal?._core?.coreMouseService?.activeEncoding === 'SGR';
+    return !!(mode && mode !== 'none' && mode !== 'x10' && sgr) || this._shouldForwardWheelToApp({ shiftKey: false });
   },
 
   // `target` ({ terminal, sessionId }) asks the question for a TerminalTile:
@@ -5845,17 +6073,27 @@ Object.assign(CodemanApp.prototype, {
     // a fix. Scoping the setting away from those modes would be the other
     // option, but it would override an explicit user choice; instead the caller
     // falls through to _maybePageCliTranscript, so the gesture still pages the
-    // CLI's transcript and the setting keeps meaning exactly what it says.
+    // CLI's transcript (or loads unloaded tmux scrollback, see there) and the
+    // setting keeps meaning exactly what it says. Pi is the accepted exception:
+    // it declares no `transcriptPageKeys`, so with this on its wheel stays dead.
     if (this.loadAppSettingsFromStorage?.()?.terminalWheelLocalScrollback) return false;
     const mode = (target.terminal || this.terminal)?.modes?.mouseTrackingMode;
     if (mode && mode !== 'none') return false;
     const session = this.sessions?.get(target.sessionId || this.activeSessionId);
     const sessionMode = session?.mode || 'claude';
-    if (sessionMode !== 'claude') return false;
-    if (!this._cliVersionAtLeast(session?.cliVersion, '2.1.187')) return false;
-    // Only while Claude is actually listening for the mouse. In its default
-    // inline renderer (2.1.280 measured: alternate_on=0, mouse_any_flag=0) the
-    // transcript lives in real scrollback, like codex, and SGR wheel reports are
+    // GitHub Copilot CLI (and pi, fullscreen by default) scrolls its own transcript on SGR wheel
+    // reports (checked with xterm encoding them natively). Their mouse DECSETs are stripped
+    // server-side so a drag selects locally (strip-mux-and-mouse), which also means xterm no longer
+    // encodes the wheel: send the same reports by hand, but only while the CLI is actually tracking
+    // the mouse. Not gated on a version. On Copilot a stale-false flag falls through to the
+    // PageUp/PageDown fallback like claude's; pi has none on purpose (the `transcriptPageKeys` note
+    // in stock.ts), so there the wheel does nothing until the flag is back.
+    if (sessionMode === 'copilot' || sessionMode === 'pi') return session?.cliMouseTracking === true;
+    if (sessionMode !== 'claude' && sessionMode !== 'codex') return false;
+    if (sessionMode === 'claude' && !this._cliVersionAtLeast(session?.cliVersion, '2.1.187')) return false;
+    // Only while Claude or Codex is actually listening for the mouse. Claude's
+    // inline renderer (2.1.280 measured: alternate_on=0, mouse_any_flag=0), like
+    // older inline Codex, keeps its transcript in real scrollback; SGR reports are
     // ignored, so forwarding made every swipe and wheel tick dead. Fullscreen
     // (CLAUDE_CODE_NO_FLICKER=1, or "tui": "fullscreen" in ~/.claude/settings.json)
     // turns on alt-screen + mode 1003/1006, which the server records as
@@ -5886,34 +6124,54 @@ Object.assign(CodemanApp.prototype, {
   // trackpad emits dozens of wheel events per second and each send becomes a
   // tmux send-keys on the server — unbatched, a single flick would spawn a
   // process storm. Per-event tick count is capped (Claude applies its own
-  // scroll-speed multiplier and acceleration on top), and the queue is bounded
-  // so a wild scroll can't build a backlog that keeps scrolling after the finger
-  // stops. Flushed via _sendInputEphemeral — loss-tolerant, off the durable queue.
+  // scroll-speed multiplier and acceleration on top). Batching is bounded by
+  // the 40ms window and the per-event cap, not an aggregate byte/tick limit.
+  // Flushed via _sendInputEphemeral — loss-tolerant, off the durable queue.
   // The encoding is the pure CodemanTerminalInput.sgrWheelReports, which a
   // TerminalTile calls with its own cell (TerminalTile._maybeForwardWheelToCli).
   _sendSyntheticSgrWheel(clientX, clientY, lines) {
     if (!this.activeSessionId || !lines) return;
     const pos = this._clientPointToCell(clientX, clientY);
     if (!pos) return;
-    this._queueScrollBytes(window.CodemanTerminalInput.sgrWheelReports(lines, pos));
+    const input = window.CodemanTerminalInput;
+    const state = this._wheelTickSession === this.activeSessionId ? this._wheelTickGesture : null;
+    if (state?.dir && state.dir !== Math.sign(lines)) this._wheelSgrQueue = '';
+    const step = input.wheelTicksForGesture(state, lines, performance.now());
+    this._wheelTickSession = this.activeSessionId;
+    this._wheelTickGesture = step.state;
+    this._queueScrollBytes(input.sgrWheelReports(step.ticks, pos));
   },
 
   /**
-   * Shared 40ms coalescer for every byte a scroll gesture sends to the PTY (SGR
+   * Coalesces scroll input into 40ms batches after the first native report (SGR
    * wheel reports and the PageUp/PageDown fallback alike). Each flush becomes a
    * tmux send-keys server-side, so per-event writes would spawn a process storm
-   * on a single flick; the queue is bounded so a wild scroll can't build a
-   * backlog that keeps scrolling after the finger stops.
+   * on a single flick. Per-event report limits preserve the upstream wheel/touch
+   * scaling; a change of direction discards only movement that is still unsent.
    *
    * A TerminalTile keeps its own narrow twin (TerminalTile._queueScrollBytes,
-   * terminal-tile.js: same 40ms window, same 512-byte bound) because this queue
+   * terminal-tile.js: same 40ms window and report limits) because this queue
    * flushes to the active session only; keep the two in step.
    */
   _queueScrollBytes(data) {
     if (!data || !this.activeSessionId) return;
-    const queued = this._wheelSgrQueue || '';
-    if (queued.length > 512) return;
-    this._wheelSgrQueue = queued + data;
+    // The first native report of a newly selected tab must not wait behind
+    // replay/atlas work for a 40ms timer (measured 60-250ms in practice).
+    // Selection generation also covers A -> B -> A when B was never scrolled.
+    const firstNativeForVisit = data.startsWith('\x1b[<') &&
+      (this._wheelNativeStartSession !== this.activeSessionId ||
+        this._wheelNativeStartGeneration !== this._selectGeneration);
+    const queued = !firstNativeForVisit && this._wheelQueueSession === this.activeSessionId
+      ? this._wheelSgrQueue || '' : '';
+    this._wheelQueueSession = this.activeSessionId;
+    this._wheelSgrQueue = window.CodemanTerminalInput.coalesceScrollBytes(queued, data);
+    if (firstNativeForVisit) {
+      this._wheelNativeStartSession = this.activeSessionId;
+      this._wheelNativeStartGeneration = this._selectGeneration;
+      if (this._wheelSgrFlushTimer) clearTimeout(this._wheelSgrFlushTimer);
+      this._flushWheelSgrQueue();
+      return;
+    }
     if (this._wheelSgrFlushTimer) return;
     this._wheelSgrFlushTimer = setTimeout(() => this._flushWheelSgrQueue(), 40);
   },
@@ -5933,9 +6191,8 @@ Object.assign(CodemanApp.prototype, {
    *    PageUp/PageDown keys (`messages_page_up/down`) but IGNORES SGR wheel
    *    reports — six `\x1b[<64;…M` reports against an idle pane left the capture
    *    byte-identical — so paging is the only gesture that reaches it;
-   *  - `codex`, which draws on tmux's alternate screen too (0.157.1, 0.160), which
-   *    the full strip hides from xterm, and pages on PageUp/PageDown while SGR
-   *    wheel reports do nothing.
+   *  - `codex` with no observed mouse tracking. Native tracked fullscreen
+   *    Codex uses fractional SGR reports; this remains its fallback capability.
    *
    * ⚠️ Which modes page is read from `window.__codemanTranscriptPageKeys`, the
    * list the server builds from the `transcriptPageKeys` CAPABILITY, never an id
@@ -5967,35 +6224,41 @@ Object.assign(CodemanApp.prototype, {
    * unset (the inline renderer, or fullscreen right after a server restart), the
    * user turned on "Wheel scrolls local history" (which pins the wheel to a buffer
    * that, for a repaint-mode CLI, is empty: the setting's footgun), or the CLI is
-   * one that never fills the buffer and never accepts the wheel (opencode, codex:
-   * both ignore SGR wheel reports, #227, and page on PageUp/PageDown). Before
+   * one that never fills the buffer and does not accept the wheel (OpenCode,
+   * or Codex without observed mouse tracking). Those modes page instead. Before
    * this, all of those produced a completely dead gesture; the #205 reporter
    * proved the keyboard route works by paging back through intact text with Fn+Up.
    * This is not wheel forwarding: it sends plain keys, and only over a hollow buffer.
    *
    * Guarded by `_localScrollbackIsHollow()` (the `transcriptPageKeys` capability +
    * `baseY === 0`) plus a false forwarding gate, so a session with real local
-   * scrollback is never touched. Shift is excluded on purpose: it is the explicit
-   * "give me local scrollback" gesture and must keep that meaning.
+   * scrollback is never touched, and neither is one whose scrollback tmux still
+   * holds but the last replay did not carry (`paneHistoryLines` > 0): that one
+   * falls through to the local path, whose scroll-to-top pull loads it. Shift is
+   * excluded on purpose: it is the explicit "give me local scrollback" gesture
+   * and must keep that meaning.
    *
-   * The FIRST event of a trackpad-sized gesture (opening under
-   * PAGE_KEY_IMMEDIATE_MAX_ROWS) pages at once. Waiting for half a screen of
+   * The FIRST event of a gesture (any opening event under one page: a trackpad
+   * flick, or a mouse notch) pages at once. Waiting for half a screen of
    * travel (19 rows, ~475px on a 38-row pane) meant an ordinary trackpad flick
    * never sent a key at all. That page is pre-paid: the travel it skipped is
    * owed back by the rest of the gesture, so the rate stays one page per
    * `perPage` rows. A new touch contact (`ev.touchId`), a pause outside a contact
-   * (PAGE_KEY_GESTURE_GAP_MS, or PAGE_KEY_DEBT_MS while a same-direction page is
-   * still owed), a reversal after the gap or a tab switch starts a new gesture;
+   * (PAGE_KEY_GESTURE_GAP_MS; while a same-direction page is still owed,
+   * PAGE_KEY_DEBT_MS, or PAGE_KEY_NOTCH_DEBT_MS when a notch-sized opener pre-paid
+   * it), a reversal after the gap or a tab switch starts a new gesture;
    * one contact is never split by time, and a quick reversal never pre-pays. A
-   * larger opening event is a wheel notch and accumulates as before, so slow
-   * notches still page once per `perPage` rows.
+   * mouse-wheel notch pages at once too, and its debt (PAGE_KEY_NOTCH_DEBT_MS) is repaid by the
+   * notches after it, so a mouse pages once per `perPage` rows of travel with the
+   * first page on the first notch, not the fifth.
    *
    * Consumed WITHOUT paging: a pinch (`ctrlKey`, how Chrome reports a trackpad
    * pinch), a mostly horizontal swipe (both deltas present, |deltaX| > |deltaY|;
    * the touch path locks its own axis before it gets here), and any gesture while
    * the session has an open dialog (tab alert 'action', set by a pending
-   * permission_prompt or elicitation_dialog), so a page key never reaches its
-   * selector.
+   * permission_prompt or elicitation_dialog) or while a Codex selection menu is on
+   * screen (the "Implement this plan?" prompt, a /model picker; see
+   * isCodexSelectionMenu), so a page key never reaches its selector.
    *
    * @returns true when the gesture was consumed here (the caller must not also
    *          scroll locally).
@@ -6012,6 +6275,7 @@ Object.assign(CodemanApp.prototype, {
    */
   _maybePageCliTranscript(ev, lines) {
     if (!lines || ev?.shiftKey || !this.activeSessionId) return false;
+    if (ev?.ctrlKey || Math.abs(ev?.deltaX || 0) > Math.abs(ev?.deltaY || 0)) return this._localScrollbackIsHollow();
     if (!this._localScrollbackIsHollow()) return false;
     // An open dialog in THIS pane's session (the active one): a page key would
     // move its selector. Consumed, so the buffer does not scroll under it either.
@@ -6019,11 +6283,34 @@ Object.assign(CodemanApp.prototype, {
       this._logScrollRouting('page-keys-dialog-open');
       return true;
     }
+    // Codex's own selection menus (the "Implement this plan?" prompt among them) are not alerts, but PageUp
+    // and PageDown move their selection, so the wheel is consumed there too.
+    if (this._codexMenuOpen()) {
+      this._logScrollRouting('page-keys-menu-open');
+      return true;
+    }
+    // A hollow buffer whose PANE still holds tmux scrollback is unloaded, not
+    // hollow: after a server restart a tab switch replays a byte tail that is
+    // only the attach repaint (baseY 0), and paging from there moved an inline
+    // Claude's composer cursor instead of its transcript. The remembered
+    // `paneHistoryLines` (tmux `#{history_size}`) says a `full=1` pull can add
+    // it, so fall through to local scrolling, whose top-of-buffer pull fetches
+    // it (_maybeLoadMoreHistoryOnScroll -> _maybeRefetchFullHistory). 0 and
+    // unknown keep paging. Page keys already queued belong to the abandoned
+    // route and go with the gesture debt. Not logged as a decision of its own
+    // (it would alternate with the caller's line every frame until the pull
+    // lands): the caller's `local-scrollback` line carries `paneHistoryLines`.
+    if ((this._paneHistoryLines?.get(this.activeSessionId) ?? 0) > 0) {
+      this._pageKeyGesture = null;
+      this._wheelSgrQueue = '';
+      return false;
+    }
     // Leftover travel and the gesture in progress belong to the tab they were made on.
     if (this._pageKeySession !== this.activeSessionId) {
       this._pageKeySession = this.activeSessionId;
       this._pageKeyGesture = null;
     }
+    if (this._pageKeyGesture?.dir && this._pageKeyGesture.dir !== Math.sign(lines)) this._wheelSgrQueue = '';
     const step = window.CodemanTerminalInput.pageKeysForGesture(
       this._pageKeyGesture,
       ev,
@@ -6035,6 +6322,14 @@ Object.assign(CodemanApp.prototype, {
     if (step.keys) this._queueScrollBytes(step.keys);
     this._logScrollRouting('page-keys');
     return true;
+  },
+
+  // Is a Codex selection menu showing in this pane (or the pane `target` names: a tile passes its own
+  // terminal and session)? See isCodexSelectionMenu.
+  _codexMenuOpen(target = {}) {
+    const session = this.sessions?.get(target.sessionId || this.activeSessionId);
+    if (session?.mode !== 'codex') return false;
+    return window.CodemanTerminalInput.isCodexSelectionMenu(target.terminal || this.terminal);
   },
 
   /**
@@ -6051,19 +6346,28 @@ Object.assign(CodemanApp.prototype, {
     const session = this.sessions?.get(sessionId);
     const optOut = !!this.loadAppSettingsFromStorage?.()?.terminalWheelLocalScrollback;
     const tracking = this.terminal?.modes?.mouseTrackingMode || 'none';
+    // The encoding xterm would report in (DEFAULT, SGR, SGR_PIXELS): touch
+    // forwards to xterm's own tracking only when it is SGR
+    // (_shouldForwardTouchToApp).
+    const encoding = this.terminal?._core?.coreMouseService?.activeEncoding || 'unknown';
     // xterm's own mode above stays 'none' for a strip mode (the server removes
     // the DECSETs), so the CLI's real tracking state is reported separately.
     const cliTracking = session?.cliMouseTracking === true;
     const baseY = this.terminal?.buffer?.active?.baseY ?? -1;
+    // What tmux still holds for this pane (the last capture's `paneHistoryLines`):
+    // `localScrollbackRows=0` beside a positive count is an UNLOADED buffer,
+    // which _maybePageCliTranscript hands to the local path instead of paging.
+    const paneHistory = this._paneHistoryLines?.get(sessionId);
     const signature =
-      `${decision}|${session?.mode}|${session?.cliVersion}|${optOut}|${tracking}|${cliTracking}|${baseY > 0}`;
+      `${decision}|${session?.mode}|${session?.cliVersion}|${optOut}|` +
+      `${tracking}|${encoding}|${cliTracking}|${baseY > 0}|${(paneHistory ?? 0) > 0}`;
     if (!this._scrollRoutingLogged) this._scrollRoutingLogged = new Map();
     if (this._scrollRoutingLogged.get(sessionId) === signature) return;
     this._scrollRoutingLogged.set(sessionId, signature);
     console.log(
       `[scroll] ${sessionId} → ${decision} (mode=${session?.mode || '?'}, cliVersion=${session?.cliVersion || 'unknown'}, ` +
-        `localScrollbackOptOut=${optOut}, mouseTracking=${tracking}, cliMouseTracking=${cliTracking}, ` +
-        `localScrollbackRows=${baseY})`
+        `localScrollbackOptOut=${optOut}, mouseTracking=${tracking}, mouseEncoding=${encoding}, ` +
+        `cliMouseTracking=${cliTracking}, localScrollbackRows=${baseY}, paneHistoryLines=${paneHistory ?? 'unknown'})`
     );
   },
 
@@ -6074,7 +6378,9 @@ Object.assign(CodemanApp.prototype, {
     // Ephemeral (fire-and-forget): wheel reports are loss-tolerant, so they skip
     // the durable seq/ACK queue — no localStorage churn, no "Nb queued" flicker
     // in the connection indicator on every scroll tick.
-    if (data && this.activeSessionId) this._sendInputEphemeral(this.activeSessionId, data);
+    if (data && this.activeSessionId && this._wheelQueueSession === this.activeSessionId) {
+      this._sendInputEphemeral(this.activeSessionId, data);
+    }
   },
 
   // Desktop counterpart of the touchend tap branch: hand-encode an SGR report
@@ -6120,8 +6426,8 @@ Object.assign(CodemanApp.prototype, {
    * The reason is that the habit and xterm's Shift mean different things once
    * the DECSETs are stripped. xterm reads Shift as "force selection" ONLY while
    * the app actually has mouse tracking on; the server strips those DECSETs for
-   * claude/codex/gemini (isAltScreenStripMode) and opencode (isMuxMouseStripMode),
-   * so xterm's mouseTrackingMode is
+   * claude/codex/gemini (isAltScreenStripMode) and the mouse-strip modes
+   * (isMuxMouseStripMode), so xterm's mouseTrackingMode is
    * permanently `none`, that branch is unreachable, and Shift instead falls into
    * `_onIncrementalClick` — EXTEND an existing selection. Extending is a no-op
    * when `selectionStart` is null, so the drag never anchors and no selection is
@@ -6378,10 +6684,122 @@ Object.assign(CodemanApp.prototype, {
     // timer and the resize observer, where an exception takes the rest of the
     // callback (the padding fit, the scroll restore, the SIGWINCH) with it.
     try {
-      return window.CodemanTerminalGeometry.clampTerminalDimensions(this.fitAddon?.proposeDimensions());
+      const dims = window.CodemanTerminalGeometry.clampTerminalDimensions(this.fitAddon?.proposeDimensions());
+      // Rows held under the on-screen keyboard (see keyboardClipPx): the
+      // container shrank, the PTY must not. Columns still follow the container.
+      const held = this._keyboardHeldRowsActive?.();
+      if (dims && held) dims.rows = Math.max(dims.rows, held);
+      return dims;
     } catch {
       return null;
     }
+  },
+
+  /**
+   * Rows held while the on-screen keyboard is up, or 0. Set by KeyboardHandler
+   * on the show transition when `keyboardHoldsRows` is on (default), cleared on
+   * hide and on a shape change. Every geometry read goes through
+   * getTerminalDimensions(), so holding it there holds the fit, the PTY resize
+   * and every capture-geometry comparison alike.
+   * @returns {number}
+   */
+  _keyboardHeldRowsActive() {
+    if (!(this._keyboardHeldRows > 0)) return 0;
+    return typeof KeyboardHandler !== 'undefined' && KeyboardHandler.keyboardVisible ? this._keyboardHeldRows : 0;
+  },
+
+  /**
+   * May the keyboard hold this session's rows? Only an INLINE renderer (the
+   * `keyboardHold` capability, read from `window.__codemanKeyboardHoldModes`,
+   * never an id literal here): a CLI that lays out the full height (codex) cannot
+   * show both its content and its composer above the keyboard and must be
+   * resized, as before. Never while the CLI reports mouse tracking (Claude's
+   * fullscreen mode), and never for a remote or docker session, whose pane hosts
+   * a nested client. Absent data means no hold. Per-device setting
+   * `keyboardHoldsRows`, default ON.
+   */
+  _keyboardHoldEligible(sessionId = this.activeSessionId) {
+    if (this.loadAppSettingsFromStorage?.()?.keyboardHoldsRows === false) return false;
+    const session = sessionId ? this.sessions?.get(sessionId) : null;
+    if (!session || session.remote || session.docker || session.adopt || session.cliMouseTracking) return false;
+    const modes = window.__codemanKeyboardHoldModes;
+    return Array.isArray(modes) && modes.includes(session.mode || 'claude');
+  },
+
+  /**
+   * Drop a hold the active session no longer qualifies for (switched to a CLI
+   * that resizes, entered fullscreen, setting turned off) and, unless the caller
+   * resizes itself (selectSession), fit and tell the PTY at once, which is the
+   * old keyboard behavior. Never re-holds: a session that becomes eligible with
+   * the keyboard already up keeps the short rows until the keyboard closes.
+   */
+  _reconcileKeyboardHold({ resize = true } = {}) {
+    if (!this._keyboardHeldRows || this._keyboardHoldEligible()) return;
+    this._releaseKeyboardHold();
+    if (resize && this.activeSessionId) this.sendResize(this.activeSessionId)?.catch?.(() => {});
+  },
+
+  /**
+   * End a keyboard row hold and put the screen back in place (no offset, no
+   * overlay bound). Shared by KeyboardHandler (keyboard hide, shape change)
+   * and _reconcileKeyboardHold.
+   * @returns {boolean} whether a hold was released
+   */
+  _releaseKeyboardHold() {
+    if (!this._keyboardHeldRows) return false;
+    this._keyboardHeldRows = 0;
+    this._applyKeyboardClip();
+    return true;
+  },
+
+  /**
+   * Scroll the (held, taller than its box) terminal screen so the live content
+   * sits above the keyboard, and bound the local-echo overlay to the rows that
+   * are visible. Runs on every render and cursor move while the hold is active;
+   * resets once when it ends.
+   */
+  _applyKeyboardClip() {
+    const container = this.terminal?.element?.parentElement;
+    if (!container) return;
+    const rows = this._keyboardHeldRowsActive() ? this.terminal.rows : 0;
+    const cellHeight = rows ? this.terminal._core?._renderService?.dimensions?.css?.cell?.height : 0;
+    const viewHeight = rows ? container.clientHeight : 0;
+    let clip = 0;
+    if (cellHeight && viewHeight) {
+      const buffer = this.terminal.buffer.active;
+      const following = buffer.viewportY >= buffer.baseY;
+      let lastContentRow = -1;
+      if (following) {
+        for (let row = rows - 1; row >= 0; row--) {
+          if (buffer.getLine(buffer.baseY + row)?.translateToString(true).trim()) {
+            lastContentRow = row;
+            break;
+          }
+        }
+      }
+      clip = window.CodemanTerminalGeometry.keyboardClipPx({
+        rows,
+        cellHeight,
+        viewHeight,
+        cursorRow: buffer.cursorY,
+        lastContentRow,
+        following,
+        viewportY: buffer.viewportY,
+        baseY: buffer.baseY,
+      });
+    }
+    if (clip !== (this._keyboardClipPx || 0)) {
+      this._keyboardClipPx = clip;
+      if (clip) container.style.setProperty('--kb-clip', `${clip}px`);
+      else container.style.removeProperty('--kb-clip');
+    }
+    // Bounded whenever rows are held, even at offset 0 (a prompt near the top
+    // still has held rows below it, under the keyboard). setRowLimit dedupes.
+    this._localEchoOverlay?.setRowLimit?.(
+      cellHeight && viewHeight
+        ? window.CodemanTerminalGeometry.keyboardVisibleRowLimit(clip, viewHeight, cellHeight)
+        : null
+    );
   },
 
   /**
@@ -6411,7 +6829,10 @@ Object.assign(CodemanApp.prototype, {
   syncTerminalGeometry() {
     if (!this.fitAddon || !this.terminal) return null;
     try {
-      this.fitAddon.fit();
+      // fit() would shrink xterm to the keyboard-shortened box before the held
+      // rows put it back: skip it while they are held (_resizeTerminalTo below
+      // still applies the container's columns).
+      if (!this._keyboardHeldRowsActive?.()) this.fitAddon.fit();
     } catch {
       /* a disposed or unattached terminal cannot be fitted; fall through to the read */
     }
@@ -6436,8 +6857,9 @@ Object.assign(CodemanApp.prototype, {
    * part of the scrollback in between. The mobile retry asks every 30 seconds,
    * so that happened on a timer for as long as the refusal lasted. So the
    * columns stay at the PTY's (the #464 invariant: the browser never draws at
-   * a width the PTY does not have), the rows follow the container (they are
-   * never adopted, see reconcilePtyGeometry), and the container's columns go
+   * a width the PTY does not have), the rows follow the container or the
+   * keyboard hold (they are never adopted, see reconcilePtyGeometry and
+   * getTerminalDimensions), and the container's columns go
    * out as the request. An accepted request is adopted by the report.
    *
    * @returns {{cols: number, rows: number}|null} the geometry to request

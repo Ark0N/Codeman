@@ -939,7 +939,7 @@ Object.assign(CodemanApp.prototype, {
   // Clean up ALL floating windows (called during handleInit to prevent memory leaks on reconnect)
   cleanupAllFloatingWindows() {
     // Clean up all subagent windows with their ResizeObservers and drag listeners
-    for (const [agentId, windowData] of this.subagentWindows) {
+    for (const windowData of this.subagentWindows.values()) {
       if (windowData.resizeObserver) {
         windowData.resizeObserver.disconnect();
       }
@@ -969,7 +969,7 @@ Object.assign(CodemanApp.prototype, {
     this.teammatePanesByName.clear();
 
     // Clean up all log viewer windows with their EventSources and drag listeners
-    for (const [windowId, data] of this.logViewerWindows) {
+    for (const data of this.logViewerWindows.values()) {
       if (data.eventSource) {
         data.eventSource.close();
       }
@@ -988,7 +988,7 @@ Object.assign(CodemanApp.prototype, {
 
     // Clean up plan subagent windows (wizard agents)
     if (this.planSubagents) {
-      for (const [agentId, windowData] of this.planSubagents) {
+      for (const windowData of this.planSubagents.values()) {
         if (windowData.dragListeners) {
           document.removeEventListener('mousemove', windowData.dragListeners.move);
           document.removeEventListener('mouseup', windowData.dragListeners.up);
@@ -1001,7 +1001,7 @@ Object.assign(CodemanApp.prototype, {
     }
 
     // Clean up all image popup windows with their drag listeners
-    for (const [imageId, popupData] of this.imagePopups) {
+    for (const popupData of this.imagePopups.values()) {
       if (popupData.dragListeners) {
         document.removeEventListener('mousemove', popupData.dragListeners.move);
         document.removeEventListener('mouseup', popupData.dragListeners.up);
@@ -1040,18 +1040,6 @@ Object.assign(CodemanApp.prototype, {
     if (this.activeFocusTrap) {
       this.activeFocusTrap.deactivate();
       this.activeFocusTrap = null;
-    }
-
-    // Clean up team tasks panel drag listeners
-    if (this.teamTasksDragListeners) {
-      document.removeEventListener('mousemove', this.teamTasksDragListeners.move);
-      document.removeEventListener('mouseup', this.teamTasksDragListeners.up);
-      if (this.teamTasksDragListeners.touchMove) {
-        document.removeEventListener('touchmove', this.teamTasksDragListeners.touchMove);
-        document.removeEventListener('touchend', this.teamTasksDragListeners.up);
-        document.removeEventListener('touchcancel', this.teamTasksDragListeners.up);
-      }
-      this.teamTasksDragListeners = null;
     }
 
     // Clear minimized agents tracking

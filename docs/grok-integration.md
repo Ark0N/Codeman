@@ -114,7 +114,7 @@ history.
 ## Remote SSH cases
 
 `grok` mode is routed through an interactive login shell
-(`exec "$SHELL" -i -l -c 'grok'`), because sshd's remote-command PATH does not include
+(`remoteLoginShellCommand('grok')`), because sshd's remote-command PATH does not include
 `~/.grok/bin`. Per-session config and `envOverrides` do not cross ssh and are rejected
 rather than silently ignored; use the per-host command override instead. For auth on
 the remote host, `grok login --device-auth` exists for exactly this.
@@ -122,11 +122,11 @@ the remote host, `grok login --device-auth` exists for exactly this.
 ## Known gaps
 
 - **No idle/completion hook yet.** The registry entry declares no `workDetect` prompt
-  marker or working line, which is what gives Codex, OpenCode, Gemini, Pi and OMP a
-  screen check. So Codeman calls a new grok pane idle 3 seconds after launch, and after
+  marker or working line, which is what gives Codex, OpenCode, Gemini, Pi, OMP and
+  Antigravity a screen check. So Codeman calls a new grok pane idle 3 seconds after launch, and after
   that it has only generic cues: Claude's `❯` marker, which grok does not print (see the
   cron item below), and a braille spinner glyph. Working and idle are unreliable for
-  grok, as for Antigravity. Grok has a hooks system, so a Codeman hook POSTing to
+  grok. Grok has a hooks system, so a Codeman hook POSTing to
   `/api/hook-event` is the highest-value follow-up.
 - **No response viewer.** Grok writes ACP JSONL sessions under
   `~/.grok/sessions/<encoded-cwd>/<session-id>/updates.jsonl`; nothing reads them yet.

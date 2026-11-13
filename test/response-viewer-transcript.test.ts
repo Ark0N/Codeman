@@ -460,3 +460,204 @@ Here is the assistant answer at column zero.
     });
   });
 });
+
+describe('GitHub Copilot pane dialect', () => {
+  // Captured from a real Copilot 1.0.95 pane inside tmux (a throwaway COPILOT_HOME, a local
+  // OpenAI-compatible endpoint): banner, two turns, status rows, composer between rules, footer.
+  const rule = '─'.repeat(100);
+  const pane = [
+    '  ╭─╮╭─╮',
+    '  ╰─╯╰─╯  Copilot v1.0.95 uses AI.',
+    '  █ ▘▝ █  Check for mistakes.',
+    '   ▔▔▔▔',
+    ' ! Model "mock" is not in the built-in catalog. Using defaults for: prompt tokens',
+    '   (COPILOT_PROVIDER_MAX_PROMPT_TOKENS), output tokens (COPILOT_PROVIDER_MAX_OUTPUT_TOKENS). Run  copilot help',
+    '   providers  for configuration details.',
+    ' ● Tip: /theme',
+    '   └ View or set color mode',
+    ' ❯ multi please                                                                                         11:16',
+    ' ● First line of the answer.                                                                         ┃',
+    '                                                                                                      ┃',
+    '   Second paragraph with bold text.                                                                   ┃',
+    '                                                                                                      ┃',
+    '   • bullet one                                                                                       ┃',
+    '   • bullet two                                                                                       ┃',
+    ' ❯ WORKDONE followed by _4711                                                                          11:17',
+    ' ● WORKDONE_4711',
+    ' ● MCP Servers reloaded: 1 server connected',
+    ' /tmp/work/.../scratch-2                                                  Session: credits unavailable',
+    rule,
+    '❯',
+    rule,
+    ' ← open sidebar · Interactive · Manual Approval · / commands · ? help · tab next tab           mock',
+  ].join('\n');
+
+  it('is a transcript mode', () => {
+    expect(isExternalCliTranscriptMode('copilot')).toBe(true);
+  });
+
+  it('returns the last answer, with no banner, status rows, composer or footer in it', () => {
+    const blocks = parseExternalCliTranscript(pane, 'copilot');
+    expect(getLastTranscriptResponse(blocks)).toBe('WORKDONE_4711');
+  });
+
+  it('keeps a multi-paragraph answer whole and strips the prompt timestamp', () => {
+    const blocks = parseExternalCliTranscript(pane, 'copilot');
+    const prompts = blocks.filter((b) => b.kind === 'prompt').map((b) => b.text);
+    expect(prompts).toEqual(['multi please', 'WORKDONE followed by _4711']);
+    const first = blocks.find((b) => b.kind === 'response')!;
+    expect(first.text).toContain('First line of the answer.');
+    expect(first.text).toContain('Second paragraph with bold text.');
+    expect(first.text).toContain('• bullet two');
+    expect(first.text).not.toMatch(/Session:|open sidebar|Tip:/);
+    // The scrollbar gutter Copilot draws at the right edge of every row never reaches the text.
+    expect(first.text).not.toContain('┃');
+  });
+
+  // The footer and composer every screen below ends with.
+  const tail = [
+    ' /tmp/work/.../scratch-2                                                  Session: credits unavailable',
+    rule,
+    '❯',
+    rule,
+    ' ← open sidebar · Interactive · Manual Approval · / commands · ? help · tab next tab           mock',
+  ];
+
+  it("keeps a shell prompt inside an answer's code block as answer text, not a new prompt", () => {
+    const screen = [
+      ' ❯ how do I run the tests   11:20',
+      ' ● Run this from the repo root:',
+      '',
+      '   ❯ npm test',
+      '',
+      '   Then read the summary line.',
+      ...tail,
+    ].join('\n');
+    const blocks = parseExternalCliTranscript(screen, 'copilot');
+    expect(blocks.filter((b) => b.kind === 'prompt').map((b) => b.text)).toEqual(['how do I run the tests']);
+    const answer = getLastTranscriptResponse(blocks);
+    expect(answer).toContain('Run this from the repo root:');
+    expect(answer).toContain('❯ npm test');
+    expect(answer).toContain('Then read the summary line.');
+  });
+
+  it('keeps a paragraph between two rules inside an answer, and treats only the last triple as the composer', () => {
+    const screen = [
+      ' ❯ quote the passage   11:21',
+      ' ● Here it is:',
+      rule,
+      '   Quoted passage between two rules.',
+      rule,
+      ...tail,
+    ].join('\n');
+    expect(getLastTranscriptResponse(parseExternalCliTranscript(screen, 'copilot'))).toBe(
+      'Here it is:\n\n---\n\nQuoted passage between two rules.'
+    );
+  });
+
+  it('keeps an answer whole across a rule inside it, so agent read never returns only its tail', () => {
+    const screen = [
+      ' ❯ summarize the change   11:22',
+      ' ● Summary',
+      '',
+      '   One line of summary.',
+      rule,
+      '   Details',
+      '',
+      '   The longer explanation.',
+      ...tail,
+    ].join('\n');
+    const blocks = parseExternalCliTranscript(screen, 'copilot');
+    expect(blocks.filter((b) => b.kind === 'response')).toHaveLength(1);
+    const answer = getLastTranscriptResponse(blocks);
+    expect(answer).toContain('Summary');
+    expect(answer).toContain('One line of summary.');
+    expect(answer).toContain('Details');
+    expect(answer).toContain('The longer explanation.');
+    // The rule before the footer separates the answer from the chrome and never trails it.
+    expect(answer.endsWith('---')).toBe(false);
+  });
+
+  it('answers nothing for a session that has only drawn its banner or a trust dialog', () => {
+    const banner = pane.split('\n').slice(0, 9).join('\n');
+    expect(getLastTranscriptResponse(parseExternalCliTranscript(banner, 'copilot'))).toBe('');
+    const trust = [
+      '│ Do you trust the files in this folder?',
+      '│ ❯ 1. Yes',
+      '│   2. Yes, and remember this folder for future sessions',
+    ].join('\n');
+    expect(getLastTranscriptResponse(parseExternalCliTranscript(trust, 'copilot'))).toBe('');
+  });
+
+  it('does not take the empty composer glyph for a prompt', () => {
+    const blocks = parseExternalCliTranscript(pane, 'copilot');
+    expect(blocks.some((b) => b.kind === 'prompt' && b.text === '')).toBe(false);
+  });
+
+  // The pane is all there is to read, so a long answer scrolls the prompt row (and the banner) off
+  // the top. That must read as the tail of the answer, not as "nothing yet".
+  describe('an answer taller than the pane', () => {
+    const rule = '─'.repeat(100);
+    const tail = (n: number) =>
+      Array.from({ length: n }, (_, i) => `   line ${String(i + 1).padStart(3, '0')} of the long answer`);
+    const footer = [
+      ' /tmp/work/.../scratch-2                                                  Session: 0 AIC used',
+      rule,
+      '❯',
+      rule,
+      ' ← open sidebar · Interactive · Manual Approval · / commands · ? help · tab next tab           mock',
+    ];
+
+    it('returns the visible rows when the prompt row has scrolled off', () => {
+      const screen = [...tail(35), ...footer].join('\n');
+      const text = getLastTranscriptResponse(parseExternalCliTranscript(screen, 'copilot'));
+      expect(text).toContain('line 001 of the long answer');
+      expect(text).toContain('line 035 of the long answer');
+      expect(text).not.toMatch(/Session:|open sidebar|commands/);
+    });
+
+    it('still reads the tail when the answer has a leading bullet row on screen', () => {
+      const screen = [' ● the answer begins here', ...tail(20), ...footer].join('\n');
+      const text = getLastTranscriptResponse(parseExternalCliTranscript(screen, 'copilot'));
+      expect(text).toContain('the answer begins here');
+      expect(text).toContain('line 020 of the long answer');
+    });
+
+    it('is not fooled by text typed in the composer under the answer', () => {
+      const typed = [
+        ...tail(30),
+        ' /tmp/work/.../scratch-2        Session: 0 AIC used',
+        rule,
+        '❯ half a thought',
+        rule,
+        footer[4],
+      ];
+      const text = getLastTranscriptResponse(parseExternalCliTranscript(typed.join('\n'), 'copilot'));
+      expect(text).toContain('line 030 of the long answer');
+      expect(text).not.toContain('half a thought');
+    });
+
+    it('still answers nothing while the banner or a trust dialog is on screen', () => {
+      const banner = [
+        '  ╭─╮╭─╮',
+        '  ╰─╯╰─╯  Copilot v1.0.95 uses AI.',
+        ' ! Model "mock" is not in the built-in catalog.',
+        ' /tmp/work  Session: 0 AIC used',
+        rule,
+        '❯',
+        rule,
+        footer[4],
+      ].join('\n');
+      expect(getLastTranscriptResponse(parseExternalCliTranscript(banner, 'copilot'))).toBe('');
+    });
+
+    it('prefers the prompt row when it is on screen', () => {
+      const screen = [
+        ' ❯ do the thing                                                     11:16',
+        ' ● short answer',
+        ...footer,
+      ].join('\n');
+      expect(getLastTranscriptResponse(parseExternalCliTranscript(screen, 'copilot'))).toBe('short answer');
+    });
+  });
+});

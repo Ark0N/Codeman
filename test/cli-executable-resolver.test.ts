@@ -1,9 +1,10 @@
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EXEC_TIMEOUT_MS } from '../src/config/exec-timeout.js';
 import {
+  CLI_INSTALLED_MARKER,
   cliResolveRetryDelayMs,
   createCliExecutableResolver,
   createProductionCliResolverHost,
@@ -128,6 +129,107 @@ describe('createCliExecutableResolver', () => {
     expect(resolver.resolve()?.binaryPath).toBe('/new/bin/codex');
     expect(resolver.resolve()?.binaryPath).toBe('/new/bin/codex');
     expect(findInLoginShell).toHaveBeenCalledTimes(2);
+  });
+
+  describe('the installer says a CLI was installed', () => {
+    // install.sh touches a marker when it installs a CLI, and the stamp is that file's
+    // mtime. A running server must see the new CLI at the next request, because Run reads
+    // this same answer: "Run fails, add the agent, Run again" must not fail twice.
+    function waiting() {
+      const clock = { now: 0, stamp: 1000 };
+      const findInLoginShell = vi.fn<() => string | null>().mockReturnValue(null);
+      const onPath = vi.fn<() => string | null>().mockReturnValue(null);
+      const installStamp = vi.fn(() => clock.stamp);
+      const h = host({
+        findInLoginShell,
+        findOnProcessPath: onPath,
+        exists: vi.fn((path) => path === '/new/bin/codex'),
+        installStamp,
+      });
+      const resolver = createCliExecutableResolver({ binary: 'codex', searchDirs: [], now: () => clock.now }, h);
+      expect(resolver.resolve()).toBeNull();
+      return { clock, findInLoginShell, onPath, installStamp, resolver };
+    }
+
+    it('ends the backoff at once when the stamp changes', () => {
+      const { clock, findInLoginShell, resolver } = waiting();
+      clock.now = 1;
+      findInLoginShell.mockReturnValue('/new/bin/codex');
+      clock.stamp = 2000;
+      expect(resolver.resolve()?.binaryPath).toBe('/new/bin/codex');
+    });
+
+    it('keeps the backoff, with nothing spawned, while the stamp stands still', () => {
+      const { clock, findInLoginShell, onPath, resolver } = waiting();
+      clock.now = cliResolveRetryDelayMs(1) - 1;
+      for (let i = 0; i < 50; i++) expect(resolver.resolve()).toBeNull();
+      expect(findInLoginShell).toHaveBeenCalledTimes(1);
+      expect(onPath).toHaveBeenCalledTimes(1);
+    });
+
+    it('a marker older than the server is not news: it does not cost a second chain', () => {
+      // A stamp present from the first look on must not read as a change at the second.
+      const { clock, findInLoginShell, resolver } = waiting();
+      clock.now = 1;
+      expect(resolver.resolve()).toBeNull();
+      expect(findInLoginShell).toHaveBeenCalledTimes(1);
+    });
+
+    it('one change buys one look: a CLI that is still missing goes back to waiting', () => {
+      const { clock, findInLoginShell, resolver } = waiting();
+      clock.now = 1;
+      clock.stamp = 2000;
+      expect(resolver.resolve()).toBeNull();
+      expect(resolver.resolve()).toBeNull();
+      expect(resolver.resolve()).toBeNull();
+      expect(findInLoginShell).toHaveBeenCalledTimes(2);
+    });
+
+    it('never looks at the marker once a CLI is resolved', () => {
+      const { clock, findInLoginShell, installStamp, resolver } = waiting();
+      findInLoginShell.mockReturnValue('/new/bin/codex');
+      clock.stamp = 2000;
+      expect(resolver.resolve()?.binaryPath).toBe('/new/bin/codex');
+      installStamp.mockClear();
+      for (let i = 0; i < 10; i++) resolver.resolve();
+      expect(installStamp).not.toHaveBeenCalled();
+    });
+
+    it('a stamp going backwards is a change too, or a restored data folder would hide one', () => {
+      const { clock, findInLoginShell, resolver } = waiting();
+      clock.now = 1;
+      clock.stamp = 500;
+      resolver.resolve();
+      expect(findInLoginShell).toHaveBeenCalledTimes(2);
+    });
+
+    it('reads the real marker file, and treats a missing one as no news', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'codeman-cli-marker-'));
+      const marker = join(dir, CLI_INSTALLED_MARKER);
+      try {
+        const h = createProductionCliResolverHost({ allowRealIoUnderVitest: true, installMarkerPath: marker });
+        expect(h.installStamp?.()).toBe(0);
+        writeFileSync(marker, '');
+        utimesSync(marker, 1000, 1000);
+        const first = h.installStamp?.();
+        expect(first).toBeGreaterThan(0);
+        utimesSync(marker, 2000, 2000);
+        expect(h.installStamp?.()).not.toBe(first);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('reads no marker under vitest, even one that is there', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'codeman-cli-marker-'));
+      const marker = join(dir, CLI_INSTALLED_MARKER);
+      try {
+        writeFileSync(marker, '');
+        expect(createProductionCliResolverHost({ installMarkerPath: marker }).installStamp?.()).toBe(0);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
   });
 
   it('invalidation drops a negative-cache backoff immediately (a CLI installed from Settings)', () => {

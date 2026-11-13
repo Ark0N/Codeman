@@ -126,7 +126,7 @@ RUN set -eux; \
 # ⚠️ The default is in REGISTRY order, byte-identical to what the generator emits.
 # A different order is a different RUN string, which is a different layer hash and
 # so a needless cache miss between a bare `docker build` and a scripted one.
-ARG CLI_NPM_PACKAGES="@anthropic-ai/claude-code opencode-ai @openai/codex @google/gemini-cli"
+ARG CLI_NPM_PACKAGES="@anthropic-ai/claude-code opencode-ai @openai/codex @google/gemini-cli @github/copilot"
 # uv/uvx: MCP servers are commonly launched with `uvx <package>` (e.g. the Nginx
 # Proxy Manager MCP), and Codex failed to enable them with "uvx not found". Copied
 # from the pinned upstream image into root-owned /usr/local/bin, never pip-installed.
@@ -202,6 +202,21 @@ RUN curl -fsSL https://omp.sh/install | sh \
  && chmod 755 /usr/local/bin/omp \
  && rm -f /root/.local/bin/omp \
  && omp --version
+
+# jcode is NOT on npm: a standalone Rust binary via jcode.sh's installer, which
+# writes $HOME/.jcode/builds/versions/<v>/ and links $HOME/.local/bin/jcode to it.
+# The linked `jcode` is a small sh LAUNCHER that resolves its own path and execs
+# the `jcode-<os>-<arch>.bin` beside it, so (unlike grok/omp above) the whole
+# version directory is copied, to /opt/jcode, and /usr/local/bin/jcode links the
+# launcher there. Root's ~/.jcode is dropped in the same layer so the image does
+# not carry the ~160MB binary twice. JCODE_SKIP_SERVER_RELOAD: there is no jcode
+# daemon at build time to hand off to.
+RUN curl -fsSL https://jcode.sh/install | JCODE_SKIP_SERVER_RELOAD=1 bash \
+ && mkdir -p /opt/jcode \
+ && cp -a "$(dirname "$(readlink -f /root/.local/bin/jcode)")/." /opt/jcode/ \
+ && ln -sfn /opt/jcode/jcode /usr/local/bin/jcode \
+ && rm -rf /root/.jcode /root/.local/bin/jcode \
+ && jcode --version
 
 # `agent` user (gid 0) with an arbitrary-uid-writable HOME. The uid is
 # auto-assigned (node:22-slim already occupies uid 1000 with its `node` user); at

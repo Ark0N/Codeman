@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>Codeman</string>
+	<key>CFBundleDisplayName</key>
+	<string>Codeman</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.getcodeman.desktop</string>
+	<key>CFBundleVersion</key>
+	<string>__VERSION__</string>
+	<key>CFBundleShortVersionString</key>
+	<string>__VERSION__</string>
+	<key>CFBundleExecutable</key>
+	<string>codeman-desktop</string>
+	<key>CFBundleIconFile</key>
+	<string>Codeman</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<!-- 11.3 is where WKDownload arrived; wry saves files through it. Below
+	     that a Download link replaces the window or saves nothing.
+	     scripts/bundle-macos.sh builds for this version too. -->
+	<key>LSMinimumSystemVersion</key>
+	<string>11.3</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.developer-tools</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSSupportsAutomaticGraphicsSwitching</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>MIT License, Codeman Contributors</string>
+	<!-- Voice dictation and gesture control ask for these; without the
+	     strings macOS kills the app the first time a page requests them. -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Codeman uses the microphone for voice dictation when you turn it on.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Codeman uses the camera for hand-gesture control when you turn it on.</string>
+	<!-- macOS 15 asks before an app reaches the local network (a LAN address,
+	     a .local name), and shows this text in that question. A process the
+	     app starts counts as the app (Apple TN3179), so a server started with
+	     "Start Codeman on this Mac" runs under the same answer. -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Codeman connects to Codeman servers on your local network. A Codeman server you start from this app uses the same permission for what it reaches on the network.</string>
+	<!-- App Transport Security would block plain http:// to a host NAME
+	     (my-mac.local, a LAN box). IP literals are exempt, which is why
+	     http://127.0.0.1 works without this. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+		<key>NSAllowsArbitraryLoadsInWebContent</key>
+		<true/>
+	</dict>
+</dict>
+</plist>

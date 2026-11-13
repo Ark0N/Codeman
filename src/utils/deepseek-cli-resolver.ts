@@ -31,7 +31,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { EXEC_TIMEOUT_MS } from '../config/exec-timeout.js';
@@ -377,11 +377,6 @@ export function getDeepSeekNotFoundMessage(): string {
  */
 export function getDeepSeekCliVersion(): string | null {
   return deepSeekResolver.resolve()?.metadata ?? null;
-}
-
-/** Does the named profile exist and can it drive a pane? */
-export function profileExists(name: string): boolean {
-  return existsSync(join(resolveDshHome(), 'profiles', name, 'package.json'));
 }
 
 /**

@@ -11,6 +11,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createRouteTestHarness, type RouteTestHarness } from './_route-test-utils.js';
 import { registerSystemRoutes } from '../../src/web/routes/system-routes.js';
+import { agentInbox } from '../../src/web/agent-inbox.js';
+
+const hostSensors = vi.hoisted(() => ({ readHostSensors: vi.fn(async (_request: unknown) => ({})) }));
+vi.mock('../../src/host-sensors.js', () => hostSensors);
 
 // ── Mocks ──────────────────────────────────────────────────────────
 
@@ -18,6 +22,11 @@ vi.mock('node:fs/promises', () => ({
   default: {
     readFile: vi.fn(async () => '{}'),
     writeFile: vi.fn(async () => undefined),
+    // settings.json is written to a temp file and renamed over the real one (settings-writer.ts).
+    realpath: vi.fn(async (p: string) => p),
+    mkdir: vi.fn(async () => undefined),
+    rename: vi.fn(async () => undefined),
+    rm: vi.fn(async () => undefined),
   },
 }));
 
@@ -326,6 +335,20 @@ describe('system-routes', () => {
       expect(body).toHaveProperty('cpu');
       expect(body).toHaveProperty('memory');
     });
+
+    it('adds no GPU or clock readings unless they are asked for', async () => {
+      const body = JSON.parse((await harness.app.inject({ method: 'GET', url: '/api/system/stats' })).body);
+      expect(body).not.toHaveProperty('gpu');
+      expect(body).not.toHaveProperty('cpuMhz');
+    });
+
+    it('passes only the requested readings on to the sensor reader', async () => {
+      hostSensors.readHostSensors.mockClear();
+      hostSensors.readHostSensors.mockResolvedValueOnce({ cpuMhz: 3200 });
+      const res = await harness.app.inject({ method: 'GET', url: '/api/system/stats?cpumhz=1&gpu=0' });
+      expect(hostSensors.readHostSensors).toHaveBeenCalledWith({ gpu: false, cpuMhz: true });
+      expect(JSON.parse(res.body).cpuMhz).toBe(3200);
+    });
   });
 
   // ========== POST /api/cleanup-state ==========
@@ -342,6 +365,73 @@ describe('system-routes', () => {
       expect(body.cleanedSessions).toBe(0);
       expect(harness.ctx.store.cleanupSessionsByIds).toHaveBeenCalledWith(new Set());
       expect(runStaleSessionCleanup).toHaveBeenCalledOnce();
+    });
+
+    it('drops the agent inbox of every record it removes, and only those', async () => {
+      agentInbox.resetForTests();
+      agentInbox.post('stale-detached', null, 'mail for a detached session');
+      agentInbox.post('still-kept', null, 'mail for a session that stays');
+      harness.ctx.tabLayouts.runStaleSessionCleanup = vi.fn(
+        async (_activeIds: Set<string>, action: (ids: ReadonlySet<string>) => unknown) =>
+          action(new Set(['stale-detached']))
+      );
+      vi.mocked(harness.ctx.store.cleanupSessionsByIds).mockReturnValueOnce({
+        count: 1,
+        cleaned: [{ id: 'stale-detached', name: 'w9-gone' }],
+      });
+      try {
+        const res = await harness.app.inject({ method: 'POST', url: '/api/cleanup-state' });
+        expect(res.statusCode).toBe(200);
+        expect(JSON.parse(res.body).cleanedSessions).toBe(1);
+        expect(agentInbox.pendingCount('stale-detached')).toBe(0);
+        expect(agentInbox.pendingCount('still-kept')).toBe(1);
+      } finally {
+        agentInbox.resetForTests();
+      }
+    });
+
+    it('keeps the agent inbox of a removed record whose tmux session the multiplexer still lists', async () => {
+      // Detach keeps the tmux session and its mux entry; the next boot re-adopts it
+      // under the same id even without a state.json record, so its mail must survive.
+      agentInbox.resetForTests();
+      agentInbox.post('stale-detached', null, 'mail for a session nothing can bring back');
+      agentInbox.post('pane-still-alive', null, 'mail for a detached pane that boot re-adopts');
+      harness.ctx.tabLayouts.runStaleSessionCleanup = vi.fn(
+        async (_activeIds: Set<string>, action: (ids: ReadonlySet<string>) => unknown) =>
+          action(new Set(['stale-detached', 'pane-still-alive']))
+      );
+      vi.mocked(harness.ctx.store.cleanupSessionsByIds).mockReturnValueOnce({
+        count: 2,
+        cleaned: [
+          { id: 'stale-detached', name: 'w9-gone' },
+          { id: 'pane-still-alive', name: 'w8-detached' },
+        ],
+      });
+      // The harness is rebuilt per test, so this mock does not leak into the next one.
+      vi.mocked(harness.ctx.mux.getSession).mockImplementation(((id: string) =>
+        id === 'pane-still-alive' ? { sessionId: id } : null) as unknown as typeof harness.ctx.mux.getSession);
+      try {
+        const res = await harness.app.inject({ method: 'POST', url: '/api/cleanup-state' });
+        expect(res.statusCode).toBe(200);
+        expect(JSON.parse(res.body).cleanedSessions).toBe(2);
+        expect(agentInbox.pendingCount('stale-detached')).toBe(0);
+        expect(agentInbox.pendingCount('pane-still-alive')).toBe(1);
+      } finally {
+        agentInbox.resetForTests();
+      }
+    });
+
+    it('deletes the edit history of every session it cleaned (diffs can hold secrets)', async () => {
+      harness.ctx.tabLayouts.runStaleSessionCleanup = vi.fn(async () => ({
+        count: 2,
+        cleaned: [
+          { id: 'stale-1', name: 'a' },
+          { id: 'stale-2', name: 'b' },
+        ],
+      })) as never;
+      const res = await harness.app.inject({ method: 'POST', url: '/api/cleanup-state' });
+      expect(JSON.parse(res.body).cleanedSessions).toBe(2);
+      expect(vi.mocked(harness.ctx.forgetEditHistory).mock.calls).toEqual([['stale-1'], ['stale-2']]);
     });
   });
 

@@ -58,6 +58,8 @@ const MOBILE_OVERVIEW_RUN_MODES = [
   { mode: 'grok', label: 'Grok', short: 'Grok' },
   { mode: 'deepseek', label: 'DeepSeek', short: 'DeepSeek' },
   { mode: 'omp', label: 'OMP', short: 'OMP' },
+  { mode: 'copilot', label: 'GitHub Copilot', short: 'GitHub Copilot' },
+  { mode: 'jcode', label: 'jcode', short: 'jcode' },
   { mode: 'shell', label: 'Terminal / Shell', short: 'Shell' },
 ];
 
@@ -384,13 +386,13 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
-   * One delegated click listener for every row, plus a breakpoint listener so
-   * rotating or unfolding while on the home screen swaps to the right surface
-   * instead of stranding a phone layout on a tablet-width viewport.
+   * One delegated click listener for every row. The breakpoint listener lives
+   * in `_wireMobileOverviewBreakpoint()`, installed at startup.
    */
   _wireMobileOverview(el) {
     if (this._mobileOverviewWired) return;
     this._mobileOverviewWired = true;
+    this._wireMobileOverviewBreakpoint();
 
     el.addEventListener('click', (event) => {
       const target = event.target && event.target.closest && event.target.closest('[data-mo-action]');
@@ -425,18 +427,34 @@ Object.assign(CodemanApp.prototype, {
         this.showWebviewModal();
       }
     });
+  },
 
-    if (window.matchMedia) {
-      const mq = window.matchMedia(MOBILE_OVERVIEW_PHONE_QUERY);
-      const onChange = () => {
-        // Only relevant while a home surface is up; entering a session re-decides
-        // through hideWelcome()/showWelcome() anyway.
-        if (this.activeSessionId) return;
-        if (typeof this.showWelcome === 'function') this.showWelcome();
-      };
-      if (mq.addEventListener) mq.addEventListener('change', onChange);
-      else if (mq.addListener) mq.addListener(onChange);
-    }
+  /**
+   * Swap the home surface when the width crosses the phone breakpoint (rotate,
+   * fold, unfold), so a phone layout is never stranded on a tablet-width
+   * viewport and the welcome screen never on a phone-width one.
+   *
+   * Installed ONCE at startup (`init()` in app.js), not on the first show: a
+   * page that loads wide never shows the phone overview, so a listener wired
+   * from there was missing on exactly the fold that needed it (#702). Idempotent,
+   * so the call from `_wireMobileOverview()` adds nothing after startup.
+   */
+  _wireMobileOverviewBreakpoint() {
+    if (this._mobileOverviewBreakpointWired || !window.matchMedia) return;
+    this._mobileOverviewBreakpointWired = true;
+    const mq = window.matchMedia(MOBILE_OVERVIEW_PHONE_QUERY);
+    const onChange = () => {
+      // Only relevant while a home surface is up; entering a session re-decides
+      // through hideWelcome()/showWelcome() anyway, and before the first
+      // showWelcome() there is nothing on screen to swap.
+      if (this.activeSessionId) return;
+      const overlay = document.getElementById('welcomeOverlay');
+      const welcomeUp = !!overlay && overlay.classList.contains('visible');
+      if (!welcomeUp && !this.isMobileOverviewVisible()) return;
+      if (typeof this.showWelcome === 'function') this.showWelcome();
+    };
+    if (mq.addEventListener) mq.addEventListener('change', onChange);
+    else if (mq.addListener) mq.addListener(onChange);
   },
 
   _toggleMobileOverviewRunMenu() {
@@ -506,6 +524,16 @@ Object.assign(CodemanApp.prototype, {
         'Nothing running. Hit Run to start something.'
       )
     );
+
+    // Sessions a human opened outside Codeman. Its own container, rebuilt by the
+    // ONE renderer in foreign-sessions.js: the phone must not grow a second row
+    // builder that could describe the same session differently from the desktop.
+    const foreign = document.createElement('div');
+    foreign.className = 'foreign-sessions mobile-foreign-sessions';
+    foreign.id = 'mobileForeignSessions';
+    foreign.hidden = true;
+    el.appendChild(foreign);
+    this.renderForeignSessions?.(foreign);
 
     el.appendChild(
       this._buildMobileOverviewSection(

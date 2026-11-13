@@ -277,5 +277,62 @@
         "docsUrl": "https://omp.sh"
       }
     }
+  },
+  {
+    "id": "copilot",
+    "label": "GitHub Copilot",
+    "shortBadge": "CP",
+    "enabled": true,
+    "order": 100,
+    "kind": "agent",
+    "discovery": {
+      "binaries": [
+        "copilot"
+      ],
+      "searchDirs": [
+        "~/.local/bin",
+        "/usr/local/bin",
+        "~/.bun/bin",
+        "~/.npm-global/bin",
+        "~/bin"
+      ],
+      "install": {
+        "command": {
+          "linux": "npm install -g @github/copilot",
+          "darwin": "npm install -g @github/copilot"
+        },
+        "npmPackage": "@github/copilot",
+        "docsUrl": "https://github.com/github/copilot-cli"
+      }
+    }
+  },
+  {
+    "id": "jcode",
+    "label": "jcode",
+    "shortBadge": "JC",
+    "enabled": true,
+    "order": 110,
+    "kind": "agent",
+    "discovery": {
+      "binaries": [
+        "jcode"
+      ],
+      "searchDirs": [
+        "~/.local/bin",
+        "/usr/local/bin",
+        "~/bin"
+      ],
+      "install": {
+        "command": {
+          "linux": "curl -fsSL https://jcode.sh/install | bash",
+          "darwin": "curl -fsSL https://jcode.sh/install | bash"
+        },
+        "docsUrl": "https://jcode.sh/docs",
+        "agentImageLayer": {
+          "kind": "dedicated",
+          "reason": "Not on npm: jcode ships a standalone Rust binary through jcode.sh/install, whose launcher is a script that execs the binary beside it."
+        }
+      }
+    }
   }
 ]

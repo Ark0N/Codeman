@@ -23,11 +23,7 @@ import { execFileSync } from 'node:child_process';
 import { EXEC_TIMEOUT_MS } from '../config/exec-timeout.js';
 import { getCli } from '../config/cli-registry/registry.js';
 import { expandHome } from './cli-resolver.js';
-import {
-  createCliExecutableResolver,
-  formatCliNotFoundMessage,
-  type CliResolverHost,
-} from './cli-executable-resolver.js';
+import { createCliExecutableResolver, type CliResolverHost } from './cli-executable-resolver.js';
 
 /** Common directories where the Grok CLI binary may be installed */
 /**
@@ -48,8 +44,6 @@ const GROK_SEARCH_DIRS = (): string[] => (getCli('grok')?.discovery.searchDirs ?
  * flag, so there is no shared `lastIndex` to reset.
  */
 export const GROK_VERSION_REGEX = /(?:^|\s)(\d+\.\d+\.\d+)/;
-
-const GROK_NOT_FOUND = 'Grok CLI not found. Install with: curl -fsSL https://x.ai/cli/install.sh | bash';
 
 /**
  * Run `grok --version` on a candidate path and return the version token when it
@@ -135,10 +129,6 @@ export function resolveGrokDir(): string | null {
  */
 export function isGrokAvailable(): boolean {
   return resolveGrokDir() !== null;
-}
-
-export function getGrokNotFoundMessage(): string {
-  return formatCliNotFoundMessage(GROK_NOT_FOUND, grokResolver.diagnostics());
 }
 
 /**

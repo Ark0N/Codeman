@@ -13,6 +13,7 @@ import { describe, it, expect } from 'vitest';
 import {
   applyLiveMetrics,
   applyMuxNames,
+  beginAttachHandoff,
   buildAttachBanner,
   buildListLines,
   confirmKillStep,
@@ -38,6 +39,7 @@ import {
   tmuxSocketFromEnv,
 } from '../../src/tui/tui-app.js';
 import { createTuiModel, stateSince } from '../../src/tui/tui-model.js';
+import type { TuiClient } from '../../src/tui/tui-client.js';
 import { glyphsFor } from '../../src/tui/tui-render.js';
 import type { TuiLiveSessionMetrics, TuiTmuxSession } from '../../src/tui/tui-client.js';
 import type { TuiConfirmState, TuiRow, TuiSessionRow } from '../../src/tui/tui-types.js';
@@ -596,6 +598,132 @@ describe('the held-Ctrl detach alias', () => {
   });
 });
 
+describe('the way out when F1 is taken, on a socket with no detach key', () => {
+  // Codeman keeps only `<prefix> send-prefix` in its socket's prefix table
+  // (src/tmux-prefix-table.ts), so tmux's stock `Ctrl+B then d` does nothing there.
+  it('names the held-Ctrl chord on the bar instead of the stock d', () => {
+    const bar = buildAttachBanner({ prefix: 'C-b', heldAlias: 'C-d' })['status-format[0]'];
+    expect(bar).toContain('#[bold]Ctrl+B then Ctrl+D#[nobold]');
+    expect(bar).not.toContain('then d');
+  });
+
+  it('hands the same chord back from the attach handoff, for the help overlay and the hint line', async () => {
+    const free = new Set(['C-d', 'M-1']);
+    const client = {
+      readPrefixKey: async () => 'C-b',
+      readDetachKey: async () => null,
+      readPrefixBinding: async (key: string) => (free.has(key) ? null : 'display-message mine'),
+      bindDetachKey: async () => true,
+      unbindDetachKey: async () => true,
+      bindSwitchKey: async () => true,
+      unbindSwitchKey: async () => true,
+      readSessionOptions: async () => null,
+      applySessionOptions: async () => true,
+      restoreSessionOptions: async () => true,
+      readWindowSizing: async () => null,
+      presizeWindow: async () => true,
+      followAttachingClient: async () => true,
+      restoreWindowSizing: async () => true,
+    } as unknown as TuiClient;
+
+    const handoff = await beginAttachHandoff(client, 'codeman-abc12345', 'w1-case', [], undefined, undefined, null);
+
+    expect(handoff.chord).toBe('Ctrl+B then Ctrl+D');
+  });
+});
+
+describe('attach switch keys stay on the TUI client', () => {
+  it('binds M-1 through the guard for the tty it was given, and does not bind without one', async () => {
+    const binds: Array<{ key: string; target: string; tty: string }> = [];
+    const unbinds: Array<{ key: string; owner: string | undefined }> = [];
+    let armed: string | null = null;
+    let disarmed: string | null = null;
+    // tmux calls in order, to pin where the attach hook is armed.
+    const order: string[] = [];
+    const client = {
+      readPrefixKey: async () => 'C-b',
+      readDetachKey: async () => 'd',
+      readPrefixBinding: async () => null,
+      bindDetachKey: async () => true,
+      unbindDetachKey: async () => true,
+      armTuiSwitchGuard: async (tty: string) => {
+        order.push('arm');
+        armed = tty;
+        return true;
+      },
+      disarmTuiSwitchGuard: async (tty: string) => {
+        disarmed = tty;
+      },
+      bindSwitchKey: async (key: string, target: string, tty: string) => {
+        order.push('bind');
+        binds.push({ key, target, tty });
+        return true;
+      },
+      unbindSwitchKey: async (key: string, owner?: string) => {
+        unbinds.push({ key, owner });
+      },
+      readSessionOptions: async () => null,
+      applySessionOptions: async () => {
+        order.push('dress');
+        return true;
+      },
+      restoreSessionOptions: async () => true,
+      readWindowSizing: async () => null,
+      presizeWindow: async () => true,
+      followAttachingClient: async () => {
+        order.push('follow');
+        return true;
+      },
+      restoreWindowSizing: async () => true,
+    } as unknown as TuiClient;
+
+    const tabs = [
+      { index: 1, label: 'w1', active: true, muxName: 'codeman-aaaa1111' },
+      { index: 2, label: 'w2', active: false, muxName: 'codeman-bbbb2222' },
+    ];
+    const handoff = await beginAttachHandoff(
+      client,
+      'codeman-aaaa1111',
+      'w1',
+      tabs,
+      undefined,
+      undefined,
+      '/dev/pts/4'
+    );
+    expect(armed).toBe('/dev/pts/4');
+    // Armed once, as the LAST tmux call of the handoff: a TUI killed while the
+    // bars were being dressed must not leave a one-shot hook for its tty that a
+    // browser tab's attach on a reused pty would fire.
+    expect(order).toEqual(['bind', 'bind', 'dress', 'follow', 'dress', 'arm']);
+    expect(binds).toEqual([
+      { key: 'M-1', target: 'codeman-aaaa1111', tty: '/dev/pts/4' },
+      { key: 'M-2', target: 'codeman-bbbb2222', tty: '/dev/pts/4' },
+    ]);
+    // Takeover clears M-1..M-9 before claiming, so a killed TUI's leftovers go.
+    expect(unbinds.filter((entry) => entry.owner === undefined).map((entry) => entry.key)).toEqual([
+      'M-1',
+      'M-2',
+      'M-3',
+      'M-4',
+      'M-5',
+      'M-6',
+      'M-7',
+      'M-8',
+      'M-9',
+    ]);
+
+    await handoff.restore();
+    expect(disarmed).toBe('/dev/pts/4');
+    expect(unbinds.filter((entry) => entry.owner === '/dev/pts/4').map((entry) => entry.key)).toEqual(['M-1', 'M-2']);
+
+    binds.length = 0;
+    armed = null;
+    await beginAttachHandoff(client, 'codeman-aaaa1111', 'w1', tabs, undefined, undefined, null);
+    expect(armed).toBeNull();
+    expect(binds).toEqual([]);
+  });
+});
+
 describe('naming a session the TUI starts', () => {
   it("follows the web UI's w<n>-<case> convention", () => {
     expect(nextSessionName('mirofish', [])).toBe('w1-mirofish');
@@ -737,8 +865,11 @@ describe('the way out of an attach', () => {
     const keys = helpKeysFor(GLYPHS, { server: true, detach: 'Ctrl+A then d' });
     const detach = keys.find(([key]) => key === 'Ctrl+A then d');
     expect(detach?.[1]).toContain('detach');
-    // Degraded mode still attaches, so it still needs the way out.
-    expect(helpKeysFor(GLYPHS, { server: false }).map(([key]) => key)).toContain('Ctrl+B then d');
+    // Degraded mode still attaches, so it still needs the way out. Before the first
+    // attach that is F1: Codeman's socket has no `d` in its prefix table to name.
+    const before = helpKeysFor(GLYPHS, { server: false }).map(([key]) => key);
+    expect(before).toContain(ONE_KEY_DETACH);
+    expect(before).not.toContain('Ctrl+B then d');
   });
 });
 

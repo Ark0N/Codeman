@@ -51,10 +51,11 @@ or a server restart shifts later runs slightly. That drift is accepted rather th
 
 ## Prompts are single line
 
-This is the rule people trip over. Programmatic input into an agent session is single line
-everywhere in Codeman, because the terminal UIs these CLIs use treat a newline as submit. A
-multi-line prompt would be silently mangled, so it is **rejected** instead: the form refuses
-it, and a prompt file whose contents are multi-line fails the run with a clear message.
+This is the rule people trip over. A cron job fires with nobody watching, and the check that
+re-presses an Enter the agent ignored cannot reliably recognise a multi-line paste in the
+composer, so a multi-line prompt could sit there unsent. In `paste` mode the newlines would
+reach the agent as keys. So a multi-line prompt is **rejected**: the form refuses it, and a
+prompt file whose contents are multi-line fails the run with a clear message.
 
 For anything longer than a sentence, put the instructions in a file and make the prompt tell
 the agent to read it:

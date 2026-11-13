@@ -9,11 +9,7 @@
 
 import { getCli } from '../config/cli-registry/registry.js';
 import { expandHome } from './cli-resolver.js';
-import {
-  createCliExecutableResolver,
-  formatCliNotFoundMessage,
-  type CliResolverHost,
-} from './cli-executable-resolver.js';
+import { createCliExecutableResolver, type CliResolverHost } from './cli-executable-resolver.js';
 
 /** Common directories where the Antigravity CLI binary may be installed */
 /**
@@ -22,9 +18,6 @@ import {
  * `~` is expanded by `expandHome`; nothing else is interpreted.
  */
 const ANTIGRAVITY_SEARCH_DIRS = (): string[] => (getCli('antigravity')?.discovery.searchDirs ?? []).map(expandHome);
-
-const ANTIGRAVITY_NOT_FOUND =
-  'Antigravity CLI not found. Install with: curl -fsSL https://antigravity.google/cli/install.sh | bash';
 
 function createAntigravityResolver(host?: CliResolverHost, now?: () => number) {
   return createCliExecutableResolver({ binary: 'agy', searchDirs: ANTIGRAVITY_SEARCH_DIRS, now }, host);
@@ -52,8 +45,4 @@ export function resolveAntigravityDir(): string | null {
  */
 export function isAntigravityAvailable(): boolean {
   return resolveAntigravityDir() !== null;
-}
-
-export function getAntigravityNotFoundMessage(): string {
-  return formatCliNotFoundMessage(ANTIGRAVITY_NOT_FOUND, antigravityResolver.diagnostics());
 }

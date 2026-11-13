@@ -116,18 +116,46 @@ seconds in. Current versions confirm against the actual screen before believing 
 
 ### A session is stuck showing busy
 
-For Antigravity and Grok Build the busy and idle status is unreliable: those CLIs expose no
-hooks and declare no working line, so after launch Codeman has only generic cues to go on
-(Claude's `❯` prompt marker, a braille spinner glyph), which they may not draw. Codex,
-OpenCode, Gemini CLI, Pi and OMP get the same screen check Claude does, so a session of
-theirs that has genuinely gone quiet will settle. If it never does, interrupt it (`Ctrl+C`
-with nothing selected).
+For Grok Build the busy and idle status is unreliable: it exposes no hooks and declares no
+working line, so after launch Codeman has only generic cues to go on (Claude's `❯` prompt
+marker, a braille spinner glyph), which it may not draw. Codex, OpenCode, Gemini CLI, Pi,
+OMP and Antigravity get the same screen check Claude does, so a session of theirs that has
+genuinely gone quiet will settle. An Antigravity session waiting on a shell-command approval
+("Run this command?") shows busy until you answer it: `agy` draws nothing Codeman reads as
+"at rest" while that list is up. If a session never settles, interrupt it (`Ctrl+C` with
+nothing selected).
 
 ### The agent asks about bypass permissions every time
 
 That prompt comes from Claude Code, not Codeman. Codeman's default is to start with
 permission prompts skipped, which is what the security model is built around. If you would
 rather it prompted, change **App Settings → Agents & CLIs → Claude → Startup Mode**.
+
+### My settings were reset, or a CLI I enabled is gone
+
+Something rewrote a file in `~/.codeman/` (a hand edit, a restart that loaded a bad file, a
+test run pointed at the real data directory). If [Config Backups](Config-Backups) was on,
+which is the default, you have copies:
+
+1. Open **Settings → System → Config backups** and pick the newest backup from before the
+   change. The list shows when each was made and what it holds.
+2. **Restore** it, reload the page, and restart Codeman if the response's `restartRequired`
+   list is not empty.
+
+A reset `settings.json` also drops the backup folder setting. If you use a custom folder, enter
+it again and save before looking for the list; until then the list shows the default folder.
+After a reinstall of the data directory the old backups are unlisted because the instance has a
+new id; see [Config Backups](Config-Backups) for how to make them visible again.
+
+A backup is never dated earlier than the newest one, so if the clock was once set to a far
+future date, every later backup keeps that date. Delete the future-dated backup folder to
+return to normal dating.
+
+Without the UI: the backups are plain folders in `~/.codeman/backups/config/`
+(`cfg-YYYYMMDD-HHMMSS`); copy the file you need back over the one in `~/.codeman/`.
+
+Not covered: `state.json` (cron jobs and respawn presets live there). A backup only exists
+from the moment the feature first ran, so a reset that happened before that cannot be undone.
 
 ### Sessions vanished after a reboot
 
@@ -159,6 +187,20 @@ CODEMAN_INSTANCE=beta CODEMAN_PORT=5000 codeman web
 `codeman web -d` and `codeman service install` both refuse to start a second server on one
 data directory for exactly this reason.
 
+### `Context size has been exceeded` from a local llama.cpp model
+
+Sessions pointed at a llama.cpp or llama-swap endpoint (see [Custom Model
+Endpoints](Custom-Model-Endpoints)) fail with `500 Context size has been exceeded`, usually
+when Claude Code runs subagents, or an agent fails with `Prompt is too long` while the main
+session carries on. The server runs several parallel slots that share one pool of context,
+and every Claude Code request carries about 40K tokens of its own system prompt and tools, so
+a few concurrent requests use the pool up. Start the model with a single slot by adding
+`--parallel 1` to its launch command, or give it a context large enough that each slot holds
+40K tokens. Check the current count with `GET /props` on the server (on llama-swap,
+`GET /props?model=<id>` for a loaded model): `total_slots` is the number of slots. `n_ctx` is the
+shared context only when the slot count is automatic; with an explicit `--parallel N` it is the
+size of each slot.
+
 ## The terminal
 
 ### I cannot scroll back through history
@@ -176,8 +218,19 @@ Things to try:
 
 ### The wheel does nothing in a Codex session
 
-Codex ignores the mouse reports that forwarding would send, so Codeman does not forward
-there. Scrolling is local, and `Shift+Wheel` behaves the same way.
+Codex with mouse tracking on gets the wheel forwarded like fullscreen Claude; otherwise
+it pages its transcript or scrolls locally, while `Shift+Wheel` always uses local scrollback.
+
+### The wheel does nothing in a pi session
+
+Fullscreen pi, the default since pi 1.0.0, scrolls its own transcript, so the wheel is
+forwarded to it while it has mouse tracking on. If the wheel does nothing, turn off
+**Wheel Scrolls Local History**: that setting keeps the wheel on a local buffer pi leaves
+empty, and pi has no paging fallback. `PageUp` and `PageDown` on a keyboard still reach pi.
+
+Codeman strips pi's mouse enables, so a drag selects text in the browser rather than using
+pi's own selection or scrollbar drag. With `tuiMode: regular` pi is inline and the wheel
+scrolls local history.
 
 ### Selected text is invisible on a light skin
 
@@ -203,6 +256,20 @@ on screen has not necessarily reached the agent yet. Press Enter, or the phone t
 If you are sending input over the API instead, your payload must end with `\r` or no Enter
 is ever sent. The request still succeeds and the text sits unsubmitted in the composer. See
 [Driving Codeman From An Agent](Driving-Codeman-From-An-Agent).
+
+### Persian, Arabic or Hebrew looks wrong in the terminal
+
+The terminal is xterm.js, which does not support right-to-left text yet
+([xtermjs/xterm.js#701](https://github.com/xtermjs/xterm.js/issues/701)). It puts each
+character in its own cell from left to right, so a sentence comes out reversed, and the
+default WebGL renderer also draws the letters unjoined. Codeman cannot fix that without
+replacing the terminal.
+
+Read the answer in **Last Response** instead, where it lays out right to left, or open a
+Markdown file in the [File Viewer](Working-With-Files). On desktop, turning off **WebGL
+Renderer** in **App Settings → Terminal & Input** and reloading joins the letters, so each
+word reads correctly, but the words of a sentence still run left to right. Phones already
+use that renderer.
 
 ## Mobile
 
@@ -287,6 +354,21 @@ Start the stack with `bash docker/Start-Codeman.sh` rather than a plain `docker 
 and update: since 1.29.0 the entrypoint corrects a root-owned bind mount before dropping
 privileges. See [Running As A Service](Running-As-A-Service).
 
+### Compose: `CODEMAN_PASSWORD is still the example value "changeme"`
+
+`Start-Codeman.sh` and `Update-Codeman.sh` refuse that password before they build or stop
+anything, because the container publishes its port on every interface and holds the Docker
+socket, so whoever signs in controls Docker on the host. Set a real password in `docker/.env`
+and run the script again.
+
+### Compose: `Codeman did not come up`, or no answer after 180 seconds
+
+`Start-Codeman.sh` waits for the server after `up -d`. `did not come up` means the container
+exited, restarted or went unhealthy, and the script prints its last log lines. `has not
+answered after 180 seconds` means it is still running but silent, so on a slow host it may
+just need longer: follow it with `docker compose logs -f codeman` from `docker/`. Either way
+the script exits 1, and `--no-wait` skips the wait for scripts that check on their own.
+
 ### A remote SSH session dropped and did not come back
 
 A bounded-backoff watcher reattaches dropped sessions, and it is on by default. Intentional
@@ -311,7 +393,7 @@ On an HTTPS install, add `-k` to the curl commands and use the `https://` URL.
 Open an [issue](https://github.com/Ark0N/Codeman/issues) with:
 
 - OS and version.
-- Install method: installer, npm, or git clone.
+- Install method: installer (with or without git), npm, or git clone.
 - `codeman --version`.
 - Browser and version, if the problem is in the UI.
 - Which CLI the session was running, and its version.

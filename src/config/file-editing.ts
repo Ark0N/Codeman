@@ -8,9 +8,13 @@
  *
  * Design (docs/file-viewer-edit-plan.md):
  * - ALLOWLIST of text extensions/basenames, not a blocklist — matching the
- *   attachment-guard precedent. `svg` and `env` are deliberately absent: svg is
- *   treated as untrusted on the read side, and `.env` is sensitive-path blocked
- *   anyway; excluding them here keeps a single obvious refusal.
+ *   attachment-guard precedent. `svg` and `env` are deliberately absent from
+ *   the extension list: svg is treated as untrusted on the read side, and the
+ *   list doubles as the attachment list, which must not gain `*.env`. Dotenv
+ *   files (`.env`, `.env.*`, `*.env`) are editable by NAME in
+ *   isEditableFileName instead: the plain preview already shows them, and the
+ *   routes pass `allowDotenv` to the sensitive-path check, which keeps every
+ *   other credential pattern.
  * - The `.git/` subtree is denied outright: `.git/hooks/*` is code execution and
  *   a corrupted index looks unrecoverable to a user who wanted to fix a typo.
  * - EOL helpers exist because a browser <textarea> normalizes to LF; the server
@@ -116,6 +120,10 @@ export const EDITABLE_BASENAMES: ReadonlySet<string> = new Set([
 export function isEditableFileName(fileName: string): boolean {
   const lower = fileName.toLowerCase();
   if (EDITABLE_BASENAMES.has(lower)) return true;
+  // Dotenv in every spelling, by name: `.env.local`'s extension is `local`, and
+  // `env` must stay off EDITABLE_EXTENSIONS, which is also the cross-workspace
+  // attachment list (TEXT_ATTACHMENT_EXTENSIONS) that never accepted `*.env`.
+  if (lower.endsWith('.env') || lower.startsWith('.env.')) return true;
   const dot = lower.lastIndexOf('.');
   // No extension (or a bare dotfile like `.bashrc`): only the basename list applies.
   if (dot <= 0) return false;

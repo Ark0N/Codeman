@@ -17,7 +17,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyCookie from '@fastify/cookie';
 import fastifyMultipart from '@fastify/multipart';
-import { dirname, join } from 'node:path';
+import { dirname, extname, join } from 'node:path';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { registryFilePath, reloadCliRegistry } from '../../src/config/cli-registry/registry.js';
 import fs, { mkdtemp, rm, mkdir, writeFile, readFile, readdir, symlink } from 'node:fs/promises';
@@ -25,7 +25,8 @@ import { tmpdir } from 'node:os';
 import { createMockRouteContext, type MockRouteContext } from '../mocks/index.js';
 import { installRouteErrorHandler } from '../../src/web/route-error-handler.js';
 import { ApiErrorCode, httpStatusForErrorCode } from '../../src/types.js';
-import { Session } from '../../src/session.js';
+import { GuardedInputBusyError, Session } from '../../src/session.js';
+import { agentInbox } from '../../src/web/agent-inbox.js';
 
 // Mock execFile so the send-key route's `tmux` invocation is observable (not run for real).
 const { execFile } = vi.hoisted(() => ({ execFile: vi.fn() }));
@@ -262,6 +263,33 @@ describe('session-routes', () => {
       it('falls back to a line feed for a mode the registry does not know', async () => {
         expect(await sentHex('no-such-cli', 'S-Enter')).toEqual(['0a']);
       });
+    });
+
+    it('answers 409 CONFLICT, without an error log, when a guarded submit cannot hold the key', async () => {
+      execFile.mockReset();
+      const session = harness.ctx._session as unknown as {
+        performAuxiliaryInput: (op: () => Promise<void>) => Promise<void>;
+      };
+      const original = session.performAuxiliaryInput;
+      session.performAuxiliaryInput = async () => {
+        throw new GuardedInputBusyError();
+      };
+      const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        const res = await harness.app.inject({
+          method: 'POST',
+          url: '/api/sessions/test-session-1/send-key',
+          payload: { key: 'S-Enter' },
+        });
+        expect(res.statusCode).toBe(409);
+        expect(res.json()).toMatchObject({ success: false, errorCode: 'CONFLICT' });
+        expect(res.json().error).toMatch(/guarded submit is in progress.*nothing was written/);
+        expect(errors).not.toHaveBeenCalled();
+        expect(execFile).not.toHaveBeenCalled();
+      } finally {
+        errors.mockRestore();
+        session.performAuxiliaryInput = original;
+      }
     });
 
     it('rejects keys outside the hex allowlist without invoking tmux', async () => {
@@ -858,12 +886,39 @@ describe('session-routes', () => {
       for (const [name, bytes] of [
         ['fake.pdf', png], // PNG bytes under a PDF name
         ['fake.docx', pdf], // a PDF under an OOXML name
-        ['binary.txt', Buffer.from('hello\u0000world')], // a NUL byte is never text
-        ['latin1.csv', Buffer.from([0x61, 0x2c, 0xe9, 0x0a])], // not UTF-8
       ] as const) {
         const res = await upload(name, 'application/octet-stream', bytes);
         expect(res.statusCode, name).toBe(415);
-        expect(JSON.parse(res.body).error, name).toMatch(/do not match declared type/);
+        expect(JSON.parse(res.body).error, name).toBe(`File bytes do not match declared type ${extname(name)}`);
+      }
+      expect(await readdir(workDir)).toEqual([]);
+      await rm(workDir, { recursive: true });
+    });
+
+    it('refuses non-UTF-8 text by naming the encoding, UTF-16 when a BOM says so', async () => {
+      const workDir = await mkdtemp(join(tmpdir(), 'codeman-doc-'));
+      harness.ctx._session.workingDir = workDir;
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const notUtf8 = (ext: string) => `This ${ext} file is not UTF-8 text; save it as UTF-8 and attach it again`;
+      const utf16 = (ext: string) => `This ${ext} file is UTF-16 text, not UTF-8; save it as UTF-8 and attach it again`;
+      try {
+        for (const [name, bytes, error, reason] of [
+          // Excel "Unicode Text" / Notepad "Unicode": UTF-16LE with its BOM.
+          ['export.txt', Buffer.from('\ufeffa\tb\n', 'utf16le'), utf16('.txt'), 'utf16-bom'],
+          ['export.csv', Buffer.from([0xfe, 0xff, 0x00, 0x61, 0x00, 0x0a]), utf16('.csv'), 'utf16-bom'], // UTF-16BE
+          ['binary.txt', Buffer.from('hello\u0000world'), notUtf8('.txt'), 'nul-byte'], // NUL, no BOM
+          ['latin1.csv', Buffer.from('a,René\n', 'latin1'), notUtf8('.csv'), 'not-utf8'], // Excel's default CSV
+        ] as const) {
+          warn.mockClear();
+          const res = await upload(name, 'application/octet-stream', bytes);
+          expect(res.statusCode, name).toBe(415);
+          expect(JSON.parse(res.body).error, name).toBe(error);
+          expect(String(warn.mock.calls[0]?.[0]), name).toMatch(
+            new RegExp(`declaredExt=\\S+ size=\\d+ reason=${reason}$`)
+          );
+        }
+      } finally {
+        warn.mockRestore();
       }
       expect(await readdir(workDir)).toEqual([]);
       await rm(workDir, { recursive: true });
@@ -956,6 +1011,27 @@ describe('session-routes', () => {
       // with no broadcast, so other open tabs kept showing the retired row until
       // their next unrelated fetch.
       expect(harness.ctx.broadcast).toHaveBeenCalledWith('session:deleted', { id: 'ghost-session' });
+      // Its stored edit history (diffs can hold secrets) goes with the record.
+      expect(harness.ctx.forgetEditHistory).toHaveBeenCalledWith('ghost-session');
+    });
+
+    it('keeps the edit history of a pinned persisted-only session whose record is only demoted', async () => {
+      vi.mocked(harness.ctx.store.getSession).mockReturnValueOnce({ id: 'pinned-ghost', owner: undefined } as never);
+      vi.mocked(harness.ctx.store.demoteOrRemoveSession).mockReturnValueOnce('preserved');
+      const res = await harness.app.inject({ method: 'DELETE', url: '/api/sessions/pinned-ghost' });
+      expect(res.statusCode).toBe(200);
+      expect(harness.ctx.forgetEditHistory).not.toHaveBeenCalled();
+    });
+
+    it('a persisted-only delete drops the agent inbox the detach kept', async () => {
+      // Detach (killMux=false) keeps the inbox; retiring the row afterwards is the delete.
+      agentInbox.resetForTests();
+      agentInbox.post('ghost-session', null, 'mail from before the detach');
+      vi.mocked(harness.ctx.store.getSession).mockReturnValueOnce({ id: 'ghost-session', owner: undefined } as never);
+      const res = await harness.app.inject({ method: 'DELETE', url: '/api/sessions/ghost-session' });
+      expect(res.statusCode).toBe(200);
+      expect(agentInbox.pendingCount('ghost-session')).toBe(0);
+      agentInbox.resetForTests();
     });
 
     it('404s a persisted-only session id the state store does not recognize either', async () => {
@@ -1156,6 +1232,93 @@ describe('session-routes', () => {
       expect(next.statusCode).toBe(200);
 
       expect(session.writeBuffer).toEqual(['prompt', '\r']);
+    });
+
+    it('refuses tagged input with 409 and gives the seq back while a guarded submit holds the input lease', async () => {
+      const url = `/api/sessions/${harness.ctx._sessionId}/input`;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const session = harness.ctx.sessions.get(harness.ctx._sessionId) as any;
+      session.writeBuffer.length = 0;
+      const post = (payload: unknown) => harness.app.inject({ method: 'POST', url, payload });
+      session.guardedInputHeld = true;
+      for (const payload of [
+        { input: 'tagged', seq: 7, clientId: 'cid-guard' },
+        { input: 'prompt\r', useMux: true, seq: 1, clientId: 'cid-guard-mux' },
+      ]) {
+        const refused = await post(payload);
+        expect(refused.statusCode, JSON.stringify(payload)).toBe(409);
+        expect(refused.json()).toMatchObject({ success: false, errorCode: 'CONFLICT' });
+        expect(refused.json().error).toMatch(/guarded submit is in progress.*nothing was written/);
+      }
+      expect(session.writeBuffer).toEqual([]);
+      expect(session.heldGuardedInput).toEqual([]);
+      // Once the lease is released the browser's retry of the same seq is applied, not
+      // rejected as a duplicate.
+      session.releaseGuardedLease();
+      expect((await post({ input: 'tagged', seq: 7, clientId: 'cid-guard' })).statusCode).toBe(200);
+      expect(session.writeBuffer).toEqual(['tagged']);
+    });
+
+    it('holds an untagged raw POST during a guarded submit and writes it once the lease is released', async () => {
+      // The phone accessory keys and the Stop button's Ctrl+C are untagged, fire-and-forget
+      // POSTs that never read the answer, so a 409 here silently lost the tap.
+      const url = `/api/sessions/${harness.ctx._sessionId}/input`;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const session = harness.ctx.sessions.get(harness.ctx._sessionId) as any;
+      session.writeBuffer.length = 0;
+      session.guardedInputHeld = true;
+      try {
+        for (const input of ['\x03', '\x1b[A']) {
+          const res = await harness.app.inject({ method: 'POST', url, payload: { input } });
+          expect(res.statusCode, JSON.stringify(input)).toBe(200);
+          expect(res.json()).toMatchObject({ success: true });
+        }
+        expect(session.writeBuffer).toEqual([]);
+        session.releaseGuardedLease();
+        expect(session.writeBuffer).toEqual(['\x03', '\x1b[A']);
+      } finally {
+        session.releaseGuardedLease();
+      }
+    });
+
+    it('lets untagged mux input wait its own turn behind the lease instead of refusing it', async () => {
+      const url = `/api/sessions/${harness.ctx._sessionId}/input`;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const session = harness.ctx.sessions.get(harness.ctx._sessionId) as any;
+      session.writeBuffer.length = 0;
+      const post = (payload: unknown) => harness.app.inject({ method: 'POST', url, payload });
+      session.guardedInputHeld = true;
+      try {
+        // Fire-and-forget `useMux`: answered at once, written in its turn.
+        expect((await post({ input: 'x', useMux: true })).statusCode).toBe(200);
+        // A plain prompt's mux write is awaited, so it answers once written.
+        const prompt = post({ input: 'prompt\r' });
+        await vi.waitFor(() => expect(session.heldGuardedInput).toHaveLength(2));
+        expect(session.writeBuffer).toEqual([]);
+        session.releaseGuardedLease();
+        expect((await prompt).statusCode).toBe(200);
+        expect(session.writeBuffer).toEqual(['x', 'prompt\r']);
+      } finally {
+        session.releaseGuardedLease();
+      }
+    });
+
+    it('refuses an untagged raw POST with 409 only when the hold queue is full', async () => {
+      const url = `/api/sessions/${harness.ctx._sessionId}/input`;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const session = harness.ctx.sessions.get(harness.ctx._sessionId) as any;
+      session.writeBuffer.length = 0;
+      session.guardedInputHeld = true;
+      session.holdForGuardedLease = () => 'full';
+      try {
+        const res = await harness.app.inject({ method: 'POST', url, payload: { input: '\x03' } });
+        expect(res.statusCode).toBe(409);
+        expect(res.json()).toMatchObject({ success: false, errorCode: 'CONFLICT' });
+        expect(session.writeBuffer).toEqual([]);
+      } finally {
+        delete session.holdForGuardedLease;
+        session.releaseGuardedLease();
+      }
     });
 
     it('always applies untagged input (curl/legacy, no dedup)', async () => {
@@ -2584,6 +2747,26 @@ describe('session-routes', () => {
       expect(row).toBeDefined();
       expect(row.workingDir).toBe(realDir);
       expect(row.workingDir).not.toBe(home);
+    });
+
+    it("resumes a renamed case's conversation in the new folder, not the stale cwd in the transcript", async () => {
+      const home = process.env.HOME as string;
+      const realDir = join(home, 'renamed-case');
+      await mkdir(realDir, { recursive: true });
+
+      const projectKey = realDir.replace(/[^a-zA-Z0-9]/g, '-');
+      const projDir = join(home, '.claude', 'projects', projectKey);
+      await mkdir(projDir, { recursive: true });
+
+      const sessionId = '33333333-3333-3333-3333-333333333333';
+      const line =
+        JSON.stringify({ type: 'user', cwd: join(home, 'old-case-name'), message: { role: 'user', content: 'hi' } }) +
+        '\n';
+      await writeFile(join(projDir, `${sessionId}.jsonl`), line + '#'.repeat(4200 - line.length));
+
+      const res = await harness.app.inject({ method: 'GET', url: `/api/history/sessions?projectKey=${projectKey}` });
+      const row = JSON.parse(res.body).data.sessions.find((s: { sessionId: string }) => s.sessionId === sessionId);
+      expect(row.workingDir).toBe(realDir);
     });
 
     it('prefers the dotdir over a same-named non-dot sibling, and never emits a "//" path', async () => {

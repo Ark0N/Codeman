@@ -101,12 +101,8 @@ Object.assign(CodemanApp.prototype, {
       if (!this.activeSessionId) return;
       if (!e.dataTransfer || !e.dataTransfer.files.length) return;
 
-      const mediaFiles = Array.from(e.dataTransfer.files).filter((f) => this._promptAttachKind(f));
-      if (mediaFiles.length === 0) {
-        this.showToast('Unsupported file type', 'error');
-        return;
-      }
-      this._uploadAndInsertImages(mediaFiles);
+      const mediaFiles = this._admitPromptAttachments(Array.from(e.dataTransfer.files));
+      if (mediaFiles.length > 0) this._uploadAndInsertImages(mediaFiles);
     });
   },
 
@@ -122,11 +118,8 @@ Object.assign(CodemanApp.prototype, {
    *  Without the overlay (local echo off) there is nothing to buffer into, so the
    *  text goes straight out. The trailing space keeps the next word off the path. */
   async _attachFromToolbar(files, sessionId) {
-    const media = files.filter((f) => this._promptAttachKind(f));
-    if (media.length === 0) {
-      this.showToast('Unsupported file type', 'error');
-      return;
-    }
+    const media = this._admitPromptAttachments(files);
+    if (media.length === 0) return;
     if (!sessionId) return; // no captured session: refuse rather than guess at one
     const paths = await this._uploadAndInsertImages(media, { insert: false, sessionId });
     if (paths.length === 0) return;
@@ -200,11 +193,16 @@ Object.assign(CodemanApp.prototype, {
   // the result for images. Works on plain HTTP (no Clipboard API needed).
   // `target` names the terminal the Ctrl+V came from and its session; both
   // default to the primary pane. A second terminal (the split pane) passes its
-  // own, so text pastes into THAT xterm and images upload to THAT session.
+  // own. Images upload to THAT session. Plain text goes to that pane's session
+  // as a Codeman-built bracketed-paste frame: the terminal is only refocused
+  // and receives input(framed). onData delivers the frame; it is not written
+  // into the xterm buffer. `target.keyEvent` is the Ctrl+V keydown itself,
+  // which the trap cancels when execCommand('paste') has already delivered.
   _handleImagePaste(target = {}) {
     const self = this;
     const terminal = target.terminal || this.terminal;
     const sessionId = target.sessionId || this.activeSessionId;
+    const keyEvent = target.keyEvent;
 
     // Create a hidden contenteditable div to receive the paste
     const trap = document.createElement('div');
@@ -231,14 +229,16 @@ Object.assign(CodemanApp.prototype, {
       pasteConsumed = true;
 
       // Check for images, videos or documents in clipboard items
-      var imageFiles = [];
+      var pastedFiles = [];
       var items = e.clipboardData && e.clipboardData.items;
       if (items) {
         for (var i = 0; i < items.length; i++) {
           var blob = items[i].getAsFile();
-          if (blob && self._promptAttachKind(blob)) imageFiles.push(blob);
+          if (blob) pastedFiles.push(blob);
         }
       }
+      var text = e.clipboardData ? e.clipboardData.getData('text/plain') : '';
+      var imageFiles = self._admitPromptAttachments(pastedFiles, { textPasted: !!text });
 
       // Clean up the trap
       setTimeout(function() {
@@ -249,21 +249,40 @@ Object.assign(CodemanApp.prototype, {
 
       if (imageFiles.length > 0) {
         self._uploadAndInsertImages(imageFiles, { sessionId: sessionId });
-      } else {
-        // No image -- route text through xterm's paste() so bracketed-paste
-        // markers (CSI 200~ ... CSI 201~) survive when the inner application
-        // has enabled bracketed-paste mode (Claude Code does). Sending text
-        // via raw sendInput() strips those markers and makes pasted input
-        // indistinguishable from typed input, weakening the CLI's
-        // prompt-injection defenses.
-        var text = e.clipboardData ? e.clipboardData.getData('text/plain') : '';
-        if (text && terminal) terminal.paste(text);
+      } else if (text && terminal) {
+        // No image. xterm's paste() emits CSI 200~/201~ only while its DECSET
+        // 2004 mirror is on, and a terminal replay clears that mirror, so the
+        // markers never arrive and a copied newline submits (#716). Build the
+        // frame here and hand it to this terminal through input(). That fires
+        // onData as user input (scroll to the bottom, clear the selection).
+        // The main pane's bracketed-paste branch and a tile's _onTerminalData
+        // deliver it, including the local-echo flush (#219). Do not also write
+        // the frame from here. Markers are stripped until none is left: one pass over
+        // `ESC[20` + `ESC[201~` + `1~` leaves an `ESC[201~` that would end the frame early.
+        let body = text;
+        while (/\x1b\[20[01]~/.test(body)) body = body.replace(/\x1b\[20[01]~/g, '');
+        body = body.replace(/\r?\n/g, '\r');
+        terminal.input(`\x1b[200~${body}\x1b[201~`);
       }
     });
 
     // Trigger the browser's native paste via execCommand
     // (this fires the paste event on our focused trap element)
     document.execCommand('paste');
+
+    // Firefox dispatches the execCommand paste synchronously, inside the call
+    // above, and then delivers the key's own paste as a SEPARATE task about
+    // 10 ms later. That second event races the setTimeout above that removes
+    // the trap and refocuses the terminal. When the timer wins, the second
+    // paste lands on xterm's textarea, xterm's own paste handler sends the
+    // clipboard again, and the one-shot flag never sees it. That race is why
+    // Ctrl+V still pasted twice only sometimes. Once execCommand has delivered
+    // a paste, cancel the keydown so the browser never issues its own.
+    // Chromium and WebKit refuse the command and dispatch nothing here, so
+    // they keep the default action, which delivers their only paste event.
+    if (pasteConsumed && keyEvent && typeof keyEvent.preventDefault === 'function') {
+      keyEvent.preventDefault();
+    }
   },
 
   /** What a pick or a paste may upload: 'image', 'video' for the camera roll's
@@ -288,6 +307,22 @@ Object.assign(CodemanApp.prototype, {
       return 'document';
     }
     return null;
+  },
+
+  /** The files of a pick, drop or paste that _promptAttachKind admits, telling the
+   *  user about any it refuses: all of them is "Unsupported file type", some of
+   *  them a count of what was skipped while the rest still upload. A clipboard
+   *  paste that also carries text passes `textPasted`: when none of its files is
+   *  admitted the text is pasted instead, so that case stays quiet. */
+  _admitPromptAttachments(files, { textPasted = false } = {}) {
+    const admitted = files.filter((f) => this._promptAttachKind(f));
+    const skipped = files.length - admitted.length;
+    if (skipped > 0 && admitted.length > 0) {
+      this.showToast(`${skipped} file${skipped > 1 ? 's' : ''} skipped: unsupported type`, 'info');
+    } else if (skipped > 0 && !textPasted) {
+      this.showToast('Unsupported file type', 'error');
+    }
+    return admitted;
   },
 
   // Max images accepted in one batch (paste / drop / mobile picker). Each is

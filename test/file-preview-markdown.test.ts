@@ -146,11 +146,14 @@ function loadApp(prefs: Record<string, string> = {}) {
   app.$ = (id: string) => document.getElementById(id);
   app._resetFilePreviewEdit = () => {};
   app._isExternalPreviewPath = () => false;
+  app._isOutsideWorktreePath = () => false;
+  app.sessions = new Map();
   app.formatFileSize = (n: number) => `${n} B`;
   app.showToast = vi.fn();
   app.filePreviewContent = '';
   app._renderMarkdown = vi.fn(() => MARKDOWN_HTML);
   app._linkifyFilePaths = vi.fn();
+  app._applyBlockDirection = vi.fn();
   app._bindResponseViewerInteractions = vi.fn();
 
   const byId = (id: string) => document.getElementById(id) as HTMLButtonElement;
@@ -177,6 +180,11 @@ describe('file viewer rendered markdown', () => {
     expect(app._renderMarkdown).toHaveBeenCalledWith(MD_CONTENT, { breaks: false });
     // Identity, not deep equality: DOM nodes are compared by reference here.
     expect(app._linkifyFilePaths.mock.calls[0][0]).toBe(doc);
+    // After the linkifier: a dir="auto" block re-resolves on every insertion under it (#715).
+    expect(app._applyBlockDirection.mock.calls[0][0]).toBe(doc);
+    expect(app._applyBlockDirection.mock.invocationCallOrder[0]).toBeGreaterThan(
+      app._linkifyFilePaths.mock.invocationCallOrder[0]
+    );
     expect(app._bindResponseViewerInteractions.mock.calls[0][0]).toBe(body);
     // The source stays what Copy copies.
     expect(app.filePreviewContent).toBe(MD_CONTENT);
@@ -462,6 +470,14 @@ describe('file viewer markdown line breaks', () => {
     const chatPara = message.querySelector('.rv-text p')!;
     expect(chatPara.querySelectorAll('br')).toHaveLength(1);
     expect(chatPara.textContent).toBe(WRAPPED.replace('\n', ''));
+  });
+
+  it('lets a document read right to left through the shipped viewer (#715)', async () => {
+    const app = loadShippingApp('سلام، این یک تست است.\n');
+
+    await app.openFilePreview('docs/README.md', 's1');
+
+    expect(document.querySelector('#filePreviewBody .file-preview-md p')?.getAttribute('dir')).toBe('auto');
   });
 });
 

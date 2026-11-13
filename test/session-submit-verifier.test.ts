@@ -347,6 +347,20 @@ describe('Session: a composer send is checked like any other prompt', () => {
     expect(muxEnters).toBe(0);
   });
 
+  it('an API prompt of several lines is recognised by the stand-in Claude Code draws for it', async () => {
+    screen = pane('❯\xa0[Pasted text #1 +3 lines]');
+    const session = makeSession();
+    // One sendInput call carries the text and its Enter; a bare `\r` is a re-press.
+    await session.writeViaMux('\nfirst of four\nsecond of four\nthird of four\nfourth of four\r');
+    expect(muxEnters).toBe(0);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(muxEnters).toBe(1);
+    // A stand-in for another line count is someone else's paste: the check ends there.
+    screen = pane('❯\xa0[Pasted text #2 +5 lines]');
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(muxEnters).toBe(1);
+  });
+
   it('typing in the terminal arms nothing', async () => {
     screen = pane('❯\xa0hi');
     const session = makeSession();
