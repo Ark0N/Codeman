@@ -76,7 +76,11 @@ export const SETENV_PROFILE_NAMES = [
 export type LauncherProfileName = (typeof LAUNCHER_PROFILE_NAMES)[number];
 export type SetenvProfileName = (typeof SETENV_PROFILE_NAMES)[number];
 
-/** True when `name` is a predictive-echo profile this build actually implements. */
+/**
+ * True when `name` is a predictive-echo profile this build actually implements.
+ * Nothing calls it yet; it stays beside the registry it reads.
+ * @knipignore
+ */
 export function isKnownPredictProfile(name: string | undefined): boolean {
   return name !== undefined && Object.prototype.hasOwnProperty.call(PREDICT_PROFILES, name);
 }

@@ -8,8 +8,8 @@ This guide documents the browser testing infrastructure, framework comparison re
 # Run standalone benchmark (recommended - avoids vitest hook issues)
 npx tsx scripts/browser-comparison.mjs
 
-# Run existing browser E2E tests
-npm test -- test/browser-e2e.test.ts
+# Run the browser suite (Playwright; the files are listed in config/test-suites.ts)
+npm run test:browser
 ```
 
 ## Framework Comparison Results
@@ -67,7 +67,7 @@ We tested three browser automation frameworks against the Codeman web UI:
    });
    ```
 
-3. **Use the existing browser-e2e.test.ts pattern** which uses agent-browser CLI commands via `execSync` (avoids async hook issues)
+3. **Drive agent-browser through its CLI** with `execSync`, as `scripts/browser-comparison.mjs` does (avoids async hook issues)
 
 ## Test File Structure
 
@@ -93,10 +93,8 @@ fixed ports 3180-3182.
 
 | File | Framework | Status |
 |------|-----------|--------|
-| `test/browser-e2e.test.ts` | agent-browser | ✅ Working |
-| `test/browser-playwright.test.ts` | Playwright | ⚠️ Vitest hook issues |
-| `test/browser-puppeteer.test.ts` | Puppeteer | ⚠️ Vitest hook issues |
-| `test/browser-agent.test.ts` | agent-browser | ⚠️ Vitest hook issues |
+| `test/*.browser.test.ts` and the other files in `BROWSER_TEST_GLOBS` (`config/test-suites.ts`) | Playwright | ✅ `npm run test:browser` |
+| `test/mobile/**` | Playwright | ✅ `npm run test:mobile` |
 | `scripts/browser-comparison.mjs` | All three | ✅ Working (standalone) |
 
 ## Framework-Specific Patterns
