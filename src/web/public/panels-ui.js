@@ -1,6 +1,6 @@
 /**
  * @fileoverview Subagent panel (discovery, detail view, kill), subagent parent tracking,
- * agent teams (tasks panel, teammate badges, terminals), project insights (bash tool tracking),
+ * agent teams (teammate badges), project insights (bash tool tracking),
  * file browser (directory tree, preview), log viewer (floating file streamers),
  * image popups (auto-popup for screenshots), mux sessions, monitor panel,
  * token statistics, toast notifications, and system stats.
@@ -177,7 +177,7 @@ Object.assign(CodemanApp.prototype, {
     this.findParentSessionForSubagent(data.agentId);
 
     // Subagent windows are no longer auto-opened on discovery.
-    // Users can open them manually from the monitor panel or via openAllActiveSubagentWindows().
+    // Users open them from the subagents panel.
 
     // Ensure connection lines are updated after window is created and DOM settles
     requestAnimationFrame(() => {
@@ -2135,16 +2135,10 @@ Object.assign(CodemanApp.prototype, {
         // Show window (unless it was minimized by user)
         if (!windowInfo.minimized) {
           windowInfo.element.style.display = 'flex';
-          // Lazily re-create teammate terminal if it was disposed when hidden
-          if (windowInfo._lazyTerminal) {
-            this._restoreTeammateTerminalFromLazy(agentId);
-          }
         }
         windowInfo.hidden = false;
       } else {
         // Hide window (but don't close it)
-        // Dispose teammate terminal to free memory while hidden on inactive tab
-        this._disposeTeammateTerminalForMinimize(agentId);
         windowInfo.element.style.display = 'none';
         windowInfo.hidden = true;
       }
@@ -2210,23 +2204,12 @@ Object.assign(CodemanApp.prototype, {
       windowData.element.remove();
       this.subagentWindows.delete(agentId);
     }
-    // Clean up teammate terminal if present
-    const termData = this.teammateTerminals.get(agentId);
-    if (termData) {
-      if (termData.resizeObserver) {
-        termData.resizeObserver.disconnect();
-      }
-      if (termData.terminal) {
-        try { termData.terminal.dispose(); } catch {}
-      }
-      this.teammateTerminals.delete(agentId);
-    }
   },
 
   // Debounced wrapper — coalesces rapid subagent events (tool_call, progress,
   // message) into a single DOM update per 100ms per agent window.
   scheduleSubagentWindowRender(agentId) {
-    // Skip DOM updates for windows with lazy (disposed) terminals — they're minimized
+    // Skip DOM updates for minimized windows
     const windowData = this.subagentWindows.get(agentId);
     if (windowData?.minimized) return;
 
@@ -2241,12 +2224,6 @@ Object.assign(CodemanApp.prototype, {
   },
 
   renderSubagentWindowContent(agentId) {
-    // Skip if this window has a live terminal (don't overwrite xterm with activity HTML)
-    if (this.teammateTerminals.has(agentId)) return;
-    // Skip if this window has a lazy (disposed) terminal — it will be re-created on restore
-    const windowData = this.subagentWindows.get(agentId);
-    if (windowData?._lazyTerminal) return;
-
     const body = document.getElementById(`subagent-window-body-${agentId}`);
     if (!body) return;
 
@@ -2398,141 +2375,6 @@ Object.assign(CodemanApp.prototype, {
   // ═══════════════════════════════════════════════════════════════
   // Agent Teams
   // ═══════════════════════════════════════════════════════════════
-
-  /** Initialize an xterm.js terminal for a teammate's tmux pane */
-  initTeammateTerminal(agentId, paneInfo, windowElement) {
-    const body = windowElement.querySelector('.subagent-window-body');
-    if (!body) return;
-
-    // Clear the activity log content
-    body.innerHTML = '';
-    body.classList.add('teammate-terminal-body');
-    windowElement.classList.add('has-terminal');
-
-    const sessionId = paneInfo.sessionId;
-
-    // Buffer incoming terminal data until xterm is ready
-    const pendingData = [];
-    this.teammateTerminals.set(agentId, {
-      terminal: null,
-      fitAddon: null,
-      paneTarget: paneInfo.paneTarget,
-      sessionId,
-      resizeObserver: null,
-      pendingData,
-    });
-
-    // Defer terminal creation to next frame so the body element has computed dimensions
-    requestAnimationFrame(() => {
-      // Safety: if window was closed before we got here, bail out
-      if (!document.contains(body)) {
-        this.teammateTerminals.delete(agentId);
-        return;
-      }
-
-      const fontSettings = this.loadAppSettingsFromStorage?.() || {};
-      const terminal = new Terminal({
-        theme: { ...window.codemanCurrentXtermTheme() },
-        minimumContrastRatio: window.codemanCurrentSkinIsLight() ? 4.5 : 1,
-        fontFamily: window.CodemanTerminalFont.resolve(fontSettings.terminalFontFamily),
-        // A pane opened after a weight change must match the main terminal;
-        // one open across the change is repainted by applyTerminalFontWeights().
-        ...window.CodemanTerminalFont.resolveWeights(fontSettings),
-        fontSize: 12,
-        lineHeight: 1.2,
-        cursorBlink: true,
-        cursorStyle: 'block',
-        scrollback: DEFAULT_SCROLLBACK,
-        allowTransparency: true,
-        allowProposedApi: true,
-      });
-
-      const fitAddon = new FitAddon.FitAddon();
-      terminal.loadAddon(fitAddon);
-
-      if (typeof Unicode11Addon !== 'undefined') {
-        try {
-          const unicode11Addon = new Unicode11Addon.Unicode11Addon();
-          terminal.loadAddon(unicode11Addon);
-          terminal.unicode.activeVersion = '11';
-        } catch (_e) { /* Unicode11 addon failed */ }
-      }
-
-      try {
-        terminal.open(body);
-      } catch (err) {
-        console.warn('[TeammateTerminal] Failed to open terminal:', err);
-        this.teammateTerminals.delete(agentId);
-        return;
-      }
-
-      // Ctrl+Z (SIGTSTP/job-control suspend): a teammate/subagent pane is always
-      // running an agent CLI (Task-tool dispatched, never a plain shell), so
-      // unlike the main terminal's mode-gated trap this one is unconditional.
-      // Mirrors the main terminal's guard in terminal-ui.js's
-      // attachCustomKeyEventHandler — case-insensitive so Caps Lock (which
-      // flips ev.key to 'Z' without setting shiftKey) can't slip a suspend past it.
-      terminal.attachCustomKeyEventHandler((ev) => {
-        if (
-          ev.type === 'keydown' &&
-          ev.key.toLowerCase() === 'z' &&
-          ev.ctrlKey &&
-          !ev.altKey &&
-          !ev.metaKey &&
-          !ev.shiftKey
-        ) {
-          ev.preventDefault();
-          return false;
-        }
-        return true;
-      });
-
-      // Wait for terminal renderer to fully initialize before any writes.
-      // xterm.js needs a few frames after open() before write() is safe.
-      setTimeout(() => {
-        try { fitAddon.fit(); } catch {}
-
-        // Fetch initial pane buffer
-        fetch(`/api/sessions/${sessionId}/teammate-pane-buffer/${encodeURIComponent(paneInfo.paneTarget)}`)
-          .then(r => r.json())
-          .then(resp => {
-            if (resp.success && resp.data?.buffer) {
-              try { terminal.write(resp.data.buffer); } catch {}
-            }
-          })
-          .catch(err => console.error('[TeammateTerminal] Failed to fetch buffer:', err));
-
-        // Flush any data that arrived while terminal was initializing
-        for (const chunk of pendingData) {
-          try { terminal.write(chunk); } catch {}
-        }
-        pendingData.length = 0;
-      }, 100);
-
-      // Forward keyboard input to the teammate's pane
-      terminal.onData((data) => {
-        fetch(`/api/sessions/${sessionId}/teammate-pane-input`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ paneTarget: paneInfo.paneTarget, input: data }),
-        }).catch(err => console.error('[TeammateTerminal] Failed to send input:', err));
-      });
-
-      // Resize observer to refit terminal when window is resized
-      const resizeObserver = new ResizeObserver(() => {
-        requestAnimationFrame(() => { try { fitAddon.fit(); } catch {} });
-      });
-      resizeObserver.observe(body);
-
-      // Update the stored entry with the real terminal
-      const entry = this.teammateTerminals.get(agentId);
-      if (entry) {
-        entry.terminal = terminal;
-        entry.fitAddon = fitAddon;
-        entry.resizeObserver = resizeObserver;
-      }
-    });
-  },
 
   /** Check if a subagent is a teammate and return its info */
   getTeammateInfo(agent) {

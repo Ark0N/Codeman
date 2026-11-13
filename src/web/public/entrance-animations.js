@@ -58,7 +58,7 @@
  * @dependency app.js (tab render pipeline), subagent-windows.js (window + line hooks),
  *   tile-grid.js (tile mount, reveal and still-copy hooks)
  * @dependency constants.js (escapeHtml)
- * @loadorder 12.6 of 16, after webview-tabs.js, before ralph-wizard.js
+ * @loadorder 12.6 of 16, after webview-tabs.js, before api-client.js
  */
 
 /** Tab entrance styles. `key` doubles as the `data-tab-anim` value. */

@@ -11,7 +11,6 @@
  *   panels-ui.js     — Subagent panel, agent teams, project insights, file browser, log viewer,
  *                       image popups, monitor, token stats, toast, system stats
  *   session-ui.js    — Quick start, session options modal, case settings, mobile case picker
- *   ralph-wizard.js  — Ralph Loop wizard modal
  *   api-client.js    — API helper methods (fetch wrappers)
  *   subagent-windows.js — Floating subagent terminal windows
  *
@@ -298,13 +297,6 @@ const _SSE_HANDLER_MAP = [
   [SSE_EVENTS.TUNNEL_QR_ROTATED, '_onTunnelQrRotated'],
   [SSE_EVENTS.TUNNEL_QR_REGENERATED, '_onTunnelQrRegenerated'],
   [SSE_EVENTS.TUNNEL_QR_AUTH_USED, '_onTunnelQrAuthUsed'],
-
-  // Plan orchestration
-  [SSE_EVENTS.PLAN_SUBAGENT, '_onPlanSubagent'],
-  [SSE_EVENTS.PLAN_PROGRESS, '_onPlanProgress'],
-  [SSE_EVENTS.PLAN_STARTED, '_onPlanStarted'],
-  [SSE_EVENTS.PLAN_CANCELLED, '_onPlanCancelled'],
-  [SSE_EVENTS.PLAN_COMPLETED, '_onPlanCompleted'],
 
   // Orchestrator loop
   [SSE_EVENTS.ORCHESTRATOR_STATE_CHANGED, '_onOrchestratorStateChanged'],
@@ -871,25 +863,10 @@ class CodemanApp {
     // Once set, never recalculated. Persisted to localStorage and server.
     this.subagentParentMap = new Map();
 
-    // Teammate tmux pane terminals (Agent Teams feature)
-    this.teammatePanesByName = new Map(); // Map<name, { paneTarget, sessionId, color }>
-    this.teammateTerminals = new Map(); // Map<agentId, { terminal, fitAddon, paneTarget, sessionId, resizeObserver }>
-
     this.terminalBufferCache = new Map(); // Map<sessionId, string> — client-side cache for instant tab re-visits (max 20)
 
     this.ralphStatePanelCollapsed = true; // Default to collapsed
     this.ralphClosedSessions = new Set(); // Sessions where user explicitly closed Ralph panel
-
-    // Plan subagent windows (visible agents during plan generation)
-    this.planSubagents = new Map(); // Map<agentId, { type, model, status, startTime, element, relativePos }>
-    this.planSubagentWindowZIndex = ZINDEX_PLAN_SUBAGENT_BASE;
-    this.planGenerationStopped = false; // Flag to ignore SSE events after Stop
-    this.planAgentsMinimized = false; // Whether agent windows are minimized to tab
-
-    // Wizard dragging state
-    this.wizardDragState = null; // { startX, startY, startLeft, startTop, isDragging }
-    this.wizardDragListeners = null; // { move, up } for cleanup
-    this.wizardPosition = null; // { left, top } - null means centered
 
     // Project Insights tracking (active Bash tools with clickable file paths)
     this.projectInsights = new Map(); // Map<sessionId, ActiveBashTool[]>
@@ -5078,10 +5055,6 @@ class CodemanApp {
     // wrapping) clipped xterm's bottom rows behind the toolbar until a tab
     // switch or a window resize.
     // Clear any other orphaned timers
-    if (this.planLoadingTimer) {
-      clearInterval(this.planLoadingTimer);
-      this.planLoadingTimer = null;
-    }
     if (this.timerCountdownInterval) {
       clearInterval(this.timerCountdownInterval);
       this.timerCountdownInterval = null;
@@ -11159,28 +11132,6 @@ class CodemanApp {
     this.renderSessionTabs();
     this.renderRalphStatePanel();
   }
-
-  // ═══════════════════════════════════════════════════════════════
-  // Ralph Loop Wizard (methods in ralph-wizard.js)
-  // ═══════════════════════════════════════════════════════════════
-
-  // Wizard state (initialized here, methods loaded from ralph-wizard.js)
-  ralphWizardStep = 1;
-  ralphWizardConfig = {
-    taskDescription: '',
-    completionPhrase: 'COMPLETE',
-    maxIterations: 10,
-    caseName: 'testcase',
-    enableRespawn: false,
-    generatedPlan: null,
-    planGenerated: false,
-    skipPlanGeneration: false,
-    planDetailLevel: 'detailed',
-    existingPlan: null,
-    useExistingPlan: false,
-  };
-  planLoadingTimer = null;
-  planLoadingStartTime = null;
 
   // ═══════════════════════════════════════════════════════════════
   // Kill Sessions

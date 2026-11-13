@@ -8,7 +8,7 @@
  * @dependency app.js (CodemanApp class, this.sessions, this.cases, this.activeSessionId)
  * @dependency constants.js (escapeHtml)
  * @dependency mobile-handlers.js (MobileDetection)
- * @loadorder 12 of 15 — loaded after panels-ui.js, before ralph-wizard.js
+ * @loadorder 12 of 15 — loaded after panels-ui.js, before api-client.js
  */
 
 /**

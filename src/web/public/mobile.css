@@ -1930,30 +1930,6 @@ html.mobile-init .file-browser-panel {
     justify-content: flex-start;
   }
 
-  /* Ralph wizard responsive */
-  .modal-wizard {
-    display: flex;
-    flex-direction: column;
-  }
-
-  .wizard-progress {
-    padding: 0.5rem;
-  }
-
-  .wizard-step {
-    padding: 0.3rem;
-  }
-
-  .wizard-step-number {
-    width: 24px;
-    height: 24px;
-    font-size: 0.7rem;
-  }
-
-  .wizard-step-label {
-    display: none;
-  }
-
   /* Timer banner - includes safe area padding */
   .timer-banner {
     padding-left: calc(0.5rem + var(--safe-area-left));

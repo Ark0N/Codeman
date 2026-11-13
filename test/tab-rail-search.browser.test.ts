@@ -277,7 +277,6 @@ describe('vertical rail session search in Chromium', () => {
         ['ag1', { element: document.getElementById('subWin'), minimized: false, hidden: false }],
       ]);
       app.subagentParentMap = new Map([['ag1', 'alpha']]);
-      app.planSubagents = new Map();
     });
     try {
       const anchor = await rowAnchor();

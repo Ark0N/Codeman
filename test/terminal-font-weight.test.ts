@@ -11,11 +11,9 @@
  *
  * Three things are pinned here because each fails silently:
  *
- *  - A live save reaches the echo overlays and the Agent Teams panes. Both
- *    cache the weight (the overlays paint it into their spans, the panes read
- *    their options at construction), so without the propagation the characters
- *    being typed, or a pane left open across the save, keep the old weight
- *    beside a repainted terminal.
+ *  - A live save reaches the echo overlays. They cache the weight and paint
+ *    it into their spans, so without the propagation the characters being
+ *    typed keep the old weight beside a repainted terminal.
  *  - An unchanged save is a no-op, so opening and closing App Settings does not
  *    churn the terminal.
  *  - The bundled face is declared over its full axis. The `@font-face`
@@ -65,19 +63,11 @@ function fakeTerminal(options: Record<string, unknown> = {}) {
 
 function makeApp(
   opts: {
-    teammates?: number;
     terminal?: ReturnType<typeof fakeTerminal> | null;
     splitPane?: { terminal: ReturnType<typeof fakeTerminal>; fit: () => void } | null;
   } = {}
 ) {
   const fit = vi.fn();
-  const teammateFits: ReturnType<typeof vi.fn>[] = [];
-  const teammateTerminals = new Map<string, { terminal: ReturnType<typeof fakeTerminal>; fitAddon: unknown }>();
-  for (let i = 0; i < (opts.teammates ?? 0); i++) {
-    const teammateFit = vi.fn();
-    teammateFits.push(teammateFit);
-    teammateTerminals.set(`agent-${i}`, { terminal: fakeTerminal(), fitAddon: { fit: teammateFit } });
-  }
   const app = {
     applyTerminalFontWeights: mixin.applyTerminalFontWeights,
     // Secondary panes (the split pane's second terminal) are reached through
@@ -99,12 +89,11 @@ function makeApp(
     _awaitTerminalFont: vi.fn(() => Promise.resolve()),
     terminal: opts.terminal === undefined ? fakeTerminal() : opts.terminal,
     fitAddon: { fit },
-    teammateTerminals,
     _localEchoOverlay: { refreshFont: vi.fn() },
     _predictiveEcho: { refreshFont: vi.fn() },
     _terminalFontReady: null as unknown,
   };
-  return { app, fit, teammateFits, teammateTerminals };
+  return { app, fit };
 }
 
 describe('applyTerminalFontWeights', () => {
@@ -150,21 +139,6 @@ describe('applyTerminalFontWeights', () => {
 
     expect(app._localEchoOverlay.refreshFont).toHaveBeenCalledTimes(1);
     expect(app._predictiveEcho.refreshFont).toHaveBeenCalledTimes(1);
-  });
-
-  it('reaches Agent Teams panes, which read their options at construction', () => {
-    const { app, teammateTerminals, teammateFits } = makeApp({ teammates: 2 });
-
-    (app as unknown as { applyTerminalFontWeights: (s: unknown) => void }).applyTerminalFontWeights({
-      terminalFontWeight: '300',
-      terminalFontWeightBold: '800',
-    });
-
-    for (const [, entry] of teammateTerminals) {
-      expect(entry.terminal.options.fontWeight).toBe(300);
-      expect(entry.terminal.options.fontWeightBold).toBe(800);
-    }
-    for (const teammateFit of teammateFits) expect(teammateFit).toHaveBeenCalled();
   });
 
   it('restores xterm’s own defaults when the setting is cleared', () => {

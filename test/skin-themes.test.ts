@@ -138,23 +138,19 @@ describe('Codeman light skins', () => {
 
   it('switches live terminals between light and dark contrast policies', () => {
     const main = { options: {} as Record<string, unknown>, rows: 24, refresh: vi.fn() };
-    const teammate = { options: {} as Record<string, unknown>, rows: 12, refresh: vi.fn() };
     const refreshFont = vi.fn();
     const app = {
       terminal: main,
-      teammateTerminals: new Map([['agent-1', { terminal: teammate }]]),
       _localEchoOverlay: { refreshFont },
     };
 
     terminal.mixin.applyTerminalSkin.call(app, 'paper-gray');
     expect(main.options.minimumContrastRatio).toBe(4.5);
-    expect(teammate.options.minimumContrastRatio).toBe(4.5);
     expect((main.options.theme as Record<string, string>).background).toBe('#f6f8fa');
     expect(refreshFont).toHaveBeenCalledTimes(1);
 
     terminal.mixin.applyTerminalSkin.call(app, 'daylight-blue');
     expect(main.options.minimumContrastRatio).toBe(1);
-    expect(teammate.options.minimumContrastRatio).toBe(1);
     expect((main.options.theme as Record<string, string>).background).toBe('#161b23');
     expect(refreshFont).toHaveBeenCalledTimes(2);
   });

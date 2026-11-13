@@ -1,7 +1,6 @@
 /**
  * @fileoverview Ralph state panel (progress ring, status, task cards, fix_plan.md integration),
- * plan versioning (checkpoint, rollback, diff), and plan wizard agents in monitor.
- * Includes 11 SSE handlers for Ralph and plan events.
+ * and plan versioning (checkpoint, rollback, diff). Includes the SSE handlers for Ralph events.
  *
  * @mixin Extends CodemanApp.prototype via Object.assign
  * @dependency app.js (CodemanApp class, this.ralphStates, this.activeSessionId)
@@ -67,64 +66,6 @@ Object.assign(CodemanApp.prototype, {
   _onExitGateMet(data) {
     this._notifySession(data.sessionId, 'warning', 'exit-gate', 'Exit Gate Met', `Loop ready to exit (indicators: ${data.completionIndicators})`);
   },
-
-  // Bash tools
-
-  // Plan orchestration
-  _onPlanSubagent(data) {
-    console.log('[Plan Subagent]', data);
-    this.handlePlanSubagentEvent(data);
-  },
-
-  _onPlanProgress(data) {
-    console.log('[Plan Progress]', data);
-
-    // Update UI if we have a progress handler registered
-    if (this._planProgressHandler) {
-      this._planProgressHandler({ type: 'plan:progress', data });
-    }
-
-    // Also update the loading display directly for better feedback
-    const titleEl = document.getElementById('planLoadingTitle');
-    const hintEl = document.getElementById('planLoadingHint');
-
-    if (titleEl && data.phase) {
-      const phaseLabels = {
-        'parallel-analysis': 'Running parallel analysis...',
-        'subagent': data.detail || 'Subagent working...',
-        'synthesis': 'Synthesizing results...',
-        'verification': 'Running verification...',
-      };
-      titleEl.textContent = phaseLabels[data.phase] || data.phase;
-    }
-    if (hintEl && data.detail) {
-      hintEl.textContent = data.detail;
-    }
-  },
-
-  _onPlanStarted(data) {
-    console.log('[Plan Started]', data);
-    this.activePlanOrchestratorId = data.orchestratorId;
-    this.planGenerationStopped = false; // Reset flag for new generation
-    this.renderMonitorPlanAgents();
-  },
-
-  _onPlanCancelled(data) {
-    console.log('[Plan Cancelled]', data);
-    if (this.activePlanOrchestratorId === data.orchestratorId) {
-      this.activePlanOrchestratorId = null;
-    }
-    this.renderMonitorPlanAgents();
-  },
-
-  _onPlanCompleted(data) {
-    console.log('[Plan Completed]', data);
-    if (this.activePlanOrchestratorId === data.orchestratorId) {
-      this.activePlanOrchestratorId = null;
-    }
-    this.renderMonitorPlanAgents();
-  },
-
 
   // ═══════════════════════════════════════════════════════════════
   // Enhanced Ralph Wiggum Loop Panel
@@ -1094,92 +1035,5 @@ Object.assign(CodemanApp.prototype, {
     if (mins < 60) return `${mins}m ago`;
     if (hours < 24) return `${hours}h ago`;
     return `${days}d ago`;
-  },
-
-
-  // ═══════════════════════════════════════════════════════════════
-  // Plan Wizard Agents in Monitor
-  // ═══════════════════════════════════════════════════════════════
-
-  renderMonitorPlanAgents() {
-    const section = document.getElementById('monitorPlanAgentsSection');
-    const body = document.getElementById('monitorPlanAgentsBody');
-    const stats = document.getElementById('monitorPlanAgentStats');
-    if (!section || !body) return;
-
-    const planAgents = Array.from(this.planSubagents?.values() || []);
-    const hasActiveOrchestrator = !!this.activePlanOrchestratorId;
-
-    // Show section only if there are plan agents or active orchestrator
-    if (planAgents.length === 0 && !hasActiveOrchestrator) {
-      section.style.display = 'none';
-      return;
-    }
-
-    section.style.display = '';
-
-    const activeCount = planAgents.filter(a => a.status === 'running').length;
-    const completedCount = planAgents.filter(a => a.status === 'completed' || a.status === 'failed').length;
-
-    if (stats) {
-      if (hasActiveOrchestrator) {
-        stats.textContent = `${activeCount} running, ${completedCount} done`;
-      } else {
-        stats.textContent = `${planAgents.length} total`;
-      }
-    }
-
-    if (planAgents.length === 0) {
-      body.innerHTML = `<div class="monitor-empty">${hasActiveOrchestrator ? 'Plan generation starting...' : 'No plan agents'}</div>`;
-      return;
-    }
-
-    let html = '';
-    for (const agent of planAgents) {
-      const statusClass = agent.status === 'running' ? 'active' : agent.status === 'completed' ? 'completed' : 'error';
-      const agentLabel = agent.agentType || agent.agentId;
-      const modelBadge = agent.model ? `<span class="model-badge opus">opus</span>` : '';
-      const detail = agent.detail ? escapeHtml(agent.detail.substring(0, 50)) : '';
-      const duration = agent.durationMs ? `${(agent.durationMs / 1000).toFixed(1)}s` : '';
-      const itemCount = agent.itemCount ? `${agent.itemCount} items` : '';
-
-      html += `
-        <div class="process-item">
-          <span class="process-mode ${statusClass}">${agent.status || 'pending'}</span>
-          <div class="process-info">
-            <div class="process-name">${modelBadge} ${escapeHtml(agentLabel)}</div>
-            <div class="process-meta">
-              ${detail ? `<span>${detail}</span>` : ''}
-              ${itemCount ? `<span>${itemCount}</span>` : ''}
-              ${duration ? `<span>${duration}</span>` : ''}
-            </div>
-          </div>
-        </div>
-      `;
-    }
-
-    body.innerHTML = html;
-  },
-
-  async cancelPlanFromMonitor() {
-    if (!this.activePlanOrchestratorId && this.planSubagents?.size === 0) {
-      this.showToast('No active plan generation', 'info');
-      return;
-    }
-
-    if (!confirm('Cancel plan generation and close all plan agent windows?')) return;
-
-    // Cancel the plan generation (reuse existing method)
-    await this.cancelPlanGeneration();
-
-    // Also force close the wizard if it's open
-    const wizardModal = document.getElementById('ralphWizardModal');
-    if (wizardModal?.classList.contains('active')) {
-      this.closeRalphWizard();
-    }
-
-    // Update monitor display
-    this.renderMonitorPlanAgents();
-    this.showToast('Plan generation cancelled', 'success');
   },
 });

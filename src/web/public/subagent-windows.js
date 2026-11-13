@@ -243,11 +243,6 @@ Object.assign(CodemanApp.prototype, {
     const svg = document.getElementById('connectionLines');
     if (!svg) return;
 
-    // Check if Ralph wizard modal is open
-    const wizardModal = document.getElementById('ralphWizardModal');
-    const wizardOpen = wizardModal?.classList.contains('active');
-    const wizardContent = wizardOpen ? wizardModal.querySelector('.modal-content') : null;
-
     // Collect visible regular subagent windows
     const visibleSubagentWindows = [];
     for (const [agentId, windowInfo] of this.subagentWindows) {
@@ -256,11 +251,6 @@ Object.assign(CodemanApp.prototype, {
       if (!win) continue;
       visibleSubagentWindows.push({ agentId, windowInfo, win });
     }
-
-    // Get plan subagent windows as array for distribution
-    const planSubagentArray = Array.from(this.planSubagents.entries())
-      .filter(([, data]) => data.element)
-      .map(([id, data]) => ({ id, ...data }));
 
     // === PHASE 1: Batch all layout reads (getBoundingClientRect) ===
     // Reading layout properties forces the browser to calculate layout.
@@ -272,36 +262,14 @@ Object.assign(CodemanApp.prototype, {
       rects.set('sub:' + agentId, win.getBoundingClientRect());
     }
 
-    // Read all plan subagent rects
-    for (const planAgent of planSubagentArray) {
-      rects.set('plan:' + planAgent.id, planAgent.element.getBoundingClientRect());
-    }
-
-    // Read wizard rect (if open)
-    let wizardRect = null;
-    if (wizardOpen && wizardContent) {
-      wizardRect = wizardContent.getBoundingClientRect();
-    }
-
-    // Read tab rects for normal mode (only tabs that are actually needed).
+    // Read tab rects (only tabs that are actually needed).
     // Only a painted row is cached: a row a search or filter hid has no line
     // (_paintedSessionTab), rather than one drawn from the viewport's corner.
-    if (!wizardOpen) {
-      for (const { agentId } of visibleSubagentWindows) {
-        const parentSessionId = this.subagentParentMap.get(agentId);
-        if (!parentSessionId || rects.has('tab:' + parentSessionId)) continue;
-        const tab = this._paintedSessionTab(parentSessionId);
-        if (tab) rects.set('tab:' + parentSessionId, tab.getBoundingClientRect());
-      }
-    }
-
-    // Read plan window rects for wizard-to-plan lines
-    if (wizardOpen && wizardContent && this.planSubagents.size > 0 && !this.planAgentsMinimized) {
-      for (const [agentId, windowData] of this.planSubagents) {
-        if (!windowData.element) continue;
-        const key = 'planwin:' + agentId;
-        if (!rects.has(key)) rects.set(key, windowData.element.getBoundingClientRect());
-      }
+    for (const { agentId } of visibleSubagentWindows) {
+      const parentSessionId = this.subagentParentMap.get(agentId);
+      if (!parentSessionId || rects.has('tab:' + parentSessionId)) continue;
+      const tab = this._paintedSessionTab(parentSessionId);
+      if (tab) rects.set('tab:' + parentSessionId, tab.getBoundingClientRect());
     }
 
     // === PHASE 2: DOM writes using cached rects (no more layout reads) ===
@@ -310,149 +278,34 @@ Object.assign(CodemanApp.prototype, {
     for (const { agentId } of visibleSubagentWindows) {
       const winRect = rects.get('sub:' + agentId);
 
-      // If wizard is open with plan subagents, connect regular subagents to plan subagent windows
-      if (wizardOpen && wizardContent && planSubagentArray.length > 0) {
-        // Find the nearest plan subagent window to connect to
-        let nearestPlanAgent = null;
-        let nearestDistance = Infinity;
+      // Connect the agent window to its parent TAB.
+      // Use the PERSISTENT subagentParentMap as the ONLY source of truth
+      const parentSessionId = this.subagentParentMap.get(agentId);
 
-        for (const planAgent of planSubagentArray) {
-          const planRect = rects.get('plan:' + planAgent.id);
-          const planCenterX = planRect.left + planRect.width / 2;
-          const planCenterY = planRect.top + planRect.height / 2;
-          const winCenterX = winRect.left + winRect.width / 2;
-          const winCenterY = winRect.top + winRect.height / 2;
-          const distance = Math.hypot(planCenterX - winCenterX, planCenterY - winCenterY);
-
-          if (distance < nearestDistance) {
-            nearestDistance = distance;
-            nearestPlanAgent = planAgent;
-          }
-        }
-
-        if (nearestPlanAgent) {
-          const planRect = rects.get('plan:' + nearestPlanAgent.id);
-
-          // Draw line from plan subagent window to regular subagent window
-          let x1, y1, x2, y2;
-          const planCenterX = planRect.left + planRect.width / 2;
-          const winCenterX = winRect.left + winRect.width / 2;
-
-          if (winCenterX < planCenterX) {
-            x1 = planRect.left;
-            y1 = planRect.top + planRect.height / 2;
-            x2 = winRect.right;
-            y2 = winRect.top + winRect.height / 2;
-          } else {
-            x1 = planRect.right;
-            y1 = planRect.top + planRect.height / 2;
-            x2 = winRect.left;
-            y2 = winRect.top + winRect.height / 2;
-          }
-
-          const midX = (x1 + x2) / 2;
-          const path = `M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`;
-
-          const line = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-          line.setAttribute('d', path);
-          line.setAttribute('class', 'connection-line plan-to-subagent-line');
-          line.setAttribute('data-agent-id', agentId);
-          line.setAttribute('data-plan-agent-id', nearestPlanAgent.id);
-          svg.appendChild(line);
-        }
-      } else if (wizardOpen && wizardContent) {
-        // Wizard open but no plan subagents - connect directly to wizard
-        const winCenterX = winRect.left + winRect.width / 2;
-        const wizardCenterX = wizardRect.left + wizardRect.width / 2;
-
-        let x1, y1, x2, y2;
-
-        if (winCenterX < wizardCenterX) {
-          x1 = wizardRect.left;
-          y1 = wizardRect.top + wizardRect.height / 2;
-          x2 = winRect.right;
-          y2 = winRect.top + winRect.height / 2;
-        } else {
-          x1 = wizardRect.right;
-          y1 = wizardRect.top + wizardRect.height / 2;
-          x2 = winRect.left;
-          y2 = winRect.top + winRect.height / 2;
-        }
-
-        const midX = (x1 + x2) / 2;
-        const path = `M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`;
-
-        const line = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-        line.setAttribute('d', path);
-        line.setAttribute('class', 'connection-line wizard-connection');
-        line.setAttribute('data-agent-id', agentId);
-        svg.appendChild(line);
-      } else {
-        // NORMAL MODE: Connect agent window to its parent TAB
-        // Use the PERSISTENT subagentParentMap as the ONLY source of truth
-        const parentSessionId = this.subagentParentMap.get(agentId);
-
-        if (!parentSessionId) {
-          // No parent known yet - skip this agent
-          continue;
-        }
-
-        const tabRect = rects.get('tab:' + parentSessionId);
-        if (!tabRect) {
-          // Tab not painted (session closed, collapsed group, or hidden by a search)
-          continue;
-        }
-
-        // Draw a curved line from the tab to the window. Header strip: tab
-        // bottom-center → window top-center (vertical). Sidebar: tab right-edge →
-        // window left-edge (horizontal), otherwise the curve loops backwards
-        // underneath the sidebar. _tabAnchor/_tabConnectorPath live in app.js.
-        const anchor = this._tabAnchor(tabRect);
-        const path = this._tabConnectorPath(anchor, winRect);
-
-        const line = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-        line.setAttribute('d', path);
-        line.setAttribute('class', 'connection-line');
-        line.setAttribute('data-agent-id', agentId);
-        line.setAttribute('data-parent-tab', parentSessionId);
-        svg.appendChild(line);
+      if (!parentSessionId) {
+        // No parent known yet - skip this agent
+        continue;
       }
-    }
 
-    // Draw lines from wizard to plan subagent windows (Opus agents during plan generation)
-    // Skip if agents are minimized to tab
-    if (wizardOpen && wizardContent && this.planSubagents.size > 0 && !this.planAgentsMinimized) {
-      for (const [agentId] of this.planSubagents) {
-        const winRect = rects.get('planwin:' + agentId);
-        if (!winRect) continue;
-
-        // Determine which side of wizard the window is on
-        const winCenterX = winRect.left + winRect.width / 2;
-        const wizardCenterX = wizardRect.left + wizardRect.width / 2;
-
-        let x1, y1, x2, y2;
-
-        if (winCenterX < wizardCenterX) {
-          x1 = wizardRect.left;
-          y1 = wizardRect.top + wizardRect.height / 3 + (this.planSubagents.size > 3 ? 0 : 50);
-          x2 = winRect.right;
-          y2 = winRect.top + winRect.height / 2;
-        } else {
-          x1 = wizardRect.right;
-          y1 = wizardRect.top + wizardRect.height / 3 + (this.planSubagents.size > 3 ? 0 : 50);
-          x2 = winRect.left;
-          y2 = winRect.top + winRect.height / 2;
-        }
-
-        const midX = (x1 + x2) / 2;
-        const path = `M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`;
-
-        const line = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-        line.setAttribute('d', path);
-        line.setAttribute('class', 'connection-line wizard-connection plan-subagent-line');
-        line.setAttribute('data-plan-agent-id', agentId);
-        svg.appendChild(line);
+      const tabRect = rects.get('tab:' + parentSessionId);
+      if (!tabRect) {
+        // Tab not painted (session closed, collapsed group, or hidden by a search)
+        continue;
       }
+
+      // Draw a curved line from the tab to the window. Header strip: tab
+      // bottom-center → window top-center (vertical). Sidebar: tab right-edge →
+      // window left-edge (horizontal), otherwise the curve loops backwards
+      // underneath the sidebar. _tabAnchor/_tabConnectorPath live in app.js.
+      const anchor = this._tabAnchor(tabRect);
+      const path = this._tabConnectorPath(anchor, winRect);
+
+      const line = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      line.setAttribute('d', path);
+      line.setAttribute('class', 'connection-line');
+      line.setAttribute('data-agent-id', agentId);
+      line.setAttribute('data-parent-tab', parentSessionId);
+      svg.appendChild(line);
     }
 
     // Ultracode floating run windows → parent tab (additional layer, ultracode-windows.js).
@@ -473,83 +326,6 @@ Object.assign(CodemanApp.prototype, {
     // Every path above was just created from scratch, so any line entrance in
     // flight has to be re-attached here (resumed via a negative animation-delay).
     this._applyLineEntrances?.(svg);
-  },
-
-  // ═══════════════════════════════════════════════════════════════
-  // Lazy Terminal Lifecycle
-  // ═══════════════════════════════════════════════════════════════
-  //
-  // Teammate terminal windows use xterm.js Terminal instances that consume
-  // ~75KB of DOM memory each. With 50 agents minimized, that's ~3.75MB of
-  // invisible terminals. To avoid this, we dispose the Terminal when a
-  // window is minimized and lazily re-create it when restored.
-  //
-  // Flow:
-  //   minimize → _disposeTeammateTerminalForMinimize() → sets _lazyTerminal flag
-  //   restore  → _restoreTeammateTerminalFromLazy()   → re-creates Terminal
-  //   create (hidden/minimized) → skip initTeammateTerminal, set _lazyTerminal
-  //
-  // The tmux pane buffer is re-fetched from the API on restore. Regular
-  // (non-teammate) subagent windows use activity HTML and are unaffected
-  // by this optimization.
-
-  /**
-   * Dispose a teammate terminal when its window is minimized.
-   * Saves pane metadata so the terminal can be re-created on restore.
-   * No-op if the window has no teammate terminal.
-   */
-  _disposeTeammateTerminalForMinimize(agentId) {
-    const termData = this.teammateTerminals.get(agentId);
-    if (!termData) return; // Not a teammate terminal window
-
-    const windowData = this.subagentWindows.get(agentId);
-
-    // Save pane metadata needed to re-create the terminal on restore
-    if (windowData) {
-      windowData._lazyTerminal = true;
-      windowData._lazyPaneTarget = termData.paneTarget;
-      windowData._lazySessionId = termData.sessionId;
-    }
-
-    // Dispose the resize observer
-    if (termData.resizeObserver) {
-      termData.resizeObserver.disconnect();
-    }
-
-    // Dispose the xterm.js Terminal instance (frees DOM nodes and internal buffers)
-    if (termData.terminal) {
-      try {
-        termData.terminal.dispose();
-      } catch {}
-    }
-
-    // Remove from teammateTerminals map so renderSubagentWindowContent won't skip this window
-    // (the activity HTML can serve as a lightweight placeholder while minimized)
-    this.teammateTerminals.delete(agentId);
-  },
-
-  /**
-   * Re-create a teammate terminal when its window is restored from minimized state.
-   * Fetches the current pane buffer from the API (tmux is the source of truth).
-   * No-op if the window doesn't have the _lazyTerminal flag.
-   */
-  _restoreTeammateTerminalFromLazy(agentId) {
-    const windowData = this.subagentWindows.get(agentId);
-    if (!windowData || !windowData._lazyTerminal) return;
-
-    const paneTarget = windowData._lazyPaneTarget;
-    const sessionId = windowData._lazySessionId;
-
-    // Clear lazy state
-    windowData._lazyTerminal = false;
-    windowData._lazyPaneTarget = null;
-    windowData._lazySessionId = null;
-
-    if (!paneTarget || !sessionId) return;
-
-    // Re-create the terminal using the same initTeammateTerminal flow
-    const paneInfo = { paneTarget, sessionId };
-    this.initTeammateTerminal(agentId, paneInfo, windowData.element);
   },
 
   // ═══════════════════════════════════════════════════════════════
@@ -627,43 +403,9 @@ Object.assign(CodemanApp.prototype, {
         finalY = topStart + visibleCount * (mobileCardHeight + mobileCardGap);
       }
     } else {
-      // Check if Ralph wizard modal is open - if so, position windows on the sides
-      const wizardModal = document.getElementById('ralphWizardModal');
-      const wizardOpen = wizardModal?.classList.contains('active');
-
-      let startX, startY, maxCols;
-
-      if (wizardOpen) {
-        // Wizard is ~720px wide, centered. Position windows on left/right sides
-        const wizardWidth = 720;
-        const centerX = viewportWidth / 2;
-        const wizardLeft = centerX - wizardWidth / 2;
-        const wizardRight = centerX + wizardWidth / 2;
-
-        // Alternate between left and right sides of the wizard
-        const leftSideSpace = wizardLeft - 20;
-        const rightSideSpace = viewportWidth - wizardRight - 20;
-
-        if (windowCount % 2 === 0 && rightSideSpace >= windowWidth) {
-          // Even windows go to the right
-          startX = wizardRight + 20;
-          maxCols = Math.floor(rightSideSpace / (windowWidth + gap)) || 1;
-        } else if (leftSideSpace >= windowWidth) {
-          // Odd windows go to the left
-          startX = Math.max(10, wizardLeft - windowWidth - 20);
-          maxCols = 1; // Usually only room for 1 column on left
-        } else {
-          // Not enough side space, use right side
-          startX = wizardRight + 20;
-          maxCols = 1;
-        }
-        startY = 80; // Start higher when wizard is open
-      } else {
-        // Normal positioning
-        startX = 50;
-        startY = WINDOW_INITIAL_TOP_PX;
-        maxCols = Math.floor((viewportWidth - startX - 50) / (windowWidth + gap)) || 1;
-      }
+      const startX = 50;
+      const startY = WINDOW_INITIAL_TOP_PX;
+      const maxCols = Math.floor((viewportWidth - startX - 50) / (windowWidth + gap)) || 1;
 
       const maxRows = Math.floor((viewportHeight - startY - 50) / (windowHeight + gap)) || 1;
       const col = windowCount % maxCols;
@@ -793,24 +535,7 @@ Object.assign(CodemanApp.prototype, {
       win.style.display = 'none';
     }
 
-    // Render content — check if this teammate has a tmux pane
-    const paneInfo = teammateInfo ? this.teammatePanesByName.get(teammateInfo.name) : null;
-    if (paneInfo) {
-      if (shouldHide) {
-        // Window starts hidden — defer terminal creation until visible (lazy init).
-        // Saves ~75KB of DOM memory per hidden teammate terminal window.
-        const windowEntry = this.subagentWindows.get(agentId);
-        if (windowEntry) {
-          windowEntry._lazyTerminal = true;
-          windowEntry._lazyPaneTarget = paneInfo.paneTarget;
-          windowEntry._lazySessionId = paneInfo.sessionId;
-        }
-      } else {
-        this.initTeammateTerminal(agentId, paneInfo, win);
-      }
-    } else {
-      this.renderSubagentWindowContent(agentId);
-    }
+    this.renderSubagentWindowContent(agentId);
 
     // Focus on click
     win.addEventListener('mousedown', () => {
@@ -882,10 +607,6 @@ Object.assign(CodemanApp.prototype, {
       this.setAgentParentSessionId(agentId, parentSessionId);
     }
 
-    // Dispose teammate terminal on minimize to free DOM/memory (~75KB per instance).
-    // The terminal will be lazily re-created on restore via initTeammateTerminal().
-    this._disposeTeammateTerminalForMinimize(agentId);
-
     // Always minimize to tab
     windowData.element.style.display = 'none';
     windowData.minimized = true;
@@ -956,18 +677,6 @@ Object.assign(CodemanApp.prototype, {
     }
     this.subagentWindows.clear();
 
-    // Clean up all teammate terminals
-    for (const [, termData] of this.teammateTerminals) {
-      if (termData.resizeObserver) termData.resizeObserver.disconnect();
-      if (termData.terminal) {
-        try {
-          termData.terminal.dispose();
-        } catch {}
-      }
-    }
-    this.teammateTerminals.clear();
-    this.teammatePanesByName.clear();
-
     // Clean up all log viewer windows with their EventSources and drag listeners
     for (const data of this.logViewerWindows.values()) {
       if (data.eventSource) {
@@ -985,20 +694,6 @@ Object.assign(CodemanApp.prototype, {
       data.element.remove();
     }
     this.logViewerWindows.clear();
-
-    // Clean up plan subagent windows (wizard agents)
-    if (this.planSubagents) {
-      for (const windowData of this.planSubagents.values()) {
-        if (windowData.dragListeners) {
-          document.removeEventListener('mousemove', windowData.dragListeners.move);
-          document.removeEventListener('mouseup', windowData.dragListeners.up);
-        }
-        if (windowData.element) {
-          windowData.element.remove();
-        }
-      }
-      this.planSubagents.clear();
-    }
 
     // Clean up all image popup windows with their drag listeners
     for (const popupData of this.imagePopups.values()) {
@@ -1018,25 +713,7 @@ Object.assign(CodemanApp.prototype, {
     // Clean up ultracode floating run windows (re-seeded from data.workflowRuns on reconnect)
     if (typeof this.removeAllUltracodeWindows === 'function') this.removeAllUltracodeWindows();
 
-    // Clear orphaned plan generation state
-    this.activePlanOrchestratorId = null;
-    this._planProgressHandler = null;
-    this.planGenerationStopped = true;
-    if (this.planGenerationAbortController) {
-      this.planGenerationAbortController.abort();
-      this.planGenerationAbortController = null;
-    }
-
-    // Clean up wizard-specific timers (leak fix: not cleared on SSE reconnect)
-    if (this.wizardMinimizedTimer) {
-      clearInterval(this.wizardMinimizedTimer);
-      this.wizardMinimizedTimer = null;
-    }
-
-    // Clean up wizard drag listeners (leak fix: document-level handlers)
-    if (typeof this.cleanupWizardDragging === 'function') this.cleanupWizardDragging();
-
-    // Deactivate focus trap if wizard was open (leak fix: keydown listener)
+    // Deactivate a focus trap a modal left active (leak fix: keydown listener)
     if (this.activeFocusTrap) {
       this.activeFocusTrap.deactivate();
       this.activeFocusTrap = null;
@@ -1044,9 +721,6 @@ Object.assign(CodemanApp.prototype, {
 
     // Clear minimized agents tracking
     this.minimizedSubagents.clear();
-
-    // Update monitor panel
-    this.renderMonitorPlanAgents();
 
     // Update connection lines (should be empty now)
     this.updateConnectionLines();
@@ -1083,12 +757,6 @@ Object.assign(CodemanApp.prototype, {
         windowData.hidden = false;
       }
       windowData.minimized = false;
-
-      // Lazily re-create teammate terminal if it was disposed on minimize.
-      // Only re-create when the window is actually becoming visible.
-      if (shouldShow && windowData._lazyTerminal) {
-        this._restoreTeammateTerminalFromLazy(agentId);
-      }
 
       this.updateConnectionLines();
       // Restack all visible mobile windows so restored ones don't overlap

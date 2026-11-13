@@ -7,7 +7,7 @@
  *
  * @mixin Extends CodemanApp.prototype via Object.assign
  * @dependency app.js (CodemanApp class must be defined)
- * @loadorder 14 of 15 — loaded after ralph-wizard.js
+ * @loadorder 14 of 15 — loaded after session-ui.js
  */
 
 // Codeman — Centralized API fetch helpers for CodemanApp
