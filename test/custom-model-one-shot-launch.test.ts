@@ -10,7 +10,7 @@
  * reinitializes on a restart.
  *
  * Uses the same JSDOM + `runScripts: "dangerously"` approach as
- * test/custom-model-run-menu-ui.test.ts, extended with the DOM elements runCodex() (the
+ * test/custom-model-run-menu-ui.test.ts, extended with the DOM elements the codex launch (the
  * CLI this was reported against) reads.
  *
  * Port: none.
@@ -221,7 +221,7 @@ describe('_quickStartWithCustomModelConfirm', () => {
   });
 });
 
-describe('runCodex(): one-shot custom-model launch (the CLI this was reported against)', () => {
+describe('the codex launch: one-shot custom-model launch (the CLI this was reported against)', () => {
   it('folds _pendingCustomModelForLaunch into the quick-start body as customModel', async () => {
     const { win, app } = bootApp();
     (win as unknown as { fetch: typeof fetch }).fetch = (async (url: string, opts?: any) => {
@@ -232,7 +232,7 @@ describe('runCodex(): one-shot custom-model launch (the CLI this was reported ag
     }) as unknown as typeof fetch;
 
     app._pendingCustomModelForLaunch = { endpointId: 'llama-box', modelId: 'qwen3' };
-    await app.runCodex();
+    await app._runCliMode('codex');
     expect(app._lastReportedError).toBeUndefined();
   });
 
@@ -245,7 +245,7 @@ describe('runCodex(): one-shot custom-model launch (the CLI this was reported ag
       return { json: async () => ({ success: true, data: { sessionId: 's1' } }) };
     }) as unknown as typeof fetch;
 
-    await app.runCodex();
+    await app._runCliMode('codex');
     expect(app._lastReportedError).toBeUndefined();
   });
 });

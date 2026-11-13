@@ -1256,7 +1256,6 @@ Object.assign(CodemanApp.prototype, {
       let touchLastX = 0;
       let touchLastY = 0;
       let velocity = 0;
-      let lastTime = 0;
       let scrollFrame = null;
       let isTouching = false;
       // One id per touch contact (touchstart), carried by its touchmoves AND its
@@ -1264,10 +1263,7 @@ Object.assign(CodemanApp.prototype, {
       // gesture however slowly the finger moves (pageKeysForGesture).
       let touchContactId = 0;
 
-      const scrollLoop = (timestamp) => {
-        const dt = lastTime ? (timestamp - lastTime) / 16.67 : 1;
-        lastTime = timestamp;
-
+      const scrollLoop = () => {
         if (!isTouching && Math.abs(velocity) > 0.3) {
           // Momentum phase — convert pixel velocity to lines
           const lines = Math.round(velocity / cellHeight());
@@ -1389,7 +1385,6 @@ Object.assign(CodemanApp.prototype, {
               longPressTimer = null;
               this._beginTouchSelection(longPressStartX, longPressStartY);
             }, window.CodemanTerminalInput.TOUCH_SELECT_LONG_PRESS_MS);
-            lastTime = 0;
             if (scrollFrame) {
               cancelAnimationFrame(scrollFrame);
               scrollFrame = null;

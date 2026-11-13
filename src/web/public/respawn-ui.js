@@ -731,20 +731,6 @@ Object.assign(CodemanApp.prototype, {
     this.showToast(`Saved preset: ${name}`, 'success');
   },
 
-  deletePreset(presetId) {
-    const presets = this.loadRespawnPresets();
-    const preset = presets.find(p => p.id === presetId);
-    if (!preset || preset.builtIn) {
-      this.showToast('Cannot delete built-in presets', 'warning');
-      return;
-    }
-
-    const filtered = presets.filter(p => p.id !== presetId);
-    this.saveRespawnPresets(filtered);
-    this.renderPresetDropdown();
-    this.showToast(`Deleted preset: ${preset.name}`, 'success');
-  },
-
   // Get respawn config from modal inputs
   getModalRespawnConfig() {
     const updatePrompt = document.getElementById('modalRespawnPrompt').value;
@@ -947,13 +933,6 @@ Object.assign(CodemanApp.prototype, {
     await this.loadRunSummary(sessionId);
   },
 
-  closeRunSummary() {
-    this.runSummarySessionId = null;
-    this.stopRunSummaryAutoRefresh();
-    // Close session options modal (summary is now a tab in it)
-    this.closeSessionOptions();
-  },
-
   async refreshRunSummary() {
     const sessionId = this.runSummarySessionId || this.editingSessionId;
     if (!sessionId) return;
@@ -1074,7 +1053,7 @@ Object.assign(CodemanApp.prototype, {
   renderRunSummary() {
     if (!this.runSummaryData) return;
 
-    const { stats, events, sessionName, startedAt, lastUpdatedAt } = this.runSummaryData;
+    const { events, sessionName, startedAt, lastUpdatedAt } = this.runSummaryData;
 
     // Update session info
     const duration = lastUpdatedAt - startedAt;
@@ -1174,11 +1153,5 @@ Object.assign(CodemanApp.prototype, {
     if (hours > 0) return `${hours}h ${minutes % 60}m`;
     if (minutes > 0) return `${minutes}m ${seconds % 60}s`;
     return `${seconds}s`;
-  },
-
-  saveSessionOptions() {
-    // Session options are applied immediately via individual controls
-    // This just closes the modal
-    this.closeSessionOptions();
   },
 });

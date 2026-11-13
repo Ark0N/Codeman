@@ -255,19 +255,6 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
-  async refreshOrchestratorStatus() {
-    try {
-      const res = await fetch('/api/orchestrator/status');
-      const data = await res.json();
-      if (data.data?.ok) {
-        this.orchestratorState = data.data;
-        this.renderOrchestratorPanel();
-      }
-    } catch (err) {
-      console.error('[Orchestrator] Status fetch failed:', err);
-    }
-  },
-
   // ═══════════════════════════════════════════════════════════════
   // Rendering
   // ═══════════════════════════════════════════════════════════════

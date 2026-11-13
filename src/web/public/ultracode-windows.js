@@ -409,17 +409,6 @@ Object.assign(CodemanApp.prototype, {
     this.updateConnectionLines();
   },
 
-  // ── Minimize an agent transcript window into its tab (same idiom as run windows) ──
-
-  /** Is this agent transcript currently minimized to a tab? */
-  _isUltracodeAgentMinimized(agentId) {
-    if (!this.minimizedUltracodeAgents) return false;
-    for (const map of this.minimizedUltracodeAgents.values()) {
-      if (map.has(agentId)) return true;
-    }
-    return false;
-  },
-
   /** Look up a minimized agent's {runId,label} entry (across sessions). */
   _getMinimizedUltracodeAgent(agentId) {
     if (!this.minimizedUltracodeAgents) return null;

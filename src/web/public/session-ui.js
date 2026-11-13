@@ -21,13 +21,12 @@
  * own no-id-branching rule exists to prevent server-side.
  *
  * Deliberately a LOCAL table rather than a server-injected catalogue: several
- * unit tests exercise these run*() methods inside a bare `vm.createContext()`
+ * unit tests exercise the launcher inside a bare `vm.createContext()`
  * sandbox with no `window` global at all (see test/run-mode-ui.test.ts) —
  * referencing `window` there unguarded would throw, not degrade. `buildConfig`
  * returns the CLI's top-level legacy config field for a LOCAL launch, or
  * `null` for a CLI that sends none (pi: no bypass flag exists, so there is
- * nothing to send — see runPi's own history below for why that must stay
- * true).
+ * nothing to send, and that must stay true).
  */
 const RUN_MODE_LAUNCH = {
   opencode: {
@@ -675,10 +674,6 @@ Object.assign(CodemanApp.prototype, {
     // On the chain the tab-return refresh already awaits, so a pick lands before the copy it reads.
     this._caseSyncChain = (this._caseSyncChain || Promise.resolve()).then(send, send);
     return this._caseSyncChain;
-  },
-
-  async quickStart() {
-    return this.run();
   },
 
   /** Ensure a newly-created session is visible without waiting for the SSE event.
@@ -2484,7 +2479,7 @@ Object.assign(CodemanApp.prototype, {
         }
         if (remoteIds[0]) {
           // Don't pre-set activeSessionId — selectSession early-returns when the
-          // IDs match, skipping the buffer load, tab activation, and focus (see runCodex).
+          // IDs match, skipping the buffer load, tab activation, and focus (see _runCliMode).
           await this.selectSession(remoteIds[0]);
         }
         this.terminal.focus();
@@ -2536,7 +2531,7 @@ Object.assign(CodemanApp.prototype, {
 
       // Switch to first session. Don't pre-set activeSessionId — selectSession
       // early-returns when the IDs match, skipping the buffer load, tab
-      // activation, and focus (see runCodex), which left the new shell tab
+      // activation, and focus (see _runCliMode), which left the new shell tab
       // created but not shown until the user manually clicked it.
       if (sessionIds.length > 0) {
         await this.selectSession(sessionIds[0]);
@@ -2601,10 +2596,8 @@ Object.assign(CodemanApp.prototype, {
    * Shared launcher for every RUN_MODE_LAUNCH entry (every run mode except
    * claude/shell, which have their own flows — claude for its remote/docker
    * branching and parallel-create path, shell for needing no CLI probe at
-   * all). The eight run<Mode>() methods below are thin named wrappers: their
-   * names stay because index.html's welcome-screen buttons and the run-mode
-   * menu call them directly by name (`app.runOpenCode()` etc.), and several
-   * tests assert on that name directly too.
+   * all). `run()` reaches it for every mode in the table; there is no per-CLI
+   * wrapper method any more.
    */
   async _runCliMode(mode, options = {}) {
     const catalogEntry = registryCliById(mode);
@@ -2688,46 +2681,6 @@ Object.assign(CodemanApp.prototype, {
     } catch (err) {
       this._reportSessionLaunchError(ownsLaunchTerminal, err.message);
     }
-  },
-
-  async runOpenCode() {
-    return this._runCliMode('opencode');
-  },
-
-  async runCodex() {
-    return this._runCliMode('codex');
-  },
-
-  async runGemini() {
-    return this._runCliMode('gemini');
-  },
-
-  async runAntigravity() {
-    return this._runCliMode('antigravity');
-  },
-
-  async runPi() {
-    return this._runCliMode('pi');
-  },
-
-  async runOmp() {
-    return this._runCliMode('omp');
-  },
-
-  async runGrok() {
-    return this._runCliMode('grok');
-  },
-
-  async runDeepSeek() {
-    return this._runCliMode('deepseek');
-  },
-
-  async runCopilot() {
-    return this._runCliMode('copilot');
-  },
-
-  async runJcode() {
-    return this._runCliMode('jcode');
   },
 
 

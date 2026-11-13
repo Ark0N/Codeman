@@ -226,15 +226,6 @@ html.mobile-init .file-browser-panel {
     min-height: 56px;
   }
 
-  /* Settings grid stays 2-col on tablet but tighter */
-  .settings-grid {
-    gap: 0.4rem 0.75rem;
-  }
-
-  .settings-item {
-    font-size: 0.7rem;
-  }
-
   /* Event type grid - slightly tighter */
   .event-type-grid {
     grid-template-columns: 1fr 40px 40px 40px;
@@ -1774,11 +1765,6 @@ html.mobile-init .file-browser-panel {
     min-height: 0; /* Allow flex item to shrink below content size */
   }
 
-  /* Show CLI info bar on mobile (Claude version/model) */
-  .cli-info-bar {
-    display: block;
-  }
-
   /* Mobile terminal — JS touch handler (terminal.scrollLines()) drives
      scrollback because xterm.js DOM renderer doesn't populate xterm-viewport's
      scroll area.  touch-action:none lets our JS handler own the gesture. */
@@ -2095,27 +2081,6 @@ html.mobile-init .file-browser-panel {
 
   /* ---- Session Options Modal: Respawn Tab Mobile Optimizations ---- */
 
-  /* Respawn header — keep horizontal, compact */
-  .respawn-header {
-    flex-direction: row;
-    gap: 0.4rem;
-    align-items: center;
-  }
-
-  /* Enable/Stop buttons — compact */
-  .respawn-header .respawn-actions {
-    display: flex;
-    gap: 0.3rem;
-    flex-shrink: 0;
-  }
-
-  .respawn-header .respawn-actions .btn-toolbar {
-    min-height: 28px !important;
-    font-size: 0.7rem !important;
-    padding: 0.2rem 0.5rem !important;
-    border-radius: 5px;
-  }
-
   /* Duration preset buttons — one compact row */
   .duration-presets {
     display: flex;
@@ -2146,28 +2111,6 @@ html.mobile-init .file-browser-panel {
     min-height: 24px;
     font-size: 16px; /* Prevents iOS zoom */
     padding: 0.1rem 0.3rem;
-  }
-
-  /* Preset selector row — full-width dropdown, buttons below */
-  .preset-selector {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0.25rem;
-  }
-
-  .preset-selector select {
-    grid-column: 1 / -1;
-    min-height: 32px;
-    font-size: 16px; /* Prevents iOS zoom */
-    border-radius: 5px;
-    padding: 0.2rem 0.4rem;
-  }
-
-  .preset-selector .btn {
-    min-height: 32px;
-    font-size: 0.65rem;
-    border-radius: 5px;
-    padding: 0.2rem 0.4rem;
   }
 
   /* Textareas — prevent iOS zoom with 16px font, compact height */
@@ -2204,21 +2147,6 @@ html.mobile-init .file-browser-panel {
     height: 18px;
   }
 
-  /* Respawn-loop box title matches the auto-resume title; its cycle-step
-     checkboxes match the step labels */
-  #sessionOptionsModal .respawn-loop-title {
-    font-size: 0.75rem;
-  }
-
-  #sessionOptionsModal .respawn-loop-box .checkbox-inline {
-    font-size: 0.65rem;
-  }
-
-  /* Respawn options row — stack if needed */
-  #sessionOptionsModal .respawn-options-row {
-    gap: 0.5rem;
-  }
-
   /* Form section headers — compact on mobile */
   #sessionOptionsModal .form-section-header {
     margin-top: 0.75rem;
@@ -2244,30 +2172,6 @@ html.mobile-init .file-browser-panel {
 
   /* ---- Context Tab: Mobile Optimizations ---- */
 
-  /* Context settings cards — tighter padding */
-  .context-setting {
-    padding: 0.625rem;
-  }
-
-  /* Stack context setting header vertically on narrow screens */
-  .context-setting-header {
-    flex-wrap: wrap;
-    gap: 0.4rem;
-  }
-
-  .context-setting-header .input-suffix-sm input {
-    width: 60px;
-    font-size: 16px; /* Prevents iOS zoom */
-    min-height: 36px;
-  }
-
-  .context-setting input[type="text"] {
-    font-size: 16px; /* Prevents iOS zoom */
-    min-height: 36px;
-    padding: 0.4rem 0.6rem;
-    border-radius: 6px;
-  }
-
   /* Color picker — larger swatches for touch */
   .color-picker {
     gap: 8px;
@@ -2285,44 +2189,13 @@ html.mobile-init .file-browser-panel {
     gap: 0.4rem;
   }
 
-  /* Number inputs in context tab — prevent iOS zoom */
-  .context-settings-grid input[type="number"] {
-    font-size: 16px;
-    min-height: 36px;
-  }
-
   /* ---- Ralph Tab: Mobile Optimizations ---- */
-
-  /* Ralph limits grid — 2 columns on mobile */
-  .ralph-limits-grid {
-    grid-template-columns: 1fr 1fr;
-    gap: 0.5rem;
-  }
-
-  .ralph-limits-grid .form-col input[type="number"] {
-    font-size: 16px; /* Prevents iOS zoom */
-    min-height: 36px;
-    padding: 0.4rem 0.5rem;
-    border-radius: 6px;
-  }
 
   /* Ralph phrase input — prevent iOS zoom */
   #modalRalphPhrase {
     font-size: 16px;
     min-height: 40px;
     border-radius: 6px;
-  }
-
-  /* Save button — full width, proper touch target */
-  .ralph-config-actions {
-    margin-top: 1rem;
-  }
-
-  .ralph-config-actions .btn-toolbar {
-    width: 100%;
-    min-height: 44px;
-    font-size: 0.85rem;
-    border-radius: 8px;
   }
 
   /* ---- Summary Tab: Mobile Optimizations ---- */
@@ -2585,31 +2458,6 @@ html.mobile-init .file-browser-panel {
     font-size: 0.85rem !important;
     font-weight: 500;
     border-radius: 10px;
-  }
-
-  /* Settings grid - single column on phones */
-  .settings-grid {
-    grid-template-columns: 1fr;
-    gap: 0.35rem;
-  }
-
-  .settings-grid-3col {
-    grid-template-columns: 1fr 1fr 1fr;
-  }
-
-  .settings-item {
-    padding: 0.35rem 0.5rem;
-    font-size: 0.7rem;
-  }
-
-  .settings-item-label {
-    font-size: 0.7rem;
-  }
-
-  .settings-section-header {
-    font-size: 0.6rem;
-    padding: 0.35rem 0 0.2rem 0;
-    margin-top: 0.5rem;
   }
 
   /* Form rows - compact on mobile */
@@ -3558,12 +3406,6 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
 
   .btn-icon-header:hover {
     transform: none;
-  }
-
-  /* Show dropdown on tap instead of hover */
-  .subagent-dropdown-trigger:active + .subagent-dropdown-menu,
-  .subagent-dropdown-trigger:focus + .subagent-dropdown-menu {
-    display: block;
   }
 
   /* Press feedback for the touch bars. The pressed look is transform + filter,

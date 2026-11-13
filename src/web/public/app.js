@@ -863,11 +863,6 @@ class CodemanApp {
     // Once set, never recalculated. Persisted to localStorage and server.
     this.subagentParentMap = new Map();
 
-    // Agent Teams tracking
-    this.teams = new Map(); // Map<teamName, TeamConfig>
-    this.teamTasks = new Map(); // Map<teamName, TeamTask[]>
-    this.teammateMap = new Map(); // Map<agentId-prefix, {name, color, teamName}> for quick lookup
-
     // Teammate tmux pane terminals (Agent Teams feature)
     this.teammatePanesByName = new Map(); // Map<name, { paneTarget, sessionId, color }>
     this.teammateTerminals = new Map(); // Map<agentId, { terminal, fitAddon, paneTarget, sessionId, resizeObserver }>
@@ -1817,15 +1812,6 @@ class CodemanApp {
     // A liveness ping (or the popup's own unload) heals the badge if it's gone.
     this._postWindowMessage({ type: 'focus-request', id });
     return true;
-  }
-
-  /** Re-dock a session: close its window (which re-docks via its unload
-   *  announcement) and clear dashboard state now. */
-  redockSession(id) {
-    const win = this.detachedWindows.get(id);
-    if (win && !win.closed) { try { win.close(); } catch {} }
-    this._postWindowMessage({ type: 'close-request', id });
-    this._redock(id);
   }
 
   /** Clear all dashboard-side detached state/timers for a session, and take its
@@ -4989,8 +4975,6 @@ class CodemanApp {
       this._xtermSnapshots?.clear();
     }
     this.projectInsights.clear();
-    this.teams.clear();
-    this.teamTasks.clear();
     // Clear all idle timers to prevent stale timers from firing
     for (const timer of this.idleTimers.values()) {
       clearTimeout(timer);

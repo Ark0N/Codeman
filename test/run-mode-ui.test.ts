@@ -160,7 +160,7 @@ describe('Run launch synchronization', () => {
    * is active wipes that session's terminal, and _cleanupPreviousSession()
    * then serializes the wiped view into its restore snapshot. Asserting on the
    * helpers alone cannot see that, so pin the call sites here. This also
-   * covers run modes added later, which is how runAntigravity was caught.
+   * covers run modes added later, which is how the antigravity launch was caught.
    */
   it('routes every run mode through the ownership helpers, never the terminal directly', () => {
     const src = readFileSync(resolve(import.meta.dirname, '../src/web/public/session-ui.js'), 'utf8');
@@ -168,15 +168,11 @@ describe('Run launch synchronization', () => {
     // Methods live in one Object.assign(prototype, {...}) block at a fixed
     // 2-space indent, so `\n  },` reliably closes the one we are inside.
     //
-    // `(\w*)` in the param list, not `()`, and the leading `_?`: PR B2
-    // consolidated the eight run<Mode>() bodies into one shared
-    // `_runCliMode(mode)`, and the ORIGINAL `\(\)`-only pattern matched every
-    // one-line wrapper (`async runOpenCode() { return this._runCliMode(...) }`)
-    // but not `_runCliMode` itself, where the real terminal-ownership logic
-    // now lives — so this guard could see 8 clean one-liners and stay green
-    // while the actual bug shipped unseen for all eight external CLIs at
-    // once. Confirmed live: adding `this.terminal.clear()` to `_runCliMode`
-    // left this test 32/32 green under the old pattern.
+    // The leading `_?` matters: PR B2 consolidated the per-CLI run<Mode>()
+    // bodies into one shared `_runCliMode(mode)`, where the real
+    // terminal-ownership logic lives, and a `\(\)`-only pattern never matched
+    // it. Confirmed live: adding `this.terminal.clear()` to `_runCliMode` left
+    // this test 32/32 green under the old pattern.
     const bodies = new Map<string, string>();
     // Any parameter list (`(mode, options = {})` included), never `\(\w*\)`
     // alone, or a launcher that grew a second parameter silently drops out.
@@ -195,12 +191,6 @@ describe('Run launch synchronization', () => {
         'runClaude',
         'runShell',
         '_runCliMode',
-        'runOpenCode',
-        'runCodex',
-        'runGemini',
-        'runAntigravity',
-        'runPi',
-        'runGrok',
       ])
     );
 
@@ -773,7 +763,7 @@ describe('Codex quick start settings', () => {
       selected.push(id);
     };
 
-    await app.runCodex();
+    await app._runCliMode('codex');
 
     expect(requests.find((req) => req.url === '/api/quick-start')?.body).toMatchObject({
       caseName: 'codex-case',
@@ -1167,12 +1157,12 @@ describe('toolbar instance count', () => {
 });
 
 describe('Gemini quick start', () => {
-  // Regression guard for the ApiResponse-envelope unwrap in runGemini(): the
+  // Regression guard for the ApiResponse-envelope unwrap in the gemini launch: the
   // status check must read `.data.available` and the quick-start response must
   // read `.data.sessionId`. Reading the raw shape (pre-fix) silently bails on
   // the status check and never selects the new tab — exactly the two blockers
   // caught in PR #134 review.
-  it('drives runGemini() through the {success,data} envelope and selects the new session', async () => {
+  it('drives the gemini launch through the {success,data} envelope and selects the new session', async () => {
     const elements: Record<string, any> = {
       quickStartCase: { value: 'gemini-case' },
       tabCount: { value: '1' },
@@ -1214,7 +1204,7 @@ describe('Gemini quick start', () => {
       selected.push(id);
     };
 
-    await app.runGemini();
+    await app._runCliMode('gemini');
 
     expect(requests.find((req) => req.url === '/api/quick-start')?.body).toMatchObject({
       caseName: 'gemini-case',
@@ -1226,8 +1216,8 @@ describe('Gemini quick start', () => {
 });
 
 describe('Antigravity quick start', () => {
-  // Same envelope-unwrap regression guard as the Gemini block above, for runAntigravity().
-  it('drives runAntigravity() through the {success,data} envelope and selects the new session', async () => {
+  // Same envelope-unwrap regression guard as the Gemini block above, for antigravity.
+  it('drives the antigravity launch through the {success,data} envelope and selects the new session', async () => {
     const elements: Record<string, any> = {
       quickStartCase: { value: 'ag-case' },
       tabCount: { value: '1' },
@@ -1268,7 +1258,7 @@ describe('Antigravity quick start', () => {
       selected.push(id);
     };
 
-    await app.runAntigravity();
+    await app._runCliMode('antigravity');
 
     expect(requests.find((req) => req.url === '/api/quick-start')?.body).toMatchObject({
       caseName: 'ag-case',
@@ -1280,11 +1270,11 @@ describe('Antigravity quick start', () => {
 });
 
 describe('Pi quick start', () => {
-  // Same envelope-unwrap regression guard as the blocks above, for runPi(), plus the
+  // Same envelope-unwrap regression guard as the blocks above, for pi, plus the
   // rule that makes pi different: it must send NO piConfig. Pi has no permission
   // prompts, and `approveProjectTrust` would opt the session into EXECUTING
   // repo-supplied TypeScript — never something a Run button decides silently.
-  it('drives runPi() through the {success,data} envelope and sends no piConfig', async () => {
+  it('drives the pi launch through the {success,data} envelope and sends no piConfig', async () => {
     const elements: Record<string, any> = {
       quickStartCase: { value: 'pi-case' },
       tabCount: { value: '1' },
@@ -1327,7 +1317,7 @@ describe('Pi quick start', () => {
       selected.push(id);
     };
 
-    await app.runPi();
+    await app._runCliMode('pi');
 
     const body = requests.find((req) => req.url === '/api/quick-start')?.body;
     expect(body).toMatchObject({ caseName: 'pi-case', mode: 'pi' });
@@ -1359,7 +1349,7 @@ describe('Pi quick start', () => {
     const errors: string[] = [];
     app._reportSessionLaunchError = (_owns: boolean, msg: string) => errors.push(msg);
 
-    await app.runPi();
+    await app._runCliMode('pi');
 
     expect(requests).toEqual(['/api/pi/status']);
     expect(errors[0]).toContain('@earendil-works/pi-coding-agent');
@@ -1367,13 +1357,13 @@ describe('Pi quick start', () => {
 });
 
 describe('Grok quick start', () => {
-  // Same envelope-unwrap regression guard as the blocks above, for runGrok(),
+  // Same envelope-unwrap regression guard as the blocks above, for grok,
   // plus the rule that makes grok the OPPOSITE of pi: the Run button DOES send
   // `grokConfig: { alwaysApprove: true }` (grok's bypassPermissions mode), the
-  // same product decision as runAntigravity's dangerouslySkipPermissions and
+  // same product decision as antigravity's dangerouslySkipPermissions and
   // claude's --dangerously-skip-permissions. The multi-user clamp strips it
   // server-side for non-granted owners.
-  it('drives runGrok() through the {success,data} envelope and sends alwaysApprove', async () => {
+  it('drives the grok launch through the {success,data} envelope and sends alwaysApprove', async () => {
     const elements: Record<string, any> = {
       quickStartCase: { value: 'grok-case' },
       tabCount: { value: '1' },
@@ -1419,7 +1409,7 @@ describe('Grok quick start', () => {
       selected.push(id);
     };
 
-    await app.runGrok();
+    await app._runCliMode('grok');
 
     const body = requests.find((req) => req.url === '/api/quick-start')?.body;
     expect(body).toMatchObject({
@@ -1454,7 +1444,7 @@ describe('Grok quick start', () => {
     const errors: string[] = [];
     app._reportSessionLaunchError = (_owns: boolean, msg: string) => errors.push(msg);
 
-    await app.runGrok();
+    await app._runCliMode('grok');
 
     expect(requests).toEqual(['/api/grok/status']);
     expect(errors[0]).toContain('https://x.ai/cli/install.sh');
@@ -1516,7 +1506,7 @@ describe('Grok quick start', () => {
       selected.push(id);
     };
 
-    await app.runGrok();
+    await app._runCliMode('grok');
 
     const names = requests.filter((r) => r.url === '/api/quick-start').map((r) => r.body.sessionName);
     expect(names).toEqual(['w1-grok-case', 'w2-grok-case', 'w3-grok-case']);

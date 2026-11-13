@@ -329,7 +329,6 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
   box-shadow: var(--elevated-shadow);
 }
 html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) :is(
-  .settings-item,
   .cron-job-row,
   #cronModal .form-row-switch.cron-switch-row,
   .cron-weekdays label
@@ -338,7 +337,6 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
   border-color: var(--control-border);
 }
 html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) :is(
-  .settings-item:hover,
   .cron-job-row:hover,
   .cron-weekdays label:hover
 ) {
@@ -418,7 +416,6 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
 /* Button focus styles */
 button:focus-visible,
 .btn-toolbar:focus-visible,
-.btn-icon:focus-visible,
 .btn-icon-header:focus-visible,
 .btn-icon-sm:focus-visible {
   outline: 2px solid var(--accent);
@@ -2707,13 +2704,6 @@ html[data-header-stats] .header-system-stats .stat-item[hidden] {
   background: rgba(239, 68, 68, 0.2);
 }
 
-.tunnel-panel-empty {
-  font-size: 11px;
-  color: var(--text-muted);
-  font-style: italic;
-  padding: 4px 0;
-}
-
 .header-tokens {
   font-size: 0.75rem;
   font-weight: 500;
@@ -3757,16 +3747,6 @@ html[data-tab-logos='off'] .home-sessions-harness {
   stroke-width: 3;
 }
 
-.ralph-ring-progress {
-  fill: none;
-  stroke: url(#ralphGradient);
-  stroke-width: 3;
-  stroke-linecap: round;
-  stroke-dasharray: 100;
-  stroke-dashoffset: 100;
-  transition: stroke-dashoffset 0.5s ease-out;
-}
-
 .ralph-ring-progress-mini {
   fill: none;
   stroke: url(#ralphGradientMini);
@@ -4084,23 +4064,6 @@ html[data-tab-logos='off'] .home-sessions-harness {
   max-height: 60px;
   overflow-y: auto;
   align-content: flex-start;
-}
-
-.ralph-tasks-compact .ralph-task-card {
-  padding: 0.2rem 0.4rem;
-  font-size: 0.65rem;
-  border-left-width: 2px;
-}
-
-.ralph-tasks-compact .ralph-task-icon {
-  font-size: 0.7rem;
-}
-
-.ralph-tasks-compact .ralph-task-content {
-  max-width: 150px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /* Large Progress Ring */
@@ -6405,11 +6368,6 @@ html[data-skin="og"] .welcome-primary:hover {
 }
 
 /* Button icon styling */
-.btn-toolbar .btn-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
 
 .btn-toolbar.btn-success {
   background: linear-gradient(135deg, #16a34a 0%, #22c55e 100%);
@@ -7153,28 +7111,6 @@ html[data-skin="og"] .welcome-primary:hover {
   outline: none;
 }
 
-.toolbar-input-sm {
-  padding: 0.3rem 0.4rem;
-  background: var(--bg-input);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  color: var(--text);
-  font-size: 0.75rem;
-  width: 40px;
-  text-align: center;
-}
-
-.toolbar-input-sm:focus {
-  outline: none;
-  border-color: var(--accent);
-}
-
-.toolbar-input-sm::-webkit-inner-spin-button,
-.toolbar-input-sm::-webkit-outer-spin-button {
-  opacity: 1;
-  height: 16px;
-}
-
 #dirDisplay {
   max-width: 250px;
   overflow: hidden;
@@ -7231,18 +7167,6 @@ html[data-skin="og"] .welcome-primary:hover {
   background: var(--bg-hover);
 }
 
-.settings-section {
-  margin-bottom: 1.25rem;
-  padding-bottom: 1rem;
-  border-bottom: 1px solid var(--border);
-}
-
-.settings-section:last-child {
-  margin-bottom: 0;
-  padding-bottom: 0;
-  border-bottom: none;
-}
-
 .form-row {
   margin-bottom: 0.75rem;
 }
@@ -7296,19 +7220,6 @@ html[data-skin="og"] .welcome-primary:hover {
   box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
 }
 
-.form-col {
-  flex: 1;
-}
-
-.form-col label {
-  display: block;
-  font-size: 0.7rem;
-  color: var(--text-dim);
-  margin-bottom: 0.35rem;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-}
-
 .input-suffix {
   display: flex;
   align-items: center;
@@ -7350,46 +7261,6 @@ html[data-skin="og"] .welcome-primary:hover {
 }
 .clone-status-err {
   color: var(--red);
-}
-
-/* Preset selector */
-.preset-selector {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-
-.preset-selector select {
-  flex: 1;
-  min-width: 0;
-  padding: 0.4rem 0.5rem;
-  background: var(--bg-input);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  color: var(--text);
-  font-size: 0.75rem;
-}
-
-.preset-selector select:focus {
-  outline: none;
-  border-color: var(--accent);
-}
-
-.preset-selector .btn-sm {
-  white-space: nowrap;
-  padding: 4px 8px;
-  font-size: 0.7rem;
-  background: var(--bg-input);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  color: var(--text);
-  cursor: pointer;
-  transition: all 0.15s;
-}
-
-.preset-selector .btn-sm:hover {
-  background: var(--bg-hover);
-  border-color: var(--border-light);
 }
 
 /* Switch toggle for form rows */
@@ -7493,138 +7364,6 @@ html[data-skin="og"] .welcome-primary:hover {
 
 .switch-sm input:checked + .slider:before {
   transform: translateX(12px);
-}
-
-/* Settings Grid Layout - 2 column compact view */
-.settings-grid {
-  display: grid;
-  /* minmax(0, 1fr) lets tracks shrink below their min-content so long
-     labels ellipsis-truncate instead of blowing out the modal width and
-     forcing a horizontal scrollbar (1fr === minmax(auto, 1fr) would not). */
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 0.5rem 1rem;
-}
-
-.settings-section-header {
-  grid-column: 1 / -1;
-  font-size: 0.65rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--text-muted);
-  padding: 0.5rem 0 0.25rem 0;
-  border-bottom: 1px solid var(--border);
-  margin-top: 0.75rem;
-}
-
-.settings-section-header:first-child {
-  margin-top: 0;
-}
-
-.settings-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0.45rem 0.7rem;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: var(--btn-radius);
-  font-size: 0.75rem;
-  transition: background var(--transition-smooth);
-}
-
-.settings-item-label {
-  color: var(--text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.settings-inline-input,
-.settings-inline-select {
-  width: min(190px, 52%);
-  min-width: 0;
-  padding: 0.3rem 0.45rem;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--bg-input);
-  color: var(--text);
-  font: inherit;
-}
-
-.settings-inline-input:focus,
-.settings-inline-select:focus {
-  outline: none;
-  border-color: var(--accent);
-}
-
-/* Skin picker: full-width row (not squeezed into a half-width grid cell) with an
-   auto-width select, so the "Skin" label keeps its space instead of truncating. */
-.settings-item-skin {
-  grid-column: 1 / -1;
-  gap: 0.75rem;
-}
-.settings-item-skin .settings-item-label {
-  flex: 0 0 auto;
-}
-.settings-item-skin .form-select {
-  width: auto;
-  min-width: 220px;
-  max-width: 320px;
-  flex: 0 1 auto;
-  /* Match the field to its settings row: the base .form-select (0.8rem / 0.5rem
-     padding) renders bigger and taller than the row, and the daylight skins'
-     Manrope font exaggerates it further. Slim it to the row's 0.75rem text. */
-  font-size: 0.75rem;
-  padding-top: 0.3rem;
-  padding-bottom: 0.3rem;
-}
-
-.settings-item-multiline {
-  align-items: center;
-}
-
-.settings-item-text {
-  display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
-  min-width: 0;
-}
-
-.settings-item-desc {
-  font-size: 0.6rem;
-  color: var(--text-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.settings-item-actions {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  flex-shrink: 0;
-}
-
-/* Three column variant for notification levels */
-.settings-grid-3col {
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
-}
-
-/* Inline input in settings item */
-.settings-item-input {
-  width: 60px;
-  padding: 0.2rem 0.4rem;
-  font-size: 0.7rem;
-  background: var(--bg-dark);
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  color: var(--text);
-  text-align: right;
-}
-
-.settings-item-input:focus {
-  outline: none;
-  border-color: var(--accent);
 }
 
 /* Status badge in settings */
@@ -8310,13 +8049,6 @@ html[data-skin="og"] .welcome-primary:hover {
   margin-top: 0.125rem;
 }
 
-.run-summary-session-info {
-  font-size: 0.7rem;
-  color: var(--text-muted);
-  font-family: 'SF Mono', Monaco, monospace;
-  padding: 0.25rem 0;
-}
-
 .run-summary-footer {
   display: flex;
   flex-direction: column;
@@ -8363,19 +8095,6 @@ html[data-skin="og"] .welcome-primary:hover {
 }
 
 /* Legacy run summary modal footer */
-#runSummaryModal .modal-footer {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  padding: 0.75rem 1rem;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
-}
-
-#runSummaryModal .modal-footer .run-summary-session-info {
-  font-size: 0.7rem;
-  color: var(--text-muted);
-  font-family: 'SF Mono', Monaco, monospace;
-}
 
 .modal-warning-text {
   color: var(--text-dim);
@@ -8697,10 +8416,6 @@ html[data-skin="og"] .welcome-primary:hover {
 }
 
 /* Session respawn section in options modal */
-.session-respawn-section {
-  padding-top: 0;
-  margin-top: 0;
-}
 
 .session-respawn-status {
   display: flex;
@@ -8814,86 +8529,7 @@ html[data-skin="og"] .welcome-primary:hover {
   width: 60px;
 }
 
-/* Respawn status + Enable/Stop row — sits at the bottom of the Respawn tab,
-   below the settings it acts on */
-.respawn-header {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 1rem;
-  margin-top: 0.75rem;
-  padding-top: 0.75rem;
-  border-top: 1px solid rgba(34, 197, 94, 0.2);
-}
-
-.respawn-header .respawn-actions {
-  margin: 0;
-  padding: 0;
-  border: none;
-}
-
-/* Respawn options row - inline checkboxes */
-.respawn-options-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 1rem;
-  margin-bottom: 0.25rem;
-}
-
-/* Auto-resume on usage limit (token pause control) */
-.auto-resume-box {
-  display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
-  margin: 0.75rem 0;
-  padding: 0.6rem 0.75rem;
-  background: rgba(59, 130, 246, 0.07);
-  border: 1px solid rgba(59, 130, 246, 0.35);
-  border-radius: 6px;
-}
-
-.auto-resume-box .checkbox-inline {
-  font-size: 0.85rem;
-  font-weight: 500;
-  color: var(--text);
-}
-
-.auto-resume-box .form-hint {
-  margin-top: 0;
-}
-
-/* Respawn loop box — groups every setting that belongs to the autonomous
-   respawn cycle (duration, presets, cycle prompts, enable). Green like its
-   Enable button; a visual sibling of the standalone auto-resume option above */
-.respawn-loop-box {
-  margin: 0.75rem 0;
-  padding: 0.6rem 0.75rem;
-  background: rgba(34, 197, 94, 0.05);
-  border: 1px solid rgba(34, 197, 94, 0.3);
-  border-radius: 6px;
-}
-
-.respawn-loop-title {
-  font-size: 0.85rem;
-  font-weight: 500;
-  color: var(--text);
-  margin-bottom: 0.3rem;
-}
-
-.respawn-loop-hint {
-  display: block;
-  margin-top: 0;
-  margin-bottom: 0.5rem;
-}
-
-.respawn-loop-box .form-section-header {
-  border-bottom-color: rgba(34, 197, 94, 0.2);
-}
-
 /* Match the cycle-step checkboxes (2./3.) to the step labels (1./4.) */
-.respawn-loop-box .checkbox-inline {
-  font-size: 0.7rem;
-}
 
 .auto-resume-status {
   display: none;
@@ -8906,106 +8542,11 @@ html[data-skin="og"] .welcome-primary:hover {
   display: block;
 }
 
-/* Respawn actions in modal */
-.respawn-actions {
-  display: flex;
-  gap: 0.5rem;
-}
-
 /* The `.modal-tabs` / `.modal-tab-btn` / `.modal-tab-content` chrome is gone:
    App Settings, Session Options and Add Case all use the `set-*` surface now.
    Its last user was Add Case; see the settings-surface block near the end. */
 
-/* Context Tab Settings Grid */
-.context-settings-grid {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-  margin-bottom: 0.75rem;
-}
-
-.context-setting {
-  padding: 0.875rem;
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-}
-
-.context-setting-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  margin-bottom: 0.625rem;
-}
-
-.context-setting-header .checkbox-inline span {
-  font-weight: 500;
-}
-
-.context-setting-header .input-suffix-sm {
-  flex-shrink: 0;
-}
-
-.context-setting-header .input-suffix-sm input {
-  width: 70px;
-}
-
-.context-setting input[type="text"] {
-  width: 100%;
-  padding: 0.375rem 0.5rem;
-  background: var(--bg-input);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  color: var(--text);
-  font-size: 0.75rem;
-}
-
-.context-setting input[type="text"]:focus {
-  outline: none;
-  border-color: var(--accent);
-}
-
-.context-setting .form-hint {
-  margin-top: 0.5rem;
-}
-
-/* Ralph Limits Grid */
-.ralph-limits-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 0.75rem;
-  margin-bottom: 0.5rem;
-}
-
-@media (max-width: 500px) {
-  .ralph-limits-grid {
-    grid-template-columns: 1fr 1fr;
-  }
-}
-
-.ralph-limits-grid .form-col input[type="number"] {
-  width: 100%;
-  padding: 0.375rem 0.5rem;
-  background: var(--bg-input);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  color: var(--text);
-  font-size: 0.8rem;
-}
-
-.ralph-limits-grid .form-col .form-hint {
-  font-size: 0.6rem;
-}
-
 /* Ralph Config Actions */
-.ralph-config-actions {
-  display: flex;
-  gap: 0.5rem;
-  margin-top: 0.75rem;
-  padding-top: 0.75rem;
-  border-top: 1px solid var(--border);
-}
 
 .modal-header {
   display: flex;
@@ -10641,9 +10182,6 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
 }
 
 /* Header removed - no longer needed */
-.subagent-dropdown-header {
-  display: none;
-}
 
 .subagent-dropdown-item {
   display: flex;
@@ -10721,13 +10259,6 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
   padding: 0 2px;
   opacity: 0;
   transition: opacity 0.1s, color 0.1s;
-}
-
-.task-empty {
-  padding: 1rem;
-  text-align: center;
-  color: var(--text-muted);
-  font-size: 0.8rem;
 }
 
 /* Task Tree */
@@ -10810,28 +10341,6 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
   margin-top: 0.25rem;
 }
 
-/* Task toggle button in toolbar */
-.task-toggle-btn {
-  position: relative;
-}
-
-.task-toggle-btn .badge {
-  position: absolute;
-  top: -4px;
-  right: -4px;
-  min-width: 14px;
-  height: 14px;
-  padding: 0 3px;
-  background: var(--yellow);
-  border-radius: 7px;
-  font-size: 0.6rem;
-  font-weight: 600;
-  color: #000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
 /* Scrollbar */
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
@@ -10841,13 +10350,6 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
 }
 ::-webkit-scrollbar-thumb:hover {
   background: var(--border-light);
-}
-
-.process-empty {
-  padding: 1rem;
-  text-align: center;
-  color: var(--text-muted);
-  font-size: 0.8rem;
 }
 
 .process-item {
@@ -11833,11 +11335,6 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
           drop-shadow(0 0 12px rgba(59, 130, 246, 0.7));
 }
 
-.connection-line.spawning-line {
-  stroke-dasharray: 1000;
-  stroke-dashoffset: 1000;
-}
-
 /* Wizard connection lines - different color to show plan generation link */
 .connection-line.wizard-connection {
   stroke: #60a5fa;
@@ -11970,10 +11467,6 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
 @media (prefers-reduced-motion: no-preference) {
   .connection-line.lineage-line--working {
     animation: lineage-flow 1.1s linear infinite;
-  }
-
-  .lineage-line-dot--working {
-    animation: lineage-dot-pulse 1.4s ease-in-out infinite;
   }
 }
 
@@ -12339,10 +11832,6 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
 
 .file-tree-item.selected {
   background: rgba(59, 130, 246, 0.15);
-}
-
-.file-tree-item.hidden-by-filter {
-  display: none;
 }
 
 /* Under an expanded folder the scan's file limit stopped short of. Inert: no hover, no click. */
@@ -12992,12 +12481,6 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
   line-height: 1.4;
 }
 
-.log-viewer-window-body .log-line {
-  padding: 0.1rem 0;
-  content-visibility: auto;
-  contain-intrinsic-size: auto 20px;
-}
-
 .log-viewer-window-body .log-error {
   color: var(--error);
 }
@@ -13544,60 +13027,6 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
 }
 
 /* Existing wizard files section */
-.existing-wizard-files-section {
-  padding: 1rem;
-}
-
-.existing-wizard-card {
-  background: var(--bg-dark);
-  border: 1px solid var(--accent);
-  border-radius: 8px;
-  padding: 1rem;
-}
-
-.existing-wizard-header {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  margin-bottom: 0.5rem;
-}
-
-.existing-wizard-icon {
-  font-size: 1.2rem;
-}
-
-.existing-wizard-title {
-  font-weight: 600;
-  color: var(--text);
-}
-
-.existing-wizard-desc {
-  font-size: 0.85rem;
-  color: var(--text-dim);
-  margin: 0 0 0.75rem 0;
-}
-
-.existing-wizard-agents {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem;
-  margin-bottom: 1rem;
-}
-
-.existing-wizard-agent {
-  background: rgba(96, 165, 250, 0.2);
-  color: var(--accent);
-  padding: 0.2rem 0.5rem;
-  border-radius: 4px;
-  font-size: 0.75rem;
-  font-weight: 500;
-}
-
-.existing-wizard-actions {
-  display: flex;
-  gap: 0.5rem;
-  justify-content: center;
-}
 
 .plan-cancel-btn {
   color: var(--red);
@@ -13740,22 +13169,6 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
   text-overflow: ellipsis;
 }
 
-/* Clickable prompt link in plan subagent header */
-.plan-subagent-prompt-link {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  cursor: pointer;
-  padding: 0.15rem 0.3rem;
-  margin: -0.15rem -0.3rem;
-  border-radius: 4px;
-  transition: background 0.15s ease;
-}
-
-.plan-subagent-prompt-link:hover {
-  background: rgba(255, 255, 255, 0.1);
-}
-
 /* Clickable status text */
 .plan-subagent-status-text.clickable {
   cursor: pointer;
@@ -13823,11 +13236,6 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
 }
 
 /* Iteration Presets */
-.iteration-presets {
-  display: flex;
-  gap: 0.35rem;
-  flex-wrap: wrap;
-}
 
 .iteration-preset-btn {
   padding: 0.5rem 1rem;
@@ -16771,20 +16179,6 @@ body.touch-device.cjk-input-visible .main {
   display: flex;
 }
 
-.attachment-type-badge {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 44px;
-  height: 44px;
-  border-radius: 6px;
-  background: var(--bg-input);
-  color: var(--text);
-  border: 1px solid var(--border-light);
-  font-size: 0.7rem;
-  font-weight: 700;
-}
-
 .attachment-card-main {
   min-width: 0;
 }
@@ -17129,7 +16523,6 @@ html:not([data-skin="og"]) {
   background: linear-gradient(90deg, var(--banner-bg-a), var(--banner-bg-b));
   border-bottom: 1px solid var(--glass-border);
 }
-.respawn-countdown-timer .respawn-timer-value,
 .action-type { color: var(--accent); }
 .respawn-timer-progress { background: var(--accent); }
 .respawn-action-log { border-left-color: rgba(var(--accent-rgb), 0.18); }
@@ -17145,7 +16538,6 @@ html:not([data-skin="og"]) {
 /* Ralph status badges: collapse the off-token Material palette onto the system */
 .ralph-status-badge { color: var(--text-dim); }
 .ralph-status-dot { box-shadow: none; }
-.ralph-info { background: rgba(var(--accent-rgb), 0.05); }
 
 /* ---- Bottom toolbar + neutral buttons ---- */
 .toolbar { box-shadow: 0 -1px 3px rgba(0, 0, 0, 0.22), 0 -4px 14px rgba(0, 0, 0, 0.14); }
@@ -17311,10 +16703,6 @@ html:not([data-skin="og"]) {
   background: var(--floating-bg);
   border: 1px solid var(--control-border);
 }
-
-/* ---- Subagent progress ring: emerald, calm glow ---- */
-.subagent-ring-progress,
-.subagent-ring circle.progress { stroke: var(--accent); }
 
 /* ---- PROGRESS RING (Ralph large): the one place a soft glow lives ---- */
 .ralph-ring-fill { filter: drop-shadow(0 0 6px rgba(var(--accent-rgb), 0.45)); }
