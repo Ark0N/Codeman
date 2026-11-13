@@ -177,7 +177,7 @@ Object.assign(CodemanApp.prototype, {
     this.findParentSessionForSubagent(data.agentId);
 
     // Subagent windows are no longer auto-opened on discovery.
-    // Users can open them manually from the monitor panel or via openAllActiveSubagentWindows().
+    // Users open them from the subagents panel.
 
     // Ensure connection lines are updated after window is created and DOM settles
     requestAnimationFrame(() => {
