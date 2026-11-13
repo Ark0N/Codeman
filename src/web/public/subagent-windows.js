@@ -329,83 +329,6 @@ Object.assign(CodemanApp.prototype, {
   },
 
   // ═══════════════════════════════════════════════════════════════
-  // Lazy Terminal Lifecycle
-  // ═══════════════════════════════════════════════════════════════
-  //
-  // Teammate terminal windows use xterm.js Terminal instances that consume
-  // ~75KB of DOM memory each. With 50 agents minimized, that's ~3.75MB of
-  // invisible terminals. To avoid this, we dispose the Terminal when a
-  // window is minimized and lazily re-create it when restored.
-  //
-  // Flow:
-  //   minimize → _disposeTeammateTerminalForMinimize() → sets _lazyTerminal flag
-  //   restore  → _restoreTeammateTerminalFromLazy()   → re-creates Terminal
-  //   create (hidden/minimized) → skip initTeammateTerminal, set _lazyTerminal
-  //
-  // The tmux pane buffer is re-fetched from the API on restore. Regular
-  // (non-teammate) subagent windows use activity HTML and are unaffected
-  // by this optimization.
-
-  /**
-   * Dispose a teammate terminal when its window is minimized.
-   * Saves pane metadata so the terminal can be re-created on restore.
-   * No-op if the window has no teammate terminal.
-   */
-  _disposeTeammateTerminalForMinimize(agentId) {
-    const termData = this.teammateTerminals.get(agentId);
-    if (!termData) return; // Not a teammate terminal window
-
-    const windowData = this.subagentWindows.get(agentId);
-
-    // Save pane metadata needed to re-create the terminal on restore
-    if (windowData) {
-      windowData._lazyTerminal = true;
-      windowData._lazyPaneTarget = termData.paneTarget;
-      windowData._lazySessionId = termData.sessionId;
-    }
-
-    // Dispose the resize observer
-    if (termData.resizeObserver) {
-      termData.resizeObserver.disconnect();
-    }
-
-    // Dispose the xterm.js Terminal instance (frees DOM nodes and internal buffers)
-    if (termData.terminal) {
-      try {
-        termData.terminal.dispose();
-      } catch {}
-    }
-
-    // Remove from teammateTerminals map so renderSubagentWindowContent won't skip this window
-    // (the activity HTML can serve as a lightweight placeholder while minimized)
-    this.teammateTerminals.delete(agentId);
-  },
-
-  /**
-   * Re-create a teammate terminal when its window is restored from minimized state.
-   * Fetches the current pane buffer from the API (tmux is the source of truth).
-   * No-op if the window doesn't have the _lazyTerminal flag.
-   */
-  _restoreTeammateTerminalFromLazy(agentId) {
-    const windowData = this.subagentWindows.get(agentId);
-    if (!windowData || !windowData._lazyTerminal) return;
-
-    const paneTarget = windowData._lazyPaneTarget;
-    const sessionId = windowData._lazySessionId;
-
-    // Clear lazy state
-    windowData._lazyTerminal = false;
-    windowData._lazyPaneTarget = null;
-    windowData._lazySessionId = null;
-
-    if (!paneTarget || !sessionId) return;
-
-    // Re-create the terminal using the same initTeammateTerminal flow
-    const paneInfo = { paneTarget, sessionId };
-    this.initTeammateTerminal(agentId, paneInfo, windowData.element);
-  },
-
-  // ═══════════════════════════════════════════════════════════════
   // Subagent Floating Windows
   // ═══════════════════════════════════════════════════════════════
 
@@ -612,24 +535,7 @@ Object.assign(CodemanApp.prototype, {
       win.style.display = 'none';
     }
 
-    // Render content — check if this teammate has a tmux pane
-    const paneInfo = teammateInfo ? this.teammatePanesByName.get(teammateInfo.name) : null;
-    if (paneInfo) {
-      if (shouldHide) {
-        // Window starts hidden — defer terminal creation until visible (lazy init).
-        // Saves ~75KB of DOM memory per hidden teammate terminal window.
-        const windowEntry = this.subagentWindows.get(agentId);
-        if (windowEntry) {
-          windowEntry._lazyTerminal = true;
-          windowEntry._lazyPaneTarget = paneInfo.paneTarget;
-          windowEntry._lazySessionId = paneInfo.sessionId;
-        }
-      } else {
-        this.initTeammateTerminal(agentId, paneInfo, win);
-      }
-    } else {
-      this.renderSubagentWindowContent(agentId);
-    }
+    this.renderSubagentWindowContent(agentId);
 
     // Focus on click
     win.addEventListener('mousedown', () => {
@@ -701,10 +607,6 @@ Object.assign(CodemanApp.prototype, {
       this.setAgentParentSessionId(agentId, parentSessionId);
     }
 
-    // Dispose teammate terminal on minimize to free DOM/memory (~75KB per instance).
-    // The terminal will be lazily re-created on restore via initTeammateTerminal().
-    this._disposeTeammateTerminalForMinimize(agentId);
-
     // Always minimize to tab
     windowData.element.style.display = 'none';
     windowData.minimized = true;
@@ -774,18 +676,6 @@ Object.assign(CodemanApp.prototype, {
       windowData.element.remove();
     }
     this.subagentWindows.clear();
-
-    // Clean up all teammate terminals
-    for (const [, termData] of this.teammateTerminals) {
-      if (termData.resizeObserver) termData.resizeObserver.disconnect();
-      if (termData.terminal) {
-        try {
-          termData.terminal.dispose();
-        } catch {}
-      }
-    }
-    this.teammateTerminals.clear();
-    this.teammatePanesByName.clear();
 
     // Clean up all log viewer windows with their EventSources and drag listeners
     for (const data of this.logViewerWindows.values()) {
@@ -867,12 +757,6 @@ Object.assign(CodemanApp.prototype, {
         windowData.hidden = false;
       }
       windowData.minimized = false;
-
-      // Lazily re-create teammate terminal if it was disposed on minimize.
-      // Only re-create when the window is actually becoming visible.
-      if (shouldShow && windowData._lazyTerminal) {
-        this._restoreTeammateTerminalFromLazy(agentId);
-      }
 
       this.updateConnectionLines();
       // Restack all visible mobile windows so restored ones don't overlap

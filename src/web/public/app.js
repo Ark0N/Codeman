@@ -855,10 +855,6 @@ class CodemanApp {
     // Once set, never recalculated. Persisted to localStorage and server.
     this.subagentParentMap = new Map();
 
-    // Teammate tmux pane terminals (Agent Teams feature)
-    this.teammatePanesByName = new Map(); // Map<name, { paneTarget, sessionId, color }>
-    this.teammateTerminals = new Map(); // Map<agentId, { terminal, fitAddon, paneTarget, sessionId, resizeObserver }>
-
     this.terminalBufferCache = new Map(); // Map<sessionId, string> — client-side cache for instant tab re-visits (max 20)
 
     this.ralphStatePanelCollapsed = true; // Default to collapsed

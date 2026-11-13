@@ -7,7 +7,6 @@
  *   only session:terminal is filtered by subscription)
  * - Tab switching: terminal buffer loading, session creation + switch
  * - Terminal data cap / backpressure recovery
- * - Lazy teammate terminal lifecycle
  * - SSE padding strategy (only latency-sensitive events)
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
