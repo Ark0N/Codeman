@@ -16,6 +16,8 @@ import { join } from 'node:path';
 import { watch as chokidarWatch, type FSWatcher as ChokidarWatcher } from 'chokidar';
 
 import type { TeamConfig, TeamTask, InboxMessage } from './types.js';
+import { getErrorMessage } from './types/api.js';
+import { closeWatcherOnError } from './utils/close-watcher-on-error.js';
 import { LRUMap } from './utils/lru-map.js';
 import { TEAM_POLL_INTERVAL_MS, MAX_CACHED_TEAMS, MAX_CACHED_TASKS } from './config/team-config.js';
 
@@ -66,8 +68,8 @@ export class TeamWatcher extends EventEmitter {
       this.teamsWatcher.on('change', teamsHandler);
       this.teamsWatcher.on('unlink', teamsHandler);
       this.teamsWatcher.on('unlinkDir', teamsHandler);
-      this.teamsWatcher.on('error', (err) => {
-        console.warn('[TeamWatcher] chokidar teams watcher error:', err);
+      closeWatcherOnError(this.teamsWatcher, (err) => {
+        console.warn(`[TeamWatcher] teams watcher stopped, relying on polling: ${getErrorMessage(err)}`);
       });
     } catch (err) {
       console.warn('[TeamWatcher] Failed to set up teams chokidar watcher, relying on polling:', err);
@@ -84,8 +86,8 @@ export class TeamWatcher extends EventEmitter {
 
       this.tasksWatcher.on('add', () => this.pollTasks().catch(() => {})); // Ignore - poll errors are non-fatal, next poll will retry
       this.tasksWatcher.on('change', () => this.pollTasks().catch(() => {})); // Ignore - poll errors are non-fatal, next poll will retry
-      this.tasksWatcher.on('error', (err) => {
-        console.warn('[TeamWatcher] chokidar tasks watcher error:', err);
+      closeWatcherOnError(this.tasksWatcher, (err) => {
+        console.warn(`[TeamWatcher] tasks watcher stopped, relying on polling: ${getErrorMessage(err)}`);
       });
     } catch (err) {
       console.warn('[TeamWatcher] Failed to set up tasks chokidar watcher, relying on polling:', err);
