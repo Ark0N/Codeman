@@ -4064,8 +4064,8 @@ Object.assign(CodemanApp.prototype, {
    * what the pull left rather than flashing the state it is about to replace.
    */
   _maybeLoadMoreHistoryOnScroll(lines) {
-    if (typeof this._earlyReplayTravel === 'number') {
-      this._earlyReplayTravel += lines;
+    if (Array.isArray(this._earlyReplayTravel)) {
+      this._earlyReplayTravel.push(lines);
       return;
     }
     if (lines > 0) {

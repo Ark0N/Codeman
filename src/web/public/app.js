@@ -806,7 +806,7 @@ class CodemanApp {
     this._fullHistoryRepullInFlight = false;
     this._liveOutputSinceFullPull = new Set(); // Set<sessionId>
     this._liveOutputGen = new Map(); // Map<sessionId, number>
-    this._earlyReplayTravel = null;
+    this._earlyReplayTravel = null; // number[] while an early (#814) replay runs
     // Sessions whose last re-pull came back THINNER than the live buffer (a
     // repaint-mode CLI pane, where tmux keeps no history of its own). The pull is
     // refused for those and retried far more slowly — see _maybeRefetchFullHistory.
@@ -9645,6 +9645,10 @@ class CodemanApp {
     // replaying its own capture, and the reset below would land in the middle
     // of that write. The select generation moves on every switch, so it can.
     const selectGen = this._selectGeneration;
+    // Sampled BEFORE the fetch: this path does not gate live output while the
+    // capture downloads, so output flushed after tmux captured would otherwise
+    // be overwritten by the replay and still count as covered by it (#814).
+    const liveOutputGen = this._liveOutputGen?.get(sessionId) || 0;
     try {
       const requestStartedAt = performance.now();
       const capture = await this._fetchTerminalCapture(
@@ -9741,8 +9745,9 @@ class CodemanApp {
       const rowsBefore = this.terminal.buffer.active.length;
       const replayStartedAt = performance.now();
       const rowsFromBottom = this.terminal.buffer.active.baseY - this.terminal.buffer.active.viewportY;
-      const liveOutputGen = this._liveOutputGen?.get(sessionId) || 0;
-      if (anchor === 'bottom') this._earlyReplayTravel = 0;
+      // Ordered, not summed: each move clamps at the buffer edge as it would
+      // have live, so a reversal after hitting the bottom is not cancelled out.
+      if (anchor === 'bottom') this._earlyReplayTravel = [];
       this._resetTerminalForReplay();
       const {
         parsedAt,
@@ -9774,8 +9779,10 @@ class CodemanApp {
       if (anchor === 'bottom') {
         // Recover the tmux repaint gap above the live screen without a jump (#814).
         const baseY = this.terminal.buffer.active.baseY;
-        const distance = rowsFromBottom - this._earlyReplayTravel;
-        this.terminal.scrollToLine(Math.max(0, Math.min(baseY, baseY - distance)));
+        const clamp = (row) => Math.max(0, Math.min(baseY, row));
+        let row = clamp(baseY - rowsFromBottom);
+        for (const move of this._earlyReplayTravel) row = clamp(row + move);
+        this.terminal.scrollToLine(row);
         this._earlyReplayTravel = null;
       } else {
         const delta = parsedBufferLength - rowsBefore;

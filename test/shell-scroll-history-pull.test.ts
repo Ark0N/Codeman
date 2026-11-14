@@ -262,7 +262,7 @@ describe('early full-history recovery above live output (#814)', () => {
     const app = Object.assign(base, {
       _liveOutputSinceFullPull: new Set<string>(),
       _liveOutputGen: new Map<string, number>(),
-      _earlyReplayTravel: null as number | null,
+      _earlyReplayTravel: null as number[] | null,
       pendingWrites: [] as string[],
       _wasAtBottomBeforeWrite: false,
       _scheduleTerminalWriteFlush: vi.fn(),
@@ -338,18 +338,20 @@ describe('early full-history recovery above live output (#814)', () => {
   });
 
   it.each([
-    { travel: -12, distance: 17 },
-    { travel: 20, distance: 0 },
-    { travel: -1000, distance: 370 },
-  ])('preserves travel $travel during an unfinished replay, clamped to the buffer', async ({ travel, distance }) => {
+    { moves: [-12], distance: 17 },
+    { moves: [20], distance: 0 },
+    { moves: [-1000], distance: 370 },
+    // Reversal after an edge: each move clamps as it would have live.
+    { moves: [20, -12], distance: 12 },
+    { moves: [-1000, 30], distance: 340 },
+  ])('replays travel $moves made during an unfinished replay, clamped per move', async ({ moves, distance }) => {
     const { app, active, liveOutput, scroll, pauseReplay } = makeScrollApp();
     liveOutput();
     const paused = pauseReplay();
     const pull = scroll(-5);
     await paused.ready;
     // The temporary reset buffer cannot scroll, but the gesture still counts.
-    active.viewportY = Math.max(0, Math.min(active.baseY, active.viewportY + travel));
-    (mixin._maybeLoadMoreHistoryOnScroll as Function).call(app, travel);
+    for (const move of moves) (mixin._maybeLoadMoreHistoryOnScroll as Function).call(app, move);
     expect(app._maybeRefetchFullHistory).toHaveBeenCalledTimes(1);
     paused.release();
     await pull;
@@ -357,6 +359,20 @@ describe('early full-history recovery above live output (#814)', () => {
     expect(app._earlyReplayTravel).toBeNull();
   });
 
+  it('keeps a session dirty when live output lands while the capture is still downloading', async () => {
+    const { app, urls, liveOutput, scroll } = makeScrollApp();
+    liveOutput();
+    const fetchCapture = app._fetchTerminalCapture.getMockImplementation()!;
+    app._fetchTerminalCapture.mockImplementationOnce(async (url: string) => {
+      const capture = await fetchCapture(url);
+      // tmux has captured; this output is newer than the capture the replay writes.
+      liveOutput();
+      return capture;
+    });
+    await scroll(-5);
+    expect(urls).toHaveLength(1);
+    expect(app._liveOutputSinceFullPull.has('s1')).toBe(true);
+  });
   it('keeps live output flushed before the final restore dirty for the next early pull', async () => {
     const { app, active, urls, liveOutput, scroll, pauseReplay } = makeScrollApp();
     liveOutput();
