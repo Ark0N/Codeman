@@ -68,7 +68,7 @@ function loadTerminalMixin(): Record<string, unknown> {
   return FakeCodemanApp.prototype;
 }
 
-function loadRefetch(): (this: unknown, opts?: { force?: boolean }) => Promise<void> {
+function loadRefetch(): (this: unknown, opts?: { force?: boolean; anchor?: string }) => Promise<void> {
   const app = readFileSync(resolve(PUBLIC, 'app.js'), 'utf8');
   const body = methodSource(app, '_maybeRefetchFullHistory');
   const context = vm.createContext({ performance, TERMINAL_TAIL_SIZE, TERMINAL_CHUNK_SIZE: 32 * 1024 });
@@ -134,7 +134,7 @@ function makeApp(
       rows: 30,
       // xterm's scrollback option; 0 leaves the browser-cap check out of a test.
       options: { scrollback },
-      buffer: { active: { length: bufferRows, baseY: 0 } },
+      buffer: { active: { length: bufferRows, baseY: 0, viewportY: 0 } },
       scrollToLine: vi.fn(),
       scrollToTop: vi.fn(),
     },
@@ -253,6 +253,186 @@ describe('shell scroll-up pulls a bounded window of tmux history', () => {
     const button = makeApp('shell', { bufferRows: 40, capture: lines(300), payload: capped });
     await refetch.call(button.app, { force: true });
     expect(computeNotice(button.app._historyTruncation.get('s1') as Record<string, unknown>).canLoadMore).toBe(false);
+  });
+});
+
+describe('early full-history recovery above live output (#814)', () => {
+  function makeScrollApp(mode = 'omp') {
+    const { app: base, urls } = makeApp(mode, { bufferRows: 130, capture: lines(400) });
+    const app = Object.assign(base, {
+      _liveOutputSinceFullPull: new Set<string>(),
+      _liveOutputGen: new Map<string, number>(),
+      _earlyReplayTravel: null as number | null,
+      pendingWrites: [] as string[],
+      _wasAtBottomBeforeWrite: false,
+      _scheduleTerminalWriteFlush: vi.fn(),
+      _restoreTerminalViewport: vi.fn(),
+      _noteMobileImeAuthoritativeOutput: vi.fn(),
+      _hasRecentUserScrollUp: () => false,
+      isTerminalAtBottom: () => app.terminal.buffer.active.viewportY >= app.terminal.buffer.active.baseY - 2,
+      _setHistoryNoticeRevealed: vi.fn(),
+      _maybeRefetchFullHistory: vi.fn((opts?: { anchor?: string }) => refetch.call(app, opts)),
+    });
+    Object.assign(app.terminal.buffer.active, { baseY: 100, viewportY: 100 });
+    const active = app.terminal.buffer.active as typeof app.terminal.buffer.active & { viewportY: number };
+    Object.assign(app.terminal, {
+      write: vi.fn((_text: string, done: () => void) => done()),
+      scrollToBottom: vi.fn(),
+      scrollLines: (n: number) => {
+        active.viewportY = Math.max(0, Math.min(active.baseY, active.viewportY + n));
+      },
+    });
+    app.terminal.scrollToLine.mockImplementation((row: number) => {
+      active.viewportY = row;
+    });
+    app.chunkedTerminalWrite.mockImplementation(async () => {
+      active.baseY = 370;
+      active.viewportY = 370;
+      active.length = 400;
+      return { parsedAt: performance.now(), bufferLength: 400, completed: true };
+    });
+    const liveOutput = () => {
+      (mixin.batchTerminalWrite as Function).call(app, 'live repaint');
+      (mixin.flushPendingWrites as Function).call(app);
+    };
+    const scroll = async (n: number) => {
+      active.viewportY = Math.max(0, Math.min(active.baseY, active.viewportY + n));
+      (mixin._maybeLoadMoreHistoryOnScroll as Function).call(app, n);
+      const pull = app._maybeRefetchFullHistory.mock.results.at(-1);
+      if (pull) await pull.value;
+    };
+    function pauseReplay(beforeComplete = () => {}) {
+      const replay = app.chunkedTerminalWrite.getMockImplementation()!;
+      const { promise: gate, resolve: release } = Promise.withResolvers<void>();
+      const { promise: ready, resolve: started } = Promise.withResolvers<void>();
+      app.chunkedTerminalWrite.mockImplementationOnce(async () => {
+        app._isLoadingBuffer = true;
+        active.baseY = 0;
+        active.viewportY = 0;
+        started();
+        await gate;
+        const result = await replay();
+        app._isLoadingBuffer = false;
+        beforeComplete();
+        return result;
+      });
+      return { ready, release };
+    }
+    return { app, active, urls, liveOutput, scroll, pauseReplay };
+  }
+
+  it('pulls on the first upward scroll after live output and preserves distance from the new bottom', async () => {
+    const { app, active, urls, liveOutput, scroll } = makeScrollApp();
+    liveOutput();
+    await scroll(-5);
+    expect(urls).toEqual(['/api/sessions/s1/terminal?full=1']);
+    expect(active.viewportY).toBe(365);
+    expect(active.baseY - active.viewportY).toBe(5);
+    expect(app._liveOutputSinceFullPull.has('s1')).toBe(false);
+    expect(app._syncStickyScrollBaseline).toHaveBeenCalledOnce();
+    // No second early pull until another live write dirties this session.
+    active.viewportY = active.baseY;
+    app._fullHistoryRepullAt.clear();
+    await scroll(-3);
+    expect(urls).toHaveLength(1);
+  });
+
+  it.each([
+    { travel: -12, distance: 17 },
+    { travel: 20, distance: 0 },
+    { travel: -1000, distance: 370 },
+  ])('preserves travel $travel during an unfinished replay, clamped to the buffer', async ({ travel, distance }) => {
+    const { app, active, liveOutput, scroll, pauseReplay } = makeScrollApp();
+    liveOutput();
+    const paused = pauseReplay();
+    const pull = scroll(-5);
+    await paused.ready;
+    // The temporary reset buffer cannot scroll, but the gesture still counts.
+    active.viewportY = Math.max(0, Math.min(active.baseY, active.viewportY + travel));
+    (mixin._maybeLoadMoreHistoryOnScroll as Function).call(app, travel);
+    expect(app._maybeRefetchFullHistory).toHaveBeenCalledTimes(1);
+    paused.release();
+    await pull;
+    expect(active.baseY - active.viewportY).toBe(distance);
+    expect(app._earlyReplayTravel).toBeNull();
+  });
+
+  it('keeps live output flushed before the final restore dirty for the next early pull', async () => {
+    const { app, active, urls, liveOutput, scroll, pauseReplay } = makeScrollApp();
+    liveOutput();
+    const generation = app._liveOutputGen.get('s1');
+    const paused = pauseReplay(liveOutput);
+    const pull = scroll(-5);
+    await paused.ready;
+    paused.release();
+    await pull;
+    expect(app._liveOutputGen.get('s1')).toBe(generation! + 1);
+    expect(app._liveOutputSinceFullPull.has('s1')).toBe(true);
+    app._fullHistoryRepullAt.clear();
+    active.viewportY = active.baseY;
+    await scroll(-3);
+    expect(urls).toEqual(['/api/sessions/s1/terminal?full=1', '/api/sessions/s1/terminal?full=1']);
+    expect(app._liveOutputSinceFullPull.has('s1')).toBe(false);
+  });
+
+  it('keeps a clean non-shell session local until the existing top path is reached', async () => {
+    const { app, active, urls, scroll } = makeScrollApp();
+    await scroll(-5);
+    expect(urls).toEqual([]);
+    await scroll(-active.viewportY);
+    expect(urls).toEqual(['/api/sessions/s1/terminal?full=1']);
+    expect(app._maybeRefetchFullHistory).toHaveBeenCalledWith();
+    expect(app.terminal.scrollToLine).toHaveBeenCalledWith(270);
+  });
+
+  it('never pulls early for a shell, even after live output', async () => {
+    const { urls, liveOutput, scroll } = makeScrollApp('shell');
+    liveOutput();
+    await scroll(-5);
+    expect(urls).toEqual([]);
+    await scroll(-95);
+    expect(urls).toEqual([`/api/sessions/s1/terminal?full=1&tail=${TERMINAL_TAIL_SIZE}`]);
+  });
+
+  it('does not dirty a session while replay loading queues its output', () => {
+    const { app, liveOutput } = makeScrollApp();
+    app._isLoadingBuffer = true;
+    liveOutput();
+    expect(app._liveOutputSinceFullPull.size).toBe(0);
+  });
+
+  it('does not pull early for downward travel or while already reading older rows', async () => {
+    const { active, urls, liveOutput, scroll } = makeScrollApp();
+    liveOutput();
+    active.viewportY = 50;
+    await scroll(-5);
+    active.viewportY = 95;
+    await scroll(3);
+    expect(urls).toEqual([]);
+  });
+
+  it.each(['_isLoadingBuffer', '_fullHistoryRepullInFlight'] as const)('respects the %s guard', async (guard) => {
+    const { app, urls, liveOutput, scroll } = makeScrollApp();
+    liveOutput();
+    app[guard] = true;
+    await scroll(-5);
+    expect(urls).toEqual([]);
+  });
+
+  it('keeps the cooldown and downgrade guard on an early pull', async () => {
+    const { app, active, urls, liveOutput, scroll } = makeScrollApp();
+    liveOutput();
+    app._fullHistoryRepullAt.set('s1', Date.now());
+    await scroll(-3);
+    expect(urls).toEqual([]);
+    app._fullHistoryRepullAt.clear();
+    active.viewportY = active.baseY;
+    active.length = 1000;
+    await scroll(-3);
+    expect(urls).toHaveLength(1);
+    expect(app._resetTerminalForReplay).not.toHaveBeenCalled();
+    expect(app._liveOutputSinceFullPull.has('s1')).toBe(true);
+    expect(app._fullHistoryRepullUseless.has('s1')).toBe(true);
   });
 });
 
