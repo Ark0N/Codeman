@@ -3,6 +3,8 @@
 use muda::accelerator::{Accelerator, Code, Modifiers};
 use muda::{AboutMetadata, CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 
+use crate::tabs::{PALETTE, PALETTE_NAMES};
+
 use crate::config::Config;
 use crate::keep_awake::{self, Mode};
 use crate::logo::{self, BlinkStyle, Signal};
@@ -21,11 +23,124 @@ pub mod menu_id {
     pub const DEVTOOLS: &str = "devtools";
     pub const HELP_DOCS: &str = "help-docs";
     pub const HELP_GITHUB: &str = "help-github";
+    pub const TAB_NEW: &str = "tab-new";
+    pub const TAB_CLOSE: &str = "tab-close";
+    pub const TAB_REOPEN: &str = "tab-reopen";
+    pub const TAB_OVERVIEW: &str = "tab-overview";
+    pub const TAB_NEXT: &str = "tab-next";
+    pub const TAB_PREVIOUS: &str = "tab-previous";
+    pub const WINDOW_CLOSE: &str = "window-close";
+    /// `tab-key-<n>`: the tab ⌘n selects (tabs::index_of_key).
+    pub const TAB_KEY_PREFIX: &str = "tab-key-";
+    /// `tab-menu:<tab>:<action>`: an item of a tab's right-click menu.
+    pub const TAB_MENU_PREFIX: &str = "tab-menu:";
+}
+
+/// What a tab's right-click menu asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TabAction {
+    Rename,
+    /// A palette colour, by index into `tabs::PALETTE`.
+    Color(usize),
+    Reload,
+    /// Show the connect page in this tab (another server, or the same with
+    /// another login).
+    Reconnect,
+    Close,
+    CloseOthers,
+}
+
+impl TabAction {
+    fn id(self, tab: u64) -> String {
+        let action = match self {
+            TabAction::Rename => "rename".to_string(),
+            TabAction::Color(i) => format!("color-{i}"),
+            TabAction::Reload => "reload".to_string(),
+            TabAction::Reconnect => "reconnect".to_string(),
+            TabAction::Close => "close".to_string(),
+            TabAction::CloseOthers => "close-others".to_string(),
+        };
+        format!("{}{tab}:{action}", menu_id::TAB_MENU_PREFIX)
+    }
+
+    /// The tab and action of a right-click menu item's id.
+    pub fn parse(id: &str) -> Option<(u64, TabAction)> {
+        let (tab, action) = id.strip_prefix(menu_id::TAB_MENU_PREFIX)?.split_once(':')?;
+        let tab = tab.parse().ok()?;
+        let action = match action {
+            "rename" => TabAction::Rename,
+            "reload" => TabAction::Reload,
+            "reconnect" => TabAction::Reconnect,
+            "close" => TabAction::Close,
+            "close-others" => TabAction::CloseOthers,
+            other => {
+                let i: usize = other.strip_prefix("color-")?.parse().ok()?;
+                (i < PALETTE.len()).then_some(TabAction::Color(i))?
+            }
+        };
+        Some((tab, action))
+    }
+}
+
+/// The ⌘ number of a `tab-key-<n>` item.
+pub fn tab_key(id: &str) -> Option<usize> {
+    id.strip_prefix(menu_id::TAB_KEY_PREFIX)?
+        .parse()
+        .ok()
+        .filter(|k| (1..=9).contains(k))
+}
+
+/// The right-click menu of one tab. `server`: the tab shows a server (Reload
+/// and Connect to Another Server make sense); `others`: there are other tabs.
+pub fn tab_context_menu(tab: u64, color: &str, server: bool, others: bool) -> muda::Result<Menu> {
+    let menu = Menu::new();
+    menu.append(&MenuItem::with_id(
+        TabAction::Rename.id(tab),
+        "Rename Tab\u{2026}",
+        true,
+        None,
+    ))?;
+    let colors = Submenu::new("Tab Color", true);
+    for (i, (value, name)) in PALETTE.iter().zip(PALETTE_NAMES).enumerate() {
+        let chosen = value.eq_ignore_ascii_case(color);
+        colors.append(&CheckMenuItem::with_id(
+            TabAction::Color(i).id(tab),
+            name,
+            true,
+            chosen,
+            None,
+        ))?;
+    }
+    menu.append(&colors)?;
+    menu.append(&PredefinedMenuItem::separator())?;
+    menu.append(&MenuItem::with_id(TabAction::Reload.id(tab), "Reload", server, None))?;
+    menu.append(&MenuItem::with_id(
+        TabAction::Reconnect.id(tab),
+        "Connect This Tab to Another Server\u{2026}",
+        server,
+        None,
+    ))?;
+    menu.append(&PredefinedMenuItem::separator())?;
+    menu.append(&MenuItem::with_id(TabAction::Close.id(tab), "Close Tab", true, None))?;
+    menu.append(&MenuItem::with_id(
+        TabAction::CloseOthers.id(tab),
+        "Close Other Tabs",
+        others,
+        None,
+    ))?;
+    Ok(menu)
 }
 
 pub struct AppMenu {
     pub bar: Menu,
     pub window_menu: Submenu,
+    /// Server: the tab commands, then one item per tab (`set_tabs`).
+    server_menu: Submenu,
+    /// ⌘1 to ⌘9, made once and shown as many as there are tabs.
+    tab_items: Vec<CheckMenuItem>,
+    /// How many of `tab_items` are in the menu.
+    tab_items_shown: usize,
+    pub reopen: MenuItem,
     pub help_menu: Submenu,
     pub start_fullscreen: CheckMenuItem,
     /// The one switch for the logo. None on a Mac without a lit logo, which has no
@@ -118,6 +233,34 @@ fn build_keep_awake(config: &Config) -> muda::Result<(Submenu, KeepAwakeMenu)> {
             status,
         },
     ))
+}
+
+impl AppMenu {
+    /// One item per tab under Server, as (name, in front), with ⌘1 to ⌘8 for
+    /// the first eight and ⌘9 for the last (`tabs::key_of`). Items past nine
+    /// tabs are left out, as Safari does.
+    pub fn set_tabs(&mut self, tabs: &[(String, bool)]) {
+        let len = tabs.len();
+        let shown: Vec<(usize, &(String, bool))> = tabs
+            .iter()
+            .enumerate()
+            .filter_map(|(i, t)| crate::tabs::key_of(i, len).map(|k| (k, t)))
+            .collect();
+        for item in self.tab_items.iter().take(self.tab_items_shown) {
+            let _ = self.server_menu.remove(item);
+        }
+        self.tab_items_shown = 0;
+        // Appended in key order, which is tab order.
+        for (key, (name, active)) in shown {
+            if let Some(item) = self.tab_items.get(key - 1) {
+                item.set_text(name);
+                item.set_checked(*active);
+                if self.server_menu.append(item).is_ok() {
+                    self.tab_items_shown = self.tab_items_shown.max(key);
+                }
+            }
+        }
+    }
 }
 
 pub fn build_menu(config: &Config) -> muda::Result<AppMenu> {
@@ -243,6 +386,52 @@ pub fn build_menu(config: &Config) -> muda::Result<AppMenu> {
         logo_switch = Some(switch);
         logo_lid = Some(lid);
     }
+    let cmd = |code| Some(Accelerator::new(Modifiers::META, code));
+    let cmd_shift = |code| Some(Accelerator::new(Modifiers::META | Modifiers::SHIFT, code));
+    let reopen = MenuItem::with_id(menu_id::TAB_REOPEN, "Reopen Closed Tab", false, cmd_shift(Code::KeyT));
+    let server_menu = Submenu::with_items(
+        "Server",
+        true,
+        &[
+            &MenuItem::with_id(menu_id::TAB_NEW, "New Server Tab", true, cmd(Code::KeyT)),
+            &MenuItem::with_id(menu_id::TAB_CLOSE, "Close Tab", true, cmd(Code::KeyW)),
+            &reopen,
+            &PredefinedMenuItem::separator(),
+            &MenuItem::with_id(menu_id::TAB_OVERVIEW, "Show All Servers", true, cmd(Code::Digit0)),
+            &MenuItem::with_id(
+                menu_id::TAB_PREVIOUS,
+                "Show Previous Tab",
+                true,
+                cmd_shift(Code::BracketLeft),
+            ),
+            &MenuItem::with_id(menu_id::TAB_NEXT, "Show Next Tab", true, cmd_shift(Code::BracketRight)),
+            &PredefinedMenuItem::separator(),
+        ],
+    )?;
+    const DIGITS: [Code; 9] = [
+        Code::Digit1,
+        Code::Digit2,
+        Code::Digit3,
+        Code::Digit4,
+        Code::Digit5,
+        Code::Digit6,
+        Code::Digit7,
+        Code::Digit8,
+        Code::Digit9,
+    ];
+    let tab_items = DIGITS
+        .iter()
+        .enumerate()
+        .map(|(i, code)| {
+            CheckMenuItem::with_id(
+                format!("{}{}", menu_id::TAB_KEY_PREFIX, i + 1),
+                "",
+                true,
+                false,
+                cmd(*code),
+            )
+        })
+        .collect();
     let window_menu = Submenu::with_items(
         "Window",
         true,
@@ -250,7 +439,9 @@ pub fn build_menu(config: &Config) -> muda::Result<AppMenu> {
             &PredefinedMenuItem::minimize(None),
             &PredefinedMenuItem::maximize(None),
             &PredefinedMenuItem::separator(),
-            &PredefinedMenuItem::close_window(None),
+            // Not the predefined Close Window: ⌘W closes a tab (Server menu),
+            // as in Safari, so closing the window is ⇧⌘W.
+            &MenuItem::with_id(menu_id::WINDOW_CLOSE, "Close Window", true, cmd_shift(Code::KeyW)),
             &PredefinedMenuItem::separator(),
             &PredefinedMenuItem::bring_all_to_front(None),
         ],
@@ -263,10 +454,14 @@ pub fn build_menu(config: &Config) -> muda::Result<AppMenu> {
             &MenuItem::with_id(menu_id::HELP_GITHUB, "Codeman on GitHub", true, None),
         ],
     )?;
-    bar.append_items(&[&app_menu, &edit, &view, &window_menu, &help_menu])?;
+    bar.append_items(&[&app_menu, &edit, &view, &server_menu, &window_menu, &help_menu])?;
     Ok(AppMenu {
         bar,
         window_menu,
+        server_menu,
+        tab_items,
+        tab_items_shown: 0,
+        reopen,
         help_menu,
         start_fullscreen,
         logo_switch,
@@ -274,4 +469,32 @@ pub fn build_menu(config: &Config) -> muda::Result<AppMenu> {
         keep_awake,
         logo_lid,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tab_menu_ids_round_trip() {
+        for action in [
+            TabAction::Rename,
+            TabAction::Color(0),
+            TabAction::Color(5),
+            TabAction::Reload,
+            TabAction::Reconnect,
+            TabAction::Close,
+            TabAction::CloseOthers,
+        ] {
+            assert_eq!(TabAction::parse(&action.id(42)), Some((42, action)));
+        }
+        assert_eq!(TabAction::parse("tab-menu:42:color-6"), None);
+        assert_eq!(TabAction::parse("tab-menu:x:close"), None);
+        assert_eq!(TabAction::parse("tab-menu:42:other"), None);
+        assert_eq!(TabAction::parse("reload"), None);
+        assert_eq!(tab_key("tab-key-1"), Some(1));
+        assert_eq!(tab_key("tab-key-9"), Some(9));
+        assert_eq!(tab_key("tab-key-0"), None);
+        assert_eq!(tab_key("tab-key-10"), None);
+    }
 }

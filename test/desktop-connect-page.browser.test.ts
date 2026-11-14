@@ -164,6 +164,46 @@ async function everyState(browser: Browser) {
   await native({ type: 'init', servers: [{ url: 'http://127.0.0.1:3000/' }], autoConnect: true, version: '0.1.0' });
   check('manual=1 suppresses auto-connect', (await posted()).length === 1, await posted());
 
+  // 3b. A server tab opened again at launch: its own server, connected to on its own
+  // (manual=1 holds for any other server), and only shown when connectNow is off.
+  const saved = [
+    { url: 'http://127.0.0.1:3000/' },
+    { url: 'https://box.tail.ts.net/', username: 'admin', hasSavedPassword: true },
+  ];
+  await page.goto('http://app.test/index.html?manual=1');
+  await native({
+    type: 'init',
+    servers: saved,
+    autoConnect: true,
+    version: '0.1.0',
+    target: saved[1].url,
+    connectNow: true,
+  });
+  p = await posted();
+  check(
+    'a restored tab connects to its own server, with its saved login',
+    p.length === 2 && p[1].cmd === 'connect' && p[1].url === 'https://box.tail.ts.net/' && p[1].username === 'admin',
+    p
+  );
+  check('and shows it on the Another machine tab', await visible('#form'));
+  await page.goto('http://app.test/index.html?manual=1');
+  await native({
+    type: 'init',
+    servers: saved,
+    autoConnect: false,
+    version: '0.1.0',
+    target: 'http://192.168.1.40:3000/',
+    connectNow: false,
+  });
+  check('connectNow off only fills the address in', (await posted()).length === 1, await posted());
+  check(
+    'a server not in the list still fills the address',
+    (await page.inputValue('#url')) === 'http://192.168.1.40:3000/'
+  );
+  // Back to step 3's page, which the steps below build on.
+  await page.goto('http://app.test/index.html?manual=1');
+  await native({ type: 'init', servers: [{ url: 'http://127.0.0.1:3000/' }], autoConnect: true, version: '0.1.0' });
+
   // 4. Needs login -> login fields, then a typed password goes out.
   await native({
     type: 'probeResult',

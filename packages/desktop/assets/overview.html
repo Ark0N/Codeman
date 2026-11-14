@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>All servers</title>
+<style>
+  /* All servers (Cmd+0): one card per server tab, what needs you first. The
+     native side sends the whole list, already ordered, on every change. */
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html { min-height: 100%; background: #0b0c0f; }
+  body {
+    margin: 0; min-height: 100%; overflow-x: hidden; background: #0b0c0f; color: #e8eaed;
+    font: 13px/1.4 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+    -webkit-user-select: none; user-select: none; cursor: default;
+  }
+  main { padding: 22px 28px 28px; }
+  header { display: flex; align-items: baseline; flex-wrap: wrap; column-gap: 14px; row-gap: 4px; margin-bottom: 18px; }
+  h1 { margin: 0; font-size: 20px; font-weight: 650; letter-spacing: -0.01em; }
+  #summary { font-size: 13px; color: #8b9099; }
+  #summary .needs { color: #fca5a5; }
+  #summary .waiting { color: #fcd34d; }
+  #grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr)); gap: 18px; align-items: stretch; }
+
+  button { font: inherit; color: inherit; margin: 0; cursor: pointer; -webkit-user-select: none; user-select: none; }
+  button:focus-visible { outline: 2px solid #3b82f6; outline-offset: 2px; }
+
+  .card {
+    --c: #94a3b8;
+    display: flex; flex-direction: column; min-width: 0; min-height: 236px; padding-top: 3px;
+    border: 1px solid #23252b; border-radius: 12px; background: #121316;
+    box-shadow: inset 0 3px 0 var(--c);
+  }
+  .card.urgent { border-color: rgba(248,113,113,0.45); }
+  .card.offline { border-style: dashed; border-color: #30333b; background: #0f1013; box-shadow: inset 0 3px 0 #30333b; }
+  .card.slim { min-height: 0; align-self: start; }
+
+  .head {
+    display: flex; align-items: flex-start; gap: 10px; width: 100%; padding: 11px 16px 10px;
+    border: 0; border-radius: 9px 9px 0 0; background: transparent; text-align: left;
+  }
+  .head:hover .name { text-decoration: underline; text-decoration-color: #3a3d45; text-underline-offset: 3px; }
+  .head:focus-visible { outline-offset: -2px; }
+  .title { flex: 1; min-width: 0; }
+  .name { display: block; font-size: 15px; font-weight: 650; line-height: 1.35; color: #e8eaed; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card.offline .name { color: #8b9099; }
+  .url { display: block; margin-top: 2px; font-size: 12px; color: #8b9099; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .key { flex: none; padding-top: 2px; font-size: 12px; color: #6b7079; }
+
+  .body { flex: 1; min-height: 0; padding: 0 10px; }
+  .row {
+    display: flex; align-items: center; gap: 9px; width: 100%; padding: 7px 8px; margin: 0 0 3px;
+    border: 0; border-radius: 8px; background: transparent; font-size: 12.5px; line-height: 18px; text-align: left;
+  }
+  .row:hover { background: #1a1c21; }
+  .row.needs { background: rgba(248,113,113,0.10); }
+  .row.needs:hover { background: rgba(248,113,113,0.16); }
+  .row.waiting { background: rgba(251,191,36,0.07); }
+  .row.waiting:hover { background: rgba(251,191,36,0.12); }
+  .mark { flex: none; display: flex; align-items: center; justify-content: center; width: 18px; height: 18px; }
+  .mark::before { content: ""; display: block; }
+  .row.needs .mark { border-radius: 9px; background: #f87171; color: #2a0707; font-weight: 700; font-size: 11px; line-height: 18px; }
+  .row.needs .mark::before { display: none; }
+  .row.waiting .mark::before { width: 9px; height: 9px; border-radius: 50%; background: #fbbf24; }
+  .row.working .mark::before {
+    width: 11px; height: 11px; border-radius: 50%; border: 2px solid #60a5fa; border-right-color: transparent;
+    animation: spin 1s linear infinite;
+  }
+  .row.idle .mark::before { width: 8px; height: 8px; border-radius: 50%; background: #3a3d45; }
+  .sname { flex: 0 1 auto; min-width: 0; max-width: 55%; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .stext { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #8b9099; }
+  .row.needs .stext { color: #fca5a5; }
+  .row.waiting .stext { color: #fcd34d; }
+  .row.idle .stext { color: #6b7079; }
+  .more { padding: 3px 8px 0; font-size: 12px; color: #6b7079; }
+  .note { display: flex; align-items: center; gap: 9px; padding: 4px 6px; font-size: 12.5px; color: #8b9099; }
+  .note.warn { color: #fcd34d; }
+
+  .foot { display: flex; align-items: center; gap: 10px; margin-top: 10px; padding: 10px 16px 14px; border-top: 1px solid #1d1f24; }
+  .meta { flex: 1; min-width: 0; font-size: 12px; color: #6b7079; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .action {
+    flex: none; height: 28px; padding: 0 12px; border: 1px solid #30333b; border-radius: 7px;
+    background: #16181d; color: #e8eaed; font-weight: 600; font-size: 12px;
+  }
+  .action:hover { background: #1d2026; border-color: #3a3d45; }
+  .action.urgent { border-color: #ef4444; background: #ef4444; color: #ffffff; }
+  .action.urgent:hover { border-color: #dc2626; background: #dc2626; }
+
+  .add {
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+    min-height: 236px; padding: 0; border: 1.5px dashed #30333b; border-radius: 12px;
+    background: transparent; color: #8b9099;
+  }
+  .add:hover { border-color: #3a3d45; color: #c9ccd2; }
+  .add-ico { width: 40px; height: 40px; border-radius: 12px; border: 1.5px dashed #3a3d45; display: flex; align-items: center; justify-content: center; }
+  .add-label { font-size: 13px; font-weight: 600; }
+  .add-key { font-size: 12px; color: #6b7079; }
+
+  .spin {
+    flex: none; width: 14px; height: 14px; border-radius: 50%;
+    border: 2px solid #30333b; border-top-color: #60a5fa; animation: spin 0.9s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) {
+    .row.working .mark::before, .spin { animation: none; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>All servers</h1>
+    <span id="summary"></span>
+  </header>
+  <div id="grid"></div>
+</main>
+<script>
+(function () {
+  'use strict';
+
+  var FALLBACK_COLOR = '#94a3b8';
+  var COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+  var MAX_ROWS = 4;
+  var STATES = ['needs', 'waiting', 'working', 'idle'];
+  var SVG_NS = 'http://www.w3.org/2000/svg';
+
+  var grid = document.getElementById('grid');
+  var summary = document.getElementById('summary');
+
+  function post(msg) { try { window.ipc.postMessage(JSON.stringify(msg)); } catch (e) { /* not in the app */ } }
+
+  // Names, URLs, versions and session texts come from servers: they are only
+  // ever set as text, and a colour only after it passed the #rrggbb check.
+  function str(v) { return typeof v === 'string' ? v : ''; }
+  function color(v) { return typeof v === 'string' && COLOR_RE.test(v) ? v : FALLBACK_COLOR; }
+  function count(v) {
+    var n = Math.floor(Number(v));
+    return isFinite(n) && n > 0 ? n : 0;
+  }
+  function shortcut(v) {
+    var n = Number(v);
+    return n >= 1 && n <= 9 && Math.floor(n) === n ? n : null;
+  }
+  function plural(n, one, many) { return n + ' ' + (n === 1 ? one : many); }
+
+  function normServer(s) {
+    if (!s || typeof s !== 'object') return null;
+    var tab = Number(s.tab);
+    if (!isFinite(tab)) return null;
+    var c = s.counts && typeof s.counts === 'object' ? s.counts : {};
+    var sessions = [];
+    (Array.isArray(s.sessions) ? s.sessions : []).forEach(function (x) {
+      if (!x || typeof x !== 'object') return;
+      sessions.push({
+        id: str(x.id),
+        name: str(x.name),
+        state: STATES.indexOf(x.state) >= 0 ? x.state : 'idle',
+        text: str(x.text)
+      });
+    });
+    return {
+      tab: tab,
+      name: str(s.name),
+      color: color(s.color),
+      url: str(s.url),
+      local: s.local === true,
+      key: shortcut(s.key),
+      version: str(s.version),
+      kind: s.kind === 'connect' || s.kind === 'loading' ? s.kind : 'server',
+      offline: s.offline === true,
+      refused: s.refused === true,
+      sessions: sessions,
+      counts: {
+        needsYou: count(c.needsYou),
+        waiting: count(c.waiting),
+        working: count(c.working),
+        sessions: count(c.sessions)
+      }
+    };
+  }
+
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+  function button(cls, focusKey, text) {
+    var b = el('button', cls, text);
+    b.type = 'button';
+    b.dataset.focus = focusKey;
+    return b;
+  }
+  function plusIcon(size) {
+    var s = document.createElementNS(SVG_NS, 'svg');
+    s.setAttribute('width', String(size));
+    s.setAttribute('height', String(size));
+    s.setAttribute('viewBox', '0 0 16 16');
+    s.setAttribute('fill', 'none');
+    s.setAttribute('stroke', 'currentColor');
+    s.setAttribute('stroke-width', '1.7');
+    s.setAttribute('aria-hidden', 'true');
+    var p = document.createElementNS(SVG_NS, 'path');
+    p.setAttribute('d', 'M8 2.5v11M2.5 8h11');
+    s.appendChild(p);
+    return s;
+  }
+
+  function renderSummary(servers) {
+    var needs = 0, waiting = 0, working = 0, offline = 0;
+    servers.forEach(function (s) {
+      if (s.offline) { offline++; return; }
+      needs += s.counts.needsYou;
+      waiting += s.counts.waiting;
+      working += s.counts.working;
+    });
+    var parts = [];
+    if (needs) parts.push(el('span', 'needs', needs + (needs === 1 ? ' needs you' : ' need you')));
+    if (waiting) parts.push(el('span', 'waiting', waiting + ' waiting'));
+    if (working) parts.push(el('span', 'working', working + ' working'));
+    if (offline) parts.push(el('span', 'offline', offline + ' offline'));
+    if (!parts.length) parts.push(el('span', 'calm', 'Nothing needs you'));
+    var out = [];
+    parts.forEach(function (p, i) {
+      if (i) out.push(document.createTextNode(' · '));
+      out.push(p);
+    });
+    summary.replaceChildren.apply(summary, out);
+  }
+
+  function sessionRow(s, x) {
+    var row = button('row ' + x.state, 'row:' + s.tab + ':' + x.id);
+    var mark = el('span', 'mark', x.state === 'needs' ? '!' : undefined);
+    mark.setAttribute('aria-hidden', 'true');
+    row.appendChild(mark);
+    row.appendChild(el('span', 'sname', x.name || 'Untitled'));
+    row.appendChild(el('span', 'stext', x.text));
+    var said = { needs: 'needs you', waiting: 'waiting', working: 'working', idle: 'idle' }[x.state];
+    row.setAttribute('aria-label', (x.name || 'Untitled') + ', ' + said + (x.text ? ': ' + x.text : ''));
+    if (x.id) row.addEventListener('click', function () { post({ cmd: 'openSession', tab: s.tab, session: x.id }); });
+    else row.disabled = true;
+    return row;
+  }
+
+  function card(s) {
+    var c = el('section', 'card');
+    c.style.setProperty('--c', s.color);
+    var name = s.name || (s.kind === 'connect' ? 'New server tab' : 'Untitled');
+    c.setAttribute('aria-label', name);
+
+    var head = button('head', 'head:' + s.tab);
+    var title = el('span', 'title');
+    title.appendChild(el('span', 'name', name));
+    if (s.url) title.appendChild(el('span', 'url', s.url));
+    head.appendChild(title);
+    if (s.key) head.appendChild(el('span', 'key', '⌘' + s.key));
+    head.addEventListener('click', function () { post({ cmd: 'open', tab: s.tab }); });
+    c.appendChild(head);
+
+    var body = el('div', 'body');
+    var meta = '';
+    var action = button('action', 'act:' + s.tab, 'Open');
+    var onAction = function () { post({ cmd: 'open', tab: s.tab }); };
+
+    if (s.kind === 'connect') {
+      c.classList.add('slim');
+      body.appendChild(el('div', 'note', 'Not connected yet'));
+    } else if (s.kind === 'loading') {
+      var note = el('div', 'note');
+      note.appendChild(el('span', 'spin'));
+      note.appendChild(document.createTextNode('Connecting…'));
+      body.appendChild(note);
+    } else if (s.offline) {
+      c.classList.add('offline');
+      body.appendChild(el('div', 'note', 'Not answering, the app keeps trying'));
+      meta = s.version;
+      action.textContent = 'Retry';
+      onAction = function () { post({ cmd: 'retry', tab: s.tab }); };
+    } else if (s.refused) {
+      body.appendChild(el('div', 'note warn', 'The login was refused'));
+      meta = s.version;
+    } else {
+      var shown = s.sessions.slice(0, MAX_ROWS);
+      shown.forEach(function (x) { body.appendChild(sessionRow(s, x)); });
+      var total = Math.max(s.counts.sessions, s.sessions.length);
+      if (total > shown.length) body.appendChild(el('div', 'more', '+' + (total - shown.length) + ' more'));
+      if (!total) body.appendChild(el('div', 'note', 'No sessions'));
+      meta = plural(total, 'session', 'sessions') + (s.version ? ' · ' + s.version : '');
+      if (s.counts.needsYou > 0) {
+        c.classList.add('urgent');
+        action.textContent = 'Answer';
+        action.classList.add('urgent');
+        // Answer goes straight to the first session that needs you, when the
+        // list names it; else to the server.
+        var first = s.sessions.filter(function (x) { return x.state === 'needs' && x.id; })[0];
+        if (first) onAction = function () { post({ cmd: 'openSession', tab: s.tab, session: first.id }); };
+      }
+    }
+    c.appendChild(body);
+
+    var foot = el('div', 'foot');
+    foot.appendChild(el('span', 'meta', meta));
+    action.setAttribute('aria-label', action.textContent + ' ' + name);
+    action.addEventListener('click', onAction);
+    foot.appendChild(action);
+    c.appendChild(foot);
+    return c;
+  }
+
+  function addCard() {
+    var b = button('add', 'new');
+    b.setAttribute('aria-label', 'Add a server');
+    var ico = el('span', 'add-ico');
+    ico.appendChild(plusIcon(16));
+    b.appendChild(ico);
+    b.appendChild(el('span', 'add-label', 'Add a server'));
+    b.appendChild(el('span', 'add-key', '⌘T'));
+    b.addEventListener('click', function () { post({ cmd: 'new' }); });
+    return b;
+  }
+
+  var lastJson = null;
+
+  function render(servers) {
+    // A state arrives every few seconds: the button that had the keyboard
+    // focus gets it back in the new cards.
+    var active = document.activeElement;
+    var focusKey = active && active.dataset ? active.dataset.focus : '';
+    renderSummary(servers);
+    var cards = servers.map(card);
+    cards.push(addCard());
+    grid.replaceChildren.apply(grid, cards);
+    if (focusKey) {
+      var all = grid.querySelectorAll('[data-focus]');
+      for (var i = 0; i < all.length; i++) {
+        if (all[i].dataset.focus === focusKey) { all[i].focus({ preventScroll: true }); break; }
+      }
+    }
+  }
+
+  function onNative(msg) {
+    if (typeof msg === 'string') {
+      try { msg = JSON.parse(msg); } catch (e) { return; }
+    }
+    if (!msg || typeof msg !== 'object' || msg.type !== 'state') return;
+    var servers = [];
+    var seen = new Set();
+    (Array.isArray(msg.servers) ? msg.servers : []).forEach(function (raw) {
+      var s = normServer(raw);
+      if (!s || seen.has(s.tab)) return;
+      seen.add(s.tab);
+      servers.push(s);
+    });
+    var json = JSON.stringify(servers);
+    if (json === lastJson) return;
+    lastJson = json;
+    render(servers);
+  }
+
+  Object.defineProperty(window, '__codemanOverview', {
+    value: Object.freeze({ onNative: onNative }),
+    writable: false,
+    configurable: false,
+    enumerable: false
+  });
+
+  render([]);
+  post({ cmd: 'ready' });
+})();
+</script>
+</body>
+</html>
