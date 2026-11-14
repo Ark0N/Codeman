@@ -804,6 +804,9 @@ class CodemanApp {
     // Cooldown per session for the scroll-to-top "load more history" re-pull.
     this._fullHistoryRepullAt = new Map(); // Map<sessionId, timestamp>
     this._fullHistoryRepullInFlight = false;
+    this._liveOutputSinceFullPull = new Set(); // Set<sessionId>
+    this._liveOutputGen = new Map(); // Map<sessionId, number>
+    this._earlyReplayTravel = null;
     // Sessions whose last re-pull came back THINNER than the live buffer (a
     // repaint-mode CLI pane, where tmux keeps no history of its own). The pull is
     // refused for those and retried far more slowly — see _maybeRefetchFullHistory.
@@ -9603,7 +9606,7 @@ class CodemanApp {
    * gets a much longer cooldown so a hollow pane stops re-fetching megabytes on
    * every scroll-up (issue #205, round 2).
    */
-  async _maybeRefetchFullHistory({ force = false } = {}) {
+  async _maybeRefetchFullHistory({ force = false, anchor = 'top' } = {}) {
     const sessionId = this.activeSessionId;
     if (!sessionId || this._fullHistoryRepullInFlight || this._isLoadingBuffer) return;
     if (this.detachedSessions?.has(sessionId)) return;
@@ -9737,6 +9740,9 @@ class CodemanApp {
       this._fullHistoryRepullUseless?.delete(sessionId);
       const rowsBefore = this.terminal.buffer.active.length;
       const replayStartedAt = performance.now();
+      const rowsFromBottom = this.terminal.buffer.active.baseY - this.terminal.buffer.active.viewportY;
+      const liveOutputGen = this._liveOutputGen?.get(sessionId) || 0;
+      if (anchor === 'bottom') this._earlyReplayTravel = 0;
       this._resetTerminalForReplay();
       const {
         parsedAt,
@@ -9750,6 +9756,9 @@ class CodemanApp {
       );
       timing.resetAndParseMs = parsedAt - replayStartedAt;
       if (!completed || this.activeSessionId !== sessionId || selectGen !== this._selectGeneration) return;
+      if ((this._liveOutputGen?.get(sessionId) || 0) === liveOutputGen) {
+        this._liveOutputSinceFullPull?.delete(sessionId);
+      }
       // Keep shell tab restores bounded too. A user-triggered full-history pull
       // may be tens of MB; caching it would replay that whole payload again on
       // the next tab switch before the normal 1MB tail fetch replaces it.
@@ -9762,9 +9771,17 @@ class CodemanApp {
       // UPWARD, so what used to be row 0 (what they were looking at) is now `delta`
       // rows down; scrolling there reveals the recovered history above it instead
       // of teleporting them to the bottom the way a normal buffer load does.
-      const delta = parsedBufferLength - rowsBefore;
-      if (delta > 0) this.terminal.scrollToLine(delta);
-      else this.terminal.scrollToTop();
+      if (anchor === 'bottom') {
+        // Recover the tmux repaint gap above the live screen without a jump (#814).
+        const baseY = this.terminal.buffer.active.baseY;
+        const distance = rowsFromBottom - this._earlyReplayTravel;
+        this.terminal.scrollToLine(Math.max(0, Math.min(baseY, baseY - distance)));
+        this._earlyReplayTravel = null;
+      } else {
+        const delta = parsedBufferLength - rowsBefore;
+        if (delta > 0) this.terminal.scrollToLine(delta);
+        else this.terminal.scrollToTop();
+      }
       // The load's own replay sampled the sticky-scroll baseline while the
       // terminal sat at the bottom of a just-rewritten buffer, so the next
       // flush would scroll back down and undo the restore above. This path is
@@ -9780,6 +9797,7 @@ class CodemanApp {
     } catch {
       // Transient (offline, 5xx) — the next scroll-up past the cooldown retries.
     } finally {
+      if (anchor === 'bottom') this._earlyReplayTravel = null;
       this._fullHistoryRepullInFlight = false;
     }
   }
@@ -10333,6 +10351,7 @@ class CodemanApp {
       const fetchStartedAt = performance.now();
       const tailUrl = `/api/sessions/${sessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}`;
       let capture;
+      let fullHistoryReplay = useFullHistory;
       try {
         capture = await this._fetchTerminalCapture(
           useFullHistory
@@ -10353,6 +10372,7 @@ class CodemanApp {
         _crashDiag.log('FULL CAPTURE ABORTED → tail');
         // It never loaded, so the next select must be allowed to try again.
         this._fullHistoryLoaded.delete(sessionId);
+        fullHistoryReplay = false;
         capture = await this._fetchTerminalCapture(tailUrl);
       }
       const headersReceivedAt = capture.headersAt;
@@ -10391,6 +10411,7 @@ class CodemanApp {
           _crashDiag.log(`REWRITE: ${(data.terminalBuffer.length/1024).toFixed(0)}KB`);
           this._setTerminalLoadState(sessionId, selectGen, 'replaying');
           const replayStartedAt = performance.now();
+          const liveOutputGen = this._liveOutputGen?.get(sessionId) || 0;
           this._resetTerminalForReplay();
           // Truncation is reported OUT OF BAND (#258). This used to write a grey
           // "... earlier output truncated ..." line into the
@@ -10398,7 +10419,7 @@ class CodemanApp {
           // cannot be actioned, and is indistinguishable from real CLI output.
           this._setHistoryTruncation(sessionId, data);
           // Use chunked write for large buffers to avoid UI jank
-          const { parsedAt: freshParsedAt } = await this.chunkedTerminalWrite(
+          const { parsedAt: freshParsedAt, completed } = await this.chunkedTerminalWrite(
             data.terminalBuffer,
             TERMINAL_CHUNK_SIZE,
             bufferLoadOwner,
@@ -10408,6 +10429,9 @@ class CodemanApp {
           if (this._isStaleSelect(selectGen)) {
             this._clearTerminalLoadState(sessionId, selectGen);
             return;
+          }
+          if (fullHistoryReplay && completed && (this._liveOutputGen?.get(sessionId) || 0) === liveOutputGen) {
+            this._liveOutputSinceFullPull?.delete(sessionId);
           }
           // Ensure terminal is scrolled to bottom after buffer load
           this.terminal.scrollToBottom();
@@ -10816,6 +10840,8 @@ class CodemanApp {
     }
     this.terminalBuffers.delete(sessionId);
     this.terminalBufferCache.delete(sessionId);
+    this._liveOutputSinceFullPull?.delete(sessionId);
+    this._liveOutputGen?.delete(sessionId);
     this._clearHistoryTruncation(sessionId);
     this._xtermSnapshots?.delete(sessionId);
     try { localStorage.removeItem(`codeman-xs-${sessionId}`); } catch {}

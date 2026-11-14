@@ -4064,11 +4064,41 @@ Object.assign(CodemanApp.prototype, {
    * what the pull left rather than flashing the state it is about to replace.
    */
   _maybeLoadMoreHistoryOnScroll(lines) {
+    if (typeof this._earlyReplayTravel === 'number') {
+      this._earlyReplayTravel += lines;
+      return;
+    }
     if (lines > 0) {
       if (this.isTerminalAtBottom()) this._setHistoryNoticeRevealed?.(null);
       return;
     }
-    if (lines === 0 || this.terminal?.buffer?.active?.viewportY !== 0) return;
+    if (lines === 0) return;
+    const buffer = this.terminal?.buffer?.active;
+    if (buffer?.viewportY !== 0) {
+      const sessionId = this.activeSessionId;
+      // tmux repaint bursts can leave a gap just above live output (#814).
+      // Called after scrollLines: include this gesture's travel in the bottom check.
+      if (
+        lines < 0 &&
+        sessionId &&
+        this._liveOutputSinceFullPull?.has(sessionId) &&
+        this.sessions.get(sessionId)?.mode !== 'shell' &&
+        buffer?.viewportY >= buffer.baseY - 2 - Math.abs(lines) &&
+        !this._fullHistoryRepullInFlight &&
+        !this._isLoadingBuffer
+      ) {
+        Promise.resolve(this._maybeRefetchFullHistory?.({ anchor: 'bottom' }))
+          .catch(() => {})
+          .then(() => {
+            // Travel during the replay is swallowed above, so a gesture that
+            // reached the top meanwhile still owes the notice its reveal.
+            if (this.activeSessionId === sessionId && this.terminal?.buffer?.active?.viewportY === 0) {
+              this._setHistoryNoticeRevealed?.(sessionId);
+            }
+          });
+      }
+      return;
+    }
     // An earlier frame of this gesture already started the pull; its own
     // completion reveals the notice, so do not flash the pre-pull state now.
     if (this._fullHistoryRepullInFlight || this._isLoadingBuffer) return;
@@ -4654,6 +4684,12 @@ Object.assign(CodemanApp.prototype, {
         this._scheduleTerminalWriteFlush();
         this._noteMobileImeAuthoritativeOutput(flushedOutputSeq, flushSessionId);
       });
+      // Only live writes can open a new tmux repaint gap; replays cannot (#814).
+      if (writeChunk.length && flushSessionId && !this._isLoadingBuffer) {
+        (this._liveOutputSinceFullPull ||= new Set()).add(flushSessionId);
+        const generations = (this._liveOutputGen ||= new Map());
+        generations.set(flushSessionId, (generations.get(flushSessionId) || 0) + 1);
+      }
     } catch (err) {
       this._terminalWriteInFlight = false;
       this._terminalWriteInFlightBytes = 0;
