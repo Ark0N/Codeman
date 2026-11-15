@@ -4401,6 +4401,26 @@ html[data-tab-logos='off'] .home-sessions-harness {
   position: relative;
 }
 
+/* Touch-only control; _syncHistoryReloadButton owns its hidden state. */
+.history-reload-btn {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  z-index: 20;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-card);
+  color: var(--text);
+  touch-action: manipulation;
+}
+
+.history-reload-btn:disabled {
+  opacity: 0.65;
+}
+
 /* Partial-history banner (#258).
    OVERLAY, not a flex child, on purpose: FitAddon derives rows/cols from the
    terminal parent's computed height, so a banner that occupied real layout

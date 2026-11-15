@@ -49,7 +49,7 @@ function methodSource(source: string, method: string): string {
 }
 
 /** Real terminal-ui.js mixin, for `_estimateReplayRows` / `_replayWouldShrinkBuffer`. */
-function loadTerminalMixin(): Record<string, unknown> {
+function loadTerminalMixin(globals: Record<string, unknown> = {}): Record<string, unknown> {
   const source = readFileSync(resolve(PUBLIC, 'terminal-ui.js'), 'utf8');
   const FakeCodemanApp = function () {} as unknown as { prototype: Record<string, unknown> };
   const context = vm.createContext({
@@ -63,6 +63,7 @@ function loadTerminalMixin(): Record<string, unknown> {
     CodemanApp: FakeCodemanApp,
     window: { addEventListener: vi.fn(), removeEventListener: vi.fn() },
     document: { addEventListener: vi.fn() },
+    ...globals,
   });
   vm.runInContext(source, context);
   return FakeCodemanApp.prototype;
@@ -73,6 +74,20 @@ function loadRefetch(): (this: unknown, opts?: { force?: boolean; anchor?: strin
   const body = methodSource(app, '_maybeRefetchFullHistory');
   const context = vm.createContext({ performance, TERMINAL_TAIL_SIZE, TERMINAL_CHUNK_SIZE: 32 * 1024 });
   return vm.runInContext(`({ ${body} })._maybeRefetchFullHistory`, context);
+}
+
+function loadAppMethod(name: string, globals: Record<string, unknown> = {}): Function {
+  const source = readFileSync(resolve(PUBLIC, 'app.js'), 'utf8');
+  return vm.runInContext(
+    `({ ${methodSource(source, name)} }).${name}`,
+    vm.createContext({
+      performance,
+      TERMINAL_TAIL_SIZE,
+      TERMINAL_CHUNK_SIZE: 32 * 1024,
+      _crashDiag: { log: vi.fn() },
+      ...globals,
+    })
+  );
 }
 
 /** The REAL `_setHistoryTruncation`, so the banner state a pull leaves behind is what production would hold. */
@@ -125,6 +140,7 @@ function makeApp(
     _selectGeneration: 7,
     _fullHistoryRepullInFlight: false,
     _isLoadingBuffer: false,
+    _loadBufferQueue: null as { at: number; data: string }[] | null,
     _fullHistoryRepullAt: new Map<string, number>(),
     _fullHistoryRepullUseless: new Set<string>(),
     _paneHistoryLines: new Map<string, number>(),
@@ -134,12 +150,25 @@ function makeApp(
       rows: 30,
       // xterm's scrollback option; 0 leaves the browser-cap check out of a test.
       options: { scrollback },
-      buffer: { active: { length: bufferRows, baseY: 0, viewportY: 0 } },
       scrollToLine: vi.fn(),
+      buffer: { active: { length: bufferRows, baseY: 0, viewportY: 0, getLine: (_row: number) => undefined } },
       scrollToTop: vi.fn(),
     },
     _estimateReplayRows: mixin._estimateReplayRows,
     _replayWouldShrinkBuffer: mixin._replayWouldShrinkBuffer,
+    _beginBufferLoad: mixin._beginBufferLoad,
+    _finishBufferLoad: vi.fn(function (this: unknown, owner: string, opts?: object) {
+      return (mixin._finishBufferLoad as Function).call(this, owner, opts);
+    }),
+    batchTerminalWrite: vi.fn(function (this: unknown, data: string) {
+      return (mixin.batchTerminalWrite as Function).call(this, data);
+    }),
+    _captureViewportAnchor: mixin._captureViewportAnchor,
+    _restoreViewportAnchor: mixin._restoreViewportAnchor,
+    pendingWrites: [] as string[],
+    _scheduleTerminalWriteFlush: vi.fn(),
+    isTerminalAtBottom: () => true,
+    _scheduleDroppedOutputRecovery: vi.fn(),
     _fetchTerminalCapture: vi.fn(async (url: string) => {
       urls.push(url);
       return {
@@ -159,8 +188,11 @@ function makeApp(
       setHistoryTruncation.call(app, sessionId, p);
     }),
     _resetTerminalForReplay: vi.fn(),
-    _bufferLoadFinishOpts: vi.fn(() => ({})),
-    chunkedTerminalWrite: vi.fn(async () => ({ parsedAt: performance.now(), bufferLength: 400, completed: true })),
+    _bufferLoadFinishOpts: loadAppMethod('_bufferLoadFinishOpts'),
+    chunkedTerminalWrite: vi.fn(async (_buffer?: string, _size?: number, owner?: string, opts?: object) => {
+      (mixin._finishBufferLoad as Function).call(app, owner, opts);
+      return { parsedAt: performance.now(), bufferLength: 400, completed: true };
+    }),
     _syncStickyScrollBaseline: vi.fn(),
   };
   return { app, urls };
@@ -262,8 +294,7 @@ describe('early full-history recovery above live output (#814)', () => {
     const app = Object.assign(base, {
       _liveOutputSinceFullPull: new Set<string>(),
       _liveOutputGen: new Map<string, number>(),
-      _earlyReplayTravel: null as number[] | null,
-      pendingWrites: [] as string[],
+      _earlyReplayTravel: null as { sessionId: string; moves: number[] } | null,
       _wasAtBottomBeforeWrite: false,
       _scheduleTerminalWriteFlush: vi.fn(),
       _restoreTerminalViewport: vi.fn(),
@@ -285,10 +316,11 @@ describe('early full-history recovery above live output (#814)', () => {
     app.terminal.scrollToLine.mockImplementation((row: number) => {
       active.viewportY = row;
     });
-    app.chunkedTerminalWrite.mockImplementation(async () => {
+    app.chunkedTerminalWrite.mockImplementation(async (_buffer, _size, owner, opts) => {
       active.baseY = 370;
       active.viewportY = 370;
       active.length = 400;
+      (mixin._finishBufferLoad as Function).call(app, owner, opts);
       return { parsedAt: performance.now(), bufferLength: 400, completed: true };
     });
     const liveOutput = () => {
@@ -305,14 +337,12 @@ describe('early full-history recovery above live output (#814)', () => {
       const replay = app.chunkedTerminalWrite.getMockImplementation()!;
       const { promise: gate, resolve: release } = Promise.withResolvers<void>();
       const { promise: ready, resolve: started } = Promise.withResolvers<void>();
-      app.chunkedTerminalWrite.mockImplementationOnce(async () => {
-        app._isLoadingBuffer = true;
+      app.chunkedTerminalWrite.mockImplementationOnce(async (...args) => {
         active.baseY = 0;
         active.viewportY = 0;
         started();
         await gate;
-        const result = await replay();
-        app._isLoadingBuffer = false;
+        const result = await replay(...args);
         beforeComplete();
         return result;
       });
@@ -326,6 +356,12 @@ describe('early full-history recovery above live output (#814)', () => {
     liveOutput();
     await scroll(-5);
     expect(urls).toEqual(['/api/sessions/s1/terminal?full=1']);
+    expect(app.chunkedTerminalWrite).toHaveBeenCalledWith(
+      expect.any(String),
+      32 * 1024,
+      expect.stringMatching(/^buffer-/),
+      expect.objectContaining({ flushQueued: true })
+    );
     expect(active.viewportY).toBe(365);
     expect(active.baseY - active.viewportY).toBe(5);
     expect(app._liveOutputSinceFullPull.has('s1')).toBe(false);
@@ -359,20 +395,31 @@ describe('early full-history recovery above live output (#814)', () => {
     expect(app._earlyReplayTravel).toBeNull();
   });
 
-  it('keeps a session dirty when live output lands while the capture is still downloading', async () => {
+  it('queues download-time output and replays it through batchTerminalWrite after the capture', async () => {
     const { app, urls, liveOutput, scroll } = makeScrollApp();
     liveOutput();
     const fetchCapture = app._fetchTerminalCapture.getMockImplementation()!;
+    const { promise, resolve: release } = Promise.withResolvers<void>();
     app._fetchTerminalCapture.mockImplementationOnce(async (url: string) => {
+      expect(app._isLoadingBuffer).toBe(true);
       const capture = await fetchCapture(url);
-      // tmux has captured; this output is newer than the capture the replay writes.
-      liveOutput();
+      await promise;
       return capture;
     });
-    await scroll(-5);
+    const pull = scroll(-5);
+    loadAppMethod('_onSessionTerminal').call(app, { id: 's1', data: 'download-time output' });
+    expect(app._loadBufferQueue).toEqual([expect.objectContaining({ data: 'download-time output' })]);
+    release();
+    await pull;
     expect(urls).toHaveLength(1);
+    expect(app.batchTerminalWrite).toHaveBeenCalledWith('download-time output');
+    expect(app.pendingWrites).toContain('download-time output');
+    expect(app._isLoadingBuffer).toBe(false);
+    // Flushing the replayed queue marks the session again.
+    (mixin.flushPendingWrites as Function).call(app);
     expect(app._liveOutputSinceFullPull.has('s1')).toBe(true);
   });
+
   it('keeps live output flushed before the final restore dirty for the next early pull', async () => {
     const { app, active, urls, liveOutput, scroll, pauseReplay } = makeScrollApp();
     liveOutput();
@@ -417,14 +464,17 @@ describe('early full-history recovery above live output (#814)', () => {
     expect(app._liveOutputSinceFullPull.size).toBe(0);
   });
 
-  it('does not pull early for downward travel or while already reading older rows', async () => {
-    const { active, urls, liveOutput, scroll } = makeScrollApp();
+  it('repairs while already reading mid-history, but never on downward travel', async () => {
+    const { app, active, urls, liveOutput, scroll } = makeScrollApp();
     liveOutput();
     active.viewportY = 50;
     await scroll(-5);
-    active.viewportY = 95;
+    expect(urls).toHaveLength(1);
+    expect(app._maybeRefetchFullHistory).toHaveBeenCalledWith({ anchor: 'content' });
+    app._fullHistoryRepullAt.clear();
+    liveOutput();
     await scroll(3);
-    expect(urls).toEqual([]);
+    expect(urls).toHaveLength(1);
   });
 
   it.each(['_isLoadingBuffer', '_fullHistoryRepullInFlight'] as const)('respects the %s guard', async (guard) => {
@@ -449,6 +499,144 @@ describe('early full-history recovery above live output (#814)', () => {
     expect(app._resetTerminalForReplay).not.toHaveBeenCalled();
     expect(app._liveOutputSinceFullPull.has('s1')).toBe(true);
     expect(app._fullHistoryRepullUseless.has('s1')).toBe(true);
+  });
+
+  it.each(['empty', 'tab-switch', 'downgrade', 'bounded-shell', 'rejection'])(
+    'flushes download-time output on the %s non-replay path',
+    async (exit) => {
+      const { app } = makeApp(exit === 'bounded-shell' ? 'shell' : 'omp', {
+        bufferRows: 200,
+        capture: lines(400),
+      });
+      const { promise, resolve: release } = Promise.withResolvers<void>();
+      app._fetchTerminalCapture.mockImplementationOnce(async () => {
+        await promise;
+        if (exit === 'rejection') throw new Error('offline');
+        if (exit === 'tab-switch') app._selectGeneration++;
+        return {
+          headersAt: performance.now(),
+          headers: { get: () => '' },
+          json: { data: { terminalBuffer: exit === 'empty' ? '' : lines(10), source: 'mux-full-history' } },
+        };
+      });
+      const pull = refetch.call(app);
+      expect(app._isLoadingBuffer).toBe(true);
+      loadAppMethod('_onSessionTerminal').call(app, { id: 's1', data: 'queued while fetching' });
+      release();
+      await pull;
+      expect(app.chunkedTerminalWrite).not.toHaveBeenCalled();
+      expect(app._finishBufferLoad).toHaveBeenCalledOnce();
+      expect(app._finishBufferLoad).toHaveBeenCalledWith(expect.any(String), { flushQueued: true, since: 0 });
+      expect(app.pendingWrites).toContain('queued while fetching');
+      expect(app._isLoadingBuffer).toBe(false);
+    }
+  );
+
+  it('counts download-time output toward the 128 KiB dropped-output recovery cap', async () => {
+    const { app } = makeApp('omp', { bufferRows: 30, capture: lines(400) });
+    const { promise, resolve: release } = Promise.withResolvers<void>();
+    app._fetchTerminalCapture.mockImplementationOnce(async () => {
+      await promise;
+      return {
+        headersAt: performance.now(),
+        headers: { get: () => '' },
+        json: { data: { terminalBuffer: '', source: 'history' } },
+      };
+    });
+    const pull = refetch.call(app);
+    const onTerminal = loadAppMethod('_onSessionTerminal');
+    onTerminal.call(app, { id: 's1', data: 'x'.repeat(70_000) });
+    onTerminal.call(app, { id: 's1', data: 'y'.repeat(70_000) });
+    expect(app._scheduleDroppedOutputRecovery).toHaveBeenCalledWith('s1', 0, 70_000);
+    expect(app._loadBufferQueue).toHaveLength(1);
+    release();
+    await pull;
+  });
+
+  it.each([false, true])(
+    'defers real dropped-output recovery through a slow pull (timer already armed: %s)',
+    async (armed) => {
+      vi.useFakeTimers();
+      const { promise, resolve: release } = Promise.withResolvers<void>();
+      try {
+        const { app } = makeApp('omp', { bufferRows: 30, capture: lines(400) });
+        const retry = vi.fn(({ repainted, stillActive, attempt }) => !repainted && stillActive && attempt < 4);
+        const schedule = loadAppMethod('_scheduleDroppedOutputRecovery', {
+          setTimeout,
+          window: { CodemanDroppedOutput: { DROP_RECOVERY_DELAY_MS: 2000, shouldRetryDroppedOutputRecovery: retry } },
+        });
+        const refresh = vi.fn(async () => true);
+        Object.assign(app, {
+          _scheduleDroppedOutputRecovery: (...args: unknown[]) => schedule.apply(app, args),
+          _onSessionNeedsRefresh: refresh,
+        });
+        if (armed) schedule.call(app, 's1');
+        const fetchCapture = app._fetchTerminalCapture.getMockImplementation()!;
+        app._fetchTerminalCapture.mockImplementationOnce(async (url) => {
+          await promise;
+          return fetchCapture(url);
+        });
+        const pull = refetch.call(app);
+        const onTerminal = loadAppMethod('_onSessionTerminal');
+        onTerminal.call(app, { id: 's1', data: 'x'.repeat(70_000) });
+        onTerminal.call(app, { id: 's1', data: 'y'.repeat(70_000) });
+        await vi.advanceTimersByTimeAsync(20_000); // Longer than all five normal retry intervals.
+        expect(app._isLoadingBuffer).toBe(true);
+        expect(refresh).not.toHaveBeenCalled();
+        expect(retry).not.toHaveBeenCalled();
+        release();
+        await pull;
+        expect(app._isLoadingBuffer).toBe(false);
+        await vi.advanceTimersByTimeAsync(2000);
+        expect(refresh).toHaveBeenCalledOnce();
+        expect(refresh).toHaveBeenCalledWith({ id: 's1' });
+        expect(retry).toHaveBeenCalledWith(expect.objectContaining({ attempt: 0, repainted: true }));
+      } finally {
+        release();
+        vi.useRealTimers();
+      }
+    }
+  );
+
+  it('does not resume a deferred recovery for a tab that is no longer active', () => {
+    const { app } = makeApp('omp', { bufferRows: 30, capture: lines(400) });
+    const owner = (app._beginBufferLoad as Function).call(app);
+    Object.assign(app, { _pendingDroppedOutputRecovery: 's1', activeSessionId: 's2' });
+    app._finishBufferLoad(owner);
+    expect(app._scheduleDroppedOutputRecovery).not.toHaveBeenCalled();
+    expect(Reflect.get(app, '_pendingDroppedOutputRecovery')).toBeNull();
+  });
+
+  it.each(['mux-full-history', 'history'])('clears the scroll-pull mark only for a mux capture: %s', async (source) => {
+    const { app, liveOutput, scroll } = makeScrollApp();
+    liveOutput();
+    const fetchCapture = app._fetchTerminalCapture.getMockImplementation()!;
+    app._fetchTerminalCapture.mockImplementationOnce(async (url) => {
+      const capture = await fetchCapture(url);
+      capture.json.data.source = source;
+      return capture;
+    });
+    await scroll(-5);
+    expect(app._liveOutputSinceFullPull.has('s1')).toBe(source !== 'mux-full-history');
+  });
+
+  it('does not swallow another tab’s travel or clear the old mark when replay is cancelled', async () => {
+    const { app, active, liveOutput, scroll, pauseReplay } = makeScrollApp();
+    liveOutput();
+    const paused = pauseReplay();
+    const pull = scroll(-5);
+    await paused.ready;
+    app.activeSessionId = 's2';
+    app._selectGeneration++;
+    active.baseY = 100;
+    active.viewportY = 100;
+    (mixin._maybeLoadMoreHistoryOnScroll as Function).call(app, 3);
+    expect(app._setHistoryNoticeRevealed).toHaveBeenCalledWith(null);
+    expect(app._earlyReplayTravel?.moves).toEqual([]);
+    paused.release();
+    await pull;
+    expect(app._liveOutputSinceFullPull.has('s1')).toBe(true);
+    expect(app._earlyReplayTravel).toBeNull();
   });
 });
 
@@ -633,5 +821,192 @@ describe('an unloaded buffer is not held to an older downgrade refusal', () => {
     expect(app._notePaneHistory).not.toHaveBeenCalled();
     expect(app._resetTerminalForReplay).not.toHaveBeenCalled();
     expect(app._fullHistoryRepullInFlight).toBe(false);
+  });
+});
+
+describe('content anchors hold the reader through a history repair', () => {
+  function fixture(rows: string[], viewportY = 5) {
+    let content = rows;
+    const active = {
+      viewportY,
+      baseY: rows.length - 3,
+      length: rows.length,
+      getLine: vi.fn((row: number) =>
+        content[row] === undefined
+          ? undefined
+          : {
+              translateToString: () => content[row],
+            }
+      ),
+    };
+    const app = { terminal: { buffer: { active }, scrollToLine: vi.fn() } };
+    const capture = () => (mixin._captureViewportAnchor as Function).call(app);
+    const restore = (anchor: unknown, next: string[]) => {
+      content = next;
+      active.baseY = next.length - 3;
+      active.length = next.length;
+      return (mixin._restoreViewportAnchor as Function).call(app, anchor);
+    };
+    return { app, active, capture, restore };
+  }
+
+  it('keeps a three-row signature at its viewport offset when rows are inserted below the reader', () => {
+    const rows = Array.from({ length: 30 }, (_, i) => `row ${i}`);
+    rows[5] = '';
+    const { app, capture, restore } = fixture(rows);
+    const anchor = capture();
+    const target = restore(anchor, [...rows.slice(0, 12), ...Array(20).fill('recovered'), ...rows.slice(12)]);
+    expect(target).toBe(5);
+    expect(app.terminal.scrollToLine).toHaveBeenCalledWith(5);
+    expect(anchor.viewportY).toBe(5);
+    expect(anchor.offset).toBe(1);
+  });
+
+  it('chooses the nearest exact signature over a nearer first-row-only match', () => {
+    const { capture, restore } = fixture(['head', 'A', 'B', 'C', ...Array(20).fill('tail')], 1);
+    const anchor = capture();
+    const next = Array(34).fill('other');
+    next.splice(3, 3, 'A', 'B', 'C');
+    next.splice(10, 3, 'A', 'wrong', 'wrong');
+    next.splice(17, 3, 'A', 'B', 'C');
+    expect(restore(anchor, next)).toBe(17);
+  });
+
+  it('falls back to the nearest first row, then distance from the bottom when nothing matches', () => {
+    const rows = Array.from({ length: 30 }, (_, i) => `row ${i}`);
+    const { capture, restore } = fixture(rows);
+    const anchor = capture();
+    const next = Array(40).fill('other');
+    next[8] = 'row 5';
+    next[17] = 'row 5';
+    expect(restore(anchor, next)).toBe(17);
+    expect(restore(anchor, Array(40).fill('no match'))).toBe(15);
+  });
+
+  it('keeps bottom distance within the bottom tolerance even if matching text exists', () => {
+    const rows = Array.from({ length: 30 }, (_, i) => `row ${i}`);
+    const { capture, restore } = fixture(rows, 26);
+    expect(restore(capture(), [...rows, ...Array(10).fill('new')])).toBe(36);
+  });
+
+  it.each(['first-row-only', 'absent'])('bounds a 50k-row search with an %s signature', (kind) => {
+    const rows = Array.from({ length: 50_000 }, (_, i) => `original ${i}`);
+    const { active, capture, restore } = fixture(rows, 25_000);
+    const anchor = capture();
+    const next = Array(50_000).fill('other');
+    if (kind === 'first-row-only') {
+      next[25_100] = anchor.signature[0];
+      next[24_800] = anchor.signature[0];
+    }
+    // An exact match outside the budget must not make the scan traverse 50k rows.
+    next.splice(30_000, 3, ...anchor.signature);
+    active.getLine.mockClear();
+    expect(restore(anchor, next)).toBe(kind === 'first-row-only' ? 25_100 : 25_000);
+    expect(active.getLine.mock.calls.length).toBeLessThanOrEqual(4005);
+  });
+});
+
+describe('touch history reload control', () => {
+  function fixture({
+    touch = true,
+    mode = 'omp',
+    bottom = false,
+    marked = true,
+    inFlight = false,
+    tiles = false,
+    active = true,
+  } = {}) {
+    const button = { hidden: true, disabled: false, textContent: '', onclick: null as (() => void) | null };
+    const ui = loadTerminalMixin({
+      MobileDetection: { isTouchDevice: () => touch },
+      document: { addEventListener: vi.fn(), getElementById: () => button },
+    });
+    const app = {
+      activeSessionId: active ? 's1' : null,
+      sessions: new Map([['s1', { mode }]]),
+      isTerminalAtBottom: () => bottom,
+      _liveOutputSinceFullPull: new Set(marked ? ['s1'] : []),
+      _fullHistoryRepullInFlight: inFlight,
+      _tilesOwnTerminal: () => tiles,
+      _maybeRefetchFullHistory: vi.fn(async (_opts: object) => {}),
+      _syncHistoryReloadButton: () => (ui._syncHistoryReloadButton as Function).call(app),
+    };
+    return { app, button };
+  }
+
+  it.each([
+    { opts: {}, visible: true },
+    { opts: { touch: false }, visible: false },
+    { opts: { mode: 'shell' }, visible: false },
+    { opts: { bottom: true }, visible: false },
+    { opts: { marked: false }, visible: false },
+    { opts: { inFlight: true }, visible: false },
+    { opts: { tiles: true }, visible: false },
+    { opts: { active: false }, visible: false },
+  ])('visibility is $visible for $opts', ({ opts, visible }) => {
+    const { app, button } = fixture(opts);
+    app._syncHistoryReloadButton();
+    expect(button.hidden).toBe(!visible);
+  });
+
+  it('forces a content-anchored pull on tap and resets the loading state on settle', async () => {
+    const { app, button } = fixture();
+    const { promise, resolve: release } = Promise.withResolvers<void>();
+    app._maybeRefetchFullHistory.mockReturnValueOnce(promise);
+    app._syncHistoryReloadButton();
+    const tapped = button.onclick!();
+    expect(app._maybeRefetchFullHistory).toHaveBeenCalledWith({ force: true, anchor: 'content' });
+    expect(button.disabled).toBe(true);
+    expect(button.textContent).toBe('Loading…');
+    release();
+    await tapped;
+    expect(button.disabled).toBe(false);
+    expect(button.textContent).toBe('↻ Reload history');
+  });
+});
+
+describe('selectSession only clears live-output marks for actual full mux captures', () => {
+  it.each(['mux-full-history', 'history'])('checks the response source: %s', async (source) => {
+    const errors = vi.fn();
+    const select = loadAppMethod('selectSession', {
+      console: { log: vi.fn(), error: errors },
+      document: { querySelector: () => null },
+      localStorage: { setItem: vi.fn(), getItem: () => null },
+      requestIdleCallback: vi.fn(),
+    });
+    const { app } = makeApp('omp', { bufferRows: 30, capture: lines(60), payload: { source } });
+    const methods = Object.fromEntries(
+      [
+        '_setTerminalLoadState',
+        '_clearTerminalLoadState',
+        '_cleanupPreviousSession',
+        '_renderHistoryTruncationBanner',
+        '_updateSseSubscription',
+        'hideWelcome',
+        'markIdleAlertSeen',
+        '_updateActiveTabImmediate',
+        'closeSessionSidebarOnHandheld',
+        'renderSessionTabs',
+        '_updateLocalEchoState',
+        'syncTerminalGeometry',
+        '_markTerminalBufferReconciled',
+        '_connectWs',
+        'scrollToLastNonEmptyLine',
+      ].map((name) => [name, vi.fn()])
+    );
+    Object.assign(app, methods, {
+      activeSessionId: 's2',
+      _fullHistoryLoaded: new Set(),
+      _liveOutputSinceFullPull: new Set(['s1']),
+      _liveOutputGen: new Map(),
+      _shouldFocusTerminalForTabSwitch: () => false,
+      _isStaleSelect: () => false,
+      sendResize: async () => false,
+    });
+    Object.assign(app.terminal, { scrollToBottom: vi.fn() });
+    await select.call(app, 's1');
+    expect(errors).not.toHaveBeenCalled();
+    expect(app.chunkedTerminalWrite).toHaveBeenCalledOnce();
+    expect(Reflect.get(app, '_liveOutputSinceFullPull').has('s1')).toBe(source !== 'mux-full-history');
   });
 });

@@ -1061,6 +1061,7 @@ Object.assign(CodemanApp.prototype, {
       typeof PredictiveEchoOverlay !== 'undefined' ? new PredictiveEchoOverlay(this.terminal) : null;
     this._predictiveEcho?.setPredictWhen((terminal) => window.CodemanTerminalInput.isCodexComposerRow(terminal));
     if (MobileDetection.isTouchDevice()) {
+      this.terminal.onScroll(() => this._syncHistoryReloadButton());
       this.terminal.onCursorMove(() => this._syncMobileHelperTextareaToCursor());
       this.terminal.onRender(() => this._syncMobileHelperTextareaToCursor());
       // Keep the live content above the keyboard while the rows are held.
@@ -4006,6 +4007,80 @@ Object.assign(CodemanApp.prototype, {
     return buffer.viewportY >= buffer.baseY - 2;
   },
 
+  /** Capture the first readable row and its neighbours without copying the buffer. */
+  _captureViewportAnchor() {
+    const buffer = this.terminal.buffer.active;
+    const { viewportY, baseY } = buffer;
+    let row = viewportY;
+    while (row < buffer.length && !buffer.getLine(row)?.translateToString(true).trim()) row++;
+    return {
+      viewportY,
+      rowsFromBottom: baseY - viewportY,
+      offset: row - viewportY,
+      signature: Array.from({ length: 3 }, (_, i) => buffer.getLine(row + i)?.translateToString(true).trim() || ''),
+    };
+  },
+
+  /** Restore the closest matching content, falling back to distance from live output. */
+  _restoreViewportAnchor(anchor) {
+    const buffer = this.terminal.buffer.active;
+    const clamp = (row) => Math.max(0, Math.min(buffer.baseY, row));
+    const fallback = clamp(buffer.baseY - anchor.rowsFromBottom);
+    let target = fallback;
+    if (anchor.rowsFromBottom > 2 && anchor.signature[0]) {
+      const expected = Math.max(0, Math.min(buffer.length - 1, buffer.baseY - anchor.rowsFromBottom + anchor.offset));
+      const text = (row) => buffer.getLine(row)?.translateToString(true).trim() || '';
+      let firstRowMatch = null;
+      let exactMatch = null;
+      // Scan at most 2000 rows either side (4001 candidates / 12003 line reads).
+      // Nearest first: stop at the first exact signature, otherwise use the
+      // nearest first-row match within budget rather than scanning 50k rows.
+      for (let distance = 0; distance <= Math.min(2000, buffer.length - 1); distance++) {
+        const left = expected - distance;
+        const right = expected + distance;
+        for (let side = 0; side < (distance === 0 ? 1 : 2); side++) {
+          const row = side === 0 ? left : right;
+          if (row < 0 || row >= buffer.length || text(row) !== anchor.signature[0]) continue;
+          if (firstRowMatch === null) firstRowMatch = row;
+          if (text(row + 1) === anchor.signature[1] && text(row + 2) === anchor.signature[2]) {
+            exactMatch = row;
+            break;
+          }
+        }
+        if (exactMatch !== null) break;
+      }
+      const match = exactMatch ?? firstRowMatch;
+      if (match !== null) target = clamp(match - anchor.offset);
+    }
+    this.terminal.scrollToLine(target);
+    return target;
+  },
+
+  /** Sole owner of the touch-only history reload control's visibility. */
+  _syncHistoryReloadButton() {
+    // Touch capability does not change at runtime and desktop never shows the
+    // control, so non-touch pages skip the DOM work entirely.
+    const touch = typeof MobileDetection !== 'undefined' && MobileDetection.isTouchDevice();
+    if (!touch) return;
+    const button = document.getElementById('historyReloadBtn');
+    if (!button) return;
+    const sessionId = this.activeSessionId;
+    const session = this.sessions.get(sessionId);
+    const visible = !!(touch && session && session.mode !== 'shell' &&
+      !this.isTerminalAtBottom() && this._liveOutputSinceFullPull?.has(sessionId) &&
+      !this._tilesOwnTerminal?.() && !this._fullHistoryRepullInFlight);
+    if (button.hidden === visible) button.hidden = !visible;
+    if (this._fullHistoryRepullInFlight) return;
+    button.disabled = false;
+    button.textContent = '↻ Reload history';
+    button.onclick = () => {
+      button.disabled = true;
+      button.textContent = 'Loading…';
+      return Promise.resolve(this._maybeRefetchFullHistory({ force: true, anchor: 'content' }))
+        .finally(() => this._syncHistoryReloadButton());
+    };
+  },
+
   /**
    * Re-take the sticky-scroll baseline from where the viewport now sits.
    *
@@ -4050,13 +4125,11 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
-   * Post-scroll companion to _noteTerminalUserScroll: hitting the TOP of the
-   * buffer while scrolling up gives the app a chance to pull the rest of tmux's
-   * scrollback (issue #205, see _maybeRefetchFullHistory). Shell sessions pull a
-   * bounded window because their captures can be large; their banner button is
-   * the unbounded path. Must be called AFTER scrollLines(), since the check is on
-   * the resulting position, and it is deliberately not folded into
-   * _noteTerminalUserScroll for exactly that reason.
+   * After scrollLines(), repair on ANY upward gesture in a non-shell session
+   * marked by live output since its last mux-full-history replay (#814), using
+   * a content anchor to hold the reader's place. Unmarked sessions still pull
+   * at the top (#205); shells pull only a bounded window there. The pull owns
+   * cooldown/latch and downgrade guards.
    *
    * It is also what brings up the partial-history notice, and what retires it
    * once a downward scroll is back at live output (_setHistoryNoticeRevealed).
@@ -4064,8 +4137,8 @@ Object.assign(CodemanApp.prototype, {
    * what the pull left rather than flashing the state it is about to replace.
    */
   _maybeLoadMoreHistoryOnScroll(lines) {
-    if (Array.isArray(this._earlyReplayTravel)) {
-      this._earlyReplayTravel.push(lines);
+    if (this._earlyReplayTravel?.sessionId === this.activeSessionId) {
+      this._earlyReplayTravel.moves.push(lines);
       return;
     }
     if (lines > 0) {
@@ -4074,39 +4147,22 @@ Object.assign(CodemanApp.prototype, {
     }
     if (lines === 0) return;
     const buffer = this.terminal?.buffer?.active;
-    if (buffer?.viewportY !== 0) {
-      const sessionId = this.activeSessionId;
-      // tmux repaint bursts can leave a gap just above live output (#814).
-      // Called after scrollLines: include this gesture's travel in the bottom check.
-      if (
-        lines < 0 &&
-        sessionId &&
-        this._liveOutputSinceFullPull?.has(sessionId) &&
-        this.sessions.get(sessionId)?.mode !== 'shell' &&
-        buffer?.viewportY >= buffer.baseY - 2 - Math.abs(lines) &&
-        !this._fullHistoryRepullInFlight &&
-        !this._isLoadingBuffer
-      ) {
-        Promise.resolve(this._maybeRefetchFullHistory?.({ anchor: 'bottom' }))
-          .catch(() => {})
-          .then(() => {
-            // Travel during the replay is swallowed above, so a gesture that
-            // reached the top meanwhile still owes the notice its reveal.
-            if (this.activeSessionId === sessionId && this.terminal?.buffer?.active?.viewportY === 0) {
-              this._setHistoryNoticeRevealed?.(sessionId);
-            }
-          });
-      }
-      return;
-    }
-    // An earlier frame of this gesture already started the pull; its own
-    // completion reveals the notice, so do not flash the pre-pull state now.
-    if (this._fullHistoryRepullInFlight || this._isLoadingBuffer) return;
+    const reachedTop = buffer?.viewportY === 0;
     const sessionId = this.activeSessionId;
-    Promise.resolve(this._maybeRefetchFullHistory?.())
+    const repair = sessionId && this._liveOutputSinceFullPull?.has(sessionId) &&
+      this.sessions.get(sessionId)?.mode !== 'shell';
+    if (!repair && buffer?.viewportY !== 0) return;
+    // An earlier frame already started a pull and owns the notice reveal.
+    if (this._fullHistoryRepullInFlight || this._isLoadingBuffer) return;
+    Promise.resolve(repair
+      ? this._maybeRefetchFullHistory?.({ anchor: 'content' })
+      : this._maybeRefetchFullHistory?.())
       .catch(() => {})
       .then(() => {
-        if (sessionId && this.activeSessionId === sessionId) this._setHistoryNoticeRevealed?.(sessionId);
+        if (sessionId && this.activeSessionId === sessionId &&
+          (reachedTop || this.terminal?.buffer?.active?.viewportY === 0)) {
+          this._setHistoryNoticeRevealed?.(sessionId);
+        }
       });
   },
 
@@ -4686,9 +4742,14 @@ Object.assign(CodemanApp.prototype, {
       });
       // Only live writes can open a new tmux repaint gap; replays cannot (#814).
       if (writeChunk.length && flushSessionId && !this._isLoadingBuffer) {
-        (this._liveOutputSinceFullPull ||= new Set()).add(flushSessionId);
+        const marked = (this._liveOutputSinceFullPull ||= new Set());
+        const newlyMarked = !marked.has(flushSessionId);
+        marked.add(flushSessionId);
         const generations = (this._liveOutputGen ||= new Map());
         generations.set(flushSessionId, (generations.get(flushSessionId) || 0) + 1);
+        // Visibility only changes here when the mark appears; scrolling is
+        // covered by the touch-only onScroll hook.
+        if (newlyMarked) this._syncHistoryReloadButton?.();
       }
     } catch (err) {
       this._terminalWriteInFlight = false;
@@ -5029,6 +5090,11 @@ Object.assign(CodemanApp.prototype, {
         if (entry.at < since) continue;
         this.batchTerminalWrite(entry.data);
       }
+    }
+    const recoverySession = this._pendingDroppedOutputRecovery;
+    this._pendingDroppedOutputRecovery = null;
+    if (recoverySession && recoverySession === this.activeSessionId) {
+      this._scheduleDroppedOutputRecovery?.(recoverySession);
     }
     return true;
   },

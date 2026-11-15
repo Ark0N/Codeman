@@ -121,6 +121,8 @@ function makeApp() {
   let resolvePull: (() => void) | null = null;
   const app = {
     activeSessionId: 's1' as string | null,
+    sessions: new Map([['s1', { mode: 'omp' }]]),
+    _liveOutputSinceFullPull: new Set<string>(),
     terminal: { buffer: { active: buffer } },
     // Each gesture's pull is held open until the test settles it.
     _maybeRefetchFullHistory: vi.fn(
@@ -183,6 +185,29 @@ describe('partial-history notice: lazy reveal', () => {
     expect(bar.textContent).toContain('40,000 lines of scrollback are retained.');
     expect(loadButton(bar)?.textContent).toBe('Load full history');
   });
+
+  it.each([
+    { viewportY: 0, revealed: true },
+    { viewportY: 200, revealed: false },
+  ])(
+    'retains the initiating top state through a marked repair from row $viewportY',
+    async ({ viewportY, revealed }) => {
+      const { app, bar, buffer } = makeApp();
+      app._setHistoryTruncation('s1', TAIL);
+      app._liveOutputSinceFullPull.add('s1');
+      app._maybeRefetchFullHistory.mockImplementation(async () => {
+        app._setHistoryTruncation('s1', { ...TAIL, source: 'mux-full-history' });
+        buffer.viewportY = 100; // The content anchor restored the old top below recovered rows.
+      });
+      buffer.viewportY = viewportY;
+      app._maybeLoadMoreHistoryOnScroll(-5);
+      for (let i = 0; i < 5; i++) await Promise.resolve();
+      expect(app._maybeRefetchFullHistory).toHaveBeenCalledOnce();
+      expect(app._maybeRefetchFullHistory).toHaveBeenCalledWith({ anchor: 'content' });
+      expect(bar.hidden).toBe(!revealed);
+      if (revealed) expect(loadButton(bar)?.textContent).toBe('Load full history');
+    }
+  );
 
   it('a later frame of the same gesture does not flash the pre-pull state while the pull runs', async () => {
     const { app, bar, buffer } = makeApp();

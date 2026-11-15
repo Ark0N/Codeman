@@ -801,12 +801,12 @@ class CodemanApp {
     // the small `full=1` capture instead of the 1 MiB byte tail: see
     // _notePaneHistory and selectSession.
     this._paneHistoryLines = new Map(); // Map<sessionId, number>
-    // Cooldown per session for the scroll-to-top "load more history" re-pull.
+    // Per-session cooldown for upward-scroll history repair / top-of-buffer pulls.
     this._fullHistoryRepullAt = new Map(); // Map<sessionId, timestamp>
     this._fullHistoryRepullInFlight = false;
     this._liveOutputSinceFullPull = new Set(); // Set<sessionId>
     this._liveOutputGen = new Map(); // Map<sessionId, number>
-    this._earlyReplayTravel = null; // number[] while an early (#814) replay runs
+    this._earlyReplayTravel = null; // { sessionId, moves: number[] } during a content-anchored replay
     // Sessions whose last re-pull came back THINNER than the live buffer (a
     // repaint-mode CLI pane, where tmux keeps no history of its own). The pull is
     // refused for those and retried far more slowly — see _maybeRefetchFullHistory.
@@ -2599,13 +2599,31 @@ class CodemanApp {
    * @param {number} [queuedBytes] - render-queue bytes at the drop, for the crash trail
    */
   _scheduleDroppedOutputRecovery(sessionId, attempt = 0, queuedBytes) {
-    if (!sessionId || this._clientDropRecoveryTimer) return;
+    if (!sessionId) return;
     // Nothing of the main terminal's to recover while the tile grid owns it.
     if (this._tilesOwnTerminal?.()) return;
+    // A slow capture owns the live-output gate. Keep the recovery owed until
+    // it releases instead of spending every retry against the same open load.
+    if (this._isLoadingBuffer) {
+      if (sessionId === this.activeSessionId) {
+        if (this._pendingDroppedOutputRecovery !== sessionId && Number.isFinite(queuedBytes)) {
+          _crashDiag.log(`TERMINAL DROP: ${(queuedBytes / 1024).toFixed(0)}KB queued (recovery deferred)`);
+        }
+        this._pendingDroppedOutputRecovery = sessionId;
+      }
+      return;
+    }
+    if (this._clientDropRecoveryTimer) return;
     // Behind the debounce guard: one line per window, not per dropped frame.
     if (Number.isFinite(queuedBytes)) _crashDiag.log(`TERMINAL DROP: ${(queuedBytes / 1024).toFixed(0)}KB queued`);
     this._clientDropRecoveryTimer = setTimeout(async () => {
       this._clientDropRecoveryTimer = null;
+      // A load may have opened after this timer was armed. Defer without
+      // advancing the attempt; _finishBufferLoad resumes only the active tab.
+      if (this._isLoadingBuffer) {
+        if (sessionId === this.activeSessionId) this._pendingDroppedOutputRecovery = sessionId;
+        return;
+      }
       let repainted = false;
       let timedOut = false;
       try {
@@ -9583,8 +9601,8 @@ class CodemanApp {
   }
 
   /**
-   * "Load more history": re-pull the whole tmux scrollback when the user scrolls up
-   * while already at the top of what the browser has.
+   * Re-pull tmux history at the top, or on any upward scroll in a non-shell
+   * session marked by live output since its last mux-full-history replay.
    *
    * xterm's buffer is only ever a WINDOW onto tmux's real history, and two things
    * shrink it. tmux repaints the pane rectangle instead of emitting linefeeds
@@ -9595,9 +9613,9 @@ class CodemanApp {
    * everything (history-limit 100k by default), so the fix is to go ask for it with
    * the same `?full=1` capture a page reload uses (issue #205).
    *
-   * On demand rather than automatic because that capture is unbounded-ish work: at
-   * the default history limit it can be megabytes, which is fine to pay when the
-   * user is explicitly reaching for history and not fine on every tab switch.
+   * Gesture-triggered and cooldown/latch guarded: a synchronous capture can cost
+   * about 0.3 s at 100k lines and blocks the server event loop. Content anchors
+   * hold the reader's place even when new history fills a gap below them.
    *
    * NEVER a downgrade: for a repaint-mode CLI pane tmux keeps no history of its
    * own, so the capture can be THINNER than what xterm already holds and the
@@ -9640,14 +9658,15 @@ class CodemanApp {
     if (!force && now - (this._fullHistoryRepullAt.get(sessionId) || 0) < cooldown) return;
     this._fullHistoryRepullAt.set(sessionId, now);
     this._fullHistoryRepullInFlight = true;
+    const loadOwner = this._beginBufferLoad();
+    let replayed = false;
     // The session-id check below cannot see a tab switch that came BACK during
     // the fetch (A -> B -> A): the id matches again while `selectSession` is
     // replaying its own capture, and the reset below would land in the middle
     // of that write. The select generation moves on every switch, so it can.
     const selectGen = this._selectGeneration;
-    // Sampled BEFORE the fetch: this path does not gate live output while the
-    // capture downloads, so output flushed after tmux captured would otherwise
-    // be overwritten by the replay and still count as covered by it (#814).
+    // Queued output replayed after this load may mark the session again. Never
+    // clear that newer generation along with the capture's original mark.
     const liveOutputGen = this._liveOutputGen?.get(sessionId) || 0;
     try {
       const requestStartedAt = performance.now();
@@ -9744,10 +9763,9 @@ class CodemanApp {
       this._fullHistoryRepullUseless?.delete(sessionId);
       const rowsBefore = this.terminal.buffer.active.length;
       const replayStartedAt = performance.now();
-      const rowsFromBottom = this.terminal.buffer.active.baseY - this.terminal.buffer.active.viewportY;
-      // Ordered, not summed: each move clamps at the buffer edge as it would
-      // have live, so a reversal after hitting the bottom is not cancelled out.
-      if (anchor === 'bottom') this._earlyReplayTravel = [];
+      const viewportAnchor = anchor === 'content' ? this._captureViewportAnchor() : null;
+      // Ordered, not summed: each move clamps at the buffer edge as it would live.
+      if (anchor === 'content') this._earlyReplayTravel = { sessionId, moves: [] };
       this._resetTerminalForReplay();
       const {
         parsedAt,
@@ -9756,12 +9774,13 @@ class CodemanApp {
       } = await this.chunkedTerminalWrite(
         buffer,
         TERMINAL_CHUNK_SIZE,
-        sessionId,
+        loadOwner,
         this._bufferLoadFinishOpts(payload, headersReceivedAt)
       );
+      replayed = true; // chunkedTerminalWrite finished this load with the capture cutoff.
       timing.resetAndParseMs = parsedAt - replayStartedAt;
       if (!completed || this.activeSessionId !== sessionId || selectGen !== this._selectGeneration) return;
-      if ((this._liveOutputGen?.get(sessionId) || 0) === liveOutputGen) {
+      if (payload.source === 'mux-full-history' && (this._liveOutputGen?.get(sessionId) || 0) === liveOutputGen) {
         this._liveOutputSinceFullPull?.delete(sessionId);
       }
       // Keep shell tab restores bounded too. A user-triggered full-history pull
@@ -9776,14 +9795,12 @@ class CodemanApp {
       // UPWARD, so what used to be row 0 (what they were looking at) is now `delta`
       // rows down; scrolling there reveals the recovered history above it instead
       // of teleporting them to the bottom the way a normal buffer load does.
-      if (anchor === 'bottom') {
-        // Recover the tmux repaint gap above the live screen without a jump (#814).
+      if (anchor === 'content') {
         const baseY = this.terminal.buffer.active.baseY;
         const clamp = (row) => Math.max(0, Math.min(baseY, row));
-        let row = clamp(baseY - rowsFromBottom);
-        for (const move of this._earlyReplayTravel) row = clamp(row + move);
+        let row = this._restoreViewportAnchor(viewportAnchor);
+        for (const move of this._earlyReplayTravel.moves) row = clamp(row + move);
         this.terminal.scrollToLine(row);
-        this._earlyReplayTravel = null;
       } else {
         const delta = parsedBufferLength - rowsBefore;
         if (delta > 0) this.terminal.scrollToLine(delta);
@@ -9804,8 +9821,10 @@ class CodemanApp {
     } catch {
       // Transient (offline, 5xx) — the next scroll-up past the cooldown retries.
     } finally {
-      if (anchor === 'bottom') this._earlyReplayTravel = null;
+      if (!replayed) this._finishBufferLoad(loadOwner, { flushQueued: true, since: 0 });
+      if (anchor === 'content') this._earlyReplayTravel = null;
       this._fullHistoryRepullInFlight = false;
+      this._syncHistoryReloadButton?.();
     }
   }
 
@@ -10052,6 +10071,7 @@ class CodemanApp {
     this._cleanupPreviousSession(sessionId);
     this.activeSessionId = sessionId;
     this._activateFileBrowserSession?.(sessionId);
+    this._syncHistoryReloadButton?.();
     // A keyboard row hold belongs to the session it was taken for: release it here
     // if this one resizes instead (the geometry work below then fits it).
     this._reconcileKeyboardHold?.({ resize: false });
@@ -10437,7 +10457,7 @@ class CodemanApp {
             this._clearTerminalLoadState(sessionId, selectGen);
             return;
           }
-          if (fullHistoryReplay && completed && (this._liveOutputGen?.get(sessionId) || 0) === liveOutputGen) {
+          if (fullHistoryReplay && data.source === 'mux-full-history' && completed && (this._liveOutputGen?.get(sessionId) || 0) === liveOutputGen) {
             this._liveOutputSinceFullPull?.delete(sessionId);
           }
           // Ensure terminal is scrolled to bottom after buffer load
