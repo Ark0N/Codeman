@@ -67,6 +67,12 @@ below the terminal that owns composition, then delivers the composed text to the
 Ctrl- and Alt-modified navigation keys typed through it reach the CLI as the modified
 sequences, so word jumps and history keys keep working.
 
+On a phone, **Input Field: Send on Enter** (beside CJK input) turns that field into a chat box:
+typed text stays in it until Enter, so you can scroll the terminal back to a question and edit
+your answer before sending. Shift+Enter adds a line, Esc clears the field, and autocorrect is on.
+A one-line answer is sent as typed, so CLI menus that take a digit still work; several lines go
+as one paste followed by Enter.
+
 ## Voice dictation
 
 `Ctrl+Shift+V`, or the microphone button. There are three providers and the default is
