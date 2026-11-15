@@ -39,6 +39,7 @@ export const BROWSER_TEST_GLOBS = [
   'test/terminal-copy-shortcut.test.ts',
   'test/terminal-keycode229-recovery.browser.test.ts',
   'test/capture-load-window.browser.test.ts',
+  'test/history-gap-repair.browser.test.ts',
   'test/capture-geometry-retry.browser.test.ts',
   'test/codex-predictive-echo.test.ts', // also needs a real codex binary
   'test/split-pane-terminal.browser.test.ts',
