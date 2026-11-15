@@ -115,6 +115,32 @@ describe('restrictTmuxPrefixTable (recorded commands)', () => {
     expect(restrictTmuxPrefixTable(`tmux -L 'codeman'`, tmux.run)).toBe(false);
     expect(tmux.calls.filter((c) => c.includes('bind-key'))).toEqual([]);
   });
+
+  it('reads a one-binding table from the full listing when `list-keys -T prefix` prints nothing', () => {
+    // A tmux `next-3.7` build lists a table holding exactly one binding as nothing at
+    // all. The reduced table must still read as reduced, or every call resets it.
+    const tmux = fakeTmux({
+      'show-options -gv prefix': 'C-b\n',
+      'list-keys -T prefix': '',
+      'list-keys':
+        'bind-key    -T copy-mode    C-a                    send-keys -X start-of-line\n' +
+        'bind-key    -T prefix       C-b                    send-prefix\n' +
+        'bind-key    -T root         F1                     detach-client\n',
+    });
+    expect(restrictTmuxPrefixTable(`tmux -L 'codeman'`, tmux.run)).toBe(false);
+    expect(tmux.calls).toContain(`tmux -L 'codeman' list-keys`);
+    expect(tmux.calls.filter((c) => c.includes('bind-key') || c.includes('unbind-key'))).toEqual([]);
+  });
+
+  it('still resets when the full listing shows a stock prefix binding', () => {
+    const tmux = fakeTmux({
+      'show-options -gv prefix': 'C-b\n',
+      'list-keys -T prefix': '',
+      'list-keys': 'bind-key    -T prefix       )                      switch-client -n\n',
+    });
+    expect(restrictTmuxPrefixTable(`tmux -L 'codeman'`, tmux.run)).toBe(true);
+    expect(tmux.calls).toContain(`tmux -L 'codeman' unbind-key -a -T prefix`);
+  });
 });
 
 const hasTmux = (() => {
@@ -126,12 +152,29 @@ const hasTmux = (() => {
   }
 })();
 
+/**
+ * One key table as `list-keys -T <table>` prints it. Some tmux builds (a `next-3.7`
+ * development build) print NOTHING there when the table holds exactly one binding,
+ * which is the shape every reset in this file produces, so a blank answer is read from
+ * the full listing instead, its padding folded to the `-T <table>` form.
+ */
+function listKeyTable(base: string, table: string): string {
+  const run = (cmd: string): string => execSync(cmd, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  const direct = run(`${base} list-keys -T ${table}`);
+  if (direct.trim()) return direct;
+  return run(`${base} list-keys`)
+    .split('\n')
+    .filter((line) => new RegExp(`^bind-key\\s+(?:-\\S+\\s+)*?-T\\s+${table}\\s`).test(line.trim()))
+    .map((line) => line.trim().replace(/-T\s+(\S+)\s+/, '-T $1 '))
+    .join('\n');
+}
+
 describe.skipIf(!hasTmux)('restrictTmuxPrefixTable against a real tmux (private socket)', () => {
   // Throwaway server, never Codeman's socket; -f /dev/null keeps the user's config out.
   const socket = `codeman-prefix-test-${process.pid}`;
   const tmux = `tmux -L ${socket} -f /dev/null`;
   const run = (cmd: string): string => execSync(cmd, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-  const keys = (table: string) => run(`${tmux} list-keys -T ${table}`);
+  const keys = (table: string) => listKeyTable(tmux, table);
   let client: pty.IPty | null = null;
 
   /** The session the attach client is looking at right now. */
@@ -275,7 +318,8 @@ describe.skipIf(!hasTmux)('restrictTmuxPrefixTable against a real tmux (private 
     run(`${tmux} set-option -g prefix 'C-\\'`);
     try {
       expect(restrictTmuxPrefixTable(tmux, run)).toBe(true);
-      expect(keys('prefix')).toMatch(/-T prefix C-\\\\\s+send-prefix/);
+      // `list-keys -T` escapes the key (`C-\\`); the full listing some builds fall back to does not.
+      expect(keys('prefix')).toMatch(/-T prefix C-\\(?:\\)?\s+send-prefix/);
       expect(restrictTmuxPrefixTable(tmux, run)).toBe(false);
     } finally {
       run(`${tmux} set-option -g prefix C-b`);
@@ -345,7 +389,7 @@ describe.skipIf(!hasTmux)('nested Docker/remote tmux prefix table (private socke
   it('after the nested reset, Ctrl+Q ), s and w leave the client, and Ctrl+Q Ctrl+Q reaches the pane', async () => {
     for (const command of nestedPrefixTableResetCommands()) run(`${tmux} ${command}`);
 
-    const prefix = run(`${tmux} list-keys -T prefix`)
+    const prefix = listKeyTable(tmux, 'prefix')
       .split('\n')
       .filter((line) => line.trim());
     expect(prefix).toEqual([expect.stringMatching(/-T prefix C-q\s+send-prefix$/)]);
@@ -381,7 +425,7 @@ describe.skipIf(!hasTmux)('nested Docker/remote tmux prefix table (private socke
     ].join(' \\; ');
     try {
       run(`${base} -f ${config} ${chain}`);
-      const prefix = run(`${base} list-keys -T prefix`)
+      const prefix = listKeyTable(base, 'prefix')
         .split('\n')
         .filter((line) => line.trim());
       expect(prefix).toEqual([expect.stringMatching(/-T prefix C-q\s+send-prefix$/)]);
