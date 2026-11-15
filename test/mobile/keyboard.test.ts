@@ -163,6 +163,41 @@ describe('Virtual Keyboard', () => {
       }
     });
 
+    it('sits the bars on the keyboard with no safe-area band, and no terminal under them', async () => {
+      // The mock layer is the faithful iOS model: the layout viewport keeps its
+      // height and only the visual viewport shrinks, so KeyboardHandler lifts the
+      // fixed bars by translateY. Headless Chromium has no home indicator, so the
+      // 34px inset a Face ID iPhone reports under viewport-fit=cover is forced.
+      const { context, page } = await createDevicePage(device, 'about:blank', 'chromium');
+      try {
+        await setupViewportMock(page);
+        await page.goto(baseUrl, { waitUntil: WAIT.DOM_CONTENT_LOADED });
+        await page.waitForTimeout(2000);
+        await page.evaluate(() => document.documentElement.style.setProperty('--safe-area-bottom', '34px'));
+
+        expect(await showKeyboardViaMock(page, KEYBOARD.TYPICAL_IOS_HEIGHT)).toBe(true);
+        await page.waitForTimeout(WAIT.KEYBOARD_ANIMATION);
+
+        const layout = await page.evaluate(() => {
+          const rect = (sel: string) => (document.querySelector(sel) as HTMLElement | null)?.getBoundingClientRect();
+          return {
+            visualBottom: (window.visualViewport?.offsetTop ?? 0) + (window.visualViewport?.height ?? 0),
+            toolbar: rect('.toolbar'),
+            accessory: rect('.keyboard-accessory-bar'),
+            terminal: rect('#terminalContainer'),
+          };
+        });
+        // Flush on the keyboard: the old CSS left the toolbar 34px above it.
+        expect(Math.abs(layout.toolbar!.bottom - layout.visualBottom)).toBeLessThanOrEqual(1);
+        expect(Math.abs(layout.accessory!.bottom - layout.toolbar!.top)).toBeLessThanOrEqual(1);
+        // The terminal's box ends where the bars begin, so its last row (the end of
+        // the prompt being typed) is not painted under the accessory bar.
+        expect(layout.terminal!.bottom).toBeLessThanOrEqual(layout.accessory!.top + 1);
+      } finally {
+        await context.close();
+      }
+    });
+
     it('works on Chromium', async () => {
       const { context, page } = await createDevicePage(device, 'about:blank', 'chromium');
       try {

@@ -1039,15 +1039,30 @@ html.mobile-init .file-browser-panel {
     bottom: calc(var(--safe-area-bottom) + var(--chrome-overlap, 0px));
   }
 
-  /* When keyboard is visible the JS translateY already accounts for the full
-     distance from the visual-viewport bottom to the layout-viewport bottom
-     (keyboard + Safari bar).  Remove the CSS Safari-bar offset to avoid
-     double-counting, which otherwise creates a visible gap above the keyboard. */
+  /* With the keyboard up the bars sit directly on it. The JS translateY already
+     lifts them by the whole distance from the layout-viewport bottom to the
+     visual-viewport bottom (keyboard, plus Safari's bar where there is one), so
+     the Safari-bar offset is not added again here. Nor is the bottom safe area:
+     the keyboard covers the home-indicator strip it reserves. Keeping it (34px
+     on a Face ID iPhone, since the page sets viewport-fit=cover) left an empty
+     band between the toolbar and the keyboard, and worse, pushed the bars 34px
+     above the box main's keyboard padding reserves for them (84px, the two
+     bars only, set by KeyboardHandler), so the terminal's last row, the end of
+     the prompt being typed, was painted under the accessory bar. The second
+     selector of each pair outranks `.ios-device.safari-browser .toolbar`. */
+  .keyboard-visible .toolbar,
   .keyboard-visible.ios-device.safari-browser .toolbar {
-    bottom: var(--safe-area-bottom);
+    bottom: 0;
   }
+  .keyboard-visible .keyboard-accessory-bar,
   .keyboard-visible.ios-device.safari-browser .keyboard-accessory-bar {
-    bottom: calc(var(--safe-area-bottom) + 40px);
+    bottom: 40px;
+  }
+  /* The CJK textarea stacks on the accessory bar, so it drops the same strip
+     (styles.css adds --safe-area-bottom for every touch device; on an iPad the
+     JS sets `bottom` inline and this rule never applies, being phone-only). */
+  .touch-device.keyboard-visible #cjkInput.cjk-input-visible {
+    bottom: 84px;
   }
 
   /* Show case selector in center */
