@@ -50,6 +50,7 @@ import { readWebviews, writeWebviews } from '../../webview-store.js';
 import { webviewCapabilities } from '../../webview-capabilities.js';
 import { egressBlockedReason, webviewEgressLookup, webviewFetch, type EgressLookup } from '../webview-egress.js';
 import { blockedWebviewHostReason } from '../webview-egress-policy.js';
+import { getDeepSeekWebCookie } from '../../deepseek-web-server.js';
 import { ApiErrorCode, createErrorResponse } from '../../types.js';
 import type { Webview, WebviewOpenData, WebviewProbe } from '../../types.js';
 import { AUTH_COOKIE_NAME } from '../middleware/auth.js';
@@ -427,6 +428,31 @@ function proxyHttp(
 }
 
 /**
+ * The credential a Codeman-managed dashboard needs on every upstream request.
+ *
+ * `dsh web` now gates its index and `/api` behind a cookie minted for the
+ * authority it was started on, and only the URL it prints on boot carries the
+ * token that buys it. The managed DeepSeek tab deliberately stores the clean
+ * URL, so the browser can never hold that cookie: `deepseek-web-server.ts`
+ * exchanges the token at startup, and this is where the supervisor's result
+ * reaches the request.
+ *
+ * Strictly scoped to the exact loopback origin the cookie was minted for. A
+ * web tab the user repointed at another host, or a stale tab still naming a
+ * previous port, must not be handed a credential that is not its own.
+ *
+ * @param webview - the saved tab being proxied.
+ * @param upstream - resolved upstream URL for this request.
+ * @returns `name=value` cookie pair, or undefined when none applies.
+ */
+function managedDashboardCookie(webview: Webview, upstream: URL): string | undefined {
+  if (webview.managed !== 'deepseek-web') return undefined;
+  if (upstream.hostname !== '127.0.0.1') return undefined;
+  const port = Number(upstream.port || (upstream.protocol === 'https:' ? 443 : 80));
+  return getDeepSeekWebCookie(port) ?? undefined;
+}
+
+/**
  * Proxy one request to the dashboard behind `cap`, serving `wildcard` as the
  * upstream path. Split out from the route handler so the 404 fallback (which has
  * no route params) can reuse it.
@@ -468,12 +494,14 @@ async function proxyRequest(
   }
 
   const hasBody = req.method !== 'GET' && req.method !== 'HEAD';
+  const injectedCookie = managedDashboardCookie(webview, upstream);
   const headers = buildUpstreamRequestHeaders(req.headers, upstream, {
     forwardCookies: webview.trusted,
     sessionCookieName: AUTH_COOKIE_NAME,
     refererPath:
       typeof req.headers.referer === 'string' ? stripProxyPrefix(req.headers.referer, cap, basePath) : undefined,
     relayBodyLength: hasBody && req.body !== undefined,
+    ...(injectedCookie ? { injectedCookie } : {}),
   });
 
   // #237: the timeout bounds TIME-TO-HEADERS only. A plain AbortSignal.timeout on
@@ -707,13 +735,19 @@ function proxyWebSocket(socket: WebSocket, req: FastifyRequest<{ Params: ProxyPa
     };
 
     const protocols = req.headers['sec-websocket-protocol'];
+    // The same credential the HTTP leg presents. A managed dashboard's realtime
+    // channel is gated exactly like its index, so without this the page loads
+    // and then sits there silently disconnected.
+    const cookie =
+      managedDashboardCookie(webview, upstream) ??
+      (webview.trusted && req.headers.cookie ? String(req.headers.cookie) : undefined);
     // `lookup` is absent from ws's ClientOptions typings but flows through
     // http.request to net.connect untouched, which is where the resolved
     // address is judged (see webview-egress.ts).
     const upstreamOptions: WsClientOptions & { lookup: EgressLookup } = {
       headers: {
         origin: upstream.origin,
-        ...(webview.trusted && req.headers.cookie ? { cookie: String(req.headers.cookie) } : {}),
+        ...(cookie ? { cookie } : {}),
       },
       handshakeTimeout: WEBVIEW_WS_HANDSHAKE_TIMEOUT_MS,
       lookup: webviewEgressLookup,

@@ -311,7 +311,19 @@ export function filterCookieHeader(cookie: string | undefined, drop: string[]): 
 export function buildUpstreamRequestHeaders(
   incoming: Record<string, string | string[] | undefined>,
   upstream: URL,
-  opts: { forwardCookies: boolean; sessionCookieName: string; refererPath?: string; relayBodyLength?: boolean }
+  opts: {
+    forwardCookies: boolean;
+    sessionCookieName: string;
+    refererPath?: string;
+    relayBodyLength?: boolean;
+    /**
+     * A credential the SERVER holds for this dashboard, replacing whatever the
+     * browser sent. `dsh web` mints its session cookie for a loopback authority
+     * the browser never visits, so the proxy is the only party that can present
+     * it (see `deepseek-web-server.ts`).
+     */
+    injectedCookie?: string;
+  }
 ): Record<string, string> {
   const headers: Record<string, string> = {};
 
@@ -342,6 +354,11 @@ export function buildUpstreamRequestHeaders(
     const cookie = filterCookieHeader(Array.isArray(raw) ? raw.join('; ') : raw, [opts.sessionCookieName]);
     if (cookie) headers['cookie'] = cookie;
   }
+
+  // After the relay above, so a browser copy can never shadow it: these cookies
+  // are scoped to the browser's origin, and the authority this request is for is
+  // one it has never been able to store anything against.
+  if (opts.injectedCookie) headers['cookie'] = opts.injectedCookie;
 
   // Present as if the browser were talking to the dashboard directly. Apps that
   // check Origin on writes (CSRF defenses) need this to match their own origin.
@@ -647,6 +664,45 @@ try{
 }
 
 /**
+ * Make a page's own RELATIVE `<base href>` absolute under the proxy prefix.
+ *
+ * A base element is resolved against the document's URL, and {@link runtimeUrlShim}
+ * deliberately rewrites that URL to strip the proxy prefix. So a page shipping
+ * `<base href="./">` — which is what a Vite build does, DeepSeek Harness among
+ * them — has its base re-resolved to Codeman's ROOT the moment the shim runs:
+ * every module script, stylesheet and `fetch('./api')` then asks the Codeman
+ * origin instead of the dashboard. The visible symptom is not an error page but
+ * a blank one: the markup and inline `<style>` paint (dsh paints a dark
+ * `#151517`), the module 404s, and nothing else ever renders.
+ *
+ * Resolving it here, while the prefix is still known, keeps the author's target
+ * (the document as it existed before masking) and is idempotent: an
+ * already-absolute path resolves to itself. Cross-origin bases are the author
+ * pointing at a CDN and are left exactly as written.
+ *
+ * @param html - document with attributes already rebased.
+ * @param prefix - proxy prefix the document was served from.
+ * @returns the document with a relative base href made absolute.
+ */
+function rebaseRelativeBase(html: string, prefix: string): string {
+  return html.replace(
+    /(<base\b[^>]*?\bhref\s*=\s*)(["'])([^"']*)\2/i,
+    (match: string, head: string, quote: string, href: string) => {
+      let resolved: URL;
+      try {
+        // A stand-in origin: only the path is kept, and a different origin here
+        // is exactly the "absolute base" case this must not touch.
+        resolved = new URL(href, `http://codeman.invalid${prefix}`);
+      } catch {
+        return match;
+      }
+      if (resolved.origin !== 'http://codeman.invalid') return match;
+      return `${head}${quote}${resolved.pathname}${resolved.search}${resolved.hash}${quote}`;
+    }
+  );
+}
+
+/**
  * Inject `<base href="/webview/<cap>/">` plus the runtime URL shim, and rebase
  * root-absolute `src`/`href`/`action` attributes, which `<base>` alone does not
  * affect.
@@ -659,9 +715,12 @@ export function rewriteHtml(html: string, capability: string, basePath = ''): st
   const prefix = proxyPrefixFor(capability, basePath);
 
   // Fresh regexes per call: module-level /g patterns carry `lastIndex` between calls.
-  const rebased = html
-    .replace(/(\s(?:src|href|action)\s*=\s*")\/(?!\/)/gi, `$1${prefix}`)
-    .replace(/(\s(?:src|href|action)\s*=\s*')\/(?!\/)/gi, `$1${prefix}`);
+  const rebased = rebaseRelativeBase(
+    html
+      .replace(/(\s(?:src|href|action)\s*=\s*")\/(?!\/)/gi, `$1${prefix}`)
+      .replace(/(\s(?:src|href|action)\s*=\s*')\/(?!\/)/gi, `$1${prefix}`),
+    prefix
+  );
 
   // A page that ships its own <base> keeps it (overriding it would break the
   // author's intent), but it STILL needs the shim, which is the layer that

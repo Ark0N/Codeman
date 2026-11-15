@@ -238,6 +238,27 @@ describe('buildUpstreamRequestHeaders', () => {
     expect(headers.authorization).toBeUndefined();
   });
 
+  // `dsh web` mints its session cookie for the loopback authority the proxy
+  // dials, which the browser has never visited and cannot store anything for.
+  // The supervisor holds it instead, and it must win over the browser's copy.
+  it('replaces the browser cookies with a server-held credential', () => {
+    const headers = buildUpstreamRequestHeaders({ cookie: 'codeman_session=SECRET; stale=1' }, upstream, {
+      forwardCookies: true,
+      sessionCookieName: 'codeman_session',
+      injectedCookie: 'dsh-auth-p=v1.payload.sig',
+    });
+    expect(headers.cookie).toBe('dsh-auth-p=v1.payload.sig');
+  });
+
+  it('sends the server-held credential even when browser cookies are not forwarded', () => {
+    const headers = buildUpstreamRequestHeaders({}, upstream, {
+      forwardCookies: false,
+      sessionCookieName: 'codeman_session',
+      injectedCookie: 'dsh-auth-p=v1.payload.sig',
+    });
+    expect(headers.cookie).toBe('dsh-auth-p=v1.payload.sig');
+  });
+
   it('presents Origin/Referer as if the browser talked to the dashboard directly', () => {
     const headers = buildUpstreamRequestHeaders({ origin: 'https://codeman.local' }, upstream, {
       forwardCookies: false,
@@ -343,6 +364,25 @@ describe('rewriteHtml', () => {
   it('does not add a second <base> when the page already has one', () => {
     const out = rewriteHtml('<html><head><base href="/x/"></head></html>', CAP);
     expect(out.match(/<base/g)).toHaveLength(1);
+  });
+
+  // A Vite build ships `<base href="./">`, and the runtime shim rewrites the
+  // document URL to strip the prefix — so "./" would resolve to Codeman's root
+  // and every module script would 404 behind an otherwise-painted page.
+  it('resolves a page-relative <base> against the prefix before the shim masks the URL', () => {
+    const out = rewriteHtml('<html><head><base href="./"></head></html>', CAP);
+    expect(out).toContain(`<base href="${PREFIX}">`);
+    expect(out.match(/<base/g)).toHaveLength(1);
+  });
+
+  it('keeps a sub-path in a relative <base> inside the proxy prefix', () => {
+    const out = rewriteHtml('<html><head><base target="_blank" href="./sub/"></head></html>', CAP);
+    expect(out).toContain(`<base target="_blank" href="${PREFIX}sub/">`);
+  });
+
+  it('leaves a cross-origin <base> exactly as the author wrote it', () => {
+    const out = rewriteHtml('<html><head><base href="https://cdn.example/x/"></head></html>', CAP);
+    expect(out).toContain('<base href="https://cdn.example/x/">');
   });
 
   it('still injects the runtime shim when the page ships its own <base>', () => {

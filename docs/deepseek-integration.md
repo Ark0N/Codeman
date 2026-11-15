@@ -288,6 +288,18 @@ dsh fences its `/api` behind a browser-trust check on the request authority, and
 Codeman web tab reaches it through Codeman's own origin via the webview proxy, not
 directly. Without it the page renders and every API call fails.
 
+Since dsh's browser-auth gate, the index is not public either: boot prints
+`dsh web: http://127.0.0.1:<port>/?token=<one-time token>` and only a request
+carrying that token is answered with the `dsh-auth-*` cookie that authorizes
+everything after it. The saved tab deliberately keeps the clean URL, so the
+browser can never present that token, and the tab used to open on dsh's 401 page.
+`src/deepseek-web-server.ts` now reads the token out of the captured boot output,
+trades it for the cookie once at startup, and `webview-routes.ts` presents that
+cookie on both the HTTP and WebSocket legs — scoped to the exact loopback
+authority it was minted for, so a repointed or stale tab cannot carry it
+elsewhere. A dsh without the gate prints a token-less banner and keeps working
+unchanged.
+
 ## 7. Docker and remote cases
 
 Docker cases work: the agent image installs `dsh` and bootstraps a `dsh-tui`
