@@ -4929,6 +4929,11 @@ class CodemanApp {
     document.body.classList.toggle('cjk-input-visible', !!showCjk);
     cjkEl.style.display = showCjk ? 'block' : 'none';
     cjkEl.setAttribute('aria-hidden', showCjk ? 'false' : 'true');
+    if (typeof CjkInput !== 'undefined') {
+      CjkInput.setHoldUntilEnter?.(
+        !!(settings.cjkInputHoldUntilEnter ?? defaults.cjkInputHoldUntilEnter ?? false)
+      );
+    }
     if (!showCjk) window.cjkActive = false;
     if (typeof KeyboardHandler !== 'undefined') KeyboardHandler.updateLayoutForKeyboard();
   }

@@ -649,6 +649,8 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('appSettingsTerminalWheelLocal').checked =
       settings.terminalWheelLocalScrollback ?? defaults.terminalWheelLocalScrollback ?? false;
     document.getElementById('appSettingsCjkInput').checked = settings.cjkInputEnabled ?? defaults.cjkInputEnabled ?? false;
+    document.getElementById('appSettingsCjkHoldUntilEnter').checked =
+      settings.cjkInputHoldUntilEnter ?? defaults.cjkInputHoldUntilEnter ?? false;
     document.getElementById('appSettingsExtendedKeyboardBar').checked = settings.extendedKeyboardBar ?? false;
     document.getElementById('appSettingsTabTwoRows').checked = settings.tabTwoRows ?? defaults.tabTwoRows ?? false;
     document.getElementById('appSettingsShowTabCliLogos').checked = this.tabCliLogosEnabled(settings);
@@ -3195,6 +3197,7 @@ Object.assign(CodemanApp.prototype, {
       ),
       terminalWheelLocalScrollback: document.getElementById('appSettingsTerminalWheelLocal').checked,
       cjkInputEnabled: document.getElementById('appSettingsCjkInput').checked,
+      cjkInputHoldUntilEnter: document.getElementById('appSettingsCjkHoldUntilEnter').checked,
       webglRendererEnabled: document.getElementById('appSettingsWebglRenderer').checked,
       extendedKeyboardBar: document.getElementById('appSettingsExtendedKeyboardBar').checked,
       tabTwoRows: document.getElementById('appSettingsTabTwoRows').checked,
@@ -3440,6 +3443,7 @@ Object.assign(CodemanApp.prototype, {
       // SettingsUpdateSchema (.strict()), so sending it would 400 the whole PUT.
       keyboardHoldsRows: _khr,
       cjkInputEnabled: _cjk,
+      cjkInputHoldUntilEnter: _cjkHold,
       extendedKeyboardBar: _ekb,
       skin: _skin,
       language: _language,
@@ -4478,6 +4482,7 @@ Object.assign(CodemanApp.prototype, {
         sessionListLayout: 'header',
         sessionSidebarFontSize: 12,
         cjkInputEnabled: false,
+        cjkInputHoldUntilEnter: false,
         terminalWheelLocalScrollback: false, // mobile scrolls via touch, not wheel
         webglRendererEnabled: false, // mobile always uses the DOM renderer
         skin: 'daylight-blue',
@@ -5206,7 +5211,7 @@ Object.assign(CodemanApp.prototype, {
       'showFontControls', 'showSystemStats', 'showGpuStats', 'showCpuMhz', 'headerStatsStyle', 'showTokenCount', 'showCost',
       'showLifecycleLog', 'showResponseViewer', 'showRedrawButton',
       'showMonitor', 'showProjectInsights', 'showFileBrowser', 'showSubagents',
-      'subagentActiveTabOnly', 'tabTwoRows', 'showTabCliLogos', 'tabOrientation', 'tabRailWidth', 'tabRailDetail', 'tabRailSort', 'tabArrangement', 'tabStateOrder', 'sessionListLayout', 'sessionSidebarFontSize', 'localEchoEnabled', 'keyboardHoldsRows', 'cjkInputEnabled', 'extendedKeyboardBar',
+      'subagentActiveTabOnly', 'tabTwoRows', 'showTabCliLogos', 'tabOrientation', 'tabRailWidth', 'tabRailDetail', 'tabRailSort', 'tabArrangement', 'tabStateOrder', 'sessionListLayout', 'sessionSidebarFontSize', 'localEchoEnabled', 'keyboardHoldsRows', 'cjkInputEnabled', 'cjkInputHoldUntilEnter', 'extendedKeyboardBar',
       'skin', 'showPlanUsageLimits', 'showAttachmentsButton', 'showFileViewerButton', 'webglRendererEnabled',
       'terminalFontFamily', 'terminalFontWeight', 'terminalFontWeightBold',
       'language',

@@ -455,7 +455,11 @@ const KeyboardHandler = {
           caseSheet.style.transform = keyboardOffset > 0 ? `translateY(${-keyboardOffset}px)` : '';
         }
         if (main && keyboardHeight > 0) {
-          const cjkInputHeight = cjkInput?.classList.contains('cjk-input-visible') ? 44 : 0;
+          // The field grows with its text in Send-on-Enter mode, so reserve its
+          // real height (44 = the one-line field plus its border, the old constant).
+          const cjkInputHeight = cjkInput?.classList.contains('cjk-input-visible')
+            ? Math.max(44, cjkInput.offsetHeight + 10)
+            : 0;
           main.style.paddingBottom = `${84 + cjkInputHeight}px`;
         }
       } else if (keyboardHeight > 0) {

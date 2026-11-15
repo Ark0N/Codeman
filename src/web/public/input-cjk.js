@@ -57,6 +57,10 @@ const CjkInput = (() => {
   let _dictationActive = false;
   let _dictationDecayTimer = null;
   let _printableKeydownAt = null;
+  // Send-on-Enter mode (setting cjkInputHoldUntilEnter): typed text stays in the
+  // field until Enter, like a chat box, instead of streaming to the PTY as it is
+  // typed. Lets a phone user scroll the terminal and edit an answer before sending.
+  let _hold = false;
   const _listeners = {};
 
   const PHANTOM = '​';
@@ -189,12 +193,47 @@ const CjkInput = (() => {
       _t('flush SKIP composing');
       return;
     }
+    // Send-on-Enter: nothing leaves the field until Enter (keydown handler).
+    if (_hold) {
+      _t('flush SKIP hold');
+      _autoGrow();
+      return;
+    }
     const val = _strip(_textarea.value);
     _t(`flush ${val ? 'send len=' + val.length : 'empty'}`);
     if (val) {
       _send(val);
     }
     _resetToPhantom();
+  }
+
+  /** Send-on-Enter: grow the field with its content (up to the CSS max-height)
+   *  and let the keyboard layout re-read its height. */
+  function _autoGrow() {
+    if (!_textarea) return;
+    const before = _textarea.style.height;
+    _textarea.style.height = 'auto';
+    _textarea.style.height = `${_textarea.scrollHeight}px`;
+    if (_textarea.style.height !== before && typeof KeyboardHandler !== 'undefined') {
+      KeyboardHandler.updateLayoutForKeyboard?.();
+    }
+  }
+
+  /** Send-on-Enter: deliver the held text as one prompt, then Enter. One line
+   *  goes as typed text + CR in one write (what live mode's Enter sends, so CLI
+   *  menus that answer to a digit keep working). Several lines go as one
+   *  bracketed paste with Enter as a separate, delayed write, the same bytes as
+   *  the mobile prompt composer (keyboard-accessory.js _sendComposedPrompt), so
+   *  embedded newlines don't submit early. */
+  function _sendHeld(val) {
+    if (!/\n/.test(val)) {
+      _send(val + '\r');
+      return;
+    }
+    let text = val;
+    while (/\x1b\[20[01]~/.test(text)) text = text.replace(/\x1b\[20[01]~/g, '');
+    _send(`\x1b[200~${text.replace(/\r?\n/g, '\r')}\x1b[201~`);
+    setTimeout(() => _send('\r'), 120);
   }
 
   /** Cancel any pending debounced flush */
@@ -316,16 +355,25 @@ const CjkInput = (() => {
         _t(`keydown ${_kdesc(e.key)} kc=${e.keyCode} ic=${e.isComposing} c=${_composing}`);
         _printableKeydownAt = null;
         if (e.key === 'Enter') {
+          // Send-on-Enter: Shift+Enter (or an IME still composing) is a newline
+          // in the field, never a send.
+          if (_hold && (e.shiftKey || e.isComposing || e.keyCode === 229)) {
+            setTimeout(_autoGrow, 0);
+            return;
+          }
           e.preventDefault();
           _composing = false;
           _cancelDebouncedFlush();
           const val = _strip(_textarea.value);
-          if (val) {
+          if (_hold && val) {
+            _sendHeld(val);
+          } else if (val) {
             _send(val + '\r');
           } else {
             _send('\r');
           }
           _resetToPhantom();
+          if (_hold) _autoGrow();
           return;
         }
 
@@ -334,6 +382,7 @@ const CjkInput = (() => {
           _composing = false;
           _cancelDebouncedFlush();
           _resetToPhantom();
+          if (_hold) _autoGrow();
           return;
         }
 
@@ -474,6 +523,32 @@ const CjkInput = (() => {
       _printableKeydownAt = null;
       _resetToPhantom();
     },
+
+    /**
+     * Send-on-Enter mode on or off (setting cjkInputHoldUntilEnter). On: text
+     * stays in the field until Enter and the browser's autocorrect is allowed,
+     * since nothing typed has reached the PTY yet. Off: the original live mode.
+     */
+    setHoldUntilEnter(on) {
+      _hold = !!on;
+      if (!_textarea) return;
+      const v = _hold ? 'on' : 'off';
+      _textarea.setAttribute('autocorrect', v);
+      _textarea.setAttribute('autocapitalize', _hold ? 'sentences' : 'off');
+      _textarea.setAttribute('spellcheck', _hold ? 'true' : 'false');
+      _textarea.placeholder = _hold
+        ? 'Type, Enter to send (Shift+Enter: new line, Esc: clear)'
+        : 'CJK input (Enter = send, Esc = clear)';
+      if (_hold) {
+        _cancelDebouncedFlush();
+        _autoGrow();
+      } else {
+        _textarea.style.height = '';
+      }
+      _t(`hold ${v}`);
+    },
+
+    get holdUntilEnter() { return _hold; },
 
     /** Diagnostic: recent IME event trace (ring buffer). */
     getTrace() {
