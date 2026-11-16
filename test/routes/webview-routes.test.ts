@@ -10,6 +10,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyCookie from '@fastify/cookie';
 import fastifyWebsocket from '@fastify/websocket';
 import fs from 'node:fs/promises';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { registerWebviewRoutes } from '../../src/web/routes/webview-routes.js';
@@ -17,12 +18,28 @@ import { installRouteErrorHandler } from '../../src/web/route-error-handler.js';
 import { webviewCapabilities } from '../../src/webview-capabilities.js';
 import { capabilityFromProxyPath } from '../../src/web/webview-proxy.js';
 import { writeWebviews } from '../../src/webview-store.js';
+import { readUsers } from '../../src/user-store.js';
 import { TabLayoutService } from '../../src/tab-layout-service.js';
 import type { TabLayout } from '../../src/tab-layout.js';
+
+/**
+ * The supervisor is the one process-spawning piece in this path. Its own tests
+ * cover the launch-token exchange and the starter binding; here a stub stands in
+ * for "this port has a cookie" so the route-level question stays what the proxy
+ * actually puts on the upstream request.
+ */
+const { getDeepSeekWebCookie } = vi.hoisted(() => ({
+  getDeepSeekWebCookie: vi.fn((_port: number, _owner?: string): string | null => null),
+}));
+
+vi.mock('../../src/deepseek-web-server.js', () => ({ getDeepSeekWebCookie }));
 
 let app: FastifyInstance;
 let tmpDir: string;
 let savedDataDir: string | undefined;
+let savedMultiUser: string | undefined;
+/** Stands in for what the auth middleware decorates on the request. */
+let currentUser: { username: string; role: 'admin' | 'user' } | undefined;
 const broadcasts: Array<{ event: string; data: unknown }> = [];
 const webviewCreated = vi.fn(async () => {});
 const webviewDeleted = vi.fn(async () => {});
@@ -30,15 +47,23 @@ const webviewDeleted = vi.fn(async () => {});
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codeman-webviews-'));
   savedDataDir = process.env.CODEMAN_DATA_DIR;
+  savedMultiUser = process.env.CODEMAN_MULTIUSER;
   process.env.CODEMAN_DATA_DIR = tmpDir;
+  delete process.env.CODEMAN_MULTIUSER;
+  currentUser = undefined;
   broadcasts.length = 0;
   webviewCreated.mockClear();
   webviewDeleted.mockClear();
+  getDeepSeekWebCookie.mockReset();
+  getDeepSeekWebCookie.mockReturnValue(null);
 
   app = Fastify({ logger: false });
   await app.register(fastifyCookie);
   // The proxy route declares a wsHandler, so the plugin must be present.
   await app.register(fastifyWebsocket);
+  app.addHook('onRequest', async (req) => {
+    if (currentUser) (req as unknown as { authUser: typeof currentUser }).authUser = currentUser;
+  });
   registerWebviewRoutes(app, {
     broadcast: (event: string, data: unknown) => broadcasts.push({ event, data }),
     tabLayouts: { webviewCreated, webviewDeleted },
@@ -51,6 +76,8 @@ afterEach(async () => {
   await app.close();
   if (savedDataDir === undefined) delete process.env.CODEMAN_DATA_DIR;
   else process.env.CODEMAN_DATA_DIR = savedDataDir;
+  if (savedMultiUser === undefined) delete process.env.CODEMAN_MULTIUSER;
+  else process.env.CODEMAN_MULTIUSER = savedMultiUser;
   await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
 });
 
@@ -265,6 +292,128 @@ describe('proxy route', () => {
     const res = await app.inject({ method: 'GET', url: `/webview/${cap}` });
     expect(res.statusCode).toBe(302);
     expect(res.headers.location).toBe(`/webview/${cap}/`);
+  });
+});
+
+describe('managed DeepSeek web cookie', () => {
+  const COOKIE = 'dsh-auth-test=v1.payload.sig';
+  const upstreams: Array<{ port: number; cookies: Array<string | undefined>; close: () => Promise<void> }> = [];
+
+  /** A real loopback listener, so the assertion is on the bytes dsh would receive. */
+  async function startUpstream() {
+    const cookies: Array<string | undefined> = [];
+    const server = http.createServer((req, res) => {
+      cookies.push(req.headers.cookie);
+      res.writeHead(200, { 'content-type': 'text/plain' });
+      res.end('ok');
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('upstream has no address');
+    const upstream = {
+      port: address.port,
+      cookies,
+      close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+    };
+    upstreams.push(upstream);
+    return upstream;
+  }
+
+  /** The stub answers for one port and one owner, like the supervisor's two checks. */
+  function mintCookieOn(port: number, owner: string | undefined): void {
+    getDeepSeekWebCookie.mockImplementation((askedPort, askedOwner) =>
+      askedPort === port && askedOwner === owner ? COOKIE : null
+    );
+  }
+
+  async function openManaged(url: string): Promise<string> {
+    const created = (await create({ name: 'DeepSeek Harness', url, managed: 'deepseek-web', trusted: true })).json()
+      .data;
+    const opened = (await app.inject({ method: 'POST', url: `/api/webviews/${created.id}/open` })).json().data;
+    return capabilityFromProxyPath(opened.embedUrl)!;
+  }
+
+  const getThrough = (cap: string) => app.inject({ method: 'GET', url: `/webview/${cap}/` });
+
+  async function writeUsersFixture(users: Array<{ username: string; role: string; canBypassPermissions: boolean }>) {
+    await fs.writeFile(
+      path.join(tmpDir, 'users.json'),
+      JSON.stringify({
+        version: 1,
+        users: users.map((user) => ({
+          ...user,
+          password: { algo: 'scrypt', N: 1, r: 1, p: 1, salt: '00', hash: '00' },
+          createdAt: 1,
+        })),
+      })
+    );
+    // The store keeps a short cache; write through it instead of waiting for the TTL.
+    await readUsers(true);
+  }
+
+  afterEach(async () => {
+    await Promise.all(upstreams.splice(0).map((upstream) => upstream.close()));
+  });
+
+  it('presents it to a managed tab on 127.0.0.1 at the minted port', async () => {
+    const upstream = await startUpstream();
+    mintCookieOn(upstream.port, undefined);
+
+    const cap = await openManaged(`http://127.0.0.1:${upstream.port}/`);
+    expect((await getThrough(cap)).statusCode).toBe(200);
+    expect(upstream.cookies).toEqual([COOKIE]);
+    expect(getDeepSeekWebCookie).toHaveBeenCalledWith(upstream.port, undefined);
+  });
+
+  it('presents nothing to a managed tab on another port', async () => {
+    const minted = await startUpstream();
+    const other = await startUpstream();
+    mintCookieOn(minted.port, undefined);
+
+    const cap = await openManaged(`http://127.0.0.1:${other.port}/`);
+    expect((await getThrough(cap)).statusCode).toBe(200);
+    expect(other.cookies).toEqual([undefined]);
+  });
+
+  it('presents nothing to an unmanaged tab on the same port', async () => {
+    const upstream = await startUpstream();
+    mintCookieOn(upstream.port, undefined);
+
+    const created = (await create({ name: 'Not managed', url: `http://127.0.0.1:${upstream.port}/` })).json().data;
+    const opened = (await app.inject({ method: 'POST', url: `/api/webviews/${created.id}/open` })).json().data;
+    const cap = capabilityFromProxyPath(opened.embedUrl)!;
+
+    expect((await getThrough(cap)).statusCode).toBe(200);
+    expect(upstream.cookies).toEqual([undefined]);
+    expect(getDeepSeekWebCookie).not.toHaveBeenCalled();
+  });
+
+  // `managed` comes from the client and the port is public, so this is the case
+  // the gate exists for: a regular user must not receive the starter's cookie.
+  it('presents nothing in multi-user mode when the owner has no privileged grant', async () => {
+    process.env.CODEMAN_MULTIUSER = '1';
+    currentUser = { username: 'bob', role: 'user' };
+    await writeUsersFixture([{ username: 'bob', role: 'user', canBypassPermissions: false }]);
+    const upstream = await startUpstream();
+    mintCookieOn(upstream.port, 'bob');
+
+    const cap = await openManaged(`http://127.0.0.1:${upstream.port}/`);
+    expect((await getThrough(cap)).statusCode).toBe(200);
+    expect(upstream.cookies).toEqual([undefined]);
+    expect(getDeepSeekWebCookie).not.toHaveBeenCalled();
+  });
+
+  it('presents it in multi-user mode to a granted owner who started the server', async () => {
+    process.env.CODEMAN_MULTIUSER = '1';
+    currentUser = { username: 'carol', role: 'user' };
+    await writeUsersFixture([{ username: 'carol', role: 'user', canBypassPermissions: true }]);
+    const upstream = await startUpstream();
+    mintCookieOn(upstream.port, 'carol');
+
+    const cap = await openManaged(`http://127.0.0.1:${upstream.port}/`);
+    expect((await getThrough(cap)).statusCode).toBe(200);
+    expect(upstream.cookies).toEqual([COOKIE]);
+    expect(getDeepSeekWebCookie).toHaveBeenCalledWith(upstream.port, 'carol');
   });
 });
 
