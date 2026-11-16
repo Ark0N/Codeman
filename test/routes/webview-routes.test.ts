@@ -9,6 +9,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyCookie from '@fastify/cookie';
 import fastifyWebsocket from '@fastify/websocket';
+import WebSocket, { WebSocketServer } from 'ws';
+import { once } from 'node:events';
+import type { AddressInfo } from 'node:net';
 import fs from 'node:fs/promises';
 import http from 'node:http';
 import os from 'node:os';
@@ -82,6 +85,15 @@ afterEach(async () => {
 });
 
 const create = (payload: Record<string, unknown>) => app.inject({ method: 'POST', url: '/api/webviews', payload });
+
+/** Wait for something a relayed connection reports asynchronously. */
+async function waitUntil(check: () => boolean, timeoutMs = 2000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!check()) {
+    if (Date.now() > deadline) throw new Error('condition not met in time');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
 
 describe('GET /api/webviews', () => {
   it('starts empty and reports the frame budget the client must honour', async () => {
@@ -414,6 +426,55 @@ describe('managed DeepSeek web cookie', () => {
     expect((await getThrough(cap)).statusCode).toBe(200);
     expect(upstream.cookies).toEqual([COOKIE]);
     expect(getDeepSeekWebCookie).toHaveBeenCalledWith(upstream.port, 'carol');
+  });
+
+  /**
+   * A loopback listener that completes the upgrade and records the cookie on the
+   * handshake. The realtime leg is a separate code path from `proxyRequest`, so
+   * the HTTP assertions above say nothing about what it puts on the wire.
+   */
+  async function startWebSocketUpstream() {
+    const cookies: Array<string | undefined> = [];
+    const server = http.createServer();
+    const wss = new WebSocketServer({ noServer: true });
+    server.on('upgrade', (req, socket, head) => {
+      cookies.push(req.headers.cookie);
+      wss.handleUpgrade(req, socket, head, (client) => client.close());
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('ws upstream has no address');
+    const upstream = {
+      port: address.port,
+      cookies,
+      close: () =>
+        new Promise<void>((resolve) => {
+          wss.close();
+          server.close(() => resolve());
+        }),
+    };
+    upstreams.push(upstream);
+    return upstream;
+  }
+
+  it('presents it on the websocket leg too, ahead of the browser cookies', async () => {
+    const upstream = await startWebSocketUpstream();
+    mintCookieOn(upstream.port, undefined);
+    const cap = await openManaged(`http://127.0.0.1:${upstream.port}/`);
+
+    // Upgrades need a real listener: inject() cannot carry them.
+    await app.listen({ port: 0, host: '127.0.0.1' });
+    const { port } = app.server.address() as AddressInfo;
+    const client = new WebSocket(`ws://127.0.0.1:${port}/webview/${cap}/ws`, {
+      headers: { cookie: 'codeman_session=SECRET; dsh-ui=dark' },
+    });
+    await once(client, 'open');
+    await waitUntil(() => upstream.cookies.length > 0);
+
+    // The credential leads so a stale browser copy cannot win, other dashboard
+    // cookies survive, and Codeman's own session cookie never goes upstream.
+    expect(upstream.cookies).toEqual([`${COOKIE}; dsh-ui=dark`]);
+    client.close();
   });
 });
 

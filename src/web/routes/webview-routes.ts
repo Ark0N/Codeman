@@ -67,8 +67,10 @@ import {
   buildUpstreamRequestHeaders,
   capabilityFromReferer,
   extractFrameAncestors,
+  filterCookieHeader,
   isFramableCrossOrigin,
   isHtmlContentType,
+  mergeCookieHeader,
   parseWebviewUrl,
   proxyPrefixFor,
   resolveUpstreamUrl,
@@ -759,10 +761,14 @@ function proxyWebSocket(socket: WebSocket, req: FastifyRequest<{ Params: ProxyPa
     const protocols = req.headers['sec-websocket-protocol'];
     // The same credential the HTTP leg presents. A managed dashboard's realtime
     // channel is gated exactly like its index, so without this the page loads
-    // and then sits there silently disconnected.
-    const cookie =
-      (await managedDashboardCookie(webview, upstream)) ??
-      (webview.trusted && req.headers.cookie ? String(req.headers.cookie) : undefined);
+    // and then sits there silently disconnected. A managed tab is trusted, so
+    // the browser's other cookies ride along behind it — filtered like the HTTP
+    // leg, which never forwards Codeman's own session cookie upstream.
+    const injectedCookie = await managedDashboardCookie(webview, upstream);
+    const browserCookie = webview.trusted && req.headers.cookie ? String(req.headers.cookie) : undefined;
+    const cookie = injectedCookie
+      ? mergeCookieHeader(filterCookieHeader(browserCookie, [AUTH_COOKIE_NAME]), injectedCookie)
+      : browserCookie;
     // `lookup` is absent from ws's ClientOptions typings but flows through
     // http.request to net.connect untouched, which is where the resolved
     // address is judged (see webview-egress.ts).

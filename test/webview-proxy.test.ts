@@ -243,13 +243,13 @@ describe('buildUpstreamRequestHeaders', () => {
   // dials, which the browser has never visited and cannot store anything for.
   // The supervisor holds it instead. The managed tab is trusted, so the browser's
   // other dsh cookies are still present and must be kept alongside it.
-  it('appends the server-held credential to the filtered browser cookies', () => {
+  it('puts the server-held credential ahead of the filtered browser cookies', () => {
     const headers = buildUpstreamRequestHeaders({ cookie: 'codeman_session=SECRET; dash=1' }, upstream, {
       forwardCookies: true,
       sessionCookieName: 'codeman_session',
       injectedCookie: 'dsh-auth-p=v1.payload.sig',
     });
-    expect(headers.cookie).toBe('dash=1; dsh-auth-p=v1.payload.sig');
+    expect(headers.cookie).toBe('dsh-auth-p=v1.payload.sig; dash=1');
   });
 
   it('keeps every non-Codeman browser cookie when injecting the server credential', () => {
@@ -262,7 +262,22 @@ describe('buildUpstreamRequestHeaders', () => {
         injectedCookie: 'dsh-auth-p=v1.payload.sig',
       }
     );
-    expect(headers.cookie).toBe('dsh-ui=dark; dsh-settings=z; dsh-auth-p=v1.payload.sig');
+    expect(headers.cookie).toBe('dsh-auth-p=v1.payload.sig; dsh-ui=dark; dsh-settings=z');
+  });
+
+  // A `Cookie` header may name the same cookie twice, and the first value is the
+  // one parsers keep. The browser can still hold a dsh cookie from an earlier
+  // proxied response, so the server's fresh copy has to lead or the stale one wins
+  // and the tab goes back to the 401 this whole path exists to prevent.
+  it('keeps the server credential in front of a stale browser copy of the same name', () => {
+    const headers = buildUpstreamRequestHeaders({ cookie: 'dsh-auth-p=STALE; dsh-ui=dark' }, upstream, {
+      forwardCookies: true,
+      sessionCookieName: 'codeman_session',
+      injectedCookie: 'dsh-auth-p=FRESH',
+    });
+    // The stale copy is still forwarded behind it (dropping it would need its own
+    // name parsing), but the parser sees FRESH first, which is what authenticates.
+    expect(headers.cookie).toBe('dsh-auth-p=FRESH; dsh-auth-p=STALE; dsh-ui=dark');
   });
 
   it('sends the server-held credential even when browser cookies are not forwarded', () => {

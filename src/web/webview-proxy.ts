@@ -363,6 +363,20 @@ export function rewriteSetCookie(cookie: string, capability: string, secureConte
   return out.join('; ');
 }
 
+/**
+ * Put a server-held credential in front of the cookies the browser sent.
+ *
+ * Order matters: a `Cookie` header can name the same cookie twice, and parsers
+ * that collapse it into a map keep the FIRST value (RFC 6265 §5.4 leaves the
+ * choice open; the common Node parsers take the first). The browser may still
+ * hold a stale copy of the same dsh cookie from an earlier proxied response, so
+ * the credential minted by the running process must lead, with everything else
+ * preserved behind it.
+ */
+export function mergeCookieHeader(browserCookie: string | undefined, injectedCookie: string): string {
+  return browserCookie ? `${injectedCookie}; ${browserCookie}` : injectedCookie;
+}
+
 /** Drop named cookies from a `Cookie` request header, returning undefined if none remain. */
 export function filterCookieHeader(cookie: string | undefined, drop: string[]): string | undefined {
   if (!cookie) return undefined;
@@ -384,12 +398,12 @@ export function buildUpstreamRequestHeaders(
     refererPath?: string;
     relayBodyLength?: boolean;
     /**
-     * A credential the SERVER holds for this dashboard, appended to whatever
-     * browser cookies were forwarded. `dsh web` mints its session cookie for a
-     * loopback authority the browser never visits, so the proxy is the only party
-     * that can present it (see `deepseek-web-server.ts`); the managed tab is
-     * trusted, which means the browser may also carry other cookies dsh set, and
-     * those must survive.
+     * A credential the SERVER holds for this dashboard, put in front of whatever
+     * browser cookies were forwarded (see `mergeCookieHeader` for why the order
+     * matters). `dsh web` mints its session cookie for a loopback authority the
+     * browser never visits, so the proxy is the only party that can present it
+     * (see `deepseek-web-server.ts`); the managed tab is trusted, which means the
+     * browser may also carry other cookies dsh set, and those must survive.
      */
     injectedCookie?: string;
   }
@@ -424,13 +438,12 @@ export function buildUpstreamRequestHeaders(
     if (cookie) headers['cookie'] = cookie;
   }
 
-  // Appended after the relay above, so a browser copy can never shadow it: this
-  // cookie is scoped to the authority the request is for, one the browser has
-  // never been able to store anything against. Other cookies are kept: a managed
-  // dsh tab is trusted, so dsh's own non-auth cookies may legitimately be there.
+  // In front of the relayed cookies rather than after them, so a stale browser
+  // copy of the same cookie cannot shadow the one minted by the running process
+  // (the parser keeps the first value). Other cookies are kept: a managed dsh tab
+  // is trusted, so dsh's own non-auth cookies may legitimately be there.
   if (opts.injectedCookie) {
-    const existing = headers['cookie'];
-    headers['cookie'] = existing ? `${existing}; ${opts.injectedCookie}` : opts.injectedCookie;
+    headers['cookie'] = mergeCookieHeader(headers['cookie'], opts.injectedCookie);
   }
 
   // Present as if the browser were talking to the dashboard directly. Apps that
