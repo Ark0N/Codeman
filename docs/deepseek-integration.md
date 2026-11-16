@@ -297,8 +297,11 @@ browser can never present that token, and the tab used to open on dsh's 401 page
 trades it for the cookie once at startup, and `webview-routes.ts` presents that
 cookie on both the HTTP and WebSocket legs — scoped to the exact loopback
 authority it was minted for, so a repointed or stale tab cannot carry it
-elsewhere. A dsh without the gate prints a token-less banner and keeps working
-unchanged.
+elsewhere. The reader scans every `dsh web:` line (dsh prints diagnostics such as
+`dsh web: loading profiles` under the same prefix before the banner) and only
+complete lines, so a banner split across two output chunks is waited for rather
+than parsed truncated. A dsh without the gate prints a token-less banner and
+keeps working unchanged.
 
 The cookie is also bound to a person, not to a URL. `managed` is accepted from the
 client on `POST/PATCH /api/webviews` and `GET /api/deepseek/web` publishes the live

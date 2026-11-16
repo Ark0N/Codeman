@@ -96,6 +96,14 @@ describe('parseLaunchUrl: the one-time token dsh prints on boot', () => {
     expect(parseLaunchUrl(output)).toBe('http://127.0.0.1:3080/?token=abc123');
   });
 
+  // dsh prints diagnostics under the same prefix before the banner. Taking the
+  // FIRST match made the real URL invisible and boot gave up 4 seconds later.
+  it('skips a diagnostic line and keeps scanning for the URL', () => {
+    expect(parseLaunchUrl('dsh web: loading profiles\ndsh web: http://127.0.0.1:3080/?token=abc\n')).toBe(
+      'http://127.0.0.1:3080/?token=abc'
+    );
+  });
+
   it('returns null for a token-less banner, which is the older dsh', () => {
     expect(parseLaunchUrl('dsh web: http://127.0.0.1:3080/\n')).toBeNull();
   });
@@ -211,6 +219,49 @@ http
   // it before dsh prints its banner. Scanning that buffer alone lost the token
   // and put the tab back on the 401 page, so the banner is matched on its own
   // (larger) budget.
+  // The banner can arrive in two stdout writes: `capture()` sees two chunks and
+  // neither is a complete line. Scanning the raw buffer either missed it or, with
+  // a partial URL that happened to parse, exchanged a truncated token.
+  it('waits for a banner split across two output chunks', async () => {
+    writeFileSync(
+      join(dir, 'dsh'),
+      `#!/usr/bin/env node
+const http = require('node:http');
+const port = Number(process.argv[process.argv.indexOf('--port') + 1]);
+const token = 'split-token';
+const cookie = 'dsh-auth-split=v1.sig';
+process.stdout.write('dsh web: loading profiles\\n');
+http
+  .createServer((req, res) => {
+    const url = new URL(req.url, 'http://127.0.0.1:' + port);
+    if (url.searchParams.get('token') === token) {
+      res.writeHead(303, { location: './', 'set-cookie': cookie + '; Path=/' });
+      res.end();
+      return;
+    }
+    if (req.headers.cookie === cookie) {
+      res.writeHead(200, { 'content-type': 'text/html' });
+      res.end('<html>ok</html>');
+      return;
+    }
+    res.writeHead(401, { 'content-type': 'text/plain' });
+    res.end('dsh web authentication required');
+  })
+  .listen(port, '127.0.0.1', () => {
+    const line = 'dsh web: http://127.0.0.1:' + port + '/?token=' + token + '\\n';
+    process.stdout.write(line.slice(0, 30));
+    setTimeout(() => process.stdout.write(line.slice(30)), 150);
+  });
+`,
+      { mode: 0o755 }
+    );
+
+    const result = await startDeepSeekWeb(dir, 'localhost:3000');
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(getDeepSeekWebCookie(result.port)).toBe('dsh-auth-split=v1.sig');
+  }, 20_000);
+
   it('still finds a banner printed after more than the error-tail cap', async () => {
     writeFileSync(
       join(dir, 'dsh'),

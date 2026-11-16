@@ -147,6 +147,39 @@ async function answersHttp(port: number): Promise<boolean> {
 }
 
 /**
+ * Remove SGR sequences so a coloured banner still parses.
+ *
+ * A coloured banner would otherwise hide the URL behind escape codes and turn a
+ * perfectly working server into a 401.
+ */
+function stripSgr(output: string): string {
+  // Built from the code point rather than written as `\x1b` so the linter's
+  // no-control-regex rule does not read it as an accidental control character.
+  return output.replace(new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g'), '');
+}
+
+/**
+ * The first `dsh web:` payload that parses as an absolute http(s) URL.
+ *
+ * Lines whose payload is not a URL are skipped, which is what makes a
+ * `dsh web: loading profiles` diagnostic harmless. Null when no line carries one.
+ */
+function firstLaunchBannerUrl(output: string): string | null {
+  // Fresh per call: a module-level /g pattern carries lastIndex between calls.
+  const line = /dsh web:\s*(\S+)/g;
+  for (const match of stripSgr(output).matchAll(line)) {
+    let url: URL;
+    try {
+      url = new URL(match[1]);
+    } catch {
+      continue;
+    }
+    if (url.protocol === 'http:' || url.protocol === 'https:') return url.href;
+  }
+  return null;
+}
+
+/**
  * The authenticated URL `dsh web` prints once it is up.
  *
  * Its browser-auth gate made the index private: boot writes
@@ -155,27 +188,18 @@ async function answersHttp(port: number): Promise<boolean> {
  * after it. The token is per process, so it can be neither guessed nor carried
  * across restarts — it has to be read out of the boot output.
  *
+ * Scans EVERY `dsh web:` line and returns the first one that is a usable URL,
+ * because dsh also prints diagnostics under the same prefix before the banner.
+ *
  * Null for output without one, which is the older-dsh case and stays working.
  *
  * @param output - captured stdout+stderr so far.
  * @returns absolute http(s) URL carrying a `token`, or null.
  */
 export function parseLaunchUrl(output: string): string | null {
-  // Strip SGR sequences first: a coloured banner would otherwise hide the URL
-  // behind escape codes and turn a perfectly working server into a 401. Built
-  // from the code point rather than written as `\x1b` so the linter's
-  // no-control-regex rule does not read it as an accidental control character.
-  const plain = output.replace(new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g'), '');
-  const match = /dsh web:\s*(\S+)/.exec(plain);
-  if (!match) return null;
-  let url: URL;
-  try {
-    url = new URL(match[1]);
-  } catch {
-    return null;
-  }
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
-  return url.searchParams.get('token') ? url.href : null;
+  const href = firstLaunchBannerUrl(output);
+  if (!href) return null;
+  return new URL(href).searchParams.get('token') ? href : null;
 }
 
 /**
@@ -218,8 +242,12 @@ async function exchangeLaunchToken(launchUrl: string): Promise<string | null> {
 async function captureSessionCookie(running: RunningServer): Promise<string | null> {
   const deadline = Date.now() + LAUNCH_URL_WAIT_MS;
   while (Date.now() < deadline) {
+    // Only COMPLETE lines: a chunk boundary can cut the token in half, and
+    // exchanging a truncated one would burn the token on a request that cannot
+    // authenticate. The next poll picks up the rest of the line.
     const banner = running.banner();
-    const launchUrl = parseLaunchUrl(banner);
+    const complete = banner.slice(0, banner.lastIndexOf('\n') + 1);
+    const launchUrl = parseLaunchUrl(complete);
     if (launchUrl) {
       const cookie = await exchangeLaunchToken(launchUrl);
       // The URL is a credential: never log it, only the fact that it did not work.
@@ -234,8 +262,7 @@ async function captureSessionCookie(running: RunningServer): Promise<string | nu
     // Only a printed http(s) URL settles this: it is the older dsh, which needs
     // no cookie. Any other line carrying the prefix (a diagnostic, a truncated
     // write) is not a banner, so the wait continues instead of giving up early.
-    const printed = /dsh web:\s*(\S+)/.exec(banner)?.[1];
-    if (printed && /^https?:\/\//.test(printed)) return null;
+    if (firstLaunchBannerUrl(complete)) return null;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   return null;
