@@ -10,8 +10,11 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyCookie from '@fastify/cookie';
 import fastifyWebsocket from '@fastify/websocket';
 import fs from 'node:fs/promises';
+import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import WebSocket, { WebSocketServer } from 'ws';
 import { registerWebviewRoutes } from '../../src/web/routes/webview-routes.js';
 import { installRouteErrorHandler } from '../../src/web/route-error-handler.js';
 import { webviewCapabilities } from '../../src/webview-capabilities.js';
@@ -265,6 +268,90 @@ describe('proxy route', () => {
     const res = await app.inject({ method: 'GET', url: `/webview/${cap}` });
     expect(res.statusCode).toBe(302);
     expect(res.headers.location).toBe(`/webview/${cap}/`);
+  });
+});
+
+describe('proxy route: WebSocket cookie forwarding', () => {
+  let upstream: Server;
+  let upstreamPort: number;
+  let wss: WebSocketServer;
+  let appPort: number;
+  let upgradeHeaders: Promise<IncomingHttpHeaders>;
+  let client: WebSocket | undefined;
+
+  beforeEach(async () => {
+    let resolveUpgrade!: (headers: IncomingHttpHeaders) => void;
+    upgradeHeaders = new Promise((resolve) => {
+      resolveUpgrade = resolve;
+    });
+
+    // A real loopback dashboard: its upgrade handler is what records the cookie
+    // the proxy put on the handshake.
+    upstream = createServer();
+    wss = new WebSocketServer({ noServer: true });
+    upstream.on('upgrade', (req, socket, head) => {
+      resolveUpgrade(req.headers);
+      wss.handleUpgrade(req, socket, head, (upstreamSocket) => {
+        wss.emit('connection', upstreamSocket, req);
+      });
+    });
+    await new Promise<void>((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+    upstreamPort = (upstream.address() as AddressInfo).port;
+
+    // WebSocket upgrades cannot go through inject(); this app needs a real port.
+    await app.listen({ port: 0, host: '127.0.0.1' });
+    appPort = (app.server.address() as AddressInfo).port;
+  });
+
+  afterEach(async () => {
+    client?.terminate();
+    client = undefined;
+    for (const socket of wss.clients) socket.terminate();
+    await new Promise<void>((resolve) => wss.close(() => resolve()));
+    await new Promise<void>((resolve) => upstream.close(() => resolve()));
+    await app.close();
+  });
+
+  /** Wait for a promise without letting a missing handshake hang the test until vitest's timeout. */
+  function within<T>(promise: Promise<T>, timeoutMs = 5000): Promise<T> {
+    let timer!: NodeJS.Timeout;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error('timed out waiting for the upstream WebSocket handshake')), timeoutMs);
+    });
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+  }
+
+  /** Create a trusted tab, open it for a capability, and connect the browser leg with `cookie`. */
+  async function connectThroughProxy(cookie: string): Promise<void> {
+    const created = await create({
+      name: 'Trusted dashboard',
+      url: `http://127.0.0.1:${upstreamPort}/`,
+      trusted: true,
+    });
+    expect(created.statusCode).toBe(200);
+    const opened = await app.inject({ method: 'POST', url: `/api/webviews/${created.json().data.id}/open` });
+    const cap = capabilityFromProxyPath(opened.json().data.embedUrl)!;
+
+    client = await new Promise<WebSocket>((resolve, reject) => {
+      const socket = new WebSocket(`ws://127.0.0.1:${appPort}/webview/${cap}/ws`, { headers: { cookie } });
+      socket.once('open', () => resolve(socket));
+      socket.once('error', reject);
+    });
+  }
+
+  it('forwards only the dashboard cookie, never the Codeman session cookie', async () => {
+    await connectThroughProxy('codeman_session=SECRET; theme=dark');
+
+    const headers = await within(upgradeHeaders);
+    expect(headers.cookie).toBe('theme=dark');
+    expect(headers.cookie).not.toContain('codeman_session');
+  });
+
+  it('sends no cookie header when the browser only has the Codeman session cookie', async () => {
+    await connectThroughProxy('codeman_session=SECRET');
+
+    const headers = await within(upgradeHeaders);
+    expect(headers.cookie).toBeUndefined();
   });
 });
 

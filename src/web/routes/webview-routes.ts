@@ -64,6 +64,7 @@ import {
   buildUpstreamRequestHeaders,
   capabilityFromReferer,
   extractFrameAncestors,
+  filterCookieHeader,
   isFramableCrossOrigin,
   isHtmlContentType,
   parseWebviewUrl,
@@ -707,13 +708,16 @@ function proxyWebSocket(socket: WebSocket, req: FastifyRequest<{ Params: ProxyPa
     };
 
     const protocols = req.headers['sec-websocket-protocol'];
+    // Trusted dashboards get the browser's own cookies, but never Codeman's
+    // session cookie: the HTTP leg strips it the same way.
+    const cookie = webview.trusted ? filterCookieHeader(req.headers.cookie, [AUTH_COOKIE_NAME]) : undefined;
     // `lookup` is absent from ws's ClientOptions typings but flows through
     // http.request to net.connect untouched, which is where the resolved
     // address is judged (see webview-egress.ts).
     const upstreamOptions: WsClientOptions & { lookup: EgressLookup } = {
       headers: {
         origin: upstream.origin,
-        ...(webview.trusted && req.headers.cookie ? { cookie: String(req.headers.cookie) } : {}),
+        ...(cookie ? { cookie } : {}),
       },
       handshakeTimeout: WEBVIEW_WS_HANDSHAKE_TIMEOUT_MS,
       lookup: webviewEgressLookup,
