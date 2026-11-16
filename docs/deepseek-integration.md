@@ -301,7 +301,10 @@ elsewhere. The reader scans every `dsh web:` line (dsh prints diagnostics such a
 `dsh web: loading profiles` under the same prefix before the banner) and only
 complete lines, so a banner split across two output chunks is waited for rather
 than parsed truncated. A dsh without the gate prints a token-less banner and
-keeps working unchanged.
+keeps working unchanged. If a token is printed but the exchange still fails, the
+server keeps running (its page serves, just 401) and is marked unusable for
+reuse: the next start request stops and respawns it, which is the "restart `dsh
+web`" the warning asks the user to perform.
 
 The cookie is also bound to a person, not to a URL. `managed` is accepted from the
 client on `POST/PATCH /api/webviews` and `GET /api/deepseek/web` publishes the live

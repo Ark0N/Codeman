@@ -108,6 +108,13 @@ interface RunningServer {
    * token, which is why "no cookie" is not a startup failure.
    */
   cookie: string | null;
+  /**
+   * True when a token-bearing banner was found but the exchange produced no
+   * cookie. Such a server cannot authenticate its tab and must not be reused: the
+   * warning tells the user to restart `dsh web`, and the next start request is
+   * what performs that restart.
+   */
+  cookieFailed: boolean;
 }
 
 let current: RunningServer | null = null;
@@ -237,9 +244,10 @@ async function exchangeLaunchToken(launchUrl: string): Promise<string | null> {
  * failure.
  *
  * @param running - the just-started server, read for its captured output.
- * @returns the cookie to hand the proxy, or null.
+ * @returns the cookie to hand the proxy (null when there is none) and whether a
+ *   token was printed but could not be exchanged.
  */
-async function captureSessionCookie(running: RunningServer): Promise<string | null> {
+async function captureSessionCookie(running: RunningServer): Promise<{ cookie: string | null; failed: boolean }> {
   const deadline = Date.now() + LAUNCH_URL_WAIT_MS;
   while (Date.now() < deadline) {
     // Only COMPLETE lines: a chunk boundary can cut the token in half, and
@@ -254,18 +262,19 @@ async function captureSessionCookie(running: RunningServer): Promise<string | nu
       if (!cookie) {
         console.warn(
           '[DeepSeek web] the launch token was printed but could not be exchanged for a session cookie; ' +
-            "the tab will show dsh's 401 page until `dsh web` is restarted"
+            'the next start request will restart `dsh web` so it can retry'
         );
+        return { cookie: null, failed: true };
       }
-      return cookie;
+      return { cookie, failed: false };
     }
     // Only a printed http(s) URL settles this: it is the older dsh, which needs
     // no cookie. Any other line carrying the prefix (a diagnostic, a truncated
     // write) is not a banner, so the wait continues instead of giving up early.
-    if (firstLaunchBannerUrl(complete)) return null;
+    if (firstLaunchBannerUrl(complete)) return { cookie: null, failed: false };
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  return null;
+  return { cookie: null, failed: false };
 }
 
 /**
@@ -376,11 +385,18 @@ async function startDeepSeekWebLocked(
   starter: string | undefined
 ): Promise<StartResult> {
   // Reuse only when the running server is BOTH healthy and fenced for the
-  // authority now asking, and it was started by this identity: the launch cookie
-  // is per process and per user, so handing a previous starter's server to
-  // another user would leave that user's tab on dsh's 401 page.
+  // authority now asking, it was started by this identity, and its credential
+  // works: the launch cookie is per process and per user, so handing a previous
+  // starter's server to another user would leave that user's tab on dsh's 401
+  // page, and a server whose token exchange failed would keep answering 401
+  // forever because reuse never gave anyone a chance to restart it.
   if (current) {
-    if (current.authority === authority && current.starter === starter && (await answersHttp(current.port))) {
+    if (
+      !current.cookieFailed &&
+      current.authority === authority &&
+      current.starter === starter &&
+      (await answersHttp(current.port))
+    ) {
       return { ok: true, port: current.port, url: `http://127.0.0.1:${current.port}`, reused: true };
     }
     await stopDeepSeekWeb();
@@ -443,6 +459,7 @@ async function startDeepSeekWebLocked(
     output: () => output,
     banner: () => banner,
     cookie: null,
+    cookieFailed: false,
   };
   current = running;
 
@@ -460,7 +477,9 @@ async function startDeepSeekWebLocked(
       // Bought before this call resolves, so the first proxied page load
       // already carries a credential — a tab opened a moment earlier would
       // otherwise get the 401 this whole module exists to prevent.
-      running.cookie = await captureSessionCookie(running);
+      const captured = await captureSessionCookie(running);
+      running.cookie = captured.cookie;
+      running.cookieFailed = captured.failed;
       return { ok: true, port, url: `http://127.0.0.1:${port}`, reused: false };
     }
     await new Promise((r) => setTimeout(r, READY_POLL_MS));

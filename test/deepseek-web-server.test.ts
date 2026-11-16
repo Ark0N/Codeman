@@ -16,7 +16,7 @@
  *    supervisor is the only party that can trade it, and the cookie it produces
  *    is authority-bound: getting that wrong is a blank tab, not a visible error.
  */
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -200,6 +200,73 @@ http
     expect(alice.reused).toBe(false);
     expect(getDeepSeekWebCookie(alice.port, 'alice')).toBe('dsh-auth-test=v1.payload.sig');
     expect(getDeepSeekWebCookie(alice.port, 'bob')).toBeNull();
+  }, 20_000);
+
+  // A failed exchange leaves a server that answers 401 to everything. Reuse used
+  // to hand that same server back on every POST, so the restart the warning asks
+  // for could never happen. The next start request must perform it.
+  it('restarts rather than reusing a server whose exchange failed', async () => {
+    writeFileSync(
+      join(dir, 'dsh'),
+      `#!/usr/bin/env node
+const fs = require('node:fs');
+const http = require('node:http');
+const path = require('node:path');
+const port = Number(process.argv[process.argv.indexOf('--port') + 1]);
+const token = 'retry-token';
+const cookie = 'dsh-auth-retry=v1.sig';
+const marker = path.join(__dirname, '.exchange-failed');
+const failedBefore = fs.existsSync(marker);
+if (!failedBefore) fs.writeFileSync(marker, '1');
+process.stdout.write('dsh web: http://127.0.0.1:' + port + '/?token=' + token + '\\n');
+http
+  .createServer((req, res) => {
+    const url = new URL(req.url, 'http://127.0.0.1:' + port);
+    if (url.searchParams.get('token') === token) {
+      if (!failedBefore) {
+        res.writeHead(500, { 'content-type': 'text/plain' });
+        res.end('temporary failure');
+        return;
+      }
+      res.writeHead(303, { location: './', 'set-cookie': cookie + '; Path=/' });
+      res.end();
+      return;
+    }
+    if (req.headers.cookie === cookie) {
+      res.writeHead(200, { 'content-type': 'text/html' });
+      res.end('<html>ok</html>');
+      return;
+    }
+    res.writeHead(401, { 'content-type': 'text/plain' });
+    res.end('dsh web authentication required');
+  })
+  .listen(port, '127.0.0.1');
+`,
+      { mode: 0o755 }
+    );
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const first = await startDeepSeekWeb(dir, 'localhost:3000');
+      expect(first.ok).toBe(true);
+      if (!first.ok) return;
+      expect(getDeepSeekWebCookie(first.port)).toBeNull();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('could not be exchanged'));
+    } finally {
+      warn.mockRestore();
+    }
+
+    const second = await startDeepSeekWeb(dir, 'localhost:3000');
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+    expect(second.reused).toBe(false);
+    expect(getDeepSeekWebCookie(second.port)).toBe('dsh-auth-retry=v1.sig');
+
+    // The recovered server is healthy again, so ordinary reuse resumes.
+    const third = await startDeepSeekWeb(dir, 'localhost:3000');
+    expect(third.ok).toBe(true);
+    if (!third.ok) return;
+    expect(third.reused).toBe(true);
   }, 20_000);
 
   it('leaves the old, ungated dsh working: no token means no cookie, not a failure', async () => {
