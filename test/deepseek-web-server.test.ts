@@ -20,10 +20,12 @@ import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import http from 'node:http';
 import { DeepSeekWebStartSchema } from '../src/web/schemas.js';
 import {
   getDeepSeekWebCookie,
   getDeepSeekWebStatus,
+  launchUrlTargetsServer,
   parseLaunchUrl,
   resetDeepSeekWebForTest,
   startDeepSeekWeb,
@@ -113,6 +115,16 @@ describe('parseLaunchUrl: the one-time token dsh prints on boot', () => {
     expect(parseLaunchUrl('booting...')).toBeNull();
     expect(parseLaunchUrl('dsh web: javascript:alert(1)?token=x')).toBeNull();
     expect(parseLaunchUrl('dsh web: not a url?token=x')).toBeNull();
+  });
+});
+
+describe('launchUrlTargetsServer: the exchange must hit the spawned port', () => {
+  it('accepts only 127.0.0.1 on the port that was just spawned', () => {
+    expect(launchUrlTargetsServer('http://127.0.0.1:3080/?token=x', 3080)).toBe(true);
+    expect(launchUrlTargetsServer('http://127.0.0.1:3081/?token=x', 3080)).toBe(false);
+    expect(launchUrlTargetsServer('http://localhost:3080/?token=x', 3080)).toBe(false);
+    expect(launchUrlTargetsServer('http://evil.example:3080/?token=x', 3080)).toBe(false);
+    expect(launchUrlTargetsServer('not a url', 3080)).toBe(false);
   });
 });
 
@@ -267,6 +279,53 @@ http
     expect(third.ok).toBe(true);
     if (!third.ok) return;
     expect(third.reused).toBe(true);
+  }, 20_000);
+
+  // The exchange is a request made by the SERVER. A banner naming another local
+  // port would let captured child output aim it, so the URL is judged before it
+  // is fetched at all.
+  it('does not fetch a banner naming another port', async () => {
+    const hits: string[] = [];
+    const target = http.createServer((req, res) => {
+      hits.push(req.url ?? '');
+      res.writeHead(200, { 'content-type': 'text/plain' });
+      res.end('should never be reached');
+    });
+    await new Promise<void>((resolve) => target.listen(0, '127.0.0.1', resolve));
+    const address = target.address();
+    if (!address || typeof address === 'string') throw new Error('target has no address');
+
+    try {
+      writeFileSync(
+        join(dir, 'dsh'),
+        `#!/usr/bin/env node
+const http = require('node:http');
+const port = Number(process.argv[process.argv.indexOf('--port') + 1]);
+process.stdout.write('dsh web: http://127.0.0.1:${address.port}/?token=stolen\\n');
+http
+  .createServer((_req, res) => {
+    res.writeHead(401, { 'content-type': 'text/plain' });
+    res.end('dsh web authentication required');
+  })
+  .listen(port, '127.0.0.1');
+`,
+        { mode: 0o755 }
+      );
+
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const result = await startDeepSeekWeb(dir, 'localhost:3000');
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        expect(getDeepSeekWebCookie(result.port)).toBeNull();
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('not fetching it'));
+      } finally {
+        warn.mockRestore();
+      }
+      expect(hits).toEqual([]);
+    } finally {
+      await new Promise<void>((resolve) => target.close(() => resolve()));
+    }
   }, 20_000);
 
   it('leaves the old, ungated dsh working: no token means no cookie, not a failure', async () => {

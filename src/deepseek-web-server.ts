@@ -210,6 +210,24 @@ export function parseLaunchUrl(output: string): string | null {
 }
 
 /**
+ * Whether a launch URL names the loopback port this supervisor just spawned.
+ *
+ * The URL is read from the child's output, but fetching it is a request made by
+ * the SERVER. A banner naming another host, or another local service's port, must
+ * not turn that exchange into an SSRF primitive, so the target is required to be
+ * the exact origin the token was minted for.
+ */
+export function launchUrlTargetsServer(launchUrl: string, port: number): boolean {
+  try {
+    const url = new URL(launchUrl);
+    const effectivePort = Number(url.port || (url.protocol === 'https:' ? 443 : 80));
+    return url.hostname === '127.0.0.1' && effectivePort === port;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Trade the launch URL for the `dsh-auth-*` cookie the proxy will present.
  *
  * `redirect: 'manual'` is load-bearing: the 303 is the response that carries
@@ -257,6 +275,13 @@ async function captureSessionCookie(running: RunningServer): Promise<{ cookie: s
     const complete = banner.slice(0, banner.lastIndexOf('\n') + 1);
     const launchUrl = parseLaunchUrl(complete);
     if (launchUrl) {
+      if (!launchUrlTargetsServer(launchUrl, running.port)) {
+        console.warn(
+          '[DeepSeek web] the printed launch URL does not name the loopback port this server was started on; ' +
+            'not fetching it'
+        );
+        return { cookie: null, failed: true };
+      }
       const cookie = await exchangeLaunchToken(launchUrl);
       // The URL is a credential: never log it, only the fact that it did not work.
       if (!cookie) {
