@@ -129,6 +129,13 @@ describe('a held draft survives a reload of the same session', () => {
     );
   });
 
+  it('going Home stashes the draft of the session it leaves', () => {
+    const appJs = read('app.js');
+    const start = appJs.indexOf('  goHome() {');
+    const body = appJs.slice(start, appJs.indexOf('this.activeSessionId = null;', start));
+    expect(body).toContain('CjkInput.stashDraft?.(this.activeSessionId);');
+  });
+
   it('a removed session drops its stashed draft', () => {
     expect(read('app.js')).toMatch(
       /discardComposerDraft\?\.\(sessionId\);\n\s*if \(typeof CjkInput !== 'undefined'\) CjkInput\.discardDraft\?\.\(sessionId\);/

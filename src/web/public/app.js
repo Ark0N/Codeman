@@ -11127,6 +11127,9 @@ class CodemanApp {
     this._retireUrlSession();
     // Home is a choice to leave the grid too; it is remembered for Tiles.
     this.closeTileGrid?.({ keepStored: true, reselect: false });
+    // A Send on Enter draft goes with its session: the null below hides that
+    // session from the next _cleanupPreviousSession, which would clear it unstashed.
+    if (typeof CjkInput !== 'undefined' && this.activeSessionId) CjkInput.stashDraft?.(this.activeSessionId);
     // Deselect active session and show welcome screen
     this.activeSessionId = null;
     try { localStorage.removeItem('codeman-active-session'); } catch {}
