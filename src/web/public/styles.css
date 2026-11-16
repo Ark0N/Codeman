@@ -14199,6 +14199,11 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
   resize: none;
   line-height: 1.4;
   box-sizing: border-box;
+  /* Send on Enter grows the field with its text (input-cjk.js _autoGrow), and the
+     setting is not limited to phones: cap it everywhere, not only in the
+     .touch-device rule, or on desktop it pushes the terminal (and its PTY) down. */
+  max-height: 68px;
+  overflow-y: auto;
 }
 
 #cjkInput:focus {

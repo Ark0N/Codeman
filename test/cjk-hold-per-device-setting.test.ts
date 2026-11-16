@@ -53,8 +53,9 @@ describe('a held draft survives a reload of the same session', () => {
   // The REAL _cleanupPreviousSession from app.js. selectSession() nulls
   // activeSessionId before calling it on a same-session forceReload (tapping the
   // tab already shown, the geometry retry), so it is told through keepCjkDraft.
-  function cleanup(hold: boolean, keepCjkDraft: boolean) {
+  function cleanup(hold: boolean, keepCjkDraft: boolean, outgoing: string | null = null) {
     const clear = vi.fn();
+    const stashDraft = vi.fn();
     const context = vm.createContext({
       console,
       setTimeout,
@@ -70,20 +71,21 @@ describe('a held draft survives a reload of the same session', () => {
       localStorage: { length: 0, key: vi.fn(), getItem: vi.fn(), setItem: vi.fn(), removeItem: vi.fn() },
       window: { addEventListener: vi.fn(), removeEventListener: vi.fn() },
       MobileDetection: { isTouchDevice: () => true, isHandheldDevice: () => true, getDeviceType: () => 'mobile' },
-      CjkInput: { holdUntilEnter: hold, clear },
+      CjkInput: { holdUntilEnter: hold, clear, stashDraft },
     });
     vm.runInContext(`${read('constants.js')}\n${read('app.js')}\nglobalThis.__CodemanApp = CodemanApp;`, context);
     const CodemanApp = (context as unknown as { __CodemanApp: { prototype: object } }).__CodemanApp;
     const app = Object.create(CodemanApp.prototype) as Record<string, unknown> & {
       _cleanupPreviousSession(id: string, opts?: { keepCjkDraft?: boolean }): void;
     };
-    app.activeSessionId = null;
+    app.activeSessionId = outgoing;
+    app.sessions = new Map();
     app._clearTimer = vi.fn();
     app._disconnectWs = vi.fn();
     app._xtermSnapshots = new Map();
     app.pendingWrites = [];
     app._cleanupPreviousSession('s1', { keepCjkDraft });
-    return clear;
+    return Object.assign(clear, { stashDraft });
   }
 
   it('keeps the draft on a same-session reload in Send on Enter mode', () => {
@@ -96,6 +98,41 @@ describe('a held draft survives a reload of the same session', () => {
 
   it('still clears in live mode, where a pending flush could fire mid-reconnect', () => {
     expect(cleanup(false, true)).toHaveBeenCalled();
+  });
+
+  it('stashes the held draft of the session being left before clearing', () => {
+    const clear = cleanup(true, false, 's0');
+    expect(clear.stashDraft).toHaveBeenCalledWith('s0');
+    expect(clear.stashDraft.mock.invocationCallOrder[0]).toBeLessThan(clear.mock.invocationCallOrder[0]);
+  });
+
+  it('selectSession restores the draft of the session it lands on', () => {
+    expect(read('app.js')).toContain(
+      "this.activeSessionId = sessionId;\n    if (typeof CjkInput !== 'undefined') CjkInput.restoreDraft?.(sessionId);"
+    );
+  });
+
+  it('leaving the tile grid for another session stashes the focused tile draft', () => {
+    // selectSession nulls activeSessionId there, which hides the tile from
+    // _cleanupPreviousSession.
+    expect(read('app.js')).toMatch(
+      /CjkInput\.stashDraft\?\.\(this\.activeSessionId\);\n(?:\s*\/\/.*\n)*\s*this\.activeSessionId = null;/
+    );
+  });
+
+  it('tile focus stashes the draft of the tile left and restores the focused one', () => {
+    const tiles = read('tile-grid.js');
+    const start = tiles.indexOf('  _selectTiledSession(sessionId, options = {}) {');
+    const body = tiles.slice(start, tiles.indexOf('grid.focusedId = sessionId;', start));
+    expect(body).toMatch(
+      /CjkInput\.stashDraft\?\.\(this\.activeSessionId\);\s*CjkInput\.clear\(\);\s*\}\s*CjkInput\.restoreDraft\?\.\(sessionId\);\s*\}\s*this\.activeSessionId = sessionId;/
+    );
+  });
+
+  it('a removed session drops its stashed draft', () => {
+    expect(read('app.js')).toMatch(
+      /discardComposerDraft\?\.\(sessionId\);\n\s*if \(typeof CjkInput !== 'undefined'\) CjkInput\.discardDraft\?\.\(sessionId\);/
+    );
   });
 
   it('selectSession passes the same-session flag it captured before nulling activeSessionId', () => {
@@ -113,6 +150,24 @@ describe('Send on Enter field layout and strings', () => {
     expect(read('styles.css')).toMatch(
       /\.touch-device:not\(\.keyboard-visible\) #cjkInput\.cjk-input-visible \{\s*max-height: 34px;\s*\}/
     );
+  });
+
+  it('caps the field on every device, not only in the .touch-device rule', () => {
+    // The setting is not limited to phones; on desktop an uncapped field grew to
+    // 502px at 25 lines and resized the PTY on every step.
+    const css = read('styles.css');
+    const base = css.slice(css.indexOf('#cjkInput {'), css.indexOf('}', css.indexOf('#cjkInput {')));
+    expect(base).toContain('max-height: 68px;');
+    expect(base).toContain('overflow-y: auto;');
+  });
+
+  it('the phone toolbar Enter presses Enter in the visible CJK field', () => {
+    // onData drops everything while cjkActive, so the xterm path does nothing.
+    const sessionUi = read('session-ui.js');
+    const start = sessionUi.indexOf('  sendEnterKey() {');
+    const body = sessionUi.slice(start, sessionUi.indexOf('triggerDataEvent', start));
+    expect(body).toContain("classList.contains('cjk-input-visible')");
+    expect(body).toContain('CjkInput.submit?.();');
   });
 
   it('has zh-CN strings for both field placeholders', () => {

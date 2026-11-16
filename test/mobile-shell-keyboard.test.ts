@@ -41,8 +41,9 @@ function loadTerminalModule(): TerminalModule {
     console,
     setInterval: vi.fn(),
     clearInterval: vi.fn(),
-    setTimeout,
-    clearTimeout,
+    // Looked up per call, so a test's vi.useFakeTimers() reaches the cached module.
+    setTimeout: (fn: () => void, ms?: number) => setTimeout(fn, ms),
+    clearTimeout: (t: ReturnType<typeof setTimeout>) => clearTimeout(t),
     requestAnimationFrame: vi.fn(),
     HTMLCanvasElement: class HTMLCanvasElement {},
     WebSocket: { OPEN: 1 },
@@ -547,10 +548,10 @@ describe('one-shot Ctrl through the CJK input field', () => {
   });
 });
 
-describe('Send on Enter: a long or multi-line held answer goes out as a composed prompt', () => {
-  // _sendCjkPrompt is CjkInput's sendPrompt callback. It hands the text to the
-  // composer's _sendComposedPrompt with the session captured at Enter, so the
-  // delayed Enter cannot follow a tab switch.
+describe('Send on Enter: a held answer goes out with Enter as its own write', () => {
+  // _sendCjkPrompt is CjkInput's sendPrompt callback. Anything longer than one
+  // character goes to the composer's _sendComposedPrompt with the session
+  // captured at Enter, so the delayed Enter cannot follow a tab switch.
   function promptApp() {
     const { CodemanApp, bar } = loadTerminalModule();
     bar.clearCtrl();
@@ -581,12 +582,44 @@ describe('Send on Enter: a long or multi-line held answer goes out as a composed
     composed.mockRestore();
   });
 
+  it('types a single character, then Enter ~120 ms later to the same session', () => {
+    // Codex folds an Enter that arrives in the same burst as the text into a
+    // paste, even for `1\r`; a selection dialog ignores a pasted digit. Same
+    // split as TmuxManager.sendInput (submitsAsKeys).
+    vi.useFakeTimers();
+    try {
+      const { app, composed } = promptApp();
+      const writes: Array<[string, string, unknown]> = [];
+      (app as unknown as { _sendInputAsync: unknown })._sendInputAsync = (id: string, input: string, opts?: unknown) =>
+        writes.push([id, input, opts]);
+      expect(app._sendCjkPrompt('1')).toBe(true);
+      expect(writes).toEqual([['session-a', '1', undefined]]);
+      app.activeSessionId = 'session-b';
+      vi.advanceTimersByTime(119);
+      expect(writes).toHaveLength(1);
+      vi.advanceTimersByTime(1);
+      expect(writes[1]).toEqual(['session-a', '\r', { useMux: true }]);
+      expect(composed).not.toHaveBeenCalled();
+      composed.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('pastes even a short word: only one character is typed', () => {
+    const { app, composed } = promptApp();
+    expect(app._sendCjkPrompt('yes')).toBe(true);
+    expect(composed).toHaveBeenCalledWith('session-a', 'yes');
+    composed.mockRestore();
+  });
+
   it('reports a refusal so the field keeps the text', () => {
     const { app, composed } = promptApp();
     composed.mockReturnValue(false);
     expect(app._sendCjkPrompt('x'.repeat(100))).toBe(false);
     app.activeSessionId = null;
     expect(app._sendCjkPrompt('x'.repeat(100))).toBe(false);
+    expect(app._sendCjkPrompt('1')).toBe(false);
     expect(composed).toHaveBeenCalledTimes(1);
     composed.mockRestore();
   });

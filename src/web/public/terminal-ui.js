@@ -4570,11 +4570,15 @@ Object.assign(CodemanApp.prototype, {
 
   /**
    * Send on Enter (CjkInput, setting cjkInputHoldUntilEnter): deliver a held
-   * answer that is too long for one `<text>\r` write, or has several lines.
-   * Claude Code takes a long burst as a paste and its \r as a newline, so it goes
-   * through the composer's path instead: the session is captured now, so the
-   * delayed Enter cannot follow a tab switch, and the length check applies.
-   * Returns false when nothing was sent, so the field keeps the text.
+   * answer, then Enter as its own write ~120 ms later. Never `<text>\r` in one
+   * write: Codex reads characters arriving in one burst as a paste and folds an
+   * Enter inside it into the paste (even `1\r` stays unsent), and Claude Code
+   * does the same for a long burst. Same split as TmuxManager.sendInput: a
+   * single character is typed (a selection dialog ignores a pasted `3`, then
+   * Enter confirms the highlighted option), anything else goes through the
+   * composer's path as one bracketed paste. The session is captured now, so the
+   * delayed Enter cannot follow a tab switch. Returns false when nothing was
+   * sent (no session, too long), so the field keeps the text.
    */
   _sendCjkPrompt(text) {
     const sessionId = this.activeSessionId;
@@ -4582,10 +4586,17 @@ Object.assign(CodemanApp.prototype, {
       _crashDiag.log(`CJK prompt DROP no-session len=${text.length}`);
       return false;
     }
-    // A multi-character chunk spends an armed one-shot Ctrl (same rule as
-    // _handleCjkInput); leaving it armed would modify the next keystroke.
+    // A held answer is never what an armed one-shot Ctrl applies to (CjkInput
+    // sends the next typed character straight away as the control key), so
+    // Enter spends it, the same rule _handleCjkInput has for a longer chunk.
     KeyboardAccessoryBar.clearCtrl?.();
     _crashDiag.log(`CJK prompt→${sessionId.slice(0, 8)} len=${text.length}`);
+    if ([...text].length === 1) {
+      if (this._localEchoPolicy === 'predict') this._predictiveEcho?.clearPredictions();
+      this._sendInputAsync(sessionId, text);
+      setTimeout(() => this._sendInputAsync(sessionId, '\r', { useMux: true }), 120);
+      return true;
+    }
     return KeyboardAccessoryBar._sendComposedPrompt(sessionId, text);
   },
 

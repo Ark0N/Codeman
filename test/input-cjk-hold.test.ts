@@ -21,14 +21,18 @@ function makeTextarea() {
     placeholder: '',
     style: { height: '' } as Record<string, string>,
     scrollHeight: 34,
+    // border-box with a 1px border: offsetHeight - clientHeight is the borders.
+    offsetHeight: 36,
+    clientHeight: 34,
     attrs,
-    blur: () => {},
-    focus: () => {},
+    blur: vi.fn(),
+    focus: vi.fn(),
+    getClientRects: (): unknown[] => [{}],
     classList: { contains: (c: string) => c === 'cjk-input-visible' },
     setSelectionRange: () => {},
-    setAttribute: (k: string, v: string) => {
+    setAttribute: vi.fn((k: string, v: string) => {
       attrs[k] = v;
-    },
+    }),
     addEventListener: (ev: string, fn: (e?: unknown) => void) => {
       listeners.set(ev, [...(listeners.get(ev) ?? []), fn]);
     },
@@ -136,43 +140,38 @@ describe('CJK input: Send on Enter', () => {
     expect(textarea.value).toBe(PHANTOM + 'the');
   });
 
-  it('sends one line as text + CR on Enter, then clears the field', () => {
-    const { textarea, sent } = load();
+  it('sends one line on Enter through the prompt path, then clears the field', () => {
+    const { textarea, sent, prompts } = load();
     type(textarea, 'yes, use Postgres');
     const preventDefault = vi.fn();
     textarea.fire('keydown', { key: 'Enter', keyCode: 13, shiftKey: false, preventDefault });
     expect(preventDefault).toHaveBeenCalled();
-    expect(sent).toEqual(['yes, use Postgres\r']);
-    expect(textarea.value).toBe(PHANTOM);
-  });
-
-  it('sends a digit as typed so CLI menus still answer to it', () => {
-    const { textarea, sent } = load();
-    type(textarea, '2');
-    textarea.fire('keydown', { key: 'Enter', keyCode: 13, shiftKey: false });
-    expect(sent).toEqual(['2\r']);
-  });
-
-  it('sends a long single line as a prompt, never as one <text>\\r burst', () => {
-    // Claude Code takes a burst of ~100+ characters as a paste and its \r as a
-    // newline, so the answer would sit unsent (src/web/route-helpers.ts).
-    const { textarea, sent, prompts } = load();
-    const long = 'x'.repeat(150);
-    type(textarea, long);
-    enter(textarea);
+    expect(prompts).toEqual(['yes, use Postgres']);
     expect(sent).toEqual([]);
-    expect(prompts).toEqual([long]);
     expect(textarea.value).toBe(PHANTOM);
   });
 
-  it('keeps a line at the direct-write limit as one write, one over it as a prompt', () => {
+  it('never writes text and Enter together, whatever the length', () => {
+    // Codex takes characters arriving in one burst as a paste and folds an Enter
+    // inside it into the paste, so even `1\r` in one write stays unsent; Claude
+    // Code does the same for a long burst. terminal-ui.js _sendCjkPrompt types a
+    // single character and pastes anything longer, Enter always on its own.
     const { textarea, sent, prompts } = load();
-    type(textarea, 'a'.repeat(64));
+    for (const answer of ['2', 'yes', 'a'.repeat(64), 'b'.repeat(150)]) {
+      type(textarea, answer);
+      enter(textarea);
+    }
+    expect(sent).toEqual([]);
+    expect(prompts).toEqual(['2', 'yes', 'a'.repeat(64), 'b'.repeat(150)]);
+    expect(textarea.value).toBe(PHANTOM);
+  });
+
+  it('keeps a short answer in the field when it is refused (no session)', () => {
+    const { textarea, prompts } = load({ promptResult: false });
+    type(textarea, 'yes');
     enter(textarea);
-    type(textarea, 'b'.repeat(65));
-    enter(textarea);
-    expect(sent).toEqual(['a'.repeat(64) + '\r']);
-    expect(prompts).toEqual(['b'.repeat(65)]);
+    expect(prompts).toEqual(['yes']);
+    expect(textarea.value).toBe(PHANTOM + 'yes');
   });
 
   it('sends several lines as a prompt (bracketed paste + session-bound Enter)', () => {
@@ -322,8 +321,130 @@ describe('CJK input: Send on Enter', () => {
     textarea.scrollHeight = 60;
     type(textarea, 'a\nb\nc');
     vi.advanceTimersByTime(1000);
-    expect(textarea.style.height).toBe('60px');
+    // scrollHeight + the 2px of border, so a two-line draft does not scroll inside.
+    expect(textarea.style.height).toBe('62px');
     expect(layout).toHaveBeenCalled();
+  });
+
+  it('leaves the field alone when the mode is set again unchanged', () => {
+    // Runs on every session select and SSE reconnect, possibly mid-composition.
+    const { CjkInput, textarea } = load();
+    textarea.setAttribute.mockClear();
+    textarea.placeholder = 'untouched';
+    CjkInput.setHoldUntilEnter(true);
+    expect(textarea.setAttribute).not.toHaveBeenCalled();
+    expect(textarea.placeholder).toBe('untouched');
+    CjkInput.setHoldUntilEnter(false);
+    expect(textarea.setAttribute).toHaveBeenCalled();
+  });
+
+  it('submit() from outside the field (toolbar Enter) sends like Enter', () => {
+    const { CjkInput, textarea, prompts, sent } = load();
+    type(textarea, 'go ahead');
+    expect(CjkInput.submit()).toBe(true);
+    expect(prompts).toEqual(['go ahead']);
+    expect(textarea.value).toBe(PHANTOM);
+    expect(CjkInput.submit()).toBe(true);
+    expect(sent).toEqual(['\r']);
+  });
+
+  it('submit() keeps a refused answer and reports it', () => {
+    const { CjkInput, textarea } = load({ promptResult: false });
+    type(textarea, 'go ahead');
+    expect(CjkInput.submit()).toBe(false);
+    expect(textarea.value).toBe(PHANTOM + 'go ahead');
+  });
+
+  it('a draft stashed on a switch comes back for its own session only', () => {
+    const { CjkInput, textarea, sent, prompts } = load();
+    type(textarea, 'half an answer');
+    CjkInput.stashDraft('session-a');
+    CjkInput.clear();
+    expect(textarea.value).toBe(PHANTOM);
+    CjkInput.restoreDraft('session-b');
+    expect(textarea.value).toBe(PHANTOM);
+    CjkInput.restoreDraft('session-a');
+    expect(textarea.value).toBe(PHANTOM + 'half an answer');
+    // Restored once: a second visit does not bring it back again.
+    CjkInput.clear();
+    CjkInput.restoreDraft('session-a');
+    expect(textarea.value).toBe(PHANTOM);
+    expect(sent).toEqual([]);
+    expect(prompts).toEqual([]);
+  });
+
+  it('a restored draft is held text: Backspace edits it without a DEL', () => {
+    const { CjkInput, textarea, sent } = load();
+    type(textarea, 'ok');
+    CjkInput.stashDraft('session-a');
+    CjkInput.clear();
+    CjkInput.restoreDraft('session-a');
+    backspace(textarea, PHANTOM + 'o');
+    backspace(textarea, PHANTOM);
+    expect(sent).toEqual([]);
+  });
+
+  it('an empty field stashes nothing, and a discarded draft is gone', () => {
+    const { CjkInput, textarea } = load();
+    type(textarea, 'draft');
+    CjkInput.stashDraft('session-a');
+    CjkInput.discardDraft('session-a');
+    CjkInput.clear();
+    CjkInput.restoreDraft('session-a');
+    expect(textarea.value).toBe(PHANTOM);
+    CjkInput.stashDraft('session-b');
+    CjkInput.restoreDraft('session-b');
+    expect(textarea.value).toBe(PHANTOM);
+  });
+
+  it('a switch with an empty field keeps the draft already stashed for that session', () => {
+    // The tile grid stashes the session it parks, then may stash it again from
+    // tile focus with the field already cleared.
+    const { CjkInput, textarea } = load();
+    type(textarea, 'keep me');
+    CjkInput.stashDraft('session-a');
+    CjkInput.clear();
+    CjkInput.stashDraft('session-a');
+    CjkInput.restoreDraft('session-a');
+    expect(textarea.value).toBe(PHANTOM + 'keep me');
+  });
+
+  it('sends a bare Enter when the field holds only blank lines', () => {
+    const { textarea, sent, prompts } = load();
+    type(textarea, '\n');
+    enter(textarea);
+    expect(prompts).toEqual([]);
+    expect(sent).toEqual(['\r']);
+  });
+
+  it('submit() mid-composition commits it first (blur, focus) and sends what landed', () => {
+    const { CjkInput, textarea, prompts } = load();
+    textarea.fire('compositionstart');
+    textarea.value = PHANTOM + 'yes';
+    textarea.fire('input', { isComposing: true, inputType: 'insertCompositionText' });
+    expect(CjkInput.submit()).toBe(true);
+    expect(textarea.blur).toHaveBeenCalled();
+    expect(textarea.focus).toHaveBeenCalled();
+    expect(prompts).toEqual(['yes']);
+    expect(textarea.value).toBe(PHANTOM);
+  });
+
+  it('a hidden field does not get a 0px height (no session shown yet)', () => {
+    const { CjkInput, textarea } = load({ hold: false });
+    textarea.getClientRects = () => [];
+    textarea.scrollHeight = 0;
+    textarea.style.height = '40px';
+    CjkInput.setHoldUntilEnter(true);
+    expect(textarea.style.height).toBe('');
+  });
+
+  it('live mode stashes no drafts', () => {
+    const { CjkInput, textarea } = load({ hold: false });
+    textarea.value = PHANTOM + 'abc';
+    CjkInput.stashDraft('session-a');
+    CjkInput.clear();
+    CjkInput.restoreDraft('session-a');
+    expect(textarea.value).toBe(PHANTOM);
   });
 
   it('live mode is unchanged: text streams after the debounce', () => {

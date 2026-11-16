@@ -9438,10 +9438,15 @@ class CodemanApp {
     // Must go through CjkInput.clear() — a raw value wipe leaves the module's
     // pending flush timers armed and drops the phantom char it relies on.
     // A held Send on Enter draft survives a reload of the same session: nothing
-    // switched, and the answer would be gone. Live mode still clears, since a
-    // pending debounced flush could fire mid-reconnect.
+    // switched, and the answer would be gone. On a real switch it is stashed for
+    // the session being left (selectSession restores it on the way back), so a
+    // stray swipe does not lose it. Live mode still clears, since a pending
+    // debounced flush could fire mid-reconnect.
     if (typeof CjkInput !== 'undefined') {
-      if (!(keepCjkDraft && CjkInput.holdUntilEnter)) CjkInput.clear();
+      if (!(keepCjkDraft && CjkInput.holdUntilEnter)) {
+        if (this.activeSessionId) CjkInput.stashDraft?.(this.activeSessionId);
+        CjkInput.clear();
+      }
     } else {
       const cjkEl = document.getElementById('cjkInput');
       if (cjkEl) cjkEl.value = '';
@@ -9981,6 +9986,9 @@ class CodemanApp {
       if (this._tileGrid.has(sessionId)) return this._selectTiledSession(sessionId, options);
       if (options?.auto === true && !options?.leaveTiles) return;
       this.closeTileGrid({ keepStored: true, reselect: false });
+      // The focused tile's Send on Enter draft: the null below hides that
+      // session from _cleanupPreviousSession, which would clear it unstashed.
+      if (typeof CjkInput !== 'undefined' && this.activeSessionId) CjkInput.stashDraft?.(this.activeSessionId);
       // The parked terminal still holds what it showed before the grid opened;
       // with no active id, the switch below snapshots none of it.
       this.activeSessionId = null;
@@ -10039,6 +10047,7 @@ class CodemanApp {
 
     this._cleanupPreviousSession(sessionId, { keepCjkDraft: reloadingSameSession });
     this.activeSessionId = sessionId;
+    if (typeof CjkInput !== 'undefined') CjkInput.restoreDraft?.(sessionId);
     this._activateFileBrowserSession?.(sessionId);
     // A keyboard row hold belongs to the session it was taken for: release it here
     // if this one resizes instead (the geometry work below then fits it).
@@ -10836,6 +10845,7 @@ class CodemanApp {
     this._flushedOffsets?.delete(sessionId);
     this._flushedTexts?.delete(sessionId);
     if (typeof KeyboardAccessoryBar !== 'undefined') KeyboardAccessoryBar.discardComposerDraft?.(sessionId);
+    if (typeof CjkInput !== 'undefined') CjkInput.discardDraft?.(sessionId);
     // Drop any durably-queued input for a session that's actually gone (deleted/
     // exited). Not a lost prompt — the target no longer exists. Only reached on
     // real session removal, never on a tab switch.
