@@ -106,6 +106,12 @@ describe('parseLaunchUrl: the one-time token dsh prints on boot', () => {
     );
   });
 
+  it('skips a URL without a token and keeps scanning for the token one', () => {
+    expect(parseLaunchUrl('dsh web: http://127.0.0.1:3080/\ndsh web: http://127.0.0.1:3080/?token=abc\n')).toBe(
+      'http://127.0.0.1:3080/?token=abc'
+    );
+  });
+
   it('returns null for a token-less banner, which is the older dsh', () => {
     expect(parseLaunchUrl('dsh web: http://127.0.0.1:3080/\n')).toBeNull();
   });

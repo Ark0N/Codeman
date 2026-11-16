@@ -169,9 +169,11 @@ function stripSgr(output: string): string {
  * The first `dsh web:` payload that parses as an absolute http(s) URL.
  *
  * Lines whose payload is not a URL are skipped, which is what makes a
- * `dsh web: loading profiles` diagnostic harmless. Null when no line carries one.
+ * `dsh web: loading profiles` diagnostic harmless. `requireToken` skips an
+ * http(s) URL that carries no `token` as well, so a diagnostic that happens to
+ * contain a plain link cannot shadow the real banner. Null when no line qualifies.
  */
-function firstLaunchBannerUrl(output: string): string | null {
+function firstLaunchBannerUrl(output: string, requireToken = false): string | null {
   // Fresh per call: a module-level /g pattern carries lastIndex between calls.
   const line = /dsh web:\s*(\S+)/g;
   for (const match of stripSgr(output).matchAll(line)) {
@@ -181,7 +183,9 @@ function firstLaunchBannerUrl(output: string): string | null {
     } catch {
       continue;
     }
-    if (url.protocol === 'http:' || url.protocol === 'https:') return url.href;
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') continue;
+    if (requireToken && !url.searchParams.get('token')) continue;
+    return url.href;
   }
   return null;
 }
@@ -195,8 +199,9 @@ function firstLaunchBannerUrl(output: string): string | null {
  * after it. The token is per process, so it can be neither guessed nor carried
  * across restarts — it has to be read out of the boot output.
  *
- * Scans EVERY `dsh web:` line and returns the first one that is a usable URL,
- * because dsh also prints diagnostics under the same prefix before the banner.
+ * Scans EVERY `dsh web:` line and returns the first one that is a usable URL
+ * carrying a token, because dsh also prints diagnostics under the same prefix
+ * before the banner.
  *
  * Null for output without one, which is the older-dsh case and stays working.
  *
@@ -204,9 +209,7 @@ function firstLaunchBannerUrl(output: string): string | null {
  * @returns absolute http(s) URL carrying a `token`, or null.
  */
 export function parseLaunchUrl(output: string): string | null {
-  const href = firstLaunchBannerUrl(output);
-  if (!href) return null;
-  return new URL(href).searchParams.get('token') ? href : null;
+  return firstLaunchBannerUrl(output, true);
 }
 
 /**
