@@ -222,9 +222,10 @@ describe('webview failure panel styling', () => {
     expect(rule![0]).toContain('color: var(--text)');
   });
 
-  it('gives the action worth taking the accent, so the two are not equal weight', () => {
-    const rule = styles.match(/\.webview-failure-actions button:first-child \{[^}]*\}/);
+  it('keeps both actions neutral, so neither is steered toward unsandboxing', () => {
+    const rule = styles.match(/\.webview-failure-actions button \{[^}]*\}/);
     expect(rule).toBeTruthy();
-    expect(rule![0]).toContain('background: var(--accent)');
+    expect(rule![0]).not.toContain('var(--accent)');
+    expect(styles).not.toMatch(/\.webview-failure-actions button:first-child/);
   });
 });
