@@ -643,6 +643,18 @@ try{
     }).observe(doc.documentElement,{subtree:true,childList:true,attributes:true,attributeFilter:A});
   }
 }catch(e){}
+// Sandboxed frames (no allow-same-origin) get an opaque origin, where the Web
+// Storage API throws on first touch. A dashboard that keeps its token or theme
+// there dies mid-boot and paints its own loading screen forever, with nothing
+// said. Tell the parent tab, which can offer trusted mode instead of leaving the
+// user staring at a spinner.
+try{
+  if(window.parent&&window.parent!==window){
+    var blocked=false;
+    try{ void window.localStorage; }catch(e){ blocked=true; }
+    if(blocked){ try{ window.parent.postMessage({type:'codeman:webview-needs-origin'},'*'); }catch(e){} }
+  }
+}catch(e){}
 }catch(e){}})();</script>`;
 }
 

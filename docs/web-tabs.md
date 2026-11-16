@@ -97,6 +97,13 @@ Unchecking **Open sandboxed** grants `allow-same-origin`. Do that only for a
 dashboard you fully trust, and only if you need it, which in practice means a
 dashboard with its own login that stores a session in a cookie or `localStorage`.
 
+That failure used to be silent: the dashboard died mid-boot on its own loading
+screen and nothing said why. The proxy's injected script now reports it once per
+load, and the tab replaces the loading screen with the reason and a **Reload
+unsandboxed** button — the same setting as the checkbox, offered at the moment it
+matters. Nothing is loosened automatically: a dashboard that never asks for
+storage never sees the notice, and the setting stays yours to make.
+
 Even in trusted mode, Codeman never forwards its own credentials upstream: the
 `Authorization` header and the `codeman_session` cookie are stripped on the way out,
 so `CODEMAN_PASSWORD` cannot leak into a dashboard.
