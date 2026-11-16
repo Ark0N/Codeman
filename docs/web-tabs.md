@@ -29,11 +29,11 @@ Past six live frames the least-recently-viewed one is dropped to bound memory
 A plain `<iframe src="http://your-box:4000">` does not work in the setup Codeman
 actually ships in, for three separate reasons:
 
-| Blocker             | What happens                                                                                   |
-| ------------------- | ---------------------------------------------------------------------------------------------- |
+| Blocker             | What happens                                                                                                                                                 |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | **Mixed content**   | Production serves HTTPS (behind `tailscale serve`). Browsers hard-block `http://` iframes on an HTTPS page, with no override, and none at all on iOS Safari. |
-| **Framing refusal** | Grafana, Portainer, Home Assistant and many others send `X-Frame-Options: DENY` or `frame-ancestors 'none'`. |
-| **Codeman's CSP**   | `default-src 'self'` means `frame-src` falls back to `'self'`, so a cross-origin iframe is blocked before it starts. |
+| **Framing refusal** | Grafana, Portainer, Home Assistant and many others send `X-Frame-Options: DENY` or `frame-ancestors 'none'`.                                                 |
+| **Codeman's CSP**   | `default-src 'self'` means `frame-src` falls back to `'self'`, so a cross-origin iframe is blocked before it starts.                                         |
 
 Serving the dashboard **through Codeman's own origin** dissolves all three. So by
 default a web tab loads `/webview/<capability>/` on Codeman, and Codeman relays to
@@ -86,7 +86,7 @@ On the box itself (a browser on `localhost`) every link opens directly.
 ## The sandbox, and when to turn it off
 
 Because a proxied dashboard is served from Codeman's own address, it is
-*same-origin with Codeman* as far as the browser is concerned. Left unchecked, its
+_same-origin with Codeman_ as far as the browser is concerned. Left unchecked, its
 JavaScript could read the Codeman page and call the API that spawns agents.
 
 So the iframe is sandboxed **without** `allow-same-origin` by default. The page runs
@@ -98,10 +98,12 @@ dashboard you fully trust, and only if you need it, which in practice means a
 dashboard with its own login that stores a session in a cookie or `localStorage`.
 
 That failure used to be silent: the dashboard died mid-boot on its own loading
-screen and nothing said why. The proxy's injected script now reports it once per
-load, and the tab replaces the loading screen with the reason and a **Reload
-unsandboxed** button — the same setting as the checkbox, offered at the moment it
-matters. Nothing is loosened automatically: a dashboard that never asks for
+screen and nothing said why. The proxy's injected script wraps the page's
+`localStorage` and `sessionStorage` accessors; the first time page code reads
+either one, it reports the blocked access once per load, and the tab replaces the
+loading screen with the reason and a **Reload unsandboxed** button — the same
+setting as the checkbox, offered at the moment it matters. Nothing is probed at
+load time and nothing is loosened automatically: a page that never touches
 storage never sees the notice, and the setting stays yours to make.
 
 Even in trusted mode, Codeman never forwards its own credentials upstream: the
@@ -115,8 +117,8 @@ requests do not carry the proxy's authentication cookie; the proxy redirects the
 the login provider, where CORS/CSP kills them, and the embedded app renders
 unstyled or broken while the Codeman page around it works fine. Trusted mode
 (**Open sandboxed** off) keeps a real origin and the cookie, so it works. The
-**Test** button cannot catch this: it checks that the Codeman *server* can reach the
-upstream, not that a sandboxed *browser* frame can load assets through the public
+**Test** button cannot catch this: it checks that the Codeman _server_ can reach the
+upstream, not that a sandboxed _browser_ frame can load assets through the public
 authentication layer.
 
 ## How the proxy authenticates
@@ -133,15 +135,15 @@ capability (tabs re-mint transparently on next click).
 
 ## Limits and env vars
 
-| Variable                             | Default | Meaning                                    |
-| ------------------------------------ | ------- | ------------------------------------------ |
-| `CODEMAN_MAX_WEBVIEWS`               | 50      | Saved dashboards per owner                 |
-| `CODEMAN_MAX_LIVE_WEBVIEW_FRAMES`    | 6       | Iframes kept mounted at once               |
-| `CODEMAN_WEBVIEW_CAPABILITY_TTL_MS`  | 12h     | Rolling capability lifetime                |
-| `CODEMAN_WEBVIEW_TIMEOUT_MS`         | 30000   | Upstream request timeout                   |
-| `CODEMAN_WEBVIEW_PROBE_TIMEOUT_MS`   | 8000    | Timeout for the Test button                |
-| `CODEMAN_MAX_WEBVIEW_HTML_BYTES`     | 8MB     | Largest HTML document rewritten            |
-| `CODEMAN_MAX_WEBVIEW_SOCKETS`        | 8       | Concurrent proxied WebSockets per dashboard |
+| Variable                            | Default | Meaning                                     |
+| ----------------------------------- | ------- | ------------------------------------------- |
+| `CODEMAN_MAX_WEBVIEWS`              | 50      | Saved dashboards per owner                  |
+| `CODEMAN_MAX_LIVE_WEBVIEW_FRAMES`   | 6       | Iframes kept mounted at once                |
+| `CODEMAN_WEBVIEW_CAPABILITY_TTL_MS` | 12h     | Rolling capability lifetime                 |
+| `CODEMAN_WEBVIEW_TIMEOUT_MS`        | 30000   | Upstream request timeout                    |
+| `CODEMAN_WEBVIEW_PROBE_TIMEOUT_MS`  | 8000    | Timeout for the Test button                 |
+| `CODEMAN_MAX_WEBVIEW_HTML_BYTES`    | 8MB     | Largest HTML document rewritten             |
+| `CODEMAN_MAX_WEBVIEW_SOCKETS`       | 8       | Concurrent proxied WebSockets per dashboard |
 
 Saved dashboards live in `~/.codeman/webviews.json`. Which tabs you have open is
 per-device (`localStorage`), since that is workspace layout rather than config.
@@ -172,7 +174,7 @@ layers cooperate so a dashboard talking to its own backend just works:
    and `/webview/<cap>/` is a path no app has a route for: without this, a React
    Router / Vue Router / Next dev server painted its HTML and CSS and then replaced
    them with its own "page not found" the moment its script ran. The page only
-   *reads* the masked path; every URL it emits still goes through the layers above.
+   _reads_ the masked path; every URL it emits still goes through the layers above.
 6. A navigation the page starts **itself** after that — `location.reload()` (a dev
    server's full-reload HMR), a root-absolute `location.href = '/login'` — now
    targets Codeman's root with no capability anywhere on it. Codeman recognises
@@ -186,7 +188,7 @@ layers cooperate so a dashboard talking to its own backend just works:
    credentials, which a sandboxed frame never does.
 
 On top of that, the proxy answers those requests with CORS headers. That sounds
-wrong for same-host requests, but a sandboxed iframe has an *opaque* origin, so the
+wrong for same-host requests, but a sandboxed iframe has an _opaque_ origin, so the
 browser treats every one of its `fetch`/XHR calls as cross-origin even though the
 URL is on Codeman itself. Without those headers, a dashboard renders perfectly and
 then every API call fails, which looks like the dashboard being broken.
@@ -225,7 +227,7 @@ then every API call fails, which looks like the dashboard being broken.
   them to its login provider and the app loads broken while Test reports reachable.
   Use trusted mode behind Cloudflare Access and friends; see the warning above.
 - **Slow endpoints and the upstream timeout** (#237). The proxy waits
-  `CODEMAN_WEBVIEW_TIMEOUT_MS` (default 300s) for the upstream's response *headers*,
+  `CODEMAN_WEBVIEW_TIMEOUT_MS` (default 300s) for the upstream's response _headers_,
   then streams the body without any time bound; a header timeout is logged
   server-side and answered as a 502 that names the limit. WebSocket handshakes use
   the separate `CODEMAN_WEBVIEW_WS_HANDSHAKE_TIMEOUT_MS` (default 30s).
@@ -247,12 +249,12 @@ then every API call fails, which looks like the dashboard being broken.
 
 ## Where the code lives
 
-| Concern                  | File                                    |
-| ------------------------ | --------------------------------------- |
-| Pure rewrite helpers     | `src/web/webview-proxy.ts`              |
-| Routes + proxy + sockets | `src/web/routes/webview-routes.ts`      |
-| Capability tokens        | `src/webview-capabilities.ts`           |
-| Persistence              | `src/webview-store.ts`                  |
-| Limits                   | `src/config/webview-limits.ts`          |
-| Frontend                 | `src/web/public/webview-tabs.js`        |
-| Auth exemption           | `src/web/middleware/auth.ts`             |
+| Concern                  | File                               |
+| ------------------------ | ---------------------------------- |
+| Pure rewrite helpers     | `src/web/webview-proxy.ts`         |
+| Routes + proxy + sockets | `src/web/routes/webview-routes.ts` |
+| Capability tokens        | `src/webview-capabilities.ts`      |
+| Persistence              | `src/webview-store.ts`             |
+| Limits                   | `src/config/webview-limits.ts`     |
+| Frontend                 | `src/web/public/webview-tabs.js`   |
+| Auth exemption           | `src/web/middleware/auth.ts`       |
