@@ -36,6 +36,7 @@ import { WebSocket as WsClient } from 'ws';
 import type { ClientOptions as WsClientOptions, WebSocket } from 'ws';
 import type { Response as UndiciResponse } from 'undici';
 import { getDataDir } from '../../config/instance.js';
+import { isMultiUserMode } from '../../config/multiuser.js';
 import {
   MAX_LIVE_WEBVIEW_FRAMES,
   MAX_WEBVIEWS,
@@ -47,6 +48,7 @@ import {
   WEBVIEW_WS_HANDSHAKE_TIMEOUT_MS,
 } from '../../config/webview-limits.js';
 import { readWebviews, writeWebviews } from '../../webview-store.js';
+import { canUsernameRunPrivilegedCommands } from '../../user-store.js';
 import { webviewCapabilities } from '../../webview-capabilities.js';
 import { egressBlockedReason, webviewEgressLookup, webviewFetch, type EgressLookup } from '../webview-egress.js';
 import { blockedWebviewHostReason } from '../webview-egress-policy.js';
@@ -441,15 +443,33 @@ function proxyHttp(
  * web tab the user repointed at another host, or a stale tab still naming a
  * previous port, must not be handed a credential that is not its own.
  *
+ * ⚠️ `managed` is accepted from the client on POST/PATCH /api/webviews, and the
+ * live port is published by GET /api/deepseek/web, so "this record is managed and
+ * points at the port" is NOT an entitlement: without the check below, any signed-in
+ * user could save `{ url: "http://127.0.0.1:<port>", managed: "deepseek-web" }` and
+ * be handed the cookie bought by the user allowed to start the server. The gate
+ * needs the owner's privileged-commands grant, which is the same bar
+ * `POST /api/deepseek/web` applies before it starts a server.
+ *
  * @param webview - the saved tab being proxied.
  * @param upstream - resolved upstream URL for this request.
  * @returns `name=value` cookie pair, or undefined when none applies.
  */
-function managedDashboardCookie(webview: Webview, upstream: URL): string | undefined {
+async function managedDashboardCookie(webview: Webview, upstream: URL): Promise<string | undefined> {
   if (webview.managed !== 'deepseek-web') return undefined;
   if (upstream.hostname !== '127.0.0.1') return undefined;
+  if (isMultiUserMode()) {
+    // Fail closed on an ownerless legacy record: `canUsernameRunPrivilegedCommands`
+    // treats an absent username as privileged (right for a cron job with no owner,
+    // wrong here), so the owner must be present before it is asked.
+    if (!webview.owner) return undefined;
+    if (!(await canUsernameRunPrivilegedCommands(webview.owner))) return undefined;
+  }
   const port = Number(upstream.port || (upstream.protocol === 'https:' ? 443 : 80));
-  return getDeepSeekWebCookie(port) ?? undefined;
+  // The second identity check is the supervisor's: even an entitled owner gets
+  // nothing from a process another user started (POST restarts it for a new
+  // starter, so that tab simply reopens with its own cookie).
+  return getDeepSeekWebCookie(port, webview.owner) ?? undefined;
 }
 
 /**
@@ -494,7 +514,7 @@ async function proxyRequest(
   }
 
   const hasBody = req.method !== 'GET' && req.method !== 'HEAD';
-  const injectedCookie = managedDashboardCookie(webview, upstream);
+  const injectedCookie = await managedDashboardCookie(webview, upstream);
   const headers = buildUpstreamRequestHeaders(req.headers, upstream, {
     forwardCookies: webview.trusted,
     sessionCookieName: AUTH_COOKIE_NAME,
@@ -739,7 +759,7 @@ function proxyWebSocket(socket: WebSocket, req: FastifyRequest<{ Params: ProxyPa
     // channel is gated exactly like its index, so without this the page loads
     // and then sits there silently disconnected.
     const cookie =
-      managedDashboardCookie(webview, upstream) ??
+      (await managedDashboardCookie(webview, upstream)) ??
       (webview.trusted && req.headers.cookie ? String(req.headers.cookie) : undefined);
     // `lookup` is absent from ws's ClientOptions typings but flows through
     // http.request to net.connect untouched, which is where the resolved

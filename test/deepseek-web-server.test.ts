@@ -171,6 +171,29 @@ http
     expect(authed.status).toBe(200);
   }, 20_000);
 
+  // `managed` is a client-supplied field and the port is published by
+  // GET /api/deepseek/web, so the supervisor additionally binds the cookie to the
+  // identity whose request started the process: another user's tab must not be
+  // handed it, and their POST must not reuse bob's server either.
+  it('hands the cookie only to the identity that started the server', async () => {
+    writeFileSync(join(dir, 'dsh'), FAKE_DSH, { mode: 0o755 });
+
+    const bob = await startDeepSeekWeb(dir, 'localhost:3000', 'bob');
+    expect(bob.ok).toBe(true);
+    if (!bob.ok) return;
+    expect(getDeepSeekWebCookie(bob.port, 'bob')).toBe('dsh-auth-test=v1.payload.sig');
+    expect(getDeepSeekWebCookie(bob.port)).toBeNull();
+    expect(getDeepSeekWebCookie(bob.port, 'alice')).toBeNull();
+
+    // A different owner restarts rather than reusing bob's cookie.
+    const alice = await startDeepSeekWeb(dir, 'localhost:3000', 'alice');
+    expect(alice.ok).toBe(true);
+    if (!alice.ok) return;
+    expect(alice.reused).toBe(false);
+    expect(getDeepSeekWebCookie(alice.port, 'alice')).toBe('dsh-auth-test=v1.payload.sig');
+    expect(getDeepSeekWebCookie(alice.port, 'bob')).toBeNull();
+  }, 20_000);
+
   it('leaves the old, ungated dsh working: no token means no cookie, not a failure', async () => {
     writeFileSync(
       join(dir, 'dsh'),

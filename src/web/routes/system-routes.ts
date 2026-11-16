@@ -18,7 +18,7 @@ import { ApiErrorCode, createErrorResponse, getErrorMessage, type NiceConfig } f
 import { isExplicitlyEnabled, isUnauthenticatedTunnelAcknowledged } from '../network-auth-policy.js';
 import { isMultiUserMode } from '../../config/multiuser.js';
 import { findUser, canUsernameRunPrivilegedCommands } from '../../user-store.js';
-import { getAuthUser, isAdmin, requireAdmin, canAccessOwned, revokeUserSessions } from '../route-helpers.js';
+import { getAuthUser, isAdmin, requireAdmin, canAccessOwned, revokeUserSessions, ownerFor } from '../route-helpers.js';
 import {
   ConfigUpdateSchema,
   SettingsUpdateSchema,
@@ -659,7 +659,10 @@ export function registerSystemRoutes(
     if (!dir) return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getDeepSeekNotFoundMessage());
 
     const { startDeepSeekWeb } = await import('../../deepseek-web-server.js');
-    const result = await startDeepSeekWeb(dir, authority);
+    // The launch cookie is bound to the identity whose request started the
+    // process, so `ownerFor` (undefined in single-user) is recorded here rather
+    // than the synthetic admin `getAuthUser` would report.
+    const result = await startDeepSeekWeb(dir, authority, ownerFor(req));
     if (!result.ok) return createErrorResponse(ApiErrorCode.OPERATION_FAILED, result.error);
     return { success: true, data: { port: result.port, url: result.url, reused: result.reused } };
   });

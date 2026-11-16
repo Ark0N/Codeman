@@ -300,6 +300,15 @@ authority it was minted for, so a repointed or stale tab cannot carry it
 elsewhere. A dsh without the gate prints a token-less banner and keeps working
 unchanged.
 
+The cookie is also bound to a person, not to a URL. `managed` is accepted from the
+client on `POST/PATCH /api/webviews` and `GET /api/deepseek/web` publishes the live
+port, so a saved record pointing at that port is not an entitlement by itself: the
+proxy presents the cookie only when the tab's owner holds the same
+privileged-commands grant `POST /api/deepseek/web` requires, and in multi-user mode
+only to the owner whose request started that process. A different owner's start
+request restarts the server rather than reusing a cookie that is not theirs, which
+is why the shared instance is effectively single-user at a time.
+
 ## 7. Docker and remote cases
 
 Docker cases work: the agent image installs `dsh` and bootstraps a `dsh-tui`

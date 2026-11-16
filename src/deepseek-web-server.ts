@@ -88,6 +88,13 @@ interface RunningServer {
   child: ChildProcess;
   port: number;
   authority: string;
+  /**
+   * Username of the Codeman user whose request started this server. Undefined in
+   * single-user mode, where no owner exists. The cookie bought with the launch
+   * token belongs to that identity and is presented to nobody else (see
+   * `getDeepSeekWebCookie`).
+   */
+  starter: string | undefined;
   output: () => string;
   /**
    * Boot output scanned for the launch banner, on its own (larger) budget than
@@ -272,10 +279,13 @@ export function getDeepSeekWebStatus(): DeepSeekWebStatus {
  * covers a dsh old enough to need no cookie at all.
  *
  * @param port - loopback port the upstream request is bound for.
+ * @param owner - identity asking for it; must be the user who started the server.
+ *   Both sides are undefined in single-user mode, where there is no owner.
  * @returns `name=value` cookie pair, or null.
  */
-export function getDeepSeekWebCookie(port: number): string | null {
+export function getDeepSeekWebCookie(port: number, owner?: string): string | null {
   if (!current || current.port !== port) return null;
+  if (current.starter !== owner) return null;
   return current.cookie;
 }
 
@@ -319,11 +329,12 @@ let startLock: Promise<unknown> = Promise.resolve();
  *
  * @param dshDir directory holding the resolved `dsh` binary.
  * @param authority browser authority to pass as `--trusted-host`.
+ * @param starter user whose request is starting it (undefined in single-user).
  */
-export function startDeepSeekWeb(dshDir: string, authority: string): Promise<StartResult> {
+export function startDeepSeekWeb(dshDir: string, authority: string, starter?: string): Promise<StartResult> {
   const run = startLock.then(
-    () => startDeepSeekWebLocked(dshDir, authority),
-    () => startDeepSeekWebLocked(dshDir, authority)
+    () => startDeepSeekWebLocked(dshDir, authority, starter),
+    () => startDeepSeekWebLocked(dshDir, authority, starter)
   );
   startLock = run.then(
     () => undefined,
@@ -332,13 +343,17 @@ export function startDeepSeekWeb(dshDir: string, authority: string): Promise<Sta
   return run;
 }
 
-async function startDeepSeekWebLocked(dshDir: string, authority: string): Promise<StartResult> {
+async function startDeepSeekWebLocked(
+  dshDir: string,
+  authority: string,
+  starter: string | undefined
+): Promise<StartResult> {
   // Reuse only when the running server is BOTH healthy and fenced for the
-  // authority now asking. A server trusting the other origin renders a page
-  // whose every API call 403s, which looks like a broken dashboard rather than
-  // a misconfigured one.
+  // authority now asking, and it was started by this identity: the launch cookie
+  // is per process and per user, so handing a previous starter's server to
+  // another user would leave that user's tab on dsh's 401 page.
   if (current) {
-    if (current.authority === authority && (await answersHttp(current.port))) {
+    if (current.authority === authority && current.starter === starter && (await answersHttp(current.port))) {
       return { ok: true, port: current.port, url: `http://127.0.0.1:${current.port}`, reused: true };
     }
     await stopDeepSeekWeb();
@@ -393,7 +408,15 @@ async function startDeepSeekWebLocked(dshDir: string, authority: string): Promis
     if (current?.child === child) current = null;
   });
 
-  const running: RunningServer = { child, port, authority, output: () => output, banner: () => banner, cookie: null };
+  const running: RunningServer = {
+    child,
+    port,
+    authority,
+    starter,
+    output: () => output,
+    banner: () => banner,
+    cookie: null,
+  };
   current = running;
 
   const deadline = Date.now() + READY_TIMEOUT_MS;
