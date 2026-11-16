@@ -107,8 +107,10 @@ describe('a held draft survives a reload of the same session', () => {
   });
 
   it('selectSession restores the draft of the session it lands on', () => {
+    // After _activateFileBrowserSession: test/file-browser-search.test.ts pins
+    // that call as the line right after the activeSessionId assignment.
     expect(read('app.js')).toContain(
-      "this.activeSessionId = sessionId;\n    if (typeof CjkInput !== 'undefined') CjkInput.restoreDraft?.(sessionId);"
+      "this.activeSessionId = sessionId;\n    this._activateFileBrowserSession?.(sessionId);\n    if (typeof CjkInput !== 'undefined') CjkInput.restoreDraft?.(sessionId);"
     );
   });
 

@@ -4577,8 +4577,13 @@ Object.assign(CodemanApp.prototype, {
    * single character is typed (a selection dialog ignores a pasted `3`, then
    * Enter confirms the highlighted option), anything else goes through the
    * composer's path as one bracketed paste. The session is captured now, so the
-   * delayed Enter cannot follow a tab switch. Returns false when nothing was
-   * sent (no session, too long), so the field keeps the text.
+   * delayed Enter cannot follow a tab switch. A lone digit while the session
+   * shows a permission or question dialog goes out without the Enter: the
+   * dialog acts on the digit itself, and a later Enter would confirm whatever
+   * the CLI shows next (a second permission prompt, unseen). Same rule as the
+   * Approvals Inbox and the Discord bridge (server.ts awaitingChoice). Returns
+   * false when nothing was sent (no session, too long), so the field keeps the
+   * text.
    */
   _sendCjkPrompt(text) {
     const sessionId = this.activeSessionId;
@@ -4594,6 +4599,12 @@ Object.assign(CodemanApp.prototype, {
     if ([...text].length === 1) {
       if (this._localEchoPolicy === 'predict') this._predictiveEcho?.clearPredictions();
       this._sendInputAsync(sessionId, text);
+      const hooks = this.pendingHooks?.get(sessionId);
+      const awaitingChoice = !!hooks && (hooks.has('permission_prompt') || hooks.has('elicitation_dialog'));
+      if (/^\d$/.test(text) && awaitingChoice) {
+        _crashDiag.log(`CJK prompt digit answers a dialog, no Enter`);
+        return true;
+      }
       setTimeout(() => this._sendInputAsync(sessionId, '\r', { useMux: true }), 120);
       return true;
     }

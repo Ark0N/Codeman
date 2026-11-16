@@ -606,6 +606,64 @@ describe('Send on Enter: a held answer goes out with Enter as its own write', ()
     }
   });
 
+  it('sends a lone digit without Enter while a permission or question dialog waits', () => {
+    // The dialog acts on the digit keypress itself; an Enter 120 ms later would
+    // confirm whatever the CLI shows next (a second permission prompt, unseen).
+    // Same rule as the Approvals Inbox and the Discord bridge (awaitingChoice).
+    vi.useFakeTimers();
+    try {
+      for (const hook of ['permission_prompt', 'elicitation_dialog']) {
+        const { app, composed } = promptApp();
+        const writes: Array<[string, string, unknown]> = [];
+        (app as unknown as { _sendInputAsync: unknown })._sendInputAsync = (
+          id: string,
+          input: string,
+          opts?: unknown
+        ) => writes.push([id, input, opts]);
+        (app as unknown as { pendingHooks: Map<string, Set<string>> }).pendingHooks = new Map([
+          ['session-a', new Set([hook])],
+        ]);
+        expect(app._sendCjkPrompt('2')).toBe(true);
+        vi.advanceTimersByTime(500);
+        expect(writes).toEqual([['session-a', '2', undefined]]);
+        composed.mockRestore();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the delayed Enter for a digit when only an idle prompt is pending, or for a letter in a dialog', () => {
+    vi.useFakeTimers();
+    try {
+      const cases: Array<[string, string]> = [
+        ['idle_prompt', '1'],
+        ['permission_prompt', 'y'],
+      ];
+      for (const [hook, text] of cases) {
+        const { app, composed } = promptApp();
+        const writes: Array<[string, string, unknown]> = [];
+        (app as unknown as { _sendInputAsync: unknown })._sendInputAsync = (
+          id: string,
+          input: string,
+          opts?: unknown
+        ) => writes.push([id, input, opts]);
+        (app as unknown as { pendingHooks: Map<string, Set<string>> }).pendingHooks = new Map([
+          ['session-a', new Set([hook])],
+        ]);
+        expect(app._sendCjkPrompt(text)).toBe(true);
+        vi.advanceTimersByTime(120);
+        expect(writes).toEqual([
+          ['session-a', text, undefined],
+          ['session-a', '\r', { useMux: true }],
+        ]);
+        composed.mockRestore();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('pastes even a short word: only one character is typed', () => {
     const { app, composed } = promptApp();
     expect(app._sendCjkPrompt('yes')).toBe(true);

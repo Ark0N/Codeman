@@ -10047,8 +10047,8 @@ class CodemanApp {
 
     this._cleanupPreviousSession(sessionId, { keepCjkDraft: reloadingSameSession });
     this.activeSessionId = sessionId;
-    if (typeof CjkInput !== 'undefined') CjkInput.restoreDraft?.(sessionId);
     this._activateFileBrowserSession?.(sessionId);
+    if (typeof CjkInput !== 'undefined') CjkInput.restoreDraft?.(sessionId);
     // A keyboard row hold belongs to the session it was taken for: release it here
     // if this one resizes instead (the geometry work below then fits it).
     this._reconcileKeyboardHold?.({ resize: false });
