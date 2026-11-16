@@ -182,6 +182,45 @@ async function boot(who: Who, stored: Settings, server: Settings | null) {
 // What the server already holds for this instance: an admin has saved App Settings before.
 const SERVER: Settings = { autoNameSessions: false, workspaceHooksEnabled: true, claudeMode: 'auto' };
 
+describe('the per-device History Reload Button setting', () => {
+  it.each(['non-admin', 'admin', 'single-user'] as const)(
+    '%s saves locally and never sends the device key',
+    async (who) => {
+      const { app, target, box, storedBlob } = await boot(who, { ...SERVER }, SERVER);
+      target._syncHistoryReloadAction = vi.fn();
+      await open_(app);
+      expect(box('appSettingsHistoryReloadAction').checked).toBe(true);
+      expect(app._displaySettingKeySet().has('historyReloadAction')).toBe(true);
+      box('appSettingsHistoryReloadAction').checked = false;
+      await app.saveAppSettings();
+      expect(storedBlob().historyReloadAction).toBe(false);
+      expect(target._syncHistoryReloadAction).toHaveBeenCalledOnce();
+      if (who === 'non-admin') expect(target._apiPut).not.toHaveBeenCalled();
+      else {
+        const [path, body] = target._apiPut.mock.calls[0] as [string, Settings];
+        expect(path).toBe('/api/settings');
+        expect(body).not.toHaveProperty('historyReloadAction');
+        expect(SettingsUpdateSchema.safeParse(body).error?.issues ?? []).toEqual([]);
+      }
+      await open_(app);
+      expect(box('appSettingsHistoryReloadAction').checked).toBe(false);
+    }
+  );
+
+  it('preserves the local choice when another device saved a different value', async () => {
+    const { app, box, storedBlob } = await boot('admin', { historyReloadAction: false }, { historyReloadAction: true });
+    await open_(app);
+    expect(box('appSettingsHistoryReloadAction').checked).toBe(false);
+    expect(storedBlob().historyReloadAction).toBe(false);
+  });
+
+  it('also defaults to enabled on handheld devices', async () => {
+    const { app, win } = await boot('admin', {}, {});
+    win.eval('MobileDetection.isHandheldDevice = () => true;');
+    expect(app.getDefaultSettings().historyReloadAction).toBe(true);
+  });
+});
+
 describe('a non-admin in multi-user mode saving App Settings', () => {
   it('keeps the per-device keys, sends no PUT, keeps the synced key at the server value, and toasts once', async () => {
     const { app, target, box, storedBlob, toasts, puts } = await boot('non-admin', { ...SERVER }, SERVER);

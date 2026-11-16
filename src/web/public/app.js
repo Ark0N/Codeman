@@ -801,10 +801,11 @@ class CodemanApp {
     // the small `full=1` capture instead of the 1 MiB byte tail: see
     // _notePaneHistory and selectSession.
     this._paneHistoryLines = new Map(); // Map<sessionId, number>
-    // Per-session cooldown for upward-scroll history repair / top-of-buffer pulls.
+    // Per-session cooldown for top-of-buffer pulls; manual actions bypass it.
     this._fullHistoryRepullAt = new Map(); // Map<sessionId, timestamp>
     this._fullHistoryRepullInFlight = false;
     this._liveOutputSinceFullPull = new Set(); // Set<sessionId>
+    this._historyReloadDismissed = new Set(); // Until the next successful full mux replay
     this._liveOutputGen = new Map(); // Map<sessionId, number>
     this._earlyReplayTravel = null; // { sessionId, moves: number[] } during a content-anchored replay
     // Sessions whose last re-pull came back THINNER than the live buffer (a
@@ -2606,10 +2607,10 @@ class CodemanApp {
     // it releases instead of spending every retry against the same open load.
     if (this._isLoadingBuffer) {
       if (sessionId === this.activeSessionId) {
-        if (this._pendingDroppedOutputRecovery !== sessionId && Number.isFinite(queuedBytes)) {
+        if (this._pendingDroppedOutputRecovery?.sessionId !== sessionId && Number.isFinite(queuedBytes)) {
           _crashDiag.log(`TERMINAL DROP: ${(queuedBytes / 1024).toFixed(0)}KB queued (recovery deferred)`);
         }
-        this._pendingDroppedOutputRecovery = sessionId;
+        this._pendingDroppedOutputRecovery = { sessionId, attempt };
       }
       return;
     }
@@ -2621,7 +2622,7 @@ class CodemanApp {
       // A load may have opened after this timer was armed. Defer without
       // advancing the attempt; _finishBufferLoad resumes only the active tab.
       if (this._isLoadingBuffer) {
-        if (sessionId === this.activeSessionId) this._pendingDroppedOutputRecovery = sessionId;
+        if (sessionId === this.activeSessionId) this._pendingDroppedOutputRecovery = { sessionId, attempt };
         return;
       }
       let repainted = false;
@@ -9614,8 +9615,8 @@ class CodemanApp {
   }
 
   /**
-   * Re-pull tmux history at the top, or on any upward scroll in a non-shell
-   * session marked by live output since its last mux-full-history replay.
+   * Re-pull tmux history automatically at the top, or explicitly from the
+   * history banner's Load full history / Reload history actions.
    *
    * xterm's buffer is only ever a WINDOW onto tmux's real history, and two things
    * shrink it. tmux repaints the pane rectangle instead of emitting linefeeds
@@ -9626,9 +9627,10 @@ class CodemanApp {
    * everything (history-limit 100k by default), so the fix is to go ask for it with
    * the same `?full=1` capture a page reload uses (issue #205).
    *
-   * Gesture-triggered and cooldown/latch guarded: a synchronous capture can cost
-   * about 0.3 s at 100k lines and blocks the server event loop. Content anchors
-   * hold the reader's place even when new history fills a gap below them.
+   * Automatic pulls are top-only and cooldown/latch guarded: a synchronous
+   * capture can cost about 0.3 s at 100k lines and blocks the server event loop.
+   * The manual Reload history action uses a content anchor to hold the reader's
+   * place even when new history fills a gap below them.
    *
    * NEVER a downgrade: for a repaint-mode CLI pane tmux keeps no history of its
    * own, so the capture can be THINNER than what xterm already holds and the
@@ -9795,6 +9797,8 @@ class CodemanApp {
       if (!completed || this.activeSessionId !== sessionId || selectGen !== this._selectGeneration) return;
       if (payload.source === 'mux-full-history' && (this._liveOutputGen?.get(sessionId) || 0) === liveOutputGen) {
         this._liveOutputSinceFullPull?.delete(sessionId);
+        this._historyReloadDismissed?.delete(sessionId);
+        this._syncHistoryReloadAction?.();
       }
       // Keep shell tab restores bounded too. A user-triggered full-history pull
       // may be tens of MB; caching it would replay that whole payload again on
@@ -9837,7 +9841,7 @@ class CodemanApp {
       if (!replayed) this._finishBufferLoad(loadOwner, { flushQueued: true, since: 0 });
       if (anchor === 'content') this._earlyReplayTravel = null;
       this._fullHistoryRepullInFlight = false;
-      this._syncHistoryReloadButton?.();
+      this._syncHistoryReloadAction?.();
     }
   }
 
@@ -9913,6 +9917,29 @@ class CodemanApp {
     this._renderHistoryTruncationBanner();
   }
 
+  /** Whether the active session can offer a manual, content-anchored repair. */
+  _historyReloadActionEligible() {
+    const sessionId = this.activeSessionId;
+    const session = this.sessions.get(sessionId);
+    // Cheap state checks first: the terminal is read only for a marked session.
+    return !!(this.loadAppSettingsFromStorage?.()?.historyReloadAction !== false &&
+      session && session.mode !== 'shell' && this._liveOutputSinceFullPull?.has(sessionId) &&
+      !this._fullHistoryRepullInFlight && !this.detachedSessions?.has(sessionId) &&
+      !this._historyReloadDismissed?.has(sessionId) && !this._tilesOwnTerminal?.() &&
+      !this.isTerminalAtBottom());
+  }
+
+  /** Only eligibility/session/loading transitions may rebuild the banner. */
+  _syncHistoryReloadAction() {
+    const sessionId = this.activeSessionId;
+    const eligible = this._historyReloadActionEligible();
+    const loading = !!sessionId && this._historyReloadActionLoadingFor === sessionId;
+    const last = this._historyReloadActionState;
+    if (last && last.sessionId === sessionId && last.eligible === eligible && last.loading === loading) return;
+    this._historyReloadActionState = { sessionId, eligible, loading };
+    this._renderHistoryTruncationBanner();
+  }
+
   /**
    * Paint the partial-history banner for the active session.
    *
@@ -9920,12 +9947,12 @@ class CodemanApp {
    * is gone forever" are not the same message and the old single boolean could
    * not tell them apart:
    *   - recoverable  → offer to load the rest
-   *   - exhausted    → say so plainly, offer nothing
+   *   - exhausted    → say so plainly
    *   - at the limit → the full capture ITSELF hit the byte ceiling
    *
-   * Shown only while revealed (`_setHistoryNoticeRevealed`: the user scrolled
-   * to the top of this tab's buffer) and never again for a session whose notice
-   * the user dismissed on this page.
+   * Notices wait for a scroll to the top and respect their page-long dismissal.
+   * Independently, eligible marked sessions offer Reload history while reading;
+   * the same bar carries it without duplicating a Load full history control.
    */
   _renderHistoryTruncationBanner() {
     const bar = document.getElementById('historyTruncationBar');
@@ -9933,11 +9960,12 @@ class CodemanApp {
     const sessionId = this.activeSessionId;
     const state = sessionId ? this._historyTruncation?.get(sessionId) : null;
     const notice = computeHistoryTruncationNotice(state || {});
-    if (
-      !notice.visible ||
-      this._historyNoticeRevealedFor !== sessionId ||
-      this._historyNoticeDismissed?.has(sessionId)
-    ) {
+    const showNotice = notice.visible && this._historyNoticeRevealedFor === sessionId &&
+      !this._historyNoticeDismissed?.has(sessionId);
+    const eligible = this._historyReloadActionEligible?.() ?? false;
+    const loading = !!sessionId && this._historyReloadActionLoadingFor === sessionId;
+    this._historyReloadActionState = { sessionId, eligible, loading };
+    if (!showNotice && !eligible && !loading) {
       bar.hidden = true;
       return;
     }
@@ -9945,10 +9973,10 @@ class CodemanApp {
     bar.textContent = '';
     const label = document.createElement('span');
     label.className = 'history-trunc-text';
-    label.textContent = notice.message;
+    label.textContent = showNotice ? notice.message : 'Recent output may be missing from this view.';
     bar.appendChild(label);
 
-    if (notice.canLoadMore) {
+    if (showNotice && notice.canLoadMore) {
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'history-trunc-load';
@@ -9962,6 +9990,23 @@ class CodemanApp {
         });
       };
       bar.appendChild(btn);
+    } else if (eligible || loading) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'history-trunc-load';
+      btn.disabled = loading;
+      btn.textContent = loading ? 'Loading…' : 'Reload history';
+      btn.onclick = () => {
+        btn.disabled = true;
+        btn.textContent = 'Loading…';
+        this._historyReloadActionLoadingFor = sessionId;
+        this._syncHistoryReloadAction();
+        return this._maybeRefetchFullHistory({ force: true, anchor: 'content' }).finally(() => {
+          if (this._historyReloadActionLoadingFor === sessionId) this._historyReloadActionLoadingFor = null;
+          this._syncHistoryReloadAction();
+        });
+      };
+      bar.appendChild(btn);
     }
 
     const dismiss = document.createElement('button');
@@ -9970,10 +10015,12 @@ class CodemanApp {
     dismiss.setAttribute('aria-label', 'Dismiss history notice');
     dismiss.textContent = '×';
     dismiss.onclick = () => {
-      // Sticky for this session until the page reloads: a dismissed notice used
-      // to come straight back on the next tab switch.
-      (this._historyNoticeDismissed ||= new Set()).add(sessionId);
-      bar.hidden = true;
+      // One × dismisses everything this bar carried. A notice dismissal sticks
+      // for the lifetime of this page; a reload dismissal lasts until a
+      // successful full mux replay clears the session's mark.
+      if (showNotice) (this._historyNoticeDismissed ||= new Set()).add(sessionId);
+      if (eligible || loading) (this._historyReloadDismissed ||= new Set()).add(sessionId);
+      this._renderHistoryTruncationBanner();
     };
     bar.appendChild(dismiss);
 
@@ -10093,7 +10140,7 @@ class CodemanApp {
     this.activeSessionId = sessionId;
     this._activateFileBrowserSession?.(sessionId);
     if (typeof CjkInput !== 'undefined') CjkInput.restoreDraft?.(sessionId);
-    this._syncHistoryReloadButton?.();
+    this._syncHistoryReloadAction?.();
     // A keyboard row hold belongs to the session it was taken for: release it here
     // if this one resizes instead (the geometry work below then fits it).
     this._reconcileKeyboardHold?.({ resize: false });
@@ -10481,6 +10528,8 @@ class CodemanApp {
           }
           if (fullHistoryReplay && data.source === 'mux-full-history' && completed && (this._liveOutputGen?.get(sessionId) || 0) === liveOutputGen) {
             this._liveOutputSinceFullPull?.delete(sessionId);
+            this._historyReloadDismissed?.delete(sessionId);
+            this._syncHistoryReloadAction?.();
           }
           // Ensure terminal is scrolled to bottom after buffer load
           this.terminal.scrollToBottom();
@@ -10890,6 +10939,8 @@ class CodemanApp {
     this.terminalBuffers.delete(sessionId);
     this.terminalBufferCache.delete(sessionId);
     this._liveOutputSinceFullPull?.delete(sessionId);
+    this._historyReloadDismissed?.delete(sessionId);
+    this._syncHistoryReloadAction?.();
     this._liveOutputGen?.delete(sessionId);
     this._clearHistoryTruncation(sessionId);
     this._xtermSnapshots?.delete(sessionId);

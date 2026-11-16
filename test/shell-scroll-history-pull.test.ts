@@ -288,7 +288,7 @@ describe('shell scroll-up pulls a bounded window of tmux history', () => {
   });
 });
 
-describe('early full-history recovery above live output (#814)', () => {
+describe('manual full-history recovery while reading (#814)', () => {
   function makeScrollApp(mode = 'omp') {
     const { app: base, urls } = makeApp(mode, { bufferRows: 130, capture: lines(400) });
     const app = Object.assign(base, {
@@ -348,29 +348,20 @@ describe('early full-history recovery above live output (#814)', () => {
       });
       return { ready, release };
     }
-    return { app, active, urls, liveOutput, scroll, pauseReplay };
+    const reload = () => app._maybeRefetchFullHistory({ force: true, anchor: 'content' });
+    return { app, active, urls, liveOutput, scroll, reload, pauseReplay };
   }
 
-  it('pulls on the first upward scroll after live output and preserves distance from the new bottom', async () => {
+  it('never pulls mid-history after live output, but still pulls at the top', async () => {
     const { app, active, urls, liveOutput, scroll } = makeScrollApp();
     liveOutput();
     await scroll(-5);
+    expect(urls).toEqual([]);
+    expect(app._liveOutputSinceFullPull.has('s1')).toBe(true);
+    await scroll(-active.viewportY);
     expect(urls).toEqual(['/api/sessions/s1/terminal?full=1']);
-    expect(app.chunkedTerminalWrite).toHaveBeenCalledWith(
-      expect.any(String),
-      32 * 1024,
-      expect.stringMatching(/^buffer-/),
-      expect.objectContaining({ flushQueued: true })
-    );
-    expect(active.viewportY).toBe(365);
-    expect(active.baseY - active.viewportY).toBe(5);
+    expect(app._maybeRefetchFullHistory).toHaveBeenCalledWith();
     expect(app._liveOutputSinceFullPull.has('s1')).toBe(false);
-    expect(app._syncStickyScrollBaseline).toHaveBeenCalledOnce();
-    // No second early pull until another live write dirties this session.
-    active.viewportY = active.baseY;
-    app._fullHistoryRepullAt.clear();
-    await scroll(-3);
-    expect(urls).toHaveLength(1);
   });
 
   it.each([
@@ -381,10 +372,11 @@ describe('early full-history recovery above live output (#814)', () => {
     { moves: [20, -12], distance: 12 },
     { moves: [-1000, 30], distance: 340 },
   ])('replays travel $moves made during an unfinished replay, clamped per move', async ({ moves, distance }) => {
-    const { app, active, liveOutput, scroll, pauseReplay } = makeScrollApp();
+    const { app, active, liveOutput, reload, pauseReplay } = makeScrollApp();
     liveOutput();
+    active.viewportY -= 5; // Read five rows above live output before the manual action.
     const paused = pauseReplay();
-    const pull = scroll(-5);
+    const pull = reload();
     await paused.ready;
     // The temporary reset buffer cannot scroll, but the gesture still counts.
     for (const move of moves) (mixin._maybeLoadMoreHistoryOnScroll as Function).call(app, move);
@@ -396,7 +388,7 @@ describe('early full-history recovery above live output (#814)', () => {
   });
 
   it('queues download-time output and replays it through batchTerminalWrite after the capture', async () => {
-    const { app, urls, liveOutput, scroll } = makeScrollApp();
+    const { app, urls, liveOutput, reload } = makeScrollApp();
     liveOutput();
     const fetchCapture = app._fetchTerminalCapture.getMockImplementation()!;
     const { promise, resolve: release } = Promise.withResolvers<void>();
@@ -406,7 +398,7 @@ describe('early full-history recovery above live output (#814)', () => {
       await promise;
       return capture;
     });
-    const pull = scroll(-5);
+    const pull = reload();
     loadAppMethod('_onSessionTerminal').call(app, { id: 's1', data: 'download-time output' });
     expect(app._loadBufferQueue).toEqual([expect.objectContaining({ data: 'download-time output' })]);
     release();
@@ -420,12 +412,12 @@ describe('early full-history recovery above live output (#814)', () => {
     expect(app._liveOutputSinceFullPull.has('s1')).toBe(true);
   });
 
-  it('keeps live output flushed before the final restore dirty for the next early pull', async () => {
-    const { app, active, urls, liveOutput, scroll, pauseReplay } = makeScrollApp();
+  it('keeps live output flushed before the final restore dirty for the next manual pull', async () => {
+    const { app, active, urls, liveOutput, reload, pauseReplay } = makeScrollApp();
     liveOutput();
     const generation = app._liveOutputGen.get('s1');
     const paused = pauseReplay(liveOutput);
-    const pull = scroll(-5);
+    const pull = reload();
     await paused.ready;
     paused.release();
     await pull;
@@ -433,7 +425,7 @@ describe('early full-history recovery above live output (#814)', () => {
     expect(app._liveOutputSinceFullPull.has('s1')).toBe(true);
     app._fullHistoryRepullAt.clear();
     active.viewportY = active.baseY;
-    await scroll(-3);
+    await reload();
     expect(urls).toEqual(['/api/sessions/s1/terminal?full=1', '/api/sessions/s1/terminal?full=1']);
     expect(app._liveOutputSinceFullPull.has('s1')).toBe(false);
   });
@@ -464,37 +456,29 @@ describe('early full-history recovery above live output (#814)', () => {
     expect(app._liveOutputSinceFullPull.size).toBe(0);
   });
 
-  it('repairs while already reading mid-history, but never on downward travel', async () => {
-    const { app, active, urls, liveOutput, scroll } = makeScrollApp();
+  it('keeps marked mid-history travel local in either direction', async () => {
+    const { active, urls, liveOutput, scroll } = makeScrollApp();
     liveOutput();
     active.viewportY = 50;
     await scroll(-5);
-    expect(urls).toHaveLength(1);
-    expect(app._maybeRefetchFullHistory).toHaveBeenCalledWith({ anchor: 'content' });
-    app._fullHistoryRepullAt.clear();
-    liveOutput();
     await scroll(3);
-    expect(urls).toHaveLength(1);
+    expect(urls).toEqual([]);
   });
 
   it.each(['_isLoadingBuffer', '_fullHistoryRepullInFlight'] as const)('respects the %s guard', async (guard) => {
-    const { app, urls, liveOutput, scroll } = makeScrollApp();
+    const { app, urls, liveOutput, reload } = makeScrollApp();
     liveOutput();
     app[guard] = true;
-    await scroll(-5);
+    await reload();
     expect(urls).toEqual([]);
   });
 
-  it('keeps the cooldown and downgrade guard on an early pull', async () => {
-    const { app, active, urls, liveOutput, scroll } = makeScrollApp();
+  it('bypasses the cooldown for manual reload but keeps the downgrade guard', async () => {
+    const { app, active, urls, liveOutput, reload } = makeScrollApp();
     liveOutput();
     app._fullHistoryRepullAt.set('s1', Date.now());
-    await scroll(-3);
-    expect(urls).toEqual([]);
-    app._fullHistoryRepullAt.clear();
-    active.viewportY = active.baseY;
     active.length = 1000;
-    await scroll(-3);
+    await reload();
     expect(urls).toHaveLength(1);
     expect(app._resetTerminalForReplay).not.toHaveBeenCalled();
     expect(app._liveOutputSinceFullPull.has('s1')).toBe(true);
@@ -598,17 +582,43 @@ describe('early full-history recovery above live output (#814)', () => {
     }
   );
 
+  it.each([false, true])('resumes a deferred recovery at its saved attempt (timer armed: %s)', async (armed) => {
+    vi.useFakeTimers();
+    try {
+      const { app } = makeApp('omp', { bufferRows: 30, capture: lines(400) });
+      const retry = vi.fn(() => false);
+      const schedule = loadAppMethod('_scheduleDroppedOutputRecovery', {
+        setTimeout,
+        window: { CodemanDroppedOutput: { DROP_RECOVERY_DELAY_MS: 2000, shouldRetryDroppedOutputRecovery: retry } },
+      });
+      Object.assign(app, {
+        _scheduleDroppedOutputRecovery: (...args: unknown[]) => schedule.apply(app, args),
+        _onSessionNeedsRefresh: vi.fn(async () => false),
+      });
+      if (armed) schedule.call(app, 's1', 3);
+      const owner = (app._beginBufferLoad as Function).call(app);
+      if (armed) await vi.advanceTimersByTimeAsync(2000);
+      else schedule.call(app, 's1', 3);
+      expect(Reflect.get(app, '_pendingDroppedOutputRecovery')).toEqual({ sessionId: 's1', attempt: 3 });
+      app._finishBufferLoad(owner);
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(retry).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ attempt: 3 }));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('does not resume a deferred recovery for a tab that is no longer active', () => {
     const { app } = makeApp('omp', { bufferRows: 30, capture: lines(400) });
     const owner = (app._beginBufferLoad as Function).call(app);
-    Object.assign(app, { _pendingDroppedOutputRecovery: 's1', activeSessionId: 's2' });
+    Object.assign(app, { _pendingDroppedOutputRecovery: { sessionId: 's1', attempt: 3 }, activeSessionId: 's2' });
     app._finishBufferLoad(owner);
     expect(app._scheduleDroppedOutputRecovery).not.toHaveBeenCalled();
     expect(Reflect.get(app, '_pendingDroppedOutputRecovery')).toBeNull();
   });
 
   it.each(['mux-full-history', 'history'])('clears the scroll-pull mark only for a mux capture: %s', async (source) => {
-    const { app, liveOutput, scroll } = makeScrollApp();
+    const { app, liveOutput, reload } = makeScrollApp();
     liveOutput();
     const fetchCapture = app._fetchTerminalCapture.getMockImplementation()!;
     app._fetchTerminalCapture.mockImplementationOnce(async (url) => {
@@ -616,15 +626,15 @@ describe('early full-history recovery above live output (#814)', () => {
       capture.json.data.source = source;
       return capture;
     });
-    await scroll(-5);
+    await reload();
     expect(app._liveOutputSinceFullPull.has('s1')).toBe(source !== 'mux-full-history');
   });
 
   it('does not swallow another tab’s travel or clear the old mark when replay is cancelled', async () => {
-    const { app, active, liveOutput, scroll, pauseReplay } = makeScrollApp();
+    const { app, active, liveOutput, reload, pauseReplay } = makeScrollApp();
     liveOutput();
     const paused = pauseReplay();
-    const pull = scroll(-5);
+    const pull = reload();
     await paused.ready;
     app.activeSessionId = 's2';
     app._selectGeneration++;
@@ -906,62 +916,211 @@ describe('content anchors hold the reader through a history repair', () => {
   });
 });
 
-describe('touch history reload control', () => {
-  function fixture({
-    touch = true,
-    mode = 'omp',
-    bottom = false,
-    marked = true,
-    inFlight = false,
-    tiles = false,
-    active = true,
-  } = {}) {
-    const button = { hidden: true, disabled: false, textContent: '', onclick: null as (() => void) | null };
-    const ui = loadTerminalMixin({
-      MobileDetection: { isTouchDevice: () => touch },
-      document: { addEventListener: vi.fn(), getElementById: () => button },
-    });
-    const app = {
-      activeSessionId: active ? 's1' : null,
-      sessions: new Map([['s1', { mode }]]),
-      isTerminalAtBottom: () => bottom,
-      _liveOutputSinceFullPull: new Set(marked ? ['s1'] : []),
-      _fullHistoryRepullInFlight: inFlight,
-      _tilesOwnTerminal: () => tiles,
-      _maybeRefetchFullHistory: vi.fn(async (_opts: object) => {}),
-      _syncHistoryReloadButton: () => (ui._syncHistoryReloadButton as Function).call(app),
+describe('manual history banner action', () => {
+  type BannerElement = {
+    hidden: boolean;
+    disabled: boolean;
+    textContent: string;
+    className: string;
+    type: string;
+    children: BannerElement[];
+    onclick: (() => Promise<void> | void) | null;
+    appendChild(child: BannerElement): void;
+    setAttribute: Function;
+  };
+  function fixture(options: Record<string, unknown> = {}) {
+    const state = {
+      touch: true,
+      mode: 'omp',
+      bottom: false,
+      marked: true,
+      inFlight: false,
+      tiles: false,
+      active: true,
+      detached: false,
+      enabled: true,
+      ...options,
     };
-    return { app, button };
+    const element = (): BannerElement => ({
+      hidden: true,
+      disabled: false,
+      textContent: '',
+      className: '',
+      type: '',
+      children: [],
+      onclick: null,
+      appendChild(child) {
+        this.children.push(child);
+      },
+      setAttribute: vi.fn(),
+    });
+    const bar = element();
+    const frames: FrameRequestCallback[] = [];
+    const document = { addEventListener: vi.fn(), getElementById: () => bar, createElement: element };
+    const ui = loadTerminalMixin({
+      document,
+      MobileDetection: { isTouchDevice: () => state.touch },
+      requestAnimationFrame: (callback: FrameRequestCallback) => frames.push(callback),
+    });
+    const { app: base } = makeApp(String(state.mode), { bufferRows: 130, capture: lines(400) });
+    const render = loadAppMethod('_renderHistoryTruncationBanner', {
+      document,
+      computeHistoryTruncationNotice: computeNotice,
+    });
+    const app = Object.assign(base, {
+      activeSessionId: state.active ? 's1' : '',
+      isTerminalAtBottom: () => state.bottom,
+      loadAppSettingsFromStorage: () => ({ historyReloadAction: state.enabled }),
+      _liveOutputSinceFullPull: new Set(state.marked ? ['s1'] : []),
+      _historyReloadDismissed: new Set<string>(),
+      _historyNoticeDismissed: new Set<string>(),
+      _historyNoticeRevealedFor: null as string | null,
+      _fullHistoryRepullInFlight: Boolean(state.inFlight),
+      detachedSessions: new Set(state.detached ? ['s1'] : []),
+      _tilesOwnTerminal: () => state.tiles,
+      _maybeRefetchFullHistory: vi.fn(async (_opts: object) => {}),
+      _historyReloadActionEligible: () => loadAppMethod('_historyReloadActionEligible').call(app),
+      _syncHistoryReloadAction: () => loadAppMethod('_syncHistoryReloadAction').call(app),
+      _scheduleHistoryReloadActionSync: () => (ui._scheduleHistoryReloadActionSync as Function).call(app),
+      _renderHistoryTruncationBanner: vi.fn(() => {
+        bar.children = [];
+        render.call(app);
+      }),
+    });
+    const button = () => bar.children.find((child) => child.className === 'history-trunc-load');
+    const dismiss = () => bar.children.find((child) => child.className === 'history-trunc-dismiss');
+    return { app, bar, button, dismiss, state, frames };
   }
 
   it.each([
     { opts: {}, visible: true },
-    { opts: { touch: false }, visible: false },
+    { opts: { touch: false }, visible: true },
+    { opts: { enabled: false }, visible: false },
     { opts: { mode: 'shell' }, visible: false },
     { opts: { bottom: true }, visible: false },
     { opts: { marked: false }, visible: false },
     { opts: { inFlight: true }, visible: false },
     { opts: { tiles: true }, visible: false },
     { opts: { active: false }, visible: false },
+    { opts: { detached: true }, visible: false },
   ])('visibility is $visible for $opts', ({ opts, visible }) => {
-    const { app, button } = fixture(opts);
-    app._syncHistoryReloadButton();
-    expect(button.hidden).toBe(!visible);
+    const { app, bar, button } = fixture(opts);
+    app._syncHistoryReloadAction();
+    expect(bar.hidden).toBe(!visible);
+    if (visible) expect(button()?.textContent).toBe('Reload history');
   });
 
-  it('forces a content-anchored pull on tap and resets the loading state on settle', async () => {
+  it('forces a content-anchored pull on tap and resets loading on settle', async () => {
     const { app, button } = fixture();
     const { promise, resolve: release } = Promise.withResolvers<void>();
     app._maybeRefetchFullHistory.mockReturnValueOnce(promise);
-    app._syncHistoryReloadButton();
-    const tapped = button.onclick!();
+    app._syncHistoryReloadAction();
+    const tapped = button()!.onclick!();
     expect(app._maybeRefetchFullHistory).toHaveBeenCalledWith({ force: true, anchor: 'content' });
-    expect(button.disabled).toBe(true);
-    expect(button.textContent).toBe('Loading…');
+    expect(button()!.disabled).toBe(true);
+    expect(button()!.textContent).toBe('Loading…');
     release();
     await tapped;
-    expect(button.disabled).toBe(false);
-    expect(button.textContent).toBe('↻ Reload history');
+    expect(button()!.disabled).toBe(false);
+    expect(button()!.textContent).toBe('Reload history');
+  });
+
+  it.each(['recoverable', 'exhausted', 'capped'])('never duplicates the %s notice load control', (kind) => {
+    const { app, bar, button } = fixture();
+    app._historyNoticeRevealedFor = 's1';
+    app._setHistoryTruncation('s1', {
+      ...TAIL_CUT,
+      exhausted: kind === 'exhausted',
+      truncationReason: kind === 'capped' ? 'capped' : 'tail',
+    });
+    expect(bar.children.filter((child) => child.className === 'history-trunc-load')).toHaveLength(1);
+    expect(button()!.textContent).toBe(kind === 'recoverable' ? 'Load full history' : 'Reload history');
+  });
+
+  it('does no DOM work without a transition and coalesces all-device onScroll calls per frame', () => {
+    const { app, state, frames } = fixture({ touch: false });
+    let onScroll!: () => void;
+    const source = readFileSync(resolve(PUBLIC, 'terminal-ui.js'), 'utf8');
+    const registration = source.match(/^    this\.terminal\.onScroll\(.*$/m)![0];
+    vm.runInNewContext(`(function () { ${registration} }).call(app)`, {
+      app: {
+        terminal: {
+          onScroll: (callback: () => void) => {
+            onScroll = callback;
+          },
+        },
+        _scheduleHistoryReloadActionSync: app._scheduleHistoryReloadActionSync,
+      },
+    });
+    app._syncHistoryReloadAction();
+    for (let i = 0; i < 100; i++) onScroll();
+    expect(frames).toHaveLength(1);
+    frames.shift()!(0);
+    expect(app._renderHistoryTruncationBanner).toHaveBeenCalledOnce();
+    state.bottom = true;
+    onScroll();
+    onScroll();
+    expect(frames).toHaveLength(1);
+    frames.shift()!(1);
+    expect(app._renderHistoryTruncationBanner).toHaveBeenCalledTimes(2);
+    app._syncHistoryReloadAction();
+    expect(app._renderHistoryTruncationBanner).toHaveBeenCalledTimes(2);
+    app.activeSessionId = 's2';
+    app._syncHistoryReloadAction();
+    expect(app._renderHistoryTruncationBanner).toHaveBeenCalledTimes(3);
+  });
+
+  it.each(['mux-full-history', 'history'])('dismisses reload until an actual full mux replay: %s', async (source) => {
+    const { app, bar, dismiss, state } = fixture();
+    app._syncHistoryReloadAction();
+    dismiss()!.onclick!();
+    expect(bar.hidden).toBe(true);
+    expect(app._historyNoticeDismissed.size).toBe(0);
+    state.bottom = true;
+    app._syncHistoryReloadAction();
+    state.bottom = false;
+    app._syncHistoryReloadAction();
+    expect(bar.hidden).toBe(true);
+    const capture = app._fetchTerminalCapture.getMockImplementation()!;
+    app._fetchTerminalCapture.mockImplementationOnce(async (url) => {
+      const result = await capture(url);
+      result.json.data.source = source;
+      return result;
+    });
+    await refetch.call(app, { force: true });
+    expect(app._historyReloadDismissed.has('s1')).toBe(source !== 'mux-full-history');
+    app._liveOutputSinceFullPull.add('s1');
+    app._syncHistoryReloadAction();
+    expect(bar.hidden).toBe(source !== 'mux-full-history');
+  });
+
+  it('one × on a combined notice dismisses both, and scroll frames keep the bar hidden', () => {
+    const { app, bar, button, dismiss, frames } = fixture();
+    app._historyNoticeRevealedFor = 's1';
+    app._setHistoryTruncation('s1', { ...TAIL_CUT, exhausted: true, truncationReason: 'tail' });
+    expect(button()!.textContent).toBe('Reload history');
+    dismiss()!.onclick!();
+    expect(bar.hidden).toBe(true);
+    expect(app._historyNoticeDismissed.has('s1')).toBe(true);
+    expect(app._historyReloadDismissed.has('s1')).toBe(true);
+    app._scheduleHistoryReloadActionSync();
+    frames.shift()!(0);
+    expect(bar.hidden).toBe(true);
+  });
+
+  it('dismissing a notice that carried no reload action lets a later eligible action show', () => {
+    const { app, bar, button, dismiss, state } = fixture({ marked: false });
+    app._historyNoticeRevealedFor = 's1';
+    app._setHistoryTruncation('s1', { ...TAIL_CUT, exhausted: true, truncationReason: 'tail' });
+    expect(button()).toBeUndefined();
+    dismiss()!.onclick!();
+    expect(bar.hidden).toBe(true);
+    expect(app._historyReloadDismissed.has('s1')).toBe(false);
+    state.marked = true;
+    app._liveOutputSinceFullPull.add('s1');
+    app._syncHistoryReloadAction();
+    expect(bar.hidden).toBe(false);
+    expect(button()!.textContent).toBe('Reload history');
   });
 });
 
