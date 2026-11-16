@@ -16139,7 +16139,11 @@ html:not([data-skin="og"]) {
   inset: 0;
   align-items: center;
   justify-content: center;
-  background: var(--bg, #0f1319);
+  /* `--bg` does not exist in any skin; the hardcoded fallback used to win every
+     time, so a light skin drew dark text on a dark plate. `--bg-card` is the
+     themed surface that steps with the skin. */
+  background: var(--bg-card, #0f1319);
+  color: var(--text);
   padding: 1.5rem;
   text-align: center;
 }

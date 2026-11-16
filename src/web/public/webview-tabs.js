@@ -329,9 +329,7 @@ Object.assign(CodemanApp.prototype, {
     const jsonId = escapeHtml(JSON.stringify(id));
     return `<div class="webview-failure-inner">
         <h3>This dashboard needs unsandboxed mode</h3>
-        <p>It tried to use browser storage, which this tab's sandbox blocks. Unsandboxed mode lets it
-        share Codeman's origin — the same trust a proxied dashboard already relies on, so only use it
-        for a dashboard you control.</p>
+        <p>It tried to use browser storage, which this tab's sandbox blocks. Unsandboxed mode lets it share Codeman's origin — the same trust a proxied dashboard already relies on, so only use it for a dashboard you control.</p>
         <div class="webview-failure-actions">
           <button class="btn-secondary" onclick="app.enableWebviewTrusted(${jsonId})">Reload unsandboxed</button>
           <button class="btn-secondary" onclick="app.dismissWebviewSandboxNotice(${jsonId})">Dismiss</button>
