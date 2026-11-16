@@ -4007,50 +4007,72 @@ Object.assign(CodemanApp.prototype, {
     return buffer.viewportY >= buffer.baseY - 2;
   },
 
-  /** Capture the first readable row and its neighbours without copying the buffer. */
+  /** Capture bounded viewport context, not just repeated TUI borders/status rows. */
   _captureViewportAnchor() {
     const buffer = this.terminal.buffer.active;
     const { viewportY, baseY } = buffer;
-    let row = viewportY;
-    while (row < buffer.length && !buffer.getLine(row)?.translateToString(true).trim()) row++;
+    const context = Array.from(
+      { length: Math.min(this.terminal.rows || 3, 64, buffer.length - viewportY) },
+      (_, i) => buffer.getLine(viewportY + i)?.translateToString(true) || ''
+    );
+    const offset = Math.max(0, context.findIndex((text) => text.trim()));
     return {
       viewportY,
       rowsFromBottom: baseY - viewportY,
-      offset: row - viewportY,
-      signature: Array.from({ length: 3 }, (_, i) => buffer.getLine(row + i)?.translateToString(true).trim() || ''),
+      offset,
+      signature: Array.from({ length: 3 }, (_, i) => context[offset + i] || ''),
+      context,
     };
   },
 
-  /** Restore the closest matching content, falling back to distance from live output. */
+  /** Match the visible context; a lone repeated row is not a reliable anchor. */
   _restoreViewportAnchor(anchor) {
     const buffer = this.terminal.buffer.active;
     const clamp = (row) => Math.max(0, Math.min(buffer.baseY, row));
-    const fallback = clamp(buffer.baseY - anchor.rowsFromBottom);
-    let target = fallback;
-    if (anchor.rowsFromBottom > 2 && anchor.signature[0]) {
-      const expected = Math.max(0, Math.min(buffer.length - 1, buffer.baseY - anchor.rowsFromBottom + anchor.offset));
-      const text = (row) => buffer.getLine(row)?.translateToString(true).trim() || '';
-      let firstRowMatch = null;
-      let exactMatch = null;
-      // Scan at most 2000 rows either side (4001 candidates / 12003 line reads).
-      // Nearest first: stop at the first exact signature, otherwise use the
-      // nearest first-row match within budget rather than scanning 50k rows.
-      for (let distance = 0; distance <= Math.min(2000, buffer.length - 1); distance++) {
-        const left = expected - distance;
-        const right = expected + distance;
-        for (let side = 0; side < (distance === 0 ? 1 : 2); side++) {
-          const row = side === 0 ? left : right;
-          if (row < 0 || row >= buffer.length || text(row) !== anchor.signature[0]) continue;
-          if (firstRowMatch === null) firstRowMatch = row;
-          if (text(row + 1) === anchor.signature[1] && text(row + 2) === anchor.signature[2]) {
-            exactMatch = row;
-            break;
-          }
-        }
-        if (exactMatch !== null) break;
+    let target = clamp(anchor.viewportY);
+    if (anchor.rowsFromBottom <= 2) {
+      target = clamp(buffer.baseY - anchor.rowsFromBottom);
+    } else {
+      const expected = clamp(buffer.baseY - anchor.rowsFromBottom);
+      const frequencies = new Map();
+      for (const text of anchor.context) {
+        if (text.trim()) frequencies.set(text, (frequencies.get(text) || 0) + 1);
       }
-      const match = exactMatch ?? firstRowMatch;
-      if (match !== null) target = clamp(match - anchor.offset);
+      const samples = anchor.context.flatMap((text, offset) =>
+        text.trim() ? [{ text, offset, weight: 1 / frequencies.get(text) }] : []
+      );
+      // Each distinct visible row contributes at most one point: repeated box
+      // borders cannot outvote the tool result the user is actually reading.
+      // Capped at the distinct-row count so a sparse viewport (one unique row
+      // among blanks) can still match; the ambiguity check rejects repeats.
+      const minimumScore = Math.min(frequencies.size, Math.max(2, frequencies.size * 0.6));
+      const first = Math.max(0, expected - 2000);
+      const last = Math.min(buffer.baseY, expected + 2000);
+      // Cache the search window once: <= 4064 getLine calls, even when all
+      // 4001 candidates match repeated TUI furniture in a 50k-row buffer.
+      const text = Array.from(
+        { length: Math.min(buffer.length, last + anchor.context.length) - first },
+        (_, i) => buffer.getLine(first + i)?.translateToString(true) || ''
+      );
+      let bestScore = 0;
+      let bestRow = null;
+      let ambiguous = false;
+      for (let row = first; row <= last; row++) {
+        let score = 0;
+        for (const sample of samples) {
+          if (text[row - first + sample.offset] === sample.text) score += sample.weight;
+        }
+        if (score > bestScore + 1e-9) {
+          bestScore = score;
+          bestRow = row;
+          ambiguous = false;
+        } else if (Math.abs(score - bestScore) <= 1e-9) {
+          ambiguous = true;
+        }
+      }
+      // Equally good copies are evidence of repeated furniture, not of the
+      // reader's location. A gap below them makes nearest-to-expected wrong.
+      if (!ambiguous && bestScore + 1e-9 >= minimumScore) target = bestRow;
     }
     this.terminal.scrollToLine(target);
     return target;
@@ -4687,6 +4709,13 @@ Object.assign(CodemanApp.prototype, {
       this.terminal.buffer?.active && !this.isTerminalAtBottom() ? this.terminal.buffer.active.viewportY : null;
     // Which buffer the anchor belongs to, checked again when the write parses.
     const flushSessionId = this.activeSessionId;
+    // xterm adjusts marker lines when its circular scrollback trims rows. An
+    // absolute viewport index does not track that trim and would move the
+    // reader upward on every live flush at the scrollback cap (#814).
+    const viewportBuffer = this.terminal.buffer?.active;
+    const viewportMarker = preserveViewportY !== null
+      ? this.terminal.registerMarker?.(preserveViewportY - (viewportBuffer.baseY + viewportBuffer.cursorY))
+      : null;
 
     const writeChunk = joined.slice(0, MAX_FRAME_BYTES);
     if (_joinedLen > MAX_FRAME_BYTES) {
@@ -4713,7 +4742,11 @@ Object.assign(CodemanApp.prototype, {
         // signal, which is the earliest point the anchor can actually be
         // reasserted. (The synchronous version passed its regression test only
         // because the test's write mock moved the viewport synchronously.)
-        this._restoreTerminalViewport(preserveViewportY, flushSessionId);
+        const viewportY = viewportMarker
+          ? (viewportMarker.isDisposed ? 0 : viewportMarker.line)
+          : preserveViewportY;
+        viewportMarker?.dispose();
+        this._restoreTerminalViewport(viewportY, flushSessionId);
         this._scheduleTerminalWriteFlush();
         this._noteMobileImeAuthoritativeOutput(flushedOutputSeq, flushSessionId);
       });
@@ -4728,6 +4761,7 @@ Object.assign(CodemanApp.prototype, {
         if (newlyMarked) this._syncHistoryReloadAction?.();
       }
     } catch (err) {
+      viewportMarker?.dispose();
       this._terminalWriteInFlight = false;
       this._terminalWriteInFlightBytes = 0;
       throw err;
@@ -5056,6 +5090,7 @@ Object.assign(CodemanApp.prototype, {
     this._isLoadingBuffer = false;
     this._loadBufferQueue = null;
     this._bufferLoadOwner = null;
+    this._syncHistoryReloadAction?.();
     // COD-144: replay (rather than discard) queued live events when the load
     // painted nothing — the queued prompt is the only content a new session has.
     // A tmux-capture load replays too, but only the tail: `since` cuts the queue

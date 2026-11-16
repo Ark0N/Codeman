@@ -9615,7 +9615,8 @@ class CodemanApp {
    * the same `?full=1` capture a page reload uses (issue #205).
    *
    * Automatic pulls are top-only and cooldown/latch guarded: a synchronous
-   * capture can cost about 0.3 s at 100k lines and blocks the server event loop.
+   * capture can cost about 1 s at 100k lines (1,068 ms median for 12.1 MB of
+   * 120-character lines, `capture-pane -p -e -J -S -100000`) and blocks the server event loop.
    * The manual Reload history action uses a content anchor to hold the reader's
    * place even when new history fills a gap below them.
    *
@@ -9748,6 +9749,7 @@ class CodemanApp {
         timing.totalMs = performance.now() - requestStartedAt;
         this._recordTerminalLoadTiming(timing);
         (this._fullHistoryRepullUseless ||= new Set()).add(sessionId);
+        (this._historyReloadDismissed ||= new Set()).add(sessionId);
         this._logScrollRouting?.('repull-refused-downgrade');
         // The browser already holds more than tmux can give back, so there is
         // nothing further to offer and the indicator must stop promising it.
@@ -9911,6 +9913,7 @@ class CodemanApp {
     // Cheap state checks first: the terminal is read only for a marked session.
     return !!(this.loadAppSettingsFromStorage?.()?.historyReloadAction !== false &&
       session && session.mode !== 'shell' && this._liveOutputSinceFullPull?.has(sessionId) &&
+      this._paneHistoryLines?.get(sessionId) !== 0 && !this._isLoadingBuffer &&
       !this._fullHistoryRepullInFlight && !this.detachedSessions?.has(sessionId) &&
       !this._historyReloadDismissed?.has(sessionId) && !this._tilesOwnTerminal?.() &&
       !this.isTerminalAtBottom());
@@ -9920,7 +9923,8 @@ class CodemanApp {
   _syncHistoryReloadAction() {
     const sessionId = this.activeSessionId;
     const eligible = this._historyReloadActionEligible();
-    const loading = !!sessionId && this._historyReloadActionLoadingFor === sessionId;
+    const loading = !!sessionId && this._historyReloadActionLoadingFor === sessionId &&
+      !this._historyReloadDismissed?.has(sessionId);
     const last = this._historyReloadActionState;
     if (last && last.sessionId === sessionId && last.eligible === eligible && last.loading === loading) return;
     this._historyReloadActionState = { sessionId, eligible, loading };
@@ -9950,7 +9954,8 @@ class CodemanApp {
     const showNotice = notice.visible && this._historyNoticeRevealedFor === sessionId &&
       !this._historyNoticeDismissed?.has(sessionId);
     const eligible = this._historyReloadActionEligible?.() ?? false;
-    const loading = !!sessionId && this._historyReloadActionLoadingFor === sessionId;
+    const loading = !!sessionId && this._historyReloadActionLoadingFor === sessionId &&
+      !this._historyReloadDismissed?.has(sessionId);
     this._historyReloadActionState = { sessionId, eligible, loading };
     if (!showNotice && !eligible && !loading) {
       bar.hidden = true;
@@ -9984,6 +9989,10 @@ class CodemanApp {
       btn.disabled = loading;
       btn.textContent = loading ? 'Loading…' : 'Reload history';
       btn.onclick = () => {
+        if (!this._historyReloadActionEligible()) {
+          this._syncHistoryReloadAction();
+          return;
+        }
         btn.disabled = true;
         btn.textContent = 'Loading…';
         this._historyReloadActionLoadingFor = sessionId;
