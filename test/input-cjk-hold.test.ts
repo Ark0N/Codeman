@@ -365,7 +365,10 @@ describe('CJK input: Send on Enter', () => {
     expect(textarea.value).toBe(PHANTOM);
     CjkInput.restoreDraft('session-a');
     expect(textarea.value).toBe(PHANTOM + 'half an answer');
-    // Restored once: a second visit does not bring it back again.
+    // Restored once: the stash is consumed, so once the user empties the
+    // field (Esc here) a second visit does not bring it back. A draft still in
+    // the field when the session is left is stashed again by clear().
+    textarea.fire('keydown', { key: 'Escape', keyCode: 27 });
     CjkInput.clear();
     CjkInput.restoreDraft('session-a');
     expect(textarea.value).toBe(PHANTOM);
@@ -407,6 +410,72 @@ describe('CJK input: Send on Enter', () => {
     CjkInput.stashDraft('session-a');
     CjkInput.restoreDraft('session-a');
     expect(textarea.value).toBe(PHANTOM + 'keep me');
+  });
+
+  it('clear() stashes a held draft for the session it was typed for, with no stash call', () => {
+    // goHome(), _replaceTileGrid and _onTileAdoptedElsewhere drop the active
+    // session before the next cleanup, which then has no session to stash for.
+    const { CjkInput, textarea, sent } = load();
+    CjkInput.restoreDraft('session-a');
+    type(textarea, 'typed for a');
+    CjkInput.clear();
+    expect(textarea.value).toBe(PHANTOM);
+    CjkInput.restoreDraft('session-b');
+    expect(textarea.value).toBe(PHANTOM);
+    CjkInput.clear();
+    CjkInput.restoreDraft('session-a');
+    expect(textarea.value).toBe(PHANTOM + 'typed for a');
+    expect(sent).toEqual([]);
+  });
+
+  it('a removed session loses its field text: discardDraft drops the owner', () => {
+    const { CjkInput, textarea } = load();
+    CjkInput.restoreDraft('session-a');
+    type(textarea, 'for a closed tile');
+    CjkInput.discardDraft('session-a');
+    expect(CjkInput.draftOwner).toBe(null);
+    CjkInput.clear();
+    CjkInput.restoreDraft('session-a');
+    expect(textarea.value).toBe(PHANTOM);
+  });
+
+  it('a field still holding text keeps its owner when another session is shown', () => {
+    const { CjkInput, textarea } = load();
+    CjkInput.restoreDraft('session-a');
+    type(textarea, 'still for a');
+    CjkInput.restoreDraft('session-b');
+    expect(CjkInput.draftOwner).toBe('session-a');
+    CjkInput.clear();
+    CjkInput.restoreDraft('session-a');
+    expect(textarea.value).toBe(PHANTOM + 'still for a');
+  });
+
+  it('Ctrl shortcuts stay in the field while it holds a draft', () => {
+    // Ctrl+Z is undo, Ctrl+A select all, Ctrl+C copy: never a control byte to
+    // the CLI while there is a draft to act on.
+    const { textarea, sent } = load();
+    type(textarea, 'draft');
+    for (const key of ['z', 'a', 'c']) {
+      const preventDefault = vi.fn();
+      textarea.fire('keydown', { key, keyCode: key.toUpperCase().charCodeAt(0), ctrlKey: true, preventDefault });
+      expect(preventDefault).not.toHaveBeenCalled();
+    }
+    expect(sent).toEqual([]);
+  });
+
+  it('Ctrl shortcuts reach the CLI from an empty field', () => {
+    const { textarea, sent } = load();
+    const preventDefault = vi.fn();
+    textarea.fire('keydown', { key: 'c', keyCode: 67, ctrlKey: true, preventDefault });
+    expect(preventDefault).toHaveBeenCalled();
+    expect(sent).toEqual(['\x03']);
+  });
+
+  it('live mode keeps sending Ctrl shortcuts with text in the field', () => {
+    const { textarea, sent } = load({ hold: false });
+    textarea.value = PHANTOM + 'x';
+    textarea.fire('keydown', { key: 'c', keyCode: 67, ctrlKey: true });
+    expect(sent).toEqual(['\x03']);
   });
 
   it('sends a bare Enter when the field holds only blank lines', () => {

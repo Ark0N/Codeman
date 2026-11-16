@@ -74,10 +74,12 @@ Enter always goes out as its own write, a moment after the text, to the session 
 typed for: a single character is typed, so CLI menus that take a digit still work, and anything
 longer goes like the prompt composer's Send, as one paste. The one exception is a lone digit while
 a permission or question dialog is waiting: the digit answers the dialog by itself, so no Enter
-follows it, which would otherwise confirm whatever the CLI shows next. The toolbar's Enter button sends the
-field too. With the keyboard bar's one-shot Ctrl armed, the next key you type goes out as a control
-key (Ctrl, then `c` is Ctrl+C) instead of being held. With the keyboard down the field stays one
-line tall. A draft stays with its session: switching tabs and coming back brings it back.
+follows it, which would otherwise confirm whatever the CLI shows next. The toolbar's Enter button
+sends the field too. With the keyboard bar's one-shot Ctrl armed, the next key you type goes out
+as a control key (Ctrl, then `c` is Ctrl+C) instead of being held. With a hardware keyboard, Ctrl
+shortcuts (undo, select all, copy) act on the field while it holds a draft and reach the CLI only
+when it is empty. With the keyboard down the field stays one line tall. A draft stays with its
+session: switching tabs and coming back brings it back.
 
 ## Voice dictation
 

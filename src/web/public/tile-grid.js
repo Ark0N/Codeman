@@ -2657,7 +2657,10 @@ Object.assign(CodemanApp.prototype, {
     // the draft openTileGrid's cleanup stashed for the session it parked).
     if (typeof CjkInput !== 'undefined') {
       if (this.activeSessionId && this.activeSessionId !== sessionId) {
-        CjkInput.stashDraft?.(this.activeSessionId);
+        // A tile closed from this tab is already gone from this.sessions and
+        // its draft discarded: stashing it again would leave it in the map
+        // until the page reloads.
+        if (this.sessions?.has(this.activeSessionId)) CjkInput.stashDraft?.(this.activeSessionId);
         CjkInput.clear();
       }
       CjkInput.restoreDraft?.(sessionId);

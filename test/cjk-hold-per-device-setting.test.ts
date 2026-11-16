@@ -122,6 +122,14 @@ describe('a held draft survives a reload of the same session', () => {
     );
   });
 
+  it('tile focus does not stash again for a tile closed from this tab', () => {
+    // removeSession discards the closed session's draft first; a stash after
+    // that would keep it in the map until the page reloads.
+    expect(read('tile-grid.js')).toContain(
+      'if (this.sessions?.has(this.activeSessionId)) CjkInput.stashDraft?.(this.activeSessionId);'
+    );
+  });
+
   it('tile focus stashes the draft of the tile left and restores the focused one', () => {
     const tiles = read('tile-grid.js');
     const start = tiles.indexOf('  _selectTiledSession(sessionId, options = {}) {');

@@ -73,6 +73,11 @@ const CjkInput = (() => {
   let _holdApplied = false;
   // Send-on-Enter: held drafts of the sessions switched away from, by session id.
   const _drafts = new Map();
+  // Send-on-Enter: the session the field's text belongs to (the one last shown,
+  // set by restoreDraft). clear() stashes a held draft under it, so every path
+  // that drops the active session before the next cleanup (goHome, the tile
+  // grid's _replaceTileGrid and _onTileAdoptedElsewhere) keeps the answer.
+  let _owner = null;
   const _listeners = {};
 
   const PHANTOM = '​';
@@ -480,7 +485,11 @@ const CjkInput = (() => {
           return;
         }
 
-        if (e.ctrlKey && CTRL_KEYS[e.key]) {
+        // Send-on-Enter with a draft in the field: Ctrl shortcuts are the
+        // field's (Ctrl+Z undo, Ctrl+A select all, Ctrl+C copy a selection), so
+        // they reach the CLI only while the field is empty, the rule Backspace
+        // and the arrows already follow.
+        if (e.ctrlKey && CTRL_KEYS[e.key] && (!_hold || _isEffectivelyEmpty())) {
           e.preventDefault();
           _send(CTRL_KEYS[e.key]);
           return;
@@ -615,6 +624,14 @@ const CjkInput = (() => {
     clear() {
       if (!_initialized || !_textarea) return;
       _t('clear (external)');
+      // Send-on-Enter: a held draft is stashed for the session it was typed
+      // for, whichever path got here. discardDraft() drops the owner of a
+      // removed session, so its text is not stashed again.
+      if (_hold && _owner) {
+        const draft = _strip(_textarea.value);
+        if (draft.trim()) _drafts.set(_owner, draft);
+      }
+      _owner = null;
       _cancelDebouncedFlush();
       clearTimeout(_compositionFlushTimer);
       _compositionFlushTimer = null;
@@ -692,7 +709,11 @@ const CjkInput = (() => {
     /** Send-on-Enter: show the draft stashed for this session, if any, unless
      *  the field already holds text. */
     restoreDraft(sessionId) {
-      if (!_initialized || !_textarea || !_hold || !_drafts.has(sessionId)) return;
+      if (!_initialized || !_textarea) return;
+      // The field now belongs to this session, draft or not (see _owner),
+      // unless it still holds another session's text (no clear() in between).
+      if (!_owner || !_strip(_textarea.value)) _owner = sessionId || null;
+      if (!_hold || !_drafts.has(sessionId)) return;
       if (_strip(_textarea.value)) return;
       const draft = _drafts.get(sessionId);
       _drafts.delete(sessionId);
@@ -706,7 +727,11 @@ const CjkInput = (() => {
     /** Forget a stashed draft when its session no longer exists. */
     discardDraft(sessionId) {
       _drafts.delete(sessionId);
+      if (_owner === sessionId) _owner = null;
     },
+
+    /** Diagnostic/test: the session the field's text belongs to. */
+    get draftOwner() { return _owner; },
 
     /** Diagnostic: recent IME event trace (ring buffer). */
     getTrace() {
