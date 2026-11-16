@@ -241,14 +241,28 @@ describe('buildUpstreamRequestHeaders', () => {
 
   // `dsh web` mints its session cookie for the loopback authority the proxy
   // dials, which the browser has never visited and cannot store anything for.
-  // The supervisor holds it instead, and it must win over the browser's copy.
-  it('replaces the browser cookies with a server-held credential', () => {
-    const headers = buildUpstreamRequestHeaders({ cookie: 'codeman_session=SECRET; stale=1' }, upstream, {
+  // The supervisor holds it instead. The managed tab is trusted, so the browser's
+  // other dsh cookies are still present and must be kept alongside it.
+  it('appends the server-held credential to the filtered browser cookies', () => {
+    const headers = buildUpstreamRequestHeaders({ cookie: 'codeman_session=SECRET; dash=1' }, upstream, {
       forwardCookies: true,
       sessionCookieName: 'codeman_session',
       injectedCookie: 'dsh-auth-p=v1.payload.sig',
     });
-    expect(headers.cookie).toBe('dsh-auth-p=v1.payload.sig');
+    expect(headers.cookie).toBe('dash=1; dsh-auth-p=v1.payload.sig');
+  });
+
+  it('keeps every non-Codeman browser cookie when injecting the server credential', () => {
+    const headers = buildUpstreamRequestHeaders(
+      { cookie: 'dsh-ui=dark; codeman_session=SECRET; dsh-settings=z' },
+      upstream,
+      {
+        forwardCookies: true,
+        sessionCookieName: 'codeman_session',
+        injectedCookie: 'dsh-auth-p=v1.payload.sig',
+      }
+    );
+    expect(headers.cookie).toBe('dsh-ui=dark; dsh-settings=z; dsh-auth-p=v1.payload.sig');
   });
 
   it('sends the server-held credential even when browser cookies are not forwarded', () => {

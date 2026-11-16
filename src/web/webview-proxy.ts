@@ -384,10 +384,12 @@ export function buildUpstreamRequestHeaders(
     refererPath?: string;
     relayBodyLength?: boolean;
     /**
-     * A credential the SERVER holds for this dashboard, replacing whatever the
-     * browser sent. `dsh web` mints its session cookie for a loopback authority
-     * the browser never visits, so the proxy is the only party that can present
-     * it (see `deepseek-web-server.ts`).
+     * A credential the SERVER holds for this dashboard, appended to whatever
+     * browser cookies were forwarded. `dsh web` mints its session cookie for a
+     * loopback authority the browser never visits, so the proxy is the only party
+     * that can present it (see `deepseek-web-server.ts`); the managed tab is
+     * trusted, which means the browser may also carry other cookies dsh set, and
+     * those must survive.
      */
     injectedCookie?: string;
   }
@@ -422,10 +424,14 @@ export function buildUpstreamRequestHeaders(
     if (cookie) headers['cookie'] = cookie;
   }
 
-  // After the relay above, so a browser copy can never shadow it: these cookies
-  // are scoped to the browser's origin, and the authority this request is for is
-  // one it has never been able to store anything against.
-  if (opts.injectedCookie) headers['cookie'] = opts.injectedCookie;
+  // Appended after the relay above, so a browser copy can never shadow it: this
+  // cookie is scoped to the authority the request is for, one the browser has
+  // never been able to store anything against. Other cookies are kept: a managed
+  // dsh tab is trusted, so dsh's own non-auth cookies may legitimately be there.
+  if (opts.injectedCookie) {
+    const existing = headers['cookie'];
+    headers['cookie'] = existing ? `${existing}; ${opts.injectedCookie}` : opts.injectedCookie;
+  }
 
   // Present as if the browser were talking to the dashboard directly. Apps that
   // check Origin on writes (CSRF defenses) need this to match their own origin.

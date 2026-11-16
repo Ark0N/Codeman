@@ -315,7 +315,9 @@ proxy presents the cookie only when the tab's owner holds the same
 privileged-commands grant `POST /api/deepseek/web` requires, and in multi-user mode
 only to the owner whose request started that process. A different owner's start
 request restarts the server rather than reusing a cookie that is not theirs, which
-is why the shared instance is effectively single-user at a time.
+is why the shared instance is effectively single-user at a time. On a trusted
+managed tab the cookie is appended to whatever cookies dsh itself set in the
+browser, rather than replacing them.
 
 ## 7. Docker and remote cases
 
