@@ -131,3 +131,23 @@ describe('webview sandbox notice (webview-tabs.js)', () => {
     expect(wrap.classList.contains('webview-frame--failed')).toBe(false);
   });
 });
+
+describe('webview failure panel styling', () => {
+  const styles = read('styles.css');
+
+  // `btn-secondary` is not defined by any stylesheet: the actions used to fall
+  // through to the browser's default button, which ignores the skin.
+  it('paints the actions from skin tokens instead of the browser default', () => {
+    const rule = styles.match(/\.webview-failure-actions button \{[^}]*\}/);
+    expect(rule).toBeTruthy();
+    expect(rule![0]).toContain('background: var(--bg-input)');
+    expect(rule![0]).toContain('border: 1px solid var(--border)');
+    expect(rule![0]).toContain('color: var(--text)');
+  });
+
+  it('gives the action worth taking the accent, so the two are not equal weight', () => {
+    const rule = styles.match(/\.webview-failure-actions button:first-child \{[^}]*\}/);
+    expect(rule).toBeTruthy();
+    expect(rule![0]).toContain('background: var(--accent)');
+  });
+});

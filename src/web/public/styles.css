@@ -16151,6 +16151,34 @@ html:not([data-skin="og"]) {
 .webview-failure-inner h3 { margin: 0 0 0.5rem; font-size: 1rem; color: var(--text); }
 .webview-failure-inner p { margin: 0 0 1rem; font-size: 0.85rem; color: var(--text-dim); line-height: 1.5; }
 .webview-failure-actions { display: flex; gap: 0.5rem; justify-content: center; flex-wrap: wrap; }
+/* Both panels asked for `btn-secondary`, a class no stylesheet defines, so the
+   actions fell through to the browser's default button: a pale grey slab with
+   system chrome that ignores the skin. Paint them from the same tokens as the
+   rest of the shell, with the one action worth taking carrying the accent. */
+.webview-failure-actions button {
+  padding: 0.4rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: var(--btn-radius);
+  background: var(--bg-input);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: background var(--transition-smooth), border-color var(--transition-smooth);
+}
+.webview-failure-actions button:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-light);
+}
+.webview-failure-actions button:first-child {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.webview-failure-actions button:first-child:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
 
 /* Tab styling: same shape as a session tab, distinguished by the globe icon and
    a cool accent so a dashboard never reads as a running agent. */
