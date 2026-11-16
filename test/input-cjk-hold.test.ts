@@ -428,6 +428,36 @@ describe('CJK input: Send on Enter', () => {
     expect(sent).toEqual([]);
   });
 
+  it('clear({ discard }) throws the draft away: a same-tab restore and a switch back stay empty', () => {
+    // The keyboard bar's clear-line key (terminal-ui.js clearTerminalInput).
+    const { CjkInput, textarea } = load();
+    CjkInput.restoreDraft('session-a');
+    type(textarea, 'thrown away');
+    CjkInput.clear({ discard: true });
+    expect(textarea.value).toBe(PHANTOM);
+    expect(CjkInput.draftOwner).toBe('session-a');
+    // Tapping the session's own tab: the field is kept, then restoreDraft runs.
+    CjkInput.restoreDraft('session-a');
+    expect(textarea.value).toBe(PHANTOM);
+    // Switching away and back.
+    CjkInput.clear();
+    CjkInput.restoreDraft('session-b');
+    CjkInput.clear();
+    CjkInput.restoreDraft('session-a');
+    expect(textarea.value).toBe(PHANTOM);
+  });
+
+  it('clear({ discard }) also drops an older stash of the same session', () => {
+    const { CjkInput, textarea } = load();
+    CjkInput.restoreDraft('session-a');
+    type(textarea, 'old');
+    CjkInput.stashDraft('session-a');
+    CjkInput.clear({ discard: true });
+    CjkInput.clear();
+    CjkInput.restoreDraft('session-a');
+    expect(textarea.value).toBe(PHANTOM);
+  });
+
   it('a removed session loses its field text: discardDraft drops the owner', () => {
     const { CjkInput, textarea } = load();
     CjkInput.restoreDraft('session-a');

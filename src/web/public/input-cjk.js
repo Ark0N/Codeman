@@ -7,6 +7,21 @@
  * While this textarea has focus, window.cjkActive = true blocks xterm's onData.
  * Arrow keys and function keys are forwarded to PTY directly.
  *
+ * ## Send on Enter (setting cjkInputHoldUntilEnter)
+ *
+ * The live mode above streams typed text to the PTY after a short debounce.
+ * With Send on Enter on, the field is a chat box instead: _flush() holds the
+ * text, and only Enter sends it, through the sendPrompt callback
+ * (terminal-ui.js _sendCjkPrompt: a single character is typed, anything longer
+ * goes as the composer's bracketed paste, Enter is always its own later write,
+ * and a lone digit at a pending dialog goes without it). Shift+Enter is a
+ * newline, Esc clears, Backspace and the arrows reach the PTY only from an
+ * empty field, and so do the Ctrl shortcuts. Autocorrect is on. A held draft
+ * belongs to one session (_owner): clear() stashes it under that session and
+ * restoreDraft() brings it back when the session is shown again, except a
+ * clear({ discard: true }) (the keyboard bar's clear-line key), which throws
+ * it away.
+ *
  * ## Android IME challenge
  *
  * Android virtual keyboards (WeChat, Sogou, Gboard in Chinese mode) use
@@ -621,17 +636,24 @@ const CjkInput = (() => {
      * can't flush into the wrong session). Restores the phantom so backspace
      * forwarding keeps working — unlike a raw `textarea.value = ''`.
      */
-    clear() {
+    clear({ discard = false } = {}) {
       if (!_initialized || !_textarea) return;
-      _t('clear (external)');
-      // Send-on-Enter: a held draft is stashed for the session it was typed
-      // for, whichever path got here. discardDraft() drops the owner of a
-      // removed session, so its text is not stashed again.
-      if (_hold && _owner) {
-        const draft = _strip(_textarea.value);
-        if (draft.trim()) _drafts.set(_owner, draft);
+      _t(`clear (external)${discard ? ' discard' : ''}`);
+      if (discard) {
+        // The user threw the text away (the keyboard bar's clear-line key):
+        // nothing is stashed, any older stash of this session goes too, and the
+        // field keeps its owner, since the session shown has not changed.
+        if (_owner) _drafts.delete(_owner);
+      } else {
+        // Send-on-Enter: a held draft is stashed for the session it was typed
+        // for, whichever path got here. discardDraft() drops the owner of a
+        // removed session, so its text is not stashed again.
+        if (_hold && _owner) {
+          const draft = _strip(_textarea.value);
+          if (draft.trim()) _drafts.set(_owner, draft);
+        }
+        _owner = null;
       }
-      _owner = null;
       _cancelDebouncedFlush();
       clearTimeout(_compositionFlushTimer);
       _compositionFlushTimer = null;

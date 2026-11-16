@@ -5134,7 +5134,9 @@ Object.assign(CodemanApp.prototype, {
   clearTerminalInput() {
     if (!this.activeSessionId) return;
 
-    if (typeof CjkInput !== 'undefined') CjkInput.clear();
+    // discard: the line is thrown away, so a Send on Enter draft must not be
+    // stashed and come back on the next visit to this session.
+    if (typeof CjkInput !== 'undefined') CjkInput.clear({ discard: true });
     // A tile or Pane B holds the keyboard: its TUI owns the editable buffer
     // (no local-echo overlay there), so kill the line in that pane's session,
     // never in the parked main pane's.
