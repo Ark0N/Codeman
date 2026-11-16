@@ -782,6 +782,34 @@ function rebaseRelativeBase(html: string, prefix: string, documentPath: string):
 }
 
 /**
+ * Rewrite root-absolute specifiers of dynamic `import()` calls in `<script>`
+ * bodies.
+ *
+ * A dynamic import is the one URL no other layer can reach: it is not an
+ * attribute, so `<base>` does not apply to it; it is not `fetch()`, so the runtime
+ * shim cannot rewrite it; and the browser resolves it against the ORIGIN root, not
+ * the document. SvelteKit's inline bootstrap is exactly this shape
+ * (`import("/_app/…")`), and the failure mode is silent: the module 404s against
+ * Codeman and the app's own loading spinner never resolves.
+ *
+ * ⚠️ Scoped to script bodies on purpose. Running the same regex over the whole
+ * document also rewrote visible text — `<pre>import("/x")</pre>` became a broken
+ * example — which is a rendering bug, not a loader the browser was going to run.
+ *
+ * @param html - document with attributes already rebased.
+ * @param prefix - proxy prefix to put in front of a `/`-rooted specifier.
+ */
+function rewriteScriptImports(html: string, prefix: string): string {
+  return html.replace(
+    /(<script\b[^>]*>)([^]*?)(<\/script>)/gi,
+    (_match: string, open: string, body: string, close: string) =>
+      open +
+      body.replace(/\bimport\s*\(\s*(["'])\/(?!\/)/g, (_import: string, quote: string) => `import(${quote}${prefix}`) +
+      close
+  );
+}
+
+/**
  * Inject `<base href="/webview/<cap>/">` plus the runtime URL shim, and rebase
  * root-absolute `src`/`href`/`action` attributes, which `<base>` alone does not
  * affect.
@@ -801,18 +829,12 @@ export function rewriteHtml(html: string, capability: string, basePath = '', doc
 
   // Fresh regexes per call: module-level /g patterns carry `lastIndex` between calls.
   const rebased = rebaseRelativeBase(
-    html
-      .replace(/(\s(?:src|href|action)\s*=\s*")\/(?!\/)/gi, `$1${prefix}`)
-      .replace(/(\s(?:src|href|action)\s*=\s*')\/(?!\/)/gi, `$1${prefix}`)
-      // A root-absolute dynamic `import()` is the one URL no other layer can
-      // reach: it is not an attribute, so `<base>` does not apply to it; it is
-      // not `fetch()`, so the runtime shim cannot rewrite it; and the browser
-      // resolves it against the ORIGIN root, not the document. SvelteKit's
-      // inline bootstrap is exactly this shape (`import("/_app/…")`), and the
-      // failure mode is silent: the module 404s against Codeman and the app's
-      // own loading spinner never resolves. Rewriting the specifier here is the
-      // only layer that can.
-      .replace(/\bimport\s*\(\s*(["'])\/(?!\/)/g, (_match, quote: string) => `import(${quote}${prefix}`),
+    rewriteScriptImports(
+      html
+        .replace(/(\s(?:src|href|action)\s*=\s*")\/(?!\/)/gi, `$1${prefix}`)
+        .replace(/(\s(?:src|href|action)\s*=\s*')\/(?!\/)/gi, `$1${prefix}`),
+      prefix
+    ),
     prefix,
     documentPath
   );

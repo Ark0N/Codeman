@@ -447,6 +447,27 @@ describe('rewriteHtml', () => {
     expect(out).toContain('import("https://cdn.example/c.js")');
   });
 
+  // The rewrite is for specifiers a loader will execute, not for the word
+  // appearing in the page a reader sees.
+  it('leaves import() in visible text alone', () => {
+    const out = rewriteHtml(
+      `<html><body><pre>import("/example.js")</pre><code>import('/other.js')</code></body></html>`,
+      CAP
+    );
+    expect(out).toContain('<pre>import("/example.js")</pre>');
+    expect(out).toContain("<code>import('/other.js')</code>");
+    expect(out).not.toContain(`${PREFIX}example.js`);
+  });
+
+  it('rewrites imports in every script body, including one with attributes', () => {
+    const out = rewriteHtml(
+      `<head><script type="module">import("/_app/a.js")</script><script defer>import('/b.js')</script></head>`,
+      CAP
+    );
+    expect(out).toContain(`import("${PREFIX}_app/a.js")`);
+    expect(out).toContain(`import('${PREFIX}b.js')`);
+  });
+
   it('rebases root-absolute src/href/action, which <base> cannot fix', () => {
     const out = rewriteHtml(
       `<head></head><body><script src="/static/app.js"></script><link href='/s.css'><form action="/login"></form></body>`,

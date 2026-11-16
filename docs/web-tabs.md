@@ -152,11 +152,13 @@ layers cooperate so a dashboard talking to its own backend just works:
    resolved against that URL, so `./` would otherwise point at Codeman's root and
    404 every module script behind an otherwise-painted page.
 2. Attribute rewriting handles root-absolute `src`/`href`/`action` in the page the
-   proxy serves — and root-absolute dynamic `import("/...")` specifiers in the
-   initial HTML. The import is the one URL no other layer can reach: `<base>` does
-   not apply to a `/`-rooted specifier and it is not a `fetch()`. SvelteKit's inline
-   bootstrap is exactly this shape; without the rewrite the module loads from
-   Codeman's root, 404s, and the app sits on its own loading spinner forever.
+   proxy serves — and root-absolute dynamic `import("/...")` specifiers inside
+   `<script>` bodies. The import is the one URL no other layer can reach: `<base>`
+   does not apply to a `/`-rooted specifier and it is not a `fetch()`. SvelteKit's
+   inline bootstrap is exactly this shape; without the rewrite the module loads
+   from Codeman's root, 404s, and the app sits on its own loading spinner forever.
+   Visible text is left alone: a `<pre>import("/x")</pre>` example is not a
+   loader and is not rewritten.
 3. A small injected script rebases URLs built at **runtime**, which the first two
    cannot see: `fetch('/api/data')` and `new WebSocket('/live')`, but equally
    `card.innerHTML = '<img src="/api/hero">'`, `img.src = '/api/slide'`, and
