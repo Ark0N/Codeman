@@ -1053,7 +1053,9 @@ describe('manual history banner action', () => {
     { opts: { bottom: true }, visible: false },
     { opts: { marked: false }, visible: false },
     { opts: { inFlight: true }, visible: false },
-    { opts: { paneHistoryLines: 0 }, visible: false },
+    // Recorded at the session's first load: a pane opened empty keeps 0 after the
+    // burst that opens the gap, so a stale 0 must not hide the action (#814).
+    { opts: { paneHistoryLines: 0 }, visible: true },
     { opts: { paneHistoryLines: 5 }, visible: true },
     { opts: { loadingBuffer: true }, visible: false },
     { opts: { tiles: true }, visible: false },
