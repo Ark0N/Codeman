@@ -248,9 +248,10 @@ Worth knowing:
   for that tab once you close it. Sessions whose CLI keeps its own history (fullscreen
   Claude) never show it, since there is nothing more to load. The same bar can also offer
   **Reload history** while scrolled up in an agent session after new output (toggle:
-  Settings → Terminal & Input → History Reload Button); it is not offered for panes
-  with no tmux history, such as fullscreen Claude. Automatic output recovery stays within
-  the bounded browser buffer.
+  Settings → Terminal & Input → History Reload Button). When a reload finds nothing more
+  than the browser already shows, such as fullscreen Claude whose pane keeps no tmux
+  history, the action is withdrawn until the next full capture. Automatic output
+  recovery stays within the bounded browser buffer.
 - **Wheel and touch scrolling** are forwarded into Claude's own transcript when a recent
   Claude runs fullscreen (`CLAUDE_CODE_NO_FLICKER=1`, or `"tui": "fullscreen"` in
   `~/.claude/settings.json`), so the wheel scrolls the conversation rather than the terminal.

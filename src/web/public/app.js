@@ -9924,9 +9924,14 @@ class CodemanApp {
     const sessionId = this.activeSessionId;
     const session = this.sessions.get(sessionId);
     // Cheap state checks first: the terminal is read only for a marked session.
+    // `_paneHistoryLines` is deliberately not consulted: it is recorded at the last
+    // load, so a session first opened empty keeps 0 after the very burst that
+    // opens the gap (#814). A pane that really holds no history (fullscreen
+    // Claude) captures one screen, `_replayWouldShrinkBuffer` refuses it, and the
+    // refusal dismisses the action until the next `mux-full-history` replay.
     return !!(this.loadAppSettingsFromStorage?.()?.historyReloadAction !== false &&
       session && session.mode !== 'shell' && this._liveOutputSinceFullPull?.has(sessionId) &&
-      this._paneHistoryLines?.get(sessionId) !== 0 && !this._isLoadingBuffer &&
+      !this._isLoadingBuffer &&
       !this._fullHistoryRepullInFlight && !this.detachedSessions?.has(sessionId) &&
       !this._historyReloadDismissed?.has(sessionId) && !this._tilesOwnTerminal?.() &&
       !this.isTerminalAtBottom());
