@@ -61,6 +61,13 @@ const CjkInput = (() => {
   // field until Enter, like a chat box, instead of streaming to the PTY as it is
   // typed. Lets a phone user scroll the terminal and edit an answer before sending.
   let _hold = false;
+  // Send-on-Enter: the held text as of the last settled input event (phantom
+  // stripped). Tells a deletion that emptied the field from a Backspace on a field
+  // that was already empty, and finds the one character an armed Ctrl applies to.
+  let _heldBase = '';
+  // Send-on-Enter: delivers a held prompt that is long or multi-line to the
+  // session it was typed for (terminal-ui.js passes the composer's send path).
+  let _sendPrompt = null;
   const _listeners = {};
 
   const PHANTOM = '​';
@@ -109,6 +116,13 @@ const CjkInput = (() => {
   const DEBOUNCE_KEYBOARD_MS = 150;
   const DEBOUNCE_DICTATION_MS = 1500;
   const DICTATION_DECAY_MS = 3000;
+
+  // Send-on-Enter: the longest single line still written as `<text>\r` in one
+  // go. Claude Code takes a burst of about a hundred characters or more as a
+  // paste (src/web/route-helpers.ts) and turns its \r into a newline, so the
+  // answer would sit unsent. Short answers (a menu digit, a word) keep the
+  // one-write form; anything longer goes out as a prompt with a separate Enter.
+  const HELD_DIRECT_MAX = 64;
 
   const PASSTHROUGH_KEYS = {
     ArrowUp:    '\x1b[A',
@@ -164,6 +178,7 @@ const CjkInput = (() => {
   }
 
   function _resetToPhantom() {
+    _heldBase = '';
     // Skip redundant writes: every programmatic value/selection mutation can
     // desync an Android IME's input session (InputConnection) — after which
     // the keyboard composes in its own UI but NO events ever reach the page.
@@ -196,6 +211,7 @@ const CjkInput = (() => {
     // Send-on-Enter: nothing leaves the field until Enter (keydown handler).
     if (_hold) {
       _t('flush SKIP hold');
+      _holdSettle();
       _autoGrow();
       return;
     }
@@ -219,21 +235,86 @@ const CjkInput = (() => {
     }
   }
 
-  /** Send-on-Enter: deliver the held text as one prompt, then Enter. One line
-   *  goes as typed text + CR in one write (what live mode's Enter sends, so CLI
-   *  menus that answer to a digit keep working). Several lines go as one
-   *  bracketed paste with Enter as a separate, delayed write, the same bytes as
-   *  the mobile prompt composer (keyboard-accessory.js _sendComposedPrompt), so
-   *  embedded newlines don't submit early. */
+  /** Send-on-Enter: deliver the held text, then Enter. Returns false when the
+   *  text was refused (too long, no session), so the field keeps it.
+   *  A short single line goes as typed text + CR in one write: what live mode's
+   *  Enter sends, so CLI menus that answer to a digit keep working. Anything
+   *  longer, or with several lines, goes through `_sendPrompt`: the mobile prompt
+   *  composer's path (KeyboardAccessoryBar._sendComposedPrompt), one bracketed
+   *  paste and then Enter as a separate, delayed write bound to the session the
+   *  text was typed for, so neither a long line nor an embedded newline submits
+   *  early and a tab switch cannot take the Enter elsewhere. */
   function _sendHeld(val) {
-    if (!/\n/.test(val)) {
+    if (!/\n/.test(val) && val.length <= HELD_DIRECT_MAX) {
       _send(val + '\r');
+      return true;
+    }
+    if (!_sendPrompt) {
+      _t('hold send DROP no-prompt-path');
+      return false;
+    }
+    return _sendPrompt(val) !== false;
+  }
+
+  function _ctrlArmed() {
+    return typeof KeyboardAccessoryBar !== 'undefined' && KeyboardAccessoryBar.isCtrlArmed?.() === true;
+  }
+
+  /** Index of the one character `after` adds to `before`, or -1 when the change
+   *  is anything else (several characters, a deletion, a rewrite). */
+  function _singleInsertionAt(before, after) {
+    if (after.length !== before.length + 1) return -1;
+    let i = 0;
+    while (i < before.length && before[i] === after[i]) i++;
+    return after.slice(i + 1) === before.slice(i) ? i : -1;
+  }
+
+  /** Send-on-Enter: settle the field after an input event. With the shell bar's
+   *  one-shot Ctrl armed, a single typed character is not held: it leaves the
+   *  field and goes to the PTY, where _handleCjkInput turns it into the control
+   *  byte (`c` → Ctrl+C). Any other change spends the modifier, the same rule
+   *  live mode follows for a multi-character chunk. */
+  function _holdSettle() {
+    const before = _heldBase;
+    const now = _strip(_textarea.value);
+    _heldBase = now;
+    if (now === before || !_ctrlArmed()) return;
+    const at = _singleInsertionAt(before, now);
+    if (at < 0 || now[at] === '\n') {
+      KeyboardAccessoryBar.clearCtrl?.();
       return;
     }
-    let text = val;
-    while (/\x1b\[20[01]~/.test(text)) text = text.replace(/\x1b\[20[01]~/g, '');
-    _send(`\x1b[200~${text.replace(/\r?\n/g, '\r')}\x1b[201~`);
-    setTimeout(() => _send('\r'), 120);
+    _t('hold ctrl key');
+    _textarea.value = PHANTOM + before;
+    _textarea.setSelectionRange(1 + at, 1 + at);
+    _heldBase = before;
+    _send(now[at]);
+  }
+
+  /** Send-on-Enter input handling: nothing is flushed, the field only settles.
+   *  A deletion forwards Backspace to the PTY only when the field was ALREADY
+   *  empty, i.e. the phantom itself was deleted. Deleting the last held
+   *  character (or select-all + delete) must not also delete a character from
+   *  the CLI's own composer, which Attach, image paste, Path and the mic fill. */
+  function _holdInput(e) {
+    if (_composing) return; // composed text settles at compositionend (_flush)
+    if (e.inputType === 'deleteContentBackward' || e.inputType === 'deleteWordBackward') {
+      const wasEmpty = !_heldBase;
+      _heldBase = _strip(_textarea.value);
+      if (!_heldBase) {
+        if (wasEmpty) _send('\x7f');
+        _resetToPhantom();
+      } else if (!_textarea.value.startsWith(PHANTOM)) {
+        // Backspace at the very start of the text deleted the phantom: put it
+        // back with the caret where it was, at the start of the text.
+        _textarea.value = PHANTOM + _textarea.value;
+        _textarea.setSelectionRange(1, 1);
+      }
+      _autoGrow();
+      return;
+    }
+    _holdSettle();
+    _autoGrow();
   }
 
   /** Cancel any pending debounced flush */
@@ -265,10 +346,11 @@ const CjkInput = (() => {
   }
 
   return {
-    init({ send }) {
+    init({ send, sendPrompt = null }) {
       if (_initialized) this.destroy();
 
       _send = send;
+      _sendPrompt = sendPrompt;
       _composing = false;
       _printableKeydownAt = null;
       _flushTimer = null;
@@ -366,7 +448,8 @@ const CjkInput = (() => {
           _cancelDebouncedFlush();
           const val = _strip(_textarea.value);
           if (_hold && val) {
-            _sendHeld(val);
+            // Refused (too long, no session): keep the text so nothing is lost.
+            if (!_sendHeld(val)) return;
           } else if (val) {
             _send(val + '\r');
           } else {
@@ -454,6 +537,11 @@ const CjkInput = (() => {
           _composing = false;
         }
 
+        if (_hold) {
+          _holdInput(e);
+          return;
+        }
+
         // ── Backspace / delete detection ──
         if (e.inputType === 'deleteContentBackward' || e.inputType === 'deleteWordBackward') {
           if (_composing) return;
@@ -532,6 +620,7 @@ const CjkInput = (() => {
     setHoldUntilEnter(on) {
       _hold = !!on;
       if (!_textarea) return;
+      _heldBase = _strip(_textarea.value);
       const v = _hold ? 'on' : 'off';
       _textarea.setAttribute('autocorrect', v);
       _textarea.setAttribute('autocapitalize', _hold ? 'sentences' : 'off');

@@ -70,8 +70,11 @@ sequences, so word jumps and history keys keep working.
 On a phone, **Input Field: Send on Enter** (beside CJK input) turns that field into a chat box:
 typed text stays in it until Enter, so you can scroll the terminal back to a question and edit
 your answer before sending. Shift+Enter adds a line, Esc clears the field, and autocorrect is on.
-A one-line answer is sent as typed, so CLI menus that take a digit still work; several lines go
-as one paste followed by Enter.
+A short one-line answer is sent as typed, so CLI menus that take a digit still work; a longer
+answer, or several lines, goes like the prompt composer's Send: one paste, then Enter to the same
+session. With the keyboard bar's one-shot Ctrl armed, the next key you type goes out as a control
+key (Ctrl, then `c` is Ctrl+C) instead of being held. With the keyboard down the field stays one
+line tall, and tapping the tab you are on keeps the draft.
 
 ## Voice dictation
 

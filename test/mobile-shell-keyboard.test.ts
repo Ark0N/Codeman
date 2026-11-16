@@ -547,6 +547,51 @@ describe('one-shot Ctrl through the CJK input field', () => {
   });
 });
 
+describe('Send on Enter: a long or multi-line held answer goes out as a composed prompt', () => {
+  // _sendCjkPrompt is CjkInput's sendPrompt callback. It hands the text to the
+  // composer's _sendComposedPrompt with the session captured at Enter, so the
+  // delayed Enter cannot follow a tab switch.
+  function promptApp() {
+    const { CodemanApp, bar } = loadTerminalModule();
+    bar.clearCtrl();
+    const app = Object.create(CodemanApp.prototype) as {
+      activeSessionId: string | null;
+      _sendCjkPrompt(text: string): boolean;
+    };
+    app.activeSessionId = 'session-a';
+    const composed = vi
+      .spyOn(bar as unknown as { _sendComposedPrompt: (s: string, t: string) => boolean }, '_sendComposedPrompt')
+      .mockReturnValue(true);
+    return { app, bar, composed };
+  }
+
+  it('sends through the composer path, bound to the session active at Enter', () => {
+    const { app, composed } = promptApp();
+    expect(app._sendCjkPrompt('line one\nline two')).toBe(true);
+    app.activeSessionId = 'session-b';
+    expect(composed).toHaveBeenCalledWith('session-a', 'line one\nline two');
+    composed.mockRestore();
+  });
+
+  it('spends an armed one-shot Ctrl, like any multi-character chunk', () => {
+    const { app, bar, composed } = promptApp();
+    bar.toggleCtrl();
+    app._sendCjkPrompt('x'.repeat(100));
+    expect(bar.isCtrlArmed()).toBe(false);
+    composed.mockRestore();
+  });
+
+  it('reports a refusal so the field keeps the text', () => {
+    const { app, composed } = promptApp();
+    composed.mockReturnValue(false);
+    expect(app._sendCjkPrompt('x'.repeat(100))).toBe(false);
+    app.activeSessionId = null;
+    expect(app._sendCjkPrompt('x'.repeat(100))).toBe(false);
+    expect(composed).toHaveBeenCalledTimes(1);
+    composed.mockRestore();
+  });
+});
+
 describe('armed styling survives the light-skin overrides', () => {
   const mobileCss = readFileSync(resolve('src/web/public/mobile.css'), 'utf8');
 

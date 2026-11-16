@@ -1083,6 +1083,10 @@ Object.assign(CodemanApp.prototype, {
         send: (text) => {
           this._handleCjkInput(text);
         },
+        // Send on Enter: a long or multi-line held answer goes out like the
+        // mobile prompt composer's Send (one bracketed paste, then Enter as a
+        // separate delayed write), bound to the session it was typed for.
+        sendPrompt: (text) => this._sendCjkPrompt(text),
       });
     }
 
@@ -4562,6 +4566,27 @@ Object.assign(CodemanApp.prototype, {
     if (this._localEchoPolicy === 'predict') this._predictiveEcho?.clearPredictions();
     _crashDiag.log(`CJK send→${this.activeSessionId.slice(0, 8)} len=${text.length}`);
     this._sendInputAsync(this.activeSessionId, text);
+  },
+
+  /**
+   * Send on Enter (CjkInput, setting cjkInputHoldUntilEnter): deliver a held
+   * answer that is too long for one `<text>\r` write, or has several lines.
+   * Claude Code takes a long burst as a paste and its \r as a newline, so it goes
+   * through the composer's path instead: the session is captured now, so the
+   * delayed Enter cannot follow a tab switch, and the length check applies.
+   * Returns false when nothing was sent, so the field keeps the text.
+   */
+  _sendCjkPrompt(text) {
+    const sessionId = this.activeSessionId;
+    if (!sessionId || typeof KeyboardAccessoryBar === 'undefined') {
+      _crashDiag.log(`CJK prompt DROP no-session len=${text.length}`);
+      return false;
+    }
+    // A multi-character chunk spends an armed one-shot Ctrl (same rule as
+    // _handleCjkInput); leaving it armed would modify the next keystroke.
+    KeyboardAccessoryBar.clearCtrl?.();
+    _crashDiag.log(`CJK prompt→${sessionId.slice(0, 8)} len=${text.length}`);
+    return KeyboardAccessoryBar._sendComposedPrompt(sessionId, text);
   },
 
   /**

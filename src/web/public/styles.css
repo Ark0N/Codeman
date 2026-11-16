@@ -14235,6 +14235,13 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
   bottom: calc(var(--safe-area-bottom) + 84px);
 }
 
+/* Send on Enter grows the field with its text, but with the keyboard down .main
+   reserves a fixed 84px (below), so a grown field would cover the terminal's
+   last rows. Keep it one line tall there; the text scrolls inside. */
+.touch-device:not(.keyboard-visible) #cjkInput.cjk-input-visible {
+  max-height: 34px;
+}
+
 body.touch-device.cjk-input-visible .main {
   padding-bottom: calc(84px + var(--safe-area-bottom));
 }

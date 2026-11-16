@@ -9384,7 +9384,7 @@ class CodemanApp {
 
   // `skipSnapshot`: the tile grid opening on the session it parks
   // (tile-grid.js openTileGrid), whose snapshot closing the grid discards.
-  _cleanupPreviousSession(newSessionId, { skipSnapshot = false } = {}) {
+  _cleanupPreviousSession(newSessionId, { skipSnapshot = false, keepCjkDraft = false } = {}) {
     // Snapshot the OUTGOING session's xterm rendered state (viewport + scrollback +
     // colors/attrs) before the terminal gets cleared/reset. Lets us restore the
     // exact view on switch-back rather than replaying codex's byte stream, which
@@ -9437,8 +9437,11 @@ class CodemanApp {
     // Clear CJK input to prevent sending stale text to the wrong session.
     // Must go through CjkInput.clear() — a raw value wipe leaves the module's
     // pending flush timers armed and drops the phantom char it relies on.
+    // A held Send on Enter draft survives a reload of the same session: nothing
+    // switched, and the answer would be gone. Live mode still clears, since a
+    // pending debounced flush could fire mid-reconnect.
     if (typeof CjkInput !== 'undefined') {
-      CjkInput.clear();
+      if (!(keepCjkDraft && CjkInput.holdUntilEnter)) CjkInput.clear();
     } else {
       const cjkEl = document.getElementById('cjkInput');
       if (cjkEl) cjkEl.value = '';
@@ -9982,7 +9985,12 @@ class CodemanApp {
       // with no active id, the switch below snapshots none of it.
       this.activeSessionId = null;
     }
+    // A reload of the session already shown (tapping its own tab, the geometry
+    // retry) is not a switch: _cleanupPreviousSession keeps a Send on Enter
+    // draft for it, which it cannot tell on its own once activeSessionId is null.
+    let reloadingSameSession = false;
     if (this.activeSessionId === sessionId && forceReload) {
+      reloadingSameSession = true;
       this.terminalBufferCache?.delete(sessionId);
       this._xtermSnapshots?.delete(sessionId);
       try { localStorage.removeItem(`codeman-xs-${sessionId}`); } catch {}
@@ -10029,7 +10037,7 @@ class CodemanApp {
     // A session tab takes the stage back from any active web tab.
     this._hideWebviewLayer?.();
 
-    this._cleanupPreviousSession(sessionId);
+    this._cleanupPreviousSession(sessionId, { keepCjkDraft: reloadingSameSession });
     this.activeSessionId = sessionId;
     this._activateFileBrowserSession?.(sessionId);
     // A keyboard row hold belongs to the session it was taken for: release it here
