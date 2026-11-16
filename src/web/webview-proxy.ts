@@ -207,6 +207,73 @@ export function capabilityFromReferer(referer: string | undefined, basePath = ''
   }
 }
 
+/** `Sec-Fetch-Dest` values that describe a page fetching for itself, not navigating. */
+const ASSET_FETCH_DESTS = new Set([
+  'script',
+  'style',
+  'image',
+  'font',
+  'manifest',
+  'worker',
+  'sharedworker',
+  'audio',
+  'video',
+  'track',
+  'embed',
+  'object',
+  'empty',
+]);
+
+/** Codeman's own missing files: a 404 here says nothing about a web tab. */
+const CODEMAN_OWN_404 =
+  /^\/(?:favicon\.ico|manifest\.json|manifest\.webmanifest|robots\.txt|apple-touch-icon[\w.-]*)$/i;
+
+/**
+ * Whether a 404 looks like a proxied dashboard's root-absolute request that
+ * escaped the prefix.
+ *
+ * This decides NOTHING about the response — the request cannot be relayed (a
+ * masked frame's `Referer` carries no capability, which is exactly why the
+ * Referer fallback above declined). It exists so the failure is diagnosable:
+ * the symptom of an escaped URL is a blank page or a spinner that never
+ * resolves, with nothing in the log to say why. Naming the path turns that into
+ * one grep.
+ *
+ * Deliberately conservative — a masked landing frame (`Referer` path `/`), an
+ * asset-shaped `Sec-Fetch-Dest`, same origin, not the API, not one of Codeman's
+ * own files. A false positive is a log line, never a behaviour change.
+ *
+ * @param input - method, request URL and headers of the 404.
+ * @returns the escaped path (no query), or null when it is not that shape.
+ */
+export function escapedWebviewAssetPath(input: {
+  method: string;
+  url: string;
+  headers: Record<string, string | string[] | undefined>;
+}): string | null {
+  if (input.method !== 'GET' && input.method !== 'HEAD') return null;
+  const path = input.url.split('?')[0] ?? '';
+  if (path.startsWith('/api') || CODEMAN_OWN_404.test(path)) return null;
+
+  const single = (value: string | string[] | undefined): string | undefined =>
+    Array.isArray(value) ? value[0] : value;
+  const dest = single(input.headers['sec-fetch-dest']);
+  if (!dest || !ASSET_FETCH_DESTS.has(dest.toLowerCase())) return null;
+
+  const host = single(input.headers.host);
+  const referer = single(input.headers.referer);
+  if (!host || !referer) return null;
+  try {
+    const from = new URL(referer);
+    // Same origin, and the masked landing path: a real Codeman page's assets all
+    // resolve, so a 404 from one is not this shape.
+    if (from.host !== host || from.pathname !== '/') return null;
+  } catch {
+    return null;
+  }
+  return path;
+}
+
 /** Remove the `frame-ancestors` directive from a CSP, preserving the rest. */
 export function stripFrameAncestors(csp: string): string {
   return csp
@@ -718,7 +785,16 @@ export function rewriteHtml(html: string, capability: string, basePath = ''): st
   const rebased = rebaseRelativeBase(
     html
       .replace(/(\s(?:src|href|action)\s*=\s*")\/(?!\/)/gi, `$1${prefix}`)
-      .replace(/(\s(?:src|href|action)\s*=\s*')\/(?!\/)/gi, `$1${prefix}`),
+      .replace(/(\s(?:src|href|action)\s*=\s*')\/(?!\/)/gi, `$1${prefix}`)
+      // A root-absolute dynamic `import()` is the one URL no other layer can
+      // reach: it is not an attribute, so `<base>` does not apply to it; it is
+      // not `fetch()`, so the runtime shim cannot rewrite it; and the browser
+      // resolves it against the ORIGIN root, not the document. SvelteKit's
+      // inline bootstrap is exactly this shape (`import("/_app/…")`), and the
+      // failure mode is silent: the module 404s against Codeman and the app's
+      // own loading spinner never resolves. Rewriting the specifier here is the
+      // only layer that can.
+      .replace(/\bimport\s*\(\s*(["'])\/(?!\/)/g, (_match, quote: string) => `import(${quote}${prefix}`),
     prefix
   );
 

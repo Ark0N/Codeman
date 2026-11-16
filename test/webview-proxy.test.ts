@@ -13,6 +13,7 @@ import {
   buildUpstreamRequestHeaders,
   capabilityFromProxyPath,
   capabilityFromReferer,
+  escapedWebviewAssetPath,
   extractFrameAncestors,
   filterCookieHeader,
   isFramableCrossOrigin,
@@ -396,6 +397,27 @@ describe('rewriteHtml', () => {
   it('injects the shim into every rewritten document', () => {
     expect(rewriteHtml('<html><head></head></html>', CAP)).toContain('<script>');
     expect(rewriteHtml('just text', CAP)).toContain('<script>');
+  });
+
+  // SvelteKit's inline bootstrap does `import("/_app/…")`. A dynamic import is
+  // neither an attribute nor a fetch(), so `<base>` and the runtime shim both
+  // miss it and the module loads from Codeman's root — the app then sits on its
+  // own spinner forever.
+  it('rewrites root-absolute dynamic import() specifiers', () => {
+    const dq = rewriteHtml('<head><script>import("/_app/entry.js")</script></head>', CAP);
+    expect(dq).toContain(`import("${PREFIX}_app/entry.js")`);
+    const sq = rewriteHtml("<head><script>import( '/x.js' )</script></head>", CAP);
+    expect(sq).toContain(`import('${PREFIX}x.js' )`);
+  });
+
+  it('leaves relative and cross-origin import() specifiers alone', () => {
+    const out = rewriteHtml(
+      `<head><script>import("./a.js");import("//cdn.example/b.js");import("https://cdn.example/c.js")</script></head>`,
+      CAP
+    );
+    expect(out).toContain('import("./a.js")');
+    expect(out).toContain('import("//cdn.example/b.js")');
+    expect(out).toContain('import("https://cdn.example/c.js")');
   });
 
   it('rebases root-absolute src/href/action, which <base> cannot fix', () => {
@@ -896,5 +918,57 @@ describe('lost-frame recovery', () => {
     expect(has({ cookie: 'theme=dark; codeman_session=abc' })).toBe(true);
     expect(has({ cookie: ['theme=dark', 'codeman_session=abc'] })).toBe(true);
     expect(has({ authorization: 'Basic YWRtaW46eA==' })).toBe(true);
+  });
+});
+
+describe('escapedWebviewAssetPath: naming a 404 a web tab caused', () => {
+  const req = (over: Record<string, unknown> = {}) => ({
+    method: 'GET',
+    url: '/_app/immutable/entry/start.js',
+    ...over,
+    headers: {
+      host: 'codeman.example:3001',
+      referer: 'http://codeman.example:3001/',
+      'sec-fetch-dest': 'script',
+      ...((over.headers as Record<string, string | string[] | undefined> | undefined) ?? {}),
+    },
+  });
+
+  it('recognises a root-absolute module a masked frame asked for', () => {
+    expect(escapedWebviewAssetPath(req())).toBe('/_app/immutable/entry/start.js');
+  });
+
+  it('drops the query string, which carries no diagnostic value', () => {
+    expect(escapedWebviewAssetPath(req({ url: '/_app/x.js?v=17' }))).toBe('/_app/x.js');
+  });
+
+  it('ignores every shape that is not a dashboard asset', () => {
+    // A navigation is the lost-frame recovery's job, not this one's.
+    expect(
+      escapedWebviewAssetPath(req({ headers: { host: 'h', referer: 'http://h/', 'sec-fetch-dest': 'document' } }))
+    ).toBeNull();
+    // Codeman's own missing files say nothing about a web tab.
+    expect(
+      escapedWebviewAssetPath(
+        req({ url: '/favicon.ico', headers: { host: 'h', referer: 'http://h/', 'sec-fetch-dest': 'image' } })
+      )
+    ).toBeNull();
+    // A real Codeman page's assets resolve; only a masked landing (`/`) is this shape.
+    expect(
+      escapedWebviewAssetPath(req({ headers: { host: 'h', referer: 'http://h/settings', 'sec-fetch-dest': 'script' } }))
+    ).toBeNull();
+    // Cross-origin referer, API paths, writes, and no referer at all.
+    expect(
+      escapedWebviewAssetPath(req({ headers: { host: 'h', referer: 'http://other/', 'sec-fetch-dest': 'script' } }))
+    ).toBeNull();
+    expect(escapedWebviewAssetPath(req({ url: '/api/thing' }))).toBeNull();
+    expect(escapedWebviewAssetPath(req({ method: 'POST' }))).toBeNull();
+    expect(escapedWebviewAssetPath(req({ headers: { host: 'h' } }))).toBeNull();
+  });
+
+  it('accepts the array headers a proxy front end can produce', () => {
+    expect(
+      escapedWebviewAssetPath(req({ headers: { host: ['h'], referer: ['http://h/'], 'sec-fetch-dest': ['image'] } }))
+    ).toBe('/_app/immutable/entry/start.js');
   });
 });
