@@ -643,7 +643,9 @@ async function proxyRequest(
     // Buffer only HTML, only under the cap: `<base>` injection needs the whole
     // document, and buffering an unbounded upstream body is a memory hazard.
     const html = await response.text();
-    return reply.send(html.length <= MAX_WEBVIEW_HTML_REWRITE_BYTES ? rewriteHtml(html, cap, basePath) : html);
+    return reply.send(
+      html.length <= MAX_WEBVIEW_HTML_REWRITE_BYTES ? rewriteHtml(html, cap, basePath, wildcard) : html
+    );
   }
 
   return reply.send(Readable.fromWeb(response.body as Parameters<typeof Readable.fromWeb>[0]));

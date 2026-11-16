@@ -753,11 +753,17 @@ try{
  * already-absolute path resolves to itself. Cross-origin bases are the author
  * pointing at a CDN and are left exactly as written.
  *
+ * The document path matters: a base in `/webview/<cap>/app/page.html` is
+ * relative to `/webview/<cap>/app/`, not to the proxy root, or a page served
+ * from a subdirectory would resolve its assets one level too high.
+ *
  * @param html - document with attributes already rebased.
  * @param prefix - proxy prefix the document was served from.
+ * @param documentPath - upstream path of the document, without the leading slash.
  * @returns the document with a relative base href made absolute.
  */
-function rebaseRelativeBase(html: string, prefix: string): string {
+function rebaseRelativeBase(html: string, prefix: string, documentPath: string): string {
+  const documentUrl = `http://codeman.invalid${prefix}${documentPath.replace(/^\/+/, '')}`;
   return html.replace(
     /(<base\b[^>]*?\bhref\s*=\s*)(["'])([^"']*)\2/i,
     (match: string, head: string, quote: string, href: string) => {
@@ -765,7 +771,7 @@ function rebaseRelativeBase(html: string, prefix: string): string {
       try {
         // A stand-in origin: only the path is kept, and a different origin here
         // is exactly the "absolute base" case this must not touch.
-        resolved = new URL(href, `http://codeman.invalid${prefix}`);
+        resolved = new URL(href, documentUrl);
       } catch {
         return match;
       }
@@ -783,8 +789,14 @@ function rebaseRelativeBase(html: string, prefix: string): string {
  * Three layers, because no single one is sufficient: `<base>` for parser-resolved
  * relative URLs, attribute rewriting for root-absolute markup, and the shim for
  * URLs built at runtime.
+ *
+ * @param html - the upstream document.
+ * @param capability - capability the document is being served under.
+ * @param basePath - reverse-proxy mount prefix (`''` at root).
+ * @param documentPath - upstream path of the document, without the leading slash.
+ *   Used to resolve the page's own relative `<base>` against its directory.
  */
-export function rewriteHtml(html: string, capability: string, basePath = ''): string {
+export function rewriteHtml(html: string, capability: string, basePath = '', documentPath = ''): string {
   const prefix = proxyPrefixFor(capability, basePath);
 
   // Fresh regexes per call: module-level /g patterns carry `lastIndex` between calls.
@@ -801,7 +813,8 @@ export function rewriteHtml(html: string, capability: string, basePath = ''): st
       // own loading spinner never resolves. Rewriting the specifier here is the
       // only layer that can.
       .replace(/\bimport\s*\(\s*(["'])\/(?!\/)/g, (_match, quote: string) => `import(${quote}${prefix}`),
-    prefix
+    prefix,
+    documentPath
   );
 
   // A page that ships its own <base> keeps it (overriding it would break the

@@ -417,6 +417,33 @@ describe('managed DeepSeek web cookie', () => {
   });
 });
 
+describe('proxy HTML rewrite', () => {
+  // The request path is what the page's relative URLs are relative to. Proving
+  // it here (rather than only on rewriteHtml) pins that proxyRequest passes it.
+  it("resolves the document's relative base against its own directory", async () => {
+    const server = http.createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end('<html><head><base href="./"></head><body>app</body></html>');
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('upstream has no address');
+
+    try {
+      const created = (await create({ name: 'App', url: `http://127.0.0.1:${address.port}/app/page.html` })).json()
+        .data;
+      const opened = (await app.inject({ method: 'POST', url: `/api/webviews/${created.id}/open` })).json().data;
+      const cap = capabilityFromProxyPath(opened.embedUrl)!;
+
+      const res = await app.inject({ method: 'GET', url: `/webview/${cap}/app/page.html` });
+      expect(res.statusCode).toBe(200);
+      expect(res.body).toContain(`<base href="/webview/${cap}/app/">`);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+});
+
 describe('POST /api/webviews/probe', () => {
   it('reports an unreachable target as a normal answer, not a 500', async () => {
     // Port 1 is reserved and refuses instantly.

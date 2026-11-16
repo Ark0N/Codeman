@@ -395,6 +395,19 @@ describe('rewriteHtml', () => {
     expect(out).toContain(`<base target="_blank" href="${PREFIX}sub/">`);
   });
 
+  // A document served from a subdirectory resolves its relative base against
+  // ITS directory, not the proxy root: `/webview/<cap>/app/page.html` with
+  // `<base href="./">` must point at `/webview/<cap>/app/`.
+  it("resolves a relative <base> against the document's own directory", () => {
+    const out = rewriteHtml('<html><head><base href="./"></head></html>', CAP, '', 'app/page.html');
+    expect(out).toContain(`<base href="${PREFIX}app/">`);
+  });
+
+  it('resolves a ../ base from the document directory', () => {
+    const out = rewriteHtml('<html><head><base href="../assets/"></head></html>', CAP, '', 'app/sub/page.html');
+    expect(out).toContain(`<base href="${PREFIX}app/assets/">`);
+  });
+
   it('leaves a cross-origin <base> exactly as the author wrote it', () => {
     const out = rewriteHtml('<html><head><base href="https://cdn.example/x/"></head></html>', CAP);
     expect(out).toContain('<base href="https://cdn.example/x/">');

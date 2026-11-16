@@ -146,9 +146,11 @@ layers cooperate so a dashboard talking to its own backend just works:
 
 1. `<base href>` handles relative URLs in the markup. A page that ships its own
    **relative** base (`<base href="./">`, what a Vite build emits) has it resolved
-   against the proxy prefix first: the page's URL is masked a few paragraphs below,
-   a base is resolved against that URL, so `./` would otherwise point at Codeman's
-   root and 404 every module script behind an otherwise-painted page.
+   against the document's own directory inside the proxy prefix first, so a
+   document at `/webview/<cap>/app/page.html` gets `/webview/<cap>/app/` rather
+   than the proxy root: the page's URL is masked a few paragraphs below, a base is
+   resolved against that URL, so `./` would otherwise point at Codeman's root and
+   404 every module script behind an otherwise-painted page.
 2. Attribute rewriting handles root-absolute `src`/`href`/`action` in the page the
    proxy serves — and root-absolute dynamic `import("/...")` specifiers in the
    initial HTML. The import is the one URL no other layer can reach: `<base>` does
