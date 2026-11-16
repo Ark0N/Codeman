@@ -1,4 +1,4 @@
-/** Real xterm + trusted phone gestures recover tmux repaint gaps while reading (#814). */
+/** Real xterm + manual banner actions recover tmux repaint gaps while reading (#814). */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
 import type { Terminal } from '@xterm/xterm';
@@ -29,7 +29,11 @@ type HistoryApp = {
   _lastResizeDims: { cols: number; rows: number } | null;
   _syncStickyScrollBaseline(): void;
   _captureViewportAnchor(): Anchor;
-  _syncHistoryReloadButton(): void;
+  _syncHistoryReloadAction(): void;
+  loadAppSettingsFromStorage(): Record<string, unknown>;
+  saveAppSettingsToStorage(settings: Record<string, unknown>): void;
+  _setHistoryTruncation(sessionId: string, payload: Record<string, unknown>): void;
+  _setHistoryNoticeRevealed(sessionId: string): void;
 };
 type RepairWindow = Window & {
   app: HistoryApp;
@@ -331,20 +335,29 @@ async function waitForRepair(page: Page): Promise<void> {
 
 const allNumbers = Array.from({ length: 144 }, (_, i) => `NUMBER-${String(i).padStart(3, '0')}`);
 
-describe('history gap repair on phones', () => {
-  it('repairs from mid-history after a real upward scroll and holds the content anchor', async () => {
-    const { context, page } = await openTerminal(true);
+describe.each([true, false])('manual history gap repair (touch: %s)', (touch) => {
+  async function readHistory(page: Page) {
+    if (touch) await scrollHistoryByTouch(page, 100);
+    else await page.evaluate(() => (window as RepairWindow).app.terminal.scrollToLine(10));
+    const position = await page.evaluate(() => {
+      const b = (window as RepairWindow).app.terminal.buffer.active;
+      return { viewportY: b.viewportY, baseY: b.baseY };
+    });
+    expect(position.viewportY).toBeGreaterThan(0);
+    expect(position.baseY - position.viewportY).toBeGreaterThan(5);
+  }
+
+  it('repairs mid-history only on a banner tap/click and holds the reading line offset', async () => {
+    const { context, page } = await openTerminal(touch);
     try {
-      await scrollHistoryByTouch(page, 100);
-      const position = await page.evaluate(() => {
-        const b = (window as RepairWindow).app.terminal.buffer.active;
-        return { viewportY: b.viewportY, baseY: b.baseY };
-      });
-      expect(position.viewportY).toBeGreaterThan(0);
-      expect(position.baseY - position.viewportY).toBeGreaterThan(5);
+      await readHistory(page);
       await burst(page);
       expect((await bufferState(page)).numbers).not.toContain('NUMBER-090');
-      await scrollHistoryByTouch(page, 40);
+      expect((await bufferState(page)).pulls).toBe(0);
+      const button = page.locator('#historyTruncationBar').getByRole('button', { name: 'Reload history' });
+      await button.waitFor({ state: 'visible' });
+      if (touch) await button.tap();
+      else await button.click();
       await waitForRepair(page);
       const state = await bufferState(page);
       expect(state.numbers).toEqual(allNumbers);
@@ -358,14 +371,16 @@ describe('history gap repair on phones', () => {
   }, 60_000);
 
   it('keeps output arriving during the capture download exactly once', async () => {
-    const { context, page } = await openTerminal(true);
+    const { context, page } = await openTerminal(touch);
     try {
-      await scrollHistoryByTouch(page, 100);
+      await readHistory(page);
       await burst(page);
       await page.evaluate(() => {
         (window as RepairWindow).repairTest.inject = true;
       });
-      await scrollHistoryByTouch(page, 40);
+      const button = page.locator('#historyTruncationBar').getByRole('button', { name: 'Reload history' });
+      if (touch) await button.tap();
+      else await button.click();
       await waitForRepair(page);
       const state = await bufferState(page);
       const detail = JSON.stringify({ state, events: pageEvents.get(page) });
@@ -378,69 +393,71 @@ describe('history gap repair on phones', () => {
     }
   }, 60_000);
 
-  it('offers a touch reload while reading and tapping it recovers the missing rows', async () => {
-    const { context, page } = await openTerminal(true);
-    try {
-      await scrollHistoryByTouch(page, 100);
-      await burst(page);
-      const button = page.getByRole('button', { name: 'Reload history' });
-      await button.waitFor({ state: 'visible' });
-      const box = await button.boundingBox();
-      expect(box!.height).toBeGreaterThanOrEqual(44);
-      expect(box!.width).toBeGreaterThanOrEqual(44);
-      await button.tap();
-      await waitForRepair(page);
-      const state = await bufferState(page);
-      expect(state.numbers).toEqual(allNumbers);
-      expect(state.anchorOffset).toBe(state.expectedOffset);
-      expect(await button.isVisible()).toBe(false);
-    } catch (error) {
-      throw await failureDetails(page, error);
-    } finally {
-      await context.close();
-    }
-  }, 60_000);
+  it.each([false, true])(
+    'keeps the revealed notice and one unobstructed load control (exhausted: %s)',
+    async (exhausted) => {
+      const { context, page } = await openTerminal(touch);
+      try {
+        await readHistory(page);
+        await burst(page);
+        await page.evaluate(
+          ({ session, exhausted }) => {
+            const app = (window as RepairWindow).app;
+            app._setHistoryTruncation(session, {
+              truncated: true,
+              truncationReason: 'tail',
+              source: 'mux-full-history',
+              fullSize: 2 * 1024 * 1024,
+              retainedBytes: 1024 * 1024,
+              paneHistoryLines: 121,
+              exhausted,
+            });
+            app._setHistoryNoticeRevealed(session);
+          },
+          { session: SESSION, exhausted }
+        );
+        const bar = page.locator('#historyTruncationBar');
+        await bar.waitFor({ state: 'visible' });
+        expect(await bar.locator('.history-trunc-text').textContent()).not.toBe(
+          'Recent output may be missing from this view.'
+        );
+        const button = bar.locator('.history-trunc-load');
+        expect(await button.count()).toBe(1);
+        expect(await button.textContent()).toBe(exhausted ? 'Reload history' : 'Load full history');
+        for (const control of await bar.getByRole('button').all()) {
+          expect(
+            await control.evaluate((element) => {
+              const box = element.getBoundingClientRect();
+              return document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2) === element;
+            })
+          ).toBe(true);
+        }
+      } catch (error) {
+        throw await failureDetails(page, error);
+      } finally {
+        await context.close();
+      }
+    },
+    60_000
+  );
 
-  it('floats a 44px reload control on wide touch viewports without resizing the terminal', async () => {
-    const { context, page } = await openTerminal(true, { width: 1280, height: 800 });
+  it('does not offer a reload action when disabled on this device', async () => {
+    const { context, page } = await openTerminal(touch);
     try {
       await page.evaluate(() => {
-        (window as RepairWindow).app.terminal.scrollToLine(10);
+        const app = (window as RepairWindow).app;
+        app.saveAppSettingsToStorage({ ...app.loadAppSettingsFromStorage(), historyReloadAction: false });
+        app._syncHistoryReloadAction();
       });
-      const dimensions = () =>
-        page.evaluate(() => {
-          const terminal = (window as RepairWindow).app.terminal;
-          const box = document.getElementById('terminalContainer')!.getBoundingClientRect();
-          return { width: box.width, height: box.height, cols: terminal.cols, rows: terminal.rows };
-        });
-      const before = await dimensions();
-      expect(await page.locator('#historyReloadBtn').isVisible()).toBe(false);
+      await readHistory(page);
       await burst(page);
-      const button = page.getByRole('button', { name: 'Reload history' });
-      await button.waitFor({ state: 'visible' });
-      expect(await button.evaluate((element) => getComputedStyle(element).position)).toBe('absolute');
-      const box = await button.boundingBox();
-      expect(box!.height).toBeGreaterThanOrEqual(44);
-      expect(box!.width).toBeGreaterThanOrEqual(44);
-      expect(await dimensions()).toEqual(before);
-    } catch (error) {
-      throw await failureDetails(page, error);
-    } finally {
-      await context.close();
-    }
-  }, 60_000);
-
-  it('never shows the reload control in a non-touch context', async () => {
-    const { context, page } = await openTerminal(false);
-    try {
+      // Wait for the same coalesced scroll synchronization used in production.
       await page.evaluate(() => {
-        (window as RepairWindow).app.terminal.scrollToLine(10);
+        const { promise, resolve } = Promise.withResolvers<void>();
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+        return promise;
       });
-      await burst(page);
-      await page.evaluate(() => {
-        (window as RepairWindow).app._syncHistoryReloadButton();
-      });
-      expect(await page.locator('#historyReloadBtn').isVisible()).toBe(false);
+      expect(await page.getByRole('button', { name: 'Reload history' }).isVisible()).toBe(false);
       expect((await bufferState(page)).pulls).toBe(0);
     } catch (error) {
       throw await failureDetails(page, error);

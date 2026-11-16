@@ -746,6 +746,12 @@
     'Extended Keyboard Bar': '扩展键盘栏',
     'Gesture Control (beta)': '手势控制（测试版）',
     'Wheel Scrolls Local History': '滚轮滚动本地历史',
+    'History Reload Button': '历史重新加载按钮',
+    'When scrolled up after new output, offer a Reload history action that re-reads the full tmux history (a full capture on the server).':
+      '有新输出后向上滚动时，提供“重新加载历史”操作，重新读取完整的 tmux 历史（在服务器上完整捕获）。',
+    'Recent output may be missing from this view.': '此视图可能缺少最近的输出。',
+    'Reload history': '重新加载历史',
+    'Load full history': '加载完整历史',
     'Auto Copy Selection': '自动复制选中内容',
     'Selection & clipboard': '选中与剪贴板',
     'Auto Copy: selection copied': '自动复制：已复制选中内容',

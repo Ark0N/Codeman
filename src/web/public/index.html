@@ -477,7 +477,6 @@
              scrolled away with the output it described and could not be acted
              on. Populated by app.js _renderHistoryTruncationBanner(). -->
         <div class="history-trunc-bar" id="historyTruncationBar" role="status" aria-live="polite" hidden></div>
-        <button id="historyReloadBtn" type="button" class="history-reload-btn" aria-label="Reload history" hidden>↻ Reload history</button>
         <div class="terminal-container" id="terminalContainer"></div>
         <textarea id="cjkInput" rows="1" placeholder="CJK input (Enter = send, Esc = clear)"
           maxlength="65536" aria-label="CJK IME input field"
@@ -2153,6 +2152,13 @@
                       <span class="set-row-desc">Plain wheel or two-finger swipe pages the terminal's own scrollback instead of the CLI transcript. Shift+wheel always reaches local scrollback.</span>
                     </div>
                     <label class="switch switch-sm"><input type="checkbox" id="appSettingsTerminalWheelLocal"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row" data-search="history reload button repair scrollback">
+                    <div class="set-row-text">
+                      <span class="set-row-label">History Reload Button <span class="set-scope">device</span></span>
+                      <span class="set-row-desc">When scrolled up after new output, offer a Reload history action that re-reads the full tmux history (a full capture on the server).</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsHistoryReloadAction"><span class="slider"></span></label>
                   </div>
                   <div class="set-row" id="appSettingsWebglRendererItem" data-search="webgl renderer gpu terminal">
                     <div class="set-row-text">

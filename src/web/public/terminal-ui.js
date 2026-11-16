@@ -1060,8 +1060,8 @@ Object.assign(CodemanApp.prototype, {
     this._predictiveEcho =
       typeof PredictiveEchoOverlay !== 'undefined' ? new PredictiveEchoOverlay(this.terminal) : null;
     this._predictiveEcho?.setPredictWhen((terminal) => window.CodemanTerminalInput.isCodexComposerRow(terminal));
+    this.terminal.onScroll(() => this._scheduleHistoryReloadActionSync());
     if (MobileDetection.isTouchDevice()) {
-      this.terminal.onScroll(() => this._syncHistoryReloadButton());
       this.terminal.onCursorMove(() => this._syncMobileHelperTextareaToCursor());
       this.terminal.onRender(() => this._syncMobileHelperTextareaToCursor());
       // Keep the live content above the keyboard while the rows are held.
@@ -4056,29 +4056,13 @@ Object.assign(CodemanApp.prototype, {
     return target;
   },
 
-  /** Sole owner of the touch-only history reload control's visibility. */
-  _syncHistoryReloadButton() {
-    // Touch capability does not change at runtime and desktop never shows the
-    // control, so non-touch pages skip the DOM work entirely.
-    const touch = typeof MobileDetection !== 'undefined' && MobileDetection.isTouchDevice();
-    if (!touch) return;
-    const button = document.getElementById('historyReloadBtn');
-    if (!button) return;
-    const sessionId = this.activeSessionId;
-    const session = this.sessions.get(sessionId);
-    const visible = !!(touch && session && session.mode !== 'shell' &&
-      !this.isTerminalAtBottom() && this._liveOutputSinceFullPull?.has(sessionId) &&
-      !this._tilesOwnTerminal?.() && !this._fullHistoryRepullInFlight);
-    if (button.hidden === visible) button.hidden = !visible;
-    if (this._fullHistoryRepullInFlight) return;
-    button.disabled = false;
-    button.textContent = '↻ Reload history';
-    button.onclick = () => {
-      button.disabled = true;
-      button.textContent = 'Loading…';
-      return Promise.resolve(this._maybeRefetchFullHistory({ force: true, anchor: 'content' }))
-        .finally(() => this._syncHistoryReloadButton());
-    };
+  /** xterm may emit once per scrolled line; sample eligibility once per frame. */
+  _scheduleHistoryReloadActionSync() {
+    if (this._historyReloadActionFrame != null) return;
+    this._historyReloadActionFrame = requestAnimationFrame(() => {
+      this._historyReloadActionFrame = null;
+      this._syncHistoryReloadAction();
+    });
   },
 
   /**
@@ -4125,11 +4109,10 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
-   * After scrollLines(), repair on ANY upward gesture in a non-shell session
-   * marked by live output since its last mux-full-history replay (#814), using
-   * a content anchor to hold the reader's place. Unmarked sessions still pull
-   * at the top (#205); shells pull only a bounded window there. The pull owns
-   * cooldown/latch and downgrade guards.
+   * After scrollLines(), pull only at the top of the local buffer (#205).
+   * Shells pull a bounded window; full captures while reading require the
+   * explicit Reload history action (#814). The pull owns cooldown/latch and
+   * downgrade guards. Content-anchored replays keep session-scoped travel.
    *
    * It is also what brings up the partial-history notice, and what retires it
    * once a downward scroll is back at live output (_setHistoryNoticeRevealed).
@@ -4147,20 +4130,14 @@ Object.assign(CodemanApp.prototype, {
     }
     if (lines === 0) return;
     const buffer = this.terminal?.buffer?.active;
-    const reachedTop = buffer?.viewportY === 0;
+    if (buffer?.viewportY !== 0) return;
     const sessionId = this.activeSessionId;
-    const repair = sessionId && this._liveOutputSinceFullPull?.has(sessionId) &&
-      this.sessions.get(sessionId)?.mode !== 'shell';
-    if (!repair && buffer?.viewportY !== 0) return;
     // An earlier frame already started a pull and owns the notice reveal.
     if (this._fullHistoryRepullInFlight || this._isLoadingBuffer) return;
-    Promise.resolve(repair
-      ? this._maybeRefetchFullHistory?.({ anchor: 'content' })
-      : this._maybeRefetchFullHistory?.())
+    Promise.resolve(this._maybeRefetchFullHistory?.())
       .catch(() => {})
       .then(() => {
-        if (sessionId && this.activeSessionId === sessionId &&
-          (reachedTop || this.terminal?.buffer?.active?.viewportY === 0)) {
+        if (sessionId && this.activeSessionId === sessionId) {
           this._setHistoryNoticeRevealed?.(sessionId);
         }
       });
@@ -4747,9 +4724,8 @@ Object.assign(CodemanApp.prototype, {
         marked.add(flushSessionId);
         const generations = (this._liveOutputGen ||= new Map());
         generations.set(flushSessionId, (generations.get(flushSessionId) || 0) + 1);
-        // Visibility only changes here when the mark appears; scrolling is
-        // covered by the touch-only onScroll hook.
-        if (newlyMarked) this._syncHistoryReloadButton?.();
+        // Mark transitions sync immediately; onScroll is coalesced on all devices.
+        if (newlyMarked) this._syncHistoryReloadAction?.();
       }
     } catch (err) {
       this._terminalWriteInFlight = false;
@@ -5091,10 +5067,10 @@ Object.assign(CodemanApp.prototype, {
         this.batchTerminalWrite(entry.data);
       }
     }
-    const recoverySession = this._pendingDroppedOutputRecovery;
+    const recovery = this._pendingDroppedOutputRecovery;
     this._pendingDroppedOutputRecovery = null;
-    if (recoverySession && recoverySession === this.activeSessionId) {
-      this._scheduleDroppedOutputRecovery?.(recoverySession);
+    if (recovery && recovery.sessionId === this.activeSessionId) {
+      this._scheduleDroppedOutputRecovery?.(recovery.sessionId, recovery.attempt);
     }
     return true;
   },

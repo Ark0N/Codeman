@@ -648,6 +648,8 @@ Object.assign(CodemanApp.prototype, {
     );
     document.getElementById('appSettingsTerminalWheelLocal').checked =
       settings.terminalWheelLocalScrollback ?? defaults.terminalWheelLocalScrollback ?? false;
+    document.getElementById('appSettingsHistoryReloadAction').checked =
+      settings.historyReloadAction ?? defaults.historyReloadAction ?? true;
     document.getElementById('appSettingsCjkInput').checked = settings.cjkInputEnabled ?? defaults.cjkInputEnabled ?? false;
     document.getElementById('appSettingsExtendedKeyboardBar').checked = settings.extendedKeyboardBar ?? false;
     document.getElementById('appSettingsTabTwoRows').checked = settings.tabTwoRows ?? defaults.tabTwoRows ?? false;
@@ -3194,6 +3196,7 @@ Object.assign(CodemanApp.prototype, {
         document.getElementById('appSettingsTerminalFontWeightBold')
       ),
       terminalWheelLocalScrollback: document.getElementById('appSettingsTerminalWheelLocal').checked,
+      historyReloadAction: document.getElementById('appSettingsHistoryReloadAction').checked,
       cjkInputEnabled: document.getElementById('appSettingsCjkInput').checked,
       webglRendererEnabled: document.getElementById('appSettingsWebglRenderer').checked,
       extendedKeyboardBar: document.getElementById('appSettingsExtendedKeyboardBar').checked,
@@ -3282,6 +3285,7 @@ Object.assign(CodemanApp.prototype, {
     this._updateLocalEchoState();
     // Turning Keep Size Under Keyboard off while it holds releases it now.
     this._reconcileKeyboardHold?.();
+    this._syncHistoryReloadAction?.();
     this.applyTerminalFontFamily?.(settings.terminalFontFamily);
     this.applyTerminalFontWeights?.(settings);
 
@@ -3455,6 +3459,7 @@ Object.assign(CodemanApp.prototype, {
       showTileGridButton: _stg,
       webglRendererEnabled: _wgl,
       terminalWheelLocalScrollback: _twls,
+      historyReloadAction: _hra,
       // Copy-on-select. Per-device (clipboard access differs by device and by
       // origin: the plain-HTTP LAN install has no navigator.clipboard at all)
       // and absent from SettingsUpdateSchema (.strict()), so sending it would
@@ -4479,6 +4484,7 @@ Object.assign(CodemanApp.prototype, {
         sessionSidebarFontSize: 12,
         cjkInputEnabled: false,
         terminalWheelLocalScrollback: false, // mobile scrolls via touch, not wheel
+        historyReloadAction: true,
         webglRendererEnabled: false, // mobile always uses the DOM renderer
         skin: 'daylight-blue',
       };
@@ -5211,6 +5217,7 @@ Object.assign(CodemanApp.prototype, {
       'terminalFontFamily', 'terminalFontWeight', 'terminalFontWeightBold',
       'language',
       'terminalWheelLocalScrollback',
+      'historyReloadAction',
       'autoCopySelection', 'copyStripMargin',
       'showSessionButton', 'showAwayDigestButton', 'showCronButton', 'showGitStatus', 'gitStatusTree', 'gitStatusMaxRepos', 'gitStatusTimeoutSeconds', 'showEditHistory',
       'showTabDetachButton',
