@@ -143,6 +143,7 @@ function makeApp(
     _loadBufferQueue: null as { at: number; data: string }[] | null,
     _fullHistoryRepullAt: new Map<string, number>(),
     _fullHistoryRepullUseless: new Set<string>(),
+    _historyReloadDismissed: new Set<string>(),
     _paneHistoryLines: new Map<string, number>(),
     terminalBufferCache: new Map<string, string>(),
     terminal: {
@@ -373,6 +374,11 @@ describe('manual full-history recovery while reading (#814)', () => {
     { moves: [-1000, 30], distance: 340 },
   ])('replays travel $moves made during an unfinished replay, clamped per move', async ({ moves, distance }) => {
     const { app, active, liveOutput, reload, pauseReplay } = makeScrollApp();
+    // The replay prepends older rows; give the reader real matching content
+    // rather than relying on the old blank-buffer bottom-distance fallback.
+    Object.assign(active, {
+      getLine: (row: number) => ({ translateToString: () => `history ${row - active.baseY}` }),
+    });
     liveOutput();
     active.viewportY -= 5; // Read five rows above live output before the manual action.
     const paused = pauseReplay();
@@ -478,11 +484,16 @@ describe('manual full-history recovery while reading (#814)', () => {
     liveOutput();
     app._fullHistoryRepullAt.set('s1', Date.now());
     active.length = 1000;
+    active.viewportY -= 5;
+    const eligible = loadAppMethod('_historyReloadActionEligible');
+    expect(eligible.call(app)).toBe(true);
     await reload();
     expect(urls).toHaveLength(1);
     expect(app._resetTerminalForReplay).not.toHaveBeenCalled();
     expect(app._liveOutputSinceFullPull.has('s1')).toBe(true);
     expect(app._fullHistoryRepullUseless.has('s1')).toBe(true);
+    expect(app._historyReloadDismissed.has('s1')).toBe(true);
+    expect(eligible.call(app)).toBe(false);
   });
 
   it.each(['empty', 'tab-switch', 'downgrade', 'bounded-shell', 'rejection'])(
@@ -872,25 +883,25 @@ describe('content anchors hold the reader through a history repair', () => {
     expect(anchor.offset).toBe(1);
   });
 
-  it('chooses the nearest exact signature over a nearer first-row-only match', () => {
+  it('keeps the old viewport when two complete contexts match equally well', () => {
     const { capture, restore } = fixture(['head', 'A', 'B', 'C', ...Array(20).fill('tail')], 1);
     const anchor = capture();
     const next = Array(34).fill('other');
     next.splice(3, 3, 'A', 'B', 'C');
     next.splice(10, 3, 'A', 'wrong', 'wrong');
     next.splice(17, 3, 'A', 'B', 'C');
-    expect(restore(anchor, next)).toBe(17);
+    expect(restore(anchor, next)).toBe(1);
   });
 
-  it('falls back to the nearest first row, then distance from the bottom when nothing matches', () => {
+  it('keeps the old viewport rather than trusting an isolated or absent row', () => {
     const rows = Array.from({ length: 30 }, (_, i) => `row ${i}`);
     const { capture, restore } = fixture(rows);
     const anchor = capture();
     const next = Array(40).fill('other');
     next[8] = 'row 5';
     next[17] = 'row 5';
-    expect(restore(anchor, next)).toBe(17);
-    expect(restore(anchor, Array(40).fill('no match'))).toBe(15);
+    expect(restore(anchor, next)).toBe(5);
+    expect(restore(anchor, Array(40).fill('no match'))).toBe(5);
   });
 
   it('keeps bottom distance within the bottom tolerance even if matching text exists', () => {
@@ -899,20 +910,56 @@ describe('content anchors hold the reader through a history repair', () => {
     expect(restore(capture(), [...rows, ...Array(10).fill('new')])).toBe(36);
   });
 
+  it('follows a lone distinctive row among blanks when history is inserted above the reader', () => {
+    const rows = Array.from({ length: 60 }, (_, i) => `row ${i}`);
+    for (let i = 20; i < 30; i++) rows[i] = '';
+    rows[25] = 'tool result: src/engine.ts';
+    const { app, capture, restore } = fixture(rows, 20);
+    Object.assign(app.terminal, { rows: 10 });
+    const anchor = capture();
+    const next = [...Array.from({ length: 40 }, (_, i) => `recovered ${i}`), ...rows];
+    expect(restore(anchor, next)).toBe(60);
+  });
+
+  it('uses the visible tool result rather than a nearer copy of repeated TUI borders', () => {
+    const repeated = ['╭────────╮', '', '│ Working │', '╰────────╯', '', 'OMP · processing'];
+    const rows = Array.from({ length: 300 }, (_, i) => repeated[i % repeated.length]);
+    rows[125] = 'tool result: src/engine.ts';
+    const { app, capture, restore } = fixture(rows, 120);
+    Object.assign(app.terminal, { rows: 18 });
+    const anchor = capture();
+    const next = [...rows.slice(0, 200), ...Array(60).fill('recovered below reader'), ...rows.slice(200)];
+    expect(restore(anchor, next)).toBe(120);
+  });
+
+  it.each([false, true])('keeps the old viewport for ambiguous furniture (distinctive row lost: %s)', (lost) => {
+    const repeated = ['╭────────╮', '', '│ Working │', '╰────────╯', '', 'OMP · processing'];
+    const rows = Array.from({ length: 300 }, (_, i) => repeated[i % repeated.length]);
+    if (lost) rows[125] = 'tool result absent from the capture';
+    const { app, capture, restore } = fixture(rows, 120);
+    Object.assign(app.terminal, { rows: 18 });
+    const anchor = capture();
+    const retained = rows.map((text, i) => (lost && i === 125 ? repeated[i % repeated.length] : text));
+    const next = [...retained.slice(0, 200), ...Array(60).fill('recovered below reader'), ...retained.slice(200)];
+    expect(restore(anchor, next)).toBe(120);
+  });
+
   it.each(['first-row-only', 'absent'])('bounds a 50k-row search with an %s signature', (kind) => {
     const rows = Array.from({ length: 50_000 }, (_, i) => `original ${i}`);
-    const { active, capture, restore } = fixture(rows, 25_000);
+    const { app, active, capture, restore } = fixture(rows, 25_000);
+    Object.assign(app.terminal, { rows: 64 });
     const anchor = capture();
     const next = Array(50_000).fill('other');
     if (kind === 'first-row-only') {
       next[25_100] = anchor.signature[0];
       next[24_800] = anchor.signature[0];
     }
-    // An exact match outside the budget must not make the scan traverse 50k rows.
-    next.splice(30_000, 3, ...anchor.signature);
+    // Even a whole matching viewport outside the budget cannot extend the scan.
+    next.splice(30_000, anchor.context.length, ...anchor.context);
     active.getLine.mockClear();
-    expect(restore(anchor, next)).toBe(kind === 'first-row-only' ? 25_100 : 25_000);
-    expect(active.getLine.mock.calls.length).toBeLessThanOrEqual(4005);
+    expect(restore(anchor, next)).toBe(25_000);
+    // 4001 possible starts plus the other 63 rows in the full viewport context.
+    expect(active.getLine.mock.calls.length).toBeLessThanOrEqual(4064);
   });
 });
 
@@ -939,6 +986,8 @@ describe('manual history banner action', () => {
       active: true,
       detached: false,
       enabled: true,
+      loadingBuffer: false,
+      paneHistoryLines: undefined as number | undefined,
       ...options,
     };
     const element = (): BannerElement => ({
@@ -976,6 +1025,10 @@ describe('manual history banner action', () => {
       _historyNoticeDismissed: new Set<string>(),
       _historyNoticeRevealedFor: null as string | null,
       _fullHistoryRepullInFlight: Boolean(state.inFlight),
+      _isLoadingBuffer: Boolean(state.loadingBuffer),
+      _paneHistoryLines: new Map<string, number>(
+        state.paneHistoryLines === undefined ? [] : [['s1', Number(state.paneHistoryLines)]]
+      ),
       detachedSessions: new Set(state.detached ? ['s1'] : []),
       _tilesOwnTerminal: () => state.tiles,
       _maybeRefetchFullHistory: vi.fn(async (_opts: object) => {}),
@@ -1000,6 +1053,9 @@ describe('manual history banner action', () => {
     { opts: { bottom: true }, visible: false },
     { opts: { marked: false }, visible: false },
     { opts: { inFlight: true }, visible: false },
+    { opts: { paneHistoryLines: 0 }, visible: false },
+    { opts: { paneHistoryLines: 5 }, visible: true },
+    { opts: { loadingBuffer: true }, visible: false },
     { opts: { tiles: true }, visible: false },
     { opts: { active: false }, visible: false },
     { opts: { detached: true }, visible: false },
@@ -1023,6 +1079,57 @@ describe('manual history banner action', () => {
     await tapped;
     expect(button()!.disabled).toBe(false);
     expect(button()!.textContent).toBe('Reload history');
+  });
+
+  it('retires a refused reload and ignores another tap on the same stale button', async () => {
+    const { app, bar, button } = fixture();
+    app.terminal.buffer.active.length = 1000;
+    app._maybeRefetchFullHistory.mockImplementation((opts) => refetch.call(app, opts));
+    app._syncHistoryReloadAction();
+    const staleButton = button()!;
+    await staleButton.onclick!();
+    expect(app._resetTerminalForReplay).not.toHaveBeenCalled();
+    expect(app._historyReloadDismissed.has('s1')).toBe(true);
+    expect(bar.hidden).toBe(true);
+    expect(button()).toBeUndefined();
+    await staleButton.onclick!();
+    expect(app._fetchTerminalCapture).toHaveBeenCalledExactlyOnceWith('/api/sessions/s1/terminal?full=1', {
+      full: true,
+    });
+    expect(app._maybeRefetchFullHistory).toHaveBeenCalledOnce();
+    expect(bar.hidden).toBe(true);
+  });
+
+  it('syncs the action after a marked session finishes loading', () => {
+    const { app, bar, button } = fixture({ marked: false });
+    const owner = (mixin._beginBufferLoad as Function).call(app);
+    app._liveOutputSinceFullPull.add('s1');
+    app._syncHistoryReloadAction();
+    expect(app._historyReloadActionEligible()).toBe(false);
+    expect(bar.hidden).toBe(true);
+    (mixin._finishBufferLoad as Function).call(app, owner);
+    expect(app._isLoadingBuffer).toBe(false);
+    expect(app._historyReloadActionEligible()).toBe(true);
+    expect(bar.hidden).toBe(false);
+    expect(button()!.textContent).toBe('Reload history');
+  });
+
+  it('hides a dismissed loading action before the pull settles and keeps it hidden', async () => {
+    const { app, bar, button, dismiss } = fixture();
+    const { promise, resolve: release } = Promise.withResolvers<void>();
+    app._maybeRefetchFullHistory.mockReturnValueOnce(promise);
+    app._syncHistoryReloadAction();
+    const tapped = button()!.onclick!();
+    expect(button()!.textContent).toBe('Loading…');
+    dismiss()!.onclick!();
+    expect(bar.hidden).toBe(true);
+    expect(app._historyReloadDismissed.has('s1')).toBe(true);
+    app._syncHistoryReloadAction();
+    expect(bar.hidden).toBe(true);
+    release();
+    await tapped;
+    expect(bar.hidden).toBe(true);
+    expect(button()).toBeUndefined();
   });
 
   it.each(['recoverable', 'exhausted', 'capped'])('never duplicates the %s notice load control', (kind) => {

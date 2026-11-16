@@ -466,3 +466,120 @@ describe.each([true, false])('manual history gap repair (touch: %s)', (touch) =>
     }
   }, 60_000);
 });
+
+it('holds an OMP reading row through repeated repaint history and capped live flushes', async () => {
+  const { context, page } = await openTerminal(true);
+  const readingRow = 'Reading tool result: src/engine.ts — preserve this row';
+  try {
+    const before = await page.evaluate(
+      async ({ session, readingRow }) => {
+        const w = window as RepairWindow;
+        const app = w.app;
+        const terminal = app.terminal;
+        const write = async (data: string) => {
+          const { promise, resolve } = Promise.withResolvers<void>();
+          terminal.write(data, resolve);
+          await promise;
+        };
+        terminal.reset();
+        terminal.options.scrollback = 50_000;
+        const repeated = [
+          '╭──────────────────╮',
+          '',
+          '│ Working…         │',
+          '╰──────────────────╯',
+          '',
+          '⠋ OMP · processing',
+        ];
+        const rows = Array.from({ length: 50_100 }, (_, i) =>
+          i % 1000 === 999 ? `tool output ${'wrapped context '.repeat(18)}` : repeated[i % repeated.length]
+        );
+        await write(rows.join('\r\n') + '\r\n');
+        terminal.scrollToLine(25_000);
+        app._syncStickyScrollBaseline();
+        // Cursor-addressed redraws and CSI S leave repeated TUI furniture in history.
+        const repaint = repeated.map((text, row) => `\x1b[${row + 1};1H\x1b[2K${text}`).join('');
+        app._onSessionTerminal({ id: session, data: `\x1b[6S${repaint}\x1b[6S${repaint}` });
+        await write('');
+        while (app.pendingWrites.length || app._terminalWriteInFlight) {
+          const { promise, resolve } = Promise.withResolvers<void>();
+          requestAnimationFrame(() => resolve());
+          await promise;
+        }
+        // Put the distinctive tool result BELOW the three repeated anchor rows.
+        const buffer = terminal.buffer.active;
+        const top = buffer.viewportY;
+        const snapshot = Array.from(
+          { length: buffer.length },
+          (_, i) => buffer.getLine(i)?.translateToString(true) || ''
+        );
+        snapshot[top + 5] = readingRow;
+        await write('\x1bc' + snapshot.join('\r\n'));
+        terminal.scrollToLine(top);
+        app._syncStickyScrollBaseline();
+        const seeded = terminal.buffer.active;
+        const captured = Array.from(
+          { length: seeded.length },
+          (_, i) => seeded.getLine(i)?.translateToString(true) || ''
+        );
+        captured.splice(top + 500, 0, ...Array.from({ length: 120 }, (_, i) => `Recovered tool detail ${i}`));
+        const terminalBuffer = captured.join('\r\n');
+        const realFetch = window.fetch.bind(window);
+        window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+          const url = String(typeof input === 'string' ? input : ((input as Request).url ?? input));
+          if (!url.includes(`/api/sessions/${session}/terminal`)) return realFetch(input, init);
+          w.repairTest.pulls++;
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            headers: new Headers(),
+            json: async () => {
+              app._onSessionTerminal({ id: session, data: '\r\nDownload-time output\r\n' });
+              return {
+                success: true,
+                data: { terminalBuffer, source: 'mux-full-history', paneHistoryLines: 100_000, truncated: false },
+              };
+            },
+          }) as unknown as Promise<Response>;
+        }) as typeof window.fetch;
+        app._liveOutputSinceFullPull.add(session);
+        app._syncHistoryReloadAction();
+        return {
+          offset: captured.indexOf(readingRow) - seeded.viewportY,
+          viewportY: seeded.viewportY,
+          baseY: seeded.baseY,
+        };
+      },
+      { session: SESSION, readingRow }
+    );
+    const button = page.locator('#historyTruncationBar').getByRole('button', { name: 'Reload history' });
+    await button.tap();
+    await waitForRepair(page);
+    const measure = () =>
+      page.evaluate((readingRow) => {
+        const app = (window as RepairWindow).app;
+        const buffer = app.terminal.buffer.active;
+        let row = -1;
+        for (let i = 0; i < buffer.length; i++) {
+          if (buffer.getLine(i)?.translateToString(true) === readingRow) {
+            row = i;
+            break;
+          }
+        }
+        return { offset: row - buffer.viewportY, viewportY: buffer.viewportY, baseY: buffer.baseY };
+      }, readingRow);
+    const afterReplay = await measure();
+    await page.evaluate((session) => {
+      (window as RepairWindow).app._onSessionTerminal({ id: session, data: '\r\nPost-replay output\r\n' });
+    }, SESSION);
+    await waitForRepair(page);
+    const afterFlush = await measure();
+    expect({ before, afterReplay, afterFlush }).toEqual({
+      before,
+      afterReplay: { ...afterReplay, offset: before.offset },
+      afterFlush: { ...afterFlush, offset: before.offset },
+    });
+  } finally {
+    await context.close();
+  }
+}, 120_000);
