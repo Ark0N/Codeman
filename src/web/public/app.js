@@ -3495,6 +3495,8 @@ class CodemanApp {
       // TUI modes still recover the whole picture, with the downgrade guard for
       // repaint-mode panes whose tmux capture can be smaller than xterm's buffer.
       const useFullHistory = this.sessions.get(sessionId)?.mode !== 'shell';
+      // Keep live output received during the capture marked for another full-history pull.
+      const liveOutputGen = this._liveOutputGen?.get(sessionId) || 0;
       let capture = await this._fetchTerminalCapture(
         useFullHistory
           ? `/api/sessions/${sessionId}/terminal?full=1`
@@ -3535,6 +3537,16 @@ class CodemanApp {
           undefined,
           this._bufferLoadFinishOpts(data, headersReceivedAt)
         );
+        if (
+          this.activeSessionId === sessionId &&
+          this._terminalRefreshOwner === refreshOwner &&
+          data.source === 'mux-full-history' &&
+          (this._liveOutputGen?.get(sessionId) || 0) === liveOutputGen
+        ) {
+          this._liveOutputSinceFullPull?.delete(sessionId);
+          this._historyReloadDismissed?.delete(sessionId);
+          this._syncHistoryReloadAction?.();
+        }
         // A tail fetch can be partial, and the banner would otherwise keep
         // describing the pre-refresh buffer (#258).
         this._setHistoryTruncation(sessionId, data);
