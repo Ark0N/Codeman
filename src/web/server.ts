@@ -2133,6 +2133,19 @@ export class WebServer extends EventEmitter {
       '</head>',
       () => `<script>window.__codemanKeyboardHoldModes=${JSON.stringify(keyboardHoldClis)};</script>\n</head>`
     );
+    // Which run modes take the wheel as SGR reports while they track the mouse
+    // (`_shouldForwardWheelToApp`), keyed by id with the `wheelForward` rule itself, so a
+    // custom clis.json entry shaped like pi forwards under its own id. `never` is left out.
+    // Disabled entries are kept (`listClis`, not `enabledClis`): disabling a CLI never ends
+    // its running sessions, and their wheel must keep working across a reload.
+    // `minVersion` is a free string a user's clis.json sets, hence the script escaper.
+    const wheelForwardClis = Object.fromEntries(
+      listClis()
+        .filter((entry) => entry.capabilities.wheelForward.mode !== 'never')
+        .map((entry) => [entry.id, entry.capabilities.wheelForward])
+    );
+    const wheelForwardJson = escapeScriptJson(JSON.stringify(wheelForwardClis));
+    html = html.replace('</head>', () => `<script>window.__codemanWheelForward=${wheelForwardJson};</script>\n</head>`);
     if (!soloSessionId && process.env.CODEMAN_GESTURE === '1') {
       html = html.replace('</head>', () => `<script>window.__codemanGestureAvailable=true;</script>\n</head>`);
       if (settings.gestureControlEnabled === true) {

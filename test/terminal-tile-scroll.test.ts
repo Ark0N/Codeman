@@ -49,6 +49,11 @@ const fetchMock = vi.fn();
  */
 const PAGE_KEY_MODES = STOCK_CLIS.filter((e) => e.capabilities.transcriptPageKeys === true).map((e) => e.id);
 
+/** The wheel-forwarding rules, read off the registry as the server builds `window.__codemanWheelForward`. */
+const WHEEL_FORWARD = Object.fromEntries(
+  STOCK_CLIS.filter((e) => e.capabilities.wheelForward.mode !== 'never').map((e) => [e.id, e.capabilities.wheelForward])
+);
+
 /**
  * The clock both panes read gesture gaps from (`performance.now()`). Real time by
  * default; a test that needs a pause or a burst moves it by hand.
@@ -62,6 +67,7 @@ function loadContext() {
     removeEventListener: vi.fn(),
     CodemanBase: { base: '' },
     __codemanTranscriptPageKeys: PAGE_KEY_MODES,
+    __codemanWheelForward: WHEEL_FORWARD,
   };
   const context = vm.createContext({
     console: { ...console, log: vi.fn(), debug: vi.fn() },

@@ -596,10 +596,14 @@ export interface CliCapabilities {
    * Forwarding the wheel to the CLI's own transcript. 'never' keeps local scrollback;
    * 'version-gated' forwards from `minVersion` on; 'always' forwards at any version. Either
    * forwarding mode applies only while the CLI has mouse tracking on (`cliMouseTracking`).
+   * Read by the browser's gate (`_shouldForwardWheelToApp` in terminal-ui.js) through
+   * `window.__codemanWheelForward`, which the server builds from this field for every CLI
+   * whose mode is not `never`, disabled ones included (their running sessions stay open).
    *
-   * ⚠️ Declared only: nothing reads this field yet (see DECLARED-FOR-LATER below). The browser's
-   * gate is `_shouldForwardWheelToApp` in terminal-ui.js, which keeps its own hand-written
-   * per-CLI rules, so changing a value here changes nothing until that gate is changed too.
+   * ⚠️ `cliMouseTracking` is only ever set for a CLI whose mouse DECSETs the server strips
+   * (`altScreen: 'strip-full'` or `'strip-mux-and-mouse'`), so a forwarding mode on any other
+   * `altScreen` never forwards: xterm keeps the DECSETs and encodes the wheel itself, until a
+   * replay drops its mouse mode.
    */
   wheelForward: { mode: 'never' | 'version-gated' | 'always'; minVersion?: string };
   /**
@@ -1009,14 +1013,15 @@ export interface CliOverlays {
 /**
  * ⚠️ DECLARED-FOR-LATER: fields no code reads yet.
  *
- * `accent`, `overlays.credStore`, `capabilities.echo`, `capabilities.wheelForward`,
- * `capabilities.keyboardAccessory` and `capabilities.maxFrameBytes` all describe FRONTEND
+ * `accent`, `overlays.credStore`, `capabilities.echo`, `capabilities.keyboardAccessory` and
+ * `capabilities.maxFrameBytes` all describe FRONTEND
  * behaviour, and most of the frontend is deliberately untouched by the change that introduced
  * this registry — `app.js`, `terminal-ui.js`, `styles.css` and friends keep their own
  * hand-authored per-CLI rules, and moving them is its own piece of work with its own way of
  * being verified (a mobile/browser suite the CI gate cannot see). `shortBadge` graduated out of
  * this list (docs/cli-enable-disable-plan.md, Phase 2): `GET /api/clis` reads it for the
- * CLI-management Settings list.
+ * CLI-management Settings list, and so did `capabilities.wheelForward`, which the browser's wheel
+ * gate reads through `window.__codemanWheelForward`.
  *
  * They are declared now because each entry should describe its CLI completely, and because
  * transcribing them while the hand-written source is still on screen is when the values are
