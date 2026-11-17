@@ -677,9 +677,22 @@ const CjkInput = (() => {
      * since nothing typed has reached the PTY yet. Off: the original live mode.
      */
     setHoldUntilEnter(on) {
+      // The placeholder first, before the early return: App Settings applies a
+      // language switch live and then calls this with the mode unchanged. It is
+      // written only when the text differs, so a field mid-composition is not
+      // touched. i18n.js skips <textarea> subtrees (what is typed there is user
+      // content), so it is translated here, like the prompt composer's.
+      if (_textarea) {
+        const source = !!on
+          ? 'Type, Enter to send (Shift+Enter: new line, Esc: clear)'
+          : 'CJK input (Enter = send, Esc = clear)';
+        const i18n = typeof window !== 'undefined' ? window.CodemanI18n : undefined;
+        const placeholder = typeof i18n?.t === 'function' ? i18n.t(source) : source;
+        if (_textarea.placeholder !== placeholder) _textarea.placeholder = placeholder;
+      }
       // Called on every session select and SSE reconnect: with the mode
-      // unchanged, leave the field alone, since rewriting its attributes while
-      // it has focus can disturb a composition in progress.
+      // unchanged, leave the rest of the field alone, since rewriting its
+      // attributes while it has focus can disturb a composition in progress.
       if (_holdApplied && _textarea && _hold === !!on) return;
       const wasHolding = _hold;
       _hold = !!on;
@@ -698,13 +711,6 @@ const CjkInput = (() => {
       _textarea.setAttribute('autocorrect', v);
       _textarea.setAttribute('autocapitalize', _hold ? 'sentences' : 'off');
       _textarea.setAttribute('spellcheck', _hold ? 'true' : 'false');
-      // i18n.js skips <textarea> subtrees (what is typed there is user content),
-      // so the placeholder is translated here, like the prompt composer's.
-      const placeholder = _hold
-        ? 'Type, Enter to send (Shift+Enter: new line, Esc: clear)'
-        : 'CJK input (Enter = send, Esc = clear)';
-      const i18n = typeof window !== 'undefined' ? window.CodemanI18n : undefined;
-      _textarea.placeholder = typeof i18n?.t === 'function' ? i18n.t(placeholder) : placeholder;
       if (_hold) {
         _cancelDebouncedFlush();
         _autoGrow();

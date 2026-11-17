@@ -372,12 +372,32 @@ describe('CJK input: Send on Enter', () => {
     // Runs on every session select and SSE reconnect, possibly mid-composition.
     const { CjkInput, textarea } = load();
     textarea.setAttribute.mockClear();
-    textarea.placeholder = 'untouched';
+    const placeholder = textarea.placeholder;
+    let writes = 0;
+    Object.defineProperty(textarea, 'placeholder', {
+      get: () => placeholder,
+      set: () => {
+        writes++;
+      },
+    });
     CjkInput.setHoldUntilEnter(true);
     expect(textarea.setAttribute).not.toHaveBeenCalled();
-    expect(textarea.placeholder).toBe('untouched');
+    expect(writes).toBe(0);
     CjkInput.setHoldUntilEnter(false);
     expect(textarea.setAttribute).toHaveBeenCalled();
+  });
+
+  it('follows a live language switch with the mode unchanged', () => {
+    // App Settings runs applyLocalization(), then _updateCjkInputState(), which
+    // calls setHoldUntilEnter() with the same mode.
+    let lang = 'en';
+    const { CjkInput, textarea } = load({ translate: (s) => (lang === 'zh' ? `zh:${s}` : s) });
+    expect(textarea.placeholder).toBe('Type, Enter to send (Shift+Enter: new line, Esc: clear)');
+    textarea.setAttribute.mockClear();
+    lang = 'zh';
+    CjkInput.setHoldUntilEnter(true);
+    expect(textarea.placeholder).toBe('zh:Type, Enter to send (Shift+Enter: new line, Esc: clear)');
+    expect(textarea.setAttribute).not.toHaveBeenCalled();
   });
 
   it('submit() from outside the field (toolbar Enter) sends like Enter', () => {

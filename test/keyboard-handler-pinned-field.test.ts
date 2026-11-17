@@ -75,6 +75,7 @@ function loadLayout({
     '.toolbar': el(),
     '.main': el(),
     '.keyboard-accessory-bar': el(),
+    '.mobile-case-picker.active .mobile-case-picker-sheet': el(300),
   };
   const cjk = { ...el(), id: 'cjkInput' };
   const context = vm.createContext({
@@ -126,6 +127,9 @@ describe('KeyboardHandler follows the visual-viewport pan on phones', () => {
     expect(nodes['.toolbar'].style.transform).toBe('');
     expect(nodes['.keyboard-accessory-bar'].style.transform).toBe('');
     expect(cjk.style.transform).toBe('');
+    // The open case sheet is inside .app too (index.html #mobileCasePickerModal):
+    // the layout gap on top of the shift floated it 186px above the keyboard.
+    expect(nodes['.mobile-case-picker.active .mobile-case-picker-sheet'].style.transform).toBe('');
   });
 
   it('keeps the old lift when there is no pan', () => {
@@ -133,6 +137,9 @@ describe('KeyboardHandler follows the visual-viewport pan on phones', () => {
     kh.updateLayoutForKeyboard();
     expect(nodes['.app'].style.transform).toBe('');
     expect(nodes['.toolbar'].style.transform).toBe('translateY(-286px)');
+    // Without a pan insideLift is the layout gap, so the case sheet keeps its lift
+    // (test/mobile-case-sheet-keyboard-lift.test.ts).
+    expect(nodes['.mobile-case-picker.active .mobile-case-picker-sheet'].style.transform).toBe('translateY(-286px)');
   });
 
   it('follows a pan whatever has focus, so a focus change cannot drop the shift', () => {

@@ -446,7 +446,8 @@ const KeyboardHandler = {
       // ⚠️ The transform makes .app the box its position:fixed children (header,
       // toolbar, accessory bar, the field) are placed against, so their keyboard lift
       // below is measured from .app's bottom, not the layout viewport's, or they would
-      // be lifted twice on a partial pan. The case sheet lives outside .app.
+      // be lifted twice on a partial pan. The case sheet (#mobileCasePickerModal) is
+      // inside .app too and takes the same lift.
       const appEl = document.querySelector('.app');
       const pan = isSmallMedium ? Math.round(window.visualViewport.offsetTop || 0) : 0;
       if (appEl) appEl.style.transform = pan > 0 ? `translateY(${pan}px)` : '';
@@ -475,7 +476,7 @@ const KeyboardHandler = {
           accessoryBar.style.transform = insideLift > 0 ? `translateY(${-insideLift}px)` : '';
         }
         if (caseSheet) {
-          caseSheet.style.transform = keyboardOffset > 0 ? `translateY(${-keyboardOffset}px)` : '';
+          caseSheet.style.transform = insideLift > 0 ? `translateY(${-insideLift}px)` : '';
         }
         if (main && keyboardHeight > 0) {
           // The field grows with its text in Send-on-Enter mode, so reserve its
