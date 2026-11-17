@@ -496,6 +496,67 @@ describe('manual full-history recovery while reading (#814)', () => {
     expect(eligible.call(app)).toBe(false);
   });
 
+  it.each([
+    { kind: 'byte-history fallback', data: { terminalBuffer: lines(400), source: 'history' } },
+    { kind: 'empty response', data: { terminalBuffer: '', source: 'history' } },
+  ])('retires manual reload after a $kind answer', async ({ data }) => {
+    const { app, active, urls, liveOutput, reload } = makeScrollApp();
+    app._fetchTerminalCapture.mockImplementation(async (url: string) => {
+      urls.push(url);
+      return { headersAt: performance.now(), headers: { get: () => '' }, json: { success: true, data } };
+    });
+    liveOutput();
+    active.viewportY -= 5;
+    const eligible = loadAppMethod('_historyReloadActionEligible');
+    expect(eligible.call(app)).toBe(true);
+    await reload();
+    expect(urls).toHaveLength(1);
+    // Only a mux replay clears the mark, so without retiring the action every
+    // tap would repeat the forced, unbounded capture.
+    expect(app._liveOutputSinceFullPull.has('s1')).toBe(true);
+    active.viewportY = Math.max(0, active.baseY - 5);
+    expect(eligible.call(app)).toBe(false);
+  });
+
+  it('keeps manual reload available after a transient error envelope', async () => {
+    const { app, active, urls, liveOutput, reload } = makeScrollApp();
+    app._fetchTerminalCapture.mockImplementation(async (url: string) => {
+      urls.push(url);
+      return { headersAt: performance.now(), headers: { get: () => '' }, json: { success: false, data: {} } };
+    });
+    liveOutput();
+    active.viewportY -= 5;
+    await reload();
+    expect(urls).toHaveLength(1);
+    expect(loadAppMethod('_historyReloadActionEligible').call(app)).toBe(true);
+  });
+
+  it('ignores a fallback answer that arrives after an A -> B -> A switch', async () => {
+    const { app, active, urls, liveOutput, reload } = makeScrollApp();
+    const { promise: answer, resolve: respond } = Promise.withResolvers<void>();
+    app._fetchTerminalCapture.mockImplementation(async (url: string) => {
+      urls.push(url);
+      await answer;
+      return {
+        headersAt: performance.now(),
+        headers: { get: () => '' },
+        json: { success: true, data: { terminalBuffer: lines(400), source: 'history' } },
+      };
+    });
+    liveOutput();
+    active.viewportY -= 5;
+    const pending = reload();
+    // The user switched away and back; that newer select's capture already
+    // cleared the dismissal, so the old request's answer is stale.
+    app._selectGeneration += 2;
+    app._historyReloadDismissed.delete('s1');
+    respond();
+    await pending;
+    expect(urls).toHaveLength(1);
+    expect(app._historyReloadDismissed.has('s1')).toBe(false);
+    expect(loadAppMethod('_historyReloadActionEligible').call(app)).toBe(true);
+  });
+
   it.each(['empty', 'tab-switch', 'downgrade', 'bounded-shell', 'rejection'])(
     'flushes download-time output on the %s non-replay path',
     async (exit) => {
