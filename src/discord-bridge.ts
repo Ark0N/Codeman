@@ -27,6 +27,7 @@ import { join } from 'node:path';
 import { probePathKind } from './utils/bounded-path-probe.js';
 import { DISCORD_RECEIVED_DIR } from './web/paste-image-gc.js';
 import WebSocket from 'ws';
+import { DiscordReplyDedupe } from './discord-reply-dedupe.js';
 import { WEBHOOK_SCOPES, type WebhookUrgency } from './types/push.js';
 import {
   DISCORD_ON_DELETE,
@@ -824,6 +825,7 @@ export interface DiscordBridgeDeps {
 }
 
 export class DiscordBridge {
+  private readonly replies: DiscordReplyDedupe;
   private cfg: DiscordConfig = { ...DEFAULT_DISCORD_CONFIG };
   private threads: Record<string, string> = {};
   private loaded = false;
@@ -857,6 +859,7 @@ export class DiscordBridge {
 
   constructor(private readonly deps: DiscordBridgeDeps) {
     this.now = deps.now ?? Date.now;
+    this.replies = new DiscordReplyDedupe(deps.configDir, this.now);
     this.api = new DiscordApi(() => this.cfg.token, deps.fetchImpl, deps.sleep);
   }
 
@@ -1312,6 +1315,7 @@ export class DiscordBridge {
       await this.say(m.channel_id, 'The agent in that tab has exited, so nothing was typed.');
       return;
     }
+    if (!(await this.replies.claim(m.guild_id, m.channel_id, m.id))) return;
     this.lastReply.set(sessionId, t);
     const saved = await this.saveAttachments(sessionId, m);
     const text = sanitiseReply(m.content ?? '', saved.paths);

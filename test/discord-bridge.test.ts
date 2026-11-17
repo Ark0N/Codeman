@@ -448,6 +448,38 @@ describe('DiscordBridge', () => {
       return b;
     }
 
+    it('deduplicates replayed real gateway IDs across restart while new replies still work', async () => {
+      const b = await ready();
+      const m = reply({ id: '555555555555555555' });
+      await b.onGatewayMessage(m);
+      b.stop();
+      t += 10_000;
+      const next = await ready();
+      await next.onGatewayMessage(m);
+      expect(sendInput).toHaveBeenCalledTimes(1);
+      await next.onGatewayMessage(reply({ id: '555555555555555556', content: 'continue' }));
+      expect(sendInput).toHaveBeenCalledTimes(2);
+      next.stop();
+    });
+
+    it('delivers replies and alerts when metadata is corrupt and recovers without restarting', async () => {
+      const b = await ready();
+      writeFileSync(join(dir, 'discord-reply-dedupe.json'), '{');
+      const log = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      try {
+        await b.onGatewayMessage(reply({ id: '555555555555555555' }));
+        expect(sendInput).toHaveBeenCalledTimes(1);
+        t += 10_000;
+        expect((await b.notify(MSG))?.ok).toBe(true);
+        rmSync(join(dir, 'discord-reply-dedupe.json'));
+        await b.onGatewayMessage(reply({ id: '555555555555555556' }));
+        expect(sendInput).toHaveBeenCalledTimes(2);
+        expect(log).toHaveBeenCalledTimes(1);
+      } finally {
+        log.mockRestore();
+        b.stop();
+      }
+    });
     it('types an allowed reply into the mapped session and ticks it', async () => {
       const b = await ready();
       await b.onGatewayMessage(reply());
@@ -1157,11 +1189,11 @@ describe('DiscordBridge files and startup hint', () => {
     await b.onGatewayMessage(reply({ content: '2', attachments: [] }));
     expect(sent.at(-1)?.[1]).toBe('2');
     t += 5_000;
-    await b.onGatewayMessage(reply({ content: 'yes', attachments: [] }));
+    await b.onGatewayMessage(reply({ id: '555555555555555556', content: 'yes', attachments: [] }));
     expect(sent.at(-1)?.[1]).toBe('yes\r');
     t += 5_000;
     waiting = false;
-    await b.onGatewayMessage(reply({ content: '2', attachments: [] }));
+    await b.onGatewayMessage(reply({ id: '555555555555555557', content: '2', attachments: [] }));
     expect(sent.at(-1)?.[1]).toBe('2\r');
     b.stop();
   });
