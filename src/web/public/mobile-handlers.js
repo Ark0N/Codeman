@@ -435,21 +435,44 @@ const KeyboardHandler = {
       // BEHIND the keyboard with its own search box out of sight.
       const caseSheet = document.querySelector('.mobile-case-picker.active .mobile-case-picker-sheet');
 
+      // A focused field that starts behind the keyboard (the pinned CJK / Send on
+      // Enter field) makes Android pan the visual viewport down to reveal it (measured
+      // on Chrome: offsetTop 285px with a 458px visual viewport in a 744px layout one).
+      // The app is sized to the visual viewport but laid out at the top of the layout
+      // viewport, so that pan left only the terminal's last line on screen. On phones,
+      // follow the pan while the keyboard is up, whatever has focus: without a pan
+      // (offsetTop 0, the usual case) nothing moves, and a focus change that keeps the
+      // pan cannot drop the shift. Every other branch clears it.
+      // ⚠️ The transform makes .app the box its position:fixed children (header,
+      // toolbar, accessory bar, the field) are placed against, so their keyboard lift
+      // below is measured from .app's bottom, not the layout viewport's, or they would
+      // be lifted twice on a partial pan. The case sheet lives outside .app.
+      const appEl = document.querySelector('.app');
+      const pan = isSmallMedium ? Math.round(window.visualViewport.offsetTop || 0) : 0;
+      if (appEl) appEl.style.transform = pan > 0 ? `translateY(${pan}px)` : '';
+      // The layout viewport's height, which position:fixed bottoms are measured from.
+      // ⚠️ Not window.innerHeight alone: on the first keyboard open after focusing the
+      // pinned field, iOS Safari reported innerHeight as the shrunk visual height (323)
+      // while the layout viewport stayed 640 (documentElement.clientHeight), so the lift
+      // came out 0 and the bars stayed behind the keyboard. Earlier a delayed
+      // scrollIntoView re-ran this pass once innerHeight had caught up; without it the
+      // stale value stuck. The larger of the two cannot be stale in that direction.
+      const layoutHeight = Math.max(window.innerHeight, document.documentElement?.clientHeight || 0);
+      const visualBottom = window.visualViewport.offsetTop + window.visualViewport.height;
+      const keyboardOffset = Math.max(0, layoutHeight - visualBottom);
+      const insideLift = pan > 0 && appEl ? Math.max(0, pan + appEl.offsetHeight - visualBottom) : keyboardOffset;
+
       if (isSmallMedium) {
         // Phones/small tablets: toolbar and accessory bar are position:fixed
         // via CSS. Use translateY to lift them above the keyboard.
         const toolbar = document.querySelector('.toolbar');
         const main = document.querySelector('.main');
 
-        const layoutHeight = window.innerHeight;
-        const visualBottom = window.visualViewport.offsetTop + window.visualViewport.height;
-        const keyboardOffset = Math.max(0, layoutHeight - visualBottom);
-
         if (toolbar) {
-          toolbar.style.transform = keyboardOffset > 0 ? `translateY(${-keyboardOffset}px)` : '';
+          toolbar.style.transform = insideLift > 0 ? `translateY(${-insideLift}px)` : '';
         }
         if (accessoryBar) {
-          accessoryBar.style.transform = keyboardOffset > 0 ? `translateY(${-keyboardOffset}px)` : '';
+          accessoryBar.style.transform = insideLift > 0 ? `translateY(${-insideLift}px)` : '';
         }
         if (caseSheet) {
           caseSheet.style.transform = keyboardOffset > 0 ? `translateY(${-keyboardOffset}px)` : '';
@@ -476,11 +499,8 @@ const KeyboardHandler = {
       // CJK textarea positioning (always position:fixed on touch devices).
       if (cjkInput?.classList.contains('cjk-input-visible') && keyboardHeight > 0) {
         if (isSmallMedium) {
-          // Phones: use translateY like toolbar/accessory bar.
-          const layoutHeight = window.innerHeight;
-          const visualBottom = window.visualViewport.offsetTop + window.visualViewport.height;
-          const keyboardOffset = Math.max(0, layoutHeight - visualBottom);
-          cjkInput.style.transform = keyboardOffset > 0 ? `translateY(${-keyboardOffset}px)` : '';
+          // Phones: use translateY like toolbar/accessory bar (it sits inside .app too).
+          cjkInput.style.transform = insideLift > 0 ? `translateY(${-insideLift}px)` : '';
           cjkInput.style.bottom = '';
         } else {
           // iPad: direct bottom = keyboard + accessory bar height.
@@ -503,7 +523,11 @@ const KeyboardHandler = {
     // keyboard was still up must still have its inline offset cleared, or the
     // next open slides in already displaced.
     const caseSheet = document.querySelector('.mobile-case-picker-sheet');
+    const appEl = document.querySelector('.app');
 
+    if (appEl) {
+      appEl.style.transform = '';
+    }
     if (toolbar) {
       toolbar.style.transform = '';
     }
@@ -733,6 +757,11 @@ const KeyboardHandler = {
     if (el.closest('.xterm') || el.closest('.terminal-container')) {
       return false;
     }
+    // The pinned CJK / Send on Enter field is position:fixed and lifted above the
+    // keyboard by updateLayoutForKeyboard(). Scrolling it into view centred it in its
+    // scrollable ancestors instead, which pushed the terminal off screen whenever the
+    // field took focus.
+    if (el.id === 'cjkInput') return false;
 
     const tagName = el.tagName?.toLowerCase();
     // Exclude type=range, type=checkbox, type=radio (don't trigger keyboard)

@@ -1378,7 +1378,7 @@ Object.assign(CodemanApp.prototype, {
               // selectSession() ends with scrollToLastNonEmptyLine(), that made
               // the keyboard unreachable after every tab switch.
               ev.preventDefault();
-              this._blurMobileTerminalInput();
+              if (this._contentTouchStartBlurs()) this._blurMobileTerminalInput();
             }
             // Hold still and this press becomes a text selection. Cancelled by any
             // travel past the shared tap slop below, so a scroll can never become one.
@@ -5701,6 +5701,19 @@ Object.assign(CodemanApp.prototype, {
     return 'content';
   },
 
+  /**
+   * Whether a touchstart on transcript content should blur the focused terminal input.
+   * It does for xterm's helper textarea: that blur, with the preventDefault beside it,
+   * keeps the compatibility click from opening the keyboard. It must NOT for the pinned
+   * CJK field: at touchstart the gesture may still be a scroll, and that field owns the
+   * keyboard while it is visible, so blurring it closed the keyboard on every swipe that
+   * started on the live screen. A real tap on inert transcript still closes the keyboard
+   * at touchend (the startedWithTerminalFocus branch), so a tap keeps its meaning.
+   */
+  _contentTouchStartBlurs() {
+    return document.activeElement?.id !== 'cjkInput';
+  },
+
   _blurMobileTerminalInput() {
     const active = document.activeElement;
     if (
@@ -5899,6 +5912,9 @@ Object.assign(CodemanApp.prototype, {
     ) {
       // No focus change: a 'content' tap was already blurred by touchstart, and
       // popping the keyboard behind a tab that is about to take over is noise.
+      // The pinned CJK field is the exception touchstart leaves focused (a swipe must
+      // not close its keyboard), so a tap that opens a link closes it here instead.
+      if (!this._contentTouchStartBlurs()) this._blurMobileTerminalInput();
       return 'link';
     }
 
