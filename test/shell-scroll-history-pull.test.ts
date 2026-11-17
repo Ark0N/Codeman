@@ -1354,3 +1354,99 @@ describe('selectSession only clears live-output marks for actual full mux captur
     expect(Reflect.get(app, '_liveOutputSinceFullPull').has('s1')).toBe(source !== 'mux-full-history');
   });
 });
+
+describe('drop-recovery refresh clears the live-output mark only for a mux capture', () => {
+  function makeRefreshApp(source = 'mux-full-history') {
+    const errors = vi.fn();
+    const refresh = loadAppMethod('_onSessionNeedsRefresh', {
+      console: { error: errors },
+      computeRewriteScrollLine: () => null,
+    });
+    const { app } = makeApp('omp', { bufferRows: 30, capture: lines(60), payload: { source } });
+    const recovery = Object.assign(app, {
+      _tilesOwnTerminal: () => false,
+      _markTerminalBufferReconciled: vi.fn(),
+      sendResize: vi.fn(),
+      _localEchoOverlay: { rerender: vi.fn() },
+      _liveOutputSinceFullPull: new Set(['s1']),
+      _liveOutputGen: new Map([['s1', 7]]),
+      _historyReloadDismissed: new Set(['s1']),
+      _syncHistoryReloadAction: vi.fn(),
+    });
+    Object.assign(app.terminal, { scrollToBottom: vi.fn() });
+    return { app: recovery, refresh, errors };
+  }
+
+  it('clears the mark and dismissal after replaying a full mux capture', async () => {
+    const { app, refresh, errors } = makeRefreshApp();
+    expect(await refresh.call(app)).toBe(true);
+    expect(errors).not.toHaveBeenCalled();
+    expect(app._fetchTerminalCapture).toHaveBeenCalledWith('/api/sessions/s1/terminal?full=1', { full: true });
+    expect(app.chunkedTerminalWrite).toHaveBeenCalledOnce();
+    expect(app._liveOutputSinceFullPull.has('s1')).toBe(false);
+    expect(app._historyReloadDismissed.has('s1')).toBe(false);
+    // The clear syncs once, and the real truncation-banner update syncs again.
+    expect(app._syncHistoryReloadAction).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the mark and dismissal for a history answer', async () => {
+    const { app, refresh, errors } = makeRefreshApp('history');
+    expect(await refresh.call(app)).toBe(true);
+    expect(errors).not.toHaveBeenCalled();
+    expect(app.chunkedTerminalWrite).toHaveBeenCalledOnce();
+    expect(app._liveOutputSinceFullPull.has('s1')).toBe(true);
+    expect(app._historyReloadDismissed.has('s1')).toBe(true);
+    expect(app._syncHistoryReloadAction).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the mark and dismissal when live output arrives during the fetch', async () => {
+    const { app, refresh, errors } = makeRefreshApp();
+    const fetchCapture = app._fetchTerminalCapture.getMockImplementation()!;
+    app._fetchTerminalCapture.mockImplementation(async (url) => {
+      app._liveOutputGen.set('s1', 8);
+      return fetchCapture(url);
+    });
+    expect(await refresh.call(app)).toBe(true);
+    expect(errors).not.toHaveBeenCalled();
+    expect(app.chunkedTerminalWrite).toHaveBeenCalledOnce();
+    expect(app._liveOutputSinceFullPull.has('s1')).toBe(true);
+    expect(app._historyReloadDismissed.has('s1')).toBe(true);
+    expect(app._syncHistoryReloadAction).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the mark and dismissal when a full mux capture falls back to a history tail', async () => {
+    const { app, refresh, errors } = makeRefreshApp();
+    app._replayWouldShrinkBuffer = vi.fn(() => true);
+    app._fetchTerminalCapture.mockResolvedValueOnce({
+      headersAt: performance.now(),
+      headers: { get: () => '' },
+      json: { data: { terminalBuffer: lines(10), source: 'mux-full-history' } },
+    });
+    app._fetchTerminalCapture.mockResolvedValueOnce({
+      headersAt: performance.now(),
+      headers: { get: () => '' },
+      json: { data: { terminalBuffer: lines(60), source: 'history' } },
+    });
+    expect(await refresh.call(app)).toBe(true);
+    expect(errors).not.toHaveBeenCalled();
+    expect(app._fetchTerminalCapture).toHaveBeenLastCalledWith(`/api/sessions/s1/terminal?tail=${TERMINAL_TAIL_SIZE}`);
+    expect(app.chunkedTerminalWrite).toHaveBeenCalledOnce();
+    expect(app._liveOutputSinceFullPull.has('s1')).toBe(true);
+    expect(app._historyReloadDismissed.has('s1')).toBe(true);
+    expect(app._syncHistoryReloadAction).toHaveBeenCalledOnce();
+  });
+
+  it.each(['session', 'owner'])('keeps the mark when the refresh loses its %s during replay', async (changed) => {
+    const { app, refresh, errors } = makeRefreshApp();
+    app.chunkedTerminalWrite.mockImplementationOnce(async () => {
+      if (changed === 'session') app.activeSessionId = 's2';
+      else Reflect.set(app, '_terminalRefreshOwner', { sessionId: 's1' });
+      return { parsedAt: performance.now(), bufferLength: 400, completed: true };
+    });
+    expect(await refresh.call(app)).toBe(true);
+    expect(errors).not.toHaveBeenCalled();
+    expect(app._liveOutputSinceFullPull.has('s1')).toBe(true);
+    expect(app._historyReloadDismissed.has('s1')).toBe(true);
+    expect(app._syncHistoryReloadAction).not.toHaveBeenCalled();
+  });
+});
