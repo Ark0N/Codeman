@@ -6695,6 +6695,7 @@ class CodemanApp {
     if (state && state.generation !== selectGen) return;
     this.terminalLoadStates.delete(sessionId);
     this._updateTerminalLoadTab(sessionId);
+    if (state) this._syncHistoryReloadAction?.();
   }
 
   _updateTerminalLoadTab(sessionId) {
@@ -9932,6 +9933,7 @@ class CodemanApp {
     return !!(this.loadAppSettingsFromStorage?.()?.historyReloadAction !== false &&
       session && session.mode !== 'shell' && this._liveOutputSinceFullPull?.has(sessionId) &&
       !this._isLoadingBuffer &&
+      !this.terminalLoadStates?.has(sessionId) && // Tab switches set this before the buffer load opens.
       !this._fullHistoryRepullInFlight && !this.detachedSessions?.has(sessionId) &&
       !this._historyReloadDismissed?.has(sessionId) && !this._tilesOwnTerminal?.() &&
       !this.isTerminalAtBottom());

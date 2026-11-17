@@ -987,6 +987,7 @@ describe('manual history banner action', () => {
       detached: false,
       enabled: true,
       loadingBuffer: false,
+      loadState: false,
       paneHistoryLines: undefined as number | undefined,
       ...options,
     };
@@ -1026,6 +1027,7 @@ describe('manual history banner action', () => {
       _historyNoticeRevealedFor: null as string | null,
       _fullHistoryRepullInFlight: Boolean(state.inFlight),
       _isLoadingBuffer: Boolean(state.loadingBuffer),
+      terminalLoadStates: new Map(state.loadState ? [['s1', { generation: 1, phase: 'resizing' }]] : []),
       _paneHistoryLines: new Map<string, number>(
         state.paneHistoryLines === undefined ? [] : [['s1', Number(state.paneHistoryLines)]]
       ),
@@ -1058,6 +1060,7 @@ describe('manual history banner action', () => {
     { opts: { paneHistoryLines: 0 }, visible: true },
     { opts: { paneHistoryLines: 5 }, visible: true },
     { opts: { loadingBuffer: true }, visible: false },
+    { opts: { loadState: true }, visible: false },
     { opts: { tiles: true }, visible: false },
     { opts: { active: false }, visible: false },
     { opts: { detached: true }, visible: false },
@@ -1100,6 +1103,18 @@ describe('manual history banner action', () => {
     });
     expect(app._maybeRefetchFullHistory).toHaveBeenCalledOnce();
     expect(bar.hidden).toBe(true);
+  });
+
+  it('shows the action when the matching terminal load state clears', () => {
+    const { app, bar, button } = fixture({ loadState: true });
+    Object.assign(app, { _updateTerminalLoadTab: vi.fn() });
+    app._syncHistoryReloadAction();
+    expect(bar.hidden).toBe(true);
+    expect(button()).toBeUndefined();
+    loadAppMethod('_clearTerminalLoadState').call(app, 's1', 1);
+    expect(app.terminalLoadStates.has('s1')).toBe(false);
+    expect(bar.hidden).toBe(false);
+    expect(button()!.textContent).toBe('Reload history');
   });
 
   it('syncs the action after a marked session finishes loading', () => {
