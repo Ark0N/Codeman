@@ -9690,6 +9690,22 @@ class CodemanApp {
       // recording its empty data would forget the count and hand the next
       // gesture back to the paging fallback, the bug this pull exists to avoid.
       if (selectGen === this._selectGeneration && capture.json?.success !== false) this._notePaneHistory?.(sessionId, payload);
+      // A manual reload answered by anything but a full mux capture (an empty
+      // response, or the byte-history fallback the route returns when the pane
+      // capture is blank or failed) cannot fill the gap, and only a mux replay
+      // clears the mark: offering it again would repeat the forced capture on
+      // every tap. Retire it until the next `mux-full-history` replay. Only for
+      // the request still current: a slow answer from before an A -> B -> A
+      // switch must not retire the action a newer capture of A already cleared.
+      if (
+        anchor === 'content' &&
+        this.activeSessionId === sessionId &&
+        selectGen === this._selectGeneration &&
+        capture.json?.success !== false &&
+        payload.source !== 'mux-full-history'
+      ) {
+        (this._historyReloadDismissed ||= new Set()).add(sessionId);
+      }
       const buffer = payload.terminalBuffer;
       const timing = {
         trigger: force ? 'full-history-button' : 'full-history-scroll',
