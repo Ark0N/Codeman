@@ -13,6 +13,7 @@ type HistoryApp = {
   sessions: Map<string, object>;
   activeSessionId: string;
   hideWelcome(): void;
+  selectSession(sessionId: string): Promise<void>;
   _onSessionTerminal(event: { id: string; data: string }): void;
   _liveOutputSinceFullPull: Set<string>;
   _fullHistoryRepullInFlight: boolean;
@@ -39,6 +40,7 @@ type RepairWindow = Window & {
   app: HistoryApp;
   repairTest: { pulls: number; anchor: Anchor | null; inject: boolean };
   repairReadiness?: { cols: number; rows: number; frames: number };
+  tabLoadTest?: { requested: boolean; release(): void; selection: Promise<void> };
 };
 
 const SESSION = 'history-repair-browser';
@@ -466,6 +468,85 @@ describe.each([true, false])('manual history gap repair (touch: %s)', (touch) =>
     }
   }, 60_000);
 });
+
+it('hides Reload history while a marked incoming tab capture is pending', async () => {
+  const { context, page } = await openTerminal(false);
+  const incoming = `${SESSION}-incoming`;
+  try {
+    await page.evaluate((session) => {
+      const w = window as RepairWindow;
+      const app = w.app;
+      app.terminal.scrollToLine(10);
+      app.sessions.set(session, { id: session, mode: 'omp', status: 'idle', name: 'Incoming history' });
+      app._liveOutputSinceFullPull.add(session);
+      const response = Promise.withResolvers<Response>();
+      const realFetch = window.fetch.bind(window);
+      const terminalBuffer = 'INCOMING-HISTORY\r\n';
+      w.tabLoadTest = {
+        requested: false,
+        release: () =>
+          response.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                data: { terminalBuffer, source: 'mux-full-history', paneHistoryLines: 1, truncated: false },
+              }),
+              { status: 200, headers: { 'Content-Type': 'application/json' } }
+            )
+          ),
+        selection: Promise.resolve(),
+      };
+      window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(typeof input === 'string' ? input : ((input as Request).url ?? input));
+        if (!url.includes(`/api/sessions/${session}/terminal`)) return realFetch(input, init);
+        w.tabLoadTest!.requested = true;
+        return response.promise;
+      }) as typeof window.fetch;
+    }, incoming);
+    expect((await bufferState(page)).baseY - (await bufferState(page)).viewportY).toBeGreaterThan(5);
+    await page.evaluate((session) => {
+      const w = window as RepairWindow;
+      w.tabLoadTest!.selection = w.app.selectSession(session);
+    }, incoming);
+    await page.waitForFunction((session) => {
+      const w = window as RepairWindow;
+      return (
+        w.tabLoadTest?.requested &&
+        w.app.activeSessionId === session &&
+        w.app.terminalLoadStates.has(session) &&
+        w.app._isLoadingBuffer
+      );
+    }, incoming);
+    const bar = page.locator('#historyTruncationBar');
+    expect(await bar.getByRole('button', { name: 'Reload history' }).count()).toBe(0);
+    expect(await bar.isHidden()).toBe(true);
+    await page.evaluate(async () => {
+      const test = (window as RepairWindow).tabLoadTest!;
+      test.release();
+      await test.selection;
+    });
+    await page.waitForFunction((session) => {
+      const app = (window as RepairWindow).app;
+      return (
+        app.activeSessionId === session &&
+        !app.terminalLoadStates.has(session) &&
+        !app._isLoadingBuffer &&
+        !app.pendingWrites.length &&
+        !app._terminalWriteInFlight
+      );
+    }, incoming);
+    expect(
+      await page.evaluate(() => {
+        const buffer = (window as RepairWindow).app.terminal.buffer.active;
+        return buffer.getLine(0)?.translateToString(true);
+      })
+    ).toBe('INCOMING-HISTORY');
+  } catch (error) {
+    throw await failureDetails(page, error);
+  } finally {
+    await context.close();
+  }
+}, 60_000);
 
 it('holds an OMP reading row through repeated repaint history and capped live flushes', async () => {
   const { context, page } = await openTerminal(true);
