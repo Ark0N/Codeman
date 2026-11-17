@@ -672,9 +672,18 @@ const CjkInput = (() => {
       // unchanged, leave the field alone, since rewriting its attributes while
       // it has focus can disturb a composition in progress.
       if (_holdApplied && _textarea && _hold === !!on) return;
+      const wasHolding = _hold;
       _hold = !!on;
       if (!_textarea) return;
       _holdApplied = true;
+      // Turning the mode off: live mode's next flush would send everything in
+      // the field, a held multi-line draft included (its newline runs the first
+      // line in a shell), and stashed drafts would come back if the mode is
+      // switched on again. Drop them all.
+      if (wasHolding && !_hold) {
+        _drafts.clear();
+        _resetToPhantom();
+      }
       _heldBase = _strip(_textarea.value);
       const v = _hold ? 'on' : 'off';
       _textarea.setAttribute('autocorrect', v);

@@ -305,6 +305,22 @@ describe('CJK input: Send on Enter', () => {
     expect(textarea.value).toBe(PHANTOM);
   });
 
+  it('turning the mode off drops the held draft and the stashes, so live mode sends only new keys', () => {
+    const { CjkInput, textarea, sent } = load();
+    CjkInput.restoreDraft('session-a');
+    type(textarea, 'rm -rf build\nsecond line');
+    CjkInput.stashDraft('session-b');
+    CjkInput.setHoldUntilEnter(false);
+    expect(textarea.value).toBe(PHANTOM);
+    type(textarea, 'x');
+    vi.advanceTimersByTime(1000);
+    expect(sent).toEqual(['x']);
+    CjkInput.setHoldUntilEnter(true);
+    CjkInput.clear();
+    CjkInput.restoreDraft('session-b');
+    expect(textarea.value).toBe(PHANTOM);
+  });
+
   it('turns autocorrect on in the mode and back off without it', () => {
     const { CjkInput, textarea } = load();
     expect(textarea.attrs.autocorrect).toBe('on');

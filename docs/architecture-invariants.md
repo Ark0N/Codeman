@@ -1269,7 +1269,7 @@ The age stamps are refreshed **in place** by a 20s clock (`_tickHomeSessionsTime
 
 ⚠️ It must disarm on ALL of: use, second tap, any other accessory key, session switch, keyboard dismissal, and a layout swap; a modifier left armed turns the next innocent keystroke into a control byte.
 
-⚠️ **onData is not the only input path** — with `cjkInputEnabled` on, the CJK textarea owns the keyboard (onData returns early for everything it swallows, and the focus router sends `terminal.focus()` there, which is where the bar refocuses after every key), so `_handleCjkInput()` applies the modifier too. It is that module's single choke point to the PTY, so one call covers typed characters, IME flushes, Enter, backspace and arrows. Without it an armed modifier could neither fire NOR be spent, and survived to a later keystroke.
+⚠️ **onData is not the only input path** — with `cjkInputEnabled` on, the CJK textarea owns the keyboard (onData returns early for everything it swallows, and the focus router sends `terminal.focus()` there, which is where the bar refocuses after every key), so `_handleCjkInput()` applies the modifier too. It is that module's single choke point to the PTY in live mode, so one call covers typed characters, IME flushes, Enter, backspace and arrows; in Send on Enter a held answer leaves through `_sendCjkPrompt()` instead, which spends the modifier, while an armed next character still goes through `_handleCjkInput()`. Without it an armed modifier could neither fire NOR be spent, and survived to a later keystroke.
 
 Mapping is `ctrlByteFor()` (`code & 0x1f` over @A-Z[\]^_ and a-z, plus Ctrl+Space=NUL / Ctrl+?=DEL); characters with no control equivalent pass through unchanged, like a hardware keyboard.
 

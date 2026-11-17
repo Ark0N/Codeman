@@ -4555,8 +4555,10 @@ Object.assign(CodemanApp.prototype, {
     // after every key. So the onData hook never sees these keystrokes, and an
     // armed modifier could neither fire NOR be spent: it survived until a
     // session switch and then turned an innocent keystroke into a control byte.
-    // This is the module's single choke point to the PTY, so applying it here
-    // covers typed characters, IME flushes, Enter, backspace and arrows at once.
+    // This is the module's single choke point to the PTY in live mode, so applying
+    // it here covers typed characters, IME flushes, Enter, backspace and arrows at
+    // once. In Send on Enter a held answer leaves through _sendCjkPrompt instead,
+    // which spends the modifier; an armed next character still comes here.
     // Same policy as the onData hook: the next single character is modified,
     // anything longer merely spends the modifier.
     if (typeof KeyboardAccessoryBar !== 'undefined' && KeyboardAccessoryBar.isCtrlArmed?.()) {
