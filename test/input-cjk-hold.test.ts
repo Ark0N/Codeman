@@ -49,7 +49,12 @@ function makeTextarea() {
   };
 }
 
-function load({ hold = true, promptResult = true } = {}) {
+function load({
+  hold = true,
+  promptResult = true,
+  touch = true,
+  translate,
+}: { hold?: boolean; promptResult?: boolean; touch?: boolean; translate?: (s: string) => string } = {}) {
   const textarea = makeTextarea();
   const sent: string[] = [];
   const prompts: string[] = [];
@@ -65,8 +70,12 @@ function load({ hold = true, promptResult = true } = {}) {
     },
   };
   const context = vm.createContext({
-    window: {},
-    document: { getElementById: (id: string) => (id === 'cjkInput' ? textarea : null), activeElement: null },
+    window: translate ? { CodemanI18n: { t: translate } } : {},
+    document: {
+      getElementById: (id: string) => (id === 'cjkInput' ? textarea : null),
+      activeElement: null,
+      body: { classList: { contains: (c: string) => touch && c === 'touch-device' } },
+    },
     navigator: { userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X)' },
     KeyboardHandler: { updateLayoutForKeyboard: layout },
     KeyboardAccessoryBar: bar,
@@ -319,6 +328,23 @@ describe('CJK input: Send on Enter', () => {
     CjkInput.clear();
     CjkInput.restoreDraft('session-b');
     expect(textarea.value).toBe(PHANTOM);
+  });
+
+  it('stays one line on a desktop, where growing would resize the PTY', () => {
+    const { textarea, layout } = load({ touch: false });
+    layout.mockClear();
+    textarea.scrollHeight = 60;
+    type(textarea, 'a\nb\nc');
+    vi.advanceTimersByTime(1000);
+    expect(textarea.style.height).toBe('');
+    expect(layout).not.toHaveBeenCalled();
+  });
+
+  it('translates its placeholder itself, since i18n.js skips textareas', () => {
+    const { CjkInput, textarea } = load({ translate: (s) => `zh:${s}` });
+    expect(textarea.placeholder).toBe('zh:Type, Enter to send (Shift+Enter: new line, Esc: clear)');
+    CjkInput.setHoldUntilEnter(false);
+    expect(textarea.placeholder).toBe('zh:CJK input (Enter = send, Esc = clear)');
   });
 
   it('turns autocorrect on in the mode and back off without it', () => {

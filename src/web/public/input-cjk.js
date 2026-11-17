@@ -251,6 +251,15 @@ const CjkInput = (() => {
       _textarea.style.height = '';
       return;
     }
+    // Only a touch device grows the field: there it is position: fixed above the
+    // keyboard. On a desktop it sits in the flex column under the terminal, so
+    // every line it gained would shrink the terminal box, refit and resize the
+    // session's PTY (a CLI repaint each time). It stays one line there and
+    // scrolls inside instead.
+    if (!document.body?.classList?.contains('touch-device')) {
+      _textarea.style.height = '';
+      return;
+    }
     const before = _textarea.style.height;
     _textarea.style.height = 'auto';
     // border-box: scrollHeight leaves the borders out, offsetHeight - clientHeight adds them back.
@@ -689,9 +698,13 @@ const CjkInput = (() => {
       _textarea.setAttribute('autocorrect', v);
       _textarea.setAttribute('autocapitalize', _hold ? 'sentences' : 'off');
       _textarea.setAttribute('spellcheck', _hold ? 'true' : 'false');
-      _textarea.placeholder = _hold
+      // i18n.js skips <textarea> subtrees (what is typed there is user content),
+      // so the placeholder is translated here, like the prompt composer's.
+      const placeholder = _hold
         ? 'Type, Enter to send (Shift+Enter: new line, Esc: clear)'
         : 'CJK input (Enter = send, Esc = clear)';
+      const i18n = typeof window !== 'undefined' ? window.CodemanI18n : undefined;
+      _textarea.placeholder = typeof i18n?.t === 'function' ? i18n.t(placeholder) : placeholder;
       if (_hold) {
         _cancelDebouncedFlush();
         _autoGrow();
