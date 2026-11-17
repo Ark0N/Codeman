@@ -172,7 +172,7 @@ describe('registered arguments', () => {
     ['attach', ['path']],
     ['start', []],
     // Optional: bare `codeman tui` opens the dashboard.
-    ['tui', ['n']],
+    ['tui', ['session']],
   ])('declares the operands of `%s`', (name, expected) => {
     const args = find(program, name)!.registeredArguments.map((arg) => arg.name());
     expect(args).toEqual(expected);
