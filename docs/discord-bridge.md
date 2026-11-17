@@ -145,7 +145,7 @@ including after a restart. The file contains IDs and timestamps only, with mode 
 
 This is best-effort replay protection, not an exactly-once guarantee. A full disk, unreadable
 file, or invalid metadata logs one content-free warning and falls back to in-memory checks.
-Reads and writes retry on later replies; a restart during a metadata outage can lose those
+Readable but invalid ID metadata is replaced on the next write. Files that could not be read are left untouched. Reads and writes retry on later replies; a restart during a metadata outage can lose those
 checks. At capacity the oldest entries are evicted, so capacity never blocks new replies.
 Notifications retain their existing delivery and retry behavior; this store never suppresses
 an outbound alert or replays terminal input.

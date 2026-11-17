@@ -4,7 +4,10 @@
  * Split like webhook-notify.ts, so the parts that matter are testable without a network:
  *   - pure: `sanitiseReply`, `threadNameFor`, `buildPost`, `discordConfigProblem`, `maskToken`
  *   - store: `~/.codeman/discord.json` (bot token, 0600 via tmp+rename) and
- *     `~/.codeman/discord-bridge.json` (sessionId -> threadId, not secret)
+ *     `~/.codeman/discord-bridge.json` (sessionId -> threadId, not secret) and
+ *     `~/.codeman/discord-reply-dedupe.json` (bounded reply IDs/timestamps, private).
+ *     Allowed replies are claimed before attachments or typing; store failures never cost a reply.
+ *     An unreadable file is never overwritten; invalid readable ID metadata can heal.
  *   - IO: `DiscordApi` (REST, injected fetch), `DiscordGateway` (inbound WebSocket, injected
  *     socket factory) and `DiscordBridge` (the rules that tie them to sessions)
  *

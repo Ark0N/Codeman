@@ -71,3 +71,53 @@ it('evicts old records rather than refusing replies at capacity', async () => {
   expect(await new DiscordReplyDedupe(dir).claim(guild, channel, message)).toBe(true);
   expect(JSON.parse(await readFile(join(dir, 'discord-reply-dedupe.json'), 'utf8'))).toHaveLength(2048);
 });
+
+it.each(['{', '{}', '[null]'])(
+  'heals readable invalid metadata %s and keeps the claim across restart',
+  async (invalid) => {
+    const path = join(dir, 'discord-reply-dedupe.json');
+    await writeFile(path, invalid);
+    const warn = vi.fn(),
+      store = new DiscordReplyDedupe(dir, Date.now, warn);
+    expect(await store.claim(guild, channel, message)).toBe(true);
+    expect(await new DiscordReplyDedupe(dir).claim(guild, channel, message)).toBe(false);
+    expect(warn).toHaveBeenCalledTimes(1);
+  }
+);
+
+it('retains newer outage claims when disk recovery reaches capacity, without overwriting an unread file', async () => {
+  const path = join(dir, 'discord-reply-dedupe.json');
+  const rows = Array.from({ length: 2048 }, (_, i) => [
+    `${guild}:${channel}:${100000000000000000n + BigInt(i)}`,
+    Date.now(),
+  ]);
+  const original = JSON.stringify(rows);
+  await writeFile(path, original);
+  const warn = vi.fn(),
+    store = new DiscordReplyDedupe(dir, Date.now, warn);
+  const read = vi
+    .spyOn(fs, 'readFile')
+    .mockRejectedValueOnce(Object.assign(new Error('descriptor limit'), { code: 'EMFILE' }));
+  expect(await store.claim(guild, channel, message)).toBe(true);
+  read.mockRestore();
+  expect(await readFile(path, 'utf8')).toBe(original);
+  expect(await store.claim(guild, channel, '444444444444444444')).toBe(true);
+  expect(await new DiscordReplyDedupe(dir).claim(guild, channel, message)).toBe(false);
+  const saved = JSON.parse(await readFile(path, 'utf8'));
+  expect(saved).toHaveLength(2048);
+  expect(saved.some((row: [string, number]) => row[0] === rows[0][0])).toBe(false);
+});
+
+it('heals an over-cap readable store rather than remaining memory-only until manual deletion', async () => {
+  const path = join(dir, 'discord-reply-dedupe.json');
+  await writeFile(
+    path,
+    JSON.stringify(
+      Array.from({ length: 2049 }, (_, i) => [`${guild}:${channel}:${100000000000000000n + BigInt(i)}`, Date.now()])
+    )
+  );
+  const warn = vi.fn();
+  expect(await new DiscordReplyDedupe(dir, Date.now, warn).claim(guild, channel, message)).toBe(true);
+  expect(await new DiscordReplyDedupe(dir).claim(guild, channel, message)).toBe(false);
+  expect(warn).toHaveBeenCalledTimes(1);
+});
