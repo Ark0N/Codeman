@@ -121,3 +121,13 @@ it('heals an over-cap readable store rather than remaining memory-only until man
   expect(await new DiscordReplyDedupe(dir).claim(guild, channel, message)).toBe(false);
   expect(warn).toHaveBeenCalledTimes(1);
 });
+
+it('heals oversized regular metadata and persists replay protection across restart', async () => {
+  const path = join(dir, 'discord-reply-dedupe.json');
+  await writeFile(path, ' '.repeat(512 * 1024 + 1));
+  const warn = vi.fn();
+  expect(await new DiscordReplyDedupe(dir, Date.now, warn).claim(guild, channel, message)).toBe(true);
+  expect(await new DiscordReplyDedupe(dir).claim(guild, channel, message)).toBe(false);
+  expect((await stat(path)).size).toBeLessThan(512 * 1024);
+  expect(warn).toHaveBeenCalledTimes(1);
+});

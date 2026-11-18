@@ -1550,14 +1550,6 @@ updates `lastSubmitAt` just like any other Enter.
 - **The whole last message.** A finished turn or an error posts the CLI's whole last message, not the screen: `WebServer.lastResponseFor` is the response viewer's reader (the body of `GET /api/sessions/:id/last-response`, registered on the route context by `registerSessionRoutes`), so the source is the same per-CLI transcript, or the pane split into turns where a CLI keeps none; a dialog and a shell keep the screen tail (its composer row and the status lines under it cut, never a `❯ 1.` option row). The read is bounded to 4 s and any failure or empty read falls back to the screen. It is split into at most 8 posts of 1,900 characters, a cut code fence closed and reopened, and Markdown tables become aligned code blocks (the separator test strips whitespace first: a regex over a run of spaces is quadratic, and the text is steerable by whatever the agent read). The repeat check is keyed on the text plus the turn it came from (the transcript stamp, else the last submit) and is recorded only after the first post succeeds, so a failed post is sent again and a later turn ending on the same words is not dropped. Only some CLIs raise a turn end (`/api/hook-event`: Claude's `stop` and `idle_prompt`, DeepSeek's `stop`), so the others reach this path through errors, a blocked respawn or a crash loop.
 - **Cost guards.** The alert tail is a function called only once a post will happen (no tmux exec while off), and `discord-notify` is a per-session token bucket (6 a minute, `429 RATE_LIMITED`).
 
-
 ### Discord reply replay metadata
 
-`discord-reply-dedupe.json` is a private 0600 data-directory file containing at most
-2,048 reply IDs and timestamps retained for seven days. An allowed reply is claimed
-by message ID before attachments or terminal input. Store failures log once and fall
-back to memory; they never cost a reply. An unreadable or unsafe file is never
-overwritten, and reads retry later. Readable but invalid ID-only content warns and
-heals on the next write. Recovery keeps older disk rows before newer outage claims
-so bounded eviction drops the oldest IDs first. Ambiguous terminal input is never
-replayed automatically.
+`discord-reply-dedupe.json` is a private 0600 data-directory file containing at most 2,048 reply IDs and timestamps retained for seven days. An allowed reply is claimed by message ID before rate-limit or exited-agent checks, attachments, or terminal input. Store failures log once and fall back to memory; they never cost a reply. An unreadable or unsafe file is never overwritten, and reads retry later. Invalid or oversized regular-file ID-only content warns and heals on the next write. Recovery keeps older disk rows before newer outage claims so bounded eviction drops the oldest IDs first. Ambiguous terminal input is never replayed automatically.

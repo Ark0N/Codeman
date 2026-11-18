@@ -31,8 +31,11 @@ export class DiscordReplyDedupe {
       let contentRead = false;
       try {
         const st = await fs.lstat(path);
-        if (!st.isFile() || st.isSymbolicLink() || st.size > 512 * 1024)
-          throw Object.assign(new Error('Unsafe metadata'), { code: 'EINVAL' });
+        if (!st.isFile() || st.isSymbolicLink()) throw Object.assign(new Error('Unsafe metadata'), { code: 'EINVAL' });
+        if (st.size > 512 * 1024) {
+          contentRead = true; // A known oversized regular file is invalid metadata, not an IO failure.
+          throw new Error('Oversized metadata');
+        }
         const text = await fs.readFile(path, 'utf8');
         contentRead = true;
         const rows: unknown = JSON.parse(text);

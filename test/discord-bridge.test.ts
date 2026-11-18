@@ -462,6 +462,40 @@ describe('DiscordBridge', () => {
       next.stop();
     });
 
+    it('claims rate-limited snowflake replies so replays remain refused across restart', async () => {
+      const b = await ready();
+      await b.onGatewayMessage(reply({ id: '555555555555555555' }));
+      t += 200;
+      const refused = reply({ id: '555555555555555556', content: 'too soon' });
+      await b.onGatewayMessage(refused);
+      expect(sendInput).toHaveBeenCalledTimes(1);
+      expect(posts.some((p) => p.path.includes(encodeURIComponent('⏳')))).toBe(true);
+      t += 5_000;
+      const count = posts.length;
+      await b.onGatewayMessage(refused);
+      expect(sendInput).toHaveBeenCalledTimes(1);
+      expect(posts).toHaveLength(count);
+      b.stop();
+      const next = await ready();
+      await next.onGatewayMessage(refused);
+      expect(sendInput).toHaveBeenCalledTimes(1);
+      await next.onGatewayMessage(reply({ id: '555555555555555557', content: 'new attempt' }));
+      expect(sendInput).toHaveBeenCalledTimes(2);
+      next.stop();
+    });
+
+    it('ignores an immediate replay without adding an hourglass to a successful reply', async () => {
+      const b = await ready();
+      const m = reply({ id: '555555555555555555' });
+      await b.onGatewayMessage(m);
+      t += 200;
+      await b.onGatewayMessage(m);
+      expect(sendInput).toHaveBeenCalledTimes(1);
+      expect(posts.filter((p) => p.method === 'PUT')).toHaveLength(1);
+      expect(posts.some((p) => p.path.includes(encodeURIComponent('⏳')))).toBe(false);
+      b.stop();
+    });
+
     it('delivers replies and alerts when metadata is corrupt and recovers without restarting', async () => {
       const b = await ready();
       writeFileSync(join(dir, 'discord-reply-dedupe.json'), '{');
@@ -1175,7 +1209,7 @@ describe('DiscordBridge files and startup hint', () => {
   it('types a reply that waits on a download before a later text reply', async () => {
     const b = await make();
     const slow = b.onGatewayMessage(reply({ content: 'first' }));
-    await new Promise((r) => setTimeout(r, 0)); // the first reply is under way (gate passed) before the clock moves
+    await vi.waitFor(() => expect(downloads).toHaveLength(1)); // wait for the claim and rate-limit gate
     t += 5_000;
     const fast = b.onGatewayMessage(reply({ id: '555555555555555556', content: 'second', attachments: [] }));
     await Promise.all([slow, fast]);

@@ -1307,6 +1307,7 @@ export class DiscordBridge {
     if (!this.cfg.allowedUserIds.includes(m.author?.id)) return;
     const sessionId = Object.keys(this.threads).find((k) => this.threads[k] === m.channel_id);
     if (!sessionId) return;
+    if (!(await this.replies.claim(m.guild_id, m.channel_id, m.id))) return;
     const t = this.now();
     const prev = this.lastReply.get(sessionId);
     if (prev !== undefined && t - prev < REPLY_MIN_INTERVAL_MS) {
@@ -1318,7 +1319,6 @@ export class DiscordBridge {
       await this.say(m.channel_id, 'The agent in that tab has exited, so nothing was typed.');
       return;
     }
-    if (!(await this.replies.claim(m.guild_id, m.channel_id, m.id))) return;
     this.lastReply.set(sessionId, t);
     const saved = await this.saveAttachments(sessionId, m);
     const text = sanitiseReply(m.content ?? '', saved.paths);

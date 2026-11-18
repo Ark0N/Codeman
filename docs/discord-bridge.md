@@ -138,14 +138,6 @@ The text explains `codeman notify "message" --urgent`. `codeman` is on the PATH 
 
 ## Reply replay protection
 
-The bridge remembers up to 2,048 recent Discord reply IDs for seven days in the private
-`discord-reply-dedupe.json` metadata file. It claims an allowed reply before downloading
-attachments or typing into its session, so a gateway replay normally cannot type it twice,
-including after a restart. The file contains IDs and timestamps only, with mode 0600.
+The bridge remembers up to 2,048 recent Discord reply IDs for seven days in the private `discord-reply-dedupe.json` metadata file. It claims an allowed reply before rate-limit or exited-agent checks, downloading attachments, or typing into its session, so a gateway replay normally cannot type it twice, including after a restart. The file contains IDs and timestamps only, with mode 0600.
 
-This is best-effort replay protection, not an exactly-once guarantee. A full disk, unreadable
-file, or invalid metadata logs one content-free warning and falls back to in-memory checks.
-Readable but invalid ID metadata is replaced on the next write. Files that could not be read are left untouched. Reads and writes retry on later replies; a restart during a metadata outage can lose those
-checks. At capacity the oldest entries are evicted, so capacity never blocks new replies.
-Notifications retain their existing delivery and retry behavior; this store never suppresses
-an outbound alert or replays terminal input.
+This is best-effort replay protection, not an exactly-once guarantee. A full disk, unreadable file, or invalid metadata logs one content-free warning and falls back to in-memory checks. Invalid or oversized regular-file ID metadata is replaced on the next write. Files that could not be read are left untouched. Reads and writes retry on later replies; a restart during a metadata outage can lose those checks. At capacity the oldest entries are evicted, so capacity never blocks new replies. Notifications retain their existing delivery and retry behavior; this store never suppresses an outbound alert or replays terminal input.
