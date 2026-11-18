@@ -1,6 +1,6 @@
 /**
  * @fileoverview `codeman tui`: the full-screen dashboard plus the two
- * non-interactive fast paths (`--list`, `<n>`).
+ * non-interactive fast paths (`--list`, `<n|name>`).
  *
  * This is the IO half of `src/tui/`: it owns the terminal, the timers, stdin
  * and the tmux handoff. Every decision it makes that can be stated as a

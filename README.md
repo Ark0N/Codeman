@@ -744,6 +744,7 @@ A full-screen dashboard for your sessions, in the terminal. Same states as the w
 codeman tui              # the dashboard
 codeman tui --list       # numbered session list, then exit (scriptable)
 codeman tui 2            # attach straight to session 2 of that list
+codeman tui api-docs     # attach straight to the live session named api-docs
 ```
 
 Sessions are grouped **NEEDS YOU → WORKING → IDLE → RECENT**, longest-waiting first. `↑↓`/`j`/`k` select, `1`-`9` and `[`/`]` switch between sessions, `Enter` attaches into the tmux pane (**`F1`** to come back). Inside a pane the bar across the top keeps the session strip visible and `Alt+1`-`Alt+9` switch without leaving. `y`/`n`/digit answer a pending permission dialog right from the list, `p` sends a one-line prompt, `n` starts a session and opens straight into it, `x` kills one (`y` confirms), `/` searches, `g` shows the away digest, `?` is help, `q` quits. Below 72 columns it drops the preview pane and becomes a single-column list, so it stays usable in Termius on a phone. With no server running it still starts in attach-only degraded mode.
