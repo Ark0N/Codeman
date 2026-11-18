@@ -244,6 +244,34 @@ describe('Auth Security', () => {
 
       expect(wrongAfterRecovery.status).toBe(401);
     });
+
+    it('should not count requests without credentials (restart with a tab open)', async () => {
+      // After a restart the open tab's background requests carry only a dead cookie.
+      for (let i = 0; i < AUTH_FAILURE_MAX * 3; i++) {
+        const res = await fetch(`${rateBaseUrl}/api/status`, {
+          headers: { Cookie: 'codeman_session=stale-from-before-restart' },
+        });
+        expect(res.status).toBe(401);
+        expect(res.headers.get('www-authenticate')).toBe('Basic realm="Codeman"');
+      }
+
+      // None of them were guesses: the wrong-password bucket is still empty.
+      await exhaustAuthFailures(rateBaseUrl, 'cod-no-creds');
+    });
+
+    it('should keep challenging requests without credentials during lockout', async () => {
+      await exhaustAuthFailures(rateBaseUrl, 'cod-challenge');
+
+      // A 429 never makes a browser show its login dialog; a 401 challenge does.
+      const res = await fetch(`${rateBaseUrl}/api/status`);
+      expect(res.status).toBe(401);
+      expect(res.headers.get('www-authenticate')).toBe('Basic realm="Codeman"');
+
+      const wrong = await fetch(`${rateBaseUrl}/api/status`, {
+        headers: { Authorization: basicAuthHeader(TEST_USER, 'still-wrong') },
+      });
+      expect(wrong.status).toBe(429);
+    });
   });
 
   describe('Hook Event Endpoint', () => {
