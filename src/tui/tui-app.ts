@@ -2742,7 +2742,7 @@ export function attachTargetError(
     case 'none':
       return typeof target === 'number' || /^\d+$/.test(target)
         ? `${palette.err(`there is no session ${target}`)}\nRun ${list} to see the numbers.\n`
-        : `${palette.err(`there is no session named ${target}`)}\nRun ${list} to see the names.\n`;
+        : `${palette.err(`there is no session named ${target}`)}\nNames match exactly. Run ${list} and attach by number instead.\n`;
   }
 }
 
