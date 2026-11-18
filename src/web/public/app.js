@@ -3505,7 +3505,13 @@ class CodemanApp {
       );
       let headersReceivedAt = capture.headersAt;
       let data = capture.json?.data ?? {};
+      // The full capture would shrink the buffer: tmux holds less than the browser,
+      // the signal `_maybeRefetchFullHistory` retires Reload history on. Record it
+      // and apply it past the ownership guard below, so the next tap does not run
+      // another forced full capture only to be refused.
+      let refusedFullCapture = false;
       if (useFullHistory && data.terminalBuffer && this._replayWouldShrinkBuffer(data.terminalBuffer)) {
+        refusedFullCapture = true;
         capture = await this._fetchTerminalCapture(`/api/sessions/${sessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}`);
         headersReceivedAt = capture.headersAt;
         data = capture.json?.data ?? {};
@@ -3519,6 +3525,10 @@ class CodemanApp {
       // pane), and an error envelope is not a capture at all.
       if (this.activeSessionId !== sessionId || this._terminalRefreshOwner !== refreshOwner) return false;
       if (capture.json?.success !== false) this._notePaneHistory?.(sessionId, data);
+      if (refusedFullCapture) {
+        (this._historyReloadDismissed ||= new Set()).add(sessionId);
+        this._syncHistoryReloadAction?.();
+      }
       if (data.terminalBuffer) {
         // This refresh is SERVER-triggered, so a user quietly reading scrollback
         // did not ask for it and must not be dragged to the bottom by it (#259).
