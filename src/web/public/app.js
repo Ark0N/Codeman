@@ -10022,7 +10022,12 @@ class CodemanApp {
         btn.disabled = true;
         btn.textContent = 'Loading…';
         // Forced: the cooldown exists to throttle scroll gestures, not choices.
-        this._maybeRefetchFullHistory({ force: true }).finally(() => {
+        // When Reload history is eligible, this button is shown in its place
+        // (one load control per bar), so it must keep the reader's line the same
+        // way. Checked at click time, not render time: the bar only re-renders on
+        // eligibility transitions, and the reader may have scrolled since.
+        const anchor = this._historyReloadActionEligible() ? 'content' : 'top';
+        this._maybeRefetchFullHistory({ force: true, anchor }).finally(() => {
           this._renderHistoryTruncationBanner();
         });
       };

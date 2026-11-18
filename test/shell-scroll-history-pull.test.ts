@@ -1210,7 +1210,7 @@ describe('manual history banner action', () => {
     expect(button()).toBeUndefined();
   });
 
-  it.each(['recoverable', 'exhausted', 'capped'])('never duplicates the %s notice load control', (kind) => {
+  it.each(['recoverable', 'exhausted', 'capped'])('never duplicates the %s notice load control', async (kind) => {
     const { app, bar, button } = fixture();
     app._historyNoticeRevealedFor = 's1';
     app._setHistoryTruncation('s1', {
@@ -1220,6 +1220,22 @@ describe('manual history banner action', () => {
     });
     expect(bar.children.filter((child) => child.className === 'history-trunc-load')).toHaveLength(1);
     expect(button()!.textContent).toBe(kind === 'recoverable' ? 'Load full history' : 'Reload history');
+    // Either way the one control stands in for Reload history, so it keeps the
+    // reader's line rather than landing on the old row 0.
+    await button()!.onclick!();
+    expect(app._maybeRefetchFullHistory).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ force: true, anchor: 'content' })
+    );
+  });
+
+  it('keeps the top anchor for Load full history when Reload history is not eligible', async () => {
+    const { app, bar, button } = fixture({ marked: false });
+    app._historyNoticeRevealedFor = 's1';
+    app._setHistoryTruncation('s1', { ...TAIL_CUT, truncationReason: 'tail' });
+    expect(bar.hidden).toBe(false);
+    expect(button()!.textContent).toBe('Load full history');
+    await button()!.onclick!();
+    expect(app._maybeRefetchFullHistory).toHaveBeenCalledExactlyOnceWith({ force: true, anchor: 'top' });
   });
 
   it('does no DOM work without a transition and coalesces all-device onScroll calls per frame', () => {
