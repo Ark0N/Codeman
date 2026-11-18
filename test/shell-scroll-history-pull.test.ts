@@ -1374,7 +1374,24 @@ describe('drop-recovery refresh clears the live-output mark only for a mux captu
       _syncHistoryReloadAction: vi.fn(),
     });
     Object.assign(app.terminal, { scrollToBottom: vi.fn() });
-    return { app: recovery, refresh, errors };
+    /** Full capture refused by the shrink guard, then the `?tail=` fallback. */
+    const mockShrinkFallback = (beforeTail = () => {}) => {
+      recovery._replayWouldShrinkBuffer = vi.fn(() => true);
+      recovery._fetchTerminalCapture.mockResolvedValueOnce({
+        headersAt: performance.now(),
+        headers: { get: () => '' },
+        json: { data: { terminalBuffer: lines(10), source: 'mux-full-history' } },
+      });
+      recovery._fetchTerminalCapture.mockImplementationOnce(async () => {
+        beforeTail();
+        return {
+          headersAt: performance.now(),
+          headers: { get: () => '' },
+          json: { data: { terminalBuffer: lines(60), source: 'history' } },
+        };
+      });
+    };
+    return { app: recovery, refresh, errors, mockShrinkFallback };
   }
 
   it('clears the mark and dismissal after replaying a full mux capture', async () => {
@@ -1414,26 +1431,28 @@ describe('drop-recovery refresh clears the live-output mark only for a mux captu
     expect(app._syncHistoryReloadAction).toHaveBeenCalledOnce();
   });
 
-  it('keeps the mark and dismissal when a full mux capture falls back to a history tail', async () => {
-    const { app, refresh, errors } = makeRefreshApp();
-    app._replayWouldShrinkBuffer = vi.fn(() => true);
-    app._fetchTerminalCapture.mockResolvedValueOnce({
-      headersAt: performance.now(),
-      headers: { get: () => '' },
-      json: { data: { terminalBuffer: lines(10), source: 'mux-full-history' } },
-    });
-    app._fetchTerminalCapture.mockResolvedValueOnce({
-      headersAt: performance.now(),
-      headers: { get: () => '' },
-      json: { data: { terminalBuffer: lines(60), source: 'history' } },
-    });
+  it('retires Reload history when a full mux capture falls back to a history tail', async () => {
+    const { app, refresh, errors, mockShrinkFallback } = makeRefreshApp();
+    app._historyReloadDismissed.clear();
+    mockShrinkFallback();
     expect(await refresh.call(app)).toBe(true);
     expect(errors).not.toHaveBeenCalled();
     expect(app._fetchTerminalCapture).toHaveBeenLastCalledWith(`/api/sessions/s1/terminal?tail=${TERMINAL_TAIL_SIZE}`);
     expect(app.chunkedTerminalWrite).toHaveBeenCalledOnce();
+    // tmux holds less than the browser: the same refusal signal the manual
+    // reload retires on, so a tap would only run another forced full capture.
     expect(app._liveOutputSinceFullPull.has('s1')).toBe(true);
     expect(app._historyReloadDismissed.has('s1')).toBe(true);
-    expect(app._syncHistoryReloadAction).toHaveBeenCalledOnce();
+  });
+
+  it('does not retire Reload history from a fallback whose refresh lost its owner', async () => {
+    const { app, refresh, errors, mockShrinkFallback } = makeRefreshApp();
+    app._historyReloadDismissed.clear();
+    mockShrinkFallback(() => Reflect.set(app, '_terminalRefreshOwner', { sessionId: 's1' }));
+    expect(await refresh.call(app)).toBe(false);
+    expect(errors).not.toHaveBeenCalled();
+    expect(app.chunkedTerminalWrite).not.toHaveBeenCalled();
+    expect(app._historyReloadDismissed.has('s1')).toBe(false);
   });
 
   it.each(['session', 'owner'])('keeps the mark when the refresh loses its %s during replay', async (changed) => {
