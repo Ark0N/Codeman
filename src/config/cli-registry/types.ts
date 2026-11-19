@@ -600,6 +600,10 @@ export interface CliCapabilities {
    * `window.__codemanWheelForward`, which the server builds from this field for every CLI
    * whose mode is not `never`, disabled ones included (their running sessions stay open).
    *
+   * ⚠️ 'version-gated' needs the session's `cliVersion`, and the server probes a version only
+   * for an entry that declares `capabilities.gates` (`cliNeedsVersionProbe`, session.ts). An
+   * entry without gates never forwards under 'version-gated', silently, so it uses 'always'.
+   *
    * ⚠️ `cliMouseTracking` is only ever set for a CLI whose mouse DECSETs the server strips
    * (`altScreen: 'strip-full'` or `'strip-mux-and-mouse'`), so a forwarding mode on any other
    * `altScreen` never forwards: xterm keeps the DECSETs and encodes the wheel itself, until a
