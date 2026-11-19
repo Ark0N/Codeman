@@ -277,11 +277,16 @@ const PANE_LIST_SEP = '|';
 /**
  * Format string for `tmux list-panes -F`. Keep in sync with {@link parsePaneRows}.
  *
- * The three `pane_dead*` fields carry the agent-exit signal of Ark0N/Codeman#446.
+ * The four `pane_dead*` fields carry the agent-exit signal of Ark0N/Codeman#446.
  * Appending them is backward compatible in both directions. A tmux that does not
  * know a variable substitutes the empty string rather than failing, which is how
  * tmux 3.2a answers `#{pane_dead_signal}` (added in 3.4), and the parser reads a
  * short row as "pid known, deadness unknown" rather than discarding it.
+ *
+ * `#{pane_dead_time}` is what tells one exit from the next. tmux 3.8 prints a
+ * blank `#{pane_pid}` once a pane's program has exited, so the pid cannot do it
+ * there, and the time is stamped once per exit, so a respawned pane that exits
+ * again reads as a new exit even with the same status.
  *
  * `#{pane_current_path}` comes last on purpose: a directory name may contain the
  * separator, and only the final field can absorb it without ambiguity.
@@ -289,7 +294,7 @@ const PANE_LIST_SEP = '|';
 const PANE_LIST_FORMAT =
   `#{session_name}${PANE_LIST_SEP}#{pane_pid}` +
   `${PANE_LIST_SEP}#{pane_dead}${PANE_LIST_SEP}#{pane_dead_status}${PANE_LIST_SEP}#{pane_dead_signal}` +
-  `${PANE_LIST_SEP}#{pane_current_path}`;
+  `${PANE_LIST_SEP}#{pane_dead_time}${PANE_LIST_SEP}#{pane_current_path}`;
 
 /**
  * 构建 pane 启动前的 nofile 修复命令。
@@ -308,31 +313,39 @@ export function buildNofileLimitCommand(targetLimit = CLAUDE_CODE_NOFILE_LIMIT):
 export interface PaneRow {
   /** tmux session this pane belongs to. Repeats once per pane of a split session. */
   sessionName: string;
-  /** `#{pane_pid}` — the process tmux started in the pane. */
-  pid: number;
+  /**
+   * `#{pane_pid}` — the process tmux started in the pane. Absent only for a dead
+   * pane: tmux 3.8 prints it blank once the program has exited.
+   */
+  pid?: number;
   /** `#{pane_dead}` — true for 1, false for 0, undefined when tmux said nothing. */
   dead?: boolean;
   /** `#{pane_dead_status}` — the exit code, absent when tmux reported none. */
   exitStatus?: number;
   /** `#{pane_dead_signal}` — the killing signal, absent before tmux 3.4 and when unsignalled. */
   exitSignal?: number;
+  /** `#{pane_dead_time}` — when the program exited (epoch seconds), absent while it runs. */
+  deadTime?: number;
   /** `#{pane_current_path}` — the pane's current directory, absent when tmux reported none. */
   currentPath?: string;
 }
 
 /**
- * One pane-exit reading, with the pane pid that produced it.
+ * One pane-exit reading, with the pane pid and exit time that identify it.
  *
- * The pid never leaves this module. It is what distinguishes "the same dead
- * pane, seen again" from "a second command in the same pane that also exited
- * with the same status", so the `at` stamp can hold across the first and must
- * not across the second. {@link PaneExit} itself stays free of it: the pid on
+ * Neither leaves this module. Together they distinguish "the same dead pane,
+ * seen again" from "a second command in the same pane that also exited with
+ * the same status", so the `at` stamp can hold across the first and must not
+ * across the second. Either may be absent: tmux 3.8 blanks the pid of a dead
+ * pane, and a tmux before 3.4 has no exit time. {@link PaneExit} itself stays free of it: the pid on
  * the session record is the attach client's, and a second pid there would
  * invite exactly the confusion Ark0N/Codeman#446 is about.
  */
 export interface PaneExitObservation {
-  /** `#{pane_pid}` of the pane this reading came from. */
-  panePid: number;
+  /** `#{pane_pid}` of the pane this reading came from, when tmux reported one. */
+  panePid?: number;
+  /** `#{pane_dead_time}` of the exit this reading saw, when tmux reported one. */
+  deadTime?: number;
   /** What to publish on the session record. */
   exit: PaneExit;
 }
@@ -363,7 +376,9 @@ function paneField(fields: string[], index: number): number | undefined {
  * into one row per pane, in tmux's own order. Exported for unit testing.
  *
  * - Skips empty lines and lines without the separator.
- * - Skips entries with a non-numeric pid or empty name.
+ * - Skips entries with an empty name, and entries with a non-numeric pid unless
+ *   the pane is dead: tmux 3.8 blanks `#{pane_pid}` for a pane whose program
+ *   exited, and dropping that row would hide exactly the exit this read is for.
  * - Leaves every field after the pid undefined when it is blank or absent, so a
  *   row from an older tmux still yields its pid.
  */
@@ -374,17 +389,19 @@ export function parsePaneRows(output: string): PaneRow[] {
     if (!line.includes(PANE_LIST_SEP)) continue;
     const fields = line.split(PANE_LIST_SEP);
     const sessionName = fields[0];
-    const pid = parseInt(fields[1] ?? '', 10);
-    if (!sessionName || Number.isNaN(pid)) continue;
     const deadFlag = fields[2];
+    const dead = deadFlag === '1' ? true : deadFlag === '0' ? false : undefined;
+    const pid = paneField(fields, 1);
+    if (!sessionName || (pid === undefined && dead !== true)) continue;
     rows.push({
       sessionName,
-      pid,
-      dead: deadFlag === '1' ? true : deadFlag === '0' ? false : undefined,
+      ...(pid !== undefined ? { pid } : {}),
+      dead,
       exitStatus: paneField(fields, 3),
       exitSignal: paneField(fields, 4),
-      // Everything after the fifth separator, so a path containing `|` stays whole.
-      currentPath: fields.slice(5).join(PANE_LIST_SEP) || undefined,
+      deadTime: paneField(fields, 5),
+      // Everything after the sixth separator, so a path containing `|` stays whole.
+      currentPath: fields.slice(6).join(PANE_LIST_SEP) || undefined,
     });
   }
   return rows;
@@ -420,7 +437,8 @@ export function derivePaneExits(rows: PaneRow[], now: number): Map<string, PaneE
     if (panesPerSession.get(row.sessionName) !== 1) continue;
     if (row.dead !== true) continue;
     exits.set(row.sessionName, {
-      panePid: row.pid,
+      ...(row.pid !== undefined ? { panePid: row.pid } : {}),
+      ...(row.deadTime !== undefined ? { deadTime: row.deadTime } : {}),
       exit: {
         ...(row.exitStatus !== undefined ? { status: row.exitStatus } : {}),
         ...(row.exitSignal !== undefined ? { signal: row.exitSignal } : {}),
@@ -3502,7 +3520,10 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     // socket a session's location is a constant, so there is no per-session
     // socket tag to reconcile and no cross-socket ambiguity that could mark a
     // live session dead (the root cause of vanished/duplicate tabs).
-    let active: Map<string, number>;
+    // Every tmux session on the socket, with its pane pid when tmux printed one.
+    // A session whose only pane is dead is still listed, with no pid (tmux 3.8
+    // blanks it): the session exists, so it must not be reported as gone.
+    let active: Map<string, number | undefined>;
     const paneDirs = new Map<string, string>();
     try {
       const output = execSync(`${this.tmux()} list-panes -a -F '${PANE_LIST_FORMAT}' 2>/dev/null || true`, {
@@ -3512,7 +3533,10 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       // Not trimmed: the directory is the last field, so trimming would cut a
       // trailing space off the last row's path. parsePaneRows skips empty lines.
       const rows = parsePaneRows(output);
-      active = new Map(rows.map((row) => [row.sessionName, row.pid]));
+      active = new Map();
+      for (const row of rows) {
+        if (row.pid !== undefined || !active.has(row.sessionName)) active.set(row.sessionName, row.pid);
+      }
       // A discovered session's directory, from its first pane with a usable path.
       // The path is admitted only if it passes the same check createSession and
       // respawnPane apply, since it was set by whoever owns the pane, not by us.
@@ -3547,10 +3571,12 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
     // Check tracked sessions against the live pane list.
     for (const [sessionId, session] of this.sessions) {
-      const pid = active.get(session.muxName);
-      if (pid !== undefined) {
+      if (active.has(session.muxName)) {
         alive.push(sessionId);
-        if (pid !== session.pid) session.pid = pid;
+        // No pid is a dead pane: keep the last one known, which is what tmux
+        // itself reported for a dead pane before 3.8.
+        const pid = active.get(session.muxName);
+        if (pid !== undefined && pid !== session.pid) session.pid = pid;
       } else {
         dead.push(sessionId);
         this.sessions.delete(sessionId);
@@ -3570,6 +3596,9 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
     for (const [sessionName, pid] of active) {
       if (!sessionName.startsWith('codeman-') && !sessionName.startsWith('claudeman-')) continue;
+      // A session with no live pane has no pid to record, and a made-up one would
+      // reach killSession()'s process-tree walk. Left undiscovered, as before.
+      if (pid === undefined) continue;
       // Only admit names that pass the safe-name pattern. A foreign process on the
       // shared `tmux -L codeman` socket could create a `codeman-…` session whose name
       // contains shell metacharacters; rejecting it here keeps it out of this.sessions
@@ -3890,9 +3919,10 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    *
    * An entry keeps the `at` of the FIRST read that saw that exit, so the stamp
    * says when the agent was found gone rather than when the last poll ran. A
-   * changed status, a changed signal, or a different pane pid all start a new
-   * observation — the pid is what catches a second command in the same pane
-   * that happened to exit the same way.
+   * changed status, a changed signal, a different pane pid or a different exit
+   * time all start a new observation — the pid and the time are what catch a
+   * second command in the same pane that happened to exit the same way (the
+   * time alone on tmux 3.8, which blanks a dead pane's pid).
    *
    * The same rule decides the read count: a repeat of the stored exit adds one,
    * and anything that starts a new observation starts the count again at 1.
@@ -3906,6 +3936,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       const sameExit =
         prev !== undefined &&
         prev.panePid === next.panePid &&
+        prev.deadTime === next.deadTime &&
         prev.exit.status === next.exit.status &&
         prev.exit.signal === next.exit.signal;
       this.paneExits.set(muxName, sameExit ? { ...prev, reads: prev.reads + 1 } : { ...next, reads: 1 });
