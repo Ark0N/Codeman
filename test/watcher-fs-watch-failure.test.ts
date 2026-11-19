@@ -17,7 +17,7 @@ const FAILURES = [
   { code: 'EMFILE', errno: -24, text: 'too many open files' },
   { code: 'ENOSPC', errno: -28, text: 'no space left on device' },
 ] as const;
-type WatchFailure = (typeof FAILURES)[number];
+type WatchFailure = { code: string; errno: number; text: string };
 
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -111,6 +111,14 @@ describe('TeamWatcher fs.watch failure', () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
   });
 
+  function expectWarnings(messages: string[]): void {
+    // Check counts before arguments so a retry storm cannot flood failure output.
+    expect(warn).toHaveBeenCalledTimes(messages.length);
+    expect(error).toHaveBeenCalledTimes(0);
+    expect(unhandled.length).toBe(0);
+    expect(warn.mock.calls.map((call) => [...call]).sort()).toEqual(messages.map((message) => [message]).sort());
+  }
+
   it.each(FAILURES)('$code stops both watchers with two warnings and keeps polling', async (failure) => {
     const watch = failEveryWatch(failure);
     try {
@@ -135,30 +143,58 @@ describe('TeamWatcher fs.watch failure', () => {
       expect(attempts).toBeLessThanOrEqual(6);
       expect(unhandled.length).toBe(0);
 
+      const expectedWarnings = [
+        `[TeamWatcher] teams watcher stopped, relying on polling: ${watchError(failure, teamsDir).message}`,
+        `[TeamWatcher] tasks watcher stopped, relying on polling: ${watchError(failure, tasksDir).message}`,
+      ];
+      for (const pollCount of [2, 3, 4]) {
+        vi.advanceTimersByTime(TEAM_POLL_INTERVAL_MS);
+        await delay(500);
+        // The same empty roots must cost the same bounded number of attempts on every tick.
+        expect(watch).toHaveBeenCalledTimes(attempts * pollCount);
+        expectWarnings(expectedWarnings);
+        expect(teamWatcher.getTeams()).toEqual([]);
+        await delay(200);
+        expect(watch).toHaveBeenCalledTimes(attempts * pollCount);
+      }
+
       const config = createTeamConfig();
       await writeTeam(teamsDir, config);
       expect(teamWatcher.getTeams()).toEqual([]);
       vi.advanceTimersByTime(TEAM_POLL_INTERVAL_MS);
       await waitUntil(() => teamWatcher.getTeams().length > 0, 'polling did not discover the new team');
       expect(teamWatcher.getTeams()).toEqual([config]);
-      expect(watch.mock.calls.length).toBe(attempts);
-      expect(warn).toHaveBeenCalledTimes(2);
+      await delay(500);
+      const finalAttempts = watch.mock.calls.length;
+      expect(finalAttempts - attempts * 4).toBeGreaterThanOrEqual(2);
+      expect(finalAttempts - attempts * 4).toBeLessThanOrEqual(6);
+      expectWarnings(expectedWarnings);
 
       expect(() => teamWatcher.stop()).not.toThrow();
+      expect(() => teamWatcher.stop()).not.toThrow();
+      vi.advanceTimersByTime(TEAM_POLL_INTERVAL_MS * 3);
       await delay(500);
-      expect(watch.mock.calls.length).toBe(attempts);
-      expect(warn).toHaveBeenCalledTimes(2);
-      expect(error).toHaveBeenCalledTimes(0);
-      expect(unhandled.length).toBe(0);
+      expect(watch).toHaveBeenCalledTimes(finalAttempts);
+      expectWarnings(expectedWarnings);
     } finally {
       teamWatcher.stop();
     }
   });
 
   it('keeps a healthy watcher active and discovers a new team before the poll interval', async () => {
+    const watch = vi.spyOn(fs, 'watch');
     try {
       teamWatcher.start();
+      await waitUntil(() => watch.mock.calls.length >= 2, 'healthy watchers did not start');
       await delay(200);
+      const attempts = watch.mock.calls.length;
+      for (let tick = 0; tick < 3; tick++) {
+        vi.advanceTimersByTime(TEAM_POLL_INTERVAL_MS);
+        await delay(200);
+        expect(watch).toHaveBeenCalledTimes(attempts);
+        expect(teamWatcher.getTeams()).toEqual([]);
+        expectWarnings([]);
+      }
       const config = createTeamConfig();
       await writeTeam(teamsDir, config);
       // No interval is advanced: discovery must come from the real filesystem watcher.
@@ -173,6 +209,221 @@ describe('TeamWatcher fs.watch failure', () => {
       teamWatcher.stop();
     }
   });
+
+  it.each(FAILURES)('$code resumes live discovery when both watchers recover on the next poll', async (failure) => {
+    const watch = failEveryWatch(failure);
+    const created = vi.fn();
+    const expectedWarnings = [
+      `[TeamWatcher] teams watcher stopped, relying on polling: ${watchError(failure, teamsDir).message}`,
+      `[TeamWatcher] tasks watcher stopped, relying on polling: ${watchError(failure, tasksDir).message}`,
+    ];
+    try {
+      teamWatcher.on('teamCreated', created);
+      teamWatcher.start();
+      await waitUntil(() => warn.mock.calls.length >= 2, 'timed out waiting for both watcher warnings');
+      await delay(200);
+      expectWarnings(expectedWarnings);
+      watch.mockRestore();
+      const recoveredWatch = vi.spyOn(fs, 'watch');
+      await delay(200);
+      expect(recoveredWatch).toHaveBeenCalledTimes(0);
+
+      vi.advanceTimersByTime(TEAM_POLL_INTERVAL_MS);
+      await delay(500);
+      expect(recoveredWatch).toHaveBeenCalledTimes(2);
+      expect(recoveredWatch.mock.calls.map(([path]) => String(path)).sort()).toEqual([teamsDir, tasksDir].sort());
+      expect(teamWatcher.getTeams()).toEqual([]);
+
+      const config = createTeamConfig();
+      await writeTeam(teamsDir, config);
+      // No further interval tick: the recovered teams watcher must discover this team.
+      await waitUntil(() => created.mock.calls.length > 0, 'recovered watcher did not discover the new team');
+      expect(created).toHaveBeenCalledTimes(1);
+      expect(created.mock.calls).toEqual([[config]]);
+      expect(teamWatcher.getTeams()).toEqual([config]);
+      expectWarnings(expectedWarnings);
+    } finally {
+      teamWatcher.stop();
+      teamWatcher.off('teamCreated', created);
+    }
+  });
+
+  it('re-arms after one new file throws ENOENT and resumes live discovery without another poll', async () => {
+    const realWatch = fs.watch;
+    const vanishedPath = join(teamsDir, 'vanished.json');
+    const failure = watchError({ code: 'ENOENT', errno: -2, text: 'no such file or directory' }, vanishedPath);
+    let failedCalls = 0;
+    const watch = vi.spyOn(fs, 'watch').mockImplementation((...args) => {
+      if (String(args[0]) === vanishedPath && failedCalls === 0) {
+        failedCalls++;
+        throw failure;
+      }
+      return realWatch(...args);
+    });
+    const created = vi.fn();
+    let closeErrorMessage = '';
+    try {
+      (undefined as unknown as fs.FSWatcher).close();
+    } catch (error) {
+      closeErrorMessage = (error as TypeError).message;
+    }
+    const expectedWarnings = [`[TeamWatcher] teams watcher stopped, relying on polling: ${closeErrorMessage}`];
+    try {
+      teamWatcher.on('teamCreated', created);
+      teamWatcher.start();
+      await waitUntil(() => watch.mock.calls.length >= 2, 'healthy watchers did not start');
+      await delay(200);
+      await writeFile(vanishedPath, '{}');
+      await waitUntil(() => warn.mock.calls.length > 0, 'the transient failure did not stop the teams watcher');
+      await delay(200);
+      expect(failedCalls).toBe(1);
+      expectWarnings(expectedWarnings);
+      await rm(vanishedPath);
+      const stoppedAttempts = watch.mock.calls.length;
+      await delay(200);
+      expect(watch).toHaveBeenCalledTimes(stoppedAttempts);
+
+      vi.advanceTimersByTime(TEAM_POLL_INTERVAL_MS);
+      await delay(500);
+      expect(watch).toHaveBeenCalledTimes(stoppedAttempts + 1);
+      expect(watch.mock.calls.slice(stoppedAttempts).map(([path]) => String(path))).toEqual([teamsDir]);
+      expect(teamWatcher.getTeams()).toEqual([]);
+      const config = createTeamConfig();
+      await writeTeam(teamsDir, config);
+      await waitUntil(() => created.mock.calls.length > 0, 're-armed watcher did not discover the new team');
+      expect(created).toHaveBeenCalledTimes(1);
+      expect(created.mock.calls).toEqual([[config]]);
+      expect(teamWatcher.getTeams()).toEqual([config]);
+      expect(failedCalls).toBe(1);
+      expectWarnings(expectedWarnings);
+    } finally {
+      teamWatcher.stop();
+      teamWatcher.off('teamCreated', created);
+    }
+  });
+
+  it.each(FAILURES.flatMap((failure) => ['teams', 'tasks'].map((kind) => ({ ...failure, kind }))))(
+    '$code re-arms only the $kind watcher and warns again only after a healthy poll',
+    async ({ kind, ...failure }) => {
+      const root = kind === 'teams' ? teamsDir : tasksDir;
+      const healthyRoot = kind === 'teams' ? tasksDir : teamsDir;
+      const realWatch = fs.watch;
+      let failingPath: string | undefined = root;
+      const watch = vi.spyOn(fs, 'watch').mockImplementation((...args) => {
+        if (String(args[0]) === failingPath) throw watchError(failure, failingPath);
+        return realWatch(...args);
+      });
+      const expectedWarnings = [
+        `[TeamWatcher] ${kind} watcher stopped, relying on polling: ${watchError(failure, root).message}`,
+      ];
+      const attemptsAt = (path: string) =>
+        watch.mock.calls.filter(([watchedPath]) => String(watchedPath) === path).length;
+      try {
+        teamWatcher.start();
+        await waitUntil(() => warn.mock.calls.length > 0, 'timed out waiting for the failed watcher warning');
+        await delay(200);
+        expectWarnings(expectedWarnings);
+        expect(attemptsAt(root)).toBe(1);
+        expect(attemptsAt(healthyRoot)).toBe(1);
+
+        for (const expectedAttempts of [2, 3]) {
+          vi.advanceTimersByTime(TEAM_POLL_INTERVAL_MS);
+          await delay(500);
+          expect(watch).toHaveBeenCalledTimes(expectedAttempts + 1);
+          expect(attemptsAt(root)).toBe(expectedAttempts);
+          expect(attemptsAt(healthyRoot)).toBe(1);
+          expectWarnings(expectedWarnings);
+          await delay(200);
+          expect(watch).toHaveBeenCalledTimes(expectedAttempts + 1);
+        }
+
+        failingPath = undefined;
+        vi.advanceTimersByTime(TEAM_POLL_INTERVAL_MS);
+        await delay(500);
+        expect(watch).toHaveBeenCalledTimes(5);
+        expect(attemptsAt(root)).toBe(4);
+        expect(attemptsAt(healthyRoot)).toBe(1);
+        expectWarnings(expectedWarnings);
+
+        // A successful re-arm alone does not end the outage before the following poll.
+        failingPath = join(root, 'before-healthy-poll.json');
+        await writeFile(failingPath, '{}');
+        await waitUntil(() => attemptsAt(failingPath!) > 0, 'recreated watcher did not watch the first new file');
+        await delay(200);
+        expect(watch).toHaveBeenCalledTimes(6);
+        expectWarnings(expectedWarnings);
+        await rm(failingPath);
+        failingPath = undefined;
+        vi.advanceTimersByTime(TEAM_POLL_INTERVAL_MS);
+        await delay(500);
+        expect(watch).toHaveBeenCalledTimes(7);
+        expect(attemptsAt(root)).toBe(5);
+        expect(attemptsAt(healthyRoot)).toBe(1);
+        expectWarnings(expectedWarnings);
+
+        vi.advanceTimersByTime(TEAM_POLL_INTERVAL_MS);
+        await delay(200);
+        expect(watch).toHaveBeenCalledTimes(7);
+        expectWarnings(expectedWarnings);
+
+        failingPath = join(root, 'after-healthy-poll.json');
+        await writeFile(failingPath, '{}');
+        await waitUntil(() => attemptsAt(failingPath!) > 0, 'healthy watcher did not watch the second new file');
+        await delay(200);
+        expect(watch).toHaveBeenCalledTimes(8);
+        expectWarnings([
+          ...expectedWarnings,
+          `[TeamWatcher] ${kind} watcher stopped, relying on polling: ${watchError(failure, failingPath).message}`,
+        ]);
+        expect(teamWatcher.getTeams()).toEqual([]);
+      } finally {
+        teamWatcher.stop();
+      }
+    }
+  );
+
+  it.each([{ code: 'healthy', failure: undefined }, ...FAILURES.map((failure) => ({ code: failure.code, failure }))])(
+    '$code stop closes both watchers and the interval and is idempotent',
+    async ({ failure }) => {
+      const watch = failure ? failEveryWatch(failure) : vi.spyOn(fs, 'watch');
+      const expectedWarnings = failure
+        ? [
+            `[TeamWatcher] teams watcher stopped, relying on polling: ${watchError(failure, teamsDir).message}`,
+            `[TeamWatcher] tasks watcher stopped, relying on polling: ${watchError(failure, tasksDir).message}`,
+          ]
+        : [];
+      try {
+        teamWatcher.start();
+        await waitUntil(() => watch.mock.calls.length >= 2, 'watchers did not attempt to start');
+        await delay(200);
+        expectWarnings(expectedWarnings);
+        const attempts = watch.mock.calls.length;
+        const closed: string[] = [];
+        if (!failure) {
+          expect(watch).toHaveBeenCalledTimes(2);
+          watch.mock.results.forEach((result, index) => {
+            expect(result.type).toBe('return');
+            (result.value as fs.FSWatcher).on('close', () => closed.push(String(watch.mock.calls[index][0])));
+          });
+        }
+        expect(() => teamWatcher.stop()).not.toThrow();
+        expect(() => teamWatcher.stop()).not.toThrow();
+        await delay(200);
+        if (!failure) expect(closed.sort()).toEqual([teamsDir, tasksDir].sort());
+        expect(vi.getTimerCount()).toBe(0);
+
+        await writeTeam(teamsDir, createTeamConfig());
+        await writeFile(join(tasksDir, 'after-stop.json'), '{}');
+        vi.advanceTimersByTime(TEAM_POLL_INTERVAL_MS * 3);
+        await delay(500);
+        expect(watch).toHaveBeenCalledTimes(attempts);
+        expect(teamWatcher.getTeams()).toEqual([]);
+        expectWarnings(expectedWarnings);
+      } finally {
+        teamWatcher.stop();
+      }
+    }
+  );
 });
 
 describe('TeamWatcher in-flight fs.watch failure', () => {

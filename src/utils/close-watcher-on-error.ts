@@ -26,7 +26,8 @@ import type { FSWatcher } from 'chokidar';
 
 /**
  * Close `watcher` on its first `'error'` and pass that error to `onClosed`,
- * once. The caller's polling has to cover what the watcher watched.
+ * once. The caller's polling has to cover what the watcher watched and create it
+ * again later: chokidar 3 reports a one-off ENOENT race through the same error.
  */
 export function closeWatcherOnError(watcher: FSWatcher, onClosed: (err: unknown) => void): void {
   watcher.once('error', (err: unknown) => {
