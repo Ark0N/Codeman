@@ -160,6 +160,7 @@ function loadBar(sessionMode = 'claude') {
     activeSessionId: 'session-1',
     sessions: new Map<string, { mode: string }>([['session-1', { mode: sessionMode }]]),
     terminal: { focus: vi.fn() },
+    _enqueueInput: vi.fn(),
   };
   const fetchMock = vi.fn(() => Promise.resolve({ ok: true, catch: () => {} }));
   const barElement = fakeBarElement();
@@ -499,10 +500,14 @@ describe('one-shot Ctrl through the CJK input field', () => {
     const app = Object.create(CodemanApp.prototype) as {
       activeSessionId: string;
       _sendInputAsync: ReturnType<typeof vi.fn>;
+      _focusedPane: () => { terminal: object; sessionId: string; isPrimary: boolean };
+      _prepareExternalInput: (...args: unknown[]) => void;
       _handleCjkInput(text: string): void;
     };
     app.activeSessionId = 'cjk-session';
     app._sendInputAsync = vi.fn();
+    app._focusedPane = () => ({ terminal: {}, sessionId: app.activeSessionId, isPrimary: true });
+    app._prepareExternalInput = vi.fn();
     return { app, bar };
   }
 
@@ -730,8 +735,10 @@ describe('composer nav keys from the bar', () => {
     return { ...loaded, app, overlay };
   }
 
-  const sentKeys = (fetchMock: { mock: { calls: unknown[][] } }) =>
-    fetchMock.mock.calls.map((call) => JSON.parse((call[1] as { body: string }).body).input);
+  const sentKeys = (enqueue: { mock: { calls: unknown[][] } }) =>
+    enqueue.mock.calls.flatMap((call) =>
+      (call[1] as { write?: string }[]).filter((op) => op.write?.startsWith('\x1b')).map((op) => op.write)
+    );
 
   it.each(['simple', 'extended'])('exposes Shift arrows in the %s agent layout', (mode) => {
     const { bar, barElement } = loadBar('codex');
@@ -744,19 +751,15 @@ describe('composer nav keys from the bar', () => {
     ['shift-left', '\x1b[1;2D'],
     ['shift-right', '\x1b[1;2C'],
   ])('%s flushes the draft before navigation and hands editing to the PTY', (action, sequence) => {
-    const { bar, app, overlay, fetchMock } = barWithDraft('unfinished follow-up');
-    const events: string[] = [];
-    app.sendInput = vi.fn(() => events.push('draft'));
-    fetchMock.mockImplementation(() => {
-      events.push('key');
-      return Promise.resolve({ ok: true, catch: () => {} });
-    });
+    const { bar, app, overlay } = barWithDraft('unfinished follow-up');
 
     bar.handleAction(action);
 
-    expect(app.sendInput).toHaveBeenCalledWith('unfinished follow-up');
-    expect(events).toEqual(['draft', 'key']);
-    expect(sentKeys(fetchMock)).toEqual([sequence]);
+    expect(app._enqueueInput).toHaveBeenCalledWith('session-1', [
+      { write: 'unfinished follow-up', useMux: true },
+      { gap: 120 },
+      { write: sequence },
+    ]);
     expect(overlay.pendingText).toBe('');
     expect([...(app._echoPassthroughSessions as Set<string>)]).toEqual(['session-1']);
   });
@@ -768,12 +771,15 @@ describe('composer nav keys from the bar', () => {
     // goes on painting the draft over the same row and still believes it is
     // pending. Flushing first is also what makes the draft recoverable: the
     // CLI stashes the live composer and hands it back on Down.
-    const { bar, app, overlay, fetchMock } = barWithDraft('draft I typed');
+    const { bar, app, overlay } = barWithDraft('draft I typed');
 
     bar.handleAction('scroll-up');
 
-    expect(app.sendInput).toHaveBeenCalledWith('draft I typed');
-    expect(sentKeys(fetchMock)).toEqual(['\x1b[A']);
+    expect(app._enqueueInput).toHaveBeenCalledWith('session-1', [
+      { write: 'draft I typed', useMux: true },
+      { gap: 120 },
+      { write: '\x1b[A' },
+    ]);
     expect(overlay.pendingText).toBe('');
     expect(overlay.suppressBufferDetection).toHaveBeenCalled();
     // The overlay's bookkeeping for this session has to go with it.
@@ -793,14 +799,14 @@ describe('composer nav keys from the bar', () => {
   });
 
   it('sends all four arrows and skips the flush when there is no draft', () => {
-    const { bar, app, fetchMock } = barWithDraft('');
+    const { bar, app } = barWithDraft('');
 
     bar.handleAction('scroll-up');
     bar.handleAction('scroll-down');
     bar.handleAction('arrow-left');
     bar.handleAction('arrow-right');
 
-    expect(sentKeys(fetchMock)).toEqual(['\x1b[A', '\x1b[B', '\x1b[D', '\x1b[C']);
+    expect(sentKeys(app._enqueueInput as ReturnType<typeof vi.fn>)).toEqual(['\x1b[A', '\x1b[B', '\x1b[D', '\x1b[C']);
     expect(app.sendInput).not.toHaveBeenCalled();
   });
 });

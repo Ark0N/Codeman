@@ -182,7 +182,7 @@ describe('Send on Enter field layout and strings', () => {
     // onData drops everything while cjkActive, so the xterm path does nothing.
     const sessionUi = read('session-ui.js');
     const start = sessionUi.indexOf('  sendEnterKey() {');
-    const body = sessionUi.slice(start, sessionUi.indexOf('triggerDataEvent', start));
+    const body = sessionUi.slice(start, sessionUi.indexOf('submitFromToolbar()', start));
     expect(body).toContain("classList.contains('cjk-input-visible')");
     expect(body).toContain('CjkInput.submit?.();');
   });

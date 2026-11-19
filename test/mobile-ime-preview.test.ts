@@ -55,6 +55,8 @@ class FakeNode {
 
 class FakeTextarea extends FakeNode {
   value = 'unchanged';
+  selectionStart = 0;
+  selectionEnd = 0;
 }
 
 type Scheduled = { id: number; callback: () => void; delay?: number };
@@ -133,7 +135,100 @@ function harness(
 }
 
 describe('MobileImePreview', () => {
+  test('native composition ignores xterm terminal-key finalization heuristics', () => {
+    const h = harness({ ownsNativeInput: () => true });
+    h.textarea.dispatch('compositionstart');
+    h.textarea.dispatch('compositionupdate', { data: 'に' });
+    h.textarea.dispatch('keydown', { key: 'x', keyCode: 88 });
+    expect(h.controller.state.composing).toBe(true);
+    expect(h.controller.state.awaitingCommit).toBe(false);
+    h.textarea.dispatch('compositionupdate', { data: '日本' });
+    h.textarea.dispatch('compositionend', { data: '日本' });
+    expect(h.controller.nativeTransaction({ inserted: '日本', deleted: 0, composition: true })).toBe(true);
+    expect(h.onCommit).toHaveBeenCalledWith('日本');
+  });
+
   beforeEach(() => vi.restoreAllMocks());
+
+  test.each([
+    { inserted: '', deleted: 2, composition: true },
+    { inserted: '', deleted: 0, composition: true },
+    { inserted: '', deleted: 0, composition: false },
+  ])('settles an awaiting native transaction immediately: %j', (transaction) => {
+    const h = harness({ ownsNativeInput: () => true });
+    h.textarea.dispatch('compositionstart');
+    h.textarea.dispatch('compositionupdate', { data: 'draft' });
+    h.textarea.dispatch('compositionend', { data: '' });
+    expect(h.controller.state.awaitingCommit).toBe(true);
+    h.clear.mockClear();
+
+    expect(h.controller.nativeTransaction(transaction)).toBe(false);
+    expect(h.controller.state.awaitingCommit).toBe(false);
+    expect(h.controller.state.committed).toBe(false);
+    expect(h.frames).toHaveLength(0);
+    expect(h.timers).toHaveLength(0);
+    expect(h.clear).toHaveBeenCalledOnce();
+    expect(h.controller.consumeTerminalData('unrelated')).toBe(false);
+    expect(h.onCommit).not.toHaveBeenCalled();
+  });
+
+  test('hands native inserted text through the existing commit lifecycle exactly once', () => {
+    const h = harness({ ownsNativeInput: () => true });
+    h.textarea.dispatch('compositionstart');
+    h.textarea.dispatch('compositionend', { data: 'teh' });
+    expect(h.controller.nativeTransaction({ inserted: 'the', deleted: 3, composition: true })).toBe(true);
+    expect(h.onCommit).toHaveBeenCalledExactlyOnceWith('the');
+    h.flushFrame();
+    expect(h.render).toHaveBeenLastCalledWith({ text: 'the', phase: 'committed' });
+    expect(h.controller.nativeTransaction({ inserted: 'the', deleted: 0, composition: true })).toBe(false);
+    expect(h.onCommit).toHaveBeenCalledOnce();
+    h.controller.completeCommit({ predicted: true });
+    expect(h.timers).toHaveLength(0);
+  });
+
+  test('null-data native provisional input extracts only the composition segment', () => {
+    const h = harness({ ownsNativeInput: () => true });
+    h.textarea.value = 'retained suffix';
+    h.textarea.selectionStart = h.textarea.selectionEnd = 9;
+    h.textarea.dispatch('compositionstart');
+    h.textarea.value = 'retained 日本suffix';
+    h.textarea.selectionStart = h.textarea.selectionEnd = 11;
+    h.textarea.dispatch('input', { data: null, isComposing: true });
+    h.flushFrame();
+    expect(h.render).toHaveBeenLastCalledWith({ text: '日本', phase: 'provisional' });
+    h.textarea.dispatch('compositionupdate', { data: null });
+    h.flushFrame();
+    expect(h.render).toHaveBeenLastCalledWith({ text: '日本', phase: 'provisional' });
+    h.textarea.dispatch('input', { data: 'event wins', isComposing: true });
+    h.flushFrame();
+    expect(h.render).toHaveBeenLastCalledWith({ text: 'event wins', phase: 'provisional' });
+    expect(h.textarea.value).toBe('retained 日本suffix');
+  });
+
+  test.each([undefined, () => false])(
+    'keeps whole-value provisional fallback without native ownership (%s)',
+    (ownsNativeInput) => {
+      const h = harness({ ownsNativeInput });
+      h.textarea.value = 'retained ';
+      h.textarea.selectionStart = h.textarea.selectionEnd = 9;
+      h.textarea.dispatch('compositionstart');
+      h.textarea.value = 'retained 日本';
+      h.textarea.selectionStart = h.textarea.selectionEnd = 11;
+      h.textarea.dispatch('input', { data: null, isComposing: true });
+      h.flushFrame();
+      expect(h.render).toHaveBeenLastCalledWith({ text: 'retained 日本', phase: 'provisional' });
+    }
+  );
+
+  test('ignores native notifications outside an awaiting commit and after destruction', () => {
+    const h = harness();
+    expect(h.controller.nativeTransaction({ inserted: 'ordinary', deleted: 0, composition: false })).toBe(false);
+    h.textarea.dispatch('compositionstart');
+    h.textarea.dispatch('compositionend');
+    h.controller.destroy();
+    expect(h.controller.nativeTransaction({ inserted: 'late', deleted: 0, composition: true })).toBe(false);
+    expect(h.onCommit).not.toHaveBeenCalled();
+  });
 
   test('collapses 500 composition updates into one latest-state frame', () => {
     const h = harness();

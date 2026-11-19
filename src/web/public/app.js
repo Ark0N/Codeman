@@ -4134,6 +4134,68 @@ class CodemanApp {
     }
   }
 
+  // Session-owned reservations survive pane switches and terminal replacement.
+  _inputFifo(sessionId) {
+    if (!this._inputFifos) this._inputFifos = new Map();
+    if (!this._inputFifos.has(sessionId)) this._inputFifos.set(sessionId, { ops: [], timer: null, draining: false });
+    return this._inputFifos.get(sessionId);
+  }
+
+  _enqueueInput(sessionId, ops) {
+    if (!sessionId || (this.sessions && !this.sessions.has(sessionId))) return;
+    const fifo = this._inputFifo(sessionId);
+    fifo.ops.push(...ops);
+    this._drainInputFifo(sessionId, fifo);
+  }
+
+  _drainInputFifo(sessionId, fifo) {
+    if (fifo.timer !== null || fifo.draining) return;
+    fifo.draining = true;
+    try {
+      while (fifo.ops.length && this._inputFifos.get(sessionId) === fifo) {
+        const op = fifo.ops.shift();
+        if (op.gap !== undefined) {
+          fifo.timer = setTimeout(() => {
+            fifo.timer = null;
+            if (this._inputFifos.get(sessionId) === fifo) this._drainInputFifo(sessionId, fifo);
+          }, op.gap);
+          break;
+        }
+        if (op.key) {
+          fetch(`/api/sessions/${sessionId}/send-key`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key: op.key }),
+          }).catch(() => {});
+        } else if (op.write) {
+          this._enqueueReliableInput(sessionId, op.write, { useMux: op.useMux });
+        }
+      }
+    } finally {
+      fifo.draining = false;
+    }
+  }
+
+  _sealPendingInput(sessionId) {
+    const timer = this._inputFlushTimeout?.get(sessionId);
+    clearTimeout(timer);
+    this._inputFlushTimeout?.delete(sessionId);
+    const text = this._pendingInput?.get(sessionId);
+    this._pendingInput?.delete(sessionId);
+    if (text) this._enqueueInput(sessionId, [{ write: text }]);
+  }
+
+  _settleMainInput(reason) {
+    const sessionId = this.activeSessionId;
+    this._iosNativeInput?.settle?.();
+    this._sealPendingInput(sessionId);
+    if (sessionId) this._flushLocalEchoTo(sessionId);
+    this._iosNativeInput?.reset?.(reason);
+    this._mobileImePreview?.reset?.();
+    this._mobileImeCommitOutputSeq = null;
+    this._localEchoOverlay?.clear();
+  }
+
   /**
    * Public input entry point — name/signature kept for all call sites.
    * Records the input durably, then delivers it reliably (exactly-once). Never
@@ -4143,6 +4205,12 @@ class CodemanApp {
    * @param {{useMux?: boolean}} [opts] - useMux only affects the POST fallback.
    */
   _sendInputAsync(sessionId, input, opts) {
+    this._sealPendingInput(sessionId);
+    this._enqueueInput(sessionId, [{ write: input, ...opts }]);
+  }
+
+  // Durable delivery starts here; FIFO gaps order enqueueing, not ACK completion.
+  _enqueueReliableInput(sessionId, input, opts) {
     if (!sessionId || !input) return;
     const useMux = opts?.useMux === true;
     // Both transports refuse a frame over the server's limit (issue #484), and a
@@ -9385,6 +9453,24 @@ class CodemanApp {
   // `skipSnapshot`: the tile grid opening on the session it parks
   // (tile-grid.js openTileGrid), whose snapshot closing the grid discards.
   _cleanupPreviousSession(newSessionId, { skipSnapshot = false, keepCjkDraft = false } = {}) {
+    // Clear CJK input to prevent sending stale text to the wrong session.
+    // Must go through CjkInput.clear() — a raw value wipe leaves the module's
+    // pending flush timers armed and drops the phantom char it relies on.
+    // A held Send on Enter draft survives a reload of the same session: nothing
+    // switched, and the answer would be gone. On a real switch it is stashed for
+    // the session being left (selectSession restores it on the way back), so a
+    // stray swipe does not lose it. Live mode still clears, since a pending
+    // debounced flush could fire mid-reconnect.
+    if (typeof CjkInput !== 'undefined') {
+      if (!(keepCjkDraft && CjkInput.holdUntilEnter)) {
+        if (this.activeSessionId) CjkInput.stashDraft?.(this.activeSessionId);
+        CjkInput.clear();
+      }
+    } else {
+      const cjkEl = document.getElementById('cjkInput');
+      if (cjkEl) cjkEl.value = '';
+    }
+    this._settleMainInput('session');
     // Snapshot the OUTGOING session's xterm rendered state (viewport + scrollback +
     // colors/attrs) before the terminal gets cleared/reset. Lets us restore the
     // exact view on switch-back rather than replaying codex's byte stream, which
@@ -9434,24 +9520,6 @@ class CodemanApp {
     // Close WebSocket for previous session (new one opens after buffer load)
     this._disconnectWs();
 
-    // Clear CJK input to prevent sending stale text to the wrong session.
-    // Must go through CjkInput.clear() — a raw value wipe leaves the module's
-    // pending flush timers armed and drops the phantom char it relies on.
-    // A held Send on Enter draft survives a reload of the same session: nothing
-    // switched, and the answer would be gone. On a real switch it is stashed for
-    // the session being left (selectSession restores it on the way back), so a
-    // stray swipe does not lose it. Live mode still clears, since a pending
-    // debounced flush could fire mid-reconnect.
-    if (typeof CjkInput !== 'undefined') {
-      if (!(keepCjkDraft && CjkInput.holdUntilEnter)) {
-        if (this.activeSessionId) CjkInput.stashDraft?.(this.activeSessionId);
-        CjkInput.clear();
-      }
-    } else {
-      const cjkEl = document.getElementById('cjkInput');
-      if (cjkEl) cjkEl.value = '';
-    }
-
     // Clean up flicker filter state when switching sessions
     this._clearTimer('flickerFilterTimeout');
     this.flickerFilterBuffer = '';
@@ -9497,7 +9565,6 @@ class CodemanApp {
         if (ta) ta.dispatchEvent(new CompositionEvent('compositionend', { data: '' }));
       }
     } catch {}
-    this._flushLocalEchoTo(this.activeSessionId);
     this._localEchoOverlay?.clear();
     // Predictions are ephemeral + already sent: nothing to save/restore
     // across a tab switch (unlike the buffer overlay's setFlushed machinery)
@@ -10017,7 +10084,7 @@ class CodemanApp {
       // hides this one from it. Flush first or the characters are cleared
       // unread. The geometry replay re-enters here with no gesture behind it,
       // so on a touch device this fires while the user is still typing.
-      this._flushLocalEchoTo(sessionId);
+      this._settleMainInput('session');
       this.activeSessionId = null;
     }
     // Focus terminal SYNCHRONOUSLY before any await — iOS Safari only honors
@@ -10830,6 +10897,14 @@ class CodemanApp {
       this._activeRename.cancel();
     }
     this.sessions.delete(sessionId);
+    const fifo = this._inputFifos?.get(sessionId);
+    clearTimeout(fifo?.timer);
+    this._inputFifos?.delete(sessionId);
+    const inputTimer = this._inputFlushTimeout?.get(sessionId);
+    clearTimeout(inputTimer);
+    this._inputFlushTimeout?.delete(sessionId);
+    this._pendingInput?.delete(sessionId);
+    this._lastKeystrokeTime?.delete(sessionId);
     // Remove from tab order
     const orderIndex = this.sessionOrder.indexOf(sessionId);
     if (orderIndex !== -1) {

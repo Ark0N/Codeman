@@ -142,6 +142,8 @@ Object.assign(CodemanApp.prototype, {
       return;
     }
 
+    const pane = this._paneForSession?.(sessionId);
+    if (pane) this._prepareExternalInput?.(pane, 'toolbar-attachment');
     const stillActive = this.activeSessionId === sessionId;
     // The overlay holds the prompt only while local echo actually owns it. A
     // session handed back to plain PTY echo by a composer nav key (echo
@@ -152,6 +154,7 @@ Object.assign(CodemanApp.prototype, {
     // goes to the PTY like any other background write.
     const overlayOwnsPrompt =
       stillActive &&
+      (!pane || (pane.isPrimary && pane.sessionId === sessionId)) &&
       !this._tilesOwnTerminal?.() &&
       this._localEchoEnabled &&
       this._localEchoOverlay &&
@@ -398,6 +401,8 @@ Object.assign(CodemanApp.prototype, {
       // activeSessionId, and after the awaits above that is whatever tab the
       // user switched to mid-upload, so the paths landed in the wrong session.
       // Same delivery sendInput() uses (durable queue, useMux for the POST path).
+      const pane = this._paneForSession?.(sessionId);
+      if (pane) this._prepareExternalInput?.(pane, 'upload-insert', { flushEcho: true });
       this._sendInputAsync(sessionId, paths.join(' '), { useMux: true });
     }
 

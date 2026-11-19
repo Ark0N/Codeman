@@ -59,6 +59,8 @@ function load(opts: { insertMode?: string; localEcho?: boolean; focused?: string
     ]),
     sendInput,
     _sendInputAsync: sendInputAsync,
+    _enqueueInput: vi.fn(),
+    _prepareExternalInput: vi.fn(),
     showToast,
     terminal: { focus: vi.fn() },
     _localEchoEnabled: !!opts.localEcho,
@@ -74,6 +76,7 @@ function load(opts: { insertMode?: string; localEcho?: boolean; focused?: string
     const pane = opts.pane;
     app._focusedPane = () => pane;
   }
+  app._paneForSession = (id: string) => (opts.pane?.sessionId === id ? opts.pane : null);
   if (opts.tiles) app._tilesOwnTerminal = () => true;
   const context = vm.createContext({
     console,
@@ -120,14 +123,17 @@ describe('dictation target', () => {
     expect(sendInput).not.toHaveBeenCalled();
   });
 
-  it('keeps the existing path when the target is still the active session', () => {
-    const { voice, sendInput, sendInputAsync } = load();
+  it('uses the session-bound path even while the target is still active', () => {
+    const { voice, app, sendInput, sendInputAsync } = load({ pane: { sessionId: 'session-a', isPrimary: true } });
     voice.start();
 
     voice._insertText('hello');
 
-    expect(sendInput).toHaveBeenCalledWith('hello');
-    expect(sendInputAsync).not.toHaveBeenCalled();
+    expect(sendInput).not.toHaveBeenCalled();
+    expect(sendInputAsync).toHaveBeenCalledWith('session-a', 'hello', { useMux: true });
+    expect(app._prepareExternalInput).toHaveBeenCalledWith({ sessionId: 'session-a', isPrimary: true }, 'voice-send', {
+      flushEcho: true,
+    });
   });
 
   it('never types another session dictation into the active local-echo overlay', () => {
@@ -142,12 +148,16 @@ describe('dictation target', () => {
   });
 
   it('still uses the local-echo overlay for the active session', () => {
-    const { voice, appendText, sendInput } = load({ localEcho: true });
+    const { voice, app, appendText, sendInput } = load({
+      localEcho: true,
+      pane: { sessionId: 'session-a', isPrimary: true },
+    });
     voice.start();
 
     voice._insertText('typed locally');
 
     expect(appendText).toHaveBeenCalledWith('typed locally');
+    expect(app._prepareExternalInput).toHaveBeenCalledWith({ sessionId: 'session-a', isPrimary: true }, 'voice-insert');
     expect(sendInput).not.toHaveBeenCalled();
   });
 
@@ -170,8 +180,7 @@ describe('dictation target', () => {
     handler();
 
     expect(sendInputAsync).toHaveBeenLastCalledWith('session-a', '\r', { useMux: true });
-    // Only the original insert went through sendInput (target was active then).
-    expect(sendInput).toHaveBeenCalledTimes(1);
+    expect(sendInput).not.toHaveBeenCalled();
   });
 
   it('drops dictation for a session that closed meanwhile, with a toast', () => {
@@ -199,8 +208,8 @@ describe('dictation target', () => {
     voice._insertText('into the tile');
 
     expect(appendText).not.toHaveBeenCalled();
-    expect(sendInput).toHaveBeenCalledWith('into the tile');
-    expect(sendInputAsync).not.toHaveBeenCalled();
+    expect(sendInput).not.toHaveBeenCalled();
+    expect(sendInputAsync).toHaveBeenCalledWith('session-a', 'into the tile', { useMux: true });
     // The keyboard goes back to the tile; the main terminal is display: none.
     expect(tileTerminal.focus).toHaveBeenCalled();
     expect((app.terminal as { focus: ReturnType<typeof vi.fn> }).focus).not.toHaveBeenCalled();
@@ -208,7 +217,7 @@ describe('dictation target', () => {
 
   it('with the tile grid open, the green send button sends only Enter to the tile session', () => {
     const tileTerminal = { focus: vi.fn() };
-    const { voice, app, gear, sendInput, overlayClear } = load({
+    const { voice, app, gear, sendInput, sendInputAsync, overlayClear } = load({
       localEcho: true,
       tiles: true,
       pane: { sessionId: 'session-a', isPrimary: false, terminal: tileTerminal },
@@ -222,25 +231,61 @@ describe('dictation target', () => {
 
     expect(overlayClear).not.toHaveBeenCalled();
     expect(sendInput).not.toHaveBeenCalledWith('stale main-terminal text');
-    expect(sendInput).toHaveBeenLastCalledWith('\r');
+    expect(sendInputAsync).toHaveBeenLastCalledWith('session-a', '\r', { useMux: true });
     // The parked main terminal's predictions are not this pane's.
     expect(
       (app._predictiveEcho as { clearPredictions: ReturnType<typeof vi.fn> }).clearPredictions
     ).not.toHaveBeenCalled();
   });
 
-  it('split view is unchanged: a Pane A dictation keeps the overlay and refocuses the main terminal', () => {
+  it('preserves Pane A pending text and dictation ordering when focus moves to B', () => {
     const paneB = { focus: vi.fn() };
-    const { voice, app, appendText, sendInput } = load({ localEcho: true, focused: 'session-a' });
+    const { voice, app, appendText, overlayClear, gear, sendInput, sendInputAsync } = load({
+      localEcho: true,
+      focused: 'session-a',
+    });
+    const overlay = app._localEchoOverlay as { pendingText: string };
+    overlay.pendingText = 'earlier text ';
+    appendText.mockImplementation((text: string) => {
+      overlay.pendingText += text;
+    });
+    overlayClear.mockImplementation(() => {
+      overlay.pendingText = '';
+    });
     voice.start();
-    // The user clicked into Pane B while speaking.
+    // Keep B focused even when the production code requests main-terminal focus.
     app._focusedPane = () => ({ sessionId: 'session-b', isPrimary: false, terminal: paneB });
 
     voice._insertText('for pane a');
 
     expect(appendText).toHaveBeenCalledWith('for pane a');
+    expect(overlay.pendingText).toBe('earlier text for pane a');
+    expect(sendInputAsync).not.toHaveBeenCalled();
+    expect(app._enqueueInput).not.toHaveBeenCalled();
+
+    clickGreenSend(gear);
+
+    expect(app._enqueueInput).toHaveBeenCalledWith('session-a', [
+      { write: 'earlier text for pane a', useMux: true },
+      { gap: 80 },
+      { write: '\r', useMux: true },
+    ]);
+    expect(overlay.pendingText).toBe('');
     expect(sendInput).not.toHaveBeenCalled();
-    expect((app.terminal as { focus: ReturnType<typeof vi.fn> }).focus).toHaveBeenCalled();
+    expect(sendInputAsync).not.toHaveBeenCalled();
+    expect(app._prepareExternalInput).toHaveBeenNthCalledWith(
+      1,
+      { sessionId: 'session-a', isPrimary: true, tile: null, terminal: app.terminal },
+      'voice-insert'
+    );
+    expect(app._prepareExternalInput).toHaveBeenNthCalledWith(
+      2,
+      { sessionId: 'session-a', isPrimary: true, tile: null, terminal: app.terminal },
+      'voice-submit'
+    );
+    // load() creates this terminal mock; its Record boundary erases the shape.
+    const mainTerminal = app.terminal as { focus: (...args: unknown[]) => void };
+    expect(mainTerminal.focus).toHaveBeenCalled();
     expect(paneB.focus).not.toHaveBeenCalled();
   });
 

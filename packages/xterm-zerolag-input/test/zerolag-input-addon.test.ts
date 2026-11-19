@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { createMockTerminal } from './helpers.js';
 import { ZerolagInputAddon } from '../src/zerolag-input-addon.js';
+import type { InputEndAnchor } from '../src/types.js';
 
 function setup(lines: string[] = ['$ '], promptChar = '$') {
   const mock = createMockTerminal({ buffer: { lines } });
@@ -89,6 +90,41 @@ describe('ZerolagInputAddon', () => {
       const source = addon.removeChar();
       expect(source).toBe('pending');
       expect(addon.pendingText).toBe('a');
+    });
+
+    it('removes a whole pending emoji without changing flushed UTF-16 offsets', () => {
+      const { addon } = tracked();
+      addon.setFlushed(2, 'ab');
+      addon.appendText('c😀');
+      expect(addon.removeChar()).toBe('pending');
+      expect(addon.pendingText).toBe('c');
+      expect(addon.getFlushed()).toEqual({ count: 2, text: 'ab' });
+      expect(addon.removeChar()).toBe('pending');
+      expect(addon.pendingText).toBe('');
+    });
+
+    it('removes a whole flushed emoji and subtracts its UTF-16 width', () => {
+      const { addon } = tracked();
+      addon.setFlushed(3, 'a😀');
+      expect(addon.removeChar()).toBe('flushed');
+      expect(addon.getFlushed()).toEqual({ count: 1, text: 'a' });
+      expect(addon.removeChar()).toBe('flushed');
+      expect(addon.getFlushed()).toEqual({ count: 0, text: '' });
+      expect(addon.state.visible).toBe(false);
+    });
+
+    it('removes a whole emoji from newly detected buffer text', () => {
+      const { addon } = tracked(['$ a😀']);
+      expect(addon.removeChar()).toBe('flushed');
+      expect(addon.getFlushed()).toEqual({ count: 1, text: 'a' });
+    });
+
+    it('hides after deleting the only pending emoji', () => {
+      const { addon } = tracked();
+      addon.appendText('😀');
+      expect(addon.removeChar()).toBe('pending');
+      expect(addon.pendingText).toBe('');
+      expect(addon.state.visible).toBe(false);
     });
 
     it('returns false when nothing to remove', () => {
@@ -829,5 +865,166 @@ describe('setRowLimit', () => {
     addon.setRowLimit(12);
     addon.appendText('y');
     expect(overlay().style.top).toBe(`${9 * 17}px`);
+  });
+});
+
+describe('input end anchor and layout subscriptions', () => {
+  function layoutSetup({ cols = 20, rows = 6, promptRow = 1, showCursor = true } = {}) {
+    const lines = Array.from({ length: rows }, (_, i) => (i === promptRow ? '$ ' : ''));
+    const mock = createMockTerminal({ buffer: { lines }, cols, rows });
+    const addon = new ZerolagInputAddon({
+      prompt: { type: 'character', char: '$', offset: 2 },
+      showCursor,
+    });
+    mock.terminal.loadAddon(addon);
+    cleanups.push(() => {
+      addon.dispose();
+      mock.cleanup();
+    });
+    return { addon, mock };
+  }
+
+  it('returns the text end on a short line, including flushed and wide characters', () => {
+    const { addon } = layoutSetup();
+    addon.setFlushed(1, 'a');
+    addon.appendText('你😀');
+    expect(addon.getInputEndAnchor()).toEqual({ col: 7, row: 1 });
+    const anchor = addon.getInputEndAnchor()!;
+    anchor.col = 0;
+    expect(addon.getInputEndAnchor()).toEqual({ col: 7, row: 1 });
+  });
+
+  it('returns the short text end rather than the row edge with showCursor false', () => {
+    const { addon, mock } = layoutSetup({ showCursor: false });
+    addon.appendText('abc');
+    expect(addon.getInputEndAnchor()).toEqual({ col: 5, row: 1 });
+    const overlay = mock.terminal.element.querySelector('.xterm-screen')!.lastElementChild!;
+    expect(overlay.children.length).toBe(1); // line only, no cursor span
+  });
+
+  it('returns the unindented end of a wrapped line', () => {
+    const { addon } = layoutSetup();
+    addon.appendText('x'.repeat(23)); // 18 cells on the first line, then 5
+    expect(addon.getInputEndAnchor()).toEqual({ col: 5, row: 2 });
+  });
+
+  it('uses the renderer bottom clamp rather than the original prompt row', () => {
+    const { addon } = layoutSetup({ promptRow: 5 });
+    addon.appendText('x'.repeat(23));
+    expect(addon.getInputEndAnchor()).toEqual({ col: 5, row: 5 });
+  });
+
+  it('follows a narrowed row limit and a clipped tail without prompt indentation', () => {
+    const { addon } = layoutSetup({ promptRow: 5 });
+    addon.appendText('x'.repeat(43)); // lines of 18, 20 and 5 cells
+    addon.setRowLimit(2);
+    expect(addon.getInputEndAnchor()).toEqual({ col: 5, row: 1 });
+    addon.setRowLimit(1);
+    expect(addon.getInputEndAnchor()).toEqual({ col: 5, row: 0 });
+  });
+
+  it('reports the right edge of an exactly full line without requiring a cursor span', () => {
+    const { addon } = layoutSetup();
+    addon.appendText('x'.repeat(18));
+    expect(addon.getInputEndAnchor()).toEqual({ col: 20, row: 1 });
+  });
+
+  it('returns null before showing, after clear, and after dispose', () => {
+    const { addon } = layoutSetup();
+    expect(addon.getInputEndAnchor()).toBeNull();
+    addon.appendText('abc');
+    addon.clear();
+    expect(addon.getInputEndAnchor()).toBeNull();
+    addon.appendText('x');
+    addon.dispose();
+    expect(addon.getInputEndAnchor()).toBeNull();
+  });
+
+  it('returns null after deleting or clearing the last visible text', () => {
+    const { addon } = layoutSetup();
+    addon.addChar('x');
+    addon.removeChar();
+    expect(addon.getInputEndAnchor()).toBeNull();
+    addon.setFlushed(1, 'x');
+    addon.clearFlushed();
+    expect(addon.getInputEndAnchor()).toBeNull();
+  });
+
+  it('returns null when a previously visible prompt is no longer found', () => {
+    const { addon, mock } = layoutSetup();
+    addon.appendText('abc');
+    mock.setLines(['output without a prompt']);
+    addon.rerender();
+    expect(addon.getInputEndAnchor()).toBeNull();
+    expect(addon.state.visible).toBe(false);
+  });
+
+  it('publishes null on a scroll hide before repainting', () => {
+    const { addon, mock } = layoutSetup();
+    addon.appendText('abc');
+    const anchors: (InputEndAnchor | null)[] = [];
+    addon.onLayout(() => anchors.push(addon.getInputEndAnchor()));
+    mock.setScroll(0, 30);
+    mock.terminal.element.querySelector('.xterm-viewport')!.dispatchEvent(new Event('scroll'));
+    expect(anchors).toEqual([null]);
+    expect(addon.getInputEndAnchor()).toBeNull();
+  });
+
+  it('publishes null when render finds the cursor outside the viewport', () => {
+    const { addon, mock } = layoutSetup();
+    addon.appendText('abc');
+    mock.setScroll(0, 30);
+    addon.rerender();
+    expect(addon.getInputEndAnchor()).toBeNull();
+  });
+
+  it('publishes null when cell dimensions disappear', () => {
+    const { addon, mock } = layoutSetup();
+    addon.appendText('abc');
+    Reflect.deleteProperty(mock.terminal._core._renderService, 'dimensions');
+    addon.rerender();
+    expect(addon.getInputEndAnchor()).toBeNull();
+  });
+
+  it('publishes null on render failure while preserving the pending input', () => {
+    const { addon } = layoutSetup();
+    addon.appendText('abc');
+    addon.setPrompt({
+      type: 'custom',
+      find: () => {
+        throw new Error('buffer unavailable');
+      },
+    });
+    expect(addon.getInputEndAnchor()).toBeNull();
+    expect(addon.pendingText).toBe('abc');
+  });
+
+  it('notifies after each layout and hide, and stops after disposal of the listener', () => {
+    const { addon } = layoutSetup();
+    const anchors: (InputEndAnchor | null)[] = [];
+    const dispose = addon.onLayout(() => anchors.push(addon.getInputEndAnchor()));
+    addon.addChar('a');
+    addon.addChar('b');
+    addon.rerender();
+    addon.clear();
+    expect(anchors).toEqual([{ col: 3, row: 1 }, { col: 4, row: 1 }, { col: 4, row: 1 }, null]);
+    dispose();
+    dispose();
+    addon.addChar('c');
+    addon.clear();
+    expect(anchors).toHaveLength(4);
+  });
+
+  it('isolates listener failures from rendering and other listeners', () => {
+    const { addon } = layoutSetup();
+    addon.onLayout(() => {
+      throw new Error('observer failed');
+    });
+    const anchors: (InputEndAnchor | null)[] = [];
+    addon.onLayout(() => anchors.push(addon.getInputEndAnchor()));
+    expect(() => addon.appendText('abc')).not.toThrow();
+    expect(addon.state.visible).toBe(true);
+    expect(() => addon.clear()).not.toThrow();
+    expect(anchors).toEqual([{ col: 5, row: 1 }, null]);
   });
 });
