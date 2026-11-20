@@ -826,6 +826,141 @@ pub fn parse_ipc(frame_url: &str, body: &str, phase: &Phase, is_main_window: boo
     Some(Ipc::Host(cmd))
 }
 
+/// The tab strip across the top of the window (assets/tabs.html).
+pub const STRIP_PAGE: &str = "codemanapp://localhost/tabs.html";
+/// The overview of every server (assets/overview.html).
+pub const OVERVIEW_PAGE: &str = "codemanapp://localhost/overview.html";
+
+/// What the tab strip asks for. Tab ids are the app's own numbers; a stale or
+/// made-up one matches no tab and does nothing.
+#[derive(Debug, PartialEq, Eq)]
+pub enum StripCmd {
+    Ready,
+    Select(u64),
+    Close(u64),
+    New,
+    Overview,
+    /// Right-click on a tab: the native menu for it.
+    Menu(u64),
+    /// The name the user typed (cleaned by `tabs::clean_name`; empty puts the
+    /// default back).
+    Rename {
+        id: u64,
+        name: String,
+    },
+    Move {
+        id: u64,
+        to: usize,
+    },
+    /// A rename started: the strip takes the keyboard for its name field.
+    Editing,
+    /// A mouse-down on the strip's empty space: drag the window.
+    Drag,
+    /// A double-click there: what a title bar double-click does.
+    Zoom,
+}
+
+/// What the overview asks for.
+#[derive(Debug, PartialEq, Eq)]
+pub enum OverviewCmd {
+    Ready,
+    Open(u64),
+    /// Show that tab and select the session in Codeman's page
+    /// (`tabs::is_session_id` is checked before it goes anywhere).
+    OpenSession {
+        tab: u64,
+        session: String,
+    },
+    New,
+    Retry(u64),
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "cmd", rename_all = "camelCase", deny_unknown_fields)]
+enum RawStrip {
+    Ready,
+    Select { id: u64 },
+    Close { id: u64 },
+    New,
+    Overview,
+    Menu { id: u64 },
+    Rename { id: u64, name: String },
+    Move { id: u64, to: usize },
+    Editing,
+    Drag,
+    Zoom,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "cmd", rename_all = "camelCase", deny_unknown_fields)]
+enum RawOverview {
+    Ready,
+    Open { tab: u64 },
+    OpenSession { tab: u64, session: String },
+    New,
+    Retry { tab: u64 },
+}
+
+/// Whether `frame_url` is exactly the bundled page `page` (a query or
+/// fragment does not matter).
+fn is_bundled_page(frame_url: &str, page: &str) -> bool {
+    let (Ok(frame), Ok(page)) = (Url::parse(frame_url), Url::parse(page)) else {
+        return false;
+    };
+    frame.scheme() == APP_SCHEME && frame.host_str() == page.host_str() && frame.path() == page.path()
+}
+
+/// A message from the tab strip. Only its own page in its own web view is
+/// listened to: the caller passes only what came from the strip's web view,
+/// and the frame must be the strip page.
+pub fn parse_strip_ipc(frame_url: &str, body: &str) -> Option<StripCmd> {
+    if body.len() > MAX_MESSAGE_LEN || !is_bundled_page(frame_url, STRIP_PAGE) {
+        return None;
+    }
+    Some(match serde_json::from_str::<RawStrip>(body).ok()? {
+        RawStrip::Ready => StripCmd::Ready,
+        RawStrip::Select { id } => StripCmd::Select(id),
+        RawStrip::Close { id } => StripCmd::Close(id),
+        RawStrip::New => StripCmd::New,
+        RawStrip::Overview => StripCmd::Overview,
+        RawStrip::Menu { id } => StripCmd::Menu(id),
+        RawStrip::Rename { id, name } if name.len() <= MAX_FIELD_LEN => StripCmd::Rename { id, name },
+        RawStrip::Move { id, to } => StripCmd::Move { id, to },
+        RawStrip::Editing => StripCmd::Editing,
+        RawStrip::Drag => StripCmd::Drag,
+        RawStrip::Zoom => StripCmd::Zoom,
+        RawStrip::Rename { .. } => return None,
+    })
+}
+
+/// A message from the overview, under the same rule as the strip's.
+pub fn parse_overview_ipc(frame_url: &str, body: &str) -> Option<OverviewCmd> {
+    if body.len() > MAX_MESSAGE_LEN || !is_bundled_page(frame_url, OVERVIEW_PAGE) {
+        return None;
+    }
+    Some(match serde_json::from_str::<RawOverview>(body).ok()? {
+        RawOverview::Ready => OverviewCmd::Ready,
+        RawOverview::Open { tab } => OverviewCmd::Open(tab),
+        RawOverview::OpenSession { tab, session } if session.len() <= MAX_FIELD_LEN => {
+            OverviewCmd::OpenSession { tab, session }
+        }
+        RawOverview::New => OverviewCmd::New,
+        RawOverview::Retry { tab } => OverviewCmd::Retry(tab),
+        RawOverview::OpenSession { .. } => return None,
+    })
+}
+
+/// The navigations the strip's and the overview's web views allow: their own
+/// bundled page and nothing else, so neither can ever show a server's page or
+/// another site.
+pub fn bundled_navigation(target: &str, page: &str) -> Navigation {
+    if is_bundled_page(target, page) {
+        Navigation::Allow
+    } else {
+        Navigation::Block
+    }
+}
+
 /// Only http(s) URLs ever reach the default browser (never `file:`, a custom
 /// app scheme, or anything `open` would hand to another program).
 pub fn external_url(target: &str) -> Option<Url> {
@@ -1885,5 +2020,99 @@ mod tests {
         assert!(external_url("file:///Applications/Calculator.app").is_none());
         assert!(external_url("codemanapp://localhost/").is_none());
         assert!(external_url("vscode://file/x").is_none());
+    }
+
+    #[test]
+    fn strip_messages_only_from_the_strip_page() {
+        let strip = STRIP_PAGE;
+        assert_eq!(parse_strip_ipc(strip, r#"{"cmd":"ready"}"#), Some(StripCmd::Ready));
+        assert_eq!(
+            parse_strip_ipc(strip, r#"{"cmd":"select","id":3}"#),
+            Some(StripCmd::Select(3))
+        );
+        assert_eq!(
+            parse_strip_ipc(strip, r#"{"cmd":"close","id":3}"#),
+            Some(StripCmd::Close(3))
+        );
+        assert_eq!(
+            parse_strip_ipc(strip, r#"{"cmd":"menu","id":3}"#),
+            Some(StripCmd::Menu(3))
+        );
+        assert_eq!(
+            parse_strip_ipc(strip, r#"{"cmd":"rename","id":3,"name":"studio"}"#),
+            Some(StripCmd::Rename {
+                id: 3,
+                name: "studio".into()
+            })
+        );
+        assert_eq!(
+            parse_strip_ipc(strip, r#"{"cmd":"move","id":3,"to":0}"#),
+            Some(StripCmd::Move { id: 3, to: 0 })
+        );
+        assert_eq!(parse_strip_ipc(strip, r#"{"cmd":"drag"}"#), Some(StripCmd::Drag));
+        assert_eq!(parse_strip_ipc(strip, r#"{"cmd":"zoom"}"#), Some(StripCmd::Zoom));
+        assert_eq!(parse_strip_ipc(strip, r#"{"cmd":"editing"}"#), Some(StripCmd::Editing));
+        assert_eq!(parse_strip_ipc(strip, r#"{"cmd":"new"}"#), Some(StripCmd::New));
+        assert_eq!(
+            parse_strip_ipc(strip, r#"{"cmd":"overview"}"#),
+            Some(StripCmd::Overview)
+        );
+        assert_eq!(
+            parse_strip_ipc("codemanapp://localhost/tabs.html?x=1", r#"{"cmd":"new"}"#),
+            Some(StripCmd::New)
+        );
+        // Other frames, other pages, other shapes.
+        assert_eq!(parse_strip_ipc(CONNECT_PAGE, r#"{"cmd":"new"}"#), None);
+        assert_eq!(parse_strip_ipc(OVERVIEW_PAGE, r#"{"cmd":"new"}"#), None);
+        assert_eq!(parse_strip_ipc("http://localhost/tabs.html", r#"{"cmd":"new"}"#), None);
+        assert_eq!(parse_strip_ipc("codemanapp://evil/tabs.html", r#"{"cmd":"new"}"#), None);
+        assert_eq!(parse_strip_ipc(strip, r#"{"cmd":"select","id":-1}"#), None);
+        assert_eq!(parse_strip_ipc(strip, r#"{"cmd":"select","id":"3"}"#), None);
+        assert_eq!(parse_strip_ipc(strip, r#"{"cmd":"connect","url":"http://x/"}"#), None);
+        let long = format!(
+            r#"{{"cmd":"rename","id":1,"name":"{}"}}"#,
+            "x".repeat(MAX_FIELD_LEN + 1)
+        );
+        assert_eq!(parse_strip_ipc(strip, &long), None);
+    }
+
+    #[test]
+    fn overview_messages_only_from_the_overview_page() {
+        let page = OVERVIEW_PAGE;
+        assert_eq!(parse_overview_ipc(page, r#"{"cmd":"ready"}"#), Some(OverviewCmd::Ready));
+        assert_eq!(
+            parse_overview_ipc(page, r#"{"cmd":"open","tab":2}"#),
+            Some(OverviewCmd::Open(2))
+        );
+        assert_eq!(
+            parse_overview_ipc(page, r#"{"cmd":"retry","tab":2}"#),
+            Some(OverviewCmd::Retry(2))
+        );
+        assert_eq!(parse_overview_ipc(page, r#"{"cmd":"new"}"#), Some(OverviewCmd::New));
+        assert_eq!(
+            parse_overview_ipc(page, r#"{"cmd":"openSession","tab":2,"session":"abc-1"}"#),
+            Some(OverviewCmd::OpenSession {
+                tab: 2,
+                session: "abc-1".into()
+            })
+        );
+        assert_eq!(parse_overview_ipc(STRIP_PAGE, r#"{"cmd":"new"}"#), None);
+        assert_eq!(parse_overview_ipc(CONNECT_PAGE, r#"{"cmd":"ready"}"#), None);
+        assert_eq!(parse_overview_ipc(page, r#"{"cmd":"select","id":1}"#), None);
+    }
+
+    #[test]
+    fn bundled_pages_navigate_nowhere_else() {
+        assert_eq!(bundled_navigation(STRIP_PAGE, STRIP_PAGE), Navigation::Allow);
+        assert_eq!(bundled_navigation(OVERVIEW_PAGE, STRIP_PAGE), Navigation::Block);
+        assert_eq!(bundled_navigation(CONNECT_PAGE, STRIP_PAGE), Navigation::Block);
+        assert_eq!(
+            bundled_navigation("http://127.0.0.1:3000/", STRIP_PAGE),
+            Navigation::Block
+        );
+        assert_eq!(bundled_navigation("about:blank", OVERVIEW_PAGE), Navigation::Block);
+        // The connect page's own gate does not admit the two new pages.
+        assert!(!is_connect_page(&Url::parse(STRIP_PAGE).unwrap()));
+        assert!(!is_connect_page(&Url::parse(OVERVIEW_PAGE).unwrap()));
     }
 }

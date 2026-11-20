@@ -58,6 +58,10 @@ pub enum Poll {
 #[derive(Deserialize)]
 struct Session {
     #[serde(default)]
+    id: String,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
     status: String,
     #[serde(default)]
     mode: String,
@@ -80,11 +84,20 @@ fn count_working(body: &str) -> Option<u32> {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct Approval {
     #[serde(default)]
     kind: String,
-    #[serde(default, rename = "acknowledgedAt")]
+    #[serde(default)]
     acknowledged_at: Option<f64>,
+    #[serde(default)]
+    session_id: String,
+    #[serde(default)]
+    tool_name: Option<String>,
+    #[serde(default)]
+    tool_summary: Option<String>,
+    #[serde(default)]
+    message: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -106,6 +119,145 @@ fn read_alerts(body: &str) -> Option<(bool, bool)> {
     let waiting = items.iter().any(|i| i.kind == "idle" && i.acknowledged_at.is_none());
     let needs_you = items.iter().any(|i| i.kind == "permission" || i.kind == "question");
     Some((waiting, needs_you))
+}
+
+/// What one agent session is doing, most urgent first (`SessionState::rank`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SessionState {
+    /// Stopped on a permission or a question: a red tab.
+    Needs,
+    /// Finished, and nobody has looked yet: a yellow tab.
+    Waiting,
+    /// At work.
+    Working,
+    Idle,
+}
+
+impl SessionState {
+    pub fn rank(self) -> u8 {
+        match self {
+            SessionState::Needs => 0,
+            SessionState::Waiting => 1,
+            SessionState::Working => 2,
+            SessionState::Idle => 3,
+        }
+    }
+}
+
+/// One agent session of a server, for the tab badges and the overview. `name`
+/// and `text` come from the server: the pages that show them treat them as
+/// text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionRow {
+    pub id: String,
+    pub name: String,
+    pub state: SessionState,
+    pub text: String,
+}
+
+/// Every agent session of a server and what it is doing. Shell tabs are left
+/// out, as for the logo.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Detail {
+    pub sessions: Vec<SessionRow>,
+}
+
+impl Detail {
+    /// The same answer `Poller::poll` gives for this server.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn activity(&self) -> Activity {
+        let any = |state: SessionState| self.sessions.iter().any(|s| s.state == state);
+        Activity {
+            working: any(SessionState::Working),
+            waiting: any(SessionState::Waiting),
+            needs_you: any(SessionState::Needs),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum DetailPoll {
+    Seen(Detail),
+    Failed,
+    /// 401 or 403: the login is refused (or must be changed first). Asking
+    /// again would count against the login rate limit.
+    Refused,
+    /// 429: too many failed logins from this address, maybe other clients'.
+    /// Worth asking again, much later.
+    RateLimited,
+}
+
+/// How long a server's text may be in a row of the overview, in characters.
+const MAX_ROW_TEXT: usize = 160;
+const MAX_ROW_NAME: usize = 80;
+/// How many sessions of one server are kept, so a server cannot make the app
+/// hold a list of any length.
+const MAX_SESSIONS: usize = 200;
+
+/// Server text for a row: control characters out, whitespace runs folded,
+/// cut at `max` characters.
+fn row_text(raw: &str, max: usize) -> String {
+    let folded = raw
+        .split(|c: char| c.is_whitespace() || c.is_control())
+        .filter(|w| !w.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    match folded.char_indices().nth(max) {
+        Some((cut, _)) => format!("{}\u{2026}", &folded[..cut]),
+        None => folded,
+    }
+}
+
+/// The detail of a server from its two answers: `GET api/sessions` and, when
+/// the server has it, `GET api/approvals` (None: an older server, no alerts).
+/// None when the sessions answer is not a list of sessions.
+pub fn read_detail(sessions_body: &str, approvals_body: Option<&str>) -> Option<Detail> {
+    let (Sessions::Envelope { data: sessions } | Sessions::Bare(sessions)) =
+        serde_json::from_str(sessions_body).ok()?;
+    let approvals: Vec<Approval> = approvals_body
+        .and_then(|body| serde_json::from_str::<ApprovalsAnswer>(body).ok())
+        .map(|a| a.data.approvals)
+        .unwrap_or_default();
+    let rows = sessions
+        .into_iter()
+        .filter(|s| s.mode != "shell" && !s.id.is_empty())
+        .take(MAX_SESSIONS)
+        .map(|s| {
+            let mine = || approvals.iter().filter(|a| a.session_id == s.id);
+            let urgent = mine().find(|a| a.kind == "permission" || a.kind == "question");
+            let waiting = mine().any(|a| a.kind == "idle" && a.acknowledged_at.is_none());
+            let (state, text) = if let Some(a) = urgent {
+                let text = match (a.kind.as_str(), &a.tool_name, &a.tool_summary, &a.message) {
+                    ("permission", Some(tool), Some(summary), _) => format!("{tool}: {summary}"),
+                    ("permission", Some(tool), None, _) => format!("Allow {tool}?"),
+                    (_, _, _, Some(message)) => message.clone(),
+                    ("question", _, _, None) => "Has a question for you".to_string(),
+                    _ => "Needs your permission".to_string(),
+                };
+                (SessionState::Needs, text)
+            } else if waiting {
+                (SessionState::Waiting, "Finished, waiting for you".to_string())
+            } else if s.status == "busy" {
+                (SessionState::Working, "Working".to_string())
+            } else {
+                (SessionState::Idle, "Idle".to_string())
+            };
+            let name = s.name.as_deref().map(|n| row_text(n, MAX_ROW_NAME)).unwrap_or_default();
+            let name = if name.is_empty() {
+                s.id.chars().take(8).collect()
+            } else {
+                name
+            };
+            SessionRow {
+                id: s.id,
+                name,
+                state,
+                text: row_text(&text, MAX_ROW_TEXT),
+            }
+        })
+        .collect();
+    Some(Detail { sessions: rows })
 }
 
 /// `name=value` out of a `Set-Cookie` header, for Codeman's session cookie.
@@ -214,6 +366,29 @@ impl Poller {
         }
         (activity.waiting, activity.needs_you) = self.alerts;
         Poll::Seen(activity)
+    }
+
+    /// Every agent session and what it is doing (`read_detail`), for a server
+    /// tab's badges and the overview. Needs a poller made with `alerts`.
+    pub fn detail(&mut self) -> DetailPoll {
+        let url = self.sessions_url.clone();
+        let sessions = match self.ask(&url) {
+            Some((200, Some(body))) => body,
+            Some((429, _)) => return DetailPoll::RateLimited,
+            Some((s, _)) if refused(s) => return DetailPoll::Refused,
+            _ => return DetailPoll::Failed,
+        };
+        let approvals = match self.approvals_url.clone() {
+            Some(url) => match self.ask(&url) {
+                Some((200, body)) => body,
+                Some((429, _)) => return DetailPoll::RateLimited,
+                Some((s, _)) if refused(s) => return DetailPoll::Refused,
+                // An older server has no list; a failed read counts as none.
+                _ => None,
+            },
+            None => None,
+        };
+        read_detail(&sessions, approvals.as_deref()).map_or(DetailPoll::Failed, DetailPoll::Seen)
     }
 }
 
@@ -461,5 +636,67 @@ mod tests {
         drop(listener);
         let server = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
         assert_eq!(Poller::new(&server, None, false).unwrap().poll(), Poll::Failed);
+    }
+
+    #[test]
+    fn detail_reads_every_agent_session_and_its_state() {
+        let sessions = r#"{"success":true,"data":[
+            {"id":"s1","name":"webshop","status":"busy","mode":"claude"},
+            {"id":"s2","name":"billing","status":"idle","mode":"claude"},
+            {"id":"s3","name":"docs","status":"idle","mode":"codex"},
+            {"id":"s4","name":"shell","status":"busy","mode":"shell"},
+            {"id":"s5","status":"idle","mode":"claude"},
+            {"id":"s6","name":"  two\n lines\u0007 ","status":"idle","mode":"claude"}]}"#;
+        let approvals = r#"{"success":true,"data":{"approvals":[
+            {"sessionId":"s2","kind":"permission","toolName":"Bash","toolSummary":"npm run migrate"},
+            {"sessionId":"s3","kind":"idle"},
+            {"sessionId":"s5","kind":"idle","acknowledgedAt":1},
+            {"sessionId":"s6","kind":"question","message":"Which locale first?"}]}}"#;
+        let detail = read_detail(sessions, Some(approvals)).unwrap();
+        let states: Vec<(&str, SessionState, &str)> = detail
+            .sessions
+            .iter()
+            .map(|s| (s.id.as_str(), s.state, s.text.as_str()))
+            .collect();
+        assert_eq!(
+            states,
+            [
+                ("s1", SessionState::Working, "Working"),
+                ("s2", SessionState::Needs, "Bash: npm run migrate"),
+                ("s3", SessionState::Waiting, "Finished, waiting for you"),
+                ("s5", SessionState::Idle, "Idle"),
+                ("s6", SessionState::Needs, "Which locale first?"),
+            ]
+        );
+        // A session with no name shows its id's start; server text is folded.
+        assert_eq!(detail.sessions[3].name, "s5");
+        assert_eq!(detail.sessions[4].name, "two lines");
+        assert_eq!(
+            detail.activity(),
+            Activity {
+                working: true,
+                waiting: true,
+                needs_you: true
+            }
+        );
+    }
+
+    #[test]
+    fn detail_without_approvals_and_from_junk() {
+        let bare = r#"[{"id":"a","name":"x","status":"busy","mode":"claude"}]"#;
+        let detail = read_detail(bare, None).unwrap();
+        assert_eq!(detail.sessions.len(), 1);
+        assert_eq!(detail.sessions[0].state, SessionState::Working);
+        assert_eq!(read_detail("not json", None), None);
+        assert_eq!(read_detail(r#"{"success":true,"data":{}}"#, None), None);
+        // A junk approvals answer counts as none.
+        assert_eq!(read_detail(bare, Some("<html>")).unwrap().sessions.len(), 1);
+        let long = format!(
+            r#"[{{"id":"a","name":"{}","status":"idle","mode":"claude"}}]"#,
+            "n".repeat(500)
+        );
+        let name = &read_detail(&long, None).unwrap().sessions[0].name;
+        assert_eq!(name.chars().count(), MAX_ROW_NAME + 1);
+        assert!(name.ends_with('\u{2026}'));
     }
 }

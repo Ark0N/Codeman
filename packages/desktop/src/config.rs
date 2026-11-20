@@ -11,6 +11,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 const MAX_SERVERS: usize = 8;
+/// How many server tabs are saved for the next launch.
+pub const MAX_TABS: usize = 24;
 /// How many recovery copies of an unreadable config can sit side by side:
 /// `desktop.json.corrupt`, then `desktop.json.corrupt.1` to `.9`.
 const ASIDE_SLOTS: usize = 10;
@@ -59,6 +61,50 @@ pub struct Config {
     /// make the whole file unreadable, which would cost the server list.
     #[serde(deserialize_with = "lenient_window")]
     pub window: Option<WindowFrame>,
+    /// The server tabs to open again at the next launch, in strip order. Only
+    /// tabs that belong to a server are kept. Read leniently, like `window`.
+    #[serde(deserialize_with = "lenient_tabs")]
+    pub tabs: Vec<TabEntry>,
+    /// The tab that was in front, an index into `tabs`.
+    #[serde(deserialize_with = "lenient_index")]
+    pub active_tab: usize,
+    /// The one server whose pages keep WebKit's default data store, so the
+    /// local storage it had before tabs existed (Codeman's per-device settings)
+    /// stays with it; every other server gets a store of its own
+    /// (`tabs::store_id`). None: not decided yet, which the first launch with
+    /// tabs does (the most recent server, or `Some("")` for none).
+    #[serde(deserialize_with = "lenient_string", skip_serializing_if = "Option::is_none")]
+    pub default_store_server: Option<String>,
+}
+
+/// One saved tab: the server it is for, and what the user made of it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TabEntry {
+    pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+}
+
+fn lenient_tabs<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<TabEntry>, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    let list = value.as_array().cloned().unwrap_or_default();
+    Ok(list
+        .into_iter()
+        .filter_map(|v| serde_json::from_value::<TabEntry>(v).ok())
+        .collect())
+}
+
+fn lenient_index<'de, D: serde::Deserializer<'de>>(d: D) -> Result<usize, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    Ok(value.as_u64().and_then(|n| usize::try_from(n).ok()).unwrap_or(0))
+}
+
+fn lenient_string<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    Ok(value.as_str().map(str::to_owned))
 }
 
 fn lenient_window<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<WindowFrame>, D::Error> {
@@ -83,6 +129,9 @@ impl Default for Config {
             logo_blink: BlinkStyles::default(),
             keep_awake: keep_awake::Settings::default(),
             window: None,
+            tabs: Vec::new(),
+            active_tab: 0,
+            default_store_server: None,
         }
     }
 }
@@ -341,6 +390,35 @@ impl Config {
         self.servers.retain(|s| !s.url.is_empty() && seen.insert(s.url.clone()));
         self.servers.truncate(MAX_SERVERS);
         self.window = self.window.and_then(WindowFrame::sanitized);
+        let mut seen = std::collections::HashSet::new();
+        self.tabs.retain(|t| !t.url.is_empty() && seen.insert(t.url.clone()));
+        self.tabs.truncate(MAX_TABS);
+        for tab in &mut self.tabs {
+            tab.name = tab.name.as_deref().and_then(crate::tabs::clean_name);
+            tab.color = tab.color.take().filter(|c| crate::tabs::is_color(c));
+        }
+        if self.active_tab >= self.tabs.len() {
+            self.active_tab = 0;
+        }
+    }
+
+    /// Settle `default_store_server` once: the server used last keeps the data
+    /// store it always had. True when it changed (the caller saves).
+    pub fn settle_default_store(&mut self) -> bool {
+        if self.default_store_server.is_some() {
+            return false;
+        }
+        self.default_store_server = Some(self.servers.first().map(|s| s.url.clone()).unwrap_or_default());
+        true
+    }
+
+    /// The data store a server's pages use: None for WebKit's default one,
+    /// else the server's own (`tabs::store_id`).
+    pub fn store_for(&self, url: &str) -> Option<[u8; 16]> {
+        match &self.default_store_server {
+            Some(server) if server == url => None,
+            _ => Some(crate::tabs::store_id(url)),
+        }
     }
 
     /// Move (or add) a server to the top of the recent list. Returns the
@@ -897,5 +975,84 @@ mod tests {
             ..frame(0.0, 40.0, 1200.0, 800.0)
         };
         assert!(full.fitted_to(&tiny, MIN).unwrap().fullscreen);
+    }
+
+    #[test]
+    fn tabs_round_trip_and_bad_values_are_dropped() {
+        let dir = tmp_dir("tabs");
+        let path = dir.join("desktop.json");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            &path,
+            r##"{"servers":[],"activeTab":7,"tabs":[
+                {"url":"http://127.0.0.1:3000/","name":"  Mine  ","color":"#A78BFA"},
+                {"url":"http://127.0.0.1:3000/","name":"again"},
+                {"url":"https://studio.example.ts.net/","color":"red;x"},
+                {"url":""},
+                42,
+                {"name":"no url"}]}"##,
+        )
+        .unwrap();
+        let (c, can_save) = Config::load_from(&path);
+        assert!(can_save);
+        assert_eq!(
+            c.tabs,
+            [
+                TabEntry {
+                    url: "http://127.0.0.1:3000/".into(),
+                    name: Some("Mine".into()),
+                    color: Some("#A78BFA".into()),
+                },
+                TabEntry {
+                    url: "https://studio.example.ts.net/".into(),
+                    name: None,
+                    color: None,
+                },
+            ]
+        );
+        // An index past the list falls back to the first tab.
+        assert_eq!(c.active_tab, 0);
+        c.save_to(&path).unwrap();
+        let (again, _) = Config::load_from(&path);
+        assert_eq!(again.tabs, c.tabs);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_bad_tab_value_never_costs_the_server_list() {
+        let dir = tmp_dir("badtabs");
+        let path = dir.join("desktop.json");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            &path,
+            r#"{"servers":[{"url":"http://a/"}],"tabs":"nope","activeTab":-3,"defaultStoreServer":5}"#,
+        )
+        .unwrap();
+        let (c, can_save) = Config::load_from(&path);
+        assert!(can_save);
+        assert_eq!(c.servers.len(), 1);
+        assert!(c.tabs.is_empty());
+        assert_eq!(c.active_tab, 0);
+        assert_eq!(c.default_store_server, None);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_server_used_last_keeps_the_default_store() {
+        let mut c = Config::default();
+        let _ = c.remember("http://old/", None, false);
+        let _ = c.remember("http://recent/", None, false);
+        assert!(c.settle_default_store());
+        assert_eq!(c.default_store_server.as_deref(), Some("http://recent/"));
+        // Decided once: a later connect does not move it.
+        let _ = c.remember("http://old/", None, false);
+        assert!(!c.settle_default_store());
+        assert_eq!(c.store_for("http://recent/"), None);
+        assert_eq!(c.store_for("http://old/"), Some(crate::tabs::store_id("http://old/")));
+        // A first run with no server keeps no server on the default store.
+        let mut fresh = Config::default();
+        assert!(fresh.settle_default_store());
+        assert_eq!(fresh.default_store_server.as_deref(), Some(""));
+        assert!(fresh.store_for("http://x/").is_some());
     }
 }

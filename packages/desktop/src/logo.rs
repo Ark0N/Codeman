@@ -1165,12 +1165,31 @@ fn watch(logo: &impl Logo, marker: &Marker, styles: BlinkStyles, signals: &mut i
     }
 }
 
-/// The one line the app writes to the child.
-#[derive(Serialize, Deserialize)]
+/// The one line the app writes to the child: every open server tab, each with
+/// its login, and the styles. The logo shows the most urgent state of all of
+/// them together.
+#[derive(Serialize, Deserialize, PartialEq)]
 struct Connection {
-    server: String,
-    authorization: Option<String>,
+    servers: Vec<Target>,
     styles: BlinkStyles,
+}
+
+/// One server the child asks.
+#[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Debug)]
+pub struct Target {
+    pub server: String,
+    pub authorization: Option<String>,
+}
+
+/// What several servers' agents do together: each state holds when it holds on
+/// any of them.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn merged(all: &[Activity]) -> Activity {
+    all.iter().fold(Activity::default(), |acc, a| Activity {
+        working: acc.working || a.working,
+        waiting: acc.waiting || a.waiting,
+        needs_you: acc.needs_you || a.needs_you,
+    })
 }
 
 /// The app's side: the pipe to the child, which is all there is to it.
@@ -1185,27 +1204,23 @@ impl Watcher {
         self.current.is_some()
     }
 
-    /// Watch this server with this login in these styles, or nothing. A child
-    /// for anything else ends first: its pipe closes with the old value. It is
-    /// back to normal well before the next child looks, which takes `SETTLE`.
-    pub fn sync(&mut self, want: Option<(&str, Option<&str>, BlinkStyles)>) {
-        let same = match (&self.current, want) {
-            (Some((now, _)), Some((server, authorization, styles))) => {
-                now.server == server && now.authorization.as_deref() == authorization && now.styles == styles
-            }
+    /// Watch these servers with their logins in these styles, or nothing (an
+    /// empty list is nothing too). A child for anything else ends first: its
+    /// pipe closes with the old value. It is back to normal well before the
+    /// next child looks, which takes `SETTLE`.
+    pub fn sync(&mut self, want: Option<(Vec<Target>, BlinkStyles)>) {
+        let want = want
+            .filter(|(servers, _)| !servers.is_empty())
+            .map(|(servers, styles)| Connection { servers, styles });
+        let same = match (&self.current, &want) {
+            (Some((now, _)), Some(want)) => now == want,
             (None, None) => true,
             _ => false,
         };
         if same {
             return;
         }
-        self.current = want.and_then(|(server, authorization, styles)| {
-            spawn_child(Connection {
-                server: server.to_owned(),
-                authorization: authorization.map(str::to_owned),
-                styles,
-            })
-        });
+        self.current = want.and_then(spawn_child);
     }
 }
 
@@ -1843,16 +1858,25 @@ mod system {
         }
     }
 
-    /// Runs for the life of the child. A server that does not answer counts as
-    /// nothing going on, and one that refuses the login is never asked again.
-    fn poll_until_refused(mut poller: Poller, shared: &Mutex<Activity>) {
+    /// Runs for the life of the child, one per server. A server that does not
+    /// answer counts as nothing going on, and one that refuses the login is
+    /// never asked again. Each writes its own slot, and `shared` is what all of
+    /// them say together (`merged`).
+    fn poll_until_refused(mut poller: Poller, index: usize, slots: &Mutex<Vec<Activity>>, shared: &Mutex<Activity>) {
         loop {
             let poll = poller.poll();
-            if let Ok(mut activity) = shared.lock() {
-                *activity = match poll {
-                    Poll::Seen(seen) => seen,
-                    _ => Activity::default(),
-                };
+            let seen = match poll {
+                Poll::Seen(seen) => seen,
+                _ => Activity::default(),
+            };
+            let all = slots.lock().ok().map(|mut slots| {
+                if let Some(slot) = slots.get_mut(index) {
+                    *slot = seen;
+                }
+                super::merged(&slots)
+            });
+            if let (Some(all), Ok(mut activity)) = (all, shared.lock()) {
+                *activity = all;
             }
             if poll == Poll::Refused {
                 return;
@@ -1877,18 +1901,19 @@ mod system {
             .read_line(&mut line)
             .ok()
             .and_then(|_| serde_json::from_str::<Connection>(&line).ok());
-        let Some(Connection {
-            server,
-            authorization,
-            styles,
-        }) = connection
-        else {
+        let Some(Connection { servers, styles }) = connection else {
             std::process::exit(0);
         };
-        let poller = Url::parse(&server)
-            .ok()
-            .and_then(|url| Poller::new(&url, authorization, styles.wants_alerts()));
-        let (Some(poller), Some(logo)) = (poller, SystemLogo::open()) else {
+        let pollers: Vec<Poller> = servers
+            .into_iter()
+            .filter_map(|target| {
+                Url::parse(&target.server)
+                    .ok()
+                    .and_then(|url| Poller::new(&url, target.authorization, styles.wants_alerts()))
+            })
+            .collect();
+        let logo = SystemLogo::open();
+        let Some(logo) = logo.filter(|_| !pollers.is_empty()) else {
             std::process::exit(0);
         };
 
@@ -1900,8 +1925,12 @@ mod system {
             let _ = closed.send(());
         });
         let activity = Arc::new(Mutex::new(Activity::default()));
-        let found = activity.clone();
-        std::thread::spawn(move || poll_until_refused(poller, &found));
+        let slots = Arc::new(Mutex::new(vec![Activity::default(); pollers.len()]));
+        for (index, poller) in pollers.into_iter().enumerate() {
+            let found = activity.clone();
+            let slots = slots.clone();
+            std::thread::spawn(move || poll_until_refused(poller, index, &slots, &found));
+        }
 
         let mut signals = Live {
             pipe_closed,
@@ -3371,15 +3400,17 @@ mod tests {
     fn the_connection_line_round_trips_with_and_without_a_login() {
         for authorization in [None, Some("Basic abc".to_string())] {
             let line = serde_json::to_string(&Connection {
-                server: "http://127.0.0.1:3000/".into(),
-                authorization: authorization.clone(),
+                servers: vec![Target {
+                    server: "http://127.0.0.1:3000/".into(),
+                    authorization: authorization.clone(),
+                }],
                 styles: WORK,
             })
             .unwrap();
             assert!(!line.contains('\n'), "one line");
             let back: Connection = serde_json::from_str(&line).unwrap();
-            assert_eq!(back.server, "http://127.0.0.1:3000/");
-            assert_eq!(back.authorization, authorization);
+            assert_eq!(back.servers[0].server, "http://127.0.0.1:3000/");
+            assert_eq!(back.servers[0].authorization, authorization);
             assert_eq!(back.styles, WORK);
         }
     }
@@ -3685,5 +3716,34 @@ mod tests {
         let mut watcher = Watcher::default();
         watcher.sync(None);
         assert!(watcher.current.is_none());
+    }
+
+    #[test]
+    fn several_servers_merge_into_one_logo() {
+        assert_eq!(merged(&[]), Activity::default());
+        assert_eq!(merged(&[working(), Activity::default()]), working());
+        let all = merged(&[working(), needs_you(), waiting()]);
+        assert!(all.working && all.waiting && all.needs_you);
+    }
+
+    #[test]
+    fn the_child_line_names_every_server() {
+        let line = serde_json::to_string(&Connection {
+            servers: vec![
+                Target {
+                    server: "http://127.0.0.1:3000/".into(),
+                    authorization: None,
+                },
+                Target {
+                    server: "https://studio.example.ts.net/".into(),
+                    authorization: Some("Basic eA==".into()),
+                },
+            ],
+            styles: WORK,
+        })
+        .unwrap();
+        let back: Connection = serde_json::from_str(&line).unwrap();
+        assert_eq!(back.servers.len(), 2);
+        assert_eq!(back.servers[1].authorization.as_deref(), Some("Basic eA=="));
     }
 }

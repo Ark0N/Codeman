@@ -1636,13 +1636,20 @@
           els.fullscreen.checked = !!msg.startFullscreen;
           els.version.textContent = 'Codeman Desktop ' + (msg.version || '');
           renderRecent();
-          if (state.servers[0]) choose(state.servers[0]);
+          // A server tab opened again at launch names its server (target), and
+          // connects to it by itself when connectNow says so; any other tab
+          // shows the server used last.
+          var target = typeof msg.target === 'string' && msg.target ? msg.target : '';
+          var targeted = target ? (state.servers.filter(function (s) { return s.url === target; })[0] || { url: target }) : null;
+          var shown = targeted || state.servers[0];
+          if (shown) choose(shown);
           var auto = !!(msg.autoConnect && !manual && !tooOld && !msg.starting && !msg.notice && state.servers[0]);
-          // The tab of the server used last; This Mac on a first run. An
-          // automatic connect opens Codeman without looking at this Mac first:
-          // that look runs a few processes and asks the server once more, and
-          // it is only needed when the connect fails, which then asks for it.
-          selectTab(state.servers[0] && !isLocalUrl(state.servers[0].url) ? 'remote' : 'local', auto);
+          if (targeted) auto = !!(msg.connectNow && !tooOld && !msg.starting && !msg.notice);
+          // The tab of that server; This Mac on a first run. An automatic
+          // connect opens Codeman without looking at this Mac first: that look
+          // runs a few processes and asks the server once more, and it is only
+          // needed when the connect fails, which then asks for it.
+          selectTab(shown && !isLocalUrl(shown.url) ? 'remote' : 'local', auto);
           if (msg.starting) {
             setBusy(true, false);
             setStatus('busy', 'Starting Codeman on this Mac…', msg.notice || '');
