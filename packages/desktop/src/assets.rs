@@ -59,6 +59,15 @@ pub fn respond(request: Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
 ///   server restarted, and nothing in the page asks for the login again.
 /// - defines `__codemanDesktopRefused(id)` (not enumerable) for
 ///   [`refused_script`].
+/// - answers `document.execCommand('paste')` with false, the way Chromium
+///   does, without asking WebKit. Codeman's ⌘V handler calls it on its hidden
+///   paste trap (`_handleImagePaste` in src/web/public/image-input.js). From a
+///   WKWebView, WebKit answers that call by opening its "Paste" access menu at
+///   the last click and holding the page until it is picked or the clipboard
+///   changes, so the key's own paste, the one that carries a copied image, got
+///   stuck behind it and a pasted picture never arrived. With this answer each
+///   ⌘V delivers exactly one paste event to the trap, measured on macOS 27.2
+///   for image data, a screenshot, a file copied in Finder, and text.
 pub const HOST_SHIM: &str = r#"(function () {
   'use strict';
   if (!/^https?:$/.test(location.protocol) || window.CodemanHost) return;
@@ -112,6 +121,19 @@ pub const HOST_SHIM: &str = r#"(function () {
       } catch (e) {}
     }
   });
+
+  // Cmd+V: Codeman's paste trap calls document.execCommand('paste'). WebKit
+  // answers that from a WKWebView with its "Paste" access menu and holds the
+  // page until someone picks it, and the key's own paste (the one carrying a
+  // copied image) is stuck behind it. Refuse it as Chromium does; every other
+  // command reaches WebKit unchanged.
+  var nativeExec = typeof Document === 'function' ? Document.prototype.execCommand : null;
+  if (typeof nativeExec === 'function') {
+    Document.prototype.execCommand = function execCommand(command) {
+      if (typeof command === 'string' && command.toLowerCase() === 'paste') return false;
+      return nativeExec.apply(this, arguments);
+    };
+  }
 
   var markDownload = function (ev) {
     if (ev.button > 1) return;
@@ -278,6 +300,8 @@ mod tests {
             "'auxclick'",
             "MAX_URL = 4096",
             "typeof id === 'string' && id !== ''",
+            "Document.prototype.execCommand = function execCommand(command)",
+            "command.toLowerCase() === 'paste') return false",
         ] {
             assert!(HOST_SHIM.contains(needle), "{needle}");
         }
