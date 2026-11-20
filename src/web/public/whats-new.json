@@ -1,13 +1,13 @@
 {
-  "version": "1.51.0",
+  "version": "1.51.1",
   "highlights": [
-    "Local models: a library, more models, and the coding agent you choose (#803, #804, #806, #807, #808)",
-    "Mac app: With the Lid Closed no longer asks for a password",
-    "Auto-compact and auto-clear see the whole context (#777)",
-    "jcode as a run mode (#650)",
-    "The File Viewer edits `.env` files (#796, #797)",
-    "Response viewer: a Copy Markdown button (#810)",
-    "Firefox no longer pastes twice on Ctrl+V (#799)",
-    "An omp pane that asks for a tool approval alerts (#798)"
+    "Phone: Send on Enter for the input field (#820)",
+    "The terminal dashboard attaches by session name (#834)",
+    "Web tabs render the DeepSeek Harness web UI and Vite dashboards (#825)",
+    "Local model: Muse Glimmer 30B as its MLX build (#803)",
+    "A failing file watcher no longer floods the log (#818)",
+    "A password-protected Codeman installs as an app (#826)",
+    "A trusted web tab's WebSocket no longer sends Codeman's session cookie to the dashboard (#827)",
+    "Answers come back for a session on its own Claude config folder (#701, #812)"
   ]
 }
