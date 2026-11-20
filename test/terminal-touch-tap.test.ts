@@ -2,6 +2,12 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import vm from 'node:vm';
 import { describe, expect, it, vi } from 'vitest';
+import { STOCK_CLIS } from '../src/config/cli-registry/stock.js';
+
+/** The wheel-forwarding rules, read off the registry as the server builds `window.__codemanWheelForward`. */
+const WHEEL_FORWARD = Object.fromEntries(
+  STOCK_CLIS.filter((e) => e.capabilities.wheelForward.mode !== 'never').map((e) => [e.id, e.capabilities.wheelForward])
+);
 
 function loadTerminalUiHarness() {
   const CodemanApp = function CodemanApp(this: any) {};
@@ -10,7 +16,7 @@ function loadTerminalUiHarness() {
   let activeElement: unknown = null;
   // The module hangs its constants off window (CodemanTerminalInput) and the URL branch of
   // the link provider opens through window.open, so tests need a handle on the same object.
-  const windowRef: Record<string, any> = {};
+  const windowRef: Record<string, any> = { __codemanWheelForward: WHEEL_FORWARD };
   const context = vm.createContext({
     window: windowRef,
     document: {

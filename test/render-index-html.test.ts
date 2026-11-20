@@ -181,6 +181,78 @@ describe('WebServer.renderIndexHtml', () => {
     }
   });
 
+  it('injects the wheelForward rules of every CLI that forwards, custom and disabled entries included', async () => {
+    // A custom clis.json entry shaped like pi (its mouse DECSETs stripped, wheel forwarded)
+    // must reach the browser's gate by its own id, and every `never` stays out. A DISABLED
+    // entry stays in: disabling a CLI never ends its running sessions, so a fullscreen copilot
+    // tab opened before the switch still needs its wheel after a reload (and an entry enabled
+    // after the page loaded already has its rule). A solo window scrolls a terminal too, so
+    // it gets the same map.
+    const path = dataPath('clis.json');
+    mkdirSync(dirname(path), { recursive: true });
+    const custom = {
+      label: 'PiD',
+      shortBadge: 'PL',
+      accent: '#6b7280',
+      enabled: true,
+      order: 120,
+      kind: 'agent',
+      discovery: { binaries: ['pi-locked'], searchDirs: [], install: { command: {} } },
+      launch: { params: {}, variants: [{ id: 'default', args: [{ lit: 'pi-locked' }] }] },
+      env: { exports: [], unset: [], tmuxSetenvKeys: [], dockerExecEnvNames: [], allowedPrefixes: [], allowedKeys: [] },
+      capabilities: {
+        external: true,
+        requiresMux: true,
+        hooks: 'none',
+        transcript: 'none',
+        altScreen: 'strip-mux-and-mouse',
+        echo: { policy: 'buffer', anchor: { kind: 'none' } },
+        wheelForward: { mode: 'always' },
+        keyboardAccessory: 'agent',
+        privilegedCommandGate: false,
+        startMode: 'interactive',
+        stripInkBloat: false,
+        ralph: false,
+        respawn: false,
+        effort: false,
+        agentSkillInjection: false,
+        statusLineTelemetry: false,
+        model: { source: 'none' },
+        privilegedParams: [],
+        privilegedEnvKeys: [],
+        gates: {},
+        customModelInjection: { kind: 'unsupported' },
+      },
+      overlays: {},
+    };
+    writeFileSync(
+      path,
+      JSON.stringify({ schemaVersion: 1, clis: { copilot: { enabled: false }, 'pi-locked': custom } }),
+      {
+        mode: 0o600,
+      }
+    );
+    reloadCliRegistry();
+    try {
+      for (const solo of [undefined, 'sess-123']) {
+        const { server } = makeServer({});
+        const html = await render(server, solo);
+        const match = html.match(/window\.__codemanWheelForward=(\{[^<]*\});/);
+        expect(match, String(solo)).not.toBeNull();
+        expect(JSON.parse(match![1])).toEqual({
+          claude: { mode: 'version-gated', minVersion: '2.1.187' },
+          codex: { mode: 'always' },
+          pi: { mode: 'always' },
+          copilot: { mode: 'always' },
+          'pi-locked': { mode: 'always' },
+        });
+      }
+    } finally {
+      writeFileSync(path, JSON.stringify({ clis: {} }, null, 2), { mode: 0o600 });
+      reloadCliRegistry();
+    }
+  });
+
   it('injects the keyboard-hold modes from the keyboardHold capability: inline Claude, never full-height codex', async () => {
     for (const solo of [undefined, 'sess-123']) {
       const { server } = makeServer();

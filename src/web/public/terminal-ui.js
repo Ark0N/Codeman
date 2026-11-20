@@ -6016,12 +6016,16 @@ Object.assign(CodemanApp.prototype, {
   // True when a parsed CLI version string ('2.1.187' — banner-parsed on the
   // server, delivered via session:cliInfo / SessionState.cliVersion) is known
   // AND >= the minimum. Unknown or unparseable versions return false so
-  // callers keep the conservative behavior.
+  // callers keep the conservative behavior, and so does an unparseable
+  // minimum: it can come from a user's clis.json (`wheelForward.minVersion`).
   _cliVersionAtLeast(version, minimum) {
-    if (typeof version !== 'string') return false;
-    const parts = version.trim().replace(/^v/, '').split('.').map(Number);
-    if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) return false;
-    const min = minimum.split('.').map(Number);
+    const parse = (v) => {
+      const m = typeof v === 'string' ? /^v?(\d+)\.(\d+)\.(\d+)$/.exec(v.trim()) : null;
+      return m ? m.slice(1).map(Number) : null;
+    };
+    const parts = parse(version);
+    const min = parse(minimum);
+    if (!parts || !min) return false;
     for (let i = 0; i < 3; i++) {
       if (parts[i] !== min[i]) return parts[i] > min[i];
     }
@@ -6081,24 +6085,26 @@ Object.assign(CodemanApp.prototype, {
     if (mode && mode !== 'none') return false;
     const session = this.sessions?.get(target.sessionId || this.activeSessionId);
     const sessionMode = session?.mode || 'claude';
-    // GitHub Copilot CLI (and pi, fullscreen by default) scrolls its own transcript on SGR wheel
-    // reports (checked with xterm encoding them natively). Their mouse DECSETs are stripped
-    // server-side so a drag selects locally (strip-mux-and-mouse), which also means xterm no longer
-    // encodes the wheel: send the same reports by hand, but only while the CLI is actually tracking
-    // the mouse. Not gated on a version. On Copilot a stale-false flag falls through to the
-    // PageUp/PageDown fallback like claude's; pi has none on purpose (the `transcriptPageKeys` note
-    // in stock.ts), so there the wheel does nothing until the flag is back.
-    if (sessionMode === 'copilot' || sessionMode === 'pi') return session?.cliMouseTracking === true;
-    if (sessionMode !== 'claude' && sessionMode !== 'codex') return false;
-    if (sessionMode === 'claude' && !this._cliVersionAtLeast(session?.cliVersion, '2.1.187')) return false;
-    // Only while Claude or Codex is actually listening for the mouse. Claude's
-    // inline renderer (2.1.280 measured: alternate_on=0, mouse_any_flag=0), like
-    // older inline Codex, keeps its transcript in real scrollback; SGR reports are
-    // ignored, so forwarding made every swipe and wheel tick dead. Fullscreen
-    // (CLAUDE_CODE_NO_FLICKER=1, or "tui": "fullscreen" in ~/.claude/settings.json)
-    // turns on alt-screen + mode 1003/1006, which the server records as
-    // cliMouseTracking. A stale-false flag after a server restart falls through
-    // to _maybePageCliTranscript, so it never goes dead.
+    // Which CLIs scroll their own transcript on SGR wheel reports is the registry's
+    // `wheelForward` rule, published by renderIndexHtml as `window.__codemanWheelForward`
+    // (id -> rule, `never` left out; a page rendered without the map forwards nothing), so a
+    // custom clis.json entry shaped like pi forwards under its own id. Stock: claude from
+    // 2.1.187 (older versions take the wheel as menu navigation), codex, copilot and pi always.
+    // Their mouse DECSETs are stripped server-side (a drag selects locally), so xterm never
+    // encodes the wheel for them and the reports are sent by hand.
+    const rule = window.__codemanWheelForward?.[sessionMode];
+    if (!rule || (rule.mode !== 'always' && rule.mode !== 'version-gated')) return false;
+    if (rule.mode === 'version-gated' && !this._cliVersionAtLeast(session?.cliVersion, rule.minVersion)) return false;
+    // Only while the CLI is actually listening for the mouse. Claude's inline renderer
+    // (2.1.280 measured: alternate_on=0, mouse_any_flag=0), like older inline Codex and pi's
+    // `tuiMode: regular`, keeps its transcript in real scrollback; SGR reports are ignored, so
+    // forwarding made every swipe and wheel tick dead. Fullscreen (CLAUDE_CODE_NO_FLICKER=1, or
+    // "tui": "fullscreen" in ~/.claude/settings.json; pi's default since 1.0.0) turns on
+    // alt-screen + mouse tracking, which the server records as cliMouseTracking. That flag is
+    // what survives a tab switch or reload, where xterm's own mouse mode does not. A stale-false
+    // flag falls through to _maybePageCliTranscript (PageUp/PageDown for a CLI declaring
+    // `transcriptPageKeys`); pi declares none on purpose (the note in stock.ts), so there the
+    // wheel does nothing until the flag is back.
     if (session?.cliMouseTracking !== true) return false;
     // Deliberately NOT gated on _terminalViewportAtBottom(). It used to be, so
     // that leaving the bottom handed the wheel back to local scrollback and both

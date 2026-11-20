@@ -303,8 +303,8 @@ const CLAUDE: CliEntry = {
     transcript: 'claude-jsonl',
     altScreen: 'strip-full',
     echo: { policy: 'buffer', anchor: { kind: 'glyph', glyph: '❯', offset: 2 } },
-    // Declared-for-later: the live rule (`_shouldForwardWheelToApp`, terminal-ui.js) is this version
-    // AND the server-published `cliMouseTracking` flag (#498), so wiring this field up needs both.
+    // Read by `_shouldForwardWheelToApp` (terminal-ui.js) through `window.__codemanWheelForward`;
+    // forwarding also needs the server-published `cliMouseTracking` flag (#498).
     wheelForward: { mode: 'version-gated', minVersion: '2.1.187' },
     // A repaint-mode Claude pane keeps no local history, so when the wheel is not
     // forwarded (older CLI, inline renderer, the local-scrollback opt-out) a scroll is
@@ -1926,8 +1926,8 @@ const COPILOT: CliEntry = {
     // (`cliMouseTracking`). Same shape and reason as opencode. The wheel keeps working because
     // `_shouldForwardWheelToApp` forwards it as SGR reports while the CLI is tracking.
     altScreen: 'strip-mux-and-mouse',
-    // Forwards the wheel as SGR reports while the CLI is tracking the mouse, at any version
-    // (`_shouldForwardWheelToApp` in terminal-ui.js has no version check for copilot).
+    // Forwards the wheel as SGR reports while the CLI is tracking the mouse, at any version:
+    // `always` is what keeps `_shouldForwardWheelToApp` (terminal-ui.js) from checking one.
     wheelForward: { mode: 'always' },
     // Pages its own transcript on PageUp/PageDown (1.0.95, measured in tmux: three PageUp moved
     // lines 109-140 to 010-042 and PageDown returned). This is the fallback when the
