@@ -14,6 +14,7 @@ import { execSync, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { dataPath } from '../../config/instance.js';
 import { readHostSensors } from '../../host-sensors.js';
+import { createCpuUsageMeter } from '../../cpu-usage.js';
 import { ApiErrorCode, createErrorResponse, getErrorMessage, type NiceConfig } from '../../types.js';
 import { isExplicitlyEnabled, isUnauthenticatedTunnelAcknowledged } from '../network-auth-policy.js';
 import { isMultiUserMode } from '../../config/multiuser.js';
@@ -93,6 +94,11 @@ const SCREENSHOTS_DIR = dataPath('screenshots');
 /** Cached CPU count — doesn't change at runtime */
 const CPU_COUNT = cpus().length;
 
+/** Header CPU use; the 1-minute load average per core only when the platform reports no core times. */
+const cpuUsagePercent = createCpuUsageMeter(cpus, () => performance.now(), () =>
+  Math.min(100, Math.round((loadavg()[0] / CPU_COUNT) * 100))
+);
+
 function parseOptionalNumber(value: string | undefined): number | undefined {
   if (value === undefined || value.trim() === '') return undefined;
   const parsed = Number(value);
@@ -125,9 +131,7 @@ function getSystemStats(): {
       usedMem = totalMem - freemem();
     }
 
-    // CPU load average (1 min) as percentage (rough approximation)
-    const load = loadavg()[0];
-    const cpuPercent = Math.min(100, Math.round((load / CPU_COUNT) * 100));
+    const cpuPercent = cpuUsagePercent();
 
     return {
       cpu: cpuPercent,
