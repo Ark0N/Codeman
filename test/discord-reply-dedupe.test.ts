@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile, stat } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -130,4 +130,22 @@ it('heals oversized regular metadata and persists replay protection across resta
   expect(await new DiscordReplyDedupe(dir).claim(guild, channel, message)).toBe(false);
   expect((await stat(path)).size).toBeLessThan(512 * 1024);
   expect(warn).toHaveBeenCalledTimes(1);
+});
+it('never replaces a symlink or a folder at the metadata path, and still accepts replies', async () => {
+  const path = join(dir, 'discord-reply-dedupe.json');
+  const target = join(dir, 'target');
+  await writeFile(target, 'keep');
+  await symlink(target, path);
+  const warn = vi.fn(),
+    store = new DiscordReplyDedupe(dir, Date.now, warn);
+  expect(await store.claim(guild, channel, message)).toBe(true);
+  expect(await store.claim(guild, channel, message)).toBe(false);
+  expect(await store.claim(guild, channel, '444444444444444444')).toBe(true);
+  expect((await lstat(path)).isSymbolicLink()).toBe(true);
+  expect(await readFile(target, 'utf8')).toBe('keep');
+  expect(warn).toHaveBeenCalledTimes(1);
+  await rm(path);
+  await mkdir(path);
+  expect(await new DiscordReplyDedupe(dir, Date.now, warn).claim(guild, channel, message)).toBe(true);
+  expect((await lstat(path)).isDirectory()).toBe(true);
 });

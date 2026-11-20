@@ -1,4 +1,24 @@
-/** @fileoverview Best-effort replay protection. A metadata-store failure must never block a person's reply. */
+/**
+ * @fileoverview Best-effort replay protection for Discord replies.
+ *
+ * Owns `<data dir>/discord-reply-dedupe.json`: at most 2,048 `guild:channel:message`
+ * ids with the time each was claimed, kept for 7 days, written 0600 through a temp
+ * file and a rename. It holds ids only, never message content.
+ *
+ * `DiscordBridge.handleMessage()` calls `claim()` once per allowed message, after the
+ * guild, allowlist and thread gates and before the rate limit, the exited-agent check,
+ * any download and any typing, so a gateway replay of a message that was refused is
+ * refused again rather than typed.
+ *
+ * Rules a reader has to keep:
+ * - A store failure never costs a reply: the claim falls back to memory, warns once
+ *   per outage and the reply is still typed.
+ * - A file that could not be read (an errno failure, a symlink, anything but a regular
+ *   file) is never overwritten.
+ * - Readable but invalid content (bad JSON, bad rows, oversized) is replaced.
+ * - Rows read from disk go first, so claims made while the file was unreadable are
+ *   the ones the 2,048 bound keeps.
+ */
 import fs from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -69,7 +89,7 @@ export class DiscordReplyDedupe {
       this.dirty = true;
     } // Before awaiting IO or typing, including during an outage.
     while (this.seen.size > LIMIT) this.seen.delete(this.seen.keys().next().value!);
-    if (!this.loaded || !this.dirty) return fresh; // Do not overwrite a journal we could not read.
+    if (!this.loaded || !this.dirty) return fresh; // Never overwrite a store file we could not read.
     const tmp = `${path}.${randomUUID()}.tmp`;
     try {
       await fs.mkdir(this.dir, { recursive: true });
