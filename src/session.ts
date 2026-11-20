@@ -1321,6 +1321,21 @@ export class Session extends EventEmitter {
     return this._textOutput.value;
   }
 
+  /**
+   * Plain text of this session for the opt-in saved transcript (`transcript-store.ts`): the
+   * pane's rendered scrollback when it is a tmux pane, so a full-screen redraw is one copy of
+   * the screen and not a hundred, else the ANSI-stripped output buffer. Null when there is none.
+   */
+  async captureTranscriptText(): Promise<string | null> {
+    if (this._isStopped) return null;
+    const viaPane =
+      this._muxSession && this._mux?.capturePaneHistoryText
+        ? await this._mux.capturePaneHistoryText(this._muxSession.muxName, this._tmuxHistoryLimit)
+        : null;
+    // capture-pane pads the visible frame with blank rows down to the pane's height.
+    return viaPane?.trimEnd() || this._textOutput.value || null;
+  }
+
   get errorBuffer(): string {
     return this._errorBuffer;
   }

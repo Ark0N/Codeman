@@ -41,7 +41,7 @@ import { fileURLToPath } from 'node:url';
 import { existsSync, mkdirSync, readFileSync, chmodSync, statSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { execSync } from 'node:child_process';
-import { hostname as getHostname, uptime as osUptime } from 'node:os';
+import { hostname as getHostname, homedir, uptime as osUptime } from 'node:os';
 import { looksLikeHostReboot, newestPersistedActivity, planRebootRestore } from '../reboot-restore.js';
 import { rebootRestoreRegistry } from './reboot-restore-registry.js';
 import { dataPath, getDataDir, CODEMAN_INSTANCE } from '../config/instance.js';
@@ -143,6 +143,10 @@ import { composerIsEmpty, plainFrame } from '../session-submit-verifier.js';
 import { detectUsageLimitPause } from '../usage-limit-patterns.js';
 import { EditHistorySync, remoteTranscriptIds } from './edit-history-sync.js';
 import { EditHistoryStore } from '../edit-history-store.js';
+import { transcriptStore } from '../transcript-store.js';
+import { TranscriptRecorder, type RecordableSession } from './transcript-recorder.js';
+import { ClaudeTranscriptReader, findClaudeTranscriptPath } from '../claude-transcript-text.js';
+import { claudeProjectsDir } from '../utils/claude-transcript.js';
 import { probeLocalPaths, readClaudeEditSources, resolveClaudeTranscript } from '../edit-history-local-source.js';
 import { remoteLocateClaudeTranscript, remoteProbePaths, remoteReadClaudeEditSources } from '../remote-files.js';
 import { remoteTmuxLocation } from '../tmux-manager.js';
@@ -234,6 +238,7 @@ import {
   registerReadMyMindRoutes,
   registerGitStatusRoutes,
   registerEditHistoryRoutes,
+  registerTranscriptRoutes,
   registerStatusTelemetryRoutes,
   registerSystemRoutes,
   registerCaseRoutes,
@@ -404,6 +409,8 @@ export class WebServer extends EventEmitter {
    * the pane's claude writes, else the stored conversation's (`remoteTranscriptIds`), and is
    * never woken for it (remote-files.ts).
    */
+  private readonly claudeTranscripts = new ClaudeTranscriptReader();
+  private readonly transcriptRecorder = new TranscriptRecorder(transcriptStore, () => this.transcriptSources());
   private readonly editHistorySync = new EditHistorySync({
     transcriptPath: (session, storedTranscriptId) =>
       session.remote
@@ -1402,6 +1409,7 @@ export class WebServer extends EventEmitter {
     registerReadMyMindRoutes(this.app, ctx);
     registerGitStatusRoutes(this.app, ctx);
     registerEditHistoryRoutes(this.app, ctx, this.editHistorySync);
+    registerTranscriptRoutes(this.app, ctx, transcriptStore);
     // Git fetch on an interval: this is only the wake-up, the scheduler itself decides what is due. Off in
     // tests for the same reason as the polls below: a test drives `tick()` directly instead of waiting on
     // a timer the harness would have to keep alive. The setting is read FRESH inside `tick()`, so turning
@@ -2811,6 +2819,9 @@ export class WebServer extends EventEmitter {
     await this.editHistorySync.sweep(exists).catch((err) => {
       console.warn('[EditHistory] Sweeping orphaned histories failed:', getErrorMessage(err));
     });
+    await transcriptStore.sweep(exists).catch((err) => {
+      console.warn('[Transcript] Sweeping orphaned transcripts failed:', getErrorMessage(err));
+    });
     return result.count;
   }
 
@@ -2819,7 +2830,46 @@ export class WebServer extends EventEmitter {
    * live (`cleanupSession`), deleted as a record only (DELETE route), or cleaned as stale
    * (startup, `POST /api/cleanup-state`).
    */
+  private transcriptSources(): RecordableSession[] {
+    return [...this.sessions.values()].map((s) => ({
+      id: s.id,
+      captureTranscriptText: (force?: boolean) => this.captureTranscriptText(s, force === true),
+    }));
+  }
+
+  /**
+   * What to save for one session. A local Claude session is saved from its conversation file:
+   * its fullscreen UI keeps the history inside the app, so tmux's scrollback holds only the
+   * screen. Everything else, and a Claude session whose file cannot be found or has no text,
+   * is saved from the pane (`Session.captureTranscriptText`).
+   */
+  private async captureTranscriptText(s: Session, force: boolean): Promise<string | null> {
+    if (getCli(s.mode)?.capabilities.transcript === 'claude-jsonl' && !s.remote && !s.docker && !s.isAdopted) {
+      const path = this.transcriptWatchers.get(s.id)?.getPath() ?? (await this.findClaudeTranscriptFile(s));
+      if (path) {
+        const text = await this.claudeTranscripts.read(path, force);
+        if (text) return text;
+        // Unchanged since the last read: nothing new to write.
+        if (!force) return null;
+      }
+    }
+    return s.captureTranscriptText();
+  }
+
+  private async findClaudeTranscriptFile(s: Session): Promise<string | null> {
+    const projectsDir = claudeProjectsDir(s.claudeConfigDir());
+    // A relocated config folder can sit on a mount that stopped answering: probe it bounded first (#516).
+    if (projectsDir !== join(homedir(), '.claude', 'projects') && (await probePathKind(projectsDir)) !== 'directory')
+      return null;
+    return findClaudeTranscriptPath(projectsDir, [s.claudeSessionId, s.id]);
+  }
+
   private forgetEditHistory(sessionId: string): void {
+    // The saved transcript (opt-in, `transcript-store.ts`) goes with the record too: same
+    // call sites, same rule, and a pinned session's demoted record keeps neither.
+    void transcriptStore.remove(sessionId).catch((err) => {
+      console.warn(`[Transcript] Removing transcript of ${sessionId} failed:`, getErrorMessage(err));
+    });
     void this.editHistorySync.remove(sessionId).catch((err) => {
       console.warn(`[EditHistory] Removing history of ${sessionId} failed:`, getErrorMessage(err));
     });
@@ -3515,6 +3565,10 @@ export class WebServer extends EventEmitter {
     if (!this.testMode) {
       // Pending agent mail first (opt-in snapshot), so it is in place before any
       // route can answer. Pruned against the restored sessions in finalizeRestoredState.
+      // Saved transcripts (opt-in): off removes any left from an earlier "on". Sessions are swept
+      // against the restored set in cleanupStaleSessions, not here, so a failed restore deletes nothing.
+      await transcriptStore.load((await this.readSettings()).transcriptSearchEnabled === true);
+      this.transcriptRecorder.start();
       const restoredMail = agentInboxPersistence.load(await this.getAgentInboxPersistEnabled());
       if (restoredMail > 0) console.log(`[AgentInbox] restored ${restoredMail} pending message(s)`);
       const restored = await this.restoreMuxSessions();
@@ -4744,6 +4798,7 @@ export class WebServer extends EventEmitter {
     // A post within the debounce window before shutdown would otherwise not reach disk.
     // Flushed again after `app.close()` below, for a post that lands in between.
     agentInboxPersistence.flush();
+    this.transcriptRecorder.stop();
     // Same reason as `cancelEverything` above: an in-flight wake is awaited by a request,
     // and `app.close()` (at the end of this method) does not abort in-flight requests,
     // so without this a restart during a wake waits out the readiness poll.

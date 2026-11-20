@@ -4592,6 +4592,23 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     }
   }
 
+  async capturePaneHistoryText(muxName: string, lines: number): Promise<string | null> {
+    if (IS_TEST_MODE) return null;
+    const target = resolveTmuxPaneTarget(muxName);
+    if (!target || !Number.isFinite(lines) || lines < 1) return null;
+    try {
+      // `-S -<N>` reaches N lines above the visible frame; tmux clamps it to the top of history.
+      const { stdout } = await execAsync(
+        `${this.tmux()} capture-pane -p -J -S -${Math.trunc(lines)} -t ${shellescape(target)}`,
+        { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS * 6, maxBuffer: 64 * 1024 * 1024 }
+      );
+      return stdout;
+    } catch {
+      // A dead or renamed pane is an ordinary outcome on a timer.
+      return null;
+    }
+  }
+
   capturePaneBuffer(muxName: string, paneTarget?: string, opts?: PaneCaptureOptions): string | null {
     const exec = this.captureRunner();
     if (!exec) return '';

@@ -18,6 +18,7 @@ import { createCpuUsageMeter } from '../../cpu-usage.js';
 import { ApiErrorCode, createErrorResponse, getErrorMessage, type NiceConfig } from '../../types.js';
 import { isExplicitlyEnabled, isUnauthenticatedTunnelAcknowledged } from '../network-auth-policy.js';
 import { isMultiUserMode } from '../../config/multiuser.js';
+import { transcriptStore } from '../../transcript-store.js';
 import { findUser, canUsernameRunPrivilegedCommands } from '../../user-store.js';
 import { getAuthUser, isAdmin, requireAdmin, canAccessOwned, revokeUserSessions, ownerFor } from '../route-helpers.js';
 import {
@@ -1219,6 +1220,10 @@ export function registerSystemRoutes(
       // Agent inbox snapshot (default OFF). From `merged` like the toggles above: a
       // partial PUT that omits the key must not switch it off and delete the file.
       agentInboxPersistence.setEnabled(merged.agentInboxPersistEnabled === true);
+
+      // Saved transcripts (default OFF, opt-in). From `merged` like the toggles above; turning it
+      // off deletes every transcript, so off really means nothing on disk.
+      await transcriptStore.setEnabled(merged.transcriptSearchEnabled === true);
 
       // Handle image watcher toggle dynamically
       toggleService((merged.imageWatcherEnabled as boolean) ?? false, imageWatcher, 'Image watcher', () => {
