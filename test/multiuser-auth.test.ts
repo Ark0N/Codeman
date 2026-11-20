@@ -291,6 +291,19 @@ describe('multi-user auth', () => {
     expect((await login(ip, 'alice', 'alicepass1')).statusCode).toBe(200);
   });
 
+  it('malformed authorization headers are still counted against the per-IP cap', async () => {
+    const { app } = await startIpServer();
+    const ip = '203.0.113.41';
+    const malformed = () =>
+      app.inject({ method: 'GET', url: '/api/status', headers: { authorization: 'Bearer x' }, remoteAddress: ip });
+
+    // Present but not valid Basic: a failed login, unlike a request with no header.
+    for (let i = 0; i < AUTH_IP_FAILURE_MAX; i++) {
+      expect((await malformed()).statusCode, `request ${i + 1}`).toBe(401);
+    }
+    expect((await malformed()).statusCode).toBe(429);
+  });
+
   it('per-IP pre-gate: a concurrent burst from one IP reaches the verify at most AUTH_IP_FAILURE_MAX times', async () => {
     const { login, buckets } = await startIpServer();
     const ip = '203.0.113.40';

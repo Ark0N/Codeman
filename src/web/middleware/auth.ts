@@ -511,8 +511,7 @@ export function registerAuthMiddleware(app: FastifyInstance, https: boolean, bas
     // Auth failed — track failure count
     authFailures.set(clientIp, failures + 1);
 
-    reply.header('WWW-Authenticate', 'Basic realm="Codeman"');
-    reply.code(401).send('Unauthorized');
+    challengeBasicAuth(reply);
   });
 
   return state;
@@ -638,8 +637,7 @@ function registerMultiUserAuthHook(
       sendAuthRateLimit(reply, userFailures, normUser);
       return;
     }
-    reply.header('WWW-Authenticate', 'Basic realm="Codeman"');
-    reply.code(401).send('Unauthorized');
+    challengeBasicAuth(reply);
   };
 
   app.addHook('onRequest', async (req, reply) => {
@@ -719,6 +717,7 @@ function registerMultiUserAuthHook(
     // which is every reload after a restart: cookie sessions live in memory, so the
     // browser replays its cached Basic header on many parallel requests at once. A
     // request with no verify in flight for its credentials is gated as normal.
+    //
     // No Authorization header at all is not a guess and runs no scrypt: challenge it
     // before the gates, without counting. Counting it let an open tab's background
     // requests after a restart (cookie sessions live in memory) fill the per-IP bucket,

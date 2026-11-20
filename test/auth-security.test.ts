@@ -272,6 +272,21 @@ describe('Auth Security', () => {
       });
       expect(wrong.status).toBe(429);
     });
+
+    it('should still count malformed authorization headers and rate-limit them', async () => {
+      // The other side of the line: a header that is present but not valid Basic
+      // is a failed login, counted like a wrong password.
+      for (let i = 0; i < AUTH_FAILURE_MAX; i++) {
+        const res = await fetch(`${rateBaseUrl}/api/status`, {
+          headers: { Authorization: 'Bearer x' },
+        });
+        expect(res.status, `request ${i + 1}`).toBe(401);
+      }
+      const res = await fetch(`${rateBaseUrl}/api/status`, {
+        headers: { Authorization: 'Bearer x' },
+      });
+      expect(res.status).toBe(429);
+    });
   });
 
   describe('Hook Event Endpoint', () => {

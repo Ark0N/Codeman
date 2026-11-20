@@ -136,11 +136,19 @@ loopback bind matters. The auth pipeline (`src/web/middleware/auth.ts`,
    so misfiring hooks can never lock out the login path.
 2. **Session cookie** check — a valid `codeman_session` cookie short‑circuits to
    allow.
-3. **HTTP Basic** check — correct credentials short‑circuit to allow and clear
+3. **No `Authorization` header** — return `401` with the `WWW-Authenticate`
+   challenge, **without counting it** and even while the IP is locked out (both
+   modes; in multi-user mode this comes before the pre-verify gates). Such a
+   request is no guess and runs no password check. Counting it let an open tab's
+   background requests after a restart (cookie sessions live in memory) fill the
+   bucket in seconds, and a `429` carries no challenge, so the browser never showed
+   its login dialog again.
+4. **HTTP Basic** check — correct credentials short‑circuit to allow and clear
    that IP's failure counter.
-4. **Rate‑limit gate** — if neither cookie nor credentials passed and the IP is
-   locked out, return `429` with a `Retry-After` header.
-5. Otherwise return `401`, incrementing the IP's failure counter.
+5. **Rate‑limit gate** — if the credentials did not pass and the IP is locked
+   out, return `429` with a `Retry-After` header.
+6. Otherwise (wrong credentials, or an `Authorization` header that is not valid
+   Basic) return `401`, incrementing the IP's failure counter.
 
 ### Session cookies
 
@@ -154,7 +162,7 @@ by presence in a server‑side map, so they cannot be forged offline.
 Failed logins are tracked **per IP**: 10 failures (`AUTH_FAILURE_MAX`) → `429`, with a 15‑minute decay. Multi-user mode replaces that with three buckets, all with the same decay: a wider per-IP **pre-gate** of 50 failures (`AUTH_IP_FAILURE_MAX`), checked before the scrypt verify, which bounds scrypt cost from one source and tolerates many users behind one egress IP; a **per-(username, IP)** gate of 10 failures (`AUTH_FAILURE_MAX`), also checked before the verify, which is what caps verified guesses against one account from one source; and a **per-username** bucket, checked after the verify, that answers `429` to failed guesses from the 10th on, from any IP (the count is incremented before the check). The last two exist in multi-user mode only. So the wider per-IP cap does not widen guessing against any one account from one IP, and other IPs cannot lock an account out.
 The QR path has its own separate limiter.
 
-The lockout check sits **after** the cookie/credential checks (step 4, not first).
+The lockout check sits **after** the cookie/credential checks (step 5, not first).
 This is deliberate: a user with a **valid cookie or correct password recovers
 immediately** even while an attacker is hammering the same IP — important because
 all traffic through a tunnel shares one source IP (loopback). Wrong credentials
