@@ -95,8 +95,12 @@ const SCREENSHOTS_DIR = dataPath('screenshots');
 const CPU_COUNT = cpus().length;
 
 /** Header CPU use; the 1-minute load average per core only when the platform reports no core times. */
-const cpuUsagePercent = createCpuUsageMeter(cpus, () => performance.now(), () =>
-  Math.min(100, Math.round((loadavg()[0] / CPU_COUNT) * 100))
+const cpuUsagePercent = createCpuUsageMeter(
+  cpus,
+  () => performance.now(),
+  () =>
+    // That is also the platform where cpus() is empty, so CPU_COUNT can be 0 here.
+    CPU_COUNT > 0 ? Math.min(100, Math.round((loadavg()[0] / CPU_COUNT) * 100)) : 0
 );
 
 function parseOptionalNumber(value: string | undefined): number | undefined {
