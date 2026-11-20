@@ -353,10 +353,17 @@ const CjkInput = (() => {
       return;
     }
     _t('hold ctrl key');
-    _textarea.value = PHANTOM + before;
-    _textarea.setSelectionRange(1 + at, 1 + at);
-    _heldBase = before;
-    _send(now[at]);
+    // The control key goes to the session this field's text was captured for;
+    // with no draft left, the next answer captures its own destination.
+    const target = _targetForSend();
+    if (!before) {
+      _resetToPhantom();
+    } else {
+      _textarea.value = PHANTOM + before;
+      _textarea.setSelectionRange(1 + at, 1 + at);
+      _heldBase = before;
+    }
+    _send(now[at], target);
   }
 
   /** Send-on-Enter input handling: nothing is flushed, the field only settles.
@@ -370,7 +377,7 @@ const CjkInput = (() => {
       const wasEmpty = !_heldBase;
       _heldBase = _strip(_textarea.value);
       if (!_heldBase) {
-        if (wasEmpty) _send('\x7f');
+        if (wasEmpty) _send('\x7f', _targetForSend());
         _resetToPhantom();
       } else if (!_textarea.value.startsWith(PHANTOM)) {
         // Backspace at the very start of the text deleted the phantom: put it
@@ -801,6 +808,10 @@ const CjkInput = (() => {
       _textarea.value = PHANTOM + draft;
       _textarea.setSelectionRange(_textarea.value.length, _textarea.value.length);
       _heldBase = draft;
+      // The restored text belongs to this session: Enter after a focus move to
+      // another pane must still send it here (see _targetForSend).
+      _target = sessionId;
+      _hasTarget = true;
       _autoGrow();
     },
 

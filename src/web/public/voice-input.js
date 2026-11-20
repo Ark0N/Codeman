@@ -1079,8 +1079,10 @@ const VoiceInput = {
       app.showToast?.('That session has closed; dictation not sent', 'warning');
       return Promise.resolve();
     }
+    // Settle the destination's iOS owner, but leave an unsent local-echo draft
+    // in the overlay: flushing it would prepend it to the reviewed dictation.
     const pane = app._paneForSession?.(target);
-    if (pane) app._prepareExternalInput?.(pane, 'voice-send', { flushEcho: true });
+    if (pane) app._prepareExternalInput?.(pane, 'voice-send');
     app._sendInputAsync(target, text, { useMux: true });
     return Promise.resolve();
   },

@@ -86,7 +86,11 @@ function loadProducerModules(app: object, context: vm.Context) {
 }
 
 function attachCjk(
-  app: { _focusedPane: () => { sessionId: string } | null; _handleCjkInput: (text: string, sessionId: string) => void },
+  app: {
+    _focusedPane: () => { sessionId: string } | null;
+    _handleCjkInput: (text: string, sessionId: string) => void;
+    _sendCjkPrompt: (text: string, sessionId: string) => boolean;
+  },
   context: vm.Context
 ) {
   const listeners = new Map<string, (event: object) => void>();
@@ -94,6 +98,8 @@ function attachCjk(
     value: '',
     selectionStart: 1,
     selectionEnd: 1,
+    style: {},
+    setAttribute: vi.fn(),
     setSelectionRange: vi.fn(),
     addEventListener: (name: string, fn: (event: object) => void) => listeners.set(name, fn),
     removeEventListener: vi.fn(),
@@ -105,6 +111,7 @@ function attachCjk(
   cjk.init({
     captureTarget: () => app._focusedPane()?.sessionId,
     send: (text: string, sessionId: string) => app._handleCjkInput(text, sessionId),
+    sendPrompt: (text: string, sessionId: string) => app._sendCjkPrompt(text, sessionId),
   });
   return { cjk, field, fire: (name: string, event = {}) => listeners.get(name)!(event) };
 }
@@ -491,6 +498,102 @@ describe('native main transactions and boundaries', () => {
     cjk.destroy();
   });
 
+  it('Send on Enter keeps a held answer, its gap and Enter on the session it was typed for', () => {
+    const { app, wire, context } = harness();
+    context.KeyboardAccessoryBar = { clearCtrl: vi.fn(), isCtrlArmed: () => false };
+    const { cjk, field, fire } = attachCjk(app, context);
+    cjk.setHoldUntilEnter(true);
+    field.value = '\u200By';
+    fire('input', { inputType: 'insertText', isComposing: false });
+    // Focus moves to Pane B before Enter; the held answer still belongs to A.
+    const tile = { sessionId: 'new', terminal: {} };
+    app._splitPane = tile;
+    app._noteFocusedTile(tile);
+    fire('keydown', { key: 'Enter', preventDefault: vi.fn() });
+    expect(wire).toEqual([['old', 'y']]);
+    vi.advanceTimersByTime(120);
+    expect(wire).toEqual([
+      ['old', 'y'],
+      ['old', '\r'],
+    ]);
+    cjk.destroy();
+  });
+
+  it('Send on Enter sends a restored draft to its own session after focus moves, without an edit', () => {
+    const { app, wire, context } = harness();
+    context.KeyboardAccessoryBar = { clearCtrl: vi.fn(), isCtrlArmed: () => false };
+    const { cjk, field, fire } = attachCjk(app, context);
+    cjk.setHoldUntilEnter(true);
+    // A draft typed for `old` is stashed on a switch and restored on the way back.
+    field.value = '\u200By';
+    fire('input', { inputType: 'insertText', isComposing: false });
+    cjk.stashDraft('old');
+    cjk.clear();
+    cjk.restoreDraft('old');
+    expect(field.value).toBe('\u200By');
+    // Focus moves to Pane B; Enter is pressed without touching the draft.
+    const tile = { sessionId: 'new', terminal: {} };
+    app._splitPane = tile;
+    app._noteFocusedTile(tile);
+    fire('keydown', { key: 'Enter', preventDefault: vi.fn() });
+    vi.advanceTimersByTime(120);
+    expect(wire).toEqual([
+      ['old', 'y'],
+      ['old', '\r'],
+    ]);
+    cjk.destroy();
+  });
+
+  it('Send on Enter sends a held-mode Ctrl key to the session it was typed for across a focus move', () => {
+    const { app, wire, context } = harness();
+    loadProducerModules(app, context);
+    const bar = vm.runInContext('KeyboardAccessoryBar', context);
+    const { cjk, field, fire } = attachCjk(app, context);
+    cjk.setHoldUntilEnter(true);
+    field.value = '\u200Bab';
+    fire('input', { inputType: 'insertText', isComposing: false });
+    bar.toggleCtrl();
+    fire('compositionstart');
+    // Focus moves to Pane B before the composition commits `c`.
+    const tile = { sessionId: 'new', terminal: {} };
+    app._splitPane = tile;
+    app._noteFocusedTile(tile);
+    field.value = '\u200Babc';
+    fire('compositionend');
+    vi.advanceTimersByTime(0);
+    expect(wire).toEqual([['old', '\x03']]);
+    expect(field.value).toBe('\u200Bab');
+    cjk.destroy();
+  });
+
+  it('Send on Enter lets the next answer capture its own session after Ctrl empties the field', () => {
+    const { app, wire, context } = harness();
+    loadProducerModules(app, context);
+    const bar = vm.runInContext('KeyboardAccessoryBar', context);
+    const { cjk, field, fire } = attachCjk(app, context);
+    cjk.setHoldUntilEnter(true);
+    bar.toggleCtrl();
+    fire('keydown', { key: 'c' });
+    field.value = '\u200Bc';
+    fire('input', { inputType: 'insertText', isComposing: false });
+    expect(wire).toEqual([['old', '\x03']]);
+    // Focus moves to Pane B; a fresh answer typed there belongs to B.
+    const tile = { sessionId: 'new', terminal: {} };
+    app._splitPane = tile;
+    app._noteFocusedTile(tile);
+    fire('keydown', { key: 'y' });
+    field.value = '\u200By';
+    fire('input', { inputType: 'insertText', isComposing: false });
+    fire('keydown', { key: 'Enter', preventDefault: vi.fn() });
+    vi.advanceTimersByTime(120);
+    expect(wire).toEqual([
+      ['old', '\x03'],
+      ['new', 'y'],
+      ['new', '\r'],
+    ]);
+    cjk.destroy();
+  });
+
   it('keeps an unfinished CJK composition on B after focus moves to A', () => {
     const { app, wire, context } = harness();
     const { cjk, field, fire } = attachCjk(app, context);
@@ -620,7 +723,7 @@ describe('native main transactions and boundaries', () => {
     }
   );
 
-  it.each(['upload', 'voice', 'Esc', 'paste'])(
+  it.each(['upload', 'Esc', 'paste'])(
     '%s preserves the typed prefix before direct writes with echo on or off',
     async (producer) => {
       for (const echo of [true, false]) {
@@ -656,12 +759,6 @@ describe('native main transactions and boundaries', () => {
             ['old', '/p'],
             ['old', '\r'],
           ]);
-        } else if (producer === 'voice') {
-          await vm.runInContext("VoiceInput._sendToTarget('old', 'world')", context);
-          expect(wire).toEqual([
-            ['old', 'hel'],
-            ['old', 'world'],
-          ]);
         } else if (producer === 'Esc') {
           vm.runInContext("KeyboardAccessoryBar.sendKey('\\x1b')", context);
           expect(wire).toEqual([
@@ -690,6 +787,19 @@ describe('native main transactions and boundaries', () => {
       vi.advanceTimersByTime(120);
       // Echo on: `hel` stays in the overlay. Echo off: it was already typed into the PTY.
       expect(wire).toEqual([...(echo ? [] : [['old', 'hel']]), ['old', '/help'], ['old', '\r']]);
+      expect(app._localEchoOverlay.pendingText).toBe(echo ? 'hel' : '');
+    }
+  });
+
+  it('sends voice dictation without submitting the unsent local-echo draft', async () => {
+    for (const echo of [true, false]) {
+      const { app, wire, context } = harness();
+      loadProducerModules(app, context);
+      app._localEchoEnabled = echo;
+      app._handleTerminalData('hel', 'old');
+      await vm.runInContext("VoiceInput._sendToTarget('old', 'world\\r')", context);
+      // Echo on: `hel` stays in the overlay. Echo off: it was already typed into the PTY.
+      expect(wire).toEqual([...(echo ? [] : [['old', 'hel']]), ['old', 'world\r']]);
       expect(app._localEchoOverlay.pendingText).toBe(echo ? 'hel' : '');
     }
   });

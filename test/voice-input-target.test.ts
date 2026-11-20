@@ -78,6 +78,11 @@ function load(opts: { insertMode?: string; localEcho?: boolean; focused?: string
   }
   app._paneForSession = (id: string) => (opts.pane?.sessionId === id ? opts.pane : null);
   if (opts.tiles) app._tilesOwnTerminal = () => true;
+  const doc = {
+    querySelector: (sel: string): unknown => (sel === '.btn-settings' ? gear : null),
+    createElement: (): unknown => ({}),
+    body: { appendChild: () => {} },
+  };
   const context = vm.createContext({
     console,
     setTimeout: (fn: () => void) => fn(),
@@ -90,11 +95,7 @@ function load(opts: { insertMode?: string; localEcho?: boolean; focused?: string
         key === 'codeman-voice-settings' ? JSON.stringify({ insertMode: opts.insertMode || 'direct' }) : null,
       setItem: () => {},
     },
-    document: {
-      querySelector: (sel: string) => (sel === '.btn-settings' ? gear : null),
-      createElement: () => ({}),
-      body: { appendChild: () => {} },
-    },
+    document: doc,
     window: {},
     navigator: {},
   });
@@ -103,7 +104,7 @@ function load(opts: { insertMode?: string; localEcho?: boolean; focused?: string
   // Recording itself is out of scope: start() only has to pick the target.
   voice._resolveProvider = () => 'webspeech';
   voice._startWebSpeech = vi.fn();
-  return { voice, app, sendInput, sendInputAsync, appendText, overlayClear, showToast, gear };
+  return { voice, app, sendInput, sendInputAsync, appendText, overlayClear, showToast, gear, doc };
 }
 
 function clickGreenSend(gear: { addEventListener: { mock: { calls: unknown[][] } } }) {
@@ -131,9 +132,7 @@ describe('dictation target', () => {
 
     expect(sendInput).not.toHaveBeenCalled();
     expect(sendInputAsync).toHaveBeenCalledWith('session-a', 'hello', { useMux: true });
-    expect(app._prepareExternalInput).toHaveBeenCalledWith({ sessionId: 'session-a', isPrimary: true }, 'voice-send', {
-      flushEcho: true,
-    });
+    expect(app._prepareExternalInput).toHaveBeenCalledWith({ sessionId: 'session-a', isPrimary: true }, 'voice-send');
   });
 
   it('never types another session dictation into the active local-echo overlay', () => {
@@ -287,6 +286,42 @@ describe('dictation target', () => {
     const mainTerminal = app.terminal as { focus: (...args: unknown[]) => void };
     expect(mainTerminal.focus).toHaveBeenCalled();
     expect(paneB.focus).not.toHaveBeenCalled();
+  });
+
+  it('compose Send delivers only the reviewed dictation and leaves the typed draft in the overlay', () => {
+    const { voice, app, appendText, overlayClear, sendInputAsync, doc } = load({
+      insertMode: 'compose',
+      localEcho: true,
+      pane: { sessionId: 'session-a', isPrimary: true },
+    });
+    const overlay = app._localEchoOverlay as { pendingText: string };
+    overlay.pendingText = 'hel';
+    const handlers = new Map<string, () => void>();
+    const textarea = { value: '', focus: vi.fn(), blur: vi.fn(), selectionStart: 0, selectionEnd: 0 };
+    doc.createElement = () => ({
+      className: '',
+      innerHTML: '',
+      remove: vi.fn(),
+      addEventListener: vi.fn(),
+      querySelector: (sel: string) =>
+        sel === 'textarea'
+          ? textarea
+          : { addEventListener: (_type: string, handler: () => void) => handlers.set(sel, handler) },
+    });
+    voice.start();
+
+    voice._insertText('Please fix the bug');
+    // The dialog's <textarea> gets the text through innerHTML; this stub has no
+    // HTML parser, so the user's reviewed text is set directly before Send.
+    textarea.value = 'Please fix the bug';
+    handlers.get('.paste-send')!();
+
+    expect(sendInputAsync).toHaveBeenCalledOnce();
+    expect(sendInputAsync).toHaveBeenCalledWith('session-a', 'Please fix the bug\r', { useMux: true });
+    expect(app._prepareExternalInput).toHaveBeenCalledWith({ sessionId: 'session-a', isPrimary: true }, 'voice-send');
+    expect(overlay.pendingText).toBe('hel');
+    expect(appendText).not.toHaveBeenCalled();
+    expect(overlayClear).not.toHaveBeenCalled();
   });
 
   it('refuses to start with no session at all', () => {

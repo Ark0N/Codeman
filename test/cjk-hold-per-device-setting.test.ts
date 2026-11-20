@@ -158,6 +158,11 @@ describe('a held draft survives a reload of the same session', () => {
       /if \(this\.activeSessionId === sessionId && forceReload\) \{\s*reloadingSameSession = true;/
     );
     expect(appJs).toContain('this._cleanupPreviousSession(sessionId, { keepCjkDraft: reloadingSameSession });');
+    // Nothing in the same-session reload block may clear the field ahead of
+    // that flag: a CjkInput.clear() there wipes the held draft keepCjkDraft keeps.
+    const start = appJs.indexOf('if (this.activeSessionId === sessionId && forceReload) {');
+    const block = appJs.slice(start, appJs.indexOf('this.activeSessionId = null;', start));
+    expect(block).not.toContain('CjkInput.clear');
   });
 });
 
@@ -178,13 +183,24 @@ describe('Send on Enter field layout and strings', () => {
     expect(base).toContain('overflow-y: auto;');
   });
 
-  it('the phone toolbar Enter presses Enter in the visible CJK field', () => {
+  it('the phone toolbar Enter presses Enter in the visible CJK field, not a bare terminal Enter', () => {
     // onData drops everything while cjkActive, so the xterm path does nothing.
-    const sessionUi = read('session-ui.js');
-    const start = sessionUi.indexOf('  sendEnterKey() {');
-    const body = sessionUi.slice(start, sessionUi.indexOf('submitFromToolbar()', start));
-    expect(body).toContain("classList.contains('cjk-input-visible')");
-    expect(body).toContain('CjkInput.submit?.();');
+    // The real sendEnterKey from session-ui.js, run with and without the field.
+    for (const visible of [true, false]) {
+      const submit = vi.fn();
+      const field = { classList: { contains: (name: string) => visible && name === 'cjk-input-visible' } };
+      const context = vm.createContext({
+        CodemanApp: function CodemanApp() {},
+        CjkInput: { submit },
+        document: { getElementById: (id: string) => (id === 'cjkInput' ? field : null) },
+      });
+      vm.runInContext(`${read('session-ui.js')}\nglobalThis.__mixin = CodemanApp.prototype;`, context);
+      const mixin = (context as unknown as { __mixin: { sendEnterKey(this: object): void } }).__mixin;
+      const submitFromToolbar = vi.fn();
+      mixin.sendEnterKey.call({ submitFromToolbar });
+      expect(submit).toHaveBeenCalledTimes(visible ? 1 : 0);
+      expect(submitFromToolbar).toHaveBeenCalledTimes(visible ? 0 : 1);
+    }
   });
 
   it('has zh-CN strings for both field placeholders', () => {

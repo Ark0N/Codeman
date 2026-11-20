@@ -206,14 +206,6 @@ function loadPasteHarness(options: PasteHarnessOptions = {}): Harness {
     };
     app._flushedOffsets = new Map();
     app._flushedTexts = new Map();
-    app._flushLocalEchoPending = function (this: Record<string, any>) {
-      const pending = this._localEchoOverlay?.pendingText || '';
-      this._localEchoOverlay.clear();
-      this._localEchoOverlay.suppressBufferDetection();
-      this._flushedOffsets?.delete(this.activeSessionId);
-      this._flushedTexts?.delete(this.activeSessionId);
-      if (pending) this._pendingInput += pending;
-    };
   }
   const toasts: string[] = [];
   app.showToast = (message: string) => toasts.push(message);
