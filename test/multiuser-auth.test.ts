@@ -304,6 +304,20 @@ describe('multi-user auth', () => {
     expect((await malformed()).statusCode).toBe(429);
   });
 
+  it('requests without credentials still get the challenge while the IP is locked out', async () => {
+    const { app } = await startIpServer();
+    const ip = '203.0.113.42';
+    const malformed = () =>
+      app.inject({ method: 'GET', url: '/api/status', headers: { authorization: 'Bearer x' }, remoteAddress: ip });
+    for (let i = 0; i < AUTH_IP_FAILURE_MAX; i++) await malformed();
+
+    // A 429 never makes a browser show its login dialog; a 401 challenge does.
+    const bare = await app.inject({ method: 'GET', url: '/api/status', remoteAddress: ip });
+    expect(bare.statusCode).toBe(401);
+    expect(bare.headers['www-authenticate']).toBe('Basic realm="Codeman"');
+    expect((await malformed()).statusCode).toBe(429);
+  });
+
   it('per-IP pre-gate: a concurrent burst from one IP reaches the verify at most AUTH_IP_FAILURE_MAX times', async () => {
     const { login, buckets } = await startIpServer();
     const ip = '203.0.113.40';
