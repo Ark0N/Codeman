@@ -2082,6 +2082,16 @@ Object.assign(CodemanApp.prototype, {
    *  so overlay flush, flushed-offset cleanup and ordering are all reused. */
   sendEnterKey() {
     if (!this.activeSessionId) return;
+    // While the CJK field is visible, onData drops everything (cjkActive), this
+    // Enter included. Press Enter in the field instead: it sends what the field
+    // holds (a Send on Enter answer, or live text not yet flushed), then Enter.
+    if (
+      typeof CjkInput !== 'undefined' &&
+      document.getElementById('cjkInput')?.classList.contains('cjk-input-visible')
+    ) {
+      CjkInput.submit?.();
+      return;
+    }
     const coreService = this.terminal?._core?.coreService;
     if (coreService && typeof coreService.triggerDataEvent === 'function') {
       coreService.triggerDataEvent('\r', true);

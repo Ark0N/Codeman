@@ -1083,6 +1083,10 @@ Object.assign(CodemanApp.prototype, {
         send: (text) => {
           this._handleCjkInput(text);
         },
+        // Send on Enter: a long or multi-line held answer goes out like the
+        // mobile prompt composer's Send (one bracketed paste, then Enter as a
+        // separate delayed write), bound to the session it was typed for.
+        sendPrompt: (text) => this._sendCjkPrompt(text),
       });
     }
 
@@ -1374,7 +1378,7 @@ Object.assign(CodemanApp.prototype, {
               // selectSession() ends with scrollToLastNonEmptyLine(), that made
               // the keyboard unreachable after every tab switch.
               ev.preventDefault();
-              this._blurMobileTerminalInput();
+              if (this._contentTouchStartBlurs()) this._blurMobileTerminalInput();
             }
             // Hold still and this press becomes a text selection. Cancelled by any
             // travel past the shared tap slop below, so a scroll can never become one.
@@ -4551,8 +4555,10 @@ Object.assign(CodemanApp.prototype, {
     // after every key. So the onData hook never sees these keystrokes, and an
     // armed modifier could neither fire NOR be spent: it survived until a
     // session switch and then turned an innocent keystroke into a control byte.
-    // This is the module's single choke point to the PTY, so applying it here
-    // covers typed characters, IME flushes, Enter, backspace and arrows at once.
+    // This is the module's single choke point to the PTY in live mode, so applying
+    // it here covers typed characters, IME flushes, Enter, backspace and arrows at
+    // once. In Send on Enter a held answer leaves through _sendCjkPrompt instead,
+    // which spends the modifier; an armed next character still comes here.
     // Same policy as the onData hook: the next single character is modified,
     // anything longer merely spends the modifier.
     if (typeof KeyboardAccessoryBar !== 'undefined' && KeyboardAccessoryBar.isCtrlArmed?.()) {
@@ -4562,6 +4568,49 @@ Object.assign(CodemanApp.prototype, {
     if (this._localEchoPolicy === 'predict') this._predictiveEcho?.clearPredictions();
     _crashDiag.log(`CJK send→${this.activeSessionId.slice(0, 8)} len=${text.length}`);
     this._sendInputAsync(this.activeSessionId, text);
+  },
+
+  /**
+   * Send on Enter (CjkInput, setting cjkInputHoldUntilEnter): deliver a held
+   * answer, then Enter as its own write ~120 ms later. Never `<text>\r` in one
+   * write: Codex reads characters arriving in one burst as a paste and folds an
+   * Enter inside it into the paste (even `1\r` stays unsent), and Claude Code
+   * does the same for a long burst. Same split as TmuxManager.sendInput: a
+   * single character is typed (a selection dialog ignores a pasted `3`, then
+   * Enter confirms the highlighted option), anything else goes through the
+   * composer's path as one bracketed paste. The session is captured now, so the
+   * delayed Enter cannot follow a tab switch. A lone digit while the session
+   * shows a permission or question dialog goes out without the Enter: the
+   * dialog acts on the digit itself, and a later Enter would confirm whatever
+   * the CLI shows next (a second permission prompt, unseen). Same rule as the
+   * Approvals Inbox and the Discord bridge (server.ts awaitingChoice). Returns
+   * false when nothing was sent (no session, too long), so the field keeps the
+   * text.
+   */
+  _sendCjkPrompt(text) {
+    const sessionId = this.activeSessionId;
+    if (!sessionId || typeof KeyboardAccessoryBar === 'undefined') {
+      _crashDiag.log(`CJK prompt DROP no-session len=${text.length}`);
+      return false;
+    }
+    // A held answer is never what an armed one-shot Ctrl applies to (CjkInput
+    // sends the next typed character straight away as the control key), so
+    // Enter spends it, the same rule _handleCjkInput has for a longer chunk.
+    KeyboardAccessoryBar.clearCtrl?.();
+    _crashDiag.log(`CJK prompt→${sessionId.slice(0, 8)} len=${text.length}`);
+    if ([...text].length === 1) {
+      if (this._localEchoPolicy === 'predict') this._predictiveEcho?.clearPredictions();
+      this._sendInputAsync(sessionId, text);
+      const hooks = this.pendingHooks?.get(sessionId);
+      const awaitingChoice = !!hooks && (hooks.has('permission_prompt') || hooks.has('elicitation_dialog'));
+      if (/^\d$/.test(text) && awaitingChoice) {
+        _crashDiag.log(`CJK prompt digit answers a dialog, no Enter`);
+        return true;
+      }
+      setTimeout(() => this._sendInputAsync(sessionId, '\r', { useMux: true }), 120);
+      return true;
+    }
+    return KeyboardAccessoryBar._sendComposedPrompt(sessionId, text);
   },
 
   /**
@@ -5087,7 +5136,9 @@ Object.assign(CodemanApp.prototype, {
   clearTerminalInput() {
     if (!this.activeSessionId) return;
 
-    if (typeof CjkInput !== 'undefined') CjkInput.clear();
+    // discard: the line is thrown away, so a Send on Enter draft must not be
+    // stashed and come back on the next visit to this session.
+    if (typeof CjkInput !== 'undefined') CjkInput.clear({ discard: true });
     // A tile or Pane B holds the keyboard: its TUI owns the editable buffer
     // (no local-echo overlay there), so kill the line in that pane's session,
     // never in the parked main pane's.
@@ -5650,6 +5701,19 @@ Object.assign(CodemanApp.prototype, {
     return 'content';
   },
 
+  /**
+   * Whether a touchstart on transcript content should blur the focused terminal input.
+   * It does for xterm's helper textarea: that blur, with the preventDefault beside it,
+   * keeps the compatibility click from opening the keyboard. It must NOT for the pinned
+   * CJK field: at touchstart the gesture may still be a scroll, and that field owns the
+   * keyboard while it is visible, so blurring it closed the keyboard on every swipe that
+   * started on the live screen. A real tap on inert transcript still closes the keyboard
+   * at touchend (the startedWithTerminalFocus branch), so a tap keeps its meaning.
+   */
+  _contentTouchStartBlurs() {
+    return document.activeElement?.id !== 'cjkInput';
+  },
+
   _blurMobileTerminalInput() {
     const active = document.activeElement;
     if (
@@ -5848,6 +5912,9 @@ Object.assign(CodemanApp.prototype, {
     ) {
       // No focus change: a 'content' tap was already blurred by touchstart, and
       // popping the keyboard behind a tab that is about to take over is noise.
+      // The pinned CJK field is the exception touchstart leaves focused (a swipe must
+      // not close its keyboard), so a tap that opens a link closes it here instead.
+      if (!this._contentTouchStartBlurs()) this._blurMobileTerminalInput();
       return 'link';
     }
 

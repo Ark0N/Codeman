@@ -41,8 +41,9 @@ function loadTerminalModule(): TerminalModule {
     console,
     setInterval: vi.fn(),
     clearInterval: vi.fn(),
-    setTimeout,
-    clearTimeout,
+    // Looked up per call, so a test's vi.useFakeTimers() reaches the cached module.
+    setTimeout: (fn: () => void, ms?: number) => setTimeout(fn, ms),
+    clearTimeout: (t: ReturnType<typeof setTimeout>) => clearTimeout(t),
     requestAnimationFrame: vi.fn(),
     HTMLCanvasElement: class HTMLCanvasElement {},
     WebSocket: { OPEN: 1 },
@@ -544,6 +545,141 @@ describe('one-shot Ctrl through the CJK input field', () => {
     app._handleCjkInput('c');
     expect(app._sendInputAsync).not.toHaveBeenCalled();
     expect(bar.isCtrlArmed()).toBe(true);
+  });
+});
+
+describe('Send on Enter: a held answer goes out with Enter as its own write', () => {
+  // _sendCjkPrompt is CjkInput's sendPrompt callback. Anything longer than one
+  // character goes to the composer's _sendComposedPrompt with the session
+  // captured at Enter, so the delayed Enter cannot follow a tab switch.
+  function promptApp() {
+    const { CodemanApp, bar } = loadTerminalModule();
+    bar.clearCtrl();
+    const app = Object.create(CodemanApp.prototype) as {
+      activeSessionId: string | null;
+      _sendCjkPrompt(text: string): boolean;
+    };
+    app.activeSessionId = 'session-a';
+    const composed = vi
+      .spyOn(bar as unknown as { _sendComposedPrompt: (s: string, t: string) => boolean }, '_sendComposedPrompt')
+      .mockReturnValue(true);
+    return { app, bar, composed };
+  }
+
+  it('sends through the composer path, bound to the session active at Enter', () => {
+    const { app, composed } = promptApp();
+    expect(app._sendCjkPrompt('line one\nline two')).toBe(true);
+    app.activeSessionId = 'session-b';
+    expect(composed).toHaveBeenCalledWith('session-a', 'line one\nline two');
+    composed.mockRestore();
+  });
+
+  it('spends an armed one-shot Ctrl, like any multi-character chunk', () => {
+    const { app, bar, composed } = promptApp();
+    bar.toggleCtrl();
+    app._sendCjkPrompt('x'.repeat(100));
+    expect(bar.isCtrlArmed()).toBe(false);
+    composed.mockRestore();
+  });
+
+  it('types a single character, then Enter ~120 ms later to the same session', () => {
+    // Codex folds an Enter that arrives in the same burst as the text into a
+    // paste, even for `1\r`; a selection dialog ignores a pasted digit. Same
+    // split as TmuxManager.sendInput (submitsAsKeys).
+    vi.useFakeTimers();
+    try {
+      const { app, composed } = promptApp();
+      const writes: Array<[string, string, unknown]> = [];
+      (app as unknown as { _sendInputAsync: unknown })._sendInputAsync = (id: string, input: string, opts?: unknown) =>
+        writes.push([id, input, opts]);
+      expect(app._sendCjkPrompt('1')).toBe(true);
+      expect(writes).toEqual([['session-a', '1', undefined]]);
+      app.activeSessionId = 'session-b';
+      vi.advanceTimersByTime(119);
+      expect(writes).toHaveLength(1);
+      vi.advanceTimersByTime(1);
+      expect(writes[1]).toEqual(['session-a', '\r', { useMux: true }]);
+      expect(composed).not.toHaveBeenCalled();
+      composed.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('sends a lone digit without Enter while a permission or question dialog waits', () => {
+    // The dialog acts on the digit keypress itself; an Enter 120 ms later would
+    // confirm whatever the CLI shows next (a second permission prompt, unseen).
+    // Same rule as the Approvals Inbox and the Discord bridge (awaitingChoice).
+    vi.useFakeTimers();
+    try {
+      for (const hook of ['permission_prompt', 'elicitation_dialog']) {
+        const { app, composed } = promptApp();
+        const writes: Array<[string, string, unknown]> = [];
+        (app as unknown as { _sendInputAsync: unknown })._sendInputAsync = (
+          id: string,
+          input: string,
+          opts?: unknown
+        ) => writes.push([id, input, opts]);
+        (app as unknown as { pendingHooks: Map<string, Set<string>> }).pendingHooks = new Map([
+          ['session-a', new Set([hook])],
+        ]);
+        expect(app._sendCjkPrompt('2')).toBe(true);
+        vi.advanceTimersByTime(500);
+        expect(writes).toEqual([['session-a', '2', undefined]]);
+        composed.mockRestore();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the delayed Enter for a digit when only an idle prompt is pending, or for a letter in a dialog', () => {
+    vi.useFakeTimers();
+    try {
+      const cases: Array<[string, string]> = [
+        ['idle_prompt', '1'],
+        ['permission_prompt', 'y'],
+      ];
+      for (const [hook, text] of cases) {
+        const { app, composed } = promptApp();
+        const writes: Array<[string, string, unknown]> = [];
+        (app as unknown as { _sendInputAsync: unknown })._sendInputAsync = (
+          id: string,
+          input: string,
+          opts?: unknown
+        ) => writes.push([id, input, opts]);
+        (app as unknown as { pendingHooks: Map<string, Set<string>> }).pendingHooks = new Map([
+          ['session-a', new Set([hook])],
+        ]);
+        expect(app._sendCjkPrompt(text)).toBe(true);
+        vi.advanceTimersByTime(120);
+        expect(writes).toEqual([
+          ['session-a', text, undefined],
+          ['session-a', '\r', { useMux: true }],
+        ]);
+        composed.mockRestore();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('pastes even a short word: only one character is typed', () => {
+    const { app, composed } = promptApp();
+    expect(app._sendCjkPrompt('yes')).toBe(true);
+    expect(composed).toHaveBeenCalledWith('session-a', 'yes');
+    composed.mockRestore();
+  });
+
+  it('reports a refusal so the field keeps the text', () => {
+    const { app, composed } = promptApp();
+    composed.mockReturnValue(false);
+    expect(app._sendCjkPrompt('x'.repeat(100))).toBe(false);
+    app.activeSessionId = null;
+    expect(app._sendCjkPrompt('x'.repeat(100))).toBe(false);
+    expect(app._sendCjkPrompt('1')).toBe(false);
+    expect(composed).toHaveBeenCalledTimes(1);
+    composed.mockRestore();
   });
 });
 
