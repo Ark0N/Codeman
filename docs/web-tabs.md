@@ -144,9 +144,21 @@ per-device (`localStorage`), since that is workspace layout rather than config.
 Worth knowing, because it is where this feature does its least obvious work. Three
 layers cooperate so a dashboard talking to its own backend just works:
 
-1. `<base href>` handles relative URLs in the markup.
+1. `<base href>` handles relative URLs in the markup. A page that ships its own
+   **relative** base (`<base href="./">`, what a Vite build emits) has it resolved
+   against the document's own directory inside the proxy prefix first, so a
+   document at `/webview/<cap>/app/page.html` gets `/webview/<cap>/app/` rather
+   than the proxy root: the page's URL is masked a few paragraphs below, a base is
+   resolved against that URL, so `./` would otherwise point at Codeman's root and
+   404 every module script behind an otherwise-painted page.
 2. Attribute rewriting handles root-absolute `src`/`href`/`action` in the page the
-   proxy serves.
+   proxy serves — and root-absolute dynamic `import("/...")` specifiers inside
+   `<script>` bodies. The import is the one URL no other layer can reach: `<base>`
+   does not apply to a `/`-rooted specifier and it is not a `fetch()`. SvelteKit's
+   inline bootstrap is exactly this shape; without the rewrite the module loads
+   from Codeman's root, 404s, and the app sits on its own loading spinner forever.
+   Visible text is left alone: a `<pre>import("/x")</pre>` example is not a
+   loader and is not rewritten.
 3. A small injected script rebases URLs built at **runtime**, which the first two
    cannot see: `fetch('/api/data')` and `new WebSocket('/live')`, but equally
    `card.innerHTML = '<img src="/api/hero">'`, `img.src = '/api/slide'`, and
@@ -190,6 +202,16 @@ then every API call fails, which looks like the dashboard being broken.
   EventSource, normal markup, the DOM sinks a page uses to build markup at runtime,
   and `url()` inside stylesheets. Something that constructs requests by an unusual
   route can still slip through. Symptom: the page renders but a panel stays empty.
+- **Root-absolute URLs the proxy never sees.** Only the HTML is rewritten, and only
+  literal `/`-rooted specifiers in it. Still escape: an `import()` built at runtime
+  (`import('/' + name)`), an import written inside an external `.js`, a static
+  `import x from "/x"` in an inline script, `navigator.serviceWorker.register("/sw.js")`,
+  and `url(/img.png)` inside an external stylesheet. They cannot be relayed either —
+  the masked frame's `Referer` carries no capability — so the failure is quiet: a
+  blank page, or a spinner that never resolves. Codeman now logs
+  `[Webview] <path> escaped the proxy` (once per path per five minutes) when such a
+  request reaches its 404, which is the fastest way to tell this class apart from a
+  dashboard that is genuinely broken.
 - **A root-absolute `url()` inside an inline `<style>` is not rescued.** Masking the
   page's URL (layer 5) trades away the `Referer` safety net of layer 4 for
   requests the shim cannot see, and only HTML is rewritten server-side. An

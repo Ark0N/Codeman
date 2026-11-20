@@ -27,6 +27,11 @@
  * - **Failures reported, not swallowed.** The shell tab used to be where the
  *   stack trace landed. With no tab, the spawn's own output is captured and
  *   handed back to the caller instead.
+ * - **The launch token traded, not forwarded.** `dsh web` gates its own index
+ *   behind a one-time token it prints on stdout and exchanges for a browser
+ *   cookie. The tab stores a clean URL, so nothing on the browser side could
+ *   ever present that token and every load answered 401. This module trades it
+ *   here, once, and hands the cookie to the proxy (`getDeepSeekWebCookie`).
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -53,6 +58,23 @@ const READY_POLL_MS = 400;
 const KILL_GRACE_MS = 3_000;
 /** Bound on captured child output, so a chatty boot cannot grow without limit. */
 const OUTPUT_CAP = 16_384;
+/**
+ * Bound on the boot-output window searched for the launch banner.
+ *
+ * Deliberately larger and separate from {@link OUTPUT_CAP}: that one only has to
+ * keep an error tail, while this one must survive a chatty plugin tree's boot
+ * logs long enough to see a banner printed after them. 256 KB of one-line output
+ * is far beyond anything a real boot prints, and a bound still exists because a
+ * wedged child can print forever.
+ */
+const BANNER_SCAN_CAP = 262_144;
+
+/** How long boot waits for `dsh web` to print the launch URL it gates itself on. */
+const LAUNCH_URL_WAIT_MS = 4_000;
+/** Bound on the one-shot token→cookie exchange (loopback, so this is generous). */
+const TOKEN_EXCHANGE_TIMEOUT_MS = 5_000;
+/** Cookie name `dsh web` mints for a browser session that presented the token. */
+const DSH_AUTH_COOKIE_PREFIX = 'dsh-auth-';
 
 export interface DeepSeekWebStatus {
   running: boolean;
@@ -66,7 +88,33 @@ interface RunningServer {
   child: ChildProcess;
   port: number;
   authority: string;
+  /**
+   * Username of the Codeman user whose request started this server. Undefined in
+   * single-user mode, where no owner exists. The cookie bought with the launch
+   * token belongs to that identity and is presented to nobody else (see
+   * `getDeepSeekWebCookie`).
+   */
+  starter: string | undefined;
   output: () => string;
+  /**
+   * Boot output scanned for the launch banner, on its own (larger) budget than
+   * `output`. Read through this rather than `output` so a banner printed after
+   * the error-tail cap filled is still found.
+   */
+  banner: () => string;
+  /**
+   * The `dsh-auth-*` cookie bought with this process's launch token, once the
+   * exchange succeeded. Null on a dsh old enough to serve its index without a
+   * token, which is why "no cookie" is not a startup failure.
+   */
+  cookie: string | null;
+  /**
+   * True when a token-bearing banner was found but the exchange produced no
+   * cookie. Such a server cannot authenticate its tab and must not be reused: the
+   * warning tells the user to restart `dsh web`, and the next start request is
+   * what performs that restart.
+   */
+  cookieFailed: boolean;
 }
 
 let current: RunningServer | null = null;
@@ -106,6 +154,158 @@ async function answersHttp(port: number): Promise<boolean> {
 }
 
 /**
+ * Remove SGR sequences so a coloured banner still parses.
+ *
+ * A coloured banner would otherwise hide the URL behind escape codes and turn a
+ * perfectly working server into a 401.
+ */
+function stripSgr(output: string): string {
+  // Built from the code point rather than written as `\x1b` so the linter's
+  // no-control-regex rule does not read it as an accidental control character.
+  return output.replace(new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g'), '');
+}
+
+/**
+ * The first `dsh web:` payload that parses as an absolute http(s) URL.
+ *
+ * Lines whose payload is not a URL are skipped, which is what makes a
+ * `dsh web: loading profiles` diagnostic harmless. `requireToken` skips an
+ * http(s) URL that carries no `token` as well, so a diagnostic that happens to
+ * contain a plain link cannot shadow the real banner. Null when no line qualifies.
+ */
+function firstLaunchBannerUrl(output: string, requireToken = false): string | null {
+  // Fresh per call: a module-level /g pattern carries lastIndex between calls.
+  const line = /dsh web:\s*(\S+)/g;
+  for (const match of stripSgr(output).matchAll(line)) {
+    let url: URL;
+    try {
+      url = new URL(match[1]);
+    } catch {
+      continue;
+    }
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') continue;
+    if (requireToken && !url.searchParams.get('token')) continue;
+    return url.href;
+  }
+  return null;
+}
+
+/**
+ * The authenticated URL `dsh web` prints once it is up.
+ *
+ * Its browser-auth gate made the index private: boot writes
+ * `dsh web: http://127.0.0.1:<port>/?token=<one-time token>` and only a request
+ * carrying that token is answered with the cookie that authorizes everything
+ * after it. The token is per process, so it can be neither guessed nor carried
+ * across restarts — it has to be read out of the boot output.
+ *
+ * Scans EVERY `dsh web:` line and returns the first one that is a usable URL
+ * carrying a token, because dsh also prints diagnostics under the same prefix
+ * before the banner.
+ *
+ * Null for output without one, which is the older-dsh case and stays working.
+ *
+ * @param output - captured stdout+stderr so far.
+ * @returns absolute http(s) URL carrying a `token`, or null.
+ */
+export function parseLaunchUrl(output: string): string | null {
+  return firstLaunchBannerUrl(output, true);
+}
+
+/**
+ * Whether a launch URL names the loopback port this supervisor just spawned.
+ *
+ * The URL is read from the child's output, but fetching it is a request made by
+ * the SERVER. A banner naming another host, or another local service's port, must
+ * not turn that exchange into an SSRF primitive, so the target is required to be
+ * the exact origin the token was minted for.
+ */
+export function launchUrlTargetsServer(launchUrl: string, port: number): boolean {
+  try {
+    const url = new URL(launchUrl);
+    const effectivePort = Number(url.port || (url.protocol === 'https:' ? 443 : 80));
+    return url.hostname === '127.0.0.1' && effectivePort === port;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Trade the launch URL for the `dsh-auth-*` cookie the proxy will present.
+ *
+ * `redirect: 'manual'` is load-bearing: the 303 is the response that carries
+ * `Set-Cookie`, and following it would burn the token on a redirect to `./`
+ * while dropping the only credential the exchange produces.
+ *
+ * @param launchUrl - token-bearing URL from {@link parseLaunchUrl}.
+ * @returns `name=value` pair ready for a Cookie header, or null.
+ */
+async function exchangeLaunchToken(launchUrl: string): Promise<string | null> {
+  try {
+    const response = await fetch(launchUrl, {
+      redirect: 'manual',
+      signal: AbortSignal.timeout(TOKEN_EXCHANGE_TIMEOUT_MS),
+    });
+    for (const header of response.headers.getSetCookie()) {
+      const pair = header.split(';', 1)[0]?.trim();
+      if (pair?.startsWith(DSH_AUTH_COOKIE_PREFIX)) return pair;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Wait for the banner, then exchange it.
+ *
+ * Never fails startup: a dsh without the gate prints a token-less banner, which
+ * is answered as "nothing to exchange" immediately rather than after the whole
+ * wait, and a gate that changes shape must not turn a serving UI into a boot
+ * failure.
+ *
+ * @param running - the just-started server, read for its captured output.
+ * @returns the cookie to hand the proxy (null when there is none) and whether a
+ *   token was printed but could not be exchanged.
+ */
+async function captureSessionCookie(running: RunningServer): Promise<{ cookie: string | null; failed: boolean }> {
+  const deadline = Date.now() + LAUNCH_URL_WAIT_MS;
+  while (Date.now() < deadline) {
+    // Only COMPLETE lines: a chunk boundary can cut the token in half, and
+    // exchanging a truncated one would burn the token on a request that cannot
+    // authenticate. The next poll picks up the rest of the line.
+    const banner = running.banner();
+    const complete = banner.slice(0, banner.lastIndexOf('\n') + 1);
+    const launchUrl = parseLaunchUrl(complete);
+    if (launchUrl) {
+      if (!launchUrlTargetsServer(launchUrl, running.port)) {
+        console.warn(
+          '[DeepSeek web] the printed launch URL does not name the loopback port this server was started on; ' +
+            'not fetching it'
+        );
+        return { cookie: null, failed: true };
+      }
+      const cookie = await exchangeLaunchToken(launchUrl);
+      // The URL is a credential: never log it, only the fact that it did not work.
+      if (!cookie) {
+        console.warn(
+          '[DeepSeek web] the launch token was printed but could not be exchanged for a session cookie; ' +
+            'the next start request will restart `dsh web` so it can retry'
+        );
+        return { cookie: null, failed: true };
+      }
+      return { cookie, failed: false };
+    }
+    // Only a printed http(s) URL settles this: it is the older dsh, which needs
+    // no cookie. Any other line carrying the prefix (a diagnostic, a truncated
+    // write) is not a banner, so the wait continues instead of giving up early.
+    if (firstLaunchBannerUrl(complete)) return { cookie: null, failed: false };
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return { cookie: null, failed: false };
+}
+
+/**
  * Signal the whole process group.
  *
  * `dsh web` boots a plugin tree and fans out, so signalling only the direct
@@ -132,6 +332,25 @@ export function getDeepSeekWebStatus(): DeepSeekWebStatus {
     url: `http://127.0.0.1:${current.port}`,
     authority: current.authority,
   };
+}
+
+/**
+ * The cookie this server's launch token bought, for the proxy to present.
+ *
+ * Keyed by `port` because the cookie is signed for the authority it was minted
+ * under (`127.0.0.1:<port>`): handing it to a web tab pointed at some other
+ * server would neither authenticate nor be that server's to receive. Null also
+ * covers a dsh old enough to need no cookie at all.
+ *
+ * @param port - loopback port the upstream request is bound for.
+ * @param owner - identity asking for it; must be the user who started the server.
+ *   Both sides are undefined in single-user mode, where there is no owner.
+ * @returns `name=value` cookie pair, or null.
+ */
+export function getDeepSeekWebCookie(port: number, owner?: string): string | null {
+  if (!current || current.port !== port) return null;
+  if (current.starter !== owner) return null;
+  return current.cookie;
 }
 
 /** Stop the background server, if one is running. Safe to call when none is. */
@@ -174,11 +393,12 @@ let startLock: Promise<unknown> = Promise.resolve();
  *
  * @param dshDir directory holding the resolved `dsh` binary.
  * @param authority browser authority to pass as `--trusted-host`.
+ * @param starter user whose request is starting it (undefined in single-user).
  */
-export function startDeepSeekWeb(dshDir: string, authority: string): Promise<StartResult> {
+export function startDeepSeekWeb(dshDir: string, authority: string, starter?: string): Promise<StartResult> {
   const run = startLock.then(
-    () => startDeepSeekWebLocked(dshDir, authority),
-    () => startDeepSeekWebLocked(dshDir, authority)
+    () => startDeepSeekWebLocked(dshDir, authority, starter),
+    () => startDeepSeekWebLocked(dshDir, authority, starter)
   );
   startLock = run.then(
     () => undefined,
@@ -187,13 +407,24 @@ export function startDeepSeekWeb(dshDir: string, authority: string): Promise<Sta
   return run;
 }
 
-async function startDeepSeekWebLocked(dshDir: string, authority: string): Promise<StartResult> {
+async function startDeepSeekWebLocked(
+  dshDir: string,
+  authority: string,
+  starter: string | undefined
+): Promise<StartResult> {
   // Reuse only when the running server is BOTH healthy and fenced for the
-  // authority now asking. A server trusting the other origin renders a page
-  // whose every API call 403s, which looks like a broken dashboard rather than
-  // a misconfigured one.
+  // authority now asking, it was started by this identity, and its credential
+  // works: the launch cookie is per process and per user, so handing a previous
+  // starter's server to another user would leave that user's tab on dsh's 401
+  // page, and a server whose token exchange failed would keep answering 401
+  // forever because reuse never gave anyone a chance to restart it.
   if (current) {
-    if (current.authority === authority && (await answersHttp(current.port))) {
+    if (
+      !current.cookieFailed &&
+      current.authority === authority &&
+      current.starter === starter &&
+      (await answersHttp(current.port))
+    ) {
       return { ok: true, port: current.port, url: `http://127.0.0.1:${current.port}`, reused: true };
     }
     await stopDeepSeekWeb();
@@ -223,8 +454,15 @@ async function startDeepSeekWebLocked(dshDir: string, authority: string): Promis
   // The pipes must be drained whether or not anyone reads them: a full pipe
   // blocks the child. Storage is capped; draining is not.
   let output = '';
+  // Scanned for the launch banner separately from `output`. That cap exists to
+  // bound the error tail, and a chatty profile can fill it before the banner is
+  // printed — losing the banner there produces exactly the 401 tab this module
+  // exists to prevent, so the two buffers must not share a limit.
+  let banner = '';
   const capture = (chunk: Buffer) => {
-    if (output.length < OUTPUT_CAP) output += chunk.toString('utf-8');
+    const text = chunk.toString('utf-8');
+    if (output.length < OUTPUT_CAP) output += text;
+    if (banner.length < BANNER_SCAN_CAP) banner += text;
   };
   child.stdout?.on('data', capture);
   child.stderr?.on('data', capture);
@@ -241,7 +479,16 @@ async function startDeepSeekWebLocked(dshDir: string, authority: string): Promis
     if (current?.child === child) current = null;
   });
 
-  const running: RunningServer = { child, port, authority, output: () => output };
+  const running: RunningServer = {
+    child,
+    port,
+    authority,
+    starter,
+    output: () => output,
+    banner: () => banner,
+    cookie: null,
+    cookieFailed: false,
+  };
   current = running;
 
   const deadline = Date.now() + READY_TIMEOUT_MS;
@@ -255,6 +502,12 @@ async function startDeepSeekWebLocked(dshDir: string, authority: string): Promis
       return { ok: false, error: tail ? `dsh web exited during startup: ${tail}` : 'dsh web exited during startup' };
     }
     if (await answersHttp(port)) {
+      // Bought before this call resolves, so the first proxied page load
+      // already carries a credential — a tab opened a moment earlier would
+      // otherwise get the 401 this whole module exists to prevent.
+      const captured = await captureSessionCookie(running);
+      running.cookie = captured.cookie;
+      running.cookieFailed = captured.failed;
       return { ok: true, port, url: `http://127.0.0.1:${port}`, reused: false };
     }
     await new Promise((r) => setTimeout(r, READY_POLL_MS));
