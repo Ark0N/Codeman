@@ -950,13 +950,15 @@ describe('input end anchor and layout subscriptions', () => {
     expect(addon.getInputEndAnchor()).toBeNull();
   });
 
-  it('returns null when a previously visible prompt is no longer found', () => {
+  it('keeps painting at the last prompt when a redraw briefly hides the prompt marker', () => {
     const { addon, mock } = layoutSetup();
     addon.appendText('abc');
+    const before = addon.getInputEndAnchor();
+    expect(before).not.toBeNull();
     mock.setLines(['output without a prompt']);
     addon.rerender();
-    expect(addon.getInputEndAnchor()).toBeNull();
-    expect(addon.state.visible).toBe(false);
+    expect(addon.state.visible).toBe(true);
+    expect(addon.getInputEndAnchor()).toEqual(before);
   });
 
   it('publishes null on a scroll hide before repainting', () => {

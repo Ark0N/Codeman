@@ -1345,9 +1345,10 @@ const KeyboardAccessoryBar = {
   },
 
   /** Send a slash command to the active session.
-   *  Sends text and Enter separately so Ink processes them as distinct events. */
+   *  Sends text and Enter separately so Ink processes them as distinct events.
+   *  The unsent local-echo draft stays in the overlay: flushing it would submit `draft/command`. */
   sendCommand(command) {
-    const sessionId = this._prepareInput(undefined, 'accessory-command', { flushEcho: true });
+    const sessionId = this._prepareInput(undefined, 'accessory-command');
     if (!sessionId) return;
     app._enqueueInput(sessionId, [{ write: command, useMux: true }, { gap: 120 }, { write: '\r', useMux: true }]);
   },

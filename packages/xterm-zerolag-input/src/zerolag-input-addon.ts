@@ -640,7 +640,7 @@ export class ZerolagInputAddon implements XtermAddon {
         } else {
           this._lastPromptPos = prompt;
         }
-      } else {
+      } else if (!this._lastPromptPos) {
         this._overlay.style.display = 'none';
         return;
       }

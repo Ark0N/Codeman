@@ -620,7 +620,7 @@ describe('native main transactions and boundaries', () => {
     }
   );
 
-  it.each(['upload', 'voice', 'Esc', 'command', 'paste'])(
+  it.each(['upload', 'voice', 'Esc', 'paste'])(
     '%s preserves the typed prefix before direct writes with echo on or off',
     async (producer) => {
       for (const echo of [true, false]) {
@@ -668,14 +668,6 @@ describe('native main transactions and boundaries', () => {
             ['old', 'hel'],
             ['old', '\x1b'],
           ]);
-        } else if (producer === 'command') {
-          vm.runInContext("KeyboardAccessoryBar.sendCommand('/help')", context);
-          expect(wire).toEqual([
-            ['old', 'hel'],
-            ['old', '/help'],
-          ]);
-          vi.advanceTimersByTime(120);
-          expect(wire.at(-1)).toEqual(['old', '\r']);
         } else {
           vm.runInContext("KeyboardAccessoryBar._sendBracketedPaste('old', 'world', 'Paste')", context);
           expect(wire).toEqual([
@@ -687,6 +679,20 @@ describe('native main transactions and boundaries', () => {
       }
     }
   );
+
+  it('sends a slash command without submitting the unsent local-echo draft', () => {
+    for (const echo of [true, false]) {
+      const { app, wire, context } = harness();
+      loadProducerModules(app, context);
+      app._localEchoEnabled = echo;
+      app._handleTerminalData('hel', 'old');
+      vm.runInContext("KeyboardAccessoryBar.sendCommand('/help')", context);
+      vi.advanceTimersByTime(120);
+      // Echo on: `hel` stays in the overlay. Echo off: it was already typed into the PTY.
+      expect(wire).toEqual([...(echo ? [] : [['old', 'hel']]), ['old', '/help'], ['old', '\r']]);
+      expect(app._localEchoOverlay.pendingText).toBe(echo ? 'hel' : '');
+    }
+  });
 
   it('keeps the typed prefix in the overlay when a toolbar attachment appends', async () => {
     const { app, wire, context } = harness();

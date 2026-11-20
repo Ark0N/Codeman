@@ -38,6 +38,25 @@ interface Pressed {
   focused: boolean;
 }
 
+/** The slice of the page's `app` and probe globals that pressMain() swaps and restores. */
+interface MainProbeWindow {
+  app: {
+    activeSessionId: string | null;
+    _localEchoEnabled: boolean;
+    _enqueueReliableInput: (sessionId: string, chunk: string) => void;
+    _pendingInput?: Map<string, string>;
+    sessions: Map<string, { id: string; mode: string }>;
+    terminal: { focus(): void; textarea?: HTMLTextAreaElement };
+  };
+  __mainSaved?: {
+    id: string | null;
+    echo: boolean;
+    send: (sessionId: string, chunk: string) => void;
+  };
+  __mainData: string[];
+  __sendKeys: string[];
+}
+
 describe('Shift/Ctrl+Enter through the shipped key handlers (keypress must be swallowed too)', () => {
   let server: WebServer;
   let browser: Browser;
@@ -105,36 +124,49 @@ describe('Shift/Ctrl+Enter through the shipped key handlers (keypress must be sw
 
   /**
    * Press `key` in the main pane. `sessionId` null is the welcome screen; otherwise the app thinks
-   * that session is active, local echo is off (the desktop default) and its real send path,
-   * `_sendInputAsync`, is recorded instead of posting.
+   * that session is active, local echo is off (the desktop default), the probe id is registered in
+   * `app.sessions` (the session FIFO drops input for unknown ids), and the transport edge,
+   * `_enqueueReliableInput`, is recorded instead of posting.
    */
   async function pressMain(key: string, sessionId: string | null): Promise<Pressed> {
     await page.evaluate((id) => {
-      const w = window as any;
+      const w = window as unknown as MainProbeWindow;
       const app = w.app;
-      w.__mainSaved ??= { id: app.activeSessionId, echo: app._localEchoEnabled, send: app._sendInputAsync };
-      w.__mainData = [] as string[];
+      w.__mainSaved ??= { id: app.activeSessionId, echo: app._localEchoEnabled, send: app._enqueueReliableInput };
+      w.__mainData = [];
       w.__sendKeys.length = 0;
       app.activeSessionId = id;
       app._localEchoEnabled = false;
-      app._pendingInput = '';
-      app._sendInputAsync = (_sid: string, chunk: string) => void w.__mainData.push(chunk);
+      if (id) {
+        app._pendingInput?.delete(id);
+        app.sessions.set(id, { id, mode: 'claude' });
+      }
+      app._enqueueReliableInput = (_sid: string, chunk: string) => void w.__mainData.push(chunk);
       app.terminal.focus();
     }, sessionId);
-    const focused = await page.evaluate(() => document.activeElement === (window as any).app.terminal.textarea);
+    const focused = await page.evaluate(
+      () => document.activeElement === (window as unknown as MainProbeWindow).app.terminal.textarea
+    );
     await page.keyboard.press(key);
-    // The main pane batches onData through a short flush timer before _sendInputAsync.
+    // The main pane batches onData through a short flush timer before the session FIFO.
     await page.waitForTimeout(150);
-    return page.evaluate((f) => {
-      const w = window as any;
-      const app = w.app;
-      const out = { data: [...w.__mainData], sendKeys: [...w.__sendKeys], focused: f };
-      app.activeSessionId = w.__mainSaved.id;
-      app._localEchoEnabled = w.__mainSaved.echo;
-      app._sendInputAsync = w.__mainSaved.send;
-      app._pendingInput = '';
-      return out;
-    }, focused);
+    return page.evaluate(
+      ({ f, id }) => {
+        const w = window as unknown as MainProbeWindow;
+        const app = w.app;
+        const saved = w.__mainSaved!;
+        const out = { data: [...w.__mainData], sendKeys: [...w.__sendKeys], focused: f };
+        app.activeSessionId = saved.id;
+        app._localEchoEnabled = saved.echo;
+        app._enqueueReliableInput = saved.send;
+        if (id) {
+          app._pendingInput?.delete(id);
+          app.sessions.delete(id);
+        }
+        return out;
+      },
+      { f: focused, id: sessionId }
+    );
   }
 
   async function pressIn(which: 'paneB' | 'old', key: string): Promise<Pressed> {

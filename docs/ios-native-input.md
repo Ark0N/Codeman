@@ -17,4 +17,4 @@ The browser runner also prepares the source-served vendor overlay through `prete
 
 The suite serves the real application with Chromium, an iPhone user agent, touch points and a coarse pointer. It observes `_enqueueReliableInput` without replacing `_sendInputAsync`, and reuses the phone-validated WebKit replay defaults. Assertions cover suggestion op boundaries, phrase replacement, held delete, dictation newline suppression, toolbar submission and subsequent suggestions, old-session CR ownership during the gap, trusted CDP paste, caret geometry in both echo modes, emoji deletion, tile session ownership and non-iOS recovery.
 
-These are browser wiring tests, not a substitute for device replay. The original phone cases live in `IOS_DIAG.md` in the diagnostic case repository.
+These are browser wiring tests, not a substitute for device replay. The logged iPhone event sequences they replay are in [#830](https://github.com/Ark0N/Codeman/issues/830).
