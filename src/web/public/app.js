@@ -5013,6 +5013,9 @@ class CodemanApp {
     // Clear pending terminal writes
     this._clearTimer('syncWaitTimeout');
     this._clearTimer('_clientDropRecoveryTimer');
+    // A recovery deferred behind a load would otherwise resume once the next
+    // load (the reconnect's own refresh) finishes, and run a second full capture.
+    this._pendingDroppedOutputRecovery = null;
     this.pendingWrites = [];
     this.writeFrameScheduled = false;
     // Release the one-chunk-in-flight gate with the rest of the write queue.
@@ -9508,6 +9511,7 @@ class CodemanApp {
     this._tabCompletionBaseText = null;
     this._clearTimer('_tabCompletionFallback');
     this._clearTimer('_clientDropRecoveryTimer');
+    this._pendingDroppedOutputRecovery = null;
     this._terminalRefreshOwner = null;
 
     // Clean up pending terminal writes to prevent old session data from appearing in new session

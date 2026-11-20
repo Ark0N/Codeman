@@ -4050,8 +4050,15 @@ Object.assign(CodemanApp.prototype, {
       // Capped at the distinct-row count so a sparse viewport (one unique row
       // among blanks) can still match; the ambiguity check rejects repeats.
       const minimumScore = Math.min(frequencies.size, Math.max(2, frequencies.size * 0.6));
-      const first = Math.max(0, expected - 2000);
-      const last = Math.min(buffer.baseY, expected + 2000);
+      // Every row a reload fills in BELOW the reader moves the reader's row one
+      // up from `expected`; a capture with fewer rows below moves it down by at
+      // most the one screen the downgrade guard tolerates. So the window leans
+      // up: 4001 candidates from `expected - 4000 + rows` to `expected + rows`,
+      // which lands gaps up to `4000 - rows` exactly even at the scrollback cap,
+      // where the replay trims the top and the old index is no longer a fallback.
+      const rows = this.terminal.rows || 0;
+      const first = Math.max(0, expected - 4000 + rows);
+      const last = Math.min(buffer.baseY, expected + rows);
       // Cache the search window once: <= 4064 getLine calls, even when all
       // 4001 candidates match repeated TUI furniture in a 50k-row buffer.
       const text = Array.from(
