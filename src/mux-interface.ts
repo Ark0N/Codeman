@@ -463,4 +463,12 @@ export interface TerminalMultiplexer extends EventEmitter {
    * pane cannot be read.
    */
   capturePaneText?(muxName: string, paneTarget?: string, opts?: { styles?: boolean }): string | null;
+
+  /**
+   * Plain text of the pane's whole scrollback plus its visible frame (`capture-pane -p -J`:
+   * no escape codes, wrapped lines re-joined), newest last. Async so a six-figure line count
+   * never blocks the event loop; the saved-transcript recorder calls it on a timer. Null when
+   * the pane cannot be read (and always in tests).
+   */
+  capturePaneHistoryText?(muxName: string, lines: number): Promise<string | null>;
 }
