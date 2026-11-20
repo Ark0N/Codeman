@@ -541,6 +541,8 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('appSettingsApprovalsInbox').checked = settings.approvalsInboxEnabled === true;
     // Agent inbox snapshot on disk: synced, default OFF.
     document.getElementById('appSettingsAgentInboxPersist').checked = settings.agentInboxPersistEnabled === true;
+    // Terminal find bar: synced, default ON (an absent key means on).
+    document.getElementById('appSettingsTerminalFind').checked = settings.terminalFindEnabled !== false;
     // Experimental agent coordination (inspect/stage/submit routes): synced, default OFF.
     document.getElementById('appSettingsAgentCoordination').checked = settings.agentCoordinationEnabled === true;
     // Custom Model Endpoint Profiles: synced, default OFF. The toggle governs both
@@ -3149,6 +3151,7 @@ Object.assign(CodemanApp.prototype, {
       configBackupDir: document.getElementById('appSettingsConfigBackupDir').value.trim(),
       ...this._configBackupRetentionPayload(_prev),
       agentInboxPersistEnabled: document.getElementById('appSettingsAgentInboxPersist').checked,
+      terminalFindEnabled: document.getElementById('appSettingsTerminalFind').checked,
       agentCoordinationEnabled: document.getElementById('appSettingsAgentCoordination').checked,
       readMyMindEnabled: document.getElementById('appSettingsReadMyMind').checked,
       ultracodeFloatingWindows: document.getElementById('appSettingsUltracodeFloatingWindows').checked,

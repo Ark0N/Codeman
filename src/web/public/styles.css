@@ -24025,3 +24025,38 @@ html[data-header-stats='tiles'] .header-plan-usage:not(:has(.pu-row)) {
 body.keyboard-visible .terminal-container .xterm-screen {
   transform: translateY(calc(-1 * var(--kb-clip, 0px)));
 }
+
+/* Terminal find bar (Ctrl+Shift+F), see terminal-ui.js */
+.terminal-find-bar {
+  position: absolute;
+  top: 8px;
+  right: 24px;
+  z-index: 30;
+  width: min(460px, calc(100% - 32px));
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  font-size: 13px;
+}
+.terminal-find-bar[hidden] { display: none; }
+.terminal-find-bar .tf-row { display: flex; align-items: center; gap: 4px; padding: 6px; }
+.terminal-find-bar .tf-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-input);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 8px;
+}
+.terminal-find-bar .tf-count { color: var(--text-dim); white-space: nowrap; min-width: 4.5em; text-align: right; }
+.terminal-find-bar .tf-btn {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+.terminal-find-bar .tf-btn:hover { background: var(--bg-hover); }
