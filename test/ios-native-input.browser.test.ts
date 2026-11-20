@@ -9,7 +9,8 @@ interface TestTerminal {
   textarea: HTMLTextAreaElement;
   element: HTMLElement;
   write(text: string, callback: () => void): void;
-  buffer: { active: { cursorX: number; cursorY: number } };
+  scrollToTop(): void;
+  buffer: { active: { cursorX: number; cursorY: number; viewportY: number; baseY: number } };
   _core: {
     _renderService: { dimensions: { css: { cell: { width: number } } } };
     _customKeyEventHandler(event: KeyboardEvent): boolean;
@@ -213,6 +214,27 @@ describe('iOS native input served-app wiring (#830)', () => {
       });
       expect(geometry.display).not.toBe('none');
       expect(geometry.col).toBeCloseTo(geometry.expected, 1);
+    });
+
+    it(`typing while scrolled back returns the viewport to the prompt (echo ${echo})`, async () => {
+      await setup(echo);
+      const scrolled = await page.evaluate(async () => {
+        const terminal = (window as unknown as TestWindow).app.terminal;
+        const written = Promise.withResolvers<void>();
+        terminal.write('line\r\n'.repeat(200) + '❯ ', written.resolve);
+        await written.promise;
+        terminal.scrollToTop();
+        return { viewportY: terminal.buffer.active.viewportY, baseY: terminal.buffer.active.baseY };
+      });
+      expect(scrolled.viewportY).toBe(0);
+      expect(scrolled.baseY).toBeGreaterThan(0);
+      const result = await run("await type('h');");
+      expect(result.sent.map((x) => x.input)).toEqual(echo ? [] : ['h']);
+      const viewport = await page.evaluate(() => {
+        const buffer = (window as unknown as TestWindow).app.terminal.buffer.active;
+        return { viewportY: buffer.viewportY, baseY: buffer.baseY };
+      });
+      expect(viewport.viewportY).toBe(viewport.baseY);
     });
   }
 

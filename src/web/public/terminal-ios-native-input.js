@@ -314,6 +314,18 @@
           reconciling = true;
           try {
             if (ops.length) {
+              // These ops bypass xterm's triggerDataEvent(data, true), so its
+              // scrollOnUserInput never runs; scroll to the prompt as xterm would.
+              try {
+                if (
+                  terminal.options &&
+                  terminal.options.scrollOnUserInput !== false &&
+                  typeof terminal.scrollToBottom === 'function'
+                )
+                  terminal.scrollToBottom();
+              } catch (error) {
+                record({ type: 'error', hook: 'scrollOnUserInput', error });
+              }
               try {
                 sendTransaction(ops);
               } catch (error) {

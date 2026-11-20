@@ -4426,7 +4426,15 @@ Object.assign(CodemanApp.prototype, {
     const settings = this.loadAppSettingsFromStorage();
     const session = this.activeSessionId ? this.sessions.get(this.activeSessionId) : null;
     const echoEnabled = settings.localEchoEnabled ?? MobileDetection.isTouchDevice();
-    const shouldEnable = !!(echoEnabled && session && session.mode !== 'shell' && session.mode !== 'codex');
+    // Per-session echo policy: 'buffer' (overlay), 'predict' (codex
+    // write-through, see the onData predict hook), 'off'. Only 'buffer'
+    // turns the overlay on; this is the one place the mode decides it.
+    let policy = 'off';
+    if (session && echoEnabled) {
+      if (session.mode === 'codex') policy = 'predict';
+      else if (session.mode !== 'shell') policy = 'buffer';
+    }
+    const shouldEnable = policy === 'buffer';
     if (!!this._localEchoEnabled !== shouldEnable) {
       this._settleMainInput('echo-policy');
       if (!shouldEnable) {
@@ -4506,15 +4514,6 @@ Object.assign(CodemanApp.prototype, {
       }
     }
 
-    // Per-session echo policy: 'buffer' (overlay), 'predict' (codex
-    // write-through, see the onData predict hook), 'off'. _localEchoEnabled
-    // keeps its exact historical values above (false for codex/shell), so
-    // every existing consumer is unchanged; this field is purely additive.
-    let policy = 'off';
-    if (session && echoEnabled) {
-      if (session.mode === 'codex') policy = 'predict';
-      else if (session.mode !== 'shell') policy = 'buffer';
-    }
     this._localEchoPolicy = policy;
     if (policy !== 'predict') this._predictiveEcho?.clearPredictions();
   },
