@@ -927,7 +927,7 @@ program
 
 program
   .command('tui')
-  .argument('[n]', 'attach straight to the nth session of `codeman tui --list`')
+  .argument('[session]', 'attach straight to a session: its number in `codeman tui --list`, or its exact session name')
   .description('Terminal dashboard for your sessions (the web UI remains the primary surface)')
   .option('-l, --list', 'Print the numbered session list and exit, instead of opening the dashboard')
   .action(async (position: string | undefined, options: { list?: boolean }) => {
@@ -940,6 +940,16 @@ program
       return;
     }
     if (position !== undefined) {
+      // Digits only is a list number, as it always was; anything else is a session name.
+      if (!/^\d+$/.test(position)) {
+        if (position.trim() === '') {
+          console.error(palette.err('An empty session name matches nothing.'));
+          process.exitCode = 1;
+          return;
+        }
+        process.exitCode = await runTuiAttach(position);
+        return;
+      }
       const n = Number.parseInt(position, 10);
       if (!Number.isSafeInteger(n) || n < 1) {
         console.error(palette.err(`"${position}" is not a session number.`));

@@ -741,6 +741,7 @@ Codeman 默认用 `--dangerously-skip-permissions` 启动会话，因此 Web UI 
 codeman tui              # 仪表盘
 codeman tui --list       # 带编号的会话列表，随即退出（可用于脚本）
 codeman tui 2            # 直接附着到列表里的第 2 个会话
+codeman tui api-docs     # 直接附着到名为 api-docs 的活动会话
 ```
 
 会话按 **NEEDS YOU → WORKING → IDLE → RECENT** 分组，等得最久的排最前。`↑↓`/`j`/`k` 选择，`1`-`9` 与 `[`/`]` 切换会话，`Enter` 附着进 tmux 面板（按 **`F1`** 回来）。在面板里，顶部的横条会一直显示会话条，`Alt+1`-`Alt+9` 不用离开就能切换。`y`/`n`/数字可以直接在列表里回答待处理的权限对话框，`p` 发送一行提示，`n` 新建会话并直接进入，`x` 杀掉一个（`y` 确认），`/` 搜索，`g` 显示离开摘要，`?` 是帮助，`q` 退出。窄于 72 列时它会去掉预览面板、变成单列列表，所以在手机上的 Termius 里依然好用。没有服务器在跑时，它仍会以仅附着的降级模式启动。

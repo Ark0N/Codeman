@@ -778,6 +778,47 @@ describe('codeman tui --list', () => {
   }, 30_000);
 });
 
+describe('codeman tui <session name>', () => {
+  it('resolves an exact live name before asking for a terminal', async () => {
+    const result = await runPiped(['tui', 'w1-alpha']);
+    expect(result.code).toBe(1);
+    // Got past resolution: the only refusal left is the missing TTY.
+    expect(result.stderr).toContain('attaching needs an interactive terminal');
+    expect(result.stderr).not.toContain('no session');
+  }, 30_000);
+
+  it('says a name nothing carries is missing, and points at --list', async () => {
+    const result = await runPiped(['tui', 'w9-nope']);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain('there is no session named w9-nope');
+    expect(result.stderr).toContain('codeman tui --list');
+  }, 30_000);
+
+  it('says a name only history carries is finished', async () => {
+    const result = await runPiped(['tui', 'w3-gamma']);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain('no live session named w3-gamma, only a finished one');
+  }, 30_000);
+
+  it('refuses a name two live sessions share and names their numbers', async () => {
+    sessions.push({ ...sessions[1], sessionId: 'eeee5555-0000-0000-0000-000000000000' });
+    try {
+      const result = await runPiped(['tui', 'w1-alpha']);
+      expect(result.code).toBe(1);
+      expect(result.stderr).toMatch(/2 live sessions are named w1-alpha \(\d+, \d+ in the list\)/);
+      expect(result.stderr).toContain('Attach by number instead');
+    } finally {
+      resetSessions();
+    }
+  }, 30_000);
+
+  it('still reads digits as a list number', async () => {
+    const result = await runPiped(['tui', '42']);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain('there is no session 42');
+  }, 30_000);
+});
+
 describe('codeman tui without a terminal', () => {
   it('refuses to open the dashboard and points at the fast paths', async () => {
     const result = await runPiped(['tui']);

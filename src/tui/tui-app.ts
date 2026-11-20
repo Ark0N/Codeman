@@ -1,6 +1,6 @@
 /**
  * @fileoverview `codeman tui`: the full-screen dashboard plus the two
- * non-interactive fast paths (`--list`, `<n>`).
+ * non-interactive fast paths (`--list`, `<n|name>`).
  *
  * This is the IO half of `src/tui/`: it owns the terminal, the timers, stdin
  * and the tmux handoff. Every decision it makes that can be stated as a
@@ -2643,7 +2643,7 @@ export async function runTui(options: TuiRunOptions = {}): Promise<number> {
   if (!stdout.isTTY || !stdin.isTTY) {
     process.stderr.write(
       `${palette.err('codeman tui needs an interactive terminal.')}\n` +
-        `Use ${palette.info('codeman tui --list')} for a plain list, or ${palette.info('codeman tui <n>')} to attach.\n`
+        `Use ${palette.info('codeman tui --list')} for a plain list, or ${palette.info('codeman tui <n|name>')} to attach.\n`
     );
     return 1;
   }
@@ -2689,17 +2689,72 @@ export async function runTuiList(options: TuiRunOptions = {}): Promise<number> {
   }
 }
 
+/** What `codeman tui <session>` points at, resolved against one snapshot of the list. */
+export type TuiAttachTarget =
+  | { kind: 'row'; row: TuiRow }
+  /** A number with no row, or a name nothing in the list carries. */
+  | { kind: 'none' }
+  /** Several LIVE sessions carry the name; `positions` are their `--list` numbers. */
+  | { kind: 'ambiguous'; positions: number[] }
+  /** Only a finished (RECENT) row carries the name: nothing to attach to. */
+  | { kind: 'finished' };
+
 /**
- * `codeman tui <n>`: attach straight to the nth row of `--list`. No screen setup
- * at all, so it is as fast as the API call it makes.
+ * Resolve `codeman tui <session>` against the rows `--list` prints.
+ *
+ * Digits only is a position, exactly as before names were accepted. Anything else
+ * is a session name, matched exactly (case-sensitive) and only against the
+ * session's name, never its folder or a prompt. Session names are not unique in
+ * Codeman, so more than one LIVE match refuses rather than guessing; a RECENT row
+ * is history with no pane, so it never counts as a live match.
  */
-export async function runTuiAttach(position: number, options: TuiRunOptions = {}): Promise<number> {
+export function resolveAttachTarget(rows: readonly TuiRow[], target: number | string): TuiAttachTarget {
+  if (typeof target === 'number' || /^\d+$/.test(target)) {
+    const row = rows[Math.trunc(Number(target)) - 1];
+    return row ? { kind: 'row', row } : { kind: 'none' };
+  }
+  const positions: number[] = [];
+  let finished = false;
+  rows.forEach((row, index) => {
+    if (row.session.name !== target) return;
+    if (row.group === 'recent') finished = true;
+    else positions.push(index + 1);
+  });
+  if (positions.length === 1) return { kind: 'row', row: rows[positions[0] - 1] };
+  if (positions.length > 1) return { kind: 'ambiguous', positions };
+  return finished ? { kind: 'finished' } : { kind: 'none' };
+}
+
+/** The stderr text for a target that resolved to no row, ending in a newline. */
+export function attachTargetError(
+  resolved: Exclude<TuiAttachTarget, { kind: 'row' }>,
+  target: number | string
+): string {
+  const list = palette.info('codeman tui --list');
+  switch (resolved.kind) {
+    case 'ambiguous':
+      return (
+        `${palette.err(`${resolved.positions.length} live sessions are named ${target} (${resolved.positions.join(', ')} in the list)`)}\n` +
+        `Attach by number instead: ${palette.info(`codeman tui ${resolved.positions[0]}`)}, or run ${list}.\n`
+      );
+    case 'finished':
+      return `${palette.err(`there is no live session named ${target}, only a finished one`)}\nRun ${list} to see the live ones.\n`;
+    case 'none':
+      return typeof target === 'number' || /^\d+$/.test(target)
+        ? `${palette.err(`there is no session ${target}`)}\nRun ${list} to see the numbers.\n`
+        : `${palette.err(`there is no session named ${target}`)}\nNames match exactly. Run ${list} and attach by number instead.\n`;
+  }
+}
+
+/**
+ * `codeman tui <session>`: attach straight to a row of `--list`, by its number or
+ * by its session name. No screen setup at all, so it is as fast as the API call
+ * it makes. The target is resolved before the terminal check, so a script learns
+ * that a name does not exist (or is ambiguous) without needing a TTY.
+ */
+export async function runTuiAttach(target: number | string, options: TuiRunOptions = {}): Promise<number> {
   const stdin = options.stdin ?? process.stdin;
   const stdout = options.stdout ?? process.stdout;
-  if (!stdout.isTTY || !stdin.isTTY) {
-    process.stderr.write(`${palette.err('attaching needs an interactive terminal.')}\n`);
-    return 1;
-  }
   const env = options.env ?? process.env;
   const client = options.client ?? new TuiClient();
   try {
@@ -2712,11 +2767,14 @@ export async function runTuiAttach(position: number, options: TuiRunOptions = {}
       process.stderr.write(authHint());
       return 1;
     }
-    const row = state.rows[Math.trunc(position) - 1];
-    if (!row) {
-      process.stderr.write(
-        `${palette.err(`there is no session ${position}`)}\nRun ${palette.info('codeman tui --list')} to see the numbers.\n`
-      );
+    const resolved = resolveAttachTarget(state.rows, target);
+    if (resolved.kind !== 'row') {
+      process.stderr.write(attachTargetError(resolved, target));
+      return 1;
+    }
+    const row = resolved.row;
+    if (!stdout.isTTY || !stdin.isTTY) {
+      process.stderr.write(`${palette.err('attaching needs an interactive terminal.')}\n`);
       return 1;
     }
     const plan = planAttach(row.session.muxName, {
