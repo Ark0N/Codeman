@@ -38,7 +38,7 @@ import {
   symlinkSync,
   readdirSync,
 } from 'node:fs';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { spawn, execFileSync, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { diffRequiredEnvKeys, parseEnvKeys } from '../src/web/self-update.js';
@@ -676,7 +676,6 @@ describe.skipIf(process.platform !== 'linux' || !HAS_PYTHON)('port_answers', () 
   }
 
   it('gives up on a connect that gets no answer within about a second, and reads it as free', async () => {
-    const { spawn } = await import('node:child_process');
     const child = spawn('python3', ['-I', '-c', SILENT_LISTENER], { stdio: ['ignore', 'pipe', 'ignore'] });
     try {
       const port = await new Promise<number>((resolve, reject) => {
@@ -692,8 +691,7 @@ describe.skipIf(process.platform !== 'linux' || !HAS_PYTHON)('port_answers', () 
   });
 
   it('still answers at once for a listening port and a closed one', async () => {
-    const net = await import('node:net');
-    const server = net.createServer();
+    const server = createServer();
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const port = (server.address() as { port: number }).port;
     try {

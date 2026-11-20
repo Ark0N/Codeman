@@ -168,6 +168,8 @@ port_answers() {
   while kill -0 "$pid" 2>/dev/null; do
     if ((tries >= 20)); then
       kill "$pid" 2>/dev/null
+      # The 2>/dev/null keeps bash 3.2 from printing a "Terminated" job line on
+      # the first-run path; bash 5.2 prints nothing without it, so CI won't notice.
       wait "$pid" 2>/dev/null
       return 1
     fi
