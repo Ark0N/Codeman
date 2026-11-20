@@ -195,6 +195,7 @@ Object.assign(CodemanApp.prototype, {
 
     await this.refreshWebviews();
     this._installWebviewLostListener();
+    this._installWebviewSandboxListener();
 
     // Restore the previously open web tabs (per device: which dashboards you keep
     // open is a workspace-layout choice, not something to sync across machines).
@@ -282,6 +283,86 @@ Object.assign(CodemanApp.prototype, {
       }
     };
     window.addEventListener('message', this._webviewLostListener);
+  },
+
+  /**
+   * Offer trusted mode when a dashboard dies on its own sandbox.
+   *
+   * A proxied frame runs without `allow-same-origin` by default, so it has an
+   * opaque origin and the Web Storage API throws on first touch — which is how a
+   * SvelteKit/React dashboard that keeps a token or a theme there ends up on its
+   * loading screen forever. The proxy's injected script reports that once per
+   * load; this turns it into a named choice instead of a blank tab.
+   *
+   * The frame is identified by `event.source` against the iframes this tab
+   * mounted, never by the payload: a sandboxed frame has a `null` origin, so the
+   * message itself proves nothing.
+   */
+  _installWebviewSandboxListener() {
+    if (this._webviewSandboxListener) return;
+    this._webviewSandboxListener = (event) => {
+      const data = event.data;
+      if (!data || typeof data !== 'object' || data.type !== 'codeman:webview-needs-origin') return;
+      if (!event.source) return;
+      const layer = document.getElementById('webviewLayer');
+      if (!layer) return;
+      for (const wrap of layer.querySelectorAll('.webview-frame')) {
+        const frame = wrap.querySelector('iframe');
+        if (!frame || frame.contentWindow !== event.source) continue;
+        const id = wrap.dataset.webviewId;
+        const webview = id ? this.webviews?.get(id) : null;
+        if (!id || !webview) return;
+        // Already unsandboxed: a storage failure now has another cause, and the
+        // same button would just repeat a setting that is already on.
+        if (webview.trusted) return;
+        const panel = wrap.querySelector('.webview-failure');
+        if (panel) panel.innerHTML = this._webviewNeedsOriginHtml(id);
+        wrap.dataset.webviewNeedsOrigin = '1';
+        wrap.classList.add('webview-frame--failed');
+        return;
+      }
+    };
+    window.addEventListener('message', this._webviewSandboxListener);
+  },
+
+  _webviewNeedsOriginHtml(id) {
+    const jsonId = escapeHtml(JSON.stringify(id));
+    return `<div class="webview-failure-inner">
+        <h3>This dashboard needs unsandboxed mode</h3>
+        <p>It tried to use browser storage, which this tab's sandbox blocks. Unsandboxed mode lets the dashboard share Codeman's origin, so it can read this page and call its API. Only use it for a dashboard you control.</p>
+        <div class="webview-failure-actions">
+          <button class="btn-secondary" onclick="app.enableWebviewTrusted(${jsonId})">Reload unsandboxed</button>
+          <button class="btn-secondary" onclick="app.dismissWebviewSandboxNotice(${jsonId})">Dismiss</button>
+        </div>
+      </div>`;
+  },
+
+  /** Flip the tab to unsandboxed mode and remount it. */
+  async enableWebviewTrusted(id) {
+    const data = await this._apiJson(`/api/webviews/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: { trusted: true },
+    });
+    if (!data) {
+      this.showToast?.('Could not switch this tab to unsandboxed mode', 'error');
+      return;
+    }
+    await this.refreshWebviews();
+    // Remount rather than reload: the existing frame keeps the sandbox attribute
+    // it was created with, so a reload would re-fetch a page that still cannot
+    // use storage.
+    const layer = document.getElementById('webviewLayer');
+    layer?.querySelector(`.webview-frame[data-webview-id="${CSS.escape(id)}"]`)?.remove();
+    this._webviewFrameLru = (this._webviewFrameLru || []).filter((entry) => entry !== id);
+    await this.openWebview(id);
+  },
+
+  dismissWebviewSandboxNotice(id) {
+    const layer = document.getElementById('webviewLayer');
+    const wrap = layer?.querySelector(`.webview-frame[data-webview-id="${CSS.escape(id)}"]`);
+    if (!wrap) return;
+    delete wrap.dataset.webviewNeedsOrigin;
+    wrap.classList.remove('webview-frame--failed');
   },
 
   _persistWebviewOrder() {
@@ -475,7 +556,11 @@ Object.assign(CodemanApp.prototype, {
       const timer = setTimeout(() => wrap.classList.add('webview-frame--failed'), 8000);
       frame.addEventListener('load', () => {
         clearTimeout(timer);
-        wrap.classList.remove('webview-frame--failed');
+        // A sandbox notice can land before `load` completes (the page boots, then
+        // its storage access throws). Clearing it here would hide the one thing
+        // that explains the dead spinner, so the notice owns the panel until the
+        // frame is remounted or the user dismisses it.
+        if (!wrap.dataset.webviewNeedsOrigin) wrap.classList.remove('webview-frame--failed');
       });
     }
 
