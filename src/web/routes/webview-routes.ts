@@ -470,8 +470,10 @@ async function managedDashboardCookie(webview: Webview, upstream: URL): Promise<
   const port = Number(upstream.port || (upstream.protocol === 'https:' ? 443 : 80));
   // The second identity check is the supervisor's: even an entitled owner gets
   // nothing from a process another user started (POST restarts it for a new
-  // starter, so that tab simply reopens with its own cookie).
-  return getDeepSeekWebCookie(port, webview.owner) ?? undefined;
+  // starter, so that tab simply reopens with its own cookie). Only in multi-user
+  // mode: a record created there keeps its owner, while a single-user start has
+  // no starter, so comparing that owner would refuse the tab for good.
+  return getDeepSeekWebCookie(port, isMultiUserMode() ? webview.owner : undefined) ?? undefined;
 }
 
 /**

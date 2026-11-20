@@ -512,6 +512,24 @@ describe('managed DeepSeek web cookie', () => {
     expect(getDeepSeekWebCookie).toHaveBeenCalledWith(upstream.port, 'carol');
   });
 
+  // A record keeps the owner it was created under. Back in single-user mode the
+  // server is started with no starter, so comparing that stale owner would leave
+  // the tab on dsh's 401 for good.
+  it('presents it in single-user mode to a managed tab created under multi-user mode', async () => {
+    process.env.CODEMAN_MULTIUSER = '1';
+    currentUser = { username: 'carol', role: 'user' };
+    await writeUsersFixture([{ username: 'carol', role: 'user', canBypassPermissions: true }]);
+    const upstream = await startUpstream();
+    const cap = await openManaged(`http://127.0.0.1:${upstream.port}/`);
+
+    delete process.env.CODEMAN_MULTIUSER;
+    currentUser = undefined;
+    mintCookieOn(upstream.port, undefined);
+    expect((await getThrough(cap)).statusCode).toBe(200);
+    expect(upstream.cookies).toEqual([COOKIE]);
+    expect(getDeepSeekWebCookie).toHaveBeenCalledWith(upstream.port, undefined);
+  });
+
   /**
    * A loopback listener that completes the upgrade and records the cookie on the
    * handshake. The realtime leg is a separate code path from `proxyRequest`, so
