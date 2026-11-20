@@ -1060,6 +1060,7 @@ Object.assign(CodemanApp.prototype, {
     this._predictiveEcho =
       typeof PredictiveEchoOverlay !== 'undefined' ? new PredictiveEchoOverlay(this.terminal) : null;
     this._predictiveEcho?.setPredictWhen((terminal) => window.CodemanTerminalInput.isCodexComposerRow(terminal));
+    this.terminal.onScroll(() => this._scheduleHistoryReloadActionSync());
     if (MobileDetection.isTouchDevice()) {
       this.terminal.onCursorMove(() => this._syncMobileHelperTextareaToCursor());
       this.terminal.onRender(() => this._syncMobileHelperTextareaToCursor());
@@ -4006,6 +4007,93 @@ Object.assign(CodemanApp.prototype, {
     return buffer.viewportY >= buffer.baseY - 2;
   },
 
+  /** Capture bounded viewport context, not just repeated TUI borders/status rows. */
+  _captureViewportAnchor() {
+    const buffer = this.terminal.buffer.active;
+    const { viewportY, baseY } = buffer;
+    const context = Array.from(
+      { length: Math.min(this.terminal.rows || 3, 64, buffer.length - viewportY) },
+      (_, i) => buffer.getLine(viewportY + i)?.translateToString(true) || ''
+    );
+    const offset = Math.max(0, context.findIndex((text) => text.trim()));
+    return {
+      viewportY,
+      rowsFromBottom: baseY - viewportY,
+      offset,
+      signature: Array.from({ length: 3 }, (_, i) => context[offset + i] || ''),
+      context,
+    };
+  },
+
+  /** Match the visible context; a lone repeated row is not a reliable anchor. */
+  _restoreViewportAnchor(anchor) {
+    const buffer = this.terminal.buffer.active;
+    const clamp = (row) => Math.max(0, Math.min(buffer.baseY, row));
+    let target = clamp(anchor.viewportY);
+    if (anchor.rowsFromBottom <= 2) {
+      target = clamp(buffer.baseY - anchor.rowsFromBottom);
+    } else {
+      const expected = clamp(buffer.baseY - anchor.rowsFromBottom);
+      const frequencies = new Map();
+      for (const text of anchor.context) {
+        if (text.trim()) frequencies.set(text, (frequencies.get(text) || 0) + 1);
+      }
+      const samples = anchor.context.flatMap((text, offset) =>
+        text.trim() ? [{ text, offset, weight: 1 / frequencies.get(text) }] : []
+      );
+      // Each distinct visible row contributes at most one point: repeated box
+      // borders cannot outvote the tool result the user is actually reading.
+      // Capped at the distinct-row count so a sparse viewport (one unique row
+      // among blanks) can still match; the ambiguity check rejects repeats.
+      const minimumScore = Math.min(frequencies.size, Math.max(2, frequencies.size * 0.6));
+      // Every row a reload fills in BELOW the reader moves the reader's row one
+      // up from `expected`; a capture with fewer rows below moves it down by at
+      // most the one screen the downgrade guard tolerates. So the window leans
+      // up: 4001 candidates from `expected - 4000 + rows` to `expected + rows`,
+      // which lands gaps up to `4000 - rows` exactly even at the scrollback cap,
+      // where the replay trims the top and the old index is no longer a fallback.
+      const rows = this.terminal.rows || 0;
+      const first = Math.max(0, expected - 4000 + rows);
+      const last = Math.min(buffer.baseY, expected + rows);
+      // Cache the search window once: <= 4064 getLine calls, even when all
+      // 4001 candidates match repeated TUI furniture in a 50k-row buffer.
+      const text = Array.from(
+        { length: Math.min(buffer.length, last + anchor.context.length) - first },
+        (_, i) => buffer.getLine(first + i)?.translateToString(true) || ''
+      );
+      let bestScore = 0;
+      let bestRow = null;
+      let ambiguous = false;
+      for (let row = first; row <= last; row++) {
+        let score = 0;
+        for (const sample of samples) {
+          if (text[row - first + sample.offset] === sample.text) score += sample.weight;
+        }
+        if (score > bestScore + 1e-9) {
+          bestScore = score;
+          bestRow = row;
+          ambiguous = false;
+        } else if (Math.abs(score - bestScore) <= 1e-9) {
+          ambiguous = true;
+        }
+      }
+      // Equally good copies are evidence of repeated furniture, not of the
+      // reader's location. A gap below them makes nearest-to-expected wrong.
+      if (!ambiguous && bestScore + 1e-9 >= minimumScore) target = bestRow;
+    }
+    this.terminal.scrollToLine(target);
+    return target;
+  },
+
+  /** xterm may emit once per scrolled line; sample eligibility once per frame. */
+  _scheduleHistoryReloadActionSync() {
+    if (this._historyReloadActionFrame != null) return;
+    this._historyReloadActionFrame = requestAnimationFrame(() => {
+      this._historyReloadActionFrame = null;
+      this._syncHistoryReloadAction();
+    });
+  },
+
   /**
    * Re-take the sticky-scroll baseline from where the viewport now sits.
    *
@@ -4050,13 +4138,10 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
-   * Post-scroll companion to _noteTerminalUserScroll: hitting the TOP of the
-   * buffer while scrolling up gives the app a chance to pull the rest of tmux's
-   * scrollback (issue #205, see _maybeRefetchFullHistory). Shell sessions pull a
-   * bounded window because their captures can be large; their banner button is
-   * the unbounded path. Must be called AFTER scrollLines(), since the check is on
-   * the resulting position, and it is deliberately not folded into
-   * _noteTerminalUserScroll for exactly that reason.
+   * After scrollLines(), pull only at the top of the local buffer (#205).
+   * Shells pull a bounded window; full captures while reading require the
+   * explicit Reload history action (#814). The pull owns cooldown/latch and
+   * downgrade guards. Content-anchored replays keep session-scoped travel.
    *
    * It is also what brings up the partial-history notice, and what retires it
    * once a downward scroll is back at live output (_setHistoryNoticeRevealed).
@@ -4064,19 +4149,26 @@ Object.assign(CodemanApp.prototype, {
    * what the pull left rather than flashing the state it is about to replace.
    */
   _maybeLoadMoreHistoryOnScroll(lines) {
+    if (this._earlyReplayTravel?.sessionId === this.activeSessionId) {
+      this._earlyReplayTravel.moves.push(lines);
+      return;
+    }
     if (lines > 0) {
       if (this.isTerminalAtBottom()) this._setHistoryNoticeRevealed?.(null);
       return;
     }
-    if (lines === 0 || this.terminal?.buffer?.active?.viewportY !== 0) return;
-    // An earlier frame of this gesture already started the pull; its own
-    // completion reveals the notice, so do not flash the pre-pull state now.
-    if (this._fullHistoryRepullInFlight || this._isLoadingBuffer) return;
+    if (lines === 0) return;
+    const buffer = this.terminal?.buffer?.active;
+    if (buffer?.viewportY !== 0) return;
     const sessionId = this.activeSessionId;
+    // An earlier frame already started a pull and owns the notice reveal.
+    if (this._fullHistoryRepullInFlight || this._isLoadingBuffer) return;
     Promise.resolve(this._maybeRefetchFullHistory?.())
       .catch(() => {})
       .then(() => {
-        if (sessionId && this.activeSessionId === sessionId) this._setHistoryNoticeRevealed?.(sessionId);
+        if (sessionId && this.activeSessionId === sessionId) {
+          this._setHistoryNoticeRevealed?.(sessionId);
+        }
       });
   },
 
@@ -4624,6 +4716,13 @@ Object.assign(CodemanApp.prototype, {
       this.terminal.buffer?.active && !this.isTerminalAtBottom() ? this.terminal.buffer.active.viewportY : null;
     // Which buffer the anchor belongs to, checked again when the write parses.
     const flushSessionId = this.activeSessionId;
+    // xterm adjusts marker lines when its circular scrollback trims rows. An
+    // absolute viewport index does not track that trim and would move the
+    // reader upward on every live flush at the scrollback cap (#814).
+    const viewportBuffer = this.terminal.buffer?.active;
+    const viewportMarker = preserveViewportY !== null
+      ? this.terminal.registerMarker?.(preserveViewportY - (viewportBuffer.baseY + viewportBuffer.cursorY))
+      : null;
 
     const writeChunk = joined.slice(0, MAX_FRAME_BYTES);
     if (_joinedLen > MAX_FRAME_BYTES) {
@@ -4650,11 +4749,26 @@ Object.assign(CodemanApp.prototype, {
         // signal, which is the earliest point the anchor can actually be
         // reasserted. (The synchronous version passed its regression test only
         // because the test's write mock moved the viewport synchronously.)
-        this._restoreTerminalViewport(preserveViewportY, flushSessionId);
+        const viewportY = viewportMarker
+          ? (viewportMarker.isDisposed ? 0 : viewportMarker.line)
+          : preserveViewportY;
+        viewportMarker?.dispose();
+        this._restoreTerminalViewport(viewportY, flushSessionId);
         this._scheduleTerminalWriteFlush();
         this._noteMobileImeAuthoritativeOutput(flushedOutputSeq, flushSessionId);
       });
+      // Only live writes can open a new tmux repaint gap; replays cannot (#814).
+      if (writeChunk.length && flushSessionId && !this._isLoadingBuffer) {
+        const marked = (this._liveOutputSinceFullPull ||= new Set());
+        const newlyMarked = !marked.has(flushSessionId);
+        marked.add(flushSessionId);
+        const generations = (this._liveOutputGen ||= new Map());
+        generations.set(flushSessionId, (generations.get(flushSessionId) || 0) + 1);
+        // Mark transitions sync immediately; onScroll is coalesced on all devices.
+        if (newlyMarked) this._syncHistoryReloadAction?.();
+      }
     } catch (err) {
+      viewportMarker?.dispose();
       this._terminalWriteInFlight = false;
       this._terminalWriteInFlightBytes = 0;
       throw err;
@@ -4983,6 +5097,7 @@ Object.assign(CodemanApp.prototype, {
     this._isLoadingBuffer = false;
     this._loadBufferQueue = null;
     this._bufferLoadOwner = null;
+    this._syncHistoryReloadAction?.();
     // COD-144: replay (rather than discard) queued live events when the load
     // painted nothing — the queued prompt is the only content a new session has.
     // A tmux-capture load replays too, but only the tail: `since` cuts the queue
@@ -4993,6 +5108,11 @@ Object.assign(CodemanApp.prototype, {
         if (entry.at < since) continue;
         this.batchTerminalWrite(entry.data);
       }
+    }
+    const recovery = this._pendingDroppedOutputRecovery;
+    this._pendingDroppedOutputRecovery = null;
+    if (recovery && recovery.sessionId === this.activeSessionId) {
+      this._scheduleDroppedOutputRecovery?.(recovery.sessionId, recovery.attempt);
     }
     return true;
   },
