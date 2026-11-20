@@ -689,6 +689,68 @@ describe('manual full-history recovery while reading (#814)', () => {
     expect(Reflect.get(app, '_pendingDroppedOutputRecovery')).toBeNull();
   });
 
+  it.each(['_resetAllAppState', '_cleanupPreviousSession'])(
+    '%s drops a deferred recovery, so the next load on the same tab does not resume it',
+    (method) => {
+      const { app } = makeApp('omp', { bufferRows: 30, capture: lines(400) });
+      Object.assign(app, {
+        sessions: new Map(),
+        ralphStates: new Map(),
+        terminalBuffers: new Map(),
+        terminalBufferCache: new Map(),
+        _xtermSnapshots: new Map(),
+        projectInsights: new Map(),
+        idleTimers: new Map(),
+        pendingHooks: new Map(),
+        approvals: new Map(),
+        _parentNameCache: new Map(),
+        subagentActivity: new Map(),
+        subagentToolResults: new Map(),
+        workflowRuns: new Map(),
+        workflowRunDetails: new Map(),
+        tabAlerts: new Map(),
+        attachmentHistoryCounts: new Map(),
+        _shownCompletions: new Set(),
+        _flushedOffsets: new Map(),
+        _localEchoOverlay: {
+          clear: vi.fn(),
+          rerender: vi.fn(),
+          suppressBufferDetection: vi.fn(),
+          pendingText: '',
+        },
+        _predictiveEcho: { clearPredictions: vi.fn() },
+        notificationManager: null,
+        timerCountdownInterval: null,
+        runSummaryAutoRefreshTimer: null,
+        _chunkedWriteGen: 0,
+        _serializeAddon: null,
+        _disconnectWs: vi.fn(),
+        _flushLocalEchoTo: vi.fn(),
+        _clearTimer: vi.fn(),
+        _pendingDroppedOutputRecovery: { sessionId: 's1', attempt: 2 },
+        activeSessionId: 's1',
+      });
+      const cleanup = loadAppMethod(method, {
+        MobileDetection: { cleanup: vi.fn(), init: vi.fn() },
+        KeyboardHandler: { cleanup: vi.fn(), init: vi.fn() },
+        CjkInput: { clear: vi.fn() },
+        localStorage: { removeItem: vi.fn() },
+        document: { getElementById: () => null },
+        clearTimeout,
+        clearInterval,
+        CompositionEvent: vi.fn(),
+      });
+      if (method === '_resetAllAppState') cleanup.call(app);
+      else cleanup.call(app, 's1', { skipSnapshot: true });
+      expect(app._clearTimer).toHaveBeenCalledWith('_clientDropRecoveryTimer');
+      expect(Reflect.get(app, '_pendingDroppedOutputRecovery')).toBeNull();
+      // The reconnect's own refresh on the same tab then finishes a load.
+      app.activeSessionId = 's1';
+      app._finishBufferLoad((app._beginBufferLoad as Function).call(app));
+      expect(app._scheduleDroppedOutputRecovery).not.toHaveBeenCalled();
+    }
+  );
+
   it.each(['mux-full-history', 'history'])('clears the scroll-pull mark only for a mux capture: %s', async (source) => {
     const { app, liveOutput, reload } = makeScrollApp();
     liveOutput();
@@ -948,9 +1010,11 @@ describe('content anchors hold the reader through a history repair', () => {
     const { capture, restore } = fixture(['head', 'A', 'B', 'C', ...Array(20).fill('tail')], 1);
     const anchor = capture();
     const next = Array(34).fill('other');
+    // Both complete copies sit inside the search window, which reaches up from
+    // the expected row (11 here) and at most one screen below it.
     next.splice(3, 3, 'A', 'B', 'C');
-    next.splice(10, 3, 'A', 'wrong', 'wrong');
-    next.splice(17, 3, 'A', 'B', 'C');
+    next.splice(6, 3, 'A', 'wrong', 'wrong');
+    next.splice(9, 3, 'A', 'B', 'C');
     expect(restore(anchor, next)).toBe(1);
   });
 
@@ -1021,6 +1085,22 @@ describe('content anchors hold the reader through a history repair', () => {
     expect(restore(anchor, next)).toBe(25_000);
     // 4001 possible starts plus the other 63 rows in the full viewport context.
     expect(active.getLine.mock.calls.length).toBeLessThanOrEqual(4064);
+  });
+
+  it.each([2_500, 3_900])('lands the reader exactly at the scrollback cap with a %i-row gap filled below', (gap) => {
+    const rows = Array.from({ length: 10_000 }, (_, i) => `line ${i}`);
+    const { app, capture, restore } = fixture(rows, 6_000);
+    Object.assign(app.terminal, { rows: 30 });
+    const anchor = capture();
+    // At the cap the buffer length is fixed: filling `gap` rows below the reader
+    // trims as many from the top, so the reader's row moves `gap` rows up and the
+    // old absolute index lands `gap` rows too far down.
+    const below = 6_000 + 30 + 100;
+    const recovered = Array.from({ length: gap }, (_, i) => `recovered ${i}`);
+    const next = [...rows.slice(gap, below), ...recovered, ...rows.slice(below)];
+    expect(next).toHaveLength(rows.length);
+    expect(restore(anchor, next)).toBe(6_000 - gap);
+    expect(next[6_000 - gap]).toBe('line 6000');
   });
 });
 
