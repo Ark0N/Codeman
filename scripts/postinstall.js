@@ -250,6 +250,7 @@ if (isGlobalInstall) {
         const xtermDir = join(require.resolve('@xterm/xterm'), '..', '..');
         const fitDir = join(require.resolve('@xterm/addon-fit'), '..', '..');
         const serializeDir = join(require.resolve('@xterm/addon-serialize'), '..', '..');
+        const searchDir = join(require.resolve('@xterm/addon-search'), '..', '..');
         const webglDir = join(require.resolve('@xterm/addon-webgl'), '..', '..');
         const unicode11Dir = join(require.resolve('@xterm/addon-unicode11'), '..', '..');
         const vendorDir = join(srcDir, 'web', 'public', 'vendor');
@@ -263,6 +264,7 @@ if (isGlobalInstall) {
             execSync(`npx esbuild "${join(xtermDir, 'lib', 'xterm.js')}" --minify --outfile="${join(vendorDir, 'xterm.min.js')}"`, { stdio: 'pipe' });
             execSync(`npx esbuild "${join(fitDir, 'lib', 'addon-fit.js')}" --minify --outfile="${join(vendorDir, 'xterm-addon-fit.min.js')}"`, { stdio: 'pipe' });
             execSync(`npx esbuild "${join(serializeDir, 'lib', 'addon-serialize.js')}" --minify --outfile="${join(vendorDir, 'xterm-addon-serialize.min.js')}"`, { stdio: 'pipe' });
+            execSync(`npx esbuild "${join(searchDir, 'lib', 'addon-search.js')}" --minify --outfile="${join(vendorDir, 'xterm-addon-search.min.js')}"`, { stdio: 'pipe' });
             execSync(`npx esbuild "${join(unicode11Dir, 'lib', 'addon-unicode11.js')}" --minify --outfile="${join(vendorDir, 'xterm-addon-unicode11.min.js')}"`, { stdio: 'pipe' });
             console.log(colors.green('✓ xterm vendor files copied to src/web/public/vendor/'));
         } catch {
@@ -270,6 +272,7 @@ if (isGlobalInstall) {
             copyFileSync(join(xtermDir, 'lib', 'xterm.js'), join(vendorDir, 'xterm.min.js'));
             copyFileSync(join(fitDir, 'lib', 'addon-fit.js'), join(vendorDir, 'xterm-addon-fit.min.js'));
             copyFileSync(join(serializeDir, 'lib', 'addon-serialize.js'), join(vendorDir, 'xterm-addon-serialize.min.js'));
+            copyFileSync(join(searchDir, 'lib', 'addon-search.js'), join(vendorDir, 'xterm-addon-search.min.js'));
             copyFileSync(join(unicode11Dir, 'lib', 'addon-unicode11.js'), join(vendorDir, 'xterm-addon-unicode11.min.js'));
             console.log(colors.green('✓ xterm vendor files copied') + colors.dim(' (unminified — esbuild not available)'));
         }

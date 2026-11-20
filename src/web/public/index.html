@@ -39,6 +39,8 @@
        without codeman having to replay codex's byte stream (which loses earlier
        conversation because codex's TUI redraws drop it from the viewport). -->
   <script defer src="vendor/xterm-addon-serialize.min.js"></script>
+  <!-- SearchAddon: the find bar over the terminal's own scrollback (default Ctrl+Shift+F). -->
+  <script defer src="vendor/xterm-addon-search.min.js"></script>
   <!-- WebGL addon lazy-loaded by app.js on desktop only (skipped on mobile, saving 244KB) -->
   <script defer src="vendor/xterm-addon-unicode11.min.js"></script>
   <script defer src="vendor/xterm-zerolag-input.js"></script>
@@ -2160,6 +2162,13 @@
                       <span class="set-row-desc">Plain wheel or two-finger swipe pages the terminal's own scrollback instead of the CLI transcript. Shift+wheel always reaches local scrollback.</span>
                     </div>
                     <label class="switch switch-sm"><input type="checkbox" id="appSettingsTerminalWheelLocal"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row" data-search="terminal find search text scrollback ctrl shift f">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Terminal Find Bar <span class="set-scope">synced</span></span>
+                      <span class="set-row-desc">Search the text in the terminal with next and previous match (Ctrl+Shift+F by default, rebindable under Shortcuts; Cmd+Shift+F on a Mac). It searches what the browser holds in scrollback, so a CLI that keeps its older text itself (Claude) is only searched for what is on screen. On by default.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsTerminalFind"><span class="slider"></span></label>
                   </div>
                   <div class="set-row" id="appSettingsWebglRendererItem" data-search="webgl renderer gpu terminal">
                     <div class="set-row-text">

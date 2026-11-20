@@ -535,6 +535,16 @@ const DEFAULT_SHORTCUTS = [
     bindings: [{ modifiers: ['alt'], key: 'b', code: 'KeyB' }],
     action: 'toggleSessionSidebar',
   },
+  {
+    id: 'find-in-terminal',
+    group: 'Terminal',
+    label: 'Find in Terminal',
+    // Dispatched by isTerminalFindChord() (terminal-ui.js) and deliberately absent from
+    // SHORTCUT_ACTIONS: with the setting off, or while the tile grid owns the terminal, the
+    // chord must reach the terminal untouched. Ctrl+Shift+F makes xterm emit nothing.
+    bindings: [{ modifiers: ['ctrl', 'shift'], key: 'F', code: 'KeyF' }],
+    action: 'openTerminalFind',
+  },
   // Tile grid (tile-grid.js). Dispatched by tileShortcutFor()/runTileShortcut()
   // and deliberately absent from SHORTCUT_ACTIONS: each applies only in some
   // states (the focus chords only while the grid is open), and outside them the
@@ -1446,6 +1456,9 @@ class CodemanApp {
           this.handleTabRailSearchKeydown(e);
           return;
         }
+        // The find bar owns the Escape pressed inside it: its own handler closes the bar, and
+        // this must not also close App Settings or a side panel behind it.
+        if (e.target?.closest?.('#terminalFindBar')) return;
         // The local model window can sit on top of App Settings (it opens from a
         // row there): Escape closes the window alone and leaves Settings open.
         if (this.isLocalModelWindowOpen?.()) {
