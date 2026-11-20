@@ -112,7 +112,7 @@ async function startIpServer() {
   const app = (s as unknown as { app: FastifyInstance }).app;
   const login = (ip: string, user: string, pass: string) =>
     app.inject({ method: 'GET', url: '/api/status', headers: { authorization: basic(user, pass) }, remoteAddress: ip });
-  return { login, buckets: s as unknown as FailureBuckets };
+  return { app, login, buckets: s as unknown as FailureBuckets };
 }
 
 describe('multi-user auth', () => {
@@ -268,6 +268,54 @@ describe('multi-user auth', () => {
     expect((await login(ipA, 'alice', 'alicepass1')).statusCode).toBe(200);
     // Neither success cleared bob's bucket on ipA: that one is per pair.
     expect((await login(ipA, 'bob', 'bobpass123')).statusCode).toBe(429);
+  });
+
+  it('requests without credentials are challenged, not counted, even past the per-IP cap', async () => {
+    const { app, login, buckets } = await startIpServer();
+    const ip = '203.0.113.40';
+    const bare = () =>
+      app.inject({
+        method: 'GET',
+        url: '/api/status',
+        headers: { cookie: 'codeman_session=stale-from-before-restart' },
+        remoteAddress: ip,
+      });
+
+    // An open tab after a restart: many cookie-only requests, none of them a guess.
+    for (let i = 0; i < AUTH_IP_FAILURE_MAX + 5; i++) {
+      const res = await bare();
+      expect(res.statusCode, `request ${i + 1}`).toBe(401);
+      expect(res.headers['www-authenticate']).toBe('Basic realm="Codeman"');
+    }
+    expect(buckets.authFailures.get(ip)).toBeUndefined();
+    expect((await login(ip, 'alice', 'alicepass1')).statusCode).toBe(200);
+  });
+
+  it('malformed authorization headers are still counted against the per-IP cap', async () => {
+    const { app } = await startIpServer();
+    const ip = '203.0.113.41';
+    const malformed = () =>
+      app.inject({ method: 'GET', url: '/api/status', headers: { authorization: 'Bearer x' }, remoteAddress: ip });
+
+    // Present but not valid Basic: a failed login, unlike a request with no header.
+    for (let i = 0; i < AUTH_IP_FAILURE_MAX; i++) {
+      expect((await malformed()).statusCode, `request ${i + 1}`).toBe(401);
+    }
+    expect((await malformed()).statusCode).toBe(429);
+  });
+
+  it('requests without credentials still get the challenge while the IP is locked out', async () => {
+    const { app } = await startIpServer();
+    const ip = '203.0.113.42';
+    const malformed = () =>
+      app.inject({ method: 'GET', url: '/api/status', headers: { authorization: 'Bearer x' }, remoteAddress: ip });
+    for (let i = 0; i < AUTH_IP_FAILURE_MAX; i++) await malformed();
+
+    // A 429 never makes a browser show its login dialog; a 401 challenge does.
+    const bare = await app.inject({ method: 'GET', url: '/api/status', remoteAddress: ip });
+    expect(bare.statusCode).toBe(401);
+    expect(bare.headers['www-authenticate']).toBe('Basic realm="Codeman"');
+    expect((await malformed()).statusCode).toBe(429);
   });
 
   it('per-IP pre-gate: a concurrent burst from one IP reaches the verify at most AUTH_IP_FAILURE_MAX times', async () => {
