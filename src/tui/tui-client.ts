@@ -992,14 +992,26 @@ export class TuiClient {
   }
 
   /**
+   * One key table as `list-keys` prints it. ⚠️ Some tmux builds (seen on a `next-3.7`
+   * development build) print NOTHING for `list-keys -T <table>` when the table holds
+   * exactly one binding, which is the shape Codeman reduces the prefix table to. So a
+   * blank answer is retried as the full listing: every line there names its table,
+   * and both parsers already filter on it.
+   */
+  private async listKeyTable(table: TuiKeyTable): Promise<string> {
+    const { stdout } = await this.exec('tmux', ['-L', this.socket, 'list-keys', '-T', table]);
+    if (stdout.trim()) return stdout;
+    return (await this.exec('tmux', ['-L', this.socket, 'list-keys'])).stdout;
+  }
+
+  /**
    * The key that detaches, straight from tmux's own key table. Key tables are
    * server-global, so unlike the prefix this takes no session. A failure is
    * null and the caller falls back to tmux's stock `d`.
    */
   async readDetachKey(): Promise<string | null> {
     try {
-      const { stdout } = await this.exec('tmux', ['-L', this.socket, 'list-keys', '-T', 'prefix']);
-      return parseDetachKey(stdout);
+      return parseDetachKey(await this.listKeyTable('prefix'));
     } catch {
       return null;
     }
@@ -1012,8 +1024,7 @@ export class TuiClient {
    */
   async readPrefixBinding(key: string, table: TuiKeyTable = 'prefix'): Promise<string | null> {
     try {
-      const { stdout } = await this.exec('tmux', ['-L', this.socket, 'list-keys', '-T', table]);
-      return parsePrefixBinding(stdout, key, table);
+      return parsePrefixBinding(await this.listKeyTable(table), key, table);
     } catch {
       return null;
     }
