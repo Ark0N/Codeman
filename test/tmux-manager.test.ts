@@ -1182,21 +1182,21 @@ describe('TmuxManager (unit)', () => {
       mockedExecSync.mockImplementation((cmd: string) => {
         if (typeof cmd === 'string' && cmd.includes(' list-panes ')) {
           return [
-            'codeman-aaaa1111|101|0|||/home/user/project-a',
+            'codeman-aaaa1111|101|0||||/home/user/project-a',
             // A hand-split session answers with the pane tmux lists first.
-            'codeman-bbbb2222|102|0|||/home/user/project-b',
-            'codeman-bbbb2222|103|0|||/home/user/project-b/sub',
+            'codeman-bbbb2222|102|0||||/home/user/project-b',
+            'codeman-bbbb2222|103|0||||/home/user/project-b/sub',
             // Set by whoever owns the pane, so it must pass the same check as any workingDir.
-            'codeman-cccc3333|104|0|||/home/user/$(touch pwned)',
+            'codeman-cccc3333|104|0||||/home/user/$(touch pwned)',
             // A tmux that reported no path.
-            'codeman-dddd4444|105|0|||',
+            'codeman-dddd4444|105|0||||',
             // The launch directory every pane starts in; a remote or docker pane never leaves it.
-            'codeman-eeee5555|106|0|||/tmp',
+            'codeman-eeee5555|106|0||||/tmp',
             // A directory deleted while its pane ran, as tmux 3.4 on Linux reports it. isValidPath()
             // rejects it for the parentheses; a relaxed path pattern must not adopt a dead directory.
-            'codeman-abcd7777|108|0|||/home/user/gone (deleted)',
+            'codeman-abcd7777|108|0||||/home/user/gone (deleted)',
             // Last row, path ending in a space: the output must not be trimmed.
-            'codeman-ffff6666|107|0|||/home/user/trailing ',
+            'codeman-ffff6666|107|0||||/home/user/trailing ',
           ].join('\n');
         }
         return '';
@@ -1237,12 +1237,70 @@ describe('TmuxManager (unit)', () => {
       }
     });
 
+    // tmux 3.8 prints a blank `#{pane_pid}` for a dead pane. Reading that as "no such
+    // session" dropped the record of a session whose agent had exited, while its tmux
+    // session stayed on the socket where nothing would ever find it again.
+    it('keeps a tracked session whose only pane is dead and has no pid', async () => {
+      mockedExecSync.mockImplementation((cmd: string) => {
+        if (typeof cmd === 'string' && cmd.includes(' list-panes ')) {
+          return ['codeman-dead1111||1|0||1795091616|', 'codeman-abcd2222|202|0||||/srv'].join('\n');
+        }
+        return '';
+      });
+      const NonTestTmuxManager = await importWithTmuxCommandsEnabled();
+      const nonTestManager = new NonTestTmuxManager();
+      for (const [sessionId, muxName, pid] of [
+        ['dead1111', 'codeman-dead1111', 101],
+        ['abcd2222', 'codeman-abcd2222', 102],
+      ] as const) {
+        nonTestManager.registerSession({
+          sessionId,
+          muxName,
+          pid,
+          createdAt: Date.now(),
+          workingDir: '/tmp',
+          mode: 'claude',
+          attached: false,
+        });
+      }
+
+      try {
+        const { alive, dead } = await nonTestManager.reconcileSessions();
+        expect(alive.sort()).toEqual(['abcd2222', 'dead1111']);
+        expect(dead).toEqual([]);
+        const pids = Object.fromEntries(nonTestManager.getSessions().map((s) => [s.muxName, s.pid]));
+        // The last pid known stays, as tmux itself reported it for a dead pane before 3.8.
+        expect(pids).toEqual({ 'codeman-dead1111': 101, 'codeman-abcd2222': 202 });
+        expect(nonTestManager.getPaneExit('codeman-dead1111')).toMatchObject({ status: 0 });
+      } finally {
+        nonTestManager.destroy();
+      }
+    });
+
+    it('does not rediscover an untracked session whose only pane is dead and has no pid', async () => {
+      // A made-up pid would reach killSession()'s process-tree walk.
+      mockedExecSync.mockImplementation((cmd: string) => {
+        if (typeof cmd === 'string' && cmd.includes(' list-panes ')) {
+          return ['codeman-dead3333||1|0||1795091616|', 'codeman-abcd4444|404|0||||/srv'].join('\n');
+        }
+        return '';
+      });
+      const NonTestTmuxManager = await importWithTmuxCommandsEnabled();
+      const nonTestManager = new NonTestTmuxManager();
+      try {
+        const { discovered } = await nonTestManager.reconcileSessions();
+        expect(discovered).toEqual(['restored-abcd4444']);
+      } finally {
+        nonTestManager.destroy();
+      }
+    });
+
     it('treats the resolved spelling of the launch directory as no answer too (macOS /private/tmp)', async () => {
       // On macOS /tmp is a symlink and a pane reports its process cwd resolved.
       realpathOverrides.set('/tmp', '/private/tmp');
       mockedExecSync.mockImplementation((cmd: string) => {
         if (typeof cmd === 'string' && cmd.includes(' list-panes ')) {
-          return ['codeman-aaaa1111|101|0|||/private/tmp', 'codeman-bbbb2222|102|0|||/tmp'].join('\n');
+          return ['codeman-aaaa1111|101|0||||/private/tmp', 'codeman-bbbb2222|102|0||||/tmp'].join('\n');
         }
         return '';
       });
@@ -1337,7 +1395,7 @@ describe('parsePaneRows', () => {
 
   it('reads a live pane as not dead, with no status or signal', () => {
     // Measured against tmux 3.2a: a live pane leaves both numeric fields blank.
-    const [row] = parsePaneRows('codeman-aaaa|1234|0|||1');
+    const [row] = parsePaneRows('codeman-aaaa|1234|0||||1');
     expect(row.dead).toBe(false);
     expect(row.exitStatus).toBeUndefined();
     expect(row.exitSignal).toBeUndefined();
@@ -1374,26 +1432,52 @@ describe('parsePaneRows', () => {
   });
 
   it('reads the pane directory from the last field', () => {
-    const [row] = parsePaneRows('codeman-aaaa|1234|0|||/home/user/project');
+    const [row] = parsePaneRows('codeman-aaaa|1234|0||||/home/user/project');
     expect(row.pid).toBe(1234);
     expect(row.dead).toBe(false);
     expect(row.currentPath).toBe('/home/user/project');
   });
 
   it('keeps a pane directory that contains the separator whole', () => {
-    const [row] = parsePaneRows('codeman-aaaa|1234|0|||/home/user/a|b');
+    const [row] = parsePaneRows('codeman-aaaa|1234|0||||/home/user/a|b');
     expect(row.currentPath).toBe('/home/user/a|b');
   });
 
   it('leaves the pane directory undefined when tmux reported none', () => {
     expect(parsePaneRows('codeman-aaaa|1234')[0].currentPath).toBeUndefined();
-    expect(parsePaneRows('codeman-aaaa|1234|0|||')[0].currentPath).toBeUndefined();
+    expect(parsePaneRows('codeman-aaaa|1234|0||||')[0].currentPath).toBeUndefined();
   });
 
   it('returns one row per pane of a split session, in tmux order', () => {
-    const rows = parsePaneRows('codeman-aaaa|100|0|||\ncodeman-aaaa|200|1|0|');
+    const rows = parsePaneRows('codeman-aaaa|100|0||||\ncodeman-aaaa|200|1|0|');
     expect(rows.map((row) => row.pid)).toEqual([100, 200]);
     expect(rows.map((row) => row.sessionName)).toEqual(['codeman-aaaa', 'codeman-aaaa']);
+  });
+
+  // Measured on tmux 3.8: once a pane's program exits, `#{pane_pid}` prints
+  // blank. Skipping that row hid every exited agent from the watcher, so a
+  // clean `/exit` left the session on the board as idle.
+  it('keeps a dead pane whose pid tmux left blank', () => {
+    const [row] = parsePaneRows('codeman-aaaa||1|0||1795091616|');
+    expect(row).toBeDefined();
+    expect(row.pid).toBeUndefined();
+    expect(row.dead).toBe(true);
+    expect(row.exitStatus).toBe(0);
+    expect(row.deadTime).toBe(1795091616);
+    expect(row.currentPath).toBeUndefined();
+  });
+
+  it('still skips a live pane with a blank pid, which is a bad read', () => {
+    expect(parsePaneRows('codeman-aaaa||0||||/home/user/project')).toEqual([]);
+    expect(parsePaneRows('codeman-aaaa||')).toEqual([]);
+  });
+
+  it('reads the exit time, and leaves it undefined while the pane runs', () => {
+    expect(parsePaneRows('codeman-aaaa|1234|1|0||1795091616|/srv')[0]).toMatchObject({
+      deadTime: 1795091616,
+      currentPath: '/srv',
+    });
+    expect(parsePaneRows('codeman-aaaa|1234|0||||/srv')[0].deadTime).toBeUndefined();
   });
 });
 
@@ -1419,7 +1503,7 @@ describe('derivePaneExits', () => {
   });
 
   it('says nothing about a live pane', () => {
-    const exits = derivePaneExits(parsePaneRows('codeman-aaaa|1234|0|||'), NOW);
+    const exits = derivePaneExits(parsePaneRows('codeman-aaaa|1234|0||||'), NOW);
     expect(exits.has('codeman-aaaa')).toBe(false);
   });
 
@@ -1436,10 +1520,15 @@ describe('derivePaneExits', () => {
 
   it("answers per session, so one session's split does not silence another", () => {
     const exits = derivePaneExits(
-      parsePaneRows('codeman-aaaa|100|1|0|\ncodeman-bbbb|200|1|0|\ncodeman-bbbb|201|0|||'),
+      parsePaneRows('codeman-aaaa|100|1|0|\ncodeman-bbbb|200|1|0|\ncodeman-bbbb|201|0||||'),
       NOW
     );
     expect([...exits.keys()]).toEqual(['codeman-aaaa']);
+  });
+
+  it('reports a clean exit from a dead pane whose pid tmux left blank', () => {
+    const exits = derivePaneExits(parsePaneRows('codeman-aaaa||1|0||1795091616|'), NOW);
+    expect(exits.get('codeman-aaaa')).toEqual({ deadTime: 1795091616, exit: { status: 0, at: NOW } });
   });
 });
 
@@ -1470,7 +1559,7 @@ describe('TmuxManager pane-exit bookkeeping', () => {
   it('forgets the exit once the same session reports a live pane', () => {
     const manager = new TmuxManager();
     manager.applyPaneExits(derivePaneExits(parsePaneRows('codeman-aaaa|100|1|0|'), NOW));
-    manager.applyPaneExits(derivePaneExits(parsePaneRows('codeman-aaaa|101|0|||'), NOW + 2000));
+    manager.applyPaneExits(derivePaneExits(parsePaneRows('codeman-aaaa|101|0||||'), NOW + 2000));
     expect(manager.getPaneExit('codeman-aaaa')).toBeUndefined();
   });
 
@@ -1530,10 +1619,29 @@ describe('TmuxManager pane-exit bookkeeping', () => {
   it('drops the count once a read sees the pane alive again', () => {
     const manager = new TmuxManager();
     manager.applyPaneExits(derivePaneExits(parsePaneRows('codeman-aaaa|100|1|0|'), NOW));
-    manager.applyPaneExits(derivePaneExits(parsePaneRows('codeman-aaaa|101|0|||'), NOW + 2000));
+    manager.applyPaneExits(derivePaneExits(parsePaneRows('codeman-aaaa|101|0||||'), NOW + 2000));
     expect(manager.getPaneExitReadCount('codeman-aaaa')).toBe(0);
     manager.applyPaneExits(derivePaneExits(parsePaneRows('codeman-aaaa|101|1|0|'), NOW + 4000));
     expect(manager.getPaneExitReadCount('codeman-aaaa')).toBe(1);
+  });
+
+  // tmux 3.8 blanks a dead pane's pid, so the exit time is what tells one
+  // exit from the next there.
+  it('counts repeated reads of one exit when tmux gave no pid', () => {
+    const manager = new TmuxManager();
+    manager.applyPaneExits(derivePaneExits(parsePaneRows('codeman-aaaa||1|0||1795091616|'), NOW));
+    manager.applyPaneExits(derivePaneExits(parsePaneRows('codeman-aaaa||1|0||1795091616|'), NOW + 2000));
+    expect(manager.getPaneExitReadCount('codeman-aaaa')).toBe(2);
+    expect(manager.getPaneExit('codeman-aaaa')).toEqual({ status: 0, at: NOW });
+  });
+
+  it('starts a new observation when the exit time changes and tmux gave no pid', () => {
+    // A hand-run `tmux respawn-pane` whose command exited 0 again between two reads.
+    const manager = new TmuxManager();
+    manager.applyPaneExits(derivePaneExits(parsePaneRows('codeman-aaaa||1|0||1795091616|'), NOW));
+    manager.applyPaneExits(derivePaneExits(parsePaneRows('codeman-aaaa||1|0||1795091620|'), NOW + 2000));
+    expect(manager.getPaneExitReadCount('codeman-aaaa')).toBe(1);
+    expect(manager.getPaneExit('codeman-aaaa')).toEqual({ status: 0, at: NOW + 2000 });
   });
 });
 
