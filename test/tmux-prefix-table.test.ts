@@ -117,8 +117,8 @@ describe('restrictTmuxPrefixTable (recorded commands)', () => {
   });
 
   it('reads a one-binding table from the full listing when `list-keys -T prefix` prints nothing', () => {
-    // A tmux `next-3.7` build lists a table holding exactly one binding as nothing at
-    // all. The reduced table must still read as reduced, or every call resets it.
+    // tmux 3.7 through 3.7c list a table holding exactly one binding as nothing at
+    // all on stdout (fixed in 3.8). The reduced table must still read as reduced, or every call resets it.
     const tmux = fakeTmux({
       'show-options -gv prefix': 'C-b\n',
       'list-keys -T prefix': '',
@@ -153,8 +153,8 @@ const hasTmux = (() => {
 })();
 
 /**
- * One key table as `list-keys -T <table>` prints it. Some tmux builds (a `next-3.7`
- * development build) print NOTHING there when the table holds exactly one binding,
+ * One key table as `list-keys -T <table>` prints it. tmux 3.7 through 3.7c (fixed in
+ * 3.8) print NOTHING there when the table holds exactly one binding,
  * which is the shape every reset in this file produces, so a blank answer is read from
  * the full listing instead, its padding folded to the `-T <table>` form.
  */

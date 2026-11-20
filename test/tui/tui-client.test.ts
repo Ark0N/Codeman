@@ -1017,8 +1017,8 @@ describe('resumeSession', () => {
 });
 
 describe('TuiClient key-table reads on a tmux that lists a one-binding table as nothing', () => {
-  // A tmux `next-3.7` build prints nothing for `list-keys -T prefix` when the table
-  // holds exactly one binding, which is how Codeman leaves it. Reading that as "free"
+  // tmux 3.7 through 3.7c (fixed in 3.8) print nothing for `list-keys -T prefix` when
+  // the table holds exactly one binding, which is how Codeman leaves it. Reading that as "free"
   // would let the TUI claim a key the user has bound.
   const fullListing =
     'bind-key    -T copy-mode    C-a                    send-keys -X start-of-line\n' +

@@ -992,9 +992,9 @@ export class TuiClient {
   }
 
   /**
-   * One key table as `list-keys` prints it. ⚠️ Some tmux builds (seen on a `next-3.7`
-   * development build) print NOTHING for `list-keys -T <table>` when the table holds
-   * exactly one binding, which is the shape Codeman reduces the prefix table to. So a
+   * One key table as `list-keys` prints it. ⚠️ tmux 3.7 through 3.7c (fixed in 3.8)
+   * print NOTHING on stdout for `list-keys -T <table>` when the table holds exactly
+   * one binding (the line goes to a status message instead), which is the shape Codeman reduces the prefix table to. So a
    * blank answer is retried as the full listing: every line there names its table,
    * and both parsers already filter on it.
    */

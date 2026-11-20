@@ -153,9 +153,9 @@ export function restrictTmuxPrefixTable(tmux: string, run: TmuxRunner = defaultR
   let listing: string | null;
   try {
     listing = run(`${tmux} list-keys -T prefix`);
-    // ⚠️ Some tmux builds (a `next-3.7` development build) print NOTHING for
-    // `list-keys -T prefix` when the table holds exactly one binding, which is the
-    // shape this function leaves behind: read blank as "ask the full listing" and keep
+    // ⚠️ tmux 3.7 through 3.7c (fixed in 3.8) print NOTHING on stdout for
+    // `list-keys -T prefix` when the table holds exactly one binding (the line goes
+    // to a status message instead), which is the shape this function leaves behind: read blank as "ask the full listing" and keep
     // only its prefix-table lines, or every call would reset an already-reduced table.
     if (!listing.trim()) {
       listing = run(`${tmux} list-keys`)
