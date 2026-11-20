@@ -137,6 +137,7 @@ export class TeamWatcher extends EventEmitter {
     this.taskMtimes.clear();
     this.inboxMtimes.clear();
     this.sessionToTeam.clear();
+    this.watchersDown.clear();
   }
 
   /** Get all discovered teams */

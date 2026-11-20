@@ -19,6 +19,11 @@ const FAILURES = [
 ] as const;
 type WatchFailure = { code: string; errno: number; text: string };
 
+// On macOS chokidar 3 never calls fs.watch for these watchers: it uses fsevents,
+// or polling when fsevents is missing, so the retry loop these tests pin cannot
+// happen there and the stubbed fs.watch never fires.
+const describeLinuxWatch = describe.skipIf(process.platform === 'darwin');
+
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 async function waitUntil(predicate: () => boolean, message: string): Promise<void> {
@@ -97,7 +102,7 @@ async function writeTeam(teamsDir: string, config: TeamConfig): Promise<void> {
   await writeFile(join(dir, 'config.json'), JSON.stringify(config));
 }
 
-describe('TeamWatcher fs.watch failure', () => {
+describeLinuxWatch('TeamWatcher fs.watch failure', () => {
   let teamsDir: string;
   let tasksDir: string;
   let teamWatcher: TeamWatcher;
@@ -178,6 +183,29 @@ describe('TeamWatcher fs.watch failure', () => {
       expectWarnings(expectedWarnings);
     } finally {
       teamWatcher.stop();
+    }
+  });
+
+  it('warns again about a watcher that still fails after stop() and start() on the same instance', async () => {
+    const failure = FAILURES[0];
+    const watch = failEveryWatch(failure);
+    const expectedWarnings = [
+      `[TeamWatcher] teams watcher stopped, relying on polling: ${watchError(failure, teamsDir).message}`,
+      `[TeamWatcher] tasks watcher stopped, relying on polling: ${watchError(failure, tasksDir).message}`,
+    ];
+    try {
+      teamWatcher.start();
+      await waitUntil(() => warn.mock.calls.length >= 2, 'timed out waiting for both watcher warnings');
+      await delay(200);
+      expectWarnings(expectedWarnings);
+      teamWatcher.stop();
+      teamWatcher.start();
+      await waitUntil(() => warn.mock.calls.length >= 4, 'a restarted watcher stayed silent about the same outage');
+      await delay(200);
+      expectWarnings([...expectedWarnings, ...expectedWarnings]);
+    } finally {
+      teamWatcher.stop();
+      watch.mockRestore();
     }
   });
 
@@ -426,7 +454,7 @@ describe('TeamWatcher fs.watch failure', () => {
   );
 });
 
-describe('TeamWatcher in-flight fs.watch failure', () => {
+describeLinuxWatch('TeamWatcher in-flight fs.watch failure', () => {
   it('stays stopped when file replacement and deletion race with ENOSPC', async () => {
     const teamsDir = join(tempDir, 'teams');
     const tasksDir = join(tempDir, 'tasks');
@@ -534,7 +562,7 @@ const EXPECTED_RUN: WorkflowRunInfo = {
   lastActivityAt: RUN_START,
 };
 
-describe('WorkflowRunWatcher fs.watch failure', () => {
+describeLinuxWatch('WorkflowRunWatcher fs.watch failure', () => {
   let runWatcher: WorkflowRunWatcher;
   let workflowsDir: string;
 
