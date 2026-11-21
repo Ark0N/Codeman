@@ -15,9 +15,27 @@
 (function (global) {
   'use strict';
 
+  // WebKit removes one grapheme cluster per Backspace, and Claude Code and Codex
+  // delete one grapheme per DEL, so an edit is counted in graphemes: a red heart,
+  // a skin-tone emoji, a flag or a ZWJ family is one DEL, as it was through xterm.
+  // Code points stand in where Intl.Segmenter is missing.
+  const graphemeSegmenter = (function () {
+    try {
+      return typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function'
+        ? new Intl.Segmenter(undefined, { granularity: 'grapheme' })
+        : null;
+    } catch (_) {
+      return null;
+    }
+  })();
+
+  function graphemes(text) {
+    return graphemeSegmenter ? Array.from(graphemeSegmenter.segment(text), (part) => part.segment) : Array.from(text);
+  }
+
   function editBetween(previous, next) {
-    const a = Array.from(previous);
-    const b = Array.from(next);
+    const a = graphemes(previous);
+    const b = graphemes(next);
     let prefix = 0;
     while (prefix < a.length && prefix < b.length && a[prefix] === b[prefix]) prefix += 1;
     return { deleted: a.length - prefix, inserted: b.slice(prefix).join('') };

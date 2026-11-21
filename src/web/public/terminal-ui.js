@@ -764,21 +764,26 @@ Object.assign(CodemanApp.prototype, {
         },
         isScreenReaderMode: () => this.terminal?.options?.screenReaderMode === true,
       });
-      this._iosCaretMarker = window.CodemanIosNativeInput.attachCaretMarker?.(this.terminal, this._iosNativeInput, {
-        anchor: () => this._nativeInputAnchor(),
-        subscribe: (callback) => this._localEchoOverlay?.onLayout?.(callback),
-      });
-    } else {
-      try {
-        this._keyCode229Recovery = window.CodemanKeyCode229Recovery?.create?.({
-          textarea: this.terminal.textarea,
-          emitRecovered: (data) => this._handleTerminalData(data, this.activeSessionId),
-          getCompositionHelper: () => this.terminal?._core?._compositionHelper,
-          isScreenReaderMode: () => this.terminal?.options?.screenReaderMode === true,
+      if (this._iosNativeInput) {
+        this._iosCaretMarker = window.CodemanIosNativeInput.attachCaretMarker?.(this.terminal, this._iosNativeInput, {
+          anchor: () => this._nativeInputAnchor(),
+          subscribe: (callback) => this._localEchoOverlay?.onLayout?.(callback),
         });
-      } catch {
-        this._keyCode229Recovery = null;
+        return;
       }
+      // create() refused (screen reader, missing xterm internals): keep master's
+      // soft-keyboard recovery rather than leaving iOS with neither.
+      this._iosNativeInput = null;
+    }
+    try {
+      this._keyCode229Recovery = window.CodemanKeyCode229Recovery?.create?.({
+        textarea: this.terminal.textarea,
+        emitRecovered: (data) => this._handleTerminalData(data, this.activeSessionId),
+        getCompositionHelper: () => this.terminal?._core?._compositionHelper,
+        isScreenReaderMode: () => this.terminal?.options?.screenReaderMode === true,
+      });
+    } catch {
+      this._keyCode229Recovery = null;
     }
   },
 
@@ -829,6 +834,9 @@ Object.assign(CodemanApp.prototype, {
       this._enqueueInput(sessionId, [{ write: text }, { gap: 80 }, { write: '\r' }]);
     } else {
       this._echoPassthroughSessions?.delete(sessionId);
+      // The CR bypasses onData here, so tell the codex predictor about it as
+      // typed Enter does (it clears the prediction run).
+      this._predictHookOnData('\r');
       this._enqueueInput(sessionId, [{ write: '\r' }]);
     }
   },

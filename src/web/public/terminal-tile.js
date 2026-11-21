@@ -661,7 +661,11 @@
       });
       if (this._iosNativeInput) {
         this._iosCaretMarker = nativeInput.attachCaretMarker(this.terminal, this._iosNativeInput);
+        return;
       }
+      // create() refused (screen reader, missing xterm internals): keep the
+      // soft-keyboard recovery rather than leaving the tile with neither.
+      this._createKeyCode229Recovery();
     }
 
     _sendNativeInputTransaction(ops) {

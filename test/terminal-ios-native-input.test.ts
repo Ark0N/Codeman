@@ -159,7 +159,12 @@ type Listener = (event: Event) => void;
 const DEL = '\x7f';
 const dels = (count: number) => Array(count).fill(DEL);
 const project = (value: string) => value.replace(/\r\n|[\r\n]/g, ' ');
-const trimPoint = (value: string) => Array.from(value).slice(0, -1).join('');
+// The destination (Claude Code, Codex, the local-echo overlay) deletes one grapheme cluster per DEL.
+const trimGrapheme = (value: string) =>
+  [...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(value)]
+    .slice(0, -1)
+    .map((part) => part.segment)
+    .join('');
 
 class FakeNode {
   listeners = new Map<string, Set<Listener>>();
@@ -356,8 +361,8 @@ function harness(
   const consume = (data: string) => {
     sent.push(data);
     if (data === DEL) {
-      if (pending) pending = trimPoint(pending);
-      else line = trimPoint(line);
+      if (pending) pending = trimGrapheme(pending);
+      else line = trimGrapheme(line);
     } else if (data === '\r') {
       commits.push(line + pending);
       line = '';
@@ -421,7 +426,11 @@ function harness(
     if (inputType === 'deleteContentBackward') {
       if (start === end) {
         if (start === 0) return;
-        start -= Array.from(textarea.value.slice(0, start)).at(-1)!.length;
+        // WebKit removes one whole grapheme cluster per Backspace.
+        const clusters = [
+          ...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(textarea.value.slice(0, start)),
+        ];
+        start -= clusters.at(-1)!.segment.length;
       }
       textarea.value = textarea.value.slice(0, start) + textarea.value.slice(end);
       textarea.setSelectionRange(start, start);
@@ -548,6 +557,17 @@ const replayCases: Array<[string, (h: Harness) => void]> = [
       expect(h.api.create({})).toBeNull();
       expect(h.api.create({ terminal: h.terminal, sendTransaction() {}, isScreenReaderMode: () => true })).toBeNull();
       expect(h.api.editBetween('a👍b', 'aX')).toEqual({ deleted: 2, inserted: 'X' });
+      // One DEL per grapheme cluster: WebKit removes the whole cluster on one
+      // Backspace, and Claude Code and Codex delete one grapheme per DEL.
+      for (const emoji of [
+        '\u2764\uFE0F',
+        '\u{1F44D}\u{1F3FD}',
+        '\u{1F1EB}\u{1F1F7}',
+        '\u{1F468}\u200D\u{1F469}\u200D\u{1F467}\u200D\u{1F466}',
+      ]) {
+        expect(h.api.editBetween(`ok${emoji}`, 'ok')).toEqual({ deleted: 1, inserted: '' });
+        expect(h.api.editBetween(`a${emoji}b`, 'aX')).toEqual({ deleted: 2, inserted: 'X' });
+      }
       for (const ch of 'hel') h.type(ch);
       h.type('lo');
       h.tick();
@@ -912,6 +932,31 @@ const replayCases: Array<[string, (h: Harness) => void]> = [
       h.backspace();
       h.bytes([]);
       expect(h.textarea.value).toBe('hello');
+    },
+  ],
+  [
+    '20b grapheme-cluster deletion sends one DEL',
+    (h) => {
+      for (const emoji of [
+        '\u2764\uFE0F',
+        '\u{1F44D}\u{1F3FD}',
+        '\u{1F1EB}\u{1F1F7}',
+        '\u{1F468}\u200D\u{1F469}\u200D\u{1F467}\u200D\u{1F466}',
+      ]) {
+        h.type('ok');
+        h.edit(emoji);
+        h.clearSent();
+        h.backspace();
+        expect(h.textarea.value).toBe('ok');
+        h.bytes([DEL]);
+        // The destination keeps the draft: one DEL took the whole emoji, nothing before it.
+        expect(h.value()).toBe('ok');
+        h.invariant();
+        h.backspace();
+        h.backspace();
+        expect(h.value()).toBe('');
+        h.clearSent();
+      }
     },
   ],
   [

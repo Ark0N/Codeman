@@ -1560,6 +1560,15 @@ describe('TerminalTile iOS native input ownership', () => {
     expect(term.keyHandler!({ type: 'keydown', key: 'a', code: 'KeyA' })).toBe(true);
   });
 
+  it('falls back to the 229 recovery when the iOS module refuses to create an owner', async () => {
+    const native = install();
+    native.create.mockReturnValueOnce(null);
+    const { tile } = await connectTile(makeApp());
+    expect(native.create).toHaveBeenCalledOnce();
+    expect(native.attachCaretMarker).not.toHaveBeenCalled();
+    expect((tile as ControllerTile)._keyCode229Recovery).not.toBeNull();
+  });
+
   it('reserves separate DEL writes and insertion for the tile session in one call', async () => {
     const native = install();
     const app = makeApp();

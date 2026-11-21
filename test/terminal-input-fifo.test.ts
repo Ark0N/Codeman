@@ -936,6 +936,35 @@ describe('native main transactions and boundaries', () => {
     app._initTerminalInputOwner();
     expect(recovery.destroy).toHaveBeenCalledOnce();
   });
+
+  it('falls back to the recovery when the iOS module is supported but create() refuses', () => {
+    const { app, wire, context } = harness();
+    const native = { isSupported: () => true, create: vi.fn(() => null), attachCaretMarker: vi.fn() };
+    const create = vi.fn((_options: { emitRecovered: (data: string) => void }) => ({ destroy: vi.fn() }));
+    context.window.CodemanIosNativeInput = native;
+    context.window.CodemanKeyCode229Recovery = { create };
+    app._localEchoEnabled = false;
+    app._initTerminalInputOwner();
+    expect(native.create).toHaveBeenCalledOnce();
+    expect(native.attachCaretMarker).not.toHaveBeenCalled();
+    expect(app._iosNativeInput).toBeNull();
+    expect(create).toHaveBeenCalledOnce();
+    create.mock.calls[0][0].emitRecovered('recovered');
+    expect(wire).toEqual([['old', 'recovered']]);
+  });
+
+  it('toolbar Enter with echo off clears codex predictions like typed Enter', () => {
+    const { app, wire } = harness();
+    // The harness stubs the hook; run the real one from terminal-ui.js.
+    delete app._predictHookOnData;
+    app._localEchoEnabled = false;
+    app._localEchoPolicy = 'predict';
+    app._predictiveEcho = { clearPredictions: vi.fn(), predictChar: vi.fn(), predictBackspace: vi.fn() };
+    app._submitMainInput('old');
+    expect(app._predictiveEcho.clearPredictions).toHaveBeenCalledOnce();
+    expect(wire).toEqual([['old', '\r']]);
+  });
+
   it('settles and resets native ownership before inserting external text into the overlay', () => {
     const { app } = harness();
     app._iosNativeInput = {

@@ -127,6 +127,28 @@ describe('ZerolagInputAddon', () => {
       expect(addon.state.visible).toBe(false);
     });
 
+    const graphemeCases = [
+      ['red heart', '\u2764\uFE0F'],
+      ['skin-tone thumbs up', '\u{1F44D}\u{1F3FD}'],
+      ['flag', '\u{1F1EB}\u{1F1F7}'],
+      ['ZWJ family', '\u{1F468}\u200D\u{1F469}\u200D\u{1F467}\u200D\u{1F466}'],
+    ];
+
+    it.each(graphemeCases)('removes a whole pending %s grapheme', (_name, emoji) => {
+      const { addon } = tracked();
+      addon.appendText('ok' + emoji);
+      expect(addon.removeChar()).toBe('pending');
+      expect(addon.pendingText).toBe('ok');
+    });
+
+    it.each(graphemeCases)('removes a whole flushed %s grapheme and subtracts its UTF-16 width', (_name, emoji) => {
+      const { addon } = tracked();
+      const text = 'ok' + emoji;
+      addon.setFlushed(text.length, text);
+      expect(addon.removeChar()).toBe('flushed');
+      expect(addon.getFlushed()).toEqual({ count: 2, text: 'ok' });
+    });
+
     it('returns false when nothing to remove', () => {
       const { addon } = tracked();
       expect(addon.removeChar()).toBe(false);

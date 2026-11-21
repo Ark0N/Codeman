@@ -19,8 +19,33 @@ const DEFAULT_BG = '#0d0d0d';
 const DEFAULT_FG = '#eeeeee';
 const DEFAULT_CURSOR = '#e0e0e0';
 
-/** UTF-16 width of the final code point (one for an empty legacy flushed string). */
-function lastCodePointWidth(text: string): number {
+type GraphemeSegmenter = {
+  segment(input: string): Iterable<{ segment: string }>;
+};
+
+const GRAPHEME_SEGMENTER: GraphemeSegmenter | null = (() => {
+  try {
+    const Segmenter = (
+      Intl as typeof Intl & {
+        Segmenter?: new (locale?: string, options?: { granularity: 'grapheme' }) => GraphemeSegmenter;
+      }
+    ).Segmenter;
+    return Segmenter ? new Segmenter(undefined, { granularity: 'grapheme' }) : null;
+  } catch {
+    return null;
+  }
+})();
+
+/** UTF-16 width of the final grapheme cluster (one for an empty legacy flushed string). */
+function lastGraphemeWidth(text: string): number {
+  if (GRAPHEME_SEGMENTER) {
+    let width = 1;
+    for (const { segment } of GRAPHEME_SEGMENTER.segment(text)) {
+      width = segment.length;
+    }
+    return width;
+  }
+
   const last = text.charCodeAt(text.length - 1);
   const previous = text.charCodeAt(text.length - 2);
   return last >= 0xdc00 && last <= 0xdfff && previous >= 0xd800 && previous <= 0xdbff ? 2 : 1;
@@ -209,7 +234,7 @@ export class ZerolagInputAddon implements XtermAddon {
   }
 
   /**
-   * Remove the last Unicode code point from the overlay.
+   * Remove the last grapheme cluster (one user-perceived character).
    *
    * Cascade order:
    * 1. Remove from `pendingText` if non-empty → returns `'pending'`
@@ -232,7 +257,7 @@ export class ZerolagInputAddon implements XtermAddon {
     const droppedComposition = this._composition.length > 0;
     this._composition = '';
     if (this._pendingText.length > 0) {
-      this._pendingText = this._pendingText.slice(0, -lastCodePointWidth(this._pendingText));
+      this._pendingText = this._pendingText.slice(0, -lastGraphemeWidth(this._pendingText));
       if (this._pendingText.length > 0 || this._flushedOffset > 0) {
         this._render();
       } else {
@@ -245,7 +270,7 @@ export class ZerolagInputAddon implements XtermAddon {
     // (handles tab completion, arrow-key edits, etc.).
     if (this._flushedOffset === 0) this._detectBufferText();
     if (this._flushedOffset > 0) {
-      const width = lastCodePointWidth(this._flushedText);
+      const width = lastGraphemeWidth(this._flushedText);
       this._flushedOffset -= width;
       this._flushedText = this._flushedText.slice(0, -width);
       if (this._flushedOffset > 0) {
