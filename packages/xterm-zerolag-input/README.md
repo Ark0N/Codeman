@@ -203,7 +203,7 @@ Implements the xterm.js `ITerminalAddon` interface. It deliberately does **not**
 |--------|---------|-------------|
 | `addChar(char)` | `void` | Add a single printable character. Auto-detects existing buffer text on the first keystroke. |
 | `appendText(text)` | `void` | Append multiple characters (paste). |
-| `removeChar()` | `'pending'` \| `'flushed'` \| `false` | Remove the last character and drop any IME composition. See [backspace handling](#backspace-handling). |
+| `removeChar()` | `'pending'` \| `'flushed'` \| `false` | Remove the last grapheme cluster (one user-perceived character: a red heart, a skin-tone emoji, a flag or a ZWJ family is one) and drop any IME composition. See [backspace handling](#backspace-handling). |
 | `clear()` | `void` | Clear all state, the composition included, and hide the overlay. Call on Enter, Ctrl+C, Escape. |
 | `setComposition(text)` | `void` | Show text an IME is still composing as an underlined tail after the typed text. Pass `''` to remove it. See [IME composition](#ime-composition). |
 | `setRowLimit(limit)` | `void` | Narrow the row bound the overlay keeps itself on screen with (normally `terminal.rows`) to the first `limit` screen rows, so it grows upward from the last of them; `null` restores all rows, and a limit above `terminal.rows` changes nothing. For hosts that keep the terminal taller than the box showing it, e.g. while an on-screen keyboard covers the bottom. |
@@ -219,6 +219,8 @@ Implements the xterm.js `ITerminalAddon` interface. It deliberately does **not**
 | `false` | Nothing to remove | Do nothing |
 
 The cascade order is pending text, then flushed text, then auto-detected buffer text (which is what makes backspace work after tab completion). Backspace "just works" across any combination of typed, in-flight and completed text.
+
+One call removes one grapheme cluster: the unit a soft-keyboard Backspace removes, and what Claude Code and Codex delete per `\x7f`. So when it returns `'flushed'`, one `\x7f` removes the same character in those CLIs; a line editor that deletes by code point (bash readline, for a skin tone or a flag) removes less. For `'pending'` or `false`, send nothing. Grapheme boundaries come from `Intl.Segmenter`; where it is missing, one code point is removed instead.
 
 ### IME composition
 
@@ -260,6 +262,8 @@ Finds text that exists after the prompt but was never typed through the overlay.
 |--------|-------------|
 | `rerender()` | Force a re-render. Call after buffer reloads, screen redraws, resizes and reconnects. A no-op when there is nothing to draw, so it needs no guard. |
 | `refreshFont()` | Re-cache font and color properties from the terminal. Call after a font size or theme change. |
+| `getInputEndAnchor()` | Where the overlay's visible text ends, from its last layout: `{ col, row }` in viewport cells (`col` equals the column count at a full line's right edge), or `null` while the overlay is hidden. For placing a caret marker against the drawn input. |
+| `onLayout(callback)` | Call `callback` after each layout, a hide included. Returns an unsubscribe function. |
 
 ### Prompt
 
