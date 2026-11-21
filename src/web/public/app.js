@@ -2610,7 +2610,11 @@ class CodemanApp {
         if (this._pendingDroppedOutputRecovery?.sessionId !== sessionId && Number.isFinite(queuedBytes)) {
           _crashDiag.log(`TERMINAL DROP: ${(queuedBytes / 1024).toFixed(0)}KB queued (recovery deferred)`);
         }
-        this._pendingDroppedOutputRecovery = { sessionId, attempt };
+        const pending = this._pendingDroppedOutputRecovery;
+        this._pendingDroppedOutputRecovery = {
+          sessionId,
+          attempt: pending?.sessionId === sessionId ? Math.max(pending.attempt, attempt) : attempt,
+        };
       }
       return;
     }
@@ -2622,7 +2626,13 @@ class CodemanApp {
       // A load may have opened after this timer was armed. Defer without
       // advancing the attempt; _finishBufferLoad resumes only the active tab.
       if (this._isLoadingBuffer) {
-        if (sessionId === this.activeSessionId) this._pendingDroppedOutputRecovery = { sessionId, attempt };
+        if (sessionId === this.activeSessionId) {
+          const pending = this._pendingDroppedOutputRecovery;
+          this._pendingDroppedOutputRecovery = {
+            sessionId,
+            attempt: pending?.sessionId === sessionId ? Math.max(pending.attempt, attempt) : attempt,
+          };
+        }
         return;
       }
       let repainted = false;
@@ -3541,13 +3551,14 @@ class CodemanApp {
         // after them and fuse into the buffer written below. See
         // _resetTerminalForReplay.
         this._resetTerminalForReplay();
-        await this.chunkedTerminalWrite(
+        const { completed } = await this.chunkedTerminalWrite(
           data.terminalBuffer,
           TERMINAL_CHUNK_SIZE,
           undefined,
           this._bufferLoadFinishOpts(data, headersReceivedAt)
         );
         if (
+          completed &&
           this.activeSessionId === sessionId &&
           this._terminalRefreshOwner === refreshOwner &&
           data.source === 'mux-full-history' &&
@@ -9863,6 +9874,11 @@ class CodemanApp {
         let row = this._restoreViewportAnchor(viewportAnchor);
         for (const move of this._earlyReplayTravel.moves) row = clamp(row + move);
         this.terminal.scrollToLine(row);
+        // Replay travel bypassed the live scroll handler's notice update.
+        if (this._earlyReplayTravel.moves.length > 0) {
+          if (row === 0) this._setHistoryNoticeRevealed?.(sessionId);
+          else if (this.isTerminalAtBottom()) this._setHistoryNoticeRevealed?.(null);
+        }
       } else {
         const delta = parsedBufferLength - rowsBefore;
         if (delta > 0) this.terminal.scrollToLine(delta);

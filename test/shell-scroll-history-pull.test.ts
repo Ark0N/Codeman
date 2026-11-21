@@ -680,6 +680,43 @@ describe('manual full-history recovery while reading (#814)', () => {
     }
   });
 
+  it.each([false, true])('keeps the highest same-session deferred attempt (timer armed: %s)', async (armed) => {
+    vi.useFakeTimers();
+    try {
+      const { app } = makeApp('omp', { bufferRows: 30, capture: lines(400) });
+      const retry = vi.fn(() => false);
+      const schedule = loadAppMethod('_scheduleDroppedOutputRecovery', {
+        setTimeout,
+        window: { CodemanDroppedOutput: { DROP_RECOVERY_DELAY_MS: 2000, shouldRetryDroppedOutputRecovery: retry } },
+      });
+      Object.assign(app, {
+        _scheduleDroppedOutputRecovery: (...args: unknown[]) => schedule.apply(app, args),
+        _onSessionNeedsRefresh: vi.fn(async () => false),
+      });
+      if (armed) schedule.call(app, 's1', 0);
+      const owner = (app._beginBufferLoad as Function).call(app);
+      schedule.call(app, 's1', 3);
+      if (armed) await vi.advanceTimersByTimeAsync(2000);
+      else schedule.call(app, 's1', 0); // A later dropped frame must not reset the bound.
+      expect(Reflect.get(app, '_pendingDroppedOutputRecovery')).toEqual({ sessionId: 's1', attempt: 3 });
+      app._finishBufferLoad(owner);
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(retry).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ attempt: 3 }));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('replaces a different session’s deferred attempt rather than merging it', () => {
+    const { app } = makeApp('omp', { bufferRows: 30, capture: lines(400) });
+    const schedule = loadAppMethod('_scheduleDroppedOutputRecovery');
+    const owner = (app._beginBufferLoad as Function).call(app);
+    Object.assign(app, { _pendingDroppedOutputRecovery: { sessionId: 's0', attempt: 4 } });
+    schedule.call(app, 's1', 0);
+    expect(Reflect.get(app, '_pendingDroppedOutputRecovery')).toEqual({ sessionId: 's1', attempt: 0 });
+    app._finishBufferLoad(owner);
+  });
+
   it('does not resume a deferred recovery for a tab that is no longer active', () => {
     const { app } = makeApp('omp', { bufferRows: 30, capture: lines(400) });
     const owner = (app._beginBufferLoad as Function).call(app);
@@ -762,6 +799,31 @@ describe('manual full-history recovery while reading (#814)', () => {
     });
     await reload();
     expect(app._liveOutputSinceFullPull.has('s1')).toBe(source !== 'mux-full-history');
+  });
+
+  it('reveals the truncation notice after replay travel reaches the top', async () => {
+    const { app, active, liveOutput, reload, pauseReplay } = makeScrollApp();
+    liveOutput();
+    const paused = pauseReplay();
+    const pull = reload();
+    await paused.ready;
+    (mixin._maybeLoadMoreHistoryOnScroll as Function).call(app, -10000);
+    paused.release();
+    await pull;
+    expect(app._setHistoryNoticeRevealed).toHaveBeenCalledWith('s1');
+    expect(active.viewportY).toBe(0);
+    expect(app._maybeRefetchFullHistory).toHaveBeenCalledOnce();
+  });
+
+  it('does not reveal the truncation notice on reload without replay travel', async () => {
+    const { app, liveOutput, reload, pauseReplay } = makeScrollApp();
+    liveOutput();
+    const paused = pauseReplay();
+    const pull = reload();
+    await paused.ready;
+    paused.release();
+    await pull;
+    expect(app._setHistoryNoticeRevealed).not.toHaveBeenCalledWith('s1');
   });
 
   it('does not swallow another tab’s travel or clear the old mark when replay is cancelled', async () => {
@@ -1320,27 +1382,14 @@ describe('manual history banner action', () => {
 
   it('does no DOM work without a transition and coalesces all-device onScroll calls per frame', () => {
     const { app, state, frames } = fixture({ touch: false });
-    let onScroll!: () => void;
-    const source = readFileSync(resolve(PUBLIC, 'terminal-ui.js'), 'utf8');
-    const registration = source.match(/^    this\.terminal\.onScroll\(.*$/m)![0];
-    vm.runInNewContext(`(function () { ${registration} }).call(app)`, {
-      app: {
-        terminal: {
-          onScroll: (callback: () => void) => {
-            onScroll = callback;
-          },
-        },
-        _scheduleHistoryReloadActionSync: app._scheduleHistoryReloadActionSync,
-      },
-    });
     app._syncHistoryReloadAction();
-    for (let i = 0; i < 100; i++) onScroll();
+    for (let i = 0; i < 100; i++) app._scheduleHistoryReloadActionSync();
     expect(frames).toHaveLength(1);
     frames.shift()!(0);
     expect(app._renderHistoryTruncationBanner).toHaveBeenCalledOnce();
     state.bottom = true;
-    onScroll();
-    onScroll();
+    app._scheduleHistoryReloadActionSync();
+    app._scheduleHistoryReloadActionSync();
     expect(frames).toHaveLength(1);
     frames.shift()!(1);
     expect(app._renderHistoryTruncationBanner).toHaveBeenCalledTimes(2);
@@ -1500,6 +1549,20 @@ describe('drop-recovery refresh clears the live-output mark only for a mux captu
     expect(app._historyReloadDismissed.has('s1')).toBe(false);
     // The clear syncs once, and the real truncation-banner update syncs again.
     expect(app._syncHistoryReloadAction).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the mark and dismissal when the mux replay is incomplete', async () => {
+    const { app, refresh, errors } = makeRefreshApp();
+    app.chunkedTerminalWrite.mockImplementationOnce(async () => ({
+      parsedAt: performance.now(),
+      bufferLength: 400,
+      completed: false,
+    }));
+    await refresh.call(app);
+    expect(errors).not.toHaveBeenCalled();
+    expect(app.chunkedTerminalWrite).toHaveBeenCalledOnce();
+    expect(app._liveOutputSinceFullPull.has('s1')).toBe(true);
+    expect(app._historyReloadDismissed.has('s1')).toBe(true);
   });
 
   it('keeps the mark and dismissal for a history answer', async () => {
