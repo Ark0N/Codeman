@@ -263,6 +263,7 @@ Finds text that exists after the prompt but was never typed through the overlay.
 | `rerender()` | Force a re-render. Call after buffer reloads, screen redraws, resizes and reconnects. A no-op when there is nothing to draw, so it needs no guard. |
 | `refreshFont()` | Re-cache font and color properties from the terminal. Call after a font size or theme change. |
 | `getInputEndAnchor()` | Where the overlay's visible text ends, from its last layout: `{ col, row }` in viewport cells (`col` equals the column count at a full line's right edge), or `null` while the overlay is hidden. For placing a caret marker against the drawn input. |
+| `getInputAnchor(offset)` | Resolve an offset in UTF-16 units into the last displayed flushed + pending + composition text to `{ col, row }` in viewport cells. Wrap boundaries prefer the next line; the final offset returns the end anchor. Returns `null` when hidden, out of range, inside a surrogate pair, or on a tail-sliced row. Performs no width measurement or DOM work. |
 | `onLayout(callback)` | Call `callback` after each layout, a hide included. Returns an unsubscribe function. |
 
 ### Prompt
@@ -278,6 +279,7 @@ Finds text that exists after the prompt but was never typed through the overlay.
 | Property | Type | Description |
 |----------|------|-------------|
 | `pendingText` | `string` | Unacknowledged text (read-only) |
+| `committedText` | `string` | Flushed + pending text exactly as last displayed, excluding composition; `''` when hidden (read-only). Visual correspondence data, not a delivery acknowledgement. Offsets use UTF-16 units. |
 | `hasPending` | `boolean` | `true` if there is pending or flushed text. Excludes the IME composition, so it can be `false` while the overlay still shows one |
 | `composition` | `string` | The text set by `setComposition()`, `''` when none (read-only) |
 | `state` | `ZerolagInputState` | Full snapshot: `pendingText`, `flushedLength`, `flushedText`, `visible`, `promptPosition` |

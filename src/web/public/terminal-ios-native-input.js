@@ -35,8 +35,8 @@
 
   function editBetween(previous, next) {
     // A pure append (including a combining mark or tone typed onto the last letter)
-    // is sent as-is, as on master: re-typing the extended cluster would make a
-    // code-point line editor (zsh) double the base letter.
+    // is sent as-is, as xterm sends it: re-typing the extended cluster would make
+    // a code-point line editor (zsh) double the base letter.
     if (next.startsWith(previous)) return { deleted: 0, inserted: next.slice(previous.length) };
     const a = graphemes(previous);
     const b = graphemes(next);
@@ -213,29 +213,26 @@
       const caret = guard(
         'caret',
         function () {
-          const value = Array.from(project(textarea.value));
-          const index = Array.from(project(textarea.value.slice(0, textarea.selectionEnd))).length;
-          const tail = value.slice(index).join('');
-          let cellsFromEnd = value.length - index;
-          const unicode = core.unicodeService;
-          if (unicode && typeof unicode.getStringCellWidth === 'function') {
-            try {
-              cellsFromEnd = unicode.getStringCellWidth(tail);
-            } catch (_) {
-              /* Older xterm builds use the code-point fallback. */
-            }
-          }
+          const text = project(textarea.value);
+          const offset = project(textarea.value.slice(0, textarea.selectionEnd)).length;
           return {
             visible:
               !destroyed &&
               textarea.ownerDocument.activeElement === textarea &&
               !composing &&
               textarea.selectionStart === textarea.selectionEnd &&
-              index < value.length,
-            cellsFromEnd,
+              offset < text.length &&
+              text === synced &&
+              !invalidated &&
+              !foreignSnapshot,
+            text,
+            offset,
+            // Advances only when an edit is reconciled (sent) or the line is reset;
+            // a borrowed clipboard value and its restoration leave it unchanged.
+            generation,
           };
         },
-        { visible: false, cellsFromEnd: 0 }
+        { visible: false, text: '', offset: 0, generation: 0 }
       );
       let previousCaret;
       notifyCaret = function () {
@@ -243,7 +240,9 @@
         if (
           previousCaret &&
           previousCaret.visible === current.visible &&
-          previousCaret.cellsFromEnd === current.cellsFromEnd
+          previousCaret.text === current.text &&
+          previousCaret.offset === current.offset &&
+          previousCaret.generation === current.generation
         )
           return;
         previousCaret = current;
@@ -352,6 +351,7 @@
                 sendTransaction(ops);
               } catch (error) {
                 record({ type: 'error', hook: 'sendTransaction', error });
+                invalidated = true;
               }
             }
             // Empty/deletion-only compositions still settle the visual preview.
@@ -389,6 +389,7 @@
           if (ev.type === 'keypress') return false;
           if (ev.type === 'keyup') return textarea.ownerDocument.activeElement === textarea;
           if (ev.type !== 'keydown') return true;
+          restoreForeign();
           const kind = composing ? 'compose' : classifyKey(ev, textarea);
           if (kind === 'compose') {
             schedule();
@@ -418,7 +419,8 @@
         target.addEventListener(type, listener, true);
       }
 
-      patch(core, '_inputEvent', function () {
+      patch(core, '_inputEvent', function (ev) {
+        if (ev && ev.data && ev.inputType === 'insertText') core._unprocessedDeadKey = false;
         return false;
       });
       patch(helper, '_handleAnyTextareaChanges', schedule);
@@ -499,6 +501,7 @@
               direction: textarea.selectionDirection,
               synced,
             };
+            notifyCaret();
           },
           terminal.element
         );
@@ -557,20 +560,80 @@
     }
   }
 
-  // This is a visual projection only: native caret changes never become keys.
-  // `options.anchor()` returns the viewport cell `{col, row}` where the VISIBLE line
-  // ends (where the next typed character would appear), 'hide' to hide the
-  // marker, or null/undefined to use xterm's cursor. A throwing anchor hides it. Codeman's local echo shows unsent text in an overlay while xterm's own
-  // cursor stays at the prompt, so the overlay must supply that anchor. Without an
-  // anchor the xterm cursor is used, which is right whenever every byte reached
-  // the PTY (local echo off, tiles).
-  // `options.subscribe(callback)` returns a disposer and is used to reposition
-  // when the anchor moves without an xterm render (overlay repaint).
+  // Visual only: an anchor(caret) supplies the exact viewport cell, 'hide', or
+  // null to resolve against parsed xterm cells. Neither mode moves native input.
+  // subscribe(callback) follows overlay repaints without an xterm render.
+  function bufferCaretAnchor(terminal, caret) {
+    const buffer = terminal.buffer.active;
+    const text = caret.text;
+    if (!text || caret.offset < 0 || caret.offset > text.length) return null;
+    let row = buffer.baseY + buffer.cursorY;
+    let col = buffer.cursorX;
+    let line = buffer.getLine(row);
+    // Read only as far as the native field and one preceding repetition.
+    function previousCell() {
+      while (line) {
+        if (col === 0) {
+          if (!line.isWrapped || row === 0) return null;
+          const following = line;
+          line = buffer.getLine(--row);
+          if (!line) return null;
+          col = terminal.cols;
+          // A wide glyph that did not fit leaves unused cells before a soft
+          // wrap. Validate that padding against the following glyph's width;
+          // ordinary blank cells (including printed spaces) remain text.
+          let padding = 0;
+          while (col - padding > 0) {
+            const cell = line.getCell(col - padding - 1);
+            if (!cell || cell.getWidth() !== 1 || cell.getChars()) break;
+            padding += 1;
+          }
+          const first = following.getCell(0);
+          if (padding && first && first.getWidth() > padding) col -= padding;
+        }
+        const cell = line.getCell(--col);
+        if (!cell) return null;
+        if (cell.getWidth() === 0) continue;
+        const chars = cell.getChars();
+        if (!chars) return null;
+        return { chars, col, row: row - buffer.viewportY };
+      }
+      return null;
+    }
+    const cells = [];
+    let remaining = text.length;
+    while (remaining > 0) {
+      const cell = previousCell();
+      if (!cell || cell.chars.length > remaining || text.slice(remaining - cell.chars.length, remaining) !== cell.chars)
+        return null;
+      cells.push(cell);
+      remaining -= cell.chars.length;
+    }
+    // A previous identical native-length suffix makes provenance ambiguous.
+    remaining = text.length;
+    while (remaining > 0) {
+      const cell = previousCell();
+      if (!cell || cell.chars.length > remaining || text.slice(remaining - cell.chars.length, remaining) !== cell.chars)
+        break;
+      remaining -= cell.chars.length;
+    }
+    if (remaining === 0) return null;
+    let offset = 0;
+    for (let i = cells.length - 1; i >= 0; i -= 1) {
+      const cell = cells[i];
+      if (caret.offset === offset) return { col: cell.col, row: cell.row };
+      offset += cell.chars.length;
+      if (caret.offset < offset) return null; // No cell inside a cluster.
+    }
+    return { col: buffer.cursorX, row: buffer.baseY + buffer.cursorY - buffer.viewportY };
+  }
   function attachCaretMarker(terminal, owner, options) {
     const anchor = options && typeof options.anchor === 'function' ? options.anchor : null;
     const disposables = [];
     let marker;
     let disposed = false;
+    let caretGeneration = 0;
+    let awaitingEcho = false;
     function dispose() {
       if (disposed) return;
       disposed = true;
@@ -586,6 +649,7 @@
     try {
       const screen = terminal.element && terminal.element.querySelector('.xterm-screen');
       if (!screen || !owner || typeof owner.caret !== 'function' || typeof owner.onCaret !== 'function') return dispose;
+      caretGeneration = owner.caret().generation;
       marker = screen.ownerDocument.createElement('div');
       marker.className = 'ios-native-caret';
       marker.setAttribute('aria-hidden', 'true');
@@ -597,41 +661,50 @@
           const core = terminal._core;
           const dimensions = core && core._renderService && core._renderService.dimensions;
           const cell = dimensions && dimensions.css && dimensions.css.cell;
-          const buffer = terminal.buffer.active;
           if (disposed || !caret.visible || !cell || !cell.width || !cell.height || !terminal.cols) {
             marker.style.display = 'none';
             return;
           }
-          let end = null;
+          let target = null;
           if (anchor) {
             try {
-              end = anchor();
+              target = anchor(caret);
             } catch (_) {
-              end = 'hide';
+              target = 'hide';
             }
           }
-          if (end === 'hide') {
+          if (target == null && !awaitingEcho) target = bufferCaretAnchor(terminal, caret);
+          if (!target || target === 'hide' || target.row < 0 || target.row >= terminal.rows) {
             marker.style.display = 'none';
             return;
           }
-          if (end == null) end = { col: buffer.cursorX, row: buffer.cursorY + buffer.baseY - buffer.viewportY };
-          let column = end.col - caret.cellsFromEnd;
-          let row = end.row;
-          if (column < 0) {
-            const rows = Math.ceil(-column / terminal.cols);
-            column += rows * terminal.cols;
-            row -= rows;
-          }
-          marker.style.display = row < 0 || row >= terminal.rows ? 'none' : 'block';
-          marker.style.left = column * cell.width + 'px';
-          marker.style.top = row * cell.height + 'px';
+          marker.style.display = 'block';
+          marker.style.left = target.col * cell.width + 'px';
+          marker.style.top = target.row * cell.height + 'px';
           marker.style.height = cell.height + 'px';
           marker.style.backgroundColor = (terminal.options.theme && terminal.options.theme.cursor) || 'currentColor';
         } catch (_) {
           marker.style.display = 'none';
         }
       }
-      disposables.push(owner.onCaret(position));
+      disposables.push(
+        owner.onCaret((caret) => {
+          // Await parsed output only for a reconciled edit or reset (generation),
+          // never for a borrowed clipboard value or its restoration.
+          if (caret.generation !== caretGeneration) {
+            caretGeneration = caret.generation;
+            awaitingEcho = true;
+          }
+          position();
+        })
+      );
+      if (typeof terminal.onWriteParsed === 'function') {
+        const subscription = terminal.onWriteParsed(() => {
+          awaitingEcho = false;
+          position();
+        });
+        disposables.push(() => subscription.dispose());
+      }
       for (const name of ['onRender', 'onCursorMove']) {
         if (typeof terminal[name] === 'function') {
           const subscription = terminal[name](position);

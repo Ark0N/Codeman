@@ -17,10 +17,10 @@
  * and a lone digit at a pending dialog goes without it). Shift+Enter is a
  * newline, Esc clears, Backspace and the arrows reach the PTY only from an
  * empty field, and so do the Ctrl shortcuts. Autocorrect is on. A held draft
- * belongs to one session (_owner): clear() stashes it under that session and
- * restoreDraft() brings it back when the session is shown again, except a
- * clear({ discard: true }) (the keyboard bar's clear-line key), which throws
- * it away.
+ * belongs to one session: a captured target takes precedence over _owner when
+ * clear() stashes it, and restoreDraft() brings it back when that session is
+ * shown again, except a clear({ discard: true }) (the keyboard bar's clear-line
+ * key), which throws it away.
  *
  * ## Android IME challenge
  *
@@ -91,10 +91,10 @@ const CjkInput = (() => {
   let _holdApplied = false;
   // Send-on-Enter: held drafts of the sessions switched away from, by session id.
   const _drafts = new Map();
-  // Send-on-Enter: the session the field's text belongs to (the one last shown,
-  // set by restoreDraft). clear() stashes a held draft under it, so every path
-  // that drops the active session before the next cleanup (goHome, the tile
-  // grid's _replaceTileGrid and _onTileAdoptedElsewhere) keeps the answer.
+  // Send-on-Enter: the session last shown, set by restoreDraft. A captured
+  // target takes precedence; otherwise clear() stashes a held draft under this
+  // owner, so paths that drop the active session before the next cleanup
+  // (goHome, _replaceTileGrid and _onTileAdoptedElsewhere) keep the answer.
   let _owner = null;
   const _listeners = {};
 
@@ -690,13 +690,15 @@ const CjkInput = (() => {
         // nothing is stashed, any older stash of this session goes too, and the
         // field keeps its owner, since the session shown has not changed.
         if (_owner) _drafts.delete(_owner);
+        if (_hasTarget && _target) _drafts.delete(_target);
       } else {
         // Send-on-Enter: a held draft is stashed for the session it was typed
         // for, whichever path got here. discardDraft() drops the owner of a
         // removed session, so its text is not stashed again.
-        if (_hold && _owner) {
+        const sessionId = _hasTarget && _target ? _target : _owner;
+        if (_hold && sessionId) {
           const draft = _strip(_textarea.value);
-          if (draft.trim()) _drafts.set(_owner, draft);
+          if (draft.trim()) _drafts.set(sessionId, draft);
         }
         _owner = null;
       }
@@ -785,6 +787,7 @@ const CjkInput = (() => {
      * clear(); restoreDraft() puts it back when that session is shown again.
      */
     stashDraft(sessionId) {
+      if (_hasTarget && _target) sessionId = _target;
       if (!_initialized || !_textarea || !_hold || !sessionId) return;
       // An empty field leaves any stash alone: a draft only sits in the map
       // while its session is not shown (restoreDraft takes it out), and the

@@ -70,8 +70,11 @@ describe('xterm private-API dependency guard', () => {
   // and touch quietly stops forwarding to native SGR tracking apps. Property names survive
   // minification, so a string check on the shipped bundle catches a rename on upgrade.
   // terminal-ios-native-input.js wraps `_inputEvent`, `_handleTextAreaBlur` and `_finalizeComposition`
-  // and reads `_compositionView`; if any is missing its create() returns null, and iOS then gets
-  // neither the native-input owner nor the keyCode-229 recovery, so #830 returns without a signal.
+  // and reads `_compositionView`; if any is missing its create() returns null, and iOS falls back
+  // to the keyCode-229 recovery, so #830 (suggestions, phrase replacement, held delete) returns
+  // without a signal.
+  // The iOS owner also clears `_unprocessedDeadKey` when native input commits text,
+  // so the next terminal command is not swallowed as part of the dead-key sequence.
   it('still ships the composition-helper and mouse-service fields terminal input depends on', () => {
     const bundle = readFileSync(resolve(root, 'node_modules/@xterm/xterm/lib/xterm.js'), 'utf8');
     for (const name of [
@@ -84,6 +87,7 @@ describe('xterm private-API dependency guard', () => {
       'coreMouseService',
       'activeEncoding',
       '_inputEvent',
+      '_unprocessedDeadKey',
       '_handleTextAreaBlur',
       '_finalizeComposition',
       '_compositionView',

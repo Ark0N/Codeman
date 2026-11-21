@@ -766,7 +766,7 @@ Object.assign(CodemanApp.prototype, {
       });
       if (this._iosNativeInput) {
         this._iosCaretMarker = window.CodemanIosNativeInput.attachCaretMarker?.(this.terminal, this._iosNativeInput, {
-          anchor: () => this._nativeInputAnchor(),
+          anchor: (caret) => this._nativeInputCaretAnchor(caret),
           subscribe: (callback) => this._localEchoOverlay?.onLayout?.(callback),
         });
         return;
@@ -787,11 +787,16 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
-  _nativeInputAnchor() {
+  _nativeInputCaretAnchor(caret) {
     const overlay = this._localEchoOverlay;
-    if (this._localEchoEnabled && !this._echoPassthroughSessions?.has(this.activeSessionId) &&
-        (overlay?.pendingText || overlay?.getFlushed?.().count)) {
-      return overlay.getInputEndAnchor?.() || 'hide';
+    if (
+      this._localEchoEnabled &&
+      !this._echoPassthroughSessions?.has(this.activeSessionId) &&
+      (overlay?.pendingText || overlay?.getFlushed?.().count)
+    ) {
+      const committed = overlay.committedText;
+      if (typeof committed !== 'string' || !committed.endsWith(caret.text)) return 'hide';
+      return overlay.getInputAnchor?.(committed.length - caret.text.length + caret.offset) || 'hide';
     }
     return null;
   },
@@ -865,6 +870,8 @@ Object.assign(CodemanApp.prototype, {
   submitFromToolbar() {
     const pane = this._focusedPane();
     if (!pane?.terminal || !pane.sessionId || pane.tile?._destroyed || !this.sessions.has(pane.sessionId)) return;
+    // Typed Enter spends an armed one-shot Ctrl in onData; this CR skips onData.
+    if (typeof KeyboardAccessoryBar !== 'undefined') KeyboardAccessoryBar.clearCtrl?.();
     // The CR goes on the FIFO, not through xterm's triggerDataEvent(data, true),
     // so its scrollOnUserInput never runs; scroll to the prompt as it would.
     const terminal = pane.terminal;
@@ -887,6 +894,7 @@ Object.assign(CodemanApp.prototype, {
     let ctrlIndex = -1;
     if (typeof KeyboardAccessoryBar !== 'undefined' && KeyboardAccessoryBar.isCtrlArmed?.()) {
       ctrlIndex = ops.findIndex((data) => data !== '\x7f' && !window.CodemanTerminalInput?.isTerminalFocusOrMouseReport(data));
+      if (ctrlIndex === -1 && ops.includes('\x7f')) KeyboardAccessoryBar.clearCtrl?.();
     }
     for (let i = 0; i < ops.length; i++) {
       const data = i === ctrlIndex ? KeyboardAccessoryBar.consumeCtrl(ops[i]) : ops[i];

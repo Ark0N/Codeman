@@ -11,7 +11,8 @@ import { describe, expect, it, vi } from 'vitest';
 type Event = Record<string, unknown>;
 interface Caret {
   visible: boolean;
-  cellsFromEnd: number;
+  text: string;
+  offset: number;
 }
 interface Transaction {
   inserted: string;
@@ -45,7 +46,7 @@ interface NativeApi {
     terminal: FakeTerminal,
     owner: NativeOwner,
     options?: {
-      anchor?: () => { col: number; row: number } | 'hide' | null | undefined;
+      anchor?: (caret: Caret) => { col: number; row: number } | 'hide' | null | undefined;
       subscribe?: (callback: () => void) => () => void;
     }
   ): () => void;
@@ -65,12 +66,21 @@ interface FakeHelper {
   _isSendingComposition: boolean;
 }
 interface FakeCore {
-  _inputEvent(): unknown;
+  _inputEvent(ev?: Event): unknown;
+  _unprocessedDeadKey?: boolean;
   _handleTextAreaBlur(): void;
   _compositionHelper: FakeHelper;
   coreService: { triggerDataEvent(): void; decPrivateModes?: { applicationCursorKeys: boolean } };
   unicodeService: { getStringCellWidth?: (text: string) => number };
   _renderService: { dimensions: { css: { cell: { width: number; height: number } } } | null };
+}
+interface BufferCell {
+  getChars(): string;
+  getWidth(): number;
+}
+interface BufferLine {
+  isWrapped: boolean;
+  getCell(col: number): BufferCell | undefined;
 }
 interface FakeTerminal {
   textarea: FakeTextarea;
@@ -78,10 +88,19 @@ interface FakeTerminal {
   _core: FakeCore;
   cols: number;
   rows: number;
-  buffer: { active: { cursorX: number; cursorY: number; baseY: number; viewportY: number } };
+  buffer: {
+    active: {
+      cursorX: number;
+      cursorY: number;
+      baseY: number;
+      viewportY: number;
+      getLine(row: number): BufferLine | undefined;
+    };
+  };
   options: { theme: { cursor: string }; screenReaderMode: boolean };
   onRender(callback: () => void): { dispose(): void };
   onCursorMove(callback: () => void): { dispose(): void };
+  onWriteParsed(callback: () => void): { dispose(): void };
 }
 interface Harness {
   api: NativeApi;
@@ -108,6 +127,7 @@ interface Harness {
   screen: FakeNode;
   renders: Set<() => void>;
   moves: Set<() => void>;
+  parsed: Set<() => void>;
   owner: NativeOwner;
   tick(): void;
   selection(start: number, end?: number, direction?: string): void;
@@ -252,6 +272,18 @@ class FakeTextarea extends FakeNode {
   }
 }
 
+function bufferLine(cells: Array<string | [string, number]>, isWrapped = false): BufferLine {
+  return {
+    isWrapped,
+    getCell(col) {
+      const value = cells[col];
+      if (value === undefined) return undefined;
+      const [chars, width] = typeof value === 'string' ? [value, 1] : value;
+      return { getChars: () => chars, getWidth: () => width };
+    },
+  };
+}
+
 function harness(
   mode = 'direct',
   options: {
@@ -324,6 +356,7 @@ function harness(
   element.querySelector = (selector: string) => (selector === '.xterm-screen' ? screen : null);
   const renders = new Set<() => void>();
   const moves = new Set<() => void>();
+  const parsed = new Set<() => void>();
   const subscribe = (set: Set<() => void>, callback: () => void) => {
     set.add(callback);
     return { dispose: () => set.delete(callback) };
@@ -334,10 +367,22 @@ function harness(
     _core: core,
     cols: 10,
     rows: 5,
-    buffer: { active: { cursorX: 5, cursorY: 2, baseY: 0, viewportY: 0 } },
+    buffer: {
+      active: {
+        cursorX: 5,
+        cursorY: 2,
+        baseY: 0,
+        viewportY: 0,
+        getLine: (row) =>
+          row === terminal.buffer.active.baseY + terminal.buffer.active.cursorY
+            ? bufferLine(Array.from(line + pending))
+            : undefined,
+      },
+    },
     options: { theme: { cursor: '#fff' }, screenReaderMode: !!options.screenReaderMode },
     onRender: (callback: () => void) => subscribe(renders, callback),
     onCursorMove: (callback: () => void) => subscribe(moves, callback),
+    onWriteParsed: (callback: () => void) => subscribe(parsed, callback),
   };
   const originals = [
     { target: core, name: '_inputEvent' },
@@ -511,6 +556,7 @@ function harness(
     screen,
     renders,
     moves,
+    parsed,
     consume,
     get owner() {
       return owner;
@@ -1048,7 +1094,7 @@ const replayCases: Array<[string, (h: Harness) => void]> = [
       h.clearSent();
       h.selection(2);
       h.bytes([]);
-      expect(h.owner.caret()).toEqual({ visible: true, cellsFromEnd: 3 });
+      expect(h.owner.caret()).toMatchObject({ visible: true, text: 'hello', offset: 2 });
       const dispose = h.api.attachCaretMarker(h.terminal, h.owner);
       const marker = h.screen.children[0];
       expect(marker.attributes['aria-hidden']).toBe('true');
@@ -1062,23 +1108,20 @@ const replayCases: Array<[string, (h: Harness) => void]> = [
       h.edit('X');
       h.bytes([...dels(3), 'Xllo']);
       expect(h.value()).toBe('heXllo');
-      expect(h.owner.caret()).toEqual({ visible: true, cellsFromEnd: 3 });
+      expect(h.owner.caret()).toMatchObject({ visible: true, text: 'heXllo', offset: 3 });
       h.clearSent();
       h.selection(6);
       expect(marker.style.display).toBe('none');
       h.bytes([]);
       h.selection(3);
-      h.terminal.buffer.active.cursorX = 0;
-      h.terminal.buffer.active.cursorY = 1;
-      for (const callback of h.renders) callback();
-      expect([marker.style.left, marker.style.top]).toEqual(['56px', '0px']);
-      h.terminal.buffer.active.cursorY = 0;
-      for (const callback of h.moves) callback();
-      expect(marker.style.display).toBe('none');
+      expect(marker.style.display).toBe('none'); // No parsed echo of the edit yet.
+      h.terminal.buffer.active.cursorX = 6;
+      for (const callback of h.parsed) callback();
+      expect([marker.style.left, marker.style.top, marker.style.display]).toEqual(['24px', '32px', 'block']);
       dispose();
       dispose();
       expect(h.screen.children).toHaveLength(0);
-      expect(h.renders.size + h.moves.size).toBe(0);
+      expect(h.renders.size + h.moves.size + h.parsed.size).toBe(0);
     },
   ],
   [
@@ -1142,10 +1185,10 @@ const replayCases: Array<[string, (h: Harness) => void]> = [
         h.core.coreService.decPrivateModes = { applicationCursorKeys };
         h.selection(1);
         h.bytes([]);
-        expect(h.owner.caret()).toEqual({ visible: true, cellsFromEnd: 2 });
+        expect(h.owner.caret()).toMatchObject({ visible: true, text: '你好', offset: 1 });
       }
       h.core.unicodeService.getStringCellWidth = undefined;
-      expect(h.owner.caret()).toEqual({ visible: true, cellsFromEnd: 1 });
+      expect(h.owner.caret()).toMatchObject({ visible: true, text: '你好', offset: 1 });
       h.selection(2);
       expect(h.owner.caret().visible).toBe(false);
     },
@@ -1159,7 +1202,8 @@ const replayCases: Array<[string, (h: Harness) => void]> = [
       const unsubscribe = h.owner.onCaret((caret: Caret) => changes.push(caret));
       h.selection(2);
       h.selection(2);
-      expect(changes).toEqual([{ visible: true, cellsFromEnd: 3 }]);
+      expect(changes).toMatchObject([{ visible: true, text: 'hello', offset: 2 }]);
+      expect(changes).toHaveLength(1);
       h.blur();
       const before = h.caretChanges.length;
       h.document.fire('selectionchange');
@@ -1179,16 +1223,16 @@ const replayCases: Array<[string, (h: Harness) => void]> = [
     },
   ],
   [
-    '31 projected code-point caret',
+    '31 projected UTF-16 caret',
     (h) => {
       h.edit('a👍\nb');
       h.clearSent();
       h.selection(4);
-      expect(h.owner.caret().cellsFromEnd).toBe(1);
+      expect(h.owner.caret()).toMatchObject({ visible: true, text: 'a👍 b', offset: 4 });
       h.selection(3);
-      expect(h.owner.caret().cellsFromEnd).toBe(2);
+      expect(h.owner.caret()).toMatchObject({ visible: true, text: 'a👍 b', offset: 3 });
       h.selection(1);
-      expect(h.owner.caret().cellsFromEnd).toBe(h.core.unicodeService.getStringCellWidth!('👍 b'));
+      expect(h.owner.caret()).toMatchObject({ visible: true, text: 'a👍 b', offset: 1 });
       h.selection(3);
       h.edit('X');
       h.bytes([DEL, DEL, 'X b']);
@@ -1231,7 +1275,7 @@ const replayCases: Array<[string, (h: Harness) => void]> = [
       });
       h.edit('X', [2, 2], 'insertText', false, false);
       h.bytes(['hello', ...dels(3), 'Xllo']);
-      expect(h.owner.caret()).toEqual({ visible: true, cellsFromEnd: 2 });
+      expect(h.owner.caret()).toMatchObject({ visible: true, text: 'heXllo', offset: 4 });
       h.invariant();
     },
   ],
@@ -1280,6 +1324,19 @@ const replayCases: Array<[string, (h: Harness) => void]> = [
       }
     },
   ],
+  [
+    'contextmenu clipboard snapshot restores before empty-line Backspace classification',
+    (h) => {
+      expect(h.textarea.value).toBe('');
+      h.terminal.element.fire('contextmenu');
+      // xterm's bubble handler writes a selection before its next capture keydown.
+      h.textarea.value = 'clipboard';
+      h.selection(0, 9);
+      expect(h.owner.keyFilter({ type: 'keydown', key: 'Backspace', keyCode: 8 })).toBe(true);
+      expect(h.textarea.value).toBe('');
+      h.bytes([]);
+    },
+  ],
 ];
 
 for (const mode of ['direct', 'local-echo']) {
@@ -1289,6 +1346,166 @@ for (const mode of ['direct', 'local-echo']) {
 }
 
 describe('CodemanIosNativeInput integration contract', () => {
+  it('projects CRLF and LF prefixes into UTF-16 caret offsets', () => {
+    const h = harness();
+    h.edit('a👍\r\nb\nc');
+    for (const [selection, offset] of [
+      [1, 1],
+      [3, 3],
+      [5, 4],
+      [7, 6],
+    ]) {
+      h.selection(selection);
+      expect(h.owner.caret()).toMatchObject({ visible: true, text: 'a👍 b c', offset });
+    }
+  });
+
+  it('hides pending, invalidated and foreign native snapshots', () => {
+    const h = harness();
+    h.type('hello');
+    h.selection(2);
+    expect(h.owner.caret().visible).toBe(true);
+    h.textarea.value = 'hellox';
+    h.selection(2);
+    expect(h.owner.caret()).toMatchObject({ visible: false, text: 'hellox', offset: 2 });
+    h.textarea.fire('beforeinput');
+    expect(h.owner.caret().visible).toBe(false);
+    h.owner.reset('test');
+    h.type('hello');
+    h.selection(2);
+    h.terminal.element.fire('contextmenu');
+    expect(h.owner.caret()).toMatchObject({ visible: false, text: 'hello', offset: 2 });
+  });
+
+  it('maps a你b through validated wide-wrap padding to explicit cells', () => {
+    const h = harness();
+    h.type('a你b');
+    h.terminal.cols = 80;
+    const lines = new Map([
+      [0, bufferLine([...Array(78).fill(' '), 'a', ''])],
+      [1, bufferLine([['你', 2], ['', 0], 'b'], true)],
+    ]);
+    Object.assign(h.terminal.buffer.active, { cursorX: 3, cursorY: 1, getLine: (row: number) => lines.get(row) });
+    h.selection(0);
+    const snapshot = h.snapshot();
+    const sent = [...h.sent];
+    const dispose = h.api.attachCaretMarker(h.terminal, h.owner);
+    const marker = h.screen.children[0];
+    for (const [offset, col, row] of [
+      [0, 78, 0],
+      [1, 0, 1],
+      [2, 2, 1],
+    ]) {
+      h.selection(offset);
+      expect([marker.style.display, marker.style.left, marker.style.top]).toEqual([
+        'block',
+        `${col * 8}px`,
+        `${row * 16}px`,
+      ]);
+    }
+    h.selection(0);
+    expect(h.snapshot()).toEqual(snapshot);
+    expect(h.sent).toEqual(sent);
+    expect(h.document.activeElement).toBe(h.textarea);
+    h.terminal.buffer.active.viewportY = 1;
+    for (const callback of h.renders) callback();
+    expect(marker.style.display).toBe('none');
+    dispose();
+  });
+
+  it.each(['e\u0301', '👩‍💻'])('hides offsets inside one buffer cluster %s but maps its start', (cluster) => {
+    const h = harness();
+    h.type(cluster + 'b');
+    Object.assign(h.terminal.buffer.active, {
+      cursorX: 3,
+      cursorY: 0,
+      getLine: () => bufferLine([[cluster, 2], ['', 0], 'b']),
+    });
+    h.selection(1);
+    const dispose = h.api.attachCaretMarker(h.terminal, h.owner);
+    const marker = h.screen.children[0];
+    expect(marker.style.display).toBe('none');
+    h.selection(0);
+    expect([marker.style.display, marker.style.left, marker.style.top]).toEqual(['block', '0px', '0px']);
+    dispose();
+  });
+
+  it('hides an old identical hello until the next parsed write', () => {
+    const h = harness();
+    h.terminal.buffer.active.getLine = () => bufferLine(Array.from('hello'));
+    const dispose = h.api.attachCaretMarker(h.terminal, h.owner);
+    h.type('hello');
+    h.selection(2);
+    const marker = h.screen.children[0];
+    expect(marker.style.display).toBe('none');
+    for (const callback of h.renders) callback();
+    for (const callback of h.moves) callback();
+    expect(marker.style.display).toBe('none');
+    for (const callback of h.parsed) callback();
+    expect([marker.style.display, marker.style.left, marker.style.top]).toEqual(['block', '16px', '32px']);
+    dispose();
+  });
+
+  it('keeps the marker after a copy borrows and restores the native field, with no new output', () => {
+    const h = harness();
+    h.terminal.buffer.active.getLine = () => bufferLine(Array.from('hello'));
+    const dispose = h.api.attachCaretMarker(h.terminal, h.owner);
+    h.type('hello');
+    h.selection(2);
+    for (const callback of h.parsed) callback();
+    const marker = h.screen.children[0];
+    expect([marker.style.display, marker.style.left]).toEqual(['block', '16px']);
+    // xterm's right-click handler lends the field to native Copy: a different
+    // terminal selection, then the copy timer restores the draft. No input is
+    // sent and no xterm write follows.
+    h.terminal.element.fire('contextmenu');
+    h.textarea.value = 'other selection';
+    h.selection(0, 15);
+    expect(marker.style.display).toBe('none');
+    h.document.fire('copy');
+    h.tick();
+    h.selection(2);
+    expect(h.owner.caret()).toMatchObject({ visible: true, text: 'hello', offset: 2 });
+    expect([marker.style.display, marker.style.left]).toEqual(['block', '16px']);
+    dispose();
+  });
+
+  it('does not treat an unwritten cell as a native space', () => {
+    const h = harness();
+    h.type('a b');
+    h.selection(1);
+    Object.assign(h.terminal.buffer.active, { cursorX: 3, getLine: () => bufferLine(['a', '', 'b']) });
+    const dispose = h.api.attachCaretMarker(h.terminal, h.owner);
+    expect(h.screen.children[0].style.display).toBe('none');
+    dispose();
+  });
+
+  it('never crosses a hard line break while matching the native field', () => {
+    const h = harness();
+    h.type('ab');
+    h.selection(0);
+    const lines = new Map([
+      [0, bufferLine(['a'])],
+      [1, bufferLine(['b'])],
+    ]);
+    Object.assign(h.terminal.buffer.active, { cursorX: 1, cursorY: 1, getLine: (row: number) => lines.get(row) });
+    const dispose = h.api.attachCaretMarker(h.terminal, h.owner);
+    expect(h.screen.children[0].style.display).toBe('none');
+    dispose();
+  });
+
+  it.each(['hellohello', 'hullo', 'xhello'])('checks the full buffer suffix and repetition for %s', (text) => {
+    const h = harness();
+    h.type('hello');
+    Object.assign(h.terminal.buffer.active, { cursorX: text.length, getLine: () => bufferLine(Array.from(text)) });
+    h.selection(2);
+    const dispose = h.api.attachCaretMarker(h.terminal, h.owner);
+    const marker = h.screen.children[0];
+    expect(marker.style.display).toBe(text === 'xhello' ? 'block' : 'none');
+    if (text === 'xhello') expect([marker.style.left, marker.style.top]).toEqual(['24px', '32px']);
+    dispose();
+  });
+
   it('requires a transaction sink and leaves unsupported xterm internals untouched', () => {
     const h = harness();
     h.owner.destroy();
@@ -1309,6 +1526,16 @@ describe('CodemanIosNativeInput integration contract', () => {
     h.tick();
     h.bytes([]);
     expect(h.silent('input').defaultPrevented).toBe(false);
+  });
+
+  it('clears the pending dead key on committed native text without emitting xterm data', () => {
+    const h = harness();
+    h.core._unprocessedDeadKey = true;
+    expect(h.core._inputEvent({ data: 'é', inputType: 'insertText' })).toBe(false);
+    expect(h.core._unprocessedDeadKey).toBe(false);
+    expect(h.rawProducer).not.toHaveBeenCalled();
+    h.tick();
+    h.bytes([]);
   });
 
   it('notifies every settled edit, deletion-only/unchanged composition, and reset', () => {
@@ -1363,8 +1590,8 @@ describe('CodemanIosNativeInput integration contract', () => {
     expect(() => h.edit('hello')).not.toThrow();
     expect(h.owner.state().synced).toBe('hello');
     h.selection(2);
-    expect(() => h.edit('X')).not.toThrow();
-    expect(h.owner.state().synced).toBe('heXllo');
+    expect(h.owner.caret()).toMatchObject({ visible: false, text: 'hello', offset: 2 });
+    expect(h.owner.state().invalidated).toBe(true);
     expect(h.records.filter((entry) => entry.type === 'error').map((entry) => entry.hook)).toContain('sendTransaction');
     expect(h.records.filter((entry) => entry.type === 'error').map((entry) => entry.hook)).toContain('onTransaction');
   });
@@ -1416,7 +1643,8 @@ describe('CodemanIosNativeInput integration contract', () => {
     let layout = () => {};
     const unsubscribe = vi.fn();
     const dispose = h.api.attachCaretMarker(h.terminal, h.owner, {
-      anchor() {
+      anchor(caret) {
+        expect(caret).toMatchObject({ visible: true, text: 'hello', offset: 2 });
         if (fail) throw new Error('layout');
         return anchor;
       },
@@ -1426,7 +1654,7 @@ describe('CodemanIosNativeInput integration contract', () => {
       },
     });
     const marker = h.screen.children[0];
-    expect([marker.style.left, marker.style.top]).toEqual(['40px', '48px']);
+    expect([marker.style.left, marker.style.top]).toEqual(['64px', '48px']);
     anchor = 'hide';
     layout();
     expect(marker.style.display).toBe('none');

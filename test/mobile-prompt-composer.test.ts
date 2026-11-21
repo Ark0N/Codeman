@@ -386,6 +386,7 @@ describe('mobile prompt composer', () => {
 
   it('uploads images without writing into the PTY and inserts their paths into the draft', async () => {
     const { app, bar, document } = loadComposer();
+    app._focusedPane = () => ({ sessionId: 'session-2', isPrimary: false });
     let finishUpload!: (paths: string[]) => void;
     app._uploadAndInsertImages.mockImplementation(
       () => new Promise<string[]>((resolveUpload) => (finishUpload = resolveUpload))
@@ -405,7 +406,7 @@ describe('mobile prompt composer', () => {
     finishUpload(['/tmp/image-one.png']);
     await vi.waitFor(() => expect(input.value).toBe('review /tmp/image-one.png'));
 
-    expect(app._uploadAndInsertImages).toHaveBeenCalledWith([image], { insert: false });
+    expect(app._uploadAndInsertImages).toHaveBeenCalledWith([image], { insert: false, sessionId: 'session-2' });
     expect((document.querySelector('.paste-send') as HTMLButtonElement).disabled).toBe(false);
     expect(app.terminal.paste).not.toHaveBeenCalled();
     expect(app._sendInputAsync).not.toHaveBeenCalled();
@@ -620,7 +621,7 @@ describe('mobile prompt composer', () => {
     Object.defineProperty(fileInput, 'files', { configurable: true, value: [video, pdf, script] });
 
     fileInput.dispatchEvent(new document.defaultView!.Event('change', { bubbles: true }));
-    expect(app._uploadAndInsertImages).toHaveBeenCalledWith([video, pdf], { insert: false });
+    expect(app._uploadAndInsertImages).toHaveBeenCalledWith([video, pdf], { insert: false, sessionId: 'session-1' });
     expect(app.showToast).toHaveBeenCalledWith('1 file skipped: unsupported type', 'info');
     await vi.waitFor(() => expect(textarea(document).value).toContain('/tmp/image-one.png'));
   });
@@ -685,7 +686,7 @@ describe('mobile prompt composer', () => {
     });
     input.dispatchEvent(event);
     expect(event.defaultPrevented).toBe(true);
-    expect(app._uploadAndInsertImages).toHaveBeenCalledWith([video], { insert: false });
+    expect(app._uploadAndInsertImages).toHaveBeenCalledWith([video], { insert: false, sessionId: 'session-1' });
   });
 });
 

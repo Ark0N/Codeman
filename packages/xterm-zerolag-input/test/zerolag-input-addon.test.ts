@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { createMockTerminal } from './helpers.js';
 import { ZerolagInputAddon } from '../src/zerolag-input-addon.js';
 import type { InputEndAnchor } from '../src/types.js';
@@ -103,6 +103,28 @@ describe('ZerolagInputAddon', () => {
       expect(addon.pendingText).toBe('');
     });
 
+    it.each([
+      ['combining accent', 'a', '\u0301'],
+      ['skin-tone modifier', '\u{1F44D}', '\u{1F3FD}'],
+    ])('removes a %s cluster across the pending/flushed boundary', (_name, base, suffix) => {
+      const { addon } = tracked();
+      addon.setFlushed(base.length, base);
+      addon.appendText(suffix);
+      expect(addon.removeChar()).toBe('flushed');
+      expect(addon.getFlushed()).toEqual({ count: 0, text: '' });
+      expect(addon.pendingText).toBe('');
+      expect(addon.state.visible).toBe(false);
+    });
+
+    it('keeps flushed text when removing a separate pending character', () => {
+      const { addon } = tracked();
+      addon.setFlushed(1, 'a');
+      addon.appendText('b');
+      expect(addon.removeChar()).toBe('pending');
+      expect(addon.getFlushed()).toEqual({ count: 1, text: 'a' });
+      expect(addon.pendingText).toBe('');
+    });
+
     it('removes a whole flushed emoji and subtracts its UTF-16 width', () => {
       const { addon } = tracked();
       addon.setFlushed(3, 'a😀');
@@ -139,6 +161,34 @@ describe('ZerolagInputAddon', () => {
       addon.appendText('ok' + emoji);
       expect(addon.removeChar()).toBe('pending');
       expect(addon.pendingText).toBe('ok');
+    });
+
+    it('removes a cluster longer than 64 UTF-16 units in one call', () => {
+      const { addon } = tracked();
+      // `a` plus 80 combining acute accents is one grapheme cluster of 81 units.
+      const cluster = 'a' + '\u0301'.repeat(80);
+      addon.appendText('ok' + cluster);
+      expect(addon.removeChar()).toBe('pending');
+      expect(addon.pendingText).toBe('ok');
+    });
+
+    it('pairs regional indicators from the start of the run', () => {
+      const { addon } = tracked();
+      // Five flags then a lone indicator: the last cluster is the lone one, not a pair.
+      const flags = '\u{1F1EB}\u{1F1F7}'.repeat(5);
+      addon.appendText('ok' + flags + '\u{1F1EB}');
+      expect(addon.removeChar()).toBe('pending');
+      expect(addon.pendingText).toBe('ok' + flags);
+      expect(addon.removeChar()).toBe('pending');
+      expect(addon.pendingText).toBe('ok' + '\u{1F1EB}\u{1F1F7}'.repeat(4));
+    });
+
+    it('removes the last grapheme of a long draft', () => {
+      const { addon } = tracked();
+      const family = '\u{1F468}\u200D\u{1F469}\u200D\u{1F467}\u200D\u{1F466}';
+      addon.appendText('a'.repeat(60000) + family);
+      expect(addon.removeChar()).toBe('pending');
+      expect(addon.pendingText).toBe('a'.repeat(60000));
     });
 
     it.each(graphemeCases)('removes a whole flushed %s grapheme and subtracts its UTF-16 width', (_name, emoji) => {
@@ -1050,5 +1100,143 @@ describe('input end anchor and layout subscriptions', () => {
     expect(addon.state.visible).toBe(true);
     expect(() => addon.clear()).not.toThrow();
     expect(anchors).toEqual([{ col: 5, row: 1 }, null]);
+  });
+
+  it('maps a wide wrap with forward affinity from column 78', () => {
+    const { addon } = layoutSetup({ cols: 80 });
+    addon.setPrompt({ type: 'custom', offset: 0, find: () => ({ col: 78, row: 1 }) });
+    addon.appendText('a你b');
+    expect([0, 1, 2, 3].map((offset) => addon.getInputAnchor(offset))).toEqual([
+      { col: 78, row: 1 },
+      { col: 0, row: 2 },
+      { col: 2, row: 2 },
+      { col: 3, row: 2 },
+    ]);
+    expect(addon.getInputEndAnchor()).toEqual({ col: 3, row: 2 });
+  });
+
+  it('maps multiple wide wraps including an empty prompt line', () => {
+    const { addon } = layoutSetup({ cols: 5 });
+    addon.setPrompt({ type: 'custom', offset: 0, find: () => ({ col: 4, row: 1 }) });
+    addon.appendText('你好世界a你b');
+    expect([0, 1, 2, 3, 4, 5, 6, 7].map((offset) => addon.getInputAnchor(offset))).toEqual([
+      { col: 0, row: 2 },
+      { col: 2, row: 2 },
+      { col: 0, row: 3 },
+      { col: 2, row: 3 },
+      { col: 4, row: 3 },
+      { col: 0, row: 4 },
+      { col: 2, row: 4 },
+      { col: 3, row: 4 },
+    ]);
+  });
+
+  it('maps ZWJ code points and combining marks without accepting surrogate interiors', () => {
+    const { addon, mock } = layoutSetup();
+    Object.assign(mock.terminal, {
+      unicode: {
+        getStringCellWidth: (ch: string) => (ch === '\u200d' || ch === '\u0301' ? 0 : ch.length === 2 ? 2 : 1),
+      },
+    });
+    addon.appendText('👩\u200d💻e\u0301x');
+    expect([0, 1, 2, 3, 4, 5, 6, 7, 8].map((offset) => addon.getInputAnchor(offset))).toEqual([
+      { col: 2, row: 1 },
+      null,
+      { col: 4, row: 1 },
+      { col: 4, row: 1 },
+      null,
+      { col: 6, row: 1 },
+      { col: 7, row: 1 },
+      { col: 7, row: 1 },
+      { col: 8, row: 1 },
+    ]);
+  });
+
+  it('queries the composition tail but exposes only the last displayed committed text', () => {
+    const { addon } = layoutSetup({ cols: 8 });
+    addon.setFlushed(2, '😀');
+    addon.appendText('ab');
+    addon.setComposition('你好');
+    expect(addon.committedText).toBe('😀ab');
+    expect(addon.getInputAnchor(4)).toEqual({ col: 6, row: 1 });
+    expect(addon.getInputAnchor(5)).toEqual({ col: 0, row: 2 });
+    expect(addon.getInputAnchor(6)).toEqual({ col: 2, row: 2 });
+    expect(addon.getInputEndAnchor()).toEqual({ col: 2, row: 2 });
+    addon.setFlushed(2, 'zz', false);
+    expect(addon.committedText).toBe('😀ab');
+    expect(addon.state).not.toHaveProperty('committedText');
+    expect(addon.state).not.toHaveProperty('composition');
+  });
+
+  it('uses upward growth and hides tail-sliced caret rows', () => {
+    const { addon } = layoutSetup({ cols: 6, rows: 4, promptRow: 3 });
+    addon.appendText('abcdefghijkl'); // abcd / efghij / kl
+    expect(addon.getInputAnchor(0)).toEqual({ col: 2, row: 1 });
+    expect(addon.getInputAnchor(4)).toEqual({ col: 0, row: 2 });
+    expect(addon.getInputAnchor(10)).toEqual({ col: 0, row: 3 });
+    addon.setRowLimit(2);
+    expect(addon.getInputAnchor(0)).toBeNull();
+    expect(addon.getInputAnchor(3)).toBeNull();
+    expect(addon.getInputAnchor(4)).toEqual({ col: 0, row: 0 });
+    expect(addon.getInputAnchor(10)).toEqual({ col: 0, row: 1 });
+    expect(addon.getInputAnchor(12)).toEqual({ col: 2, row: 1 });
+  });
+
+  it('keeps the final offset at the right edge of a full final row', () => {
+    const { addon } = layoutSetup({ cols: 6 });
+    addon.appendText('abcdefghij');
+    expect(addon.getInputAnchor(4)).toEqual({ col: 0, row: 2 });
+    expect(addon.getInputAnchor(10)).toEqual({ col: 6, row: 2 });
+    expect(addon.getInputEndAnchor()).toEqual({ col: 6, row: 2 });
+  });
+
+  it('does no width measurement for a redundant render or an anchor query', () => {
+    const { addon, mock } = layoutSetup();
+    const width = vi.fn((ch: string) => (ch === '你' ? 2 : 1));
+    Object.assign(mock.terminal, { unicode: { getStringCellWidth: width } });
+    addon.setFlushed(3, 'a你b');
+    expect(width).toHaveBeenCalled();
+    width.mockClear();
+    addon.setFlushed(3, 'a你b'); // same key, unlike forced rerender()
+    expect(addon.getInputAnchor(1)).toEqual({ col: 3, row: 1 });
+    expect(addon.getInputAnchor(3)).toEqual({ col: 6, row: 1 });
+    expect(addon.committedText).toBe('a你b');
+    expect(width).not.toHaveBeenCalled();
+  });
+
+  it('rejects invalid offsets and clears visual correspondence on hide and disposal', () => {
+    const { addon, mock } = layoutSetup();
+    expect(addon.getInputAnchor(0)).toBeNull();
+    expect(addon.committedText).toBe('');
+    addon.appendText('abc');
+    for (const offset of [-1, 4, 0.5, NaN, Infinity]) expect(addon.getInputAnchor(offset)).toBeNull();
+    mock.setScroll(0, 30);
+    mock.terminal.element.querySelector('.xterm-viewport')!.dispatchEvent(new Event('scroll'));
+    expect(addon.getInputAnchor(0)).toBeNull();
+    expect(addon.committedText).toBe('');
+    mock.setScroll(0, 0);
+    addon.rerender();
+    expect(addon.committedText).toBe('abc');
+    addon.clear();
+    expect(addon.getInputAnchor(0)).toBeNull();
+    expect(addon.committedText).toBe('');
+    addon.appendText('x');
+    addon.dispose();
+    expect(addon.getInputAnchor(0)).toBeNull();
+    expect(addon.committedText).toBe('');
+  });
+
+  it('clears offset anchors and committed text on render failure', () => {
+    const { addon } = layoutSetup();
+    addon.appendText('abc');
+    addon.setPrompt({
+      type: 'custom',
+      find: () => {
+        throw new Error('buffer unavailable');
+      },
+    });
+    expect(addon.getInputAnchor(0)).toBeNull();
+    expect(addon.committedText).toBe('');
+    expect(addon.pendingText).toBe('abc');
   });
 });

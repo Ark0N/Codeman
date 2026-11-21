@@ -6,22 +6,32 @@
 
   function kev(type, key, keyCode, extra = {}) {
     const ev = new KeyboardEvent(type, {
-      key, code: extra.code || (key === 'Backspace' ? 'Backspace' : 'Unidentified'),
-      bubbles: true, cancelable: true, composed: true,
-      ctrlKey: !!extra.ctrlKey, shiftKey: !!extra.shiftKey,
-      altKey: !!extra.altKey, metaKey: !!extra.metaKey, isComposing: !!extra.isComposing,
+      key,
+      code: extra.code || (key === 'Backspace' ? 'Backspace' : 'Unidentified'),
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      ctrlKey: !!extra.ctrlKey,
+      shiftKey: !!extra.shiftKey,
+      altKey: !!extra.altKey,
+      metaKey: !!extra.metaKey,
+      isComposing: !!extra.isComposing,
     });
     Object.defineProperties(ev, {
-      keyCode: { get: () => keyCode }, which: { get: () => keyCode },
-      charCode: { get: () => type === 'keypress' ? keyCode : 0 },
+      keyCode: { get: () => keyCode },
+      which: { get: () => keyCode },
+      charCode: { get: () => (type === 'keypress' ? keyCode : 0) },
     });
     return ev;
   }
 
   function iev(type, inputType, data, options = {}) {
     return new InputEvent(type, {
-      inputType, data: data ?? null,
-      bubbles: true, cancelable: type === 'beforeinput', composed: true,
+      inputType,
+      data: data ?? null,
+      bubbles: true,
+      cancelable: type === 'beforeinput',
+      composed: true,
       isComposing: !!options.isComposing,
     });
   }
@@ -35,12 +45,17 @@
     if (inputType === 'deleteContentBackward') {
       if (start === end) {
         if (start === 0) return false;
-        start -= Array.from(value.slice(0, start)).pop().length;
+        const segments = new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(value.slice(0, start));
+        start -= Array.from(segments).pop().segment.length;
       }
       setValue.call(ta, value.slice(0, start) + value.slice(end));
       select.call(ta, start, start);
-    } else if (inputType === 'insertText' || inputType === 'insertReplacementText' ||
-               inputType === 'insertCompositionText' || inputType === 'insertLineBreak') {
+    } else if (
+      inputType === 'insertText' ||
+      inputType === 'insertReplacementText' ||
+      inputType === 'insertCompositionText' ||
+      inputType === 'insertLineBreak'
+    ) {
       const text = inputType === 'insertLineBreak' ? '\n' : data;
       setValue.call(ta, value.slice(0, start) + text + value.slice(end));
       // Textarea values normalize CRLF. Use the normalized inserted length.
@@ -66,7 +81,11 @@
   // caret advance in the intact field as real browser defaults would.
   function capturedEdits(ta, records, afterInput, afterEvent) {
     const select = HTMLTextAreaElement.prototype.setSelectionRange;
-    const decode = value => value.replace(/<LF>/g, '\n').replace(/<CR>/g, '\r').replace(/<NBSP>/g, '\u00a0');
+    const decode = (value) =>
+      value
+        .replace(/<LF>/g, '\n')
+        .replace(/<CR>/g, '\r')
+        .replace(/<NBSP>/g, '\u00a0');
     let pending;
     for (const record of records) {
       if (record.kind !== 'ev' || !['beforeinput', 'input'].includes(record.type)) continue;
@@ -142,12 +161,28 @@
   function paste(ta, text) {
     const clipboardData = new DataTransfer();
     clipboardData.setData('text/plain', text);
-    ta.dispatchEvent(new ClipboardEvent('paste', {
-      clipboardData, bubbles: true, cancelable: true, composed: true,
-    }));
+    ta.dispatchEvent(
+      new ClipboardEvent('paste', {
+        clipboardData,
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+      })
+    );
   }
 
   global.IosReplay = Object.freeze({
-    kev, iev, edit, capturedEdits, typeKey, backspace, holdDeleteRepeat, replaceSuggestion, enter, caret, composition, paste,
+    kev,
+    iev,
+    edit,
+    capturedEdits,
+    typeKey,
+    backspace,
+    holdDeleteRepeat,
+    replaceSuggestion,
+    enter,
+    caret,
+    composition,
+    paste,
   });
 })(window);

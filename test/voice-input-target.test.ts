@@ -290,6 +290,7 @@ describe('dictation target', () => {
     const textarea = { value: '', focus: vi.fn(), blur: vi.fn(), selectionStart: 0, selectionEnd: 0 };
     doc.createElement = () => ({
       className: '',
+      dataset: {},
       innerHTML: '',
       remove: vi.fn(),
       addEventListener: vi.fn(),
@@ -312,6 +313,42 @@ describe('dictation target', () => {
     expect(overlay.pendingText).toBe('hel');
     expect(appendText).not.toHaveBeenCalled();
     expect(overlayClear).not.toHaveBeenCalled();
+  });
+
+  it('retargets an existing compose overlay for the next dictation', () => {
+    const { voice, sendInputAsync, doc } = load({ insertMode: 'compose' });
+    const handlers = new Map<string, () => void>();
+    const textarea = {
+      value: '',
+      focus: vi.fn(),
+      blur: vi.fn(),
+      selectionStart: 0,
+      selectionEnd: 0,
+      closest: (): { dataset: Record<string, string> } => overlay,
+    };
+    const overlay = {
+      dataset: {},
+      className: '',
+      innerHTML: '',
+      remove: vi.fn(),
+      addEventListener: vi.fn(),
+      querySelector: (sel: string) =>
+        sel === 'textarea'
+          ? textarea
+          : {
+              addEventListener: (_type: string, handler: () => void) => handlers.set(sel, handler),
+            },
+    };
+    doc.createElement = () => overlay;
+    voice._targetSessionId = 'session-a';
+    voice._insertText('first dictation');
+    doc.querySelector = (sel: string) => (sel === '.voice-compose-overlay .paste-textarea' ? textarea : null);
+
+    voice._targetSessionId = 'session-b';
+    voice._insertText('second dictation');
+    handlers.get('.paste-send')!();
+
+    expect(sendInputAsync).toHaveBeenCalledExactlyOnceWith('session-b', 'second dictation\r', { useMux: true });
   });
 
   it('refuses to start with no session at all', () => {

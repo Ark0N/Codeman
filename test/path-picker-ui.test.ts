@@ -48,6 +48,8 @@ function loadKeyboardModule() {
     _focusedPane: () => ({ sessionId: 'session-1', isPrimary: true }),
     _paneForSession: (sessionId: string) => ({ sessionId, isPrimary: true }),
     _localEchoEnabled: false,
+    _localEchoPolicy: 'off',
+    _predictiveEcho: { clearPredictions: vi.fn() },
     _localEchoOverlay: { appendText: vi.fn() },
     _prepareExternalInput: vi.fn(),
   };
@@ -184,6 +186,22 @@ describe('mobile filesystem picker actions', () => {
     });
     options.onSelect('/mnt/d/AI/project/file.ts');
     expect(app._sendInputAsync).toHaveBeenCalledWith('session-1', '/mnt/d/AI/project/file.ts', { useMux: true });
+  });
+
+  it.each([false, true])('clears primary predictions before inserting a path (buffered=%s)', (buffered) => {
+    const { app, bar, picker } = loadKeyboardModule();
+    app._localEchoPolicy = 'predict';
+    app._localEchoEnabled = buffered;
+    picker.open = vi.fn();
+    bar.handleAction('pick-path');
+
+    picker.open.mock.calls[0][0].onSelect('/project/file.ts');
+
+    expect(app._predictiveEcho.clearPredictions).toHaveBeenCalledOnce();
+    const insert = buffered ? app._localEchoOverlay.appendText : app._sendInputAsync;
+    expect(app._predictiveEcho.clearPredictions.mock.invocationCallOrder[0]).toBeLessThan(
+      insert.mock.invocationCallOrder[0]
+    );
   });
 
   it.each([false, true])(

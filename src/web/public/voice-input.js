@@ -1097,6 +1097,7 @@ const VoiceInput = {
       // If a compose overlay is already open, populate its textarea instead of recreating
       const existingTextarea = document.querySelector('.voice-compose-overlay .paste-textarea');
       if (existingTextarea) {
+        existingTextarea.closest('.voice-compose-overlay').dataset.targetSessionId = target;
         existingTextarea.value = trimmed;
         existingTextarea.focus();
         existingTextarea.selectionStart = existingTextarea.selectionEnd = trimmed.length;
@@ -1216,10 +1217,10 @@ const VoiceInput = {
 
   /** Show an editable compose overlay so the user can review/edit before sending */
   _showComposeOverlay(text) {
-    const target = this._targetSession();
     document.querySelector('.voice-compose-overlay')?.remove();
     const overlay = document.createElement('div');
     overlay.className = 'voice-compose-overlay paste-overlay';
+    overlay.dataset.targetSessionId = this._targetSession();
     overlay.innerHTML = `
       <div class="paste-dialog">
         <textarea class="paste-textarea">${text.replace(/</g, '&lt;')}</textarea>
@@ -1234,7 +1235,7 @@ const VoiceInput = {
     const send = () => {
       const val = textarea.value.trim();
       overlay.remove();
-      if (val) this._sendToTarget(target, val + '\r').catch(() => {});
+      if (val) this._sendToTarget(overlay.dataset.targetSessionId, val + '\r').catch(() => {});
     };
     const cancel = () => overlay.remove();
     const newInput = () => {

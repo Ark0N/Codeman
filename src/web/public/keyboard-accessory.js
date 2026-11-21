@@ -1231,7 +1231,9 @@ const KeyboardAccessoryBar = {
         this.flushPendingThen('\t');
         break;
       case 'shift-tab':
-        this.sendKey('\x1b[Z');
+        // Cycles a mode, never edits the composer: leave the unsent draft in the
+        // overlay, as a typed Shift+Tab does.
+        this.sendKey('\x1b[Z', { keepDraft: true });
         break;
       case 'ctrl-o':
         this.sendKey('\x0f');
@@ -1401,9 +1403,10 @@ const KeyboardAccessoryBar = {
 
   /** Send a special key (arrow, escape, etc.) directly to the PTY.
    *  Bypasses tmux send-keys -l (literal mode) since escape sequences
-   *  must be written raw to be interpreted as key presses by Ink. */
-  sendKey(escapeSequence) {
-    const sessionId = this._prepareInput(undefined, 'accessory-key', { flushEcho: true });
+   *  must be written raw to be interpreted as key presses by Ink.
+   *  `keepDraft` leaves the unsent local-echo draft in the overlay. */
+  sendKey(escapeSequence, { keepDraft = false } = {}) {
+    const sessionId = this._prepareInput(undefined, 'accessory-key', keepDraft ? undefined : { flushEcho: true });
     if (!sessionId) return;
     app._predictiveEcho?.clearPredictions();
     app._enqueueInput(sessionId, [{ write: escapeSequence }]);
@@ -1422,6 +1425,7 @@ const KeyboardAccessoryBar = {
       directoriesOnly: false,
       onSelect: (path) => {
         const targetPane = app._paneForSession?.(sessionId);
+        if (targetPane?.isPrimary && app._localEchoPolicy === 'predict') app._predictiveEcho?.clearPredictions();
         if (targetPane?.isPrimary && app._localEchoEnabled && app._localEchoOverlay && !app._echoPassthroughSessions?.has(sessionId)) {
           app._prepareExternalInput?.(targetPane, 'accessory-path');
           app._localEchoOverlay.appendText(path);
@@ -1637,7 +1641,7 @@ const KeyboardAccessoryBar = {
       };
       syncUploadUi();
       try {
-        const paths = await app._uploadAndInsertImages(images, { insert: false });
+        const paths = await app._uploadAndInsertImages(images, { insert: false, sessionId });
         if (paths?.length) {
           const currentOverlay =
             this._composerOverlay?.isConnected && this._composerOverlay.dataset.sessionId === sessionId

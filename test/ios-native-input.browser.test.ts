@@ -9,10 +9,11 @@ interface TestTerminal {
   textarea: HTMLTextAreaElement;
   element: HTMLElement;
   write(text: string, callback: () => void): void;
+  cols: number;
   scrollToTop(): void;
   buffer: { active: { cursorX: number; cursorY: number; viewportY: number; baseY: number } };
   _core: {
-    _renderService: { dimensions: { css: { cell: { width: number } } } };
+    _renderService: { dimensions: { css: { cell: { width: number; height: number } } } };
     _customKeyEventHandler(event: KeyboardEvent): boolean;
   };
 }
@@ -21,6 +22,9 @@ interface NativeOwner {
 }
 interface TestApp {
   terminal: TestTerminal;
+  fitAddon: { proposeDimensions(): { cols: number; rows: number } | undefined };
+  syncTerminalGeometry(): { cols: number; rows: number } | null;
+  _resizeTimeout: number | null;
   activeSessionId: string;
   sessions: Map<string, { id: string; mode: string; status?: string }>;
   _localEchoEnabled: boolean;
@@ -143,6 +147,19 @@ describe('iOS native input served-app wiring (#830)', () => {
     }, action);
   }
 
+  async function markerCell() {
+    return page.evaluate(() => {
+      const terminal = (window as unknown as TestWindow).app.terminal;
+      const marker = terminal.element.querySelector<HTMLElement>('.ios-native-caret')!;
+      const cell = terminal._core._renderService.dimensions.css.cell;
+      return {
+        display: marker.style.display,
+        col: Math.round(parseFloat(marker.style.left) / cell.width),
+        row: Math.round(parseFloat(marker.style.top) / cell.height),
+      };
+    });
+  }
+
   for (const echo of [false, true]) {
     it(`suggestion commits hello once, and Enter preserves the 80ms gap (echo ${echo})`, async () => {
       await setup(echo);
@@ -194,26 +211,54 @@ describe('iOS native input served-app wiring (#830)', () => {
       if (echo) expect(result.pending).toBe('lo');
     });
 
-    it(`trackpad caret marker sits after he in hello (echo ${echo})`, async () => {
+    it(`trackpad caret marker sits at cell (4, 0) after he in hello (echo ${echo})`, async () => {
       await setup(echo);
       await run(
         "await type('hello'); if (!app._localEchoEnabled) await new Promise(resolve => app.terminal.write('hello', resolve)); r.caret(ta, 2);"
       );
-      const geometry = await page.evaluate(() => {
+      expect(await markerCell()).toEqual({ display: 'block', col: 4, row: 0 });
+    });
+
+    it(`a你b wide wrap maps offsets to (78, 0), (0, 1), (2, 1) (echo ${echo})`, async () => {
+      await setup(echo);
+      await page.evaluate(async () => {
         const app = (window as unknown as TestWindow).app;
-        const marker = app.terminal.element.querySelector<HTMLElement>('.ios-native-caret')!;
+        const container = app.terminal.element.parentElement!;
+        const proposed = app.fitAddon.proposeDimensions()!;
         const cell = app.terminal._core._renderService.dimensions.css.cell;
-        const end = app._localEchoEnabled
-          ? app._localEchoOverlay.getInputEndAnchor()
-          : { col: app.terminal.buffer.active.cursorX, row: app.terminal.buffer.active.cursorY };
-        return {
-          display: marker.style.display,
-          col: parseFloat(marker.style.left) / cell.width,
-          expected: end!.col - 3,
-        };
+        // A raw terminal.resize(80, ...) is undone by the app's ResizeObserver.
+        // Size its real box instead, so every subsequent auto-fit also yields 80.
+        const width = parseFloat(getComputedStyle(container).width) + (80 - proposed.cols) * cell.width;
+        container.style.width = container.style.minWidth = container.style.maxWidth = `${width}px`;
+        app.syncTerminalGeometry();
+        const layout = Promise.withResolvers<void>();
+        requestAnimationFrame(() => requestAnimationFrame(() => layout.resolve()));
+        await layout.promise;
       });
-      expect(geometry.display).not.toBe('none');
-      expect(geometry.col).toBeCloseTo(geometry.expected, 1);
+      // The real 300ms resize handler can clear the viewport; let it finish
+      // before installing the prompt and typing the native field.
+      await page.waitForFunction(() => {
+        const app = (window as unknown as TestWindow).app;
+        return app.terminal.cols === 80 && app._resizeTimeout === null;
+      });
+      await page.evaluate(async () => {
+        const app = (window as unknown as TestWindow).app;
+        const written = Promise.withResolvers<void>();
+        app.terminal.write('\x1bc' + '.'.repeat(76) + '❯ ', written.resolve);
+        await written.promise;
+      });
+      await run(
+        "await type('a你b'); if (!app._localEchoEnabled) await new Promise(resolve => app.terminal.write('a你b', resolve));"
+      );
+      for (const [offset, col, row] of [
+        [0, 78, 0],
+        [1, 0, 1],
+        [2, 2, 1],
+      ]) {
+        await run(`r.caret(ta, ${offset});`);
+        expect(await page.evaluate(() => (window as unknown as TestWindow).app.terminal.cols)).toBe(80);
+        expect(await markerCell()).toEqual({ display: 'block', col, row });
+      }
     });
 
     it(`typing while scrolled back returns the viewport to the prompt (echo ${echo})`, async () => {
@@ -385,6 +430,21 @@ describe('iOS native input served-app wiring (#830)', () => {
     expect(result.pending).toBe('a');
     expect(result.sent).toEqual([]);
   });
+
+  for (const echo of [false, true]) {
+    it.each([
+      ['red heart', '\u2764\uFE0F'],
+      ['skin-tone thumbs up', '\u{1F44D}\u{1F3FD}'],
+      ['flag', '\u{1F1EB}\u{1F1F7}'],
+      ['ZWJ family', '\u{1F468}\u200D\u{1F469}\u200D\u{1F467}\u200D\u{1F466}'],
+    ])(`deletes a whole %s grapheme with one backspace (echo ${echo})`, async (_name, emoji) => {
+      await setup(echo);
+      const result = await run(`await type(${JSON.stringify('ok' + emoji)}); r.backspace(ta);`);
+      expect(result.value).toBe('ok');
+      expect(result.pending).toBe(echo ? 'ok' : '');
+      expect(result.sent.map((x) => x.input)).toEqual(echo ? [] : [...('ok' + emoji), '\x7f']);
+    });
+  }
 
   it('a Pane B/grid TerminalTile owns suggestions for its session without 229 recovery', async () => {
     await setup(false);

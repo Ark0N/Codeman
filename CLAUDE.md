@@ -355,7 +355,7 @@ npm test -- -t "pattern"                          # By name
 Three suites are deliberately left out, because they cannot pass on an arbitrary machine. Each has its own runner, and a failure there means "not runnable here", not a regression:
 
 ```bash
-npm run test:browser   # Playwright + chromium, live server; codex-predictive-echo also needs a real codex binary
+npm run test:browser   # Playwright + chromium, live server (own pretest vendor step); codex-predictive-echo also needs a real codex binary
 npm run test:mobile    # the above plus environment-specific PNG baselines (own config, own pretest vendor step)
 npm run test:perf      # wall-clock benchmarks — need an otherwise idle machine
 npm run test:all       # literally everything; fails ~87 tests on a clean master here, which is why it is not the default

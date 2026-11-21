@@ -660,6 +660,7 @@
         isScreenReaderMode: () => this.terminal?.options?.screenReaderMode === true,
       });
       if (this._iosNativeInput) {
+        // Tiles have no local-echo overlay: resolve only from verified parsed cells.
         this._iosCaretMarker = nativeInput.attachCaretMarker(this.terminal, this._iosNativeInput);
         return;
       }
@@ -678,6 +679,7 @@
       // through unchanged, but it still disarms, so the next `c` stays a `c`.
       if (typeof KeyboardAccessoryBar !== 'undefined' && KeyboardAccessoryBar.isCtrlArmed?.()) {
         ctrlIndex = ops.findIndex((data) => data !== '\x7f');
+        if (ctrlIndex === -1 && ops.includes('\x7f')) KeyboardAccessoryBar.clearCtrl?.();
       }
       // Keep replacement deletions: Ctrl changes only the insertion, once for
       // this edit, never once per DEL. Tiles have no local echo to reconcile.

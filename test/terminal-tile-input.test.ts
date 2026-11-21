@@ -1543,7 +1543,7 @@ describe('TerminalTile iOS native input ownership', () => {
     return { owner, create, attachCaretMarker, dispose, send: (ops: string[]) => options.sendTransaction(ops) };
   };
 
-  it('creates an owner and xterm-cursor marker, but no 229 recovery, on iOS', async () => {
+  it('creates an owner and parsed-buffer marker without an anchor, but no 229 recovery, on iOS', async () => {
     const native = install();
     const { tile, term } = await connectTile(makeApp());
     expect(native.create).toHaveBeenCalledOnce();
@@ -1676,14 +1676,30 @@ describe('TerminalTile iOS native input ownership', () => {
     expect(native.owner.reset).toHaveBeenCalledExactlyOnceWith('ctrl');
   });
 
-  it('does not consume Ctrl for a deletion-only transaction', async () => {
+  it('spends Ctrl on a deletion-only transaction without resetting the owner', async () => {
     const native = install();
     const app = makeApp();
     app._enqueueInput = vi.fn();
-    const consumeCtrl = vi.fn();
-    context.KeyboardAccessoryBar = { isCtrlArmed: () => true, consumeCtrl };
+    let armed = true;
+    const consumeCtrl = vi.fn(() => {
+      armed = false;
+      return '\x03';
+    });
+    context.KeyboardAccessoryBar = {
+      isCtrlArmed: () => armed,
+      consumeCtrl,
+      clearCtrl: () => {
+        armed = false;
+      },
+    };
     await connectTile(app);
     native.send(['\x7f']);
+    expect(armed).toBe(false);
+    native.send(['c']);
+    expect(app._enqueueInput.mock.calls).toEqual([
+      ['s-tile', [{ write: '\x7f' }]],
+      ['s-tile', [{ write: 'c' }]],
+    ]);
     expect(consumeCtrl).not.toHaveBeenCalled();
     expect(native.owner.reset).not.toHaveBeenCalled();
   });

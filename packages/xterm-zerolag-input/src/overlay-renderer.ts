@@ -88,6 +88,13 @@ function holdsOnlyRendered(container: HTMLDivElement, state: RenderedLines): boo
   return !state.cursor || children[state.lines.length] === state.cursor;
 }
 
+interface OverlayPlacement {
+  end: InputEndAnchor | null;
+  firstVisible: number;
+  topRow: number;
+  keepsPromptLine: boolean;
+}
+
 /**
  * Render the overlay content into the container element.
  *
@@ -102,7 +109,7 @@ function holdsOnlyRendered(container: HTMLDivElement, state: RenderedLines): boo
  * DOM work, layout and paint, which a long prompt on a phone paid for in
  * dropped frames.
  */
-export function renderOverlay(container: HTMLDivElement, params: RenderParams): InputEndAnchor | null {
+export function renderOverlay(container: HTMLDivElement, params: RenderParams): OverlayPlacement {
   const {
     lines,
     compositionStart,
@@ -252,7 +259,12 @@ export function renderOverlay(container: HTMLDivElement, params: RenderParams): 
   }
 
   container.style.display = '';
-  return lastLine === undefined ? null : { col: cursorCol, row: topRow + visibleLines.length - 1 };
+  return {
+    end: lastLine === undefined ? null : { col: cursorCol, row: topRow + visibleLines.length - 1 },
+    firstVisible,
+    topRow,
+    keepsPromptLine,
+  };
 }
 
 /**

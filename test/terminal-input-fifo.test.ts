@@ -47,6 +47,9 @@ function harness() {
   app._localEchoOverlay = {
     pendingText: '',
     flushed: '',
+    get committedText() {
+      return this.flushed + this.pendingText;
+    },
     addChar(text: string) {
       this.pendingText += text;
     },
@@ -68,7 +71,7 @@ function harness() {
       this[key] = Array.from(this[key]).slice(0, -1).join('');
       return key === 'pendingText' ? 'pending' : 'flushed';
     },
-    getInputEndAnchor: vi.fn(() => ({ col: 8, row: 2 })),
+    getInputAnchor: vi.fn(() => ({ col: 8, row: 2 })),
   };
   const wire: Array<[string, string]> = [];
   app._enqueueReliableInput = vi.fn((id: string, text: string) => wire.push([id, text]));
@@ -365,6 +368,27 @@ describe('native main transactions and boundaries', () => {
             ['old', '\x03'],
           ]
     );
+  });
+
+  it('spends Ctrl on a deletion-only transaction without resetting the owner', () => {
+    const { app, wire, context } = harness();
+    loadProducerModules(app, context);
+    app._localEchoEnabled = false;
+    app._iosNativeInput = { reset: vi.fn() };
+    const bar = vm.runInContext('KeyboardAccessoryBar', context);
+    bar.toggleCtrl();
+
+    app._sendNativeInputTransaction(['\x7f']);
+
+    expect(wire).toEqual([['old', '\x7f']]);
+    expect(bar.isCtrlArmed()).toBe(false);
+    expect(app._iosNativeInput.reset).not.toHaveBeenCalled();
+    app._sendNativeInputTransaction(['c']);
+    expect(wire).toEqual([
+      ['old', '\x7f'],
+      ['old', 'c'],
+    ]);
+    expect(app._iosNativeInput.reset).not.toHaveBeenCalled();
   });
 
   it('settles, seals, flushes, resets owner and preview before session cleanup', () => {
@@ -817,17 +841,21 @@ describe('native main transactions and boundaries', () => {
     expect(app._localEchoOverlay.pendingText).toBe('hel /p ');
   });
 
-  it('hides the caret when a buffering overlay cannot supply an anchor', () => {
+  it('maps the native suffix after a non-BMP committed prefix and hides mismatches or missing cells', () => {
     const { app } = harness();
-    expect(app._nativeInputAnchor()).toBeNull();
-    app._localEchoOverlay.pendingText = 'text';
-    expect(app._nativeInputAnchor()).toEqual({ col: 8, row: 2 });
-    app._localEchoOverlay.getInputEndAnchor = () => null;
-    expect(app._nativeInputAnchor()).toBe('hide');
-    delete app._localEchoOverlay.getInputEndAnchor;
-    expect(app._nativeInputAnchor()).toBe('hide');
+    const caret = { visible: true, text: 'hello', offset: 2 };
+    expect(app._nativeInputCaretAnchor(caret)).toBeNull();
+    app._localEchoOverlay.flushed = '👍';
+    app._localEchoOverlay.pendingText = 'hello';
+    expect(app._nativeInputCaretAnchor(caret)).toEqual({ col: 8, row: 2 });
+    expect(app._localEchoOverlay.getInputAnchor).toHaveBeenLastCalledWith(4);
+    expect(app._nativeInputCaretAnchor({ ...caret, text: 'hullo' })).toBe('hide');
+    app._localEchoOverlay.getInputAnchor = () => null;
+    expect(app._nativeInputCaretAnchor(caret)).toBe('hide');
+    delete app._localEchoOverlay.getInputAnchor;
+    expect(app._nativeInputCaretAnchor(caret)).toBe('hide');
     app._echoPassthroughSessions = new Set(['old']);
-    expect(app._nativeInputAnchor()).toBeNull();
+    expect(app._nativeInputCaretAnchor(caret)).toBeNull();
   });
 
   it('prepares only the captured tile owner, not the primary owner', () => {
@@ -853,6 +881,44 @@ describe('native main transactions and boundaries', () => {
     focusedPane.mockReturnValue({ terminal: {}, sessionId: 'gone', isPrimary: false });
     app.submitFromToolbar();
     expect(wire).toHaveLength(2);
+  });
+
+  it('toolbar Enter spends an armed one-shot Ctrl, so the next typed c stays a c', () => {
+    for (const echo of [true, false]) {
+      const { app, wire, context } = harness();
+      loadProducerModules(app, context);
+      app._localEchoEnabled = echo;
+      const bar = vm.runInContext('KeyboardAccessoryBar', context);
+      bar.toggleCtrl();
+      expect(bar.isCtrlArmed()).toBe(true);
+      app.submitFromToolbar();
+      vi.advanceTimersByTime(80);
+      expect(bar.isCtrlArmed()).toBe(false);
+      wire.length = 0;
+      app._handleTerminalData('c', 'old');
+      app.submitFromToolbar();
+      vi.advanceTimersByTime(80);
+      expect(wire).toEqual([
+        ['old', 'c'],
+        ['old', '\r'],
+      ]);
+    }
+  });
+
+  it('accessory Shift+Tab leaves the unsent draft in the overlay, as a typed Shift+Tab does', () => {
+    const { app, wire, context } = harness();
+    loadProducerModules(app, context);
+    app._handleTerminalData('hel', 'old');
+    vm.runInContext("KeyboardAccessoryBar.handleAction('shift-tab')", context);
+    expect(wire).toEqual([['old', '\x1b[Z']]);
+    expect(app._localEchoOverlay.pendingText).toBe('hel');
+    // The typed key takes the same path: the draft stays put.
+    app._handleTerminalData('\x1b[Z', 'old');
+    expect(wire).toEqual([
+      ['old', '\x1b[Z'],
+      ['old', '\x1b[Z'],
+    ]);
+    expect(app._localEchoOverlay.pendingText).toBe('hel');
   });
   it('resets native ownership before dispatching synthetic compositionend', () => {
     const { app, context } = harness();
@@ -916,7 +982,7 @@ describe('native main transactions and boundaries', () => {
     options.onTransaction(transaction);
     expect(app._mobileImePreview.nativeTransaction).toHaveBeenCalledWith(transaction);
     const markerOptions = native.attachCaretMarker.mock.calls[0][2];
-    expect(markerOptions.anchor()).toBeNull();
+    expect(markerOptions.anchor({ visible: true, text: 'native', offset: 2 })).toBeNull();
     expect(markerOptions.subscribe(vi.fn())).toBe(unsubscribe);
     app._initTerminalInputOwner();
     expect(owner.destroy).toHaveBeenCalledOnce();
