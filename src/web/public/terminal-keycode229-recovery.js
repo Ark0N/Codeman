@@ -60,15 +60,36 @@
 (function (global) {
   'use strict';
 
+  // Grapheme clusters, the unit a soft-keyboard Backspace removes, Claude Code and
+  // Codex delete per DEL, and the local-echo overlay drops per DEL. Code points
+  // stand in where Intl.Segmenter is missing (same rule as terminal-ios-native-input.js).
+  const graphemeSegmenter = (() => {
+    try {
+      return typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function'
+        ? new Intl.Segmenter(undefined, { granularity: 'grapheme' })
+        : null;
+    } catch {
+      return null;
+    }
+  })();
+
+  function graphemes(text) {
+    return graphemeSegmenter ? Array.from(graphemeSegmenter.segment(text), (part) => part.segment) : Array.from(text);
+  }
+
   /**
    * What turns `previous` into `next`, as a terminal sees it: how many characters to delete from
    * the END of the line, then what to type. Everything after the common prefix is treated as
-   * replaced, because a terminal can only edit at its cursor. Counts are code points, so an
-   * emoji is one DEL, as it is one backspace.
+   * replaced, because a terminal can only edit at its cursor. Counts are grapheme clusters, so a
+   * red heart, a skin-tone emoji, a flag or a ZWJ family is one DEL, as it is one backspace.
    */
   function editBetween(previous, next) {
-    const a = Array.from(previous);
-    const b = Array.from(next);
+    // A pure append (including a combining mark or tone typed onto the last letter)
+    // is sent as-is: re-typing the extended cluster would make a code-point line
+    // editor (zsh) double the base letter.
+    if (next.startsWith(previous)) return { deleted: 0, inserted: next.slice(previous.length) };
+    const a = graphemes(previous);
+    const b = graphemes(next);
     let prefix = 0;
     const max = Math.min(a.length, b.length);
     while (prefix < max && a[prefix] === b[prefix]) prefix += 1;

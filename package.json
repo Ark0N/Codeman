@@ -23,6 +23,7 @@
     "test:watch": "vitest --config config/vitest.ci.config.ts",
     "test:coverage": "vitest run --config config/vitest.ci.config.ts --coverage",
     "test:ci": "vitest run --config config/vitest.ci.config.ts",
+    "pretest:browser": "node scripts/prepare-test-vendor.mjs",
     "test:browser": "vitest run --config config/vitest.browser.config.ts",
     "test:perf": "vitest run --config config/vitest.perf.config.ts",
     "test:all": "vitest run --config config/vitest.config.ts",

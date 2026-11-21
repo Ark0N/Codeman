@@ -33,7 +33,7 @@
  * @globals {class} FocusTrap
  *
  * @dependency mobile-handlers.js (MobileDetection.isTouchDevice)
- * @dependency app.js (uses global `app` for sendInput, activeSessionId, terminal)
+ * @dependency app.js (uses global `app` for _enqueueInput, _sendInputAsync, _prepareExternalInput, activeSessionId, terminal)
  * @loadorder 5 of 15 — loaded after notification-manager.js, before app.js
  */
 
@@ -1189,7 +1189,7 @@ const KeyboardAccessoryBar = {
 
   /** Handle accessory button actions */
   handleAction(action, btn) {
-    if (typeof app === 'undefined' || !app.activeSessionId) return;
+    if (typeof app === 'undefined') return;
 
     // Any key other than Ctrl itself spends the modifier. It is a one-shot for
     // the next TYPED character, so an accessory key tapped in between (Esc, an
@@ -1228,7 +1228,7 @@ const KeyboardAccessoryBar = {
         // Tab means "complete what I just typed", but with local echo the typed
         // text is still buffered in the overlay and has never reached the PTY —
         // a bare \t would ask the CLI to complete an empty composer.
-        this.flushPendingThen(() => this.sendKey('\t'));
+        this.flushPendingThen('\t');
         break;
       case 'shift-tab':
         this.sendKey('\x1b[Z');
@@ -1268,6 +1268,7 @@ const KeyboardAccessoryBar = {
         this.pickPath();
         break;
       case 'clear-input':
+        this._prepareInput(undefined, 'accessory-clear');
         app.clearTerminalInput?.();
         break;
       case 'dismiss':
@@ -1331,38 +1332,53 @@ const KeyboardAccessoryBar = {
     this.element.classList.toggle('codex-enabled', this._isCodexSession());
   },
 
+  /** Capture the destination before settling native input; background drafts
+   *  must never reset a different pane's owner. */
+  _prepareInput(sessionId, reason, opts) {
+    const target = sessionId || (typeof app._focusedPane === 'function' ? app._focusedPane()?.sessionId : app.activeSessionId);
+    const pane = app._paneForSession?.(target);
+    if (pane) {
+      if (opts) app._prepareExternalInput?.(pane, reason, opts);
+      else app._prepareExternalInput?.(pane, reason);
+    }
+    return target;
+  },
+
   /** Send a slash command to the active session.
-   *  Sends text and Enter separately so Ink processes them as distinct events. */
+   *  Sends text and Enter separately so Ink processes them as distinct events.
+   *  The unsent local-echo draft stays in the overlay: flushing it would submit `draft/command`. */
   sendCommand(command) {
-    if (!app.activeSessionId) return;
-    // Send command text first (without Enter)
-    app.sendInput(command);
-    // Send Enter separately after a brief delay so Ink has time to process the text.
-    setTimeout(() => app.sendInput('\r'), 120);
+    const sessionId = this._prepareInput(undefined, 'accessory-command');
+    if (!sessionId) return;
+    app._enqueueInput(sessionId, [{ write: command, useMux: true }, { gap: 120 }, { write: '\r', useMux: true }]);
   },
 
   /**
-   * Flush whatever the local-echo overlay is still holding, THEN run `after()`.
-   *
-   * On a phone the characters you type sit in the overlay and have never
-   * reached the PTY, so any key that acts on "what I just typed" has to push
-   * that text out first or the CLI acts on an empty composer. Mirrors the
-   * flush the typed path performs in terminal-ui.js's onData; the 120ms is the
-   * same settle delay sendCommand uses, so the text lands before the key.
+   * Flush local echo and reserve the following key atomically in the session
+   * FIFO, so switching panes during the settle gap cannot redirect the key.
    */
-  flushPendingThen(after) {
-    const overlay = app._localEchoOverlay;
+  flushPendingThen(sequence, reason = 'accessory-key', passthrough = false) {
+    const pane = app._focusedPane?.();
+    const sessionId = typeof app._focusedPane === 'function' ? pane?.sessionId : app.activeSessionId;
+    if (!sessionId) return;
+    if (pane) app._prepareExternalInput?.(pane, reason);
+    const overlay = !pane || pane.isPrimary ? app._localEchoOverlay : null;
     const pending = (app._localEchoEnabled && overlay?.pendingText) || '';
-    if (!pending) {
-      after();
-      return;
+    if (passthrough) {
+      if (!app._echoPassthroughSessions) app._echoPassthroughSessions = new Set();
+      app._echoPassthroughSessions.add(sessionId);
     }
-    overlay.clear();
-    overlay.suppressBufferDetection?.();
-    app._flushedOffsets?.delete(app.activeSessionId);
-    app._flushedTexts?.delete(app.activeSessionId);
-    app.sendInput(pending);
-    setTimeout(after, 120);
+    const ops = [];
+    if (pending) {
+      overlay.clear();
+      overlay.suppressBufferDetection?.();
+      app._flushedOffsets?.delete(sessionId);
+      app._flushedTexts?.delete(sessionId);
+      ops.push({ write: pending, useMux: true }, { gap: 120 });
+    }
+    app._predictiveEcho?.clearPredictions();
+    ops.push({ write: sequence });
+    app._enqueueInput(sessionId, ops);
   },
 
   /**
@@ -1380,38 +1396,39 @@ const KeyboardAccessoryBar = {
    * broken because what came back was never what the row showed.
    */
   sendNavKey(sequence) {
-    if (!app.activeSessionId) return;
-    if (!app._echoPassthroughSessions) app._echoPassthroughSessions = new Set();
-    app._echoPassthroughSessions.add(app.activeSessionId);
-    this.flushPendingThen(() => this.sendKey(sequence));
+    this.flushPendingThen(sequence, 'accessory-navigation', true);
   },
 
   /** Send a special key (arrow, escape, etc.) directly to the PTY.
    *  Bypasses tmux send-keys -l (literal mode) since escape sequences
    *  must be written raw to be interpreted as key presses by Ink. */
   sendKey(escapeSequence) {
-    if (!app.activeSessionId) return;
-    // Arrows/Esc move the server-side cursor and bypass onData: clear
-    // predictions now instead of waiting out the ~150ms off-row grace.
+    const sessionId = this._prepareInput(undefined, 'accessory-key', { flushEcho: true });
+    if (!sessionId) return;
     app._predictiveEcho?.clearPredictions();
-    fetch(`/api/sessions/${app.activeSessionId}/input`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ input: escapeSequence })
-    }).catch(() => {});
+    app._enqueueInput(sessionId, [{ write: escapeSequence }]);
   },
 
   /** Browse the active session's workspace and insert a selected path without Enter. */
   pickPath() {
-    if (!app.activeSessionId) return;
-    const session = app.sessions?.get(app.activeSessionId);
+    const pane = app._focusedPane?.();
+    const sessionId = typeof app._focusedPane === 'function' ? pane?.sessionId : app.activeSessionId;
+    if (!sessionId) return;
+    const session = app.sessions?.get(sessionId);
     PathPicker.open({
       title: 'Insert File or Folder Path',
-      sessionId: app.activeSessionId,
+      sessionId,
       initialPath: session?.workingDir || '',
       directoriesOnly: false,
       onSelect: (path) => {
-        app.insertTerminalText?.(path);
+        const targetPane = app._paneForSession?.(sessionId);
+        if (targetPane?.isPrimary && app._localEchoEnabled && app._localEchoOverlay && !app._echoPassthroughSessions?.has(sessionId)) {
+          app._prepareExternalInput?.(targetPane, 'accessory-path');
+          app._localEchoOverlay.appendText(path);
+        } else {
+          if (targetPane) app._prepareExternalInput?.(targetPane, 'accessory-path', { flushEcho: true });
+          app._sendInputAsync(sessionId, path, { useMux: true });
+        }
         setTimeout(() => app.terminal?.focus(), 100);
       },
     });
@@ -1421,6 +1438,9 @@ const KeyboardAccessoryBar = {
    *  exists only in the overlay; flushed text already reached the PTY, so erase
    *  that prefix before making the textarea authoritative. */
   _takePendingLocalEcho(sessionId) {
+    this._prepareInput(sessionId, 'accessory-compose-adopt');
+    const pane = app._focusedPane?.();
+    if (pane && (!pane.isPrimary || pane.sessionId !== sessionId)) return '';
     if (!app._localEchoEnabled || !app._localEchoOverlay) return '';
     const pending = app._localEchoOverlay.pendingText || '';
     const overlayFlushed = app._localEchoOverlay.getFlushed?.() || {};
@@ -1458,17 +1478,15 @@ const KeyboardAccessoryBar = {
    *  Enter stays a separate delayed write because Codex drops keys sharing a
    *  PTY read with a bracketed paste. */
   _sendComposedPrompt(sessionId, text) {
-    if (!this._sendBracketedPaste(sessionId, text, 'Prompt')) return false;
-    setTimeout(() => app._sendInputAsync(sessionId, '\r', { useMux: true }), 120);
-    return true;
+    return this._sendBracketedPaste(sessionId, text, 'Prompt', true);
   },
 
   /** One bracketed-paste write on the durable session-bound path, the same
    *  bytes a terminal paste produces, so the receiving shell or CLI takes a
    *  multi-line block as one edit. Never presses Enter: callers decide.
    *  `label` names the payload in the too-long toast. */
-  _sendBracketedPaste(sessionId, text, label) {
-    if (!sessionId || !text || typeof app._sendInputAsync !== 'function') return false;
+  _sendBracketedPaste(sessionId, text, label, submit = false) {
+    if (!sessionId || !text || typeof app._enqueueInput !== 'function') return false;
     app._predictiveEcho?.clearPredictions();
     // Match xterm's prepareTextForTerminal(): CR keeps embedded newlines inside
     // the single-line input transport and is what terminal.paste() emitted.
@@ -1483,7 +1501,10 @@ const KeyboardAccessoryBar = {
       app.showToast?.(`${label} is too long to send (maximum ${this._composerMaxLength.toLocaleString()} characters)`, 'error');
       return false;
     }
-    app._sendInputAsync(sessionId, `${COMPOSER_PASTE_START}${pasteText}${COMPOSER_PASTE_END}`);
+    this._prepareInput(sessionId, submit ? 'accessory-compose-send' : 'accessory-paste', { flushEcho: true });
+    const ops = [{ write: `${COMPOSER_PASTE_START}${pasteText}${COMPOSER_PASTE_END}` }];
+    if (submit) ops.push({ gap: 120 }, { write: '\r', useMux: true });
+    app._enqueueInput(sessionId, ops);
     return true;
   },
 
@@ -1500,13 +1521,15 @@ const KeyboardAccessoryBar = {
   /** Open the manual agent prompt composer. Enter remains a newline; only the
    *  Send button submits. Cancel/backdrop/Escape preserve the per-session draft. */
   composePrompt() {
-    if (typeof app === 'undefined' || !app.activeSessionId) return;
-    if (this._isShellSession()) {
+    if (typeof app === 'undefined') return;
+    const pane = app._focusedPane?.();
+    const sessionId = typeof app._focusedPane === 'function' ? pane?.sessionId : app.activeSessionId;
+    if (!sessionId) return;
+    if (app.sessions?.get(sessionId)?.mode === 'shell') {
       this.pasteFromClipboard();
       return;
     }
 
-    const sessionId = app.activeSessionId;
     const pending = this._takePendingLocalEcho(sessionId);
     const saved = this._composerDrafts.get(sessionId) || '';
     // A parked draft and text typed (or attached) on the prompt since are two
@@ -1687,10 +1710,13 @@ const KeyboardAccessoryBar = {
       // draft would be prepended to it the next time the composer opens.
       this._composerDrafts.delete(sessionId);
       close({ focusTerminal: true, preserveDraft: false });
+      const targetPane = app._focusedPane?.();
+      if (targetPane?.sessionId === sessionId) app._prepareExternalInput?.(targetPane, 'accessory-compose-insert');
       if (
         app._localEchoEnabled &&
         app._localEchoOverlay &&
         app.activeSessionId === sessionId &&
+        (!targetPane || (targetPane.isPrimary && targetPane.sessionId === sessionId)) &&
         !app._tilesOwnTerminal?.() &&
         !app._echoPassthroughSessions?.has(sessionId)
       ) {
@@ -1737,10 +1763,11 @@ const KeyboardAccessoryBar = {
    *  All upload paths reuse app._uploadAndInsertImages() (image-input.js), which
    *  uploads to /api/sessions/:id/paste-image and inserts the saved path. */
   pasteFromClipboard() {
-    if (typeof app === 'undefined' || !app.activeSessionId) return;
-    // The shell this overlay was opened for: a tab switch while it is open must
-    // not deliver the paste to whatever session is active at Send time.
-    const sessionId = app.activeSessionId;
+    if (typeof app === 'undefined') return;
+    // Capture once: switching focus while the dialog is open cannot redirect it.
+    const pane = app._focusedPane?.();
+    const sessionId = typeof app._focusedPane === 'function' ? pane?.sessionId : app.activeSessionId;
+    if (!sessionId) return;
 
     // Create overlay
     const overlay = document.createElement('div');

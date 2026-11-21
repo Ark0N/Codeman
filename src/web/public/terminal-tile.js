@@ -54,6 +54,7 @@
  * @dependency constants.js (window.CodemanTerminalFont, window.CodemanFetchDeadline, DEFAULT_SCROLLBACK, TERMINAL_TAIL_SIZE, SHELL_LOAD_BASE_QUERY, SHELL_LOAD_QUERY, TERMINAL_CHUNK_SIZE)
  * @dependency terminal-ui.js (codemanCurrentXtermTheme, codemanCurrentSkinIsLight, CodemanTerminalInput.shouldSuppressTerminalQueryResponse/isTerminalFocusOrMouseReport/wheelDeltaLines/wheelTicksForGesture/coalesceScrollBytes/sgrWheelReports/pageKeysForGesture, app._shouldForwardWheelToApp/_localScrollbackIsHollow/_terminalViewportAtBottom/_clientPointToCell/_handleDesktopTerminalClick, app.tabAlerts)
  * @dependency terminal-keycode229-recovery.js (window.CodemanKeyCode229Recovery, optional: absent, xterm's own textarea handling stands)
+ * @dependency terminal-ios-native-input.js (window.CodemanIosNativeInput, optional iOS native editing owner)
  * @loadorder 7.4 of 16, loaded after terminal-ui.js and before terminal-split.js
  */
 
@@ -227,6 +228,8 @@
       // The soft-keyboard controller (terminal-keycode229-recovery.js): created
       // in connect() once the xterm is open, torn down in destroy().
       this._keyCode229Recovery = null;
+      this._iosNativeInput = null;
+      this._iosCaretMarker = null;
     }
 
     async connect() {
@@ -275,7 +278,7 @@
       this._onFocusIn = () => global.app?._noteFocusedTile?.(this);
       this.terminal.textarea?.addEventListener('focus', this._onFocusIn);
 
-      this._createKeyCode229Recovery();
+      this._createInputOwner();
       // The twin of terminal-ui.js's onData gate (initTerminal; keep the two in
       // step). Canonical xterm data tells the controller this keystroke was
       // delivered, but not a query reply or a focus/mouse report, which xterm
@@ -309,6 +312,7 @@
       // here too. Ctrl+V goes through the primary pane's paste trap
       // (image-input.js), aimed at this pane (below).
       this.terminal.attachCustomKeyEventHandler((ev) => {
+        if (this._iosNativeInput?.keyFilter(ev) === false) return false;
         // FIRST, above the IME early return below, as in terminal-ui.js: every
         // keydown settles this pane's pending textarea edit and drains a
         // pending recovery BEFORE xterm handles the key, so a character an
@@ -637,6 +641,66 @@
         return;
       }
       app?._sendInputAsync?.(this.sessionId, data);
+    }
+
+    // iOS owns native textarea edits; other platforms retain the 229 recovery.
+    // Replacing either controller first settles the old tile's pending edit.
+    _createInputOwner() {
+      this._destroyIosNativeInput();
+      this._destroyKeyCode229Recovery();
+      if (!this.terminal) return;
+      const nativeInput = global.CodemanIosNativeInput;
+      if (!nativeInput?.isSupported?.()) {
+        this._createKeyCode229Recovery();
+        return;
+      }
+      this._iosNativeInput = nativeInput.create({
+        terminal: this.terminal,
+        sendTransaction: (ops) => this._sendNativeInputTransaction(ops),
+        isScreenReaderMode: () => this.terminal?.options?.screenReaderMode === true,
+      });
+      if (this._iosNativeInput) {
+        this._iosCaretMarker = nativeInput.attachCaretMarker(this.terminal, this._iosNativeInput);
+        return;
+      }
+      // create() refused (screen reader, missing xterm internals): keep the
+      // soft-keyboard recovery rather than leaving the tile with neither.
+      this._createKeyCode229Recovery();
+    }
+
+    _sendNativeInputTransaction(ops) {
+      const sessionId = this.sessionId;
+      const app = global.app;
+      let ctrlIndex = -1;
+      // Same rule as the primary pane (terminal-ui.js _sendNativeInputTransaction):
+      // the edit's first insertion spends the armed Ctrl whatever its length.
+      // consumeCtrl maps a single character and passes a suggestion or emoji
+      // through unchanged, but it still disarms, so the next `c` stays a `c`.
+      if (typeof KeyboardAccessoryBar !== 'undefined' && KeyboardAccessoryBar.isCtrlArmed?.()) {
+        ctrlIndex = ops.findIndex((data) => data !== '\x7f');
+      }
+      // Keep replacement deletions: Ctrl changes only the insertion, once for
+      // this edit, never once per DEL. Tiles have no local echo to reconcile.
+      const writes = ops.map((data, i) => ({
+        write: i === ctrlIndex ? KeyboardAccessoryBar.consumeCtrl(data) : data,
+      }));
+      if (app?._enqueueInput) app._enqueueInput(sessionId, writes);
+      else for (const { write } of writes) app?._sendInputAsync?.(sessionId, write);
+      if (ctrlIndex !== -1) this._iosNativeInput?.reset('ctrl');
+    }
+
+    _destroyIosNativeInput() {
+      try {
+        this._iosNativeInput?.settle();
+      } finally {
+        try {
+          this._iosNativeInput?.destroy();
+        } finally {
+          this._iosNativeInput = null;
+          this._iosCaretMarker?.();
+          this._iosCaretMarker = null;
+        }
+      }
     }
 
     // The soft-keyboard controller, the twin of the primary pane's wiring in
@@ -1554,6 +1618,8 @@
     }
 
     destroy() {
+      if (global.app?._focusedTile === this && typeof CjkInput !== 'undefined') CjkInput.flushNow?.();
+      this._destroyIosNativeInput();
       this._destroyed = true;
       // Anything still queued for this session stays in the app's queue and is
       // delivered over HTTP by the redelivery sweep, so closing the pane mid-

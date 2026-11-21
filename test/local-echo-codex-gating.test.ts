@@ -20,6 +20,7 @@ import { performance } from 'node:perf_hooks';
 import { resolve } from 'node:path';
 import vm from 'node:vm';
 import { describe, expect, it, vi } from 'vitest';
+import type { Mock } from 'vitest';
 
 type OverlayStub = {
   pendingText: string;
@@ -28,6 +29,7 @@ type OverlayStub = {
   prompts: unknown[];
   clear(): void;
   suppressBufferDetection(): void;
+  getFlushed(): { count: number; text: string };
   setPrompt(p: unknown): void;
   appendText: ReturnType<typeof vi.fn>;
 };
@@ -38,14 +40,15 @@ type AppInstance = {
   terminal?: { focus: () => void };
   _localEchoEnabled?: boolean;
   _localEchoOverlay?: OverlayStub;
-  _pendingInput: string;
+  _pendingInput: Map<string, string>;
+  _inputFlushTimeout: Map<string, NodeJS.Timeout>;
+  _lastKeystrokeTime: Map<string, number>;
   _flushedOffsets?: Map<string, number>;
   _flushedTexts?: Map<string, string>;
   _echoPassthroughSessions?: Set<string>;
   loadAppSettingsFromStorage: () => Record<string, unknown>;
-  sendInput: ReturnType<typeof vi.fn>;
+  _enqueueReliableInput: Mock;
   _updateLocalEchoState(): void;
-  _flushLocalEchoPending(): void;
   insertTerminalText(text: string): void;
 };
 
@@ -111,6 +114,7 @@ function makeOverlay(pending = ''): OverlayStub {
     setPrompt(p: unknown) {
       this.prompts.push(p);
     },
+    getFlushed: () => ({ count: 0, text: '' }),
     appendText: vi.fn(),
   };
 }
@@ -120,11 +124,14 @@ function makeApp(mode: string, overlay = makeOverlay()): AppInstance {
   app.activeSessionId = 's1';
   app.sessions = new Map([['s1', { mode }]]);
   app._localEchoOverlay = overlay;
-  app._pendingInput = '';
+  app._pendingInput = new Map();
+  app._inputFlushTimeout = new Map();
+  app._lastKeystrokeTime = new Map();
+  app.terminal = { focus: vi.fn() };
   app._flushedOffsets = new Map([['s1', 3]]);
   app._flushedTexts = new Map([['s1', 'abc']]);
   app.loadAppSettingsFromStorage = () => ({ localEchoEnabled: true });
-  app.sendInput = vi.fn().mockResolvedValue(undefined);
+  app._enqueueReliableInput = vi.fn();
   return app;
 }
 
@@ -179,6 +186,7 @@ describe('_updateLocalEchoState mode gating', () => {
   it('disables the overlay for codex sessions even with the setting ON (issues #218/#219/#220/#222)', () => {
     const overlay = makeOverlay('pending');
     const app = makeApp('codex', overlay);
+    app._localEchoEnabled = true; // Pending overlay text belongs to an enabled buffer policy.
     app._updateLocalEchoState();
     expect(app._localEchoEnabled).toBe(false);
     expect(overlay.cleared).toBeGreaterThan(0);
@@ -199,25 +207,6 @@ describe('_updateLocalEchoState mode gating', () => {
   });
 });
 
-describe('_flushLocalEchoPending', () => {
-  it('moves pending text into _pendingInput and resets overlay + flushed tracking', () => {
-    const overlay = makeOverlay('hello');
-    const app = makeApp('claude', overlay);
-    app._flushLocalEchoPending();
-    expect(app._pendingInput).toBe('hello');
-    expect(overlay.cleared).toBe(1);
-    expect(overlay.suppressed).toBe(1);
-    expect(app._flushedOffsets!.has('s1')).toBe(false);
-    expect(app._flushedTexts!.has('s1')).toBe(false);
-  });
-
-  it('appends nothing when the overlay is empty', () => {
-    const app = makeApp('claude', makeOverlay(''));
-    app._flushLocalEchoPending();
-    expect(app._pendingInput).toBe('');
-  });
-});
-
 describe('insertTerminalText pass-through routing', () => {
   it('appends to the overlay while local echo is buffering', () => {
     const overlay = makeOverlay();
@@ -225,7 +214,7 @@ describe('insertTerminalText pass-through routing', () => {
     app._localEchoEnabled = true;
     app.insertTerminalText('path.txt');
     expect(overlay.appendText).toHaveBeenCalledWith('path.txt');
-    expect(app.sendInput).not.toHaveBeenCalled();
+    expect(app._enqueueReliableInput).not.toHaveBeenCalled();
   });
 
   it('sends directly while the session is in nav-key pass-through', () => {
@@ -234,7 +223,7 @@ describe('insertTerminalText pass-through routing', () => {
     app._localEchoEnabled = true;
     app._echoPassthroughSessions = new Set(['s1']);
     app.insertTerminalText('path.txt');
-    expect(app.sendInput).toHaveBeenCalledWith('path.txt');
+    expect(app._enqueueReliableInput).toHaveBeenCalledWith('s1', 'path.txt', { useMux: true });
     expect(overlay.appendText).not.toHaveBeenCalled();
   });
 });
@@ -425,12 +414,12 @@ describe('_predictHookOnData (wire neutrality)', () => {
 
   it('never touches _pendingInput and never sends (visual-only pin)', () => {
     const app = makePredictApp();
-    app._pendingInput = 'queued';
+    app._pendingInput.set('s1', 'queued');
     for (const data of ['h', 'i', '\x7f', '\r', '\x1b[A', 'multi char', '\x1b[200~x\x1b[201~']) {
       app._predictHookOnData(data);
     }
-    expect(app._pendingInput).toBe('queued');
-    expect(app.sendInput).not.toHaveBeenCalled();
+    expect(app._pendingInput.get('s1')).toBe('queued');
+    expect(app._enqueueReliableInput).not.toHaveBeenCalled();
   });
 
   it('is inert under buffer/off policies and without a predictor', () => {
@@ -451,21 +440,21 @@ describe('_predictHookOnData (wire neutrality)', () => {
     app._predictiveEcho!.predictChar.mockImplementation(() => {
       throw new Error('boom');
     });
-    app._pendingInput = 'queued';
+    app._pendingInput.set('s1', 'queued');
     expect(() => app._predictHookOnData('h')).not.toThrow();
-    expect(app._pendingInput).toBe('queued');
-    expect(app.sendInput).not.toHaveBeenCalled();
+    expect(app._pendingInput.get('s1')).toBe('queued');
+    expect(app._enqueueReliableInput).not.toHaveBeenCalled();
   });
 });
 
 describe('insertTerminalText under predict policy', () => {
-  it('routes to sendInput (not the overlay) and clears predictions', () => {
+  it('routes to reliable input (not the overlay) and clears predictions', () => {
     const overlay = makeOverlay();
     const app = makeApp('codex', overlay) as PredictiveApp;
     app._predictiveEcho = makePredictor();
     app._updateLocalEchoState(); // predict; _localEchoEnabled false
     app.insertTerminalText('path.txt');
-    expect(app.sendInput).toHaveBeenCalledWith('path.txt');
+    expect(app._enqueueReliableInput).toHaveBeenCalledWith('s1', 'path.txt', { useMux: true });
     expect(overlay.appendText).not.toHaveBeenCalled();
     expect(app._predictiveEcho.clearPredictions).toHaveBeenCalled();
   });

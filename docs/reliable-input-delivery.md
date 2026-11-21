@@ -75,7 +75,7 @@ Both transports refuse a frame longer than `MAX_INPUT_LENGTH` (64 KiB,
 at the head of the queue, was re-sent every 2 s forever, blocked every later
 input for the session, and came back from localStorage on each reload.
 
-- `_sendInputAsync()` splits a paste over the frame limit into in-limit frames
+- `_enqueueReliableInput()` (the session FIFO's transport edge) splits a paste over the frame limit into in-limit frames
   (`CodemanInputLimit.split`, constants.js, never cutting a surrogate pair). They
   go out in seq order, so the PTY sees one contiguous stream. A paste over
   `PASTE_MAX_CHARS` (1 MiB), or an oversized `useMux` write (one paste plus its own Enter, never

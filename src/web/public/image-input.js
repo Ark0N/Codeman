@@ -7,7 +7,7 @@
  *
  * For drag-and-drop: listens on the terminal container for file drops.
  *
- * @dependency app.js (uses global `app` for sendInput, activeSessionId, showToast)
+ * @dependency app.js (uses global `app` for _sendInputAsync, _prepareExternalInput, activeSessionId, showToast)
  * @dependency panels-ui.js (provides showToast)
  */
 
@@ -142,6 +142,8 @@ Object.assign(CodemanApp.prototype, {
       return;
     }
 
+    const pane = this._paneForSession?.(sessionId);
+    if (pane) this._prepareExternalInput?.(pane, 'toolbar-attachment');
     const stillActive = this.activeSessionId === sessionId;
     // The overlay holds the prompt only while local echo actually owns it. A
     // session handed back to plain PTY echo by a composer nav key (echo
@@ -152,6 +154,7 @@ Object.assign(CodemanApp.prototype, {
     // goes to the PTY like any other background write.
     const overlayOwnsPrompt =
       stillActive &&
+      (!pane || (pane.isPrimary && pane.sessionId === sessionId)) &&
       !this._tilesOwnTerminal?.() &&
       this._localEchoEnabled &&
       this._localEchoOverlay &&
@@ -394,10 +397,11 @@ Object.assign(CodemanApp.prototype, {
     const paths = results.filter(Boolean);
     if (paths.length > 0 && options.insert !== false) {
       // Insert all paths in one shot, space-separated, in selection order, into
-      // the session the batch was uploaded TO. Not sendInput(): it re-reads
-      // activeSessionId, and after the awaits above that is whatever tab the
-      // user switched to mid-upload, so the paths landed in the wrong session.
-      // Same delivery sendInput() uses (durable queue, useMux for the POST path).
+      // the session the batch was uploaded to, captured before the awaits above,
+      // not the active tab the user may have switched to mid-upload.
+      // Delivery uses the durable session-bound path, with useMux for the POST fallback.
+      const pane = this._paneForSession?.(sessionId);
+      if (pane) this._prepareExternalInput?.(pane, 'upload-insert', { flushEcho: true });
       this._sendInputAsync(sessionId, paths.join(' '), { useMux: true });
     }
 

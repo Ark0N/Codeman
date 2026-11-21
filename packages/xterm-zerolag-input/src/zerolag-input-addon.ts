@@ -6,6 +6,7 @@ import type {
   PromptPosition,
   PromptFinder,
   FontStyle,
+  InputEndAnchor,
 } from './types.js';
 import { getCellDimensions } from './cell-dimensions.js';
 import { findPrompt, readTextAfterPrompt, promptRowInViewport } from './prompt-finder.js';
@@ -17,6 +18,38 @@ const DEFAULT_SCROLL_DEBOUNCE_MS = 50;
 const DEFAULT_BG = '#0d0d0d';
 const DEFAULT_FG = '#eeeeee';
 const DEFAULT_CURSOR = '#e0e0e0';
+
+type GraphemeSegmenter = {
+  segment(input: string): Iterable<{ segment: string }>;
+};
+
+const GRAPHEME_SEGMENTER: GraphemeSegmenter | null = (() => {
+  try {
+    const Segmenter = (
+      Intl as typeof Intl & {
+        Segmenter?: new (locale?: string, options?: { granularity: 'grapheme' }) => GraphemeSegmenter;
+      }
+    ).Segmenter;
+    return Segmenter ? new Segmenter(undefined, { granularity: 'grapheme' }) : null;
+  } catch {
+    return null;
+  }
+})();
+
+/** UTF-16 width of the final grapheme cluster (one for an empty legacy flushed string). */
+function lastGraphemeWidth(text: string): number {
+  if (GRAPHEME_SEGMENTER) {
+    let width = 1;
+    for (const { segment } of GRAPHEME_SEGMENTER.segment(text)) {
+      width = segment.length;
+    }
+    return width;
+  }
+
+  const last = text.charCodeAt(text.length - 1);
+  const previous = text.charCodeAt(text.length - 2);
+  return last >= 0xdc00 && last <= 0xdfff && previous >= 0xd800 && previous <= 0xdbff ? 2 : 1;
+}
 
 /**
  * xterm.js addon that provides instant keystroke feedback via a DOM overlay.
@@ -76,6 +109,8 @@ export class ZerolagInputAddon implements XtermAddon {
   // Render cache
   private _lastRenderKey = '';
   private _lastPromptPos: PromptPosition | null = null;
+  private _inputEndAnchor: InputEndAnchor | null = null;
+  private _layoutListeners = new Set<() => void>();
 
   // Font cache
   private _font: FontStyle = {
@@ -130,6 +165,8 @@ export class ZerolagInputAddon implements XtermAddon {
       try {
         if (!promptRowInViewport(this._terminal!)) {
           this._overlay!.style.display = 'none';
+          this._inputEndAnchor = null;
+          this._notifyLayout();
           if (this._scrollTimer) {
             clearTimeout(this._scrollTimer);
             this._scrollTimer = null;
@@ -171,6 +208,7 @@ export class ZerolagInputAddon implements XtermAddon {
     this._scrollViewport = null;
     this._scrollHandler = null;
     this._terminal = null;
+    this._layoutListeners.clear();
   }
 
   // ─── Input methods ────────────────────────────────────────────────
@@ -196,7 +234,7 @@ export class ZerolagInputAddon implements XtermAddon {
   }
 
   /**
-   * Remove the last character from the overlay.
+   * Remove the last grapheme cluster (one user-perceived character).
    *
    * Cascade order:
    * 1. Remove from `pendingText` if non-empty → returns `'pending'`
@@ -219,7 +257,7 @@ export class ZerolagInputAddon implements XtermAddon {
     const droppedComposition = this._composition.length > 0;
     this._composition = '';
     if (this._pendingText.length > 0) {
-      this._pendingText = this._pendingText.slice(0, -1);
+      this._pendingText = this._pendingText.slice(0, -lastGraphemeWidth(this._pendingText));
       if (this._pendingText.length > 0 || this._flushedOffset > 0) {
         this._render();
       } else {
@@ -228,23 +266,13 @@ export class ZerolagInputAddon implements XtermAddon {
       return 'pending';
     }
 
-    if (this._flushedOffset > 0) {
-      this._flushedOffset--;
-      this._flushedText = this._flushedText.slice(0, -1);
-      if (this._flushedOffset > 0) {
-        this._render();
-      } else {
-        this._hide();
-      }
-      return 'flushed';
-    }
-
     // Both empty — try detecting text already on the prompt line
-    // (handles tab completion, arrow-key edits, etc.)
-    this._detectBufferText();
+    // (handles tab completion, arrow-key edits, etc.).
+    if (this._flushedOffset === 0) this._detectBufferText();
     if (this._flushedOffset > 0) {
-      this._flushedOffset--;
-      this._flushedText = this._flushedText.slice(0, -1);
+      const width = lastGraphemeWidth(this._flushedText);
+      this._flushedOffset -= width;
+      this._flushedText = this._flushedText.slice(0, -width);
       if (this._flushedOffset > 0) {
         this._render();
       } else {
@@ -319,6 +347,19 @@ export class ZerolagInputAddon implements XtermAddon {
   }
 
   // ─── Rendering control ────────────────────────────────────────────
+
+  /** Viewport text end from the renderer's last visible layout, or null when hidden. */
+  getInputEndAnchor(): InputEndAnchor | null {
+    return this._inputEndAnchor ? { ...this._inputEndAnchor } : null;
+  }
+
+  /** Subscribe after each layout, including hide. Returns an unsubscribe function. */
+  onLayout(cb: () => void): () => void {
+    this._layoutListeners.add(cb);
+    return () => {
+      this._layoutListeners.delete(cb);
+    };
+  }
 
   /**
    * Force a re-render of the overlay at the current prompt position.
@@ -578,22 +619,34 @@ export class ZerolagInputAddon implements XtermAddon {
     }
   }
 
+  private _notifyLayout(): void {
+    for (const cb of this._layoutListeners) {
+      try {
+        cb();
+      } catch {
+        // A visual observer must not interrupt input or the other listeners.
+      }
+    }
+  }
+
   private _hide(): void {
     if (!this._overlay) return;
     this._lastRenderKey = '';
     this._lastPromptPos = null;
     this._overlay.innerHTML = '';
     this._overlay.style.display = 'none';
+    this._inputEndAnchor = null;
+    this._notifyLayout();
   }
 
   private _render(): void {
     if (!this._terminal || !this._overlay) return;
-    if (!this._hasContent()) {
-      this._overlay.style.display = 'none';
-      return;
-    }
-
+    let layoutChanged = true;
     try {
+      if (!this._hasContent()) {
+        this._overlay.style.display = 'none';
+        return;
+      }
       const buf = this._terminal.buffer.active;
 
       // Hide the overlay while the cursor row is scrolled out of view
@@ -658,7 +711,10 @@ export class ZerolagInputAddon implements XtermAddon {
       // redundant render.
       const totalRows = this._layoutRows();
       const renderKey = `${displayText}:${compositionStart}:${startCol}:${activePrompt.row}:${activePrompt.col}:${totalCols}:${totalRows}:${this._flushedOffset}`;
-      if (renderKey === this._lastRenderKey && this._overlay.style.display !== 'none') return;
+      if (renderKey === this._lastRenderKey && this._overlay.style.display !== 'none') {
+        layoutChanged = false;
+        return;
+      }
       this._lastRenderKey = renderKey;
 
       // Split into visual lines by column width (CJK wide chars = 2 cols)
@@ -695,7 +751,7 @@ export class ZerolagInputAddon implements XtermAddon {
 
       const cursorColor = this._options.cursorColor ?? this._terminal.options.theme?.cursor ?? DEFAULT_CURSOR;
 
-      renderOverlay(this._overlay, {
+      this._inputEndAnchor = renderOverlay(this._overlay, {
         lines,
         compositionStart: this._composition ? compositionStart : undefined,
         startCol,
@@ -718,6 +774,9 @@ export class ZerolagInputAddon implements XtermAddon {
         this._overlay.innerHTML = '';
         this._overlay.style.display = 'none';
       }
+    } finally {
+      if (this._overlay.style.display === 'none') this._inputEndAnchor = null;
+      if (layoutChanged) this._notifyLayout();
     }
   }
 }

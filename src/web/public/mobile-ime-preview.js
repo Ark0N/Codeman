@@ -42,7 +42,9 @@
   const KEEP_COMPOSING_KEYCODES = new Set([20, 229, 16, 17, 18]);
   const CONTROL_OR_LINE_BREAK = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
 
-  function isIosWebKitTouch(nav = navigator) {
+  // Shared with CodemanIosNativeInput.isSupported(); keep platform gating here
+  // because the preview predates and loads before the native input owner.
+  function isIosWebKitTouch(nav = global.navigator) {
     const userAgent = String(nav && nav.userAgent ? nav.userAgent : '');
     const platform = String(nav && nav.platform ? nav.platform : '');
     const touchPoints = Number(nav && nav.maxTouchPoints ? nav.maxTouchPoints : 0);
@@ -59,6 +61,12 @@
     const render = typeof options.render === 'function' ? options.render : function () {};
     const clear = typeof options.clear === 'function' ? options.clear : function () {};
     const onCommit = typeof options.onCommit === 'function' ? options.onCommit : function () {};
+    const ownsNativeInput =
+      typeof options.ownsNativeInput === 'function'
+        ? options.ownsNativeInput
+        : function () {
+            return false;
+          };
     const scheduleFrame = options.scheduleFrame || global.requestAnimationFrame.bind(global);
     const cancelFrame = options.cancelFrame || global.cancelAnimationFrame.bind(global);
     const setTimer = options.setTimer || global.setTimeout.bind(global);
@@ -73,6 +81,7 @@
     let frameToken = null;
     let timerToken = null;
     let finalizedByKeydown = false;
+    let compositionStart = 0;
     let destroyed = false;
     let invokingClear = false;
 
@@ -140,17 +149,19 @@
       cleanup();
       if (destroyed) return;
       composing = true;
+      compositionStart = textarea.selectionStart == null ? textarea.value.length : textarea.selectionStart;
     }
 
     function updateComposition(event) {
       if (!composing) return;
-      latestValue = event.data == null ? '' : String(event.data);
+      const segment = safely(ownsNativeInput) ? textarea.value.slice(compositionStart, textarea.selectionEnd) : '';
+      latestValue = event.data == null ? segment : String(event.data);
       scheduleLatestPreview('provisional');
     }
 
     function onComposingInput(event) {
       if (!event.isComposing) return;
-      updateComposition({ data: event.data == null ? textarea.value : event.data });
+      updateComposition({ data: event.data == null && !safely(ownsNativeInput) ? textarea.value : event.data });
     }
 
     function armFallbackTimer(isCurrent) {
@@ -203,6 +214,9 @@
     // finalizes it. `isComposing` and `key` are deliberately not consulted,
     // because xterm does not consult them.
     function onKeydown(event) {
+      // Native ownership, not xterm's terminal-key heuristic, decides when the
+      // retained field has finished composing.
+      if (safely(ownsNativeInput)) return;
       if (keydownTarget !== textarea && event.target !== textarea) return;
       if (!composing || KEEP_COMPOSING_KEYCODES.has(event.keyCode)) return;
       finalizeComposition(latestValue, true);
@@ -246,6 +260,16 @@
       return true;
     }
 
+    function nativeTransaction({ inserted, deleted, composition }) {
+      if (destroyed || !awaitingCommit) return false;
+      if (inserted && consumeTerminalData(inserted)) return true;
+      // No inserted text (or unsafe terminal controls): nothing can display a
+      // commit later. In particular deletion-only/unchanged compositions settle
+      // now instead of leaving unrelated input to consume the 2 s fallback.
+      cleanup();
+      return false;
+    }
+
     function completeCommit(result) {
       if (destroyed || !result || result.predicted !== true || !committed) return;
       cleanup();
@@ -275,6 +299,7 @@
 
     return {
       consumeTerminalData,
+      nativeTransaction,
       completeCommit,
       noteAuthoritativeOutput,
       reset,
