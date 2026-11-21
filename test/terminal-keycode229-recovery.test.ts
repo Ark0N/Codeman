@@ -763,6 +763,19 @@ describe('edit-based sync of the helper textarea (autocorrect replacements)', ()
     expect(e.sent.slice(before)).toEqual(['\x7f']);
   });
 
+  it.each([
+    ['Thai', '\u0E01\u0E34\u0E48'],
+    ['Hindi', '\u0915\u094D\u0937'],
+  ])('types %s combining marks one field state at a time as plain appends', (_name, word) => {
+    // Each keystroke extends the last grapheme cluster; re-typing that cluster would
+    // make a code-point line editor (zsh) double the base letter.
+    const e = editSyncHarness();
+    e.create(true);
+    typeKeys(e, word);
+    expect(e.sent).toEqual(Array.from(word));
+    expect(e.line()).toBe(word);
+  });
+
   it.each(MULTI_CODE_POINT_EMOJI)(
     'keeps the local-echo draft at ok when the %s is deleted (real overlay)',
     (_name, emoji) => {
@@ -825,5 +838,7 @@ describe('edit-based sync of the helper textarea (autocorrect replacements)', ()
     expect(editBetween('x😀', 'x')).toEqual({ deleted: 1, inserted: '' });
     expect(editBetween('x\u{1F44D}\u{1F3FD}', 'x')).toEqual({ deleted: 1, inserted: '' });
     expect(editBetween('', '')).toEqual({ deleted: 0, inserted: '' });
+    // A mark typed onto the last letter is a plain append, not a DEL and a re-typed cluster.
+    expect(editBetween('\u0E01', '\u0E01\u0E34')).toEqual({ deleted: 0, inserted: '\u0E34' });
   });
 });

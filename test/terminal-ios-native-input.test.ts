@@ -568,6 +568,9 @@ const replayCases: Array<[string, (h: Harness) => void]> = [
         expect(h.api.editBetween(`ok${emoji}`, 'ok')).toEqual({ deleted: 1, inserted: '' });
         expect(h.api.editBetween(`a${emoji}b`, 'aX')).toEqual({ deleted: 2, inserted: 'X' });
       }
+      // A combining mark or tone typed onto the last letter is a plain append, as on master.
+      expect(h.api.editBetween('\u0E01', '\u0E01\u0E34')).toEqual({ deleted: 0, inserted: '\u0E34' });
+      expect(h.api.editBetween('\u0915\u094D', '\u0915\u094D\u0937')).toEqual({ deleted: 0, inserted: '\u0937' });
       for (const ch of 'hel') h.type(ch);
       h.type('lo');
       h.tick();
@@ -955,6 +958,24 @@ const replayCases: Array<[string, (h: Harness) => void]> = [
         h.backspace();
         h.backspace();
         expect(h.value()).toBe('');
+        h.clearSent();
+      }
+    },
+  ],
+  [
+    '20c combining marks typed one key at a time are plain appends',
+    (h) => {
+      // Thai กิ่ and Hindi क्ष: each keystroke extends the last grapheme cluster.
+      // Re-typing that cluster would make a code-point line editor (zsh) double the base letter.
+      for (const word of ['\u0E01\u0E34\u0E48', '\u0915\u094D\u0937']) {
+        for (const ch of word) h.edit(ch);
+        h.tick();
+        h.bytes(Array.from(word));
+        expect(h.value()).toBe(word);
+        h.invariant();
+        while (h.textarea.value) h.backspace();
+        expect(h.value()).toBe('');
+        h.tick();
         h.clearSent();
       }
     },

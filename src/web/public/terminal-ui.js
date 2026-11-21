@@ -1101,7 +1101,6 @@ Object.assign(CodemanApp.prototype, {
               this._tabCompletionSessionId = null;
               this._tabCompletionRetries = 0;
               this._tabCompletionBaseText = null;
-              ov.setFlushed(detected.length, detected);
               ov.rerender();
             }
           });

@@ -34,6 +34,10 @@
   }
 
   function editBetween(previous, next) {
+    // A pure append (including a combining mark or tone typed onto the last letter)
+    // is sent as-is, as on master: re-typing the extended cluster would make a
+    // code-point line editor (zsh) double the base letter.
+    if (next.startsWith(previous)) return { deleted: 0, inserted: next.slice(previous.length) };
     const a = graphemes(previous);
     const b = graphemes(next);
     let prefix = 0;
