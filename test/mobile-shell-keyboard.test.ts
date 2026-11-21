@@ -606,7 +606,7 @@ describe('Send on Enter: a held answer goes out with Enter as its own write', ()
   it('types a single character, then Enter 120 ms later on the same session FIFO across a switch', () => {
     // Codex folds an Enter that arrives in the same burst as the text into a
     // paste, even for `1\r`; a selection dialog ignores a pasted digit. Same
-    // split as TmuxManager.sendInput (submitsAsKeys).
+    // split as the tmux manager's submitsAsKeys path.
     vi.useFakeTimers();
     try {
       const { app, composed, writes } = promptApp();
@@ -732,7 +732,6 @@ describe('composer nav keys from the bar', () => {
     const app = loaded.app as unknown as Record<string, unknown>;
     app._localEchoEnabled = true;
     app._localEchoOverlay = overlay;
-    app.sendInput = vi.fn();
     app._flushedOffsets = new Map([['session-1', 3]]);
     app._flushedTexts = new Map([['session-1', 'dra']]);
     return { ...loaded, app, overlay };
@@ -810,7 +809,6 @@ describe('composer nav keys from the bar', () => {
     bar.handleAction('arrow-right');
 
     expect(sentKeys(app._enqueueInput as ReturnType<typeof vi.fn>)).toEqual(['\x1b[A', '\x1b[B', '\x1b[D', '\x1b[C']);
-    expect(app.sendInput).not.toHaveBeenCalled();
   });
 });
 

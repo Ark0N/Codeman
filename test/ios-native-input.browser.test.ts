@@ -236,6 +236,32 @@ describe('iOS native input served-app wiring (#830)', () => {
       });
       expect(viewport.viewportY).toBe(viewport.baseY);
     });
+
+    it(`toolbar Enter while scrolled back returns the viewport to the prompt (echo ${echo})`, async () => {
+      await setup(echo);
+      const scrolled = await page.evaluate(async () => {
+        const terminal = (window as unknown as TestWindow).app.terminal;
+        const written = Promise.withResolvers<void>();
+        terminal.write('line\r\n'.repeat(200) + '❯ ', written.resolve);
+        await written.promise;
+        terminal.scrollToTop();
+        return { viewportY: terminal.buffer.active.viewportY, baseY: terminal.buffer.active.baseY };
+      });
+      expect(scrolled.viewportY).toBe(0);
+      expect(scrolled.baseY).toBeGreaterThan(0);
+      await page
+        .locator('button[onclick="app.sendEnterKey()"]')
+        .evaluate((button: HTMLButtonElement) => button.click());
+      // Echo on delivers the CR after the local-echo gap: wait for it on the wire.
+      await page.waitForFunction(() => (window as unknown as TestWindow).__sent.some((x) => x.input === '\r'));
+      const sent = await page.evaluate(() => (window as unknown as TestWindow).__sent.map((x) => x.input));
+      expect(sent).toEqual(['\r']);
+      const viewport = await page.evaluate(() => {
+        const buffer = (window as unknown as TestWindow).app.terminal.buffer.active;
+        return { viewportY: buffer.viewportY, baseY: buffer.baseY };
+      });
+      expect(viewport.viewportY).toBe(viewport.baseY);
+    });
   }
 
   for (const target of ['main', 'tile'] as const) {

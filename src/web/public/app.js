@@ -4198,8 +4198,10 @@ class CodemanApp {
 
   /**
    * Public input entry point — name/signature kept for all call sites.
-   * Records the input durably, then delivers it reliably (exactly-once). Never
-   * blocks the keystroke flush; never silently drops on a half-open socket.
+   * Seals the session's batched keystrokes, then enqueues the input on that
+   * session's FIFO, which hands it to the durable exactly-once layer
+   * (_enqueueReliableInput). It can wait behind an earlier `gap` (a delayed
+   * Enter); it never silently drops on a half-open socket.
    * @param {string} sessionId
    * @param {string} input
    * @param {{useMux?: boolean}} [opts] - useMux only affects the POST fallback.

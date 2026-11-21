@@ -49,7 +49,6 @@ function loadToolbar(sessionId: string | null = 'session-1', localEcho = true, k
   const app = new CodemanApp();
   app.activeSessionId = sessionId;
   app.showToast = vi.fn();
-  app.sendInput = vi.fn(async () => {});
   app.terminal = { focus: vi.fn() };
   app._isMobileTerminalInputFocused = vi.fn(() => keyboardUp);
   app._blurMobileTerminalInput = vi.fn();

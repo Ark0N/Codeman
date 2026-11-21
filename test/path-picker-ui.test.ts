@@ -43,7 +43,6 @@ function loadKeyboardModule() {
     terminal: { focus: vi.fn() },
     clearTerminalInput: vi.fn(),
     insertTerminalText: vi.fn(),
-    sendInput: vi.fn(),
     _enqueueInput: vi.fn(),
     _sendInputAsync: vi.fn(),
     _focusedPane: () => ({ sessionId: 'session-1', isPrimary: true }),
@@ -92,7 +91,6 @@ describe('accessory Tab key', () => {
     const { app, bar, fetchMock } = loadKeyboardModule();
     bar.handleAction('tab');
 
-    expect(app.sendInput).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
     expect(app._enqueueInput).toHaveBeenCalledWith('session-1', [{ write: '\t' }]);
   });
@@ -156,10 +154,8 @@ describe('toolbar Enter', () => {
     const context = vm.createContext({ CodemanApp: function () {} });
     vm.runInContext(`${sessionSource}\nglobalThis.__mixin = CodemanApp.prototype;`, context);
     const submitFromToolbar = vi.fn();
-    const sendInput = vi.fn();
-    context.__mixin.sendEnterKey.call({ submitFromToolbar, sendInput });
+    context.__mixin.sendEnterKey.call({ submitFromToolbar });
     expect(submitFromToolbar).toHaveBeenCalledOnce();
-    expect(sendInput).not.toHaveBeenCalled();
   });
 });
 
@@ -169,7 +165,6 @@ describe('mobile filesystem picker actions', () => {
     bar.handleAction('clear-input');
 
     expect(app.clearTerminalInput).toHaveBeenCalledOnce();
-    expect(app.sendInput).not.toHaveBeenCalled();
     expect(keyboardSource).toContain('data-action="clear-input"');
     expect(keyboardSource).toContain('data-action="clear" title="/clear"');
   });
@@ -189,7 +184,6 @@ describe('mobile filesystem picker actions', () => {
     });
     options.onSelect('/mnt/d/AI/project/file.ts');
     expect(app._sendInputAsync).toHaveBeenCalledWith('session-1', '/mnt/d/AI/project/file.ts', { useMux: true });
-    expect(app.sendInput).not.toHaveBeenCalled();
   });
 
   it.each([false, true])(
@@ -247,14 +241,12 @@ describe('mobile filesystem picker actions', () => {
 
   it('inserts a selected path into the editable local-echo prompt without sending it', () => {
     const appendText = vi.fn();
-    const sendInput = vi.fn();
     const focus = vi.fn();
     const app = {
       activeSessionId: 'session-1',
       _localEchoEnabled: true,
       _localEchoOverlay: { appendText },
       terminal: { focus },
-      sendInput,
       _focusedPane: () => ({ terminal: app.terminal, sessionId: app.activeSessionId, isPrimary: true }),
       _prepareExternalInput: vi.fn(),
     };
@@ -262,20 +254,17 @@ describe('mobile filesystem picker actions', () => {
     terminalHarness.mixin.insertTerminalText.call(app, '/mnt/d/AI/project');
 
     expect(appendText).toHaveBeenCalledWith('/mnt/d/AI/project');
-    expect(sendInput).not.toHaveBeenCalled();
     expect(focus).toHaveBeenCalledOnce();
   });
 
   it('clears pending and already-flushed prompt text without invoking /clear', () => {
     const clear = vi.fn();
     const suppressBufferDetection = vi.fn();
-    const sendInput = vi.fn(() => Promise.resolve());
     const showToast = vi.fn();
     const focus = vi.fn();
     const app = {
       activeSessionId: 'session-1',
       _inputFlushTimeout: null,
-      _pendingInput: 'pending text',
       _localEchoEnabled: true,
       _localEchoOverlay: {
         getFlushed: () => ({ count: 4, text: 'a😀b' }),
@@ -284,7 +273,6 @@ describe('mobile filesystem picker actions', () => {
       },
       _flushedOffsets: new Map([['session-1', 4]]),
       _flushedTexts: new Map([['session-1', 'a😀b']]),
-      sendInput,
       _sendInputAsync: vi.fn(),
       _focusedPane: () => ({ terminal: app.terminal, sessionId: app.activeSessionId, isPrimary: true }),
       _prepareExternalInput: vi.fn(),
@@ -301,7 +289,6 @@ describe('mobile filesystem picker actions', () => {
     expect(clear).toHaveBeenCalledOnce();
     expect(suppressBufferDetection).toHaveBeenCalledOnce();
     expect(app._sendInputAsync).toHaveBeenCalledWith('session-1', '\x7f'.repeat(3), { useMux: true });
-    expect(sendInput).not.toHaveBeenCalled();
     expect(app._flushedOffsets.size).toBe(0);
     expect(app._flushedTexts.size).toBe(0);
     expect(showToast).toHaveBeenCalledWith('Input cleared', 'success');
@@ -311,7 +298,6 @@ describe('mobile filesystem picker actions', () => {
 
   it('sends a picked path to the tile or Pane B that holds the keyboard, never the parked main overlay', () => {
     const appendText = vi.fn();
-    const sendInput = vi.fn();
     const _sendInputAsync = vi.fn();
     const mainFocus = vi.fn();
     const tileFocus = vi.fn();
@@ -320,7 +306,6 @@ describe('mobile filesystem picker actions', () => {
       _localEchoEnabled: true,
       _localEchoOverlay: { appendText },
       terminal: { focus: mainFocus },
-      sendInput,
       _sendInputAsync,
       _prepareExternalInput: vi.fn(),
       _focusedPane: () => ({ terminal: { focus: tileFocus }, sessionId: 'tile-2', isPrimary: false, tile: {} }),
@@ -330,24 +315,20 @@ describe('mobile filesystem picker actions', () => {
 
     expect(_sendInputAsync).toHaveBeenCalledWith('tile-2', '/mnt/d/AI/project');
     expect(appendText).not.toHaveBeenCalled();
-    expect(sendInput).not.toHaveBeenCalled();
     expect(tileFocus).toHaveBeenCalledOnce();
     expect(mainFocus).not.toHaveBeenCalled();
   });
 
   it('clears the prompt of the tile or Pane B that holds the keyboard with Ctrl+U, leaving the main overlay alone', () => {
     const clear = vi.fn();
-    const sendInput = vi.fn(() => Promise.resolve());
     const _sendInputAsync = vi.fn();
     const showToast = vi.fn();
     const tileFocus = vi.fn();
     const app = {
       activeSessionId: 'session-1',
       _inputFlushTimeout: null,
-      _pendingInput: 'main pane text',
       _localEchoEnabled: true,
       _localEchoOverlay: { getFlushed: () => ({ count: 0, text: '' }), clear, suppressBufferDetection: vi.fn() },
-      sendInput,
       _sendInputAsync,
       _prepareExternalInput: vi.fn(),
       showToast,
@@ -358,22 +339,17 @@ describe('mobile filesystem picker actions', () => {
     terminalHarness.mixin.clearTerminalInput.call(app);
 
     expect(_sendInputAsync).toHaveBeenCalledWith('tile-2', '\x15');
-    expect(sendInput).not.toHaveBeenCalled();
     expect(clear).not.toHaveBeenCalled();
-    expect(app._pendingInput).toBe('main pane text');
     expect(showToast).toHaveBeenCalledWith('Input cleared', 'success');
     expect(tileFocus).toHaveBeenCalledOnce();
   });
 
   it('uses Ctrl+U to clear the TUI-owned prompt when local echo is disabled', () => {
-    const sendInput = vi.fn(() => Promise.resolve());
     const app = {
       activeSessionId: 'session-1',
       _inputFlushTimeout: null,
-      _pendingInput: '',
       _localEchoEnabled: false,
       _localEchoOverlay: null,
-      sendInput,
       _sendInputAsync: vi.fn(),
       _focusedPane: () => ({ terminal: app.terminal, sessionId: app.activeSessionId, isPrimary: true }),
       _prepareExternalInput: vi.fn(),

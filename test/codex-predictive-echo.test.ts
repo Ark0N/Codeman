@@ -40,6 +40,16 @@ let untrustedWorkdir: string;
 let sessionId: string;
 const createdSessions: string[] = [];
 
+/** The transport edge the recorders wrap: every typed producer reaches it through the session FIFO. */
+type ReliableSend = (sid: string, data: string, opts?: unknown) => void;
+interface RecorderWindow {
+  app: { _enqueueReliableInput: ReliableSend };
+  __dbg: Array<[string, string]>;
+  __trace: string[];
+  __origSend?: ReliableSend;
+  __origSend2?: ReliableSend;
+}
+
 function hasCodex(): boolean {
   try {
     execSync(`PATH="${CODEX_BIN_DIR}:$PATH" codex --version`, { stdio: 'pipe' });
@@ -324,12 +334,13 @@ d('codex predictive echo E2E (real codex TUI)', () => {
     await resetComposer();
     const pidBefore = execSync(`${TMUX} list-panes -a -F '#{pane_id} #{pane_pid}'`, { encoding: 'utf8' }).trim();
     await page.evaluate(() => {
-      const app = (window as any).app;
-      (window as any).__dbg = [];
-      if (!(window as any).__origSend2) (window as any).__origSend2 = app._sendInputAsync.bind(app);
-      app._sendInputAsync = (sid: string, data: string, opts?: unknown) => {
-        (window as any).__dbg.push([sid.slice(0, 8), JSON.stringify(data)]);
-        return (window as any).__origSend2(sid, data, opts);
+      const w = window as unknown as RecorderWindow;
+      const app = w.app;
+      w.__dbg = [];
+      const original = (w.__origSend2 ??= app._enqueueReliableInput.bind(app));
+      app._enqueueReliableInput = (sid, data, opts) => {
+        w.__dbg.push([sid.slice(0, 8), JSON.stringify(data)]);
+        return original(sid, data, opts);
       };
     });
     await page.keyboard.type('abc', { delay: 30 });
@@ -471,15 +482,16 @@ d('codex predictive echo E2E (real codex TUI)', () => {
 
     const record = () =>
       page.evaluate(() => {
-        const app = (window as any).app;
-        (window as any).__trace = [];
-        if (!(window as any).__origSend) (window as any).__origSend = app._sendInputAsync.bind(app);
-        app._sendInputAsync = (sid: string, data: string, opts?: unknown) => {
-          (window as any).__trace.push(data);
-          return (window as any).__origSend(sid, data, opts);
+        const w = window as unknown as RecorderWindow;
+        const app = w.app;
+        w.__trace = [];
+        const original = (w.__origSend ??= app._enqueueReliableInput.bind(app));
+        app._enqueueReliableInput = (sid, data, opts) => {
+          w.__trace.push(data);
+          return original(sid, data, opts);
         };
       });
-    const trace = () => page.evaluate(() => ((window as any).__trace as string[]).join(''));
+    const trace = () => page.evaluate(() => (window as unknown as RecorderWindow).__trace.join(''));
 
     await record();
     await script();

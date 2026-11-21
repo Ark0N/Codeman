@@ -33,7 +33,7 @@
  * @globals {class} FocusTrap
  *
  * @dependency mobile-handlers.js (MobileDetection.isTouchDevice)
- * @dependency app.js (uses global `app` for sendInput, activeSessionId, terminal)
+ * @dependency app.js (uses global `app` for _enqueueInput, _sendInputAsync, _prepareExternalInput, activeSessionId, terminal)
  * @loadorder 5 of 15 — loaded after notification-manager.js, before app.js
  */
 

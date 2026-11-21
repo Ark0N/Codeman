@@ -36,7 +36,6 @@ type Voice = {
 type Pane = { sessionId: string; isPrimary?: boolean; terminal?: { focus: () => void } };
 
 function load(opts: { insertMode?: string; localEcho?: boolean; focused?: string; tiles?: boolean; pane?: Pane } = {}) {
-  const sendInput = vi.fn(async () => {});
   const sendInputAsync = vi.fn();
   const appendText = vi.fn();
   const overlayClear = vi.fn();
@@ -57,7 +56,6 @@ function load(opts: { insertMode?: string; localEcho?: boolean; focused?: string
       ['session-a', {}],
       ['session-b', {}],
     ]),
-    sendInput,
     _sendInputAsync: sendInputAsync,
     _enqueueInput: vi.fn(),
     _prepareExternalInput: vi.fn(),
@@ -104,7 +102,7 @@ function load(opts: { insertMode?: string; localEcho?: boolean; focused?: string
   // Recording itself is out of scope: start() only has to pick the target.
   voice._resolveProvider = () => 'webspeech';
   voice._startWebSpeech = vi.fn();
-  return { voice, app, sendInput, sendInputAsync, appendText, overlayClear, showToast, gear, doc };
+  return { voice, app, sendInputAsync, appendText, overlayClear, showToast, gear, doc };
 }
 
 function clickGreenSend(gear: { addEventListener: { mock: { calls: unknown[][] } } }) {
@@ -114,23 +112,21 @@ function clickGreenSend(gear: { addEventListener: { mock: { calls: unknown[][] }
 
 describe('dictation target', () => {
   it('sends to the session recording started in, even after a tab switch', () => {
-    const { voice, app, sendInput, sendInputAsync } = load();
+    const { voice, app, sendInputAsync } = load();
     voice.start();
     app.activeSessionId = 'session-b'; // user switched tabs while speaking
 
     voice._insertText('fix the login bug');
 
     expect(sendInputAsync).toHaveBeenCalledWith('session-a', 'fix the login bug', { useMux: true });
-    expect(sendInput).not.toHaveBeenCalled();
   });
 
   it('uses the session-bound path even while the target is still active', () => {
-    const { voice, app, sendInput, sendInputAsync } = load({ pane: { sessionId: 'session-a', isPrimary: true } });
+    const { voice, app, sendInputAsync } = load({ pane: { sessionId: 'session-a', isPrimary: true } });
     voice.start();
 
     voice._insertText('hello');
 
-    expect(sendInput).not.toHaveBeenCalled();
     expect(sendInputAsync).toHaveBeenCalledWith('session-a', 'hello', { useMux: true });
     expect(app._prepareExternalInput).toHaveBeenCalledWith({ sessionId: 'session-a', isPrimary: true }, 'voice-send');
   });
@@ -147,7 +143,7 @@ describe('dictation target', () => {
   });
 
   it('still uses the local-echo overlay for the active session', () => {
-    const { voice, app, appendText, sendInput } = load({
+    const { voice, app, appendText } = load({
       localEcho: true,
       pane: { sessionId: 'session-a', isPrimary: true },
     });
@@ -157,7 +153,6 @@ describe('dictation target', () => {
 
     expect(appendText).toHaveBeenCalledWith('typed locally');
     expect(app._prepareExternalInput).toHaveBeenCalledWith({ sessionId: 'session-a', isPrimary: true }, 'voice-insert');
-    expect(sendInput).not.toHaveBeenCalled();
   });
 
   it('takes its target from the focused pane when one is reported', () => {
@@ -170,7 +165,7 @@ describe('dictation target', () => {
   });
 
   it('the green send button sends Enter to the dictation target', () => {
-    const { voice, app, gear, sendInput, sendInputAsync } = load();
+    const { voice, app, gear, sendInputAsync } = load();
     voice.start();
     voice._insertText('ship it');
     app.activeSessionId = 'session-b';
@@ -179,25 +174,23 @@ describe('dictation target', () => {
     handler();
 
     expect(sendInputAsync).toHaveBeenLastCalledWith('session-a', '\r', { useMux: true });
-    expect(sendInput).not.toHaveBeenCalled();
   });
 
   it('drops dictation for a session that closed meanwhile, with a toast', () => {
-    const { voice, app, sendInput, sendInputAsync, showToast } = load();
+    const { voice, app, sendInputAsync, showToast } = load();
     voice.start();
     app.activeSessionId = 'session-b';
     (app.sessions as Map<string, unknown>).delete('session-a');
 
     voice._insertText('too late');
 
-    expect(sendInput).not.toHaveBeenCalled();
     expect(sendInputAsync).not.toHaveBeenCalled();
     expect(showToast).toHaveBeenCalledWith('That session has closed; dictation not sent', 'warning');
   });
 
   it('with the tile grid open, dictation goes to the focused tile, not the parked overlay', () => {
     const tileTerminal = { focus: vi.fn() };
-    const { voice, app, appendText, sendInput, sendInputAsync } = load({
+    const { voice, app, appendText, sendInputAsync } = load({
       localEcho: true,
       tiles: true,
       pane: { sessionId: 'session-a', isPrimary: false, terminal: tileTerminal },
@@ -207,7 +200,6 @@ describe('dictation target', () => {
     voice._insertText('into the tile');
 
     expect(appendText).not.toHaveBeenCalled();
-    expect(sendInput).not.toHaveBeenCalled();
     expect(sendInputAsync).toHaveBeenCalledWith('session-a', 'into the tile', { useMux: true });
     // The keyboard goes back to the tile; the main terminal is display: none.
     expect(tileTerminal.focus).toHaveBeenCalled();
@@ -216,7 +208,7 @@ describe('dictation target', () => {
 
   it('with the tile grid open, the green send button sends only Enter to the tile session', () => {
     const tileTerminal = { focus: vi.fn() };
-    const { voice, app, gear, sendInput, sendInputAsync, overlayClear } = load({
+    const { voice, app, gear, sendInputAsync, overlayClear } = load({
       localEcho: true,
       tiles: true,
       pane: { sessionId: 'session-a', isPrimary: false, terminal: tileTerminal },
@@ -229,7 +221,6 @@ describe('dictation target', () => {
     clickGreenSend(gear);
 
     expect(overlayClear).not.toHaveBeenCalled();
-    expect(sendInput).not.toHaveBeenCalledWith('stale main-terminal text');
     expect(sendInputAsync).toHaveBeenLastCalledWith('session-a', '\r', { useMux: true });
     // The parked main terminal's predictions are not this pane's.
     expect(
@@ -239,7 +230,7 @@ describe('dictation target', () => {
 
   it('preserves Pane A pending text and dictation ordering when focus moves to B', () => {
     const paneB = { focus: vi.fn() };
-    const { voice, app, appendText, overlayClear, gear, sendInput, sendInputAsync } = load({
+    const { voice, app, appendText, overlayClear, gear, sendInputAsync } = load({
       localEcho: true,
       focused: 'session-a',
     });
@@ -270,7 +261,6 @@ describe('dictation target', () => {
       { write: '\r', useMux: true },
     ]);
     expect(overlay.pendingText).toBe('');
-    expect(sendInput).not.toHaveBeenCalled();
     expect(sendInputAsync).not.toHaveBeenCalled();
     expect(app._prepareExternalInput).toHaveBeenNthCalledWith(
       1,

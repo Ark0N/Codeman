@@ -579,7 +579,7 @@ step 1 is a real step). Before shipping:
    browser, confirm the reply renders and scrollback survives a tab switch. Do not touch
    `w1`/`w2`/`w3`.
 4. **Local-echo policy gate (§2.10):** on a phone profile, type into the pi editor through the
-   buffer overlay (drive with `page.keyboard.type()`, never `app.sendInput()`, and force
+   buffer overlay (drive with `page.keyboard.type()`, never `app._sendInputAsync()`, and force
    `app._localEchoEnabled = true`; headless Chromium reports touch as false) and confirm pi's
    composer renders the flushed text correctly on Enter. If it mis-renders, flip pi to the `'off'`
    branch in `_updateLocalEchoState` and pin that instead.

@@ -25,7 +25,7 @@
  * @globals {object} VoiceInput
  *
  * @dependency mobile-handlers.js (MobileDetection for device checks)
- * @dependency app.js (uses global `app` for sendInput, showToast, terminal focus)
+ * @dependency app.js (uses global `app` for _sendInputAsync, _enqueueInput, _prepareExternalInput, showToast, terminal focus)
  * @loadorder 3 of 15 — loaded after mobile-handlers.js, before notification-manager.js
  */
 

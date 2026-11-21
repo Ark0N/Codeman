@@ -857,6 +857,12 @@ Object.assign(CodemanApp.prototype, {
   submitFromToolbar() {
     const pane = this._focusedPane();
     if (!pane?.terminal || !pane.sessionId || pane.tile?._destroyed || !this.sessions.has(pane.sessionId)) return;
+    // The CR goes on the FIFO, not through xterm's triggerDataEvent(data, true),
+    // so its scrollOnUserInput never runs; scroll to the prompt as it would.
+    const terminal = pane.terminal;
+    if (terminal.options?.scrollOnUserInput !== false && typeof terminal.scrollToBottom === 'function') {
+      terminal.scrollToBottom();
+    }
     this._prepareExternalInput(pane, 'submit');
     if (pane.isPrimary) this._submitMainInput(pane.sessionId);
     else this._sendInputAsync(pane.sessionId, '\r');
@@ -7196,19 +7202,6 @@ Object.assign(CodemanApp.prototype, {
     // wording wrapped to two, which is a lot of the terminal to cover for a
     // notice about a condition that resolves itself.
     this.showToast('Another device is setting the width — scroll sideways', 'info');
-  },
-
-  /**
-   * Send input to the active session.
-   * @param {string} input - Text to send (include \r for Enter)
-   * @returns {Promise<void>}
-   */
-  async sendInput(input) {
-    if (!this.activeSessionId || !input) return;
-    // Route through the durable, exactly-once delivery layer (useMux for the
-    // POST fallback) so voice / keyboard-accessory / paste input also survives a
-    // dropped link instead of being lost in a single best-effort fetch.
-    this._sendInputAsync(this.activeSessionId, input, { useMux: true });
   },
 
   // ═══════════════════════════════════════════════════════════════
