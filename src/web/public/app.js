@@ -10054,7 +10054,11 @@ class CodemanApp {
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'history-trunc-load';
-      btn.textContent = 'Load full history';
+      // A content-anchored pull from here stands in for Reload history, so it
+      // shares Reload's loading state: the pull flips Reload eligibility, and the
+      // re-render that follows must not bring the button back enabled mid-pull.
+      btn.disabled = loading;
+      btn.textContent = loading ? 'Loading…' : 'Load full history';
       btn.onclick = () => {
         btn.disabled = true;
         btn.textContent = 'Loading…';
@@ -10064,7 +10068,16 @@ class CodemanApp {
         // way. Checked at click time, not render time: the bar only re-renders on
         // eligibility transitions, and the reader may have scrolled since.
         const anchor = this._historyReloadActionEligible() ? 'content' : 'top';
-        this._maybeRefetchFullHistory({ force: true, anchor }).finally(() => {
+        // The top anchor keeps no loading state: it would hold the bar up after
+        // a scroll back to live output, where it hides today.
+        if (anchor === 'content') {
+          this._historyReloadActionLoadingFor = sessionId;
+          this._syncHistoryReloadAction();
+        }
+        return this._maybeRefetchFullHistory({ force: true, anchor }).finally(() => {
+          if (anchor === 'content' && this._historyReloadActionLoadingFor === sessionId) {
+            this._historyReloadActionLoadingFor = null;
+          }
           this._renderHistoryTruncationBanner();
         });
       };

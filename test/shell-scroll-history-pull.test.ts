@@ -1378,13 +1378,31 @@ describe('manual history banner action', () => {
       truncationReason: kind === 'capped' ? 'capped' : 'tail',
     });
     expect(bar.children.filter((child) => child.className === 'history-trunc-load')).toHaveLength(1);
-    expect(button()!.textContent).toBe(kind === 'recoverable' ? 'Load full history' : 'Reload history');
+    const label = kind === 'recoverable' ? 'Load full history' : 'Reload history';
+    expect(button()!.textContent).toBe(label);
+    // Hold the pull open the way the real one does: in flight, Reload history
+    // is no longer eligible, and the sync that follows rebuilds the bar.
+    const { promise, resolve: release } = Promise.withResolvers<void>();
+    app._maybeRefetchFullHistory.mockImplementationOnce(() => {
+      app._fullHistoryRepullInFlight = true;
+      return promise.finally(() => {
+        app._fullHistoryRepullInFlight = false;
+      });
+    });
+    const clicked = button()!.onclick!();
+    app._syncHistoryReloadAction();
+    expect({ text: button()!.textContent, disabled: button()!.disabled }).toEqual({
+      text: 'Loading…',
+      disabled: true,
+    });
+    release();
+    await clicked;
     // Either way the one control stands in for Reload history, so it keeps the
     // reader's line rather than landing on the old row 0.
-    await button()!.onclick!();
     expect(app._maybeRefetchFullHistory).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ force: true, anchor: 'content' })
     );
+    expect({ text: button()!.textContent, disabled: button()!.disabled }).toEqual({ text: label, disabled: false });
   });
 
   it('keeps the top anchor for Load full history when Reload history is not eligible', async () => {
