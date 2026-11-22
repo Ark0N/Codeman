@@ -1295,6 +1295,18 @@ describe('manual history banner action', () => {
     if (visible) expect(button()?.textContent).toBe('Reload history');
   });
 
+  it('announces the truncation notice but keeps a reload-only bar silent', () => {
+    const { app, bar, button } = fixture();
+    app._syncHistoryReloadAction();
+    expect(button()!.textContent).toBe('Reload history');
+    expect(bar.setAttribute).toHaveBeenLastCalledWith('aria-live', 'off');
+    // Revealing the truncation notice in the same bar makes it news again.
+    app._historyNoticeRevealedFor = 's1';
+    app._setHistoryTruncation('s1', { ...TAIL_CUT, truncationReason: 'tail' });
+    expect(button()!.textContent).toBe('Load full history');
+    expect(bar.setAttribute).toHaveBeenLastCalledWith('aria-live', 'polite');
+  });
+
   it('stands aside while a drop-recovery refresh fetches, then offers Reload again', async () => {
     const { app, bar, button } = fixture();
     app._syncHistoryReloadAction();

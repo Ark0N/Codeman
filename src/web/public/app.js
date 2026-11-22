@@ -10056,6 +10056,11 @@ class CodemanApp {
       return;
     }
 
+    // `#historyTruncationBar` is a polite live region. Only the truncation
+    // notice is news worth announcing; a reload-only bar re-renders on every
+    // eligible scroll-up in a busy tab, so it stays silent and is reached by Tab.
+    // Set before the rewrite below, so the new content is judged by it.
+    bar.setAttribute('aria-live', showNotice ? 'polite' : 'off');
     bar.textContent = '';
     const label = document.createElement('span');
     label.className = 'history-trunc-text';
