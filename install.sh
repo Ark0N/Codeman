@@ -4416,6 +4416,9 @@ print_done_screen() {
             echo -e "              ${DIM}(the same variables apply to: codeman web -d)${NC}"
         fi
     fi
+    echo -e "    ${YELLOW}${BOLD}Multi-user setup${NC}  Adding accounts does not enable multi-user mode."
+    echo -e "              Stop the running server before adding the first admin with ${CYAN}codeman users add <name> --admin${NC}."
+    echo -e "              Start with ${CYAN}codeman web --multiuser${NC}, or set ${CYAN}CODEMAN_MULTIUSER=1${NC} in the service configuration and restart."
     if [[ -f "$INSTALL_DIR/$SOURCE_MARKER" && ! -d "$INSTALL_DIR/.git" ]]; then
         echo -e "    ${BOLD}Update${NC}    re-run the install line ${DIM}(installed without git, so the in-app updater is off)${NC}"
     else
