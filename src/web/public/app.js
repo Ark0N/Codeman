@@ -3497,6 +3497,9 @@ class CodemanApp {
     if (this._terminalRefreshOwner?.sessionId === sessionId) return false;
     const refreshOwner = { sessionId };
     this._terminalRefreshOwner = refreshOwner;
+    // Reload history stands aside for the length of this refresh (see
+    // _historyReloadActionEligible); take it off an already-painted bar now.
+    this._syncHistoryReloadAction?.();
     try {
       // A shell can retain a multi-megabyte/100k-line tmux history. Automatic
       // recovery stays bounded just like normal shell selection (tmux's rendered
@@ -3604,7 +3607,11 @@ class CodemanApp {
       console.error('needsRefresh reload failed:', err);
       return err?.name === 'AbortError' ? 'deadline' : false;
     } finally {
-      if (this._terminalRefreshOwner === refreshOwner) this._terminalRefreshOwner = null;
+      if (this._terminalRefreshOwner === refreshOwner) {
+        this._terminalRefreshOwner = null;
+        // Reload history stands aside while this refresh fetches; offer it again.
+        this._syncHistoryReloadAction?.();
+      }
     }
   }
 
@@ -9681,6 +9688,10 @@ class CodemanApp {
   async _maybeRefetchFullHistory({ force = false, anchor = 'top' } = {}) {
     const sessionId = this.activeSessionId;
     if (!sessionId || this._fullHistoryRepullInFlight || this._isLoadingBuffer) return;
+    // A drop-recovery refresh owns this session until its replay ends: a second
+    // capture would run back to back with it, and its load would replace this
+    // pull's queue, losing the output that arrived during the download.
+    if (this._terminalRefreshOwner?.sessionId === sessionId) return;
     if (this.detachedSessions?.has(sessionId)) return;
     // The parked main terminal has no history to pull while tiles own the screen.
     if (this._tilesOwnTerminal?.()) return;
@@ -9996,6 +10007,7 @@ class CodemanApp {
       session && session.mode !== 'shell' && this._liveOutputSinceFullPull?.has(sessionId) &&
       !this._isLoadingBuffer &&
       !this.terminalLoadStates?.has(sessionId) && // Tab switches set this before the buffer load opens.
+      this._terminalRefreshOwner?.sessionId !== sessionId && // A drop-recovery refresh is fetching.
       !this._fullHistoryRepullInFlight && !this.detachedSessions?.has(sessionId) &&
       !this._historyReloadDismissed?.has(sessionId) && !this._tilesOwnTerminal?.() &&
       !this.isTerminalAtBottom());

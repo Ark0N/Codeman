@@ -1209,6 +1209,7 @@ describe('manual history banner action', () => {
       loadingBuffer: false,
       loadState: false,
       paneHistoryLines: undefined as number | undefined,
+      refreshing: false,
       ...options,
     };
     const element = (): BannerElement => ({
@@ -1248,6 +1249,7 @@ describe('manual history banner action', () => {
       _fullHistoryRepullInFlight: Boolean(state.inFlight),
       _isLoadingBuffer: Boolean(state.loadingBuffer),
       terminalLoadStates: new Map(state.loadState ? [['s1', { generation: 1, phase: 'resizing' }]] : []),
+      _terminalRefreshOwner: state.refreshing ? { sessionId: 's1' } : null,
       _paneHistoryLines: new Map<string, number>(
         state.paneHistoryLines === undefined ? [] : [['s1', Number(state.paneHistoryLines)]]
       ),
@@ -1284,11 +1286,55 @@ describe('manual history banner action', () => {
     { opts: { tiles: true }, visible: false },
     { opts: { active: false }, visible: false },
     { opts: { detached: true }, visible: false },
+    // A drop-recovery refresh owns the session while it fetches.
+    { opts: { refreshing: true }, visible: false },
   ])('visibility is $visible for $opts', ({ opts, visible }) => {
     const { app, bar, button } = fixture(opts);
     app._syncHistoryReloadAction();
     expect(bar.hidden).toBe(!visible);
     if (visible) expect(button()?.textContent).toBe('Reload history');
+  });
+
+  it('stands aside while a drop-recovery refresh fetches, then offers Reload again', async () => {
+    const { app, bar, button } = fixture();
+    app._syncHistoryReloadAction();
+    const staleButton = button()!;
+    expect(staleButton.textContent).toBe('Reload history');
+    // Hold the recovery's own `?full=1` open: only its owner marks it.
+    const fetchCapture = app._fetchTerminalCapture.getMockImplementation()!;
+    const { promise, resolve: release } = Promise.withResolvers<void>();
+    app._fetchTerminalCapture.mockImplementationOnce(async (url) => {
+      await promise;
+      // A history answer keeps the mark, so Reload is due again afterwards.
+      const capture = await fetchCapture(url);
+      capture.json.data.source = 'history';
+      return capture;
+    });
+    Object.assign(app, {
+      _markTerminalBufferReconciled: vi.fn(),
+      sendResize: vi.fn(),
+      _localEchoOverlay: { rerender: vi.fn() },
+    });
+    Object.assign(app.terminal, { scrollToBottom: vi.fn() });
+    app._maybeRefetchFullHistory.mockImplementation((opts) => refetch.call(app, opts));
+    const recovery = loadAppMethod('_onSessionNeedsRefresh', {
+      console: { error: vi.fn() },
+      computeRewriteScrollLine: () => null,
+    }).call(app);
+    expect(app._terminalRefreshOwner).toEqual({ sessionId: 's1' });
+    expect(bar.hidden).toBe(true);
+    // A tap on the button painted before the refresh started fetches nothing.
+    await staleButton.onclick!();
+    await refetch.call(app, { force: true, anchor: 'top' });
+    expect(app._fetchTerminalCapture).toHaveBeenCalledOnce();
+    expect(app._isLoadingBuffer).toBe(false);
+    release();
+    await recovery;
+    expect(app._terminalRefreshOwner).toBeNull();
+    // The recovery replayed a history answer, so the session is still marked
+    // and its `finally` offers the action again.
+    expect(bar.hidden).toBe(false);
+    expect(button()!.textContent).toBe('Reload history');
   });
 
   it('forces a content-anchored pull on tap and resets loading on settle', async () => {
@@ -1582,8 +1628,6 @@ describe('drop-recovery refresh clears the live-output mark only for a mux captu
     expect(app.chunkedTerminalWrite).toHaveBeenCalledOnce();
     expect(app._liveOutputSinceFullPull.has('s1')).toBe(false);
     expect(app._historyReloadDismissed.has('s1')).toBe(false);
-    // The clear syncs once, and the real truncation-banner update syncs again.
-    expect(app._syncHistoryReloadAction).toHaveBeenCalledTimes(2);
   });
 
   it('keeps the mark and dismissal when the mux replay is incomplete', async () => {
@@ -1607,7 +1651,6 @@ describe('drop-recovery refresh clears the live-output mark only for a mux captu
     expect(app.chunkedTerminalWrite).toHaveBeenCalledOnce();
     expect(app._liveOutputSinceFullPull.has('s1')).toBe(true);
     expect(app._historyReloadDismissed.has('s1')).toBe(true);
-    expect(app._syncHistoryReloadAction).toHaveBeenCalledOnce();
   });
 
   it('keeps the mark and dismissal when live output arrives during the fetch', async () => {
@@ -1622,7 +1665,6 @@ describe('drop-recovery refresh clears the live-output mark only for a mux captu
     expect(app.chunkedTerminalWrite).toHaveBeenCalledOnce();
     expect(app._liveOutputSinceFullPull.has('s1')).toBe(true);
     expect(app._historyReloadDismissed.has('s1')).toBe(true);
-    expect(app._syncHistoryReloadAction).toHaveBeenCalledOnce();
   });
 
   it('retires Reload history when a full mux capture falls back to a history tail', async () => {
@@ -1660,6 +1702,5 @@ describe('drop-recovery refresh clears the live-output mark only for a mux captu
     expect(errors).not.toHaveBeenCalled();
     expect(app._liveOutputSinceFullPull.has('s1')).toBe(true);
     expect(app._historyReloadDismissed.has('s1')).toBe(true);
-    expect(app._syncHistoryReloadAction).not.toHaveBeenCalled();
   });
 });
