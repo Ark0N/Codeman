@@ -815,6 +815,23 @@ describe('manual full-history recovery while reading (#814)', () => {
     expect(app._maybeRefetchFullHistory).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    { moves: [-10000, 3], revealed: 's1', row: 3 },
+    { moves: [-10000, 10000], revealed: null, row: 370 },
+  ])('decides the notice per replay move like a live scroll: $moves', async ({ moves, revealed, row }) => {
+    const { app, active, liveOutput, reload, pauseReplay } = makeScrollApp();
+    liveOutput();
+    const paused = pauseReplay();
+    const pull = reload();
+    await paused.ready;
+    for (const move of moves) (mixin._maybeLoadMoreHistoryOnScroll as Function).call(app, move);
+    paused.release();
+    await pull;
+    expect(active.viewportY).toBe(row);
+    expect(app._setHistoryNoticeRevealed).toHaveBeenLastCalledWith(revealed);
+    expect(app._maybeRefetchFullHistory).toHaveBeenCalledOnce();
+  });
+
   it('does not reveal the truncation notice on reload without replay travel', async () => {
     const { app, liveOutput, reload, pauseReplay } = makeScrollApp();
     liveOutput();
@@ -1056,7 +1073,7 @@ describe('content anchors hold the reader through a history repair', () => {
     return { app, active, capture, restore };
   }
 
-  it('keeps a three-row signature at its viewport offset when rows are inserted below the reader', () => {
+  it('keeps the visible context at its viewport offset when rows are inserted below the reader', () => {
     const rows = Array.from({ length: 30 }, (_, i) => `row ${i}`);
     rows[5] = '';
     const { app, capture, restore } = fixture(rows);
@@ -1065,7 +1082,7 @@ describe('content anchors hold the reader through a history repair', () => {
     expect(target).toBe(5);
     expect(app.terminal.scrollToLine).toHaveBeenCalledWith(5);
     expect(anchor.viewportY).toBe(5);
-    expect(anchor.offset).toBe(1);
+    expect(anchor.context).toEqual(['', 'row 6', 'row 7']);
   });
 
   it('keeps the old viewport when two complete contexts match equally well', () => {
@@ -1138,8 +1155,8 @@ describe('content anchors hold the reader through a history repair', () => {
     const anchor = capture();
     const next = Array(50_000).fill('other');
     if (kind === 'first-row-only') {
-      next[25_100] = anchor.signature[0];
-      next[24_800] = anchor.signature[0];
+      next[25_100] = anchor.context[0];
+      next[24_800] = anchor.context[0];
     }
     // Even a whole matching viewport outside the budget cannot extend the scan.
     next.splice(30_000, anchor.context.length, ...anchor.context);

@@ -9872,13 +9872,17 @@ class CodemanApp {
         const baseY = this.terminal.buffer.active.baseY;
         const clamp = (row) => Math.max(0, Math.min(baseY, row));
         let row = this._restoreViewportAnchor(viewportAnchor);
-        for (const move of this._earlyReplayTravel.moves) row = clamp(row + move);
-        this.terminal.scrollToLine(row);
-        // Replay travel bypassed the live scroll handler's notice update.
-        if (this._earlyReplayTravel.moves.length > 0) {
-          if (row === 0) this._setHistoryNoticeRevealed?.(sessionId);
-          else if (this.isTerminalAtBottom()) this._setHistoryNoticeRevealed?.(null);
+        // Replay travel bypassed the live scroll handler's notice update, so
+        // decide it per move as that handler would: an upward move that reaches
+        // row 0 reveals the notice, a downward move back at live output retires it.
+        let reveal = null;
+        for (const move of this._earlyReplayTravel.moves) {
+          row = clamp(row + move);
+          if (move < 0 && row === 0) reveal = true;
+          else if (move > 0 && row >= baseY - 2) reveal = false;
         }
+        this.terminal.scrollToLine(row);
+        if (reveal !== null) this._setHistoryNoticeRevealed?.(reveal ? sessionId : null);
       } else {
         const delta = parsedBufferLength - rowsBefore;
         if (delta > 0) this.terminal.scrollToLine(delta);

@@ -4019,14 +4019,7 @@ Object.assign(CodemanApp.prototype, {
       { length: Math.min(this.terminal.rows || 3, 64, buffer.length - viewportY) },
       (_, i) => buffer.getLine(viewportY + i)?.translateToString(true) || ''
     );
-    const offset = Math.max(0, context.findIndex((text) => text.trim()));
-    return {
-      viewportY,
-      rowsFromBottom: baseY - viewportY,
-      offset,
-      signature: Array.from({ length: 3 }, (_, i) => context[offset + i] || ''),
-      context,
-    };
+    return { viewportY, rowsFromBottom: baseY - viewportY, context };
   },
 
   /** Match the visible context; a lone repeated row is not a reliable anchor. */

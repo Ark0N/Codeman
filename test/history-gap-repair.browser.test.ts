@@ -4,7 +4,7 @@ import { chromium, type Browser, type BrowserContext, type Page } from 'playwrig
 import type { Terminal } from '@xterm/xterm';
 import { WebServer } from '../src/web/server.js';
 
-type Anchor = { signature: string[]; offset: number; viewportY: number; rowsFromBottom: number };
+type Anchor = { context: string[]; viewportY: number; rowsFromBottom: number };
 type HistoryApp = {
   terminal: Terminal & {
     _core?: { _renderService?: { dimensions?: { css?: { cell?: { height: number } } } } };
@@ -293,11 +293,13 @@ async function bufferState(page: Page) {
       (_, i) => buffer.getLine(i)?.translateToString(true).trim() || ''
     );
     const anchor = w.repairTest.anchor;
+    // The first non-blank visible row the anchor captured, and where it sat.
+    const anchorRow = anchor ? anchor.context.findIndex((text) => text.trim()) : -1;
     return {
       numbers: rows.filter((row) => /^NUMBER-\d+$/.test(row)),
       markerHits: rows.filter((row) => row.includes(marker)).length,
-      anchorOffset: anchor ? rows.indexOf(anchor.signature[0]) - buffer.viewportY : null,
-      expectedOffset: anchor?.offset,
+      anchorOffset: anchor ? rows.indexOf(anchor.context[anchorRow]) - buffer.viewportY : null,
+      expectedOffset: anchor ? anchorRow : undefined,
       pulls: w.repairTest.pulls,
       viewportY: buffer.viewportY,
       baseY: buffer.baseY,
