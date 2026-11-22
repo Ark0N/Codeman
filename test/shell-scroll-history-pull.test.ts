@@ -1548,7 +1548,7 @@ describe('manual history banner action', () => {
 });
 
 describe('selectSession only clears live-output marks for actual full mux captures', () => {
-  it.each(['mux-full-history', 'history'])('checks the response source: %s', async (source) => {
+  function makeSelectApp(source = 'mux-full-history') {
     const errors = vi.fn();
     const select = loadAppMethod('selectSession', {
       console: { log: vi.fn(), error: errors },
@@ -1576,7 +1576,7 @@ describe('selectSession only clears live-output marks for actual full mux captur
         'scrollToLastNonEmptyLine',
       ].map((name) => [name, vi.fn()])
     );
-    Object.assign(app, methods, {
+    const selection = Object.assign(app, methods, {
       activeSessionId: 's2',
       _fullHistoryLoaded: new Set(),
       _liveOutputSinceFullPull: new Set(['s1']),
@@ -1586,10 +1586,28 @@ describe('selectSession only clears live-output marks for actual full mux captur
       sendResize: async () => false,
     });
     Object.assign(app.terminal, { scrollToBottom: vi.fn() });
+    return { app: selection, select, errors };
+  }
+
+  it.each(['mux-full-history', 'history'])('checks the response source: %s', async (source) => {
+    const { app, select, errors } = makeSelectApp(source);
     await select.call(app, 's1');
     expect(errors).not.toHaveBeenCalled();
     expect(app.chunkedTerminalWrite).toHaveBeenCalledOnce();
     expect(Reflect.get(app, '_liveOutputSinceFullPull').has('s1')).toBe(source !== 'mux-full-history');
+  });
+
+  it('keeps the mark when live output arrives during the fresh fetch', async () => {
+    const { app, select, errors } = makeSelectApp();
+    const fetchCapture = app._fetchTerminalCapture.getMockImplementation()!;
+    app._fetchTerminalCapture.mockImplementationOnce(async (url) => {
+      app._liveOutputGen.set('s1', (app._liveOutputGen.get('s1') || 0) + 1);
+      return fetchCapture(url);
+    });
+    await select.call(app, 's1');
+    expect(errors).not.toHaveBeenCalled();
+    expect(app.chunkedTerminalWrite).toHaveBeenCalledOnce();
+    expect(app._liveOutputSinceFullPull.has('s1')).toBe(true);
   });
 });
 

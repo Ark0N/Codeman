@@ -10557,6 +10557,8 @@ class CodemanApp {
         !session?.remote && !session?.docker && !session?.adopt && this._paneHistoryLines?.get(sessionId) === 0;
       const useFullHistory = !shellSession && (paneKeepsNoHistory || !this._fullHistoryLoaded.has(sessionId));
       if (useFullHistory) this._fullHistoryLoaded.add(sessionId);
+      // Sample before fetching, as other replays do, so output during download keeps the session marked.
+      const liveOutputGen = this._liveOutputGen?.get(sessionId) || 0;
       const fetchStartedAt = performance.now();
       const tailUrl = `/api/sessions/${sessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}`;
       let capture;
@@ -10620,7 +10622,6 @@ class CodemanApp {
           _crashDiag.log(`REWRITE: ${(data.terminalBuffer.length/1024).toFixed(0)}KB`);
           this._setTerminalLoadState(sessionId, selectGen, 'replaying');
           const replayStartedAt = performance.now();
-          const liveOutputGen = this._liveOutputGen?.get(sessionId) || 0;
           this._resetTerminalForReplay();
           // Truncation is reported OUT OF BAND (#258). This used to write a grey
           // "... earlier output truncated ..." line into the
