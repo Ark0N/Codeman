@@ -118,6 +118,11 @@ File paths in a session are links. That works in two places:
   render as underlined monospace links. A Markdown link whose target is a path
   (`[report](/tmp/run/report.json)`, the way Codex cites files) opens the same way.
 
+Codex file links can open supported files in Codeman's preview. Use **Response files** to
+browse files linked in the latest reply. A Codex sidebar file name also opens the preview
+when it matches a single linked file. On a wide window with a single terminal, **Dock**
+switches between a preview beside the terminal and a floating preview.
+
 Clicking one opens it in the preview: images and PDFs render, video and audio play with a
 working scrub bar, documents convert, text shows inline, Markdown renders and HTML opens as a
 page. The exception is a plain text file (a log, `.txt`, `.json`, code) inside the workspace

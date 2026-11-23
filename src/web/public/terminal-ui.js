@@ -2553,7 +2553,7 @@ Object.assign(CodemanApp.prototype, {
           }
         }
 
-        if (self.sessions?.get(getSessionId())?.mode === 'codex') {
+        if (self._supportsCodexResponseFiles?.(getSessionId())) {
           const sidebar = codexSidebarFileRow(terminal, bufferLineNumber - 1);
           if (sidebar) {
             const lineEnd = bufferLineNumber * terminal.cols + terminal.cols;
@@ -6569,7 +6569,7 @@ Object.assign(CodemanApp.prototype, {
     return label && label.length <= 240 ? { label, row, start, end } : null;
   },
 
-  async _openCodexTerminalResponseFile(terminal, sessionId, session, point, clicked, stillCurrent, forward) {
+  async _openCodexTerminalResponseFile(terminal, sessionId, point, clicked, stillCurrent, forward) {
     let path;
     try {
       const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/last-response?context=full`, {
@@ -6577,7 +6577,10 @@ Object.assign(CodemanApp.prototype, {
       });
       if (response.ok) {
         const { data } = await response.json();
-        if (Array.isArray(data?.messages)) path = this._findCodexResponseFile(data.messages, clicked.label, session, clicked.sidebar);
+        if (!stillCurrent()) return;
+        if (Array.isArray(data?.messages)) {
+          path = this._findCodexResponseFile(data.messages, clicked.label, sessionId, clicked.sidebar);
+        }
       }
     } catch {
       // Preserve the native click if the transcript cannot be resolved.
@@ -6620,7 +6623,6 @@ Object.assign(CodemanApp.prototype, {
     if (performance.now() <= (this._trustedTapMouseSuppressUntil || 0)) return;
     if (!ev.target?.closest?.('.xterm-screen')) return;
     const sessionId = target.sessionId || this.activeSessionId;
-    const session = this.sessions?.get(sessionId);
     const { clientX, clientY } = ev;
     const forward = () => {
       if (this._shouldReportMouseToCli(sessionId)) this._sendSyntheticSgrTap(clientX, clientY, target);
@@ -6628,7 +6630,7 @@ Object.assign(CodemanApp.prototype, {
     this._codexTerminalLinkClicks ??= new WeakMap();
     const click = Symbol();
     this._codexTerminalLinkClicks.set(terminal, click);
-    const link = session?.mode === 'codex' && this._codexTerminalLinkLabel(terminal, clientX, clientY);
+    const link = this._supportsCodexResponseFiles?.(sessionId) && this._codexTerminalLinkLabel(terminal, clientX, clientY);
     if (!link) {
       forward();
       return;
@@ -6637,7 +6639,7 @@ Object.assign(CodemanApp.prototype, {
     const stillCurrent = () =>
       this._codexTerminalLinkClicks.get(terminal) === click &&
       (target.sessionId ? terminal.element?.isConnected : this.activeSessionId === sessionId && this.terminal === terminal);
-    void this._openCodexTerminalResponseFile(terminal, sessionId, session, { clientX, clientY }, link, stillCurrent, forward)
+    void this._openCodexTerminalResponseFile(terminal, sessionId, { clientX, clientY }, link, stillCurrent, forward)
       .catch((error) => console.error('Unable to open Codex terminal response file:', error));
   },
 

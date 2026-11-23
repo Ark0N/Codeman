@@ -3211,9 +3211,11 @@ class CodemanApp {
     const backdrop = document.getElementById('responseViewerBackdrop');
     viewer.classList.remove('visible');
     if (backdrop) backdrop.classList.remove('visible');
-    if (this.terminal) {
+    const terminal = this._responseViewerReturnTerminal;
+    this._responseViewerReturnTerminal = null;
+    if (terminal && terminal.element?.isConnected !== false && this._shouldFocusTerminalForTabSwitch()) {
       try {
-        this.terminal.focus();
+        terminal.focus();
       } catch {
         /* terminal may be detached mid-teardown */
       }
@@ -3221,14 +3223,35 @@ class CodemanApp {
     return true;
   }
 
-  _findCodexResponseFile(messages, label, session, sidebar = false) {
+  _supportsCodexResponseFiles(sessionId) {
+    const mode = this.sessions?.get(sessionId)?.mode;
+    return window.__codemanCliCatalog?.find((entry) => entry.id === mode)?.transcript === 'codex-rollout';
+  }
+
+  _findCodexResponseFile(messages, label, sessionId, sidebar = false) {
     const [prefix, suffix, ...extra] = sidebar ? label.split('…') : [];
     const abbreviated = Boolean(prefix && suffix && extra.length === 0);
+    const containsFilename = (text) => abbreviated ? text.includes(prefix) && text.includes(suffix) : text.includes(label);
     let match = null;
     for (const message of messages) {
-      if (message.role !== 'assistant' || typeof message.text !== 'string' || (!sidebar && !message.text.includes(label))) continue;
+      const { text } = message;
+      if (message.role !== 'assistant' || typeof text !== 'string') continue;
+      if (sidebar && !containsFilename(text)) {
+        // Markdown destinations can URI-encode the filename. Leave Markdown
+        // escapes and HTML entities to the renderer when present.
+        const decoded = text.replace(/(?:%[\da-f]{2})+/gi, (escapes) => {
+          try {
+            return decodeURIComponent(escapes);
+          } catch {
+            return escapes;
+          }
+        });
+        if (!containsFilename(decoded) && !/\\[!-~]|&(?:#\w+|[a-z]+);/i.test(decoded)) continue;
+      } else if (!sidebar && !text.includes(label)) {
+        continue;
+      }
       const rendered = document.createElement('template');
-      rendered.innerHTML = this._renderMarkdown(message.text, { localFileLinks: true });
+      rendered.innerHTML = this._renderMarkdown(text, { localFileLinks: true });
       const links = Array.from(rendered.content.querySelectorAll('a')).filter(
         (link) => sidebar || link.textContent.trim() === label
       );
@@ -3236,7 +3259,7 @@ class CodemanApp {
 
       this._linkifyFilePaths(rendered.content);
       for (const link of links) {
-        const path = resolveLinkedFilePath(link.dataset.path, session.workingDir);
+        const path = this._resolveLinkedFilePath(link.dataset.path, sessionId);
         if (sidebar) {
           const basename = path.split('/').pop();
           // Codex preserves both ends of a filename when it shortens the tab.
@@ -3257,11 +3280,12 @@ class CodemanApp {
   }
 
   _openResponseFile(path, sessionId) {
-    if (this.filePreviewEdit?.dirty && !confirm('Discard unsaved changes?')) return;
+    const discard = 'Discard unsaved changes?';
+    if (this.filePreviewEdit?.dirty && !confirm(window.codemanT?.(discard) || discard)) return;
     return this.openFilePreview(path, sessionId, null, { dock: true });
   }
 
-  _renderResponseFiles(body, responses, sessionId, session) {
+  _renderResponseFiles(body, responses, sessionId) {
     const list = document.createElement('ul');
     const seen = new Set();
     for (const response of responses) {
@@ -3270,7 +3294,7 @@ class CodemanApp {
       this._linkifyFilePaths(rendered.content);
       for (const link of rendered.content.querySelectorAll('a.rv-path')) {
         if (link.dataset.folder) continue;
-        const path = resolveLinkedFilePath(link.dataset.path, session.workingDir);
+        const path = this._resolveLinkedFilePath(link.dataset.path, sessionId);
         if (!/^\/(?!\/)/.test(path) || !previewsInFileViewer(path) || seen.has(path)) continue;
         seen.add(path);
         const item = document.createElement('li');
@@ -3289,7 +3313,10 @@ class CodemanApp {
       }
     }
     if (seen.size) body.replaceChildren(list);
-    else body.textContent = 'No previewable files in the latest response.';
+    else {
+      const empty = 'No previewable files in the latest response.';
+      body.textContent = window.codemanT?.(empty) || empty;
+    }
   }
 
   async toggleResponseViewer(filesOnly = false) {
@@ -3306,7 +3333,8 @@ class CodemanApp {
     if (!this.activeSessionId) return;
     const responseSessionId = this.activeSessionId;
     const session = this.sessions?.get?.(responseSessionId);
-    if (filesOnly && session?.mode !== 'codex') return;
+    if (filesOnly && !this._supportsCodexResponseFiles(responseSessionId)) return;
+    const returnTerminal = isOpen ? this._responseViewerReturnTerminal : this._focusedPane?.().terminal;
     const request = Symbol('response-viewer');
     this._responseViewerRequest = request;
     try {
@@ -3352,7 +3380,7 @@ class CodemanApp {
       const body = document.getElementById('responseViewerBody');
       if (filesOnly) {
         const responses = turnMessages.length ? turnMessages.map((message) => message.text) : [lastResponse];
-        this._renderResponseFiles(body, responses, responseSessionId, session);
+        this._renderResponseFiles(body, responses, responseSessionId);
       } else if (turnMessages.length > 0) {
         // The whole last turn, rendered exactly as the full view renders that
         // turn: one badge, then badge-less continuation segments. The same
@@ -3383,13 +3411,14 @@ class CodemanApp {
       const title = document.getElementById('responseViewerTitle');
       const moreBtn = document.getElementById('responseViewerMore');
       viewer.dataset.filesOnly = String(filesOnly);
-      if (title) title.textContent = filesOnly ? 'Response files' : 'Last Response';
+      const titleText = filesOnly ? 'Response files' : 'Last Response';
+      if (title) title.textContent = window.codemanT?.(titleText) || titleText;
       if (moreBtn) {
-        moreBtn.style.display = data.hasContext ? '' : 'none';
-        moreBtn.textContent = 'More';
+        moreBtn.style.display = '';
+        moreBtn.textContent = window.codemanT?.('More') || 'More';
       }
-      // Last Response is a single rendered block, not a transcript — no filters here.
 
+      this._responseViewerReturnTerminal = returnTerminal;
       viewer.classList.add('visible');
       backdrop.classList.add('visible');
       // A multi-row turn opens at its NEWEST text, matching loadFullContext's
@@ -3401,7 +3430,8 @@ class CodemanApp {
     } catch (err) {
       console.error('Failed to load response:', err);
       if (filesOnly && this._responseViewerRequest === request && this.activeSessionId === responseSessionId) {
-        this.showToast('Unable to load response files', 'error');
+        const message = 'Unable to load response files';
+        this.showToast(window.codemanT?.(message) || message, 'error');
       }
     }
   }
@@ -6572,7 +6602,7 @@ class CodemanApp {
 
   renderSessionTabs({ immediate = false } = {}) {
     const responseFilesButton = this.$('responseFilesBtn');
-    if (responseFilesButton) responseFilesButton.hidden = this.sessions.get(this.activeSessionId)?.mode !== 'codex';
+    if (responseFilesButton) responseFilesButton.hidden = !this._supportsCodexResponseFiles(this.activeSessionId);
     // Don't re-render while user is typing in the inline rename input
     if (this._inlineRenameActive) return;
     if (immediate) {

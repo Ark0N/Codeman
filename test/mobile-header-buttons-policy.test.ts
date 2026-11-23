@@ -34,7 +34,7 @@ const PHONE_WIDTH = 393;
 // Its per-device setting still defaults off on a handheld. With the blanket phone
 // hide gone, that default and the startup hide are the whole lock, so both are
 // pinned below ("File Viewer on a phone: off until it is switched on").
-// Response files is available once Codex links a file, and its preview floats on phones.
+// Response files is currently available in Codex sessions, and its preview floats on phones.
 const MOBILE_VISIBLE_ALLOWLIST = new Set<string>(['btn-file-viewer', 'btn-response-files']);
 
 // Buttons we expect to STAY hidden on phones — an explicit lock so a future edit
@@ -220,9 +220,7 @@ describe('File Viewer on a phone: off until it is switched on (#759)', () => {
         if (decl.value.trim() === 'none' && decl.important) hidesAtStartup = true;
       });
     });
-    expect(hidesAtStartup, 'mobile.css must keep .btn-file-viewer in its html.mobile-init display:none rule').toBe(
-      true
-    );
+    expect(hidesAtStartup, 'mobile.css must keep .btn-file-viewer in its html.mobile-init display:none rule').toBe(true);
   });
 });
 

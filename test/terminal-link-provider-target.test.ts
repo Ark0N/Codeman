@@ -19,11 +19,13 @@ import { describe, expect, it, vi } from 'vitest';
 type Link = { text: string; activate: (ev: unknown, text: string) => void; hover: () => void; leave: () => void };
 type Provider = { provideLinks: (line: number, cb: (links: Link[] | undefined) => void) => void };
 
-function loadHarness() {
+function loadHarness(fetchResponse = vi.fn()) {
   const CodemanApp = function CodemanApp(this: unknown) {};
   const windowRef: Record<string, unknown> = {};
   const context = vm.createContext({
     window: windowRef,
+    AbortSignal,
+    fetch: fetchResponse,
     document: {
       body: { classList: { contains: () => false } },
       activeElement: null,
@@ -48,20 +50,25 @@ function loadHarness() {
 }
 
 /** A one-screen xterm stand-in holding `lines`, recording every provider registered on it. */
-function fakeTerminal(lines: string[]) {
+function fakeTerminal(lines: string[], cols = 80) {
   const providers: Provider[] = [];
   return {
-    cols: 80,
+    cols,
     providers,
     registerLinkProvider: (p: Provider) => providers.push(p),
     buffer: {
       active: {
         length: lines.length,
+        viewportY: 0,
         getLine: (row: number) =>
           row >= 0 && row < lines.length
             ? {
                 isWrapped: false,
-                translateToString: (trim?: boolean) => (trim === false ? lines[row].padEnd(80) : lines[row]),
+                getCell: (col: number) => ({ getChars: () => lines[row][col] ?? ' ', getWidth: () => 1 }),
+                translateToString: (trim?: boolean, start = 0, end = cols) => {
+                  const text = lines[row].padEnd(cols).slice(start, end);
+                  return trim ? text.trimEnd() : text;
+                },
               }
             : undefined,
       },
@@ -145,4 +152,79 @@ describe('registerFilePathLinkProvider with a target (a second pane)', () => {
 
     expect(app.openFilePreview).toHaveBeenCalledWith('/tmp/a.pdf', 'second');
   });
+});
+
+describe('native Codex sidebar files', () => {
+  const left = 'wrote /tmp/keep.png'.padEnd(42);
+  const tab = ' Brief…26943.docx × +';
+  const picker = ' › · Word draft.docx  Project root';
+
+  function setupSidebar() {
+    const app = makeApp();
+    app._supportsCodexResponseFiles = () => true;
+    const terminal = fakeTerminal([
+      left + '│' + tab,
+      ' '.repeat(42) + '│ Open in sidebar',
+      ' '.repeat(42) + '│ Files 1',
+      ' '.repeat(42) + '│' + picker,
+      ' '.repeat(42) + '│ body /tmp/normal.png',
+    ]);
+    app.terminal = terminal;
+    app._clientPointToCell = (col: number, row: number) => ({ col, row });
+    return { app, terminal };
+  }
+
+  it('finds a shortened tab and a picker entry without claiming the close button or directory suffix', () => {
+    const { app, terminal } = setupSidebar();
+    expect(app._codexTerminalLinkLabel(terminal, 47, 1)).toMatchObject({ label: 'Brief…26943.docx', sidebar: true });
+    expect(app._codexTerminalLinkLabel(terminal, 44 + tab.indexOf('×'), 1)).toBeNull();
+    expect(app._codexTerminalLinkLabel(terminal, 52, 4)).toMatchObject({ label: 'Word draft.docx', sidebar: true });
+    expect(app._codexTerminalLinkLabel(terminal, 44 + picker.indexOf('Project'), 4)).toBeNull();
+  });
+
+  it('suppresses generic sidebar suffixes and preserves ordinary paths beside and below them', () => {
+    const { app } = setupSidebar();
+    const provider = app.registerFilePathLinkProvider();
+    expect(linksOn(provider, 1).map(({ text }) => text)).toEqual(['/tmp/keep.png']);
+    expect(linksOn(provider, 4)).toEqual([]);
+    expect(linksOn(provider, 5).map(({ text }) => text)).toEqual(['/tmp/normal.png']);
+    app._supportsCodexResponseFiles = () => false;
+    expect(linksOn(provider, 4).map(({ text }) => text)).toContain('draft.docx');
+  });
+});
+
+describe('Codex response click fallback', () => {
+  const clicked = { label: 'Word draft.docx', row: 1, start: 42, end: 57, sidebar: true };
+  const point = { clientX: 40, clientY: 10 };
+
+  it.each(['failed load', 'no match', 'superseded click', 'moved cell', 'matched file'])(
+    'handles %s',
+    async (outcome) => {
+      const fetchResponse = vi.fn();
+      const app = loadHarness(fetchResponse);
+      const forward = vi.fn();
+      const terminal = fakeTerminal([]);
+      const match = vi.fn(() => (outcome === 'no match' ? null : '/work/Word draft.docx'));
+      app._findCodexResponseFile = match;
+      app._codexTerminalLinkLabel = () => (outcome === 'moved cell' ? { ...clicked, row: 2 } : clicked);
+      app._openResponseFile = vi.fn();
+      if (outcome === 'failed load') fetchResponse.mockRejectedValue(new Error('offline'));
+      else fetchResponse.mockResolvedValue({ ok: true, json: async () => ({ data: { messages: [] } }) });
+      await app._openCodexTerminalResponseFile(
+        terminal,
+        'pane',
+        point,
+        clicked,
+        () => outcome !== 'superseded click',
+        forward
+      );
+      expect(forward).toHaveBeenCalledTimes(Number(outcome === 'failed load' || outcome === 'no match'));
+      if (outcome === 'matched file') {
+        expect(app._openResponseFile).toHaveBeenCalledWith('/work/Word draft.docx', 'pane');
+      } else {
+        expect(app._openResponseFile).not.toHaveBeenCalled();
+      }
+      if (outcome === 'superseded click') expect(match).not.toHaveBeenCalled();
+    }
+  );
 });

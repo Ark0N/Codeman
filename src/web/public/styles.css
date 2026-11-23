@@ -13647,7 +13647,7 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
 }
 
 #responseFilesBtn[hidden],
-.response-viewer[data-files-only='true'] :is(#responseViewerMore, #responseViewerCopy, #responseViewerCopyMarkdown) {
+.response-viewer[data-files-only='true'] :is(#responseViewerMore, #responseViewerCopyMarkdown) {
   display: none !important;
 }
 

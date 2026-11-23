@@ -30,6 +30,8 @@ import { describe, expect, it, vi } from 'vitest';
 const dom = new JSDOM('<!DOCTYPE html><html><body></body></html>');
 const { document, NodeFilter } = dom.window;
 
+const fetchResponse = vi.fn();
+
 function loadCodemanAppClass() {
   const constants = readFileSync(resolve(import.meta.dirname, '../src/web/public/constants.js'), 'utf8');
   const source = readFileSync(resolve(import.meta.dirname, '../src/web/public/app.js'), 'utf8');
@@ -42,15 +44,25 @@ function loadCodemanAppClass() {
     clearTimeout,
     requestAnimationFrame: vi.fn(),
     HTMLCanvasElement: class HTMLCanvasElement {},
-    fetch: vi.fn(),
+    fetch: fetchResponse,
     document,
     NodeFilter,
     marked,
     localStorage: { length: 0, key: vi.fn(), getItem: vi.fn(), setItem: vi.fn(), removeItem: vi.fn() },
-    window: { addEventListener: vi.fn(), removeEventListener: vi.fn() },
+    window: {
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      __codemanCliCatalog: [{ id: 'custom-codex', transcript: 'codex-rollout' }],
+    },
     MobileDetection: {},
   });
-  vm.runInContext(`${constants}\n${source}\nglobalThis.__CodemanApp = CodemanApp;`, context);
+  const terminalUi = readFileSync(resolve(import.meta.dirname, '../src/web/public/terminal-ui.js'), 'utf8');
+  const addEventListener = vi.spyOn(document, 'addEventListener').mockImplementation(() => {});
+  try {
+    vm.runInContext(`${constants}\n${source}\n${terminalUi}\nglobalThis.__CodemanApp = CodemanApp;`, context);
+  } finally {
+    addEventListener.mockRestore();
+  }
   return (context as { __CodemanApp: { prototype: { _linkifyFilePaths(root: unknown): void } } }).__CodemanApp;
 }
 
@@ -349,17 +361,17 @@ describe('Codex response files', () => {
     app._sanitizeHtml = (html: string) => html;
     app.openFilePreview = vi.fn();
     app.activeSessionId = 'another-session';
+    app.sessions = new Map([['codex-session', { workingDir: '/work/project', paneCwd: '/work/project/live' }]]);
     const body = document.createElement('div');
 
     app._renderResponseFiles(
       body,
       [
         '[Word brief](</work/project/Brief %231.docx>)\n\n[Image](out/image.png)',
-        '[Duplicate](/work/project/out/image.png) [PDF](file:///work/project/Export%20one.pdf)',
+        '[Duplicate](/work/project/live/out/image.png) [PDF](file:///work/project/Export%20one.pdf)',
         '[Web](https://example.com/x.pdf) [Network](file://remote/share/x.pdf) [Code](src/app.ts)',
       ],
-      'codex-session',
-      { workingDir: '/work/project' }
+      'codex-session'
     );
 
     const links = Array.from(body.querySelectorAll('a'));
@@ -368,7 +380,7 @@ describe('Codex response files', () => {
     for (const link of links) link.click();
     expect(app.openFilePreview.mock.calls).toEqual([
       ['/work/project/Brief #1.docx', 'codex-session', null, { dock: true }],
-      ['/work/project/out/image.png', 'codex-session', null, { dock: true }],
+      ['/work/project/live/out/image.png', 'codex-session', null, { dock: true }],
       ['/work/project/Export one.pdf', 'codex-session', null, { dock: true }],
     ]);
   });
@@ -377,7 +389,7 @@ describe('Codex response files', () => {
     const app = Object.create(CodemanApp.prototype);
     app._renderMarkdown = renderChat;
     const body = document.createElement('div');
-    app._renderResponseFiles(body, ['No files in this response.'], 'codex-session', { workingDir: '/work' });
+    app._renderResponseFiles(body, ['No files in this response.'], 'codex-session');
     expect(body.textContent).toBe('No previewable files in the latest response.');
   });
 });
@@ -386,27 +398,28 @@ describe('Codex terminal response link matching', () => {
   function appForTranscript() {
     const app = Object.create(CodemanApp.prototype);
     app._sanitizeHtml = (html: string) => html;
+    app.sessions = new Map([['codex-session', { workingDir: '/work/project', paneCwd: '/work/project/live' }]]);
     return app;
   }
 
   it('uses the explicit destination behind an underlined label', () => {
     const app = appForTranscript();
-    const session = { workingDir: '/work/project' };
+    const session = 'codex-session';
     expect(
       app._findCodexResponseFile(
         [
           { role: 'assistant', text: 'See [Word brief](<out/Word draft.docx>).' },
-          { role: 'assistant', text: 'Repeated [Word brief](file:///work/project/out/Word%20draft.docx).' },
+          { role: 'assistant', text: 'Repeated [Word brief](file:///work/project/live/out/Word%20draft.docx).' },
         ],
         'Word brief',
         session
       )
-    ).toBe('/work/project/out/Word draft.docx');
+    ).toBe('/work/project/live/out/Word draft.docx');
   });
 
   it('resolves a native sidebar filename only when its destination is unique', () => {
     const app = appForTranscript();
-    const session = { workingDir: '/work/project' };
+    const session = 'codex-session';
     const message = { role: 'assistant', text: '[Preview image](file:///work/project/Image%20draft.png)' };
     expect(app._findCodexResponseFile([message], 'Image draft.png', session, true)).toBe(
       '/work/project/Image draft.png'
@@ -427,14 +440,30 @@ describe('Codex terminal response link matching', () => {
     ).toBeNull();
   });
 
+  it('renders only potential sidebar matches, including URI-encoded filenames', () => {
+    const app = appForTranscript();
+    const render = vi.spyOn(app, '_renderMarkdown');
+    const texts = [
+      'Unrelated message.',
+      'Only a prefix: Word',
+      'Only an extension: .docx',
+      '[Download](file:///work/Word%20draft.docx)',
+    ];
+    const messages = texts.map((text) => ({ role: 'assistant', text }));
+    expect(app._findCodexResponseFile(messages, 'Word…draft.docx', 'codex-session', true)).toBe(
+      '/work/Word draft.docx'
+    );
+    expect(render).toHaveBeenCalledExactlyOnceWith(texts[3], { localFileLinks: true });
+  });
+
   it('resolves an abbreviated native tab only when one path matches both visible ends', () => {
     const app = appForTranscript();
-    const session = { workingDir: '/work/project' };
+    const session = 'codex-session';
     const name = 'Interview panel plan - requisition 2026943.docx';
     const exact = { role: 'assistant', text: `[Download](<out/${name}>)` };
     const near = { role: 'assistant', text: '[Wrong extension](<out/Interview draft 2026943.pdf>)' };
     const label = 'Interview…26943.docx';
-    expect(app._findCodexResponseFile([exact, near], label, session, true)).toBe(`/work/project/out/${name}`);
+    expect(app._findCodexResponseFile([exact, near], label, session, true)).toBe(`/work/project/live/out/${name}`);
     expect(
       app._findCodexResponseFile(
         [
@@ -464,8 +493,58 @@ describe('Codex terminal response link matching', () => {
           { role: 'assistant', text: other },
         ],
         'Word brief',
-        { workingDir: '/work/project' }
+        'codex-session'
       )
     ).toBeNull();
+  });
+});
+
+describe('response viewer modes', () => {
+  function setup(mode: string) {
+    document.body.innerHTML = `<div id="responseViewerBackdrop"></div><div id="responseViewer">
+      <h2 id="responseViewerTitle"></h2><button id="responseViewerMore" style="display:none"></button>
+      <div id="responseViewerBody"></div></div>`;
+    const app = Object.create(CodemanApp.prototype);
+    app.activeSessionId = 'session';
+    app.sessions = new Map([['session', { mode, workingDir: '/work', paneCwd: '/work/live' }]]);
+    app._sanitizeHtml = (html: string) => html;
+    app._buildResponseViewerMessage = () => document.createElement('div');
+    app._bindResponseViewerInteractions = vi.fn();
+    app.openFilePreview = vi.fn();
+    app.terminal = { focus: vi.fn() };
+    const focused = { focus: vi.fn() };
+    app._focusedPane = () => ({ terminal: focused });
+    app._shouldFocusTerminalForTabSwitch = () => true;
+    fetchResponse.mockReset().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: { text: '[Plan](out/plan.docx)' } }),
+    });
+    return { app, focused };
+  }
+
+  it('restores More for a normal response without hasContext', async () => {
+    const { app } = setup('claude');
+    await app.toggleResponseViewer();
+    expect(document.querySelector<HTMLElement>('#responseViewerMore')?.style.display).toBe('');
+  });
+
+  it('opens the file picker for a registered rollout reader and returns focus to the originating pane', async () => {
+    const { app, focused } = setup('custom-codex');
+    await app.toggleResponseViewer(true);
+    expect(document.getElementById('responseViewer')?.dataset.filesOnly).toBe('true');
+    expect(document.getElementById('responseViewerTitle')?.textContent).toBe('Response files');
+    document.querySelector<HTMLAnchorElement>('#responseViewerBody a')?.click();
+    expect(app.openFilePreview).toHaveBeenCalledWith('/work/live/out/plan.docx', 'session', null, { dock: true });
+    expect(focused.focus).toHaveBeenCalledOnce();
+    expect(app.terminal.focus).not.toHaveBeenCalled();
+  });
+
+  it('closes the file picker without focusing an xterm when the keyboard is hidden', async () => {
+    const { app, focused } = setup('custom-codex');
+    app._shouldFocusTerminalForTabSwitch = () => false;
+    await app.toggleResponseViewer(true);
+    expect(app.closeResponseViewer()).toBe(true);
+    expect(focused.focus).not.toHaveBeenCalled();
+    expect(app.terminal.focus).not.toHaveBeenCalled();
   });
 });

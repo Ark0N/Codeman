@@ -3762,10 +3762,16 @@ Object.assign(CodemanApp.prototype, {
 
   _setFilePreviewDocked(dock) {
     const overlay = this.$('filePreviewOverlay');
-    if (!overlay || dock === overlay.classList.contains('is-docked')) return;
+    if (!overlay) return;
+    const terminalWrap = this.$('terminalContainer')?.closest('.terminal-wrap');
+    dock = Boolean(
+      dock &&
+        terminalWrap?.parentElement?.matches('.main:not(.tiles-active, .webview-active)') &&
+        window.matchMedia?.('(min-width: 1180px)').matches
+    );
+    if (dock === overlay.classList.contains('is-docked')) return;
     if (dock) {
-      const terminalWrap = this.$('terminalContainer')?.closest('.terminal-wrap');
-      if (!terminalWrap || !overlay.parentElement) return;
+      if (!overlay.parentElement) return;
       this._filePreviewOverlayHome = overlay.parentElement;
       terminalWrap.after(overlay);
     } else {
