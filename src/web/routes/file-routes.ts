@@ -23,6 +23,7 @@ import type {
   FilesystemPreviewKind,
   FileDeleteData,
   FileWriteData,
+  LazyFileListingData,
 } from '../../types.js';
 import { ApiErrorCode, createErrorResponse, getErrorMessage } from '../../types.js';
 import { compileFileQuery } from '../../utils/file-query.js';
@@ -91,6 +92,8 @@ import {
   FilesystemMkdirSchema,
   FilesystemPreviewQuerySchema,
   FileWriteSchema,
+  LazyFileListingQuerySchema,
+  FileListingCursorSchema,
 } from '../schemas.js';
 import {
   MAX_EDITABLE_BYTES,
@@ -1742,11 +1745,12 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
   // File tree listing
   app.get('/api/sessions/:id/files', async (req) => {
     const { id } = req.params as { id: string };
-    const { depth, showHidden, q, root } = req.query as {
+    const { depth, showHidden, q, root, lazy } = req.query as {
       depth?: string;
       showHidden?: string;
       q?: string;
       root?: string;
+      lazy?: string;
     };
     const session = findSessionOrFail(ctx, id, req);
 
@@ -1820,6 +1824,113 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
     let entriesRead = 0;
     const isListed = (entry: Dirent): boolean =>
       (includeHidden || !entry.name.startsWith('.')) && !(entry.isDirectory() && excludeDirs.has(entry.name));
+
+    // One folder at a time for the Files panel. Keep the legacy tree/search branches below
+    // untouched: existing callers depend on their exact response shape and scan policy.
+    if (lazy === '1' && !matcher && !session.remote) {
+      const parsed = LazyFileListingQuerySchema.safeParse(req.query);
+      if (!parsed.success) throwRouteError(400, ApiErrorCode.INVALID_INPUT, 'Invalid directory listing query');
+      const { path: directoryPath, cursor } = parsed.data;
+      const namedPath = directoryPath ? resolve(workingDir, directoryPath) : walkRoot;
+      const lexical = validateSessionFilePathLexical(walkRoot, namedPath);
+      if (!lexical) throwRouteError(403, ApiErrorCode.FORBIDDEN, 'Directory is outside the selected workspace');
+
+      const checkKind = async (folder: string): Promise<void> => {
+        const kind = await probePathKind(folder, { pastCap: true });
+        if (kind === 'unknown') {
+          throwRouteError(
+            422,
+            ApiErrorCode.OPERATION_FAILED,
+            describeUnknownPath('The folder', folder, { pastCap: true })
+          );
+        }
+        if (kind === 'absent') throwRouteError(404, ApiErrorCode.NOT_FOUND, 'Folder not found');
+        if (kind !== 'directory') throwRouteError(400, ApiErrorCode.INVALID_INPUT, 'Path is not a directory');
+      };
+      // Probe before synchronous confinement and before readdir (#516), including a request
+      // naming a directory on an unresponsive mount. Never turn unknown into an empty list.
+      await checkKind(walkRoot);
+      if (namedPath !== walkRoot) await checkKind(namedPath);
+      const validated = validateLocalSessionFilePath({ workingDir, liveWorktree }, namedPath);
+      const selected = validated && validateSessionFilePath(walkRoot, namedPath);
+      if (!selected) throwRouteError(403, ApiErrorCode.FORBIDDEN, 'Directory is outside the selected workspace');
+      const refusedSegment = (path: string): boolean =>
+        path.split(sep).some((part) => excludeDirs.has(part) || (!includeHidden && part.startsWith('.')));
+      // Both names matter: an alias may point at an excluded/hidden directory.
+      if (refusedSegment(lexical.relativePath) || refusedSegment(selected.relativePath)) {
+        throwRouteError(403, ApiErrorCode.FORBIDDEN, 'Directory is excluded or hidden');
+      }
+
+      const scope = createHash('sha256')
+        .update(JSON.stringify([id, walkRoot, namedPath, includeHidden]))
+        .digest('hex');
+      let after: { name: string; directory: boolean } | undefined;
+      if (cursor) {
+        try {
+          const decoded = FileListingCursorSchema.parse(JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')));
+          if (decoded.scope !== scope) throw new Error('Different listing');
+          after = decoded;
+        } catch {
+          throwRouteError(400, ApiErrorCode.INVALID_INPUT, 'Invalid directory continuation; refresh files');
+        }
+      }
+      const compare = (a: { name: string; directory: boolean }, b: { name: string; directory: boolean }): number =>
+        Number(b.directory) - Number(a.directory) ||
+        a.name.localeCompare(b.name) ||
+        (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+      let entries: Dirent[];
+      try {
+        entries = await fs.readdir(namedPath, { withFileTypes: true });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT')
+          throwRouteError(404, ApiErrorCode.NOT_FOUND, 'Folder not found');
+        throwRouteError(422, ApiErrorCode.OPERATION_FAILED, 'Folder unavailable; retry or refresh files');
+      }
+      const listed = entries
+        .filter(
+          (entry) =>
+            isListed(entry) && (!after || compare({ name: entry.name, directory: entry.isDirectory() }, after) > 0)
+        )
+        .sort((a, b) =>
+          compare({ name: a.name, directory: a.isDirectory() }, { name: b.name, directory: b.isDirectory() })
+        );
+      // Bound both the response and metadata reads, independently for every folder/page.
+      const page = listed.slice(0, 500);
+      const data: LazyFileListingData = {
+        root: walkRoot,
+        ...(reportedWorktree && { worktree: reportedWorktree }),
+        lazy: true,
+        tree: [],
+        totalFiles: 0,
+        totalDirectories: 0,
+        truncated: listed.length > page.length,
+      };
+      for (const entry of page) {
+        const fullPath = join(namedPath, entry.name);
+        if (entry.isDirectory()) {
+          data.tree.push({ name: entry.name, path: nodePath(fullPath), type: 'directory' });
+          data.totalDirectories++;
+        } else {
+          // Match legacy leaf rows, including symbolic links; directory links are not traversed.
+          let size: number | undefined;
+          try {
+            size = (await fs.stat(fullPath)).size;
+          } catch {
+            /* A disappearing file is still a listed entry. */
+          }
+          const extension = entry.name.includes('.') ? entry.name.split('.').pop()?.toLowerCase() : undefined;
+          data.tree.push({ name: entry.name, path: nodePath(fullPath), type: 'file', size, extension });
+          data.totalFiles++;
+        }
+      }
+      if (data.truncated) {
+        const last = page[page.length - 1];
+        data.nextCursor = Buffer.from(
+          JSON.stringify({ scope, name: last.name, directory: last.isDirectory() })
+        ).toString('base64url');
+      }
+      return { success: true, data };
+    }
 
     // ===== Search mode =====
     // A query turns this endpoint into a FLAT match list rather than a nested

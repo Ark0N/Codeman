@@ -824,6 +824,26 @@ Frontend `readmymind-ui.js`: header 🧠 marker-hidden (`btn-readmymind--hidden`
 
 ### Files panel search
 
+The panel browses local workspaces through opt-in `lazy=1` directory pages (#759),
+documented in [Listing a directory](api-reference.md#listing-a-directory-get-apiv1sessionsidfileslazy1).
+Each request reads one directory, returns at most 500 entries and supplies `nextCursor`
+when more remain. Cursor scope includes the session, selected root, directory and hidden
+preference. Directories without `children` are unloaded; symbolic links keep their legacy
+file-row representation, so the browser does not expand directory links. Path confinement, bounded
+probes and the inside/outside worktree rules apply to every request.
+
+The browser caches loaded pages in the current tree epoch. Owner, epoch, hidden preference,
+selected root and tree identity guard folder/page responses. Typing filters loaded entries
+without a request; Enter uses the existing workspace search, and clearing restores the tree.
+Expand All opens only loaded folders. Refresh retains visible expansion state; automatic
+restoration skips recorded load errors and hidden-off expansions before requesting pages.
+Hidden-path checks are relative to the listing root, so a worktree's dotted prefix does not
+hide its ordinary folders. Explicit Retry loads the failed folder/page; errors retain entries
+already loaded. Tests: `test/routes/file-routes-lazy.test.ts`, `test/file-browser-lazy.test.ts`
+and `test/mobile/file-browser.test.ts`.
+
+The recursive listing and `q` search policies below remain unchanged for existing callers.
+
 **Files panel search** (COD-236, the `q` param on `GET /api/sessions/:id/files`): `compileFileQuery()` (`utils/file-query.ts`, pure, no IO, so it unit-tests directly) compiles the query into a reusable predicate, which is what lets the server-side walk prune instead of streaming the whole tree.
 
 ⚠️ **A query turns that endpoint into a FLAT match list rather than a nested tree**, and the walk deliberately recurses past non-matching directories, since the whole point of searching is to reach a file whose ancestors do not match. An empty or whitespace-only query compiles to `null`, which is what keeps the default tree response byte-identical when no search is requested.

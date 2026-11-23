@@ -134,6 +134,34 @@ export const FilesystemPreviewQuerySchema = z.object({
   showHidden: showHiddenQuerySchema,
 });
 
+/** Additive Files-panel listing mode. Existing recursive callers are not parsed through this. */
+export const LazyFileListingQuerySchema = z.object({
+  path: z
+    .string()
+    .max(4096)
+    .refine((p) => !p.includes('\0'))
+    .optional(),
+  cursor: z
+    .string()
+    .min(1)
+    .max(4096)
+    .regex(/^[A-Za-z0-9_-]+$/)
+    .optional(),
+});
+
+/** A continuation key, scoped to one session, root, directory and hidden-files preference. */
+export const FileListingCursorSchema = z
+  .object({
+    scope: z.string().regex(/^[a-f0-9]{64}$/),
+    name: z
+      .string()
+      .min(1)
+      .max(255)
+      .refine((name) => !name.includes('\0') && !name.includes('/')),
+    directory: z.boolean(),
+  })
+  .strict();
+
 /**
  * Body validation for `PUT /api/sessions/:id/file-content` (File Viewer edit
  * mode). `content.max()` counts UTF-16 code units, which for UTF-8 output is

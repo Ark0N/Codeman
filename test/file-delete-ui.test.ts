@@ -236,7 +236,7 @@ describe('deleteFileFromBrowser', () => {
     });
     await app.loadFileBrowser(SESSION);
     (document.getElementById('fileBrowserSearch') as HTMLInputElement).value = 'me';
-    app.filterFileBrowser('me');
+    app.searchFileBrowser('me');
     await vi.waitFor(() => expect(rowFor('src/delete-me.txt')).toBeTruthy());
     expect(rowFor('src/other.md')).toBeUndefined();
 

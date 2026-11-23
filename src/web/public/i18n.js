@@ -1159,6 +1159,16 @@
     'Filter by date range': '按日期范围筛选',
     'Filter by session status': '按会话状态筛选',
     'Filter files...': '筛选文件…',
+    'Filter loaded files · Enter to search workspace': '筛选已加载的文件 · 按 Enter 搜索工作区',
+    'Loading folder...': '正在加载文件夹…',
+    'Incomplete folder': '文件夹内容不完整',
+    'Load more': '加载更多',
+    'Retry loading': '重试加载',
+    'No files in this folder': '此文件夹中没有文件',
+    'Folder unavailable': '文件夹不可用',
+    'Workspace changed; refresh files': '工作区已更改，请刷新文件列表',
+    'No matches in loaded folders · Enter to search workspace': '已加载的文件夹中没有匹配项 · 按 Enter 搜索工作区',
+    'Search incomplete; no matches in scanned files': '搜索未完成；已扫描的文件中没有匹配项',
     Worktree: '工作树',
     'Session folder': '会话文件夹',
     'Back to worktree': '返回工作树',
@@ -1702,6 +1712,14 @@
 
   function translateDynamic(source) {
     const patterns = [
+      [
+        /^(\d+) matches in loaded folders · Enter to search workspace$/,
+        (_m, n) => `已加载的文件夹中有 ${n} 个匹配项 · 按 Enter 搜索工作区`,
+      ],
+      [
+        /^(\d+) files, (\d+) dirs · loaded folders( · hidden shown)?$/,
+        (_m, files, dirs, hidden) => `${files} 个文件，${dirs} 个文件夹 · 已加载${hidden ? ' · 已显示隐藏项' : ''}`,
+      ],
       [/^(\d+) tokens?$/, (_m, count) => `${count} 个 Token`],
       [/^(\d+) sessions?$/, (_m, count) => `${count} 个会话`],
       [/^(\d+) tasks?$/, (_m, count) => `${count} 个任务`],

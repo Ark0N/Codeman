@@ -154,8 +154,10 @@ describe('Files panel in a git worktree', () => {
     const { app, elements, server } = loadPanel();
     server.worktree = WORKTREE;
     await app.loadFileBrowser('sess-1');
-    app._fileBrowserState.filter = 'main';
     elements.fileBrowserSearch.value = 'main';
+    app.searchFileBrowser('main');
+    await vi.waitFor(() => expect(server.requests.some((url) => url.includes('q=main'))).toBe(true));
+    server.requests.length = 0;
 
     await app.toggleFileBrowserRoot();
     await vi.waitFor(() => expect(server.requests.some((url) => url.includes('q=main'))).toBe(true));
