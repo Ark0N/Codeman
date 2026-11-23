@@ -81,10 +81,21 @@ vi.mock('../../src/remote-hosts.js', async (importOriginal) => {
   };
 });
 
+vi.mock('../../src/docker-hosts.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/docker-hosts.js')>();
+  return {
+    ...actual,
+    checkDockerAvailable: vi.fn(actual.checkDockerAvailable),
+    checkDockerImagePresent: vi.fn(actual.checkDockerImagePresent),
+  };
+});
+
 // Import mocked modules for test control
 import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { checkRemoteTmuxAvailable } from '../../src/remote-hosts.js';
+import { checkDockerAvailable, checkDockerImagePresent } from '../../src/docker-hosts.js';
+import { DOCKER_EXPORT_SCHEMA } from '../../src/docker-export.js';
 
 const mockedExistsSync = vi.mocked(existsSync);
 const mockedMkdirSync = vi.mocked(mkdirSync);
@@ -106,9 +117,14 @@ interface CaseRouteHarness {
  * from src/web/server.ts) so bare handler returns become { success:true, data }
  * and returned error envelopes get mapped to a conventional HTTP status.
  */
-async function createEnvelopeHarness(): Promise<CaseRouteHarness> {
+async function createEnvelopeHarness(authUser?: { username: string; role: 'user' }): Promise<CaseRouteHarness> {
   const app = Fastify({ logger: false });
   await app.register(fastifyCookie);
+  if (authUser) {
+    app.addHook('onRequest', async (req) => {
+      Object.assign(req, { authUser });
+    });
+  }
 
   // Uniform response envelope (matches src/web/server.ts preSerialization hook).
   app.addHook('preSerialization', (req, reply, payload: unknown, done) => {
@@ -553,6 +569,218 @@ describe('case-routes', () => {
       });
       expect(link.statusCode).toBe(httpStatusForErrorCode(ApiErrorCode.OPERATION_FAILED));
       expect(JSON.parse(link.body)).toMatchObject({ success: false, errorCode: ApiErrorCode.OPERATION_FAILED });
+    });
+  });
+
+  describe('POST /api/cases/docker-quickcreate', () => {
+    const profiles = [
+      {
+        id: 'local-podman',
+        label: 'Podman sandbox',
+        engine: 'podman',
+        image: 'localhost/agent:dev',
+        mountCredentials: false,
+      },
+      { id: 'docker-dev', label: 'Docker sandbox', engine: 'docker', image: 'agent:dev', context: 'dev-context' },
+    ] as const;
+
+    const create = (name: string, body: Record<string, unknown> = {}) =>
+      harness.app.inject({ method: 'POST', url: '/api/cases/docker-quickcreate', payload: { name, ...body } });
+
+    let registry: Map<string, string>;
+
+    beforeEach(() => {
+      registry = new Map([['docker-hosts.json', JSON.stringify(profiles)]]);
+      mockedReadFile.mockImplementation(async (path) => {
+        const file = registry.get(String(path).split('/').at(-1)!);
+        if (file !== undefined) return file;
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      });
+      mockedWriteFile.mockImplementation(async (path, data) => {
+        registry.set(String(path).split('/').at(-1)!, String(data));
+      });
+    });
+
+    afterEach(() => mockedWriteFile.mockResolvedValue(undefined));
+
+    it('reuses a profile for distinct workspaces without rewriting its settings', async () => {
+      const podman = profiles[0];
+      const docker = profiles[1];
+      const first = await create('podman-one', { hostId: podman.id });
+      const second = await create('podman-two', { hostId: podman.id });
+      const third = await create('docker-one', { hostId: docker.id });
+      expect([first.statusCode, second.statusCode, third.statusCode]).toEqual([200, 200, 200]);
+      expect(first.json().data.case).toMatchObject({ hostId: podman.id, name: 'podman-one' });
+      expect(second.json().data.case).toMatchObject({ hostId: podman.id, name: 'podman-two' });
+      expect(third.json().data.case).toMatchObject({ hostId: docker.id });
+      expect(first.json().data.case.hostWorkspacePath).not.toBe(second.json().data.case.hostWorkspacePath);
+      expect(checkDockerAvailable).toHaveBeenCalledWith('podman', expect.objectContaining({ id: podman.id }));
+      expect(checkDockerAvailable).toHaveBeenCalledWith('docker', expect.objectContaining({ context: docker.context }));
+      expect(checkDockerImagePresent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          engine: 'podman',
+          image: podman.image,
+          mountCredentials: false,
+          containerName: 'codeman-case-podman-one',
+        }),
+        podman.image
+      );
+      expect(checkDockerImagePresent).toHaveBeenCalledWith(
+        expect.objectContaining({ engine: 'podman', containerName: 'codeman-case-podman-two' }),
+        podman.image
+      );
+      expect(mockedWriteFile.mock.calls.some(([path]) => String(path).endsWith('/docker-hosts.json'))).toBe(false);
+    });
+
+    it('refuses unknown and mixed profile requests before creating anything', async () => {
+      expect((await create('missing', { hostId: 'absent' })).statusCode).toBe(404);
+      expect((await create('mixed', { hostId: profiles[0].id, mountCredentials: true })).statusCode).toBe(400);
+      expect(mockedMkdirSync).not.toHaveBeenCalled();
+      expect(mockedWriteFile).not.toHaveBeenCalled();
+      expect(checkDockerAvailable).not.toHaveBeenCalled();
+    });
+
+    it('refuses profiles a non-admin cannot list or use', async () => {
+      await harness.app.close();
+      harness = await createEnvelopeHarness({ username: 'member', role: 'user' });
+      vi.stubEnv('CODEMAN_MULTIUSER', '1');
+      try {
+        const list = await harness.app.inject('/api/docker-hosts');
+        expect(list.json().data).toEqual([]);
+        expect((await create('unauthorized', { hostId: profiles[0].id })).statusCode).toBe(403);
+        expect(mockedMkdirSync).not.toHaveBeenCalled();
+        expect(mockedWriteFile).not.toHaveBeenCalled();
+        expect(checkDockerAvailable).not.toHaveBeenCalled();
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
+
+    it('reports an unavailable profile without creating the case or switching engines', async () => {
+      vi.mocked(checkDockerAvailable).mockResolvedValueOnce({
+        ok: false,
+        engine: 'podman',
+        rootless: true,
+        isDesktop: false,
+        cgroupV2: false,
+        capsEnforced: false,
+        error: 'Podman stopped',
+      });
+      const res = await create('offline', { hostId: profiles[0].id });
+      expect(res.json()).toMatchObject({ success: false, error: expect.stringContaining('Podman stopped') });
+      expect(checkDockerAvailable).toHaveBeenCalledTimes(1);
+      expect(mockedMkdirSync).not.toHaveBeenCalled();
+      expect(mockedWriteFile).not.toHaveBeenCalled();
+    });
+
+    it('keeps both case links when two requests finish preflight together', async () => {
+      let resumeProbing!: () => void;
+      const bothProbing = new Promise<void>((resolve) => (resumeProbing = resolve));
+      await vi.mocked(checkDockerImagePresent).withImplementation(
+        async () => {
+          await bothProbing;
+          return true;
+        },
+        async () => {
+          const requests = [
+            create('concurrent-one', { hostId: profiles[0].id }),
+            create('concurrent-two', { hostId: profiles[0].id }),
+          ];
+          try {
+            await vi.waitFor(() => expect(checkDockerImagePresent).toHaveBeenCalledTimes(2));
+          } finally {
+            resumeProbing();
+          }
+          expect((await Promise.all(requests)).map((res) => res.statusCode)).toEqual([200, 200]);
+        }
+      );
+      const cases = JSON.parse(registry.get('docker-cases.json')!);
+      expect(cases).toHaveLength(2);
+      expect(cases).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: 'concurrent-one', hostId: profiles[0].id }),
+          expect.objectContaining({ name: 'concurrent-two', hostId: profiles[0].id }),
+        ])
+      );
+    });
+
+    it.each(['DELETE', 'PUT'] as const)('declines a saved profile changed by %s during preflight', async (method) => {
+      let finishProbe!: (present: boolean) => void;
+      vi.mocked(checkDockerImagePresent).mockReturnValueOnce(new Promise((resolve) => (finishProbe = resolve)));
+      const profile = profiles[0];
+      const latest = create('stale-profile', { hostId: profile.id });
+      await vi.waitFor(() => expect(checkDockerImagePresent).toHaveBeenCalledOnce());
+      try {
+        const changed = await harness.app.inject({
+          method,
+          url: `/api/docker-hosts/${profile.id}`,
+          ...(method === 'PUT' ? { payload: { ...profile, image: 'agent:changed' } } : {}),
+        });
+        expect(changed.statusCode).toBe(200);
+      } finally {
+        finishProbe(true);
+      }
+      expect((await latest).statusCode).toBe(409);
+      expect(mockedMkdirSync.mock.calls.some(([path]) => String(path).includes('stale-profile'))).toBe(false);
+      expect(registry.has('docker-cases.json')).toBe(false);
+    });
+
+    it('keeps a generated profile intact when a later overrides request reuses its original case name', async () => {
+      const original = await create('original', { memory: '2g' });
+      const hostId = original.json().data.case.hostId;
+      expect((await create('reused', { hostId })).statusCode).toBe(200);
+      registry.set(
+        'docker-cases.json',
+        JSON.stringify(
+          JSON.parse(registry.get('docker-cases.json')!).filter((entry: { name: string }) => entry.name !== 'original')
+        )
+      );
+
+      const recreated = await create('original', { memory: '8g' });
+      expect(recreated.statusCode).toBe(200);
+      expect(recreated.json().data.case.hostId).not.toBe(hostId);
+      expect(JSON.parse(registry.get('docker-hosts.json')!)).toContainEqual(
+        expect.objectContaining({ id: hostId, resources: { memory: '2g' } })
+      );
+    });
+
+    it('keeps an imported profile intact if a quick-created case uses it', async () => {
+      const profile = { ...profiles[0], id: 'imported-original' };
+      registry.set('docker-hosts.json', JSON.stringify([profile]));
+      expect((await create('reused', { hostId: profile.id })).statusCode).toBe(200);
+      registry.set(
+        'case.tgz',
+        JSON.stringify({
+          schemaVersion: DOCKER_EXPORT_SCHEMA,
+          mode: 'workspace',
+          engine: 'docker',
+          caseName: 'original',
+          image: 'agent:new',
+          containerWorkdir: '/workspace',
+          network: 'bridge',
+          checksums: {},
+        })
+      );
+      mockedExistsSync.mockImplementation((path) => String(path).endsWith('/case.tgz'));
+      const response = await harness.app.inject({
+        method: 'POST',
+        url: '/api/docker-cases/import',
+        payload: { bundle: 'case.tgz', newCaseName: 'original', destWorkspacePath: '/tmp/import-workspace' },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json().data.case.hostId).not.toBe(profile.id);
+      expect(JSON.parse(registry.get('docker-hosts.json')!)).toContainEqual(profile);
+    });
+
+    it('keeps the legacy shared default and per-case overrides', async () => {
+      const shared = await create('builtin');
+      const custom = await create('custom', { memory: '2g' });
+      expect(shared.json().data.case.hostId).toBe('default');
+      expect(custom.json().data.case.hostId).toBe('q-custom');
+      expect(checkDockerImagePresent).toHaveBeenCalledWith(
+        expect.objectContaining({ resources: { memory: '2g' } }),
+        expect.any(String)
+      );
     });
   });
 

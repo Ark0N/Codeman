@@ -9,6 +9,8 @@
 import { FastifyInstance } from 'fastify';
 import { existsSync, lstatSync, mkdirSync, writeFileSync, readdirSync, readFileSync, createReadStream } from 'node:fs';
 import { exec } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import fs from 'node:fs/promises';
 import { join, resolve, basename, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -133,6 +135,14 @@ const SAFE_CASE_NAME = /^[a-zA-Z0-9_-]+$/;
 const DOCKER_EXPORTS_DIR = dataPath('docker-exports');
 /** Auto-created host profile for the one-click "Run in Docker" case flow. */
 const DEFAULT_DOCKER_HOST_ID = 'default';
+
+// Serialize the registry changes that can invalidate a quick-create preflight.
+let dockerRegistryChain: Promise<unknown> = Promise.resolve();
+function withDockerRegistryLock<T>(mutate: () => Promise<T>): Promise<T> {
+  const run = dockerRegistryChain.then(mutate);
+  dockerRegistryChain = run.catch(() => {});
+  return run;
+}
 
 /** App version for export manifests (best-effort read of package.json). */
 const APP_VERSION = (() => {
@@ -1049,12 +1059,14 @@ export function registerCaseRoutes(
     const denied = adminOnly(req, reply);
     if (denied) return denied;
     const host = parseBody(DockerHostSchema, req.body);
-    const hosts = await readDockerHosts(CODEMAN_CONFIG_DIR);
-    if (hosts.some((item) => item.id === host.id)) {
-      return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, 'Docker host already exists');
-    }
-    await writeDockerHosts(CODEMAN_CONFIG_DIR, [...hosts, host]);
-    return { success: true, data: { host } };
+    return withDockerRegistryLock(async () => {
+      const hosts = await readDockerHosts(CODEMAN_CONFIG_DIR);
+      if (hosts.some((item) => item.id === host.id)) {
+        return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, 'Docker host already exists');
+      }
+      await writeDockerHosts(CODEMAN_CONFIG_DIR, [...hosts, host]);
+      return { success: true, data: { host } };
+    });
   });
 
   app.put('/api/docker-hosts/:id', async (req, reply): Promise<ApiResponse<{ host: unknown }>> => {
@@ -1062,29 +1074,33 @@ export function registerCaseRoutes(
     if (denied) return denied;
     const { id } = req.params as { id: string };
     const host = parseBody(DockerHostSchema, { ...(req.body as object), id });
-    const hosts = await readDockerHosts(CODEMAN_CONFIG_DIR);
-    const index = hosts.findIndex((item) => item.id === id);
-    if (index === -1) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Docker host not found');
-    const next = [...hosts];
-    next[index] = host;
-    await writeDockerHosts(CODEMAN_CONFIG_DIR, next);
-    return { success: true, data: { host } };
+    return withDockerRegistryLock(async () => {
+      const hosts = await readDockerHosts(CODEMAN_CONFIG_DIR);
+      const index = hosts.findIndex((item) => item.id === id);
+      if (index === -1) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Docker host not found');
+      const next = [...hosts];
+      next[index] = host;
+      await writeDockerHosts(CODEMAN_CONFIG_DIR, next);
+      return { success: true, data: { host } };
+    });
   });
 
   app.delete('/api/docker-hosts/:id', async (req, reply): Promise<ApiResponse<{ id: string }>> => {
     const denied = adminOnly(req, reply);
     if (denied) return denied;
     const { id } = req.params as { id: string };
-    const cases = await readDockerCases(CODEMAN_CONFIG_DIR);
-    if (cases.some((item) => item.hostId === id)) {
-      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Docker host is still used by docker cases');
-    }
-    const hosts = await readDockerHosts(CODEMAN_CONFIG_DIR);
-    await writeDockerHosts(
-      CODEMAN_CONFIG_DIR,
-      hosts.filter((item) => item.id !== id)
-    );
-    return { success: true, data: { id } };
+    return withDockerRegistryLock(async () => {
+      const cases = await readDockerCases(CODEMAN_CONFIG_DIR);
+      if (cases.some((item) => item.hostId === id)) {
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Docker host is still used by docker cases');
+      }
+      const hosts = await readDockerHosts(CODEMAN_CONFIG_DIR);
+      await writeDockerHosts(
+        CODEMAN_CONFIG_DIR,
+        hosts.filter((item) => item.id !== id)
+      );
+      return { success: true, data: { id } };
+    });
   });
 
   app.post(
@@ -1375,17 +1391,21 @@ export function registerCaseRoutes(
   });
 
   // One-click "Run in Docker": create a NORMAL case (folder in CASES_DIR, scaffolded)
-  // AND link it to a hardened container with default settings, auto-provisioning a
-  // shared `default` docker host so the user never touches host/image/network fields.
+  // AND link it to a container using a saved Docker host or the built-in settings.
   app.post(
     '/api/cases/docker-quickcreate',
     async (
-      req
+      req,
+      reply
     ): Promise<
       ApiResponse<{ case: unknown; capsEnforced?: boolean; isDesktop?: boolean; imageBuilding?: boolean }>
     > => {
       const body = parseBody(DockerQuickCreateSchema, req.body);
-      const { name, description } = body;
+      const { name, description, hostId } = body;
+      if (hostId) {
+        const denied = adminOnly(req, reply);
+        if (denied) return denied;
+      }
       const casePath = validatePathWithinBase(name, resolveCasesDir(getAuthUser(req)));
       if (!casePath) return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case path');
 
@@ -1413,42 +1433,59 @@ export function registerCaseRoutes(
         body.gpus ||
         body.mountCredentials !== undefined
       );
-      const resources: { memory?: string; cpus?: string } = {};
-      if (body.memory) resources.memory = body.memory;
-      if (body.cpus) resources.cpus = body.cpus;
-      const desiredHost: DockerHost = {
-        id: hasOverrides ? `q-${name}` : DEFAULT_DOCKER_HOST_ID,
-        label: hasOverrides ? `Case: ${name}` : 'Default',
-        image: body.image || DEFAULT_AGENT_IMAGE,
-        network: body.network || 'bridge',
-        ...(body.networkName ? { networkName: body.networkName } : {}),
-        ...(Object.keys(resources).length ? { resources } : {}),
-        ...(body.gpus ? { gpus: body.gpus } : {}),
-        mountCredentials: body.mountCredentials ?? true,
-        resumeOnStart: true,
-        hooksEnabled: true,
-      };
-      const hosts = await readDockerHosts(CODEMAN_CONFIG_DIR);
-      const existing = hosts.find((item) => item.id === desiredHost.id);
-      // Reuse the shared default if present; create/refresh a per-case host for overrides.
-      const host = existing && !hasOverrides ? existing : desiredHost;
-      if (!existing) {
-        await writeDockerHosts(CODEMAN_CONFIG_DIR, [...hosts, desiredHost]);
-      } else if (hasOverrides) {
-        await writeDockerHosts(
-          CODEMAN_CONFIG_DIR,
-          hosts.map((h) => (h.id === desiredHost.id ? desiredHost : h))
+      if (hostId && hasOverrides) {
+        return createErrorResponse(
+          ApiErrorCode.INVALID_INPUT,
+          'A saved container profile cannot be combined with case overrides'
         );
       }
+      const host = await withDockerRegistryLock(async () => {
+        const hosts = await readDockerHosts(CODEMAN_CONFIG_DIR);
+        if (hostId) return hosts.find((item) => item.id === hostId);
+
+        let id = hasOverrides ? `q-${name}` : DEFAULT_DOCKER_HOST_ID;
+        const existing = hosts.find((item) => item.id === id);
+        if (existing && !hasOverrides) return existing;
+        // A second case can now reuse the original case's profile. Give new overrides
+        // their own profile while any other case is still using the original one.
+        if (existing && (await readDockerCases(CODEMAN_CONFIG_DIR)).some((item) => item.hostId === id)) {
+          id = `q-${randomUUID()}`;
+        }
+        const resources = {
+          ...(body.memory ? { memory: body.memory } : {}),
+          ...(body.cpus ? { cpus: body.cpus } : {}),
+        };
+        const desiredHost: DockerHost = {
+          id,
+          label: hasOverrides ? `Case: ${name}` : 'Default',
+          image: body.image || DEFAULT_AGENT_IMAGE,
+          network: body.network || 'bridge',
+          ...(body.networkName ? { networkName: body.networkName } : {}),
+          ...(body.memory || body.cpus ? { resources } : {}),
+          ...(body.gpus ? { gpus: body.gpus } : {}),
+          mountCredentials: body.mountCredentials ?? true,
+          resumeOnStart: true,
+          hooksEnabled: true,
+        };
+        await writeDockerHosts(
+          CODEMAN_CONFIG_DIR,
+          existing?.id === id ? hosts.map((item) => (item.id === id ? desiredHost : item)) : [...hosts, desiredHost]
+        );
+        return desiredHost;
+      });
+      if (!host) return createErrorResponse(ApiErrorCode.NOT_FOUND, `Container profile "${hostId}" was not found`);
 
       // Probe the daemon BEFORE scaffolding so a missing docker surfaces a clear
       // error instead of leaving an orphaned case folder. The base image is NOT a
       // blocker: a missing default image auto-builds in the background on first use.
-      const availability = await checkDockerAvailable(host.engine);
+      const availability = hostId
+        ? await checkDockerAvailable(host.engine ?? 'docker', host)
+        : await checkDockerAvailable(host.engine);
       if (!availability.ok) {
+        const message = availability.error || 'Container engine is not available';
         return createErrorResponse(
           ApiErrorCode.OPERATION_FAILED,
-          availability.error || 'docker daemon is not available'
+          hostId ? `Container profile "${hostId}": ${message}` : message
         );
       }
       const dockerCase = {
@@ -1463,29 +1500,45 @@ export function registerCaseRoutes(
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, imageGate.error);
       }
 
-      // Scaffold the case folder exactly like a normal case.
-      try {
-        mkdirSync(casePath, { recursive: true });
-        mkdirSync(join(casePath, 'src'), { recursive: true });
-        const templatePath = await ctx.getDefaultClaudeMdPath();
-        writeFileSync(join(casePath, 'CLAUDE.md'), generateClaudeMd(name, description || '', templatePath));
-        await writeHooksConfig(casePath);
-      } catch (err) {
-        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to create case: ${getErrorMessage(err)}`);
-      }
+      return withDockerRegistryLock(async () => {
+        // Preflight can take time. Publish only if the same configuration still
+        // exists, and append to the current registry so parallel requests both land.
+        const latestHost = (await readDockerHosts(CODEMAN_CONFIG_DIR)).find((item) => item.id === host.id);
+        if (!isDeepStrictEqual(latestHost, host)) {
+          return createErrorResponse(
+            ApiErrorCode.CONFLICT,
+            `Container profile "${host.id}" changed during creation. Refresh the profile list and try again.`
+          );
+        }
+        const currentCases = await readDockerCases(CODEMAN_CONFIG_DIR);
+        if (existsSync(casePath) || currentCases.some((item) => item.name === name)) {
+          return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, 'Case already exists');
+        }
 
-      await writeDockerCases(CODEMAN_CONFIG_DIR, [...dockerCases, dockerCase]);
-      ctx.broadcast(SseEvent.CaseCreated, { name, path: casePath });
-      ctx.broadcast(SseEvent.CaseLinked, { name, path: casePath, type: 'docker' });
-      return {
-        success: true,
-        data: {
-          case: dockerCase,
-          capsEnforced: availability.capsEnforced,
-          isDesktop: availability.isDesktop,
-          imageBuilding: imageGate.imageBuilding,
-        },
-      };
+        // Scaffold the case folder exactly like a normal case.
+        try {
+          mkdirSync(casePath, { recursive: true });
+          mkdirSync(join(casePath, 'src'), { recursive: true });
+          const templatePath = await ctx.getDefaultClaudeMdPath();
+          writeFileSync(join(casePath, 'CLAUDE.md'), generateClaudeMd(name, description || '', templatePath));
+          await writeHooksConfig(casePath);
+        } catch (err) {
+          return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to create case: ${getErrorMessage(err)}`);
+        }
+
+        await writeDockerCases(CODEMAN_CONFIG_DIR, [...currentCases, dockerCase]);
+        ctx.broadcast(SseEvent.CaseCreated, { name, path: casePath });
+        ctx.broadcast(SseEvent.CaseLinked, { name, path: casePath, type: 'docker' });
+        return {
+          success: true,
+          data: {
+            case: dockerCase,
+            capsEnforced: availability.capsEnforced,
+            isDesktop: availability.isDesktop,
+            imageBuilding: imageGate.imageBuilding,
+          },
+        };
+      });
     }
   );
 
@@ -1612,39 +1665,45 @@ export function registerCaseRoutes(
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Import failed: ${getErrorMessage(err)}`);
     }
 
-    // Create (or REFRESH) the dedicated docker host pointing at the quarantined
-    // imported image (full mode) or the manifest's base image (workspace-only).
-    // Refresh matters: after a case-delete + re-import of the same name, a stale
-    // `imported-<name>` host would silently pin the PREVIOUS import's image tag.
-    const hostId = `imported-${newCaseName}`;
-    const hosts = await readDockerHosts(CODEMAN_CONFIG_DIR);
-    const importedHost = {
-      id: hostId,
-      label: `Imported: ${newCaseName}`,
-      engine: result.manifest.engine,
-      image: result.importedImage ?? result.manifest.image,
-      network: (['bridge', 'none', 'custom'].includes(result.manifest.network) ? result.manifest.network : 'bridge') as
-        | 'bridge'
-        | 'none'
-        | 'custom',
-    };
-    await writeDockerHosts(
-      CODEMAN_CONFIG_DIR,
-      hosts.some((h) => h.id === hostId)
-        ? hosts.map((h) => (h.id === hostId ? { ...h, ...importedHost } : h))
-        : [...hosts, importedHost]
-    );
-    const newCase = {
-      name: newCaseName,
-      type: 'docker' as const,
-      hostId,
-      hostWorkspacePath: destWorkspacePath,
-      containerWorkdir: result.manifest.containerWorkdir,
-      owner: ownerFor(req),
-    };
-    await writeDockerCases(CODEMAN_CONFIG_DIR, [...dockerCases, newCase]);
-    ctx.broadcast(SseEvent.DockerImportComplete, { name: newCaseName, path: destWorkspacePath, type: 'docker' });
-    return { success: true, data: { case: newCase } };
+    return withDockerRegistryLock(async () => {
+      const currentCases = await readDockerCases(CODEMAN_CONFIG_DIR);
+      if (currentCases.some((item) => item.name === newCaseName)) {
+        return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, 'Case already exists');
+      }
+      // Create (or REFRESH) the dedicated docker host pointing at the quarantined
+      // imported image (full mode) or the manifest's base image (workspace-only).
+      // Refresh matters: after a case-delete + re-import of the same name, a stale
+      // `imported-<name>` host would silently pin the PREVIOUS import's image tag.
+      let hostId = `imported-${newCaseName}`;
+      if (currentCases.some((item) => item.hostId === hostId)) hostId = `imported-${randomUUID()}`;
+      const hosts = await readDockerHosts(CODEMAN_CONFIG_DIR);
+      const importedHost = {
+        id: hostId,
+        label: `Imported: ${newCaseName}`,
+        engine: result.manifest.engine,
+        image: result.importedImage ?? result.manifest.image,
+        network: (['bridge', 'none', 'custom'].includes(result.manifest.network)
+          ? result.manifest.network
+          : 'bridge') as 'bridge' | 'none' | 'custom',
+      };
+      await writeDockerHosts(
+        CODEMAN_CONFIG_DIR,
+        hosts.some((h) => h.id === hostId)
+          ? hosts.map((h) => (h.id === hostId ? { ...h, ...importedHost } : h))
+          : [...hosts, importedHost]
+      );
+      const newCase = {
+        name: newCaseName,
+        type: 'docker' as const,
+        hostId,
+        hostWorkspacePath: destWorkspacePath,
+        containerWorkdir: result.manifest.containerWorkdir,
+        owner: ownerFor(req),
+      };
+      await writeDockerCases(CODEMAN_CONFIG_DIR, [...currentCases, newCase]);
+      ctx.broadcast(SseEvent.DockerImportComplete, { name: newCaseName, path: destWorkspacePath, type: 'docker' });
+      return { success: true, data: { case: newCase } };
+    });
   });
 
   // Recreate-on-drift confirm (docs/docker-cases-plan.md §4): remove the case

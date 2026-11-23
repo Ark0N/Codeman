@@ -10,6 +10,7 @@ import { CASES_DIR, SETTINGS_PATH } from '../../src/web/route-helpers.js';
 import { applyLaunchDefaults } from '../../src/web/launch-defaults.js';
 import { buildCodexCommand } from '../../src/tmux-manager.js';
 import { Session } from '../../src/session.js';
+import * as dockerHosts from '../../src/docker-hosts.js';
 import { safeRmHomeTree } from '../mocks/index.js';
 import { getDataDir } from '../../src/config/instance.js';
 import { SettingsUpdateSchema } from '../../src/web/schemas.js';
@@ -152,10 +153,11 @@ describe('Codex launch defaults', () => {
     });
   });
 
-  it('does not record unused defaults for a Docker quick-start', async () => {
+  it('uses the profile daemon and skips unused Codex defaults for a Docker quick-start', async () => {
+    const probe = vi.spyOn(dockerHosts, 'checkDockerAvailable');
     await writeFile(
       join(getDataDir(), 'docker-hosts.json'),
-      JSON.stringify([{ id: 'docker1', label: 'Docker', image: 'codeman/agent:base' }])
+      JSON.stringify([{ id: 'docker1', label: 'Docker', image: 'codeman/agent:base', context: 'dev-context' }])
     );
     await writeFile(
       join(getDataDir(), 'docker-cases.json'),
@@ -171,7 +173,8 @@ describe('Codex launch defaults', () => {
     );
     expect(await createdConfig('/api/quick-start')).toBeUndefined();
     const session = [...harness.ctx.sessions.values()].at(-1) as Session;
-    expect(session.docker?.containerName).toBe('codeman-default-test');
+    expect(probe).toHaveBeenCalledWith('docker', expect.objectContaining({ context: 'dev-context' }));
+    expect(session.docker).toMatchObject({ containerName: 'codeman-default-test', context: 'dev-context' });
     expect(session.toState().model).toBeUndefined();
   });
 

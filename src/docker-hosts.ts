@@ -1110,9 +1110,12 @@ interface DockerInfoJson {
   Name?: string;
 }
 
-async function runDockerInfo(engine: DockerEngine): Promise<DockerInfoJson | null> {
+type DockerDaemon = Pick<SessionDocker, 'context' | 'daemonHost'>;
+
+async function runDockerInfo(engine: DockerEngine, daemon?: DockerDaemon): Promise<DockerInfoJson | null> {
+  const [bin, ...args] = dockerEngineArgv({ engine, ...daemon });
   try {
-    const { stdout } = await execFileAsync(engine, ['info', '--format', '{{json .}}'], {
+    const { stdout } = await execFileAsync(bin, [...args, 'info', '--format', '{{json .}}'], {
       timeout: DOCKER_PROBE_TIMEOUT_MS,
     });
     return JSON.parse(stdout) as DockerInfoJson;
@@ -1139,7 +1142,7 @@ function classifyDockerInfo(engine: DockerEngine, info: DockerInfoJson): DockerA
  * whether resource caps are enforceable. Auto-detects docker then podman when no
  * engine is given. No-op canned value under VITEST.
  */
-export async function checkDockerAvailable(engine?: DockerEngine): Promise<DockerAvailability> {
+export async function checkDockerAvailable(engine?: DockerEngine, daemon?: DockerDaemon): Promise<DockerAvailability> {
   if (IS_TEST_MODE) {
     return {
       ok: true,
@@ -1152,7 +1155,7 @@ export async function checkDockerAvailable(engine?: DockerEngine): Promise<Docke
   }
   const candidates: DockerEngine[] = engine ? [engine] : ['docker', 'podman'];
   for (const candidate of candidates) {
-    const info = await runDockerInfo(candidate);
+    const info = await runDockerInfo(candidate, daemon);
     if (info) return classifyDockerInfo(candidate, info);
   }
   return {

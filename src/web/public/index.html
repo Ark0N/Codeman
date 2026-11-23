@@ -3822,7 +3822,16 @@
             </div>
             <details class="advanced-options docker-quick-settings" id="dockerQuickSettings">
               <summary><svg class="set-adv-chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg><span>Container settings (optional, sensible defaults)</span></summary>
-              <div class="advanced-options-content">
+              <div class="advanced-options-content" id="quickDockerHostRow" hidden>
+                <div class="form-row">
+                  <label for="quickDockerHost">Container profile</label>
+                  <select id="quickDockerHost" onchange="app.syncDockerQuickProfile()">
+                    <option value="">Built-in settings</option>
+                  </select>
+                  <span class="form-hint">Reuse the image and runtime settings from a saved container profile.</span>
+                </div>
+              </div>
+              <div class="advanced-options-content" id="quickDockerOverrides">
                 <div class="form-row">
                   <label>Template</label>
                   <select id="quickDockerTemplate" onchange="app.applyDockerTemplate()">

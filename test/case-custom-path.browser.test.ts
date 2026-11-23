@@ -60,6 +60,42 @@ describe('Create a case in a custom folder', () => {
     await page.click('label.checkbox-row:has(#newCaseDocker)');
   });
 
+  it('uses a saved profile in the normal Create New submission without sending overrides', async () => {
+    await page.route('**/api/docker-hosts', (route) =>
+      route.fulfill({ json: { success: true, data: [{ id: 'dev', label: 'Development', engine: 'podman' }] } })
+    );
+    await page.route('**/api/cases/docker-quickcreate', (route) =>
+      route.fulfill({ status: 404, json: { success: false, error: 'Container profile "dev" was not found' } })
+    );
+    try {
+      await open();
+      await page.check('#newCaseDocker');
+      await page.locator('#dockerQuickSettings summary').click();
+      const select = page.locator('#quickDockerHost');
+      expect(await select.locator('option[value=dev]').textContent({ timeout: 5000 })).toBe('Development (Podman)');
+      await page.fill('#quickDockerMemory', '8g');
+      await select.selectOption('dev');
+      expect(await page.locator('#quickDockerMemory').isVisible()).toBe(false);
+      await page.fill('#newCaseName', 'profile-case');
+      const [request] = await Promise.all([
+        page.waitForRequest('**/api/cases/docker-quickcreate'),
+        page.evaluate(() => (window as any).app.createCase()),
+      ]);
+      expect(request.postDataJSON()).toEqual({ name: 'profile-case', description: '', hostId: 'dev' });
+      expect(await toastText()).toContain('Container profile "dev" was not found');
+      expect(await page.isVisible('#createCaseModal')).toBe(true);
+      await page.uncheck('#newCaseDocker');
+      expect(await select.isDisabled()).toBe(true);
+    } finally {
+      await page.evaluate(() => {
+        (document.getElementById('dockerQuickSettings') as HTMLDetailsElement).open = false;
+        (document.getElementById('quickDockerMemory') as HTMLInputElement).value = '';
+      });
+      await page.unroute('**/api/docker-hosts');
+      await page.unroute('**/api/cases/docker-quickcreate');
+    }
+  });
+
   it('Browse opens the folder picker for directories only and fills the field with the choice', async () => {
     await open();
     await page.click('label.checkbox-row:has(#newCaseCustomPathToggle)');
