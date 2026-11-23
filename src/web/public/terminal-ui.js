@@ -4791,29 +4791,32 @@ Object.assign(CodemanApp.prototype, {
         // signal, which is the earliest point the anchor can actually be
         // reasserted. (The synchronous version passed its regression test only
         // because the test's write mock moved the viewport synchronously.)
-        const viewportY = viewportMarker
-          ? (viewportMarker.isDisposed ? 0 : viewportMarker.line)
-          : preserveViewportY;
+        // A marker is disposed when its row is trimmed off a full scrollback,
+        // but also when the stream itself erases scrollback (`ESC[3J`, RIS),
+        // which the narrow and middle strips keep. Fall back to the absolute
+        // index then, as before markers, rather than sending the reader to row 0.
+        const viewportY = viewportMarker && !viewportMarker.isDisposed ? viewportMarker.line : preserveViewportY;
         viewportMarker?.dispose();
         this._restoreTerminalViewport(viewportY, flushSessionId);
         this._scheduleTerminalWriteFlush();
         this._noteMobileImeAuthoritativeOutput(flushedOutputSeq, flushSessionId);
       });
-      // Only live writes can open a new tmux repaint gap; replays cannot (#814).
-      if (writeChunk.length && flushSessionId && !this._isLoadingBuffer) {
-        const marked = (this._liveOutputSinceFullPull ||= new Set());
-        const newlyMarked = !marked.has(flushSessionId);
-        marked.add(flushSessionId);
-        const generations = (this._liveOutputGen ||= new Map());
-        generations.set(flushSessionId, (generations.get(flushSessionId) || 0) + 1);
-        // Mark transitions sync immediately; onScroll is coalesced on all devices.
-        if (newlyMarked) this._syncHistoryReloadAction?.();
-      }
     } catch (err) {
       viewportMarker?.dispose();
       this._terminalWriteInFlight = false;
       this._terminalWriteInFlightBytes = 0;
       throw err;
+    }
+    // Only live writes can open a new tmux repaint gap; replays cannot (#814).
+    // Outside the try: the catch above must only cover the write itself.
+    if (writeChunk.length && flushSessionId && !this._isLoadingBuffer) {
+      const marked = (this._liveOutputSinceFullPull ||= new Set());
+      const newlyMarked = !marked.has(flushSessionId);
+      marked.add(flushSessionId);
+      const generations = (this._liveOutputGen ||= new Map());
+      generations.set(flushSessionId, (generations.get(flushSessionId) || 0) + 1);
+      // Mark transitions sync immediately; onScroll is coalesced on all devices.
+      if (newlyMarked) this._syncHistoryReloadAction?.();
     }
     const bytesThisFrame = deferred ? MAX_FRAME_BYTES : _joinedLen;
     const _dt = performance.now() - _t0;

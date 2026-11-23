@@ -102,4 +102,30 @@ describe('live terminal viewport at the scrollback cap', () => {
     expect(row).not.toBe('line 140');
     expect(row).toBe('line 160');
   });
+
+  // ESC[3J (kept by the narrow and middle strips) erases scrollback and disposes
+  // the marker the same way a trim does; the reader must keep their row, not
+  // land on row 0.
+  it.each([true, false])(
+    'keeps the reader on their row when one flush clears scrollback and reprints it (markers: %s)',
+    async (markersEnabled) => {
+      const terminal = new Terminal({ cols: 80, rows: 10, scrollback: 1000, allowProposedApi: true });
+      try {
+        if (!markersEnabled) Object.defineProperty(terminal, 'registerMarker', { value: undefined });
+        const app = loadHarness(terminal);
+        const history = Array.from({ length: 200 }, (_, i) => `line ${i}\r\n`).join('');
+        await write(terminal, history);
+        terminal.scrollToLine(100);
+        expect(topRow(terminal)).toBe('line 100');
+        expect(app.isTerminalAtBottom()).toBe(false);
+        app.pendingWrites.push(`\x1b[H\x1b[2J\x1b[3J${history}`);
+        app.flushPendingWrites();
+        await write(terminal, '');
+        expect(app._terminalWriteInFlight).toBe(false);
+        expect(topRow(terminal)).toBe('line 100');
+      } finally {
+        terminal.dispose();
+      }
+    }
+  );
 });
