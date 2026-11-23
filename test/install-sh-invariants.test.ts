@@ -14,7 +14,7 @@ import { describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { STOCK_CLIS } from '../src/config/cli-registry/stock.js';
 import { CLI_INSTALLED_MARKER } from '../src/utils/cli-executable-resolver.js';
@@ -840,6 +840,7 @@ describe('install.sh review fixes for #460', () => {
     }
     const done = fn('print_done_screen', '\nupdate() {');
     expect(done).toContain('$(start_command_hint)');
+    expect(done).toContain('$(start_command_hint) --multiuser');
     expect(done).not.toMatch(/CODEMAN_HOST=0\.0\.0\.0 codeman web/);
   });
 
@@ -923,6 +924,123 @@ describe('install.sh review fixes for #460', () => {
     );
     expect(lan).toContain('bare=codeman web');
     expect(drive('--tailscale')).toContain('host=127.0.0.1 pw=s3cret ack=0');
+  });
+});
+
+describe('install.sh multi-user guidance and reconfiguration', () => {
+  const unit = '.config/systemd/user/codeman-web.service';
+  const agent = 'Library/LaunchAgents/com.codeman.web.plist';
+
+  function drive(script: string, existing?: { path: string; content: string }) {
+    const home = mkdtempSync(join(tmpdir(), 'codeman-multiuser-service-'));
+    try {
+      if (existing) {
+        const path = join(home, existing.path);
+        mkdirSync(dirname(path), { recursive: true });
+        writeFileSync(path, existing.content);
+      }
+      const env = {
+        ...process.env,
+        HOME: home,
+        CODEMAN_INSTALL_DIR: join(home, 'app'),
+        CODEMAN_NONINTERACTIVE: '1',
+        CODEMAN_INSTALL_SH_LIB: '1',
+      };
+      const driver = `
+        . "$1"
+        unset CODEMAN_HOST CODEMAN_PORT CODEMAN_PASSWORD CODEMAN_TAILSCALE
+        systemctl() { return 0; }
+        loginctl() { return 0; }
+        launchctl() { return 0; }
+        sleep() { :; }
+        verify_systemd_active() { return 0; }
+        codeman_answers_locally() { return 1; }
+        detect_tailscale_serve_url() { return 1; }
+        detect_lan_ip() { echo 192.0.2.1; }
+        print_qr() { :; }
+        check_cloudflared() { return 1; }
+        detect_all_clis() { CLI_FOUND_COUNT=1; }
+        ${script}
+      `;
+      const result = spawnSync('bash', ['-c', driver, 'bash', INSTALL_SH], {
+        encoding: 'utf-8',
+        timeout: 30_000,
+        env,
+      });
+      expect(result.status, result.stderr).toBe(0);
+      return result.stdout.replace(/\x1b\[[0-9;]*m/g, '');
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  }
+
+  it('prints a binding-aware manual command after the aligned first-admin step', () => {
+    const output = drive(`
+      BIND_HOST=0.0.0.0; BIND_PASSWORD=x; BIND_BASE_URL=/codeman; CODEMAN_PORT=4000
+      print_done_screen 3 true
+    `);
+    expect(output).toMatch(/    Users     .*codeman users add <name> --admin/);
+    expect(output).toContain(
+      "CODEMAN_HOST=0.0.0.0 CODEMAN_PASSWORD='<your-password>' CODEMAN_BASE_URL=/codeman CODEMAN_PORT=4000 codeman web --multiuser"
+    );
+    expect(output.indexOf('codeman users add')).toBeLessThan(output.indexOf('codeman web --multiuser'));
+    expect(output).not.toMatch(/stop the running server|daemon-reload|launchctl (load|unload)/i);
+  });
+
+  it('prints the exact systemd edit and daemon reload', () => {
+    const output = drive('read_existing_binding; print_done_screen "" ""', { path: unit, content: '[Service]\n' });
+    expect(output).toContain('~/.config/systemd/user/codeman-web.service');
+    expect(output).toContain('Environment=CODEMAN_MULTIUSER=1');
+    expect(output).toContain('[Service]');
+    expect(output).toContain('systemctl --user daemon-reload && systemctl --user restart codeman-web');
+    expect(output).not.toContain('EnvironmentVariables');
+  });
+
+  it('prints the exact LaunchAgent edit and unload/load sequence', () => {
+    const output = drive('read_existing_binding; print_done_screen "" ""', { path: agent, content: '<plist/>\n' });
+    const guidance = output.split('    Users     ')[1] ?? '';
+    expect(guidance).toContain('EnvironmentVariables');
+    expect(guidance).toContain('<key>CODEMAN_MULTIUSER</key><string>1</string>');
+    const unload = 'launchctl unload ~/Library/LaunchAgents/com.codeman.web.plist';
+    const load = 'launchctl load ~/Library/LaunchAgents/com.codeman.web.plist';
+    expect(guidance.indexOf(unload)).toBeGreaterThan(-1);
+    expect(guidance.indexOf(load)).toBeGreaterThan(guidance.indexOf(unload));
+    expect(guidance).not.toContain('daemon-reload');
+  });
+
+  it.each([
+    ['systemd', unit, 'Environment=CODEMAN_MULTIUSER=1', true],
+    ['systemd', unit, 'Environment="CODEMAN_MULTIUSER=true"', true],
+    ['systemd', unit, 'Environment=CODEMAN_MULTIUSER=0', false],
+    ['systemd', unit, '', false],
+    ['launchd', agent, '<key>CODEMAN_MULTIUSER</key><string>1</string>', true],
+    ['launchd', agent, '<key>CODEMAN_MULTIUSER</key>\n<string>true</string>', true],
+    ['launchd', agent, '<key>CODEMAN_MULTIUSER</key>\n<string>0</string>', false],
+    ['launchd', agent, '', false],
+  ])('reconfigures %s with existing setting %s %s (enabled %s)', (supervisor, path, setting, enabled) => {
+    if (supervisor === 'launchd' && existsSync('/Library/LaunchDaemons/com.codeman.web.plist')) return;
+    const setup = supervisor === 'systemd' ? 'setup_systemd_service' : 'setup_launchd_service';
+    const output = drive(
+      `
+        parse_flags --port 4000 --service
+        choose_network_binding >/dev/null
+        ${setup} >/dev/null
+        read_existing_binding
+        print_done_screen "" ""
+        echo 'SERVICE FILE'
+        sed -n '/CODEMAN_MULTIUSER/{p;n;p;}' "$HOME/${path}"
+      `,
+      { path, content: setting + '\n' }
+    );
+    expect(output).toContain('http://localhost:4000');
+    const service = output.split('SERVICE FILE\n')[1];
+    if (enabled) {
+      expect(output).not.toContain('codeman users add');
+      expect(service).toMatch(/Environment=CODEMAN_MULTIUSER=1|<key>CODEMAN_MULTIUSER<\/key>\s*<string>1<\/string>/);
+    } else {
+      expect(output).toContain('codeman users add');
+      expect(service).toBe('');
+    }
   });
 });
 

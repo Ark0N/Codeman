@@ -161,6 +161,7 @@ TS_RENAME_RECORD="$HOME/.codeman/tailscale-rename"
 # tailscale_choose_mapping (path mode) or read back from the service file.
 BIND_BASE_URL=""
 EXISTING_BASE_URL=""
+EXISTING_MULTIUSER="0"
 EXISTING_VERSION=""
 
 # Answer presets from flags. LAUNCH_PRESET: 1 = run now, 2 = service, 3 = do
@@ -2342,10 +2343,10 @@ xml_unescape() {
 # Read the binding out of an already-installed service file, if any. A service
 # file WITHOUT our CODEMAN_HOST line is a pre-1.8 install, which effectively
 # ran loopback (the server default), so it reports 127.0.0.1. Also reads back
-# the sub-path (CODEMAN_BASE_URL) and the port the service was written with,
-# and the installed version, for the preflight summary and the re-run defaults.
+# the service sub-path, port, multi-user mode, and installed version for the
+# preflight summary and the re-run defaults.
 read_existing_binding() {
-    EXISTING_FOUND="0"; EXISTING_HOST=""; EXISTING_PASSWORD=""; EXISTING_ACK="0"; EXISTING_BASE_URL=""
+    EXISTING_FOUND="0"; EXISTING_HOST=""; EXISTING_PASSWORD=""; EXISTING_ACK="0"; EXISTING_BASE_URL=""; EXISTING_MULTIUSER="0"
     local unit="$HOME/.config/systemd/user/codeman-web.service"
     local plist="$HOME/Library/LaunchAgents/com.codeman.web.plist"
     local existing_port=""
@@ -2358,6 +2359,7 @@ read_existing_binding() {
         [[ -n "$pwline" ]] && EXISTING_PASSWORD=$(systemd_env_unescape "$pwline")
         grep -q '^Environment=CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK=1' "$unit" && EXISTING_ACK="1"
         EXISTING_BASE_URL=$(sed -n 's/^Environment=CODEMAN_BASE_URL=//p' "$unit" | head -1)
+        grep -Eq '^Environment="?CODEMAN_MULTIUSER=(1|true)"?$' "$unit" && EXISTING_MULTIUSER="1"
         existing_port=$(sed -n 's/^Environment=CODEMAN_PORT=//p' "$unit" | head -1)
     elif [[ -f "$plist" ]]; then
         EXISTING_FOUND="1"
@@ -2367,6 +2369,13 @@ read_existing_binding() {
         [[ -n "$pwraw" ]] && EXISTING_PASSWORD=$(xml_unescape "$pwraw")
         grep -q '<key>CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK</key>' "$plist" && EXISTING_ACK="1"
         EXISTING_BASE_URL=$(awk '/<key>CODEMAN_BASE_URL<\/key>/{getline; print}' "$plist" | sed -n 's/.*<string>\(.*\)<\/string>.*/\1/p')
+        if awk '/<key>CODEMAN_MULTIUSER<\/key>/ {
+            sub(/.*<key>CODEMAN_MULTIUSER<\/key>[[:space:]]*/, "")
+            if ($0 == "") getline
+            print
+        }' "$plist" | grep -Eq '^[[:space:]]*<string>(1|true)</string>'; then
+            EXISTING_MULTIUSER="1"
+        fi
         existing_port=$(awk '/<key>CODEMAN_PORT<\/key>/{getline; print}' "$plist" | sed -n 's/.*<string>\(.*\)<\/string>.*/\1/p')
     fi
 
@@ -3636,6 +3645,11 @@ setup_launchd_service() {
     <string>$(xml_escape "$CODEMAN_PORT")</string>"
     fi
 
+    if [[ "$EXISTING_MULTIUSER" == "1" ]]; then
+        bind_plist+=$'\n'"    <key>CODEMAN_MULTIUSER</key>
+    <string>1</string>"
+    fi
+
     cat > "$agent_plist" << EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -3717,6 +3731,10 @@ setup_systemd_service() {
     fi
     if [[ -n "${CODEMAN_PORT:-}" && "${CODEMAN_PORT}" != "3000" ]]; then
         bind_env="${bind_env:+$bind_env$'\n'}Environment=CODEMAN_PORT=$CODEMAN_PORT"
+    fi
+
+    if [[ "$EXISTING_MULTIUSER" == "1" ]]; then
+        bind_env="${bind_env:+$bind_env$'\n'}Environment=CODEMAN_MULTIUSER=1"
     fi
 
     # Create service file
@@ -4416,9 +4434,28 @@ print_done_screen() {
             echo -e "              ${DIM}(the same variables apply to: codeman web -d)${NC}"
         fi
     fi
-    echo -e "    ${YELLOW}${BOLD}Multi-user setup${NC}  Adding accounts does not enable multi-user mode."
-    echo -e "              Stop the running server before adding the first admin with ${CYAN}codeman users add <name> --admin${NC}."
-    echo -e "              Start with ${CYAN}codeman web --multiuser${NC}, or set ${CYAN}CODEMAN_MULTIUSER=1${NC} in the service configuration and restart."
+    if [[ "$EXISTING_MULTIUSER" != "1" ]]; then
+        echo -e "    ${BOLD}Users${NC}     Create the first admin with ${CYAN}codeman users add <name> --admin${NC} before enabling multi-user mode."
+        echo -e "              To start manually, run ${CYAN}$(start_command_hint) --multiuser${NC}"
+        if [[ "$launch" == "2" ]]; then
+            case "$svc" in
+                systemd)
+                    if [[ -f "$unit" ]]; then
+                        echo -e "              In ${CYAN}~/.config/systemd/user/codeman-web.service${NC}, add ${CYAN}Environment=CODEMAN_MULTIUSER=1${NC} under [Service]."
+                        echo -e "              Then run ${CYAN}systemctl --user daemon-reload && systemctl --user restart codeman-web${NC}"
+                    fi
+                    ;;
+                launchd)
+                    if [[ -f "$agent_plist" ]]; then
+                        echo -e "              In ${CYAN}~/Library/LaunchAgents/com.codeman.web.plist${NC}, add this entry to EnvironmentVariables."
+                        echo -e "              ${CYAN}<key>CODEMAN_MULTIUSER</key><string>1</string>${NC}"
+                        echo -e "              Then run ${CYAN}launchctl unload ~/Library/LaunchAgents/com.codeman.web.plist${NC}"
+                        echo -e "              followed by ${CYAN}launchctl load ~/Library/LaunchAgents/com.codeman.web.plist${NC}"
+                    fi
+                    ;;
+            esac
+        fi
+    fi
     if [[ -f "$INSTALL_DIR/$SOURCE_MARKER" && ! -d "$INSTALL_DIR/.git" ]]; then
         echo -e "    ${BOLD}Update${NC}    re-run the install line ${DIM}(installed without git, so the in-app updater is off)${NC}"
     else
