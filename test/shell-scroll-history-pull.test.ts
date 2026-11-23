@@ -1210,6 +1210,7 @@ describe('manual history banner action', () => {
       loadState: false,
       paneHistoryLines: undefined as number | undefined,
       refreshing: false,
+      sessionFlags: {} as Record<string, unknown>,
       ...options,
     };
     const element = (): BannerElement => ({
@@ -1234,6 +1235,7 @@ describe('manual history banner action', () => {
       requestAnimationFrame: (callback: FrameRequestCallback) => frames.push(callback),
     });
     const { app: base } = makeApp(String(state.mode), { bufferRows: 130, capture: lines(400) });
+    Object.assign(base.sessions.get('s1')!, state.sessionFlags);
     const render = loadAppMethod('_renderHistoryTruncationBanner', {
       document,
       computeHistoryTruncationNotice: computeNotice,
@@ -1288,6 +1290,11 @@ describe('manual history banner action', () => {
     { opts: { detached: true }, visible: false },
     // A drop-recovery refresh owns the session while it fetches.
     { opts: { refreshing: true }, visible: false },
+    // A nested tmux client keeps the local pane in the alternate screen, so
+    // `?full=1` returns one screen; the route splices in a remote's scrollback.
+    { opts: { sessionFlags: { docker: true } }, visible: false },
+    { opts: { sessionFlags: { adopt: true } }, visible: false },
+    { opts: { sessionFlags: { remote: true } }, visible: true },
   ])('visibility is $visible for $opts', ({ opts, visible }) => {
     const { app, bar, button } = fixture(opts);
     app._syncHistoryReloadAction();
@@ -1305,6 +1312,15 @@ describe('manual history banner action', () => {
     app._setHistoryTruncation('s1', { ...TAIL_CUT, truncationReason: 'tail' });
     expect(button()!.textContent).toBe('Load full history');
     expect(bar.setAttribute).toHaveBeenLastCalledWith('aria-live', 'polite');
+  });
+
+  it('labels the dismiss button for what the bar carries', () => {
+    const { app, dismiss } = fixture();
+    app._syncHistoryReloadAction();
+    expect(dismiss()!.setAttribute).toHaveBeenCalledWith('aria-label', 'Dismiss Reload history');
+    app._historyNoticeRevealedFor = 's1';
+    app._setHistoryTruncation('s1', { ...TAIL_CUT, truncationReason: 'tail' });
+    expect(dismiss()!.setAttribute).toHaveBeenCalledWith('aria-label', 'Dismiss history notice');
   });
 
   it('stands aside while a drop-recovery refresh fetches, then offers Reload again', async () => {

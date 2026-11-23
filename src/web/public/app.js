@@ -10003,8 +10003,14 @@ class CodemanApp {
     // opens the gap (#814). A pane that really holds no history (fullscreen
     // Claude) captures one screen, `_replayWouldShrinkBuffer` refuses it, and the
     // refusal dismisses the action until the next `mux-full-history` replay.
+    // Docker and adopted sessions are left out: their local pane hosts a nested
+    // tmux client in the alternate screen, so `?full=1` returns one screen that
+    // the downgrade guard always refuses (the exclusions `paneKeepsNoHistory`
+    // uses in selectSession). Remote sessions stay eligible, since the route
+    // splices the remote scrollback into their capture.
     return !!(this.loadAppSettingsFromStorage?.()?.historyReloadAction !== false &&
-      session && session.mode !== 'shell' && this._liveOutputSinceFullPull?.has(sessionId) &&
+      session && session.mode !== 'shell' && !session.docker && !session.adopt &&
+      this._liveOutputSinceFullPull?.has(sessionId) &&
       !this._isLoadingBuffer &&
       !this.terminalLoadStates?.has(sessionId) && // Tab switches set this before the buffer load opens.
       this._terminalRefreshOwner?.sessionId !== sessionId && // A drop-recovery refresh is fetching.
@@ -10125,7 +10131,8 @@ class CodemanApp {
     const dismiss = document.createElement('button');
     dismiss.type = 'button';
     dismiss.className = 'history-trunc-dismiss';
-    dismiss.setAttribute('aria-label', 'Dismiss history notice');
+    // Name what the × actually dismisses: a reload-only bar has no notice.
+    dismiss.setAttribute('aria-label', showNotice ? 'Dismiss history notice' : 'Dismiss Reload history');
     dismiss.textContent = '×';
     dismiss.onclick = () => {
       // One × dismisses everything this bar carried. A notice dismissal sticks

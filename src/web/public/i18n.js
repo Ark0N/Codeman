@@ -757,6 +757,7 @@
     'Recent output may be missing from this view.': '此视图可能缺少最近的输出。',
     'Reload history': '重新加载历史',
     'Load full history': '加载完整历史',
+    'Dismiss Reload history': '忽略“重新加载历史”',
     'Auto Copy Selection': '自动复制选中内容',
     'Selection & clipboard': '选中与剪贴板',
     'Auto Copy: selection copied': '自动复制：已复制选中内容',
