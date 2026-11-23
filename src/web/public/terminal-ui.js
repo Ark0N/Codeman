@@ -4792,9 +4792,11 @@ Object.assign(CodemanApp.prototype, {
         // reasserted. (The synchronous version passed its regression test only
         // because the test's write mock moved the viewport synchronously.)
         // A marker is disposed when its row is trimmed off a full scrollback,
-        // but also when the stream itself erases scrollback (`ESC[3J`, RIS),
+        // but also when the stream itself erases scrollback with `ESC[3J`,
         // which the narrow and middle strips keep. Fall back to the absolute
         // index then, as before markers, rather than sending the reader to row 0.
+        // (RIS does not dispose it: xterm swaps in a new buffer and the marker
+        // stays on its old line, which is the same index as this fallback.)
         const viewportY = viewportMarker && !viewportMarker.isDisposed ? viewportMarker.line : preserveViewportY;
         viewportMarker?.dispose();
         this._restoreTerminalViewport(viewportY, flushSessionId);
