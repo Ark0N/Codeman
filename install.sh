@@ -2340,6 +2340,27 @@ xml_unescape() {
     printf '%s' "$1" | sed -e 's/&lt;/</g' -e 's/&gt;/>/g' -e 's/&amp;/\&/g'
 }
 
+# Read one assignment from the unit's Environment= directives. Each line can
+# hold several assignments, quoted as whole words. Later assignments and empty
+# directives override earlier values. The unit is read as data.
+read_systemd_environment() {
+    awk -v key="$2=" '
+        /^[[:space:]]*Environment[[:space:]]*=/ {
+            sub(/^[[:space:]]*Environment[[:space:]]*=[[:space:]]*/, "")
+            if ($0 == "") value = ""
+            while (match($0, /^("([^"\\]|\\.)*"|\047([^\047\\]|\\.)*\047|[^[:space:]"\047][^[:space:]]*)([[:space:]]|$)/)) {
+                word = substr($0, 1, RLENGTH)
+                $0 = substr($0, RLENGTH + 1)
+                sub(/^[[:space:]]+/, "")
+                sub(/[[:space:]]$/, "", word)
+                if (word ~ /^["\047]/) word = substr(word, 2, length(word) - 2)
+                if (index(word, key) == 1) value = substr(word, length(key) + 1)
+            }
+        }
+        END { print value }
+    ' "$1"
+}
+
 # Read the binding out of an already-installed service file, if any. A service
 # file WITHOUT our CODEMAN_HOST line is a pre-1.8 install, which effectively
 # ran loopback (the server default), so it reports 127.0.0.1. Also reads back
@@ -2353,14 +2374,16 @@ read_existing_binding() {
 
     if [[ -f "$unit" ]]; then
         EXISTING_FOUND="1"
-        EXISTING_HOST=$(sed -n 's/^Environment=CODEMAN_HOST=//p' "$unit" | head -1)
+        EXISTING_HOST=$(read_systemd_environment "$unit" CODEMAN_HOST)
         local pwline
-        pwline=$(sed -n 's/^Environment="CODEMAN_PASSWORD=\(.*\)"$/\1/p' "$unit" | head -1)
+        pwline=$(read_systemd_environment "$unit" CODEMAN_PASSWORD)
         [[ -n "$pwline" ]] && EXISTING_PASSWORD=$(systemd_env_unescape "$pwline")
-        grep -q '^Environment=CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK=1' "$unit" && EXISTING_ACK="1"
-        EXISTING_BASE_URL=$(sed -n 's/^Environment=CODEMAN_BASE_URL=//p' "$unit" | head -1)
-        grep -Eq '^Environment="?CODEMAN_MULTIUSER=(1|true)"?$' "$unit" && EXISTING_MULTIUSER="1"
-        existing_port=$(sed -n 's/^Environment=CODEMAN_PORT=//p' "$unit" | head -1)
+        [[ "$(read_systemd_environment "$unit" CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK)" == "1" ]] && EXISTING_ACK="1"
+        EXISTING_BASE_URL=$(read_systemd_environment "$unit" CODEMAN_BASE_URL)
+        case "$(read_systemd_environment "$unit" CODEMAN_MULTIUSER)" in
+            1|true) EXISTING_MULTIUSER="1" ;;
+        esac
+        existing_port=$(read_systemd_environment "$unit" CODEMAN_PORT)
     elif [[ -f "$plist" ]]; then
         EXISTING_FOUND="1"
         EXISTING_HOST=$(awk '/<key>CODEMAN_HOST<\/key>/{getline; print}' "$plist" | sed -n 's/.*<string>\(.*\)<\/string>.*/\1/p')
@@ -2371,9 +2394,10 @@ read_existing_binding() {
         EXISTING_BASE_URL=$(awk '/<key>CODEMAN_BASE_URL<\/key>/{getline; print}' "$plist" | sed -n 's/.*<string>\(.*\)<\/string>.*/\1/p')
         if awk '/<key>CODEMAN_MULTIUSER<\/key>/ {
             sub(/.*<key>CODEMAN_MULTIUSER<\/key>[[:space:]]*/, "")
-            if ($0 == "") getline
-            print
-        }' "$plist" | grep -Eq '^[[:space:]]*<string>(1|true)</string>'; then
+            while ($0 ~ /^[[:space:]]*$/ && getline > 0) {}
+            enabled = ($0 ~ /^[[:space:]]*<string>(1|true)<\/string>/)
+        }
+        END { exit !enabled }' "$plist"; then
             EXISTING_MULTIUSER="1"
         fi
         existing_port=$(awk '/<key>CODEMAN_PORT<\/key>/{getline; print}' "$plist" | sed -n 's/.*<string>\(.*\)<\/string>.*/\1/p')

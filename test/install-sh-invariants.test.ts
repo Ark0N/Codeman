@@ -1011,10 +1011,18 @@ describe('install.sh multi-user guidance and reconfiguration', () => {
   it.each([
     ['systemd', unit, 'Environment=CODEMAN_MULTIUSER=1', true],
     ['systemd', unit, 'Environment="CODEMAN_MULTIUSER=true"', true],
+    ['systemd', unit, '  Environment = CODEMAN_MULTIUSER=1   ', true],
+    ['systemd', unit, 'Environment="NOTE=two words" CODEMAN_MULTIUSER=1 NODE_ENV=production', true],
+    ['systemd', unit, "Environment='CODEMAN_MULTIUSER=1' NODE_ENV=production", true],
+    ['systemd', unit, 'Environment=CODEMAN_MULTIUSER=1 CODEMAN_MULTIUSER=0', false],
+    ['systemd', unit, 'Environment=CODEMAN_MULTIUSER=1\nEnvironment=CODEMAN_MULTIUSER=false', false],
+    ['systemd', unit, 'Environment=CODEMAN_MULTIUSER=1\nEnvironment=', false],
+    ['systemd', unit, 'Environment="NOTE=some text CODEMAN_MULTIUSER=1 more text"', false],
     ['systemd', unit, 'Environment=CODEMAN_MULTIUSER=0', false],
     ['systemd', unit, '', false],
     ['launchd', agent, '<key>CODEMAN_MULTIUSER</key><string>1</string>', true],
     ['launchd', agent, '<key>CODEMAN_MULTIUSER</key>\n<string>true</string>', true],
+    ['launchd', agent, '<key>CODEMAN_MULTIUSER</key>\n  \n<string>1</string>', true],
     ['launchd', agent, '<key>CODEMAN_MULTIUSER</key>\n<string>0</string>', false],
     ['launchd', agent, '', false],
   ])('reconfigures %s with existing setting %s %s (enabled %s)', (supervisor, path, setting, enabled) => {
@@ -1041,6 +1049,28 @@ describe('install.sh multi-user guidance and reconfiguration', () => {
       expect(output).toContain('codeman users add');
       expect(service).toBe('');
     }
+  });
+
+  it('preserves a combined systemd binding without reintroducing a disabled multi-user assignment', () => {
+    const output = drive(
+      `
+        parse_flags --port 4000 --service
+        choose_network_binding >/dev/null
+        setup_systemd_service >/dev/null
+        cat "$HOME/${unit}"
+      `,
+      {
+        path: unit,
+        content: [
+          '[Service]',
+          'Environment=CODEMAN_HOST=0.0.0.0 CODEMAN_MULTIUSER=1 "CODEMAN_PASSWORD=test password"',
+          'Environment=CODEMAN_MULTIUSER=0',
+        ].join('\n'),
+      }
+    );
+    expect(output).toMatch(/^Environment=CODEMAN_HOST=0\.0\.0\.0$/m);
+    expect(output).toContain('Environment="CODEMAN_PASSWORD=test password"');
+    expect(output).not.toContain('CODEMAN_MULTIUSER');
   });
 });
 
