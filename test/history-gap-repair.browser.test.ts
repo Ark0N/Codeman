@@ -358,7 +358,7 @@ describe.each([true, false])('manual history gap repair (touch: %s)', (touch) =>
       await burst(page);
       expect((await bufferState(page)).numbers).not.toContain('NUMBER-090');
       expect((await bufferState(page)).pulls).toBe(0);
-      const button = page.locator('#historyTruncationBar').getByRole('button', { name: 'Reload history' });
+      const button = page.locator('#historyTruncationBar').getByRole('button', { name: 'Reload history', exact: true });
       await button.waitFor({ state: 'visible' });
       if (touch) await button.tap();
       else await button.click();
@@ -382,7 +382,7 @@ describe.each([true, false])('manual history gap repair (touch: %s)', (touch) =>
       await page.evaluate(() => {
         (window as RepairWindow).repairTest.inject = true;
       });
-      const button = page.locator('#historyTruncationBar').getByRole('button', { name: 'Reload history' });
+      const button = page.locator('#historyTruncationBar').getByRole('button', { name: 'Reload history', exact: true });
       if (touch) await button.tap();
       else await button.click();
       await waitForRepair(page);
@@ -461,7 +461,7 @@ describe.each([true, false])('manual history gap repair (touch: %s)', (touch) =>
         requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
         return promise;
       });
-      expect(await page.getByRole('button', { name: 'Reload history' }).isVisible()).toBe(false);
+      expect(await page.getByRole('button', { name: 'Reload history', exact: true }).isVisible()).toBe(false);
       expect((await bufferState(page)).pulls).toBe(0);
     } catch (error) {
       throw await failureDetails(page, error);
@@ -520,7 +520,7 @@ it('hides Reload history while a marked incoming tab capture is pending', async 
       );
     }, incoming);
     const bar = page.locator('#historyTruncationBar');
-    expect(await bar.getByRole('button', { name: 'Reload history' }).count()).toBe(0);
+    expect(await bar.getByRole('button', { name: 'Reload history', exact: true }).count()).toBe(0);
     expect(await bar.isHidden()).toBe(true);
     await page.evaluate(async () => {
       const test = (window as RepairWindow).tabLoadTest!;
@@ -635,7 +635,7 @@ it('holds an OMP reading row through repeated repaint history and capped live fl
       },
       { session: SESSION, readingRow }
     );
-    const button = page.locator('#historyTruncationBar').getByRole('button', { name: 'Reload history' });
+    const button = page.locator('#historyTruncationBar').getByRole('button', { name: 'Reload history', exact: true });
     await button.tap();
     await waitForRepair(page);
     const measure = () =>
