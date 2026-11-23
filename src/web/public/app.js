@@ -3222,6 +3222,8 @@ class CodemanApp {
   }
 
   _findCodexResponseFile(messages, label, session, sidebar = false) {
+    const [prefix, suffix, ...extra] = sidebar ? label.split('…') : [];
+    const abbreviated = Boolean(prefix && suffix && extra.length === 0);
     let match = null;
     for (const message of messages) {
       if (message.role !== 'assistant' || typeof message.text !== 'string' || (!sidebar && !message.text.includes(label))) continue;
@@ -3235,7 +3237,14 @@ class CodemanApp {
       this._linkifyFilePaths(rendered.content);
       for (const link of links) {
         const path = resolveLinkedFilePath(link.dataset.path, session.workingDir);
-        if (sidebar && path.split('/').pop() !== label) continue;
+        if (sidebar) {
+          const basename = path.split('/').pop();
+          // Codex preserves both ends of a filename when it shortens the tab.
+          const matchesEnds =
+            abbreviated && basename.length > prefix.length + suffix.length &&
+            basename.startsWith(prefix) && basename.endsWith(suffix);
+          if (basename !== label && !matchesEnds) continue;
+        }
         // Ambiguity includes web URLs and unsupported files with the same label.
         if (!link.dataset.linkified || link.dataset.folder || !/^\/(?!\/)/.test(path) || !previewsInFileViewer(path)) {
           return null;

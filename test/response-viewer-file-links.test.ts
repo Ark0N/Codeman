@@ -427,6 +427,30 @@ describe('Codex terminal response link matching', () => {
     ).toBeNull();
   });
 
+  it('resolves an abbreviated native tab only when one path matches both visible ends', () => {
+    const app = appForTranscript();
+    const session = { workingDir: '/work/project' };
+    const name = 'Interview panel plan - requisition 2026943.docx';
+    const exact = { role: 'assistant', text: `[Download](<out/${name}>)` };
+    const near = { role: 'assistant', text: '[Wrong extension](<out/Interview draft 2026943.pdf>)' };
+    const label = 'Interview…26943.docx';
+    expect(app._findCodexResponseFile([exact, near], label, session, true)).toBe(`/work/project/out/${name}`);
+    expect(
+      app._findCodexResponseFile(
+        [
+          exact,
+          {
+            role: 'assistant',
+            text: '[Another draft](<other/Interview alternate 2026943.docx>)',
+          },
+        ],
+        label,
+        session,
+        true
+      )
+    ).toBeNull();
+  });
+
   it.each([
     '[Word brief](out/different.docx)',
     '[Word brief](https://example.test/report.docx)',

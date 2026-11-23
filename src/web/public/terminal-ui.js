@@ -526,7 +526,7 @@ function codexSidebarFileRow(terminal, row) {
           to--;
         }
         const label = line.translateToString(false, from, to).trim();
-        if (label && !label.includes('…') && previewsInFileViewer(label)) entries.push({ label, start: from, end: to });
+        if (label && previewsInFileViewer(label)) entries.push({ label, start: from, end: to });
       };
       if (row === headerRow) {
         let from = divider + 1;
