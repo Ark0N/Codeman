@@ -45,6 +45,7 @@ function loadCodemanAppClass() {
     fetch: vi.fn(),
     document,
     NodeFilter,
+    marked,
     localStorage: { length: 0, key: vi.fn(), getItem: vi.fn(), setItem: vi.fn(), removeItem: vi.fn() },
     window: { addEventListener: vi.fn(), removeEventListener: vi.fn() },
     MobileDetection: {},
@@ -339,5 +340,108 @@ describe('response viewer file-path linkifier', () => {
       /pathLink\.dataset\.linkified \? this\._resolveLinkedFilePath\?\.\(filePath, sessionId\) : filePath/
     );
     expect(APP_SOURCE).toMatch(/openFilePreview\(target \|\| filePath, sessionId\)/);
+  });
+});
+
+describe('Codex response files', () => {
+  it('lists previewable files once and opens their encoded URI in the originating session', () => {
+    const app = Object.create(CodemanApp.prototype);
+    app._sanitizeHtml = (html: string) => html;
+    app.openFilePreview = vi.fn();
+    app.activeSessionId = 'another-session';
+    const body = document.createElement('div');
+
+    app._renderResponseFiles(
+      body,
+      [
+        '[Word brief](</work/project/Brief %231.docx>)\n\n[Image](out/image.png)',
+        '[Duplicate](/work/project/out/image.png) [PDF](file:///work/project/Export%20one.pdf)',
+        '[Web](https://example.com/x.pdf) [Network](file://remote/share/x.pdf) [Code](src/app.ts)',
+      ],
+      'codex-session',
+      { workingDir: '/work/project' }
+    );
+
+    const links = Array.from(body.querySelectorAll('a'));
+    expect(links.map((link) => link.textContent)).toEqual(['Word brief', 'Image', 'PDF']);
+    expect(app.openFilePreview).not.toHaveBeenCalled();
+    for (const link of links) link.click();
+    expect(app.openFilePreview.mock.calls).toEqual([
+      ['/work/project/Brief #1.docx', 'codex-session', null, { dock: true }],
+      ['/work/project/out/image.png', 'codex-session', null, { dock: true }],
+      ['/work/project/Export one.pdf', 'codex-session', null, { dock: true }],
+    ]);
+  });
+
+  it('shows an empty state when the response contains no previewable files', () => {
+    const app = Object.create(CodemanApp.prototype);
+    app._renderMarkdown = renderChat;
+    const body = document.createElement('div');
+    app._renderResponseFiles(body, ['No files in this response.'], 'codex-session', { workingDir: '/work' });
+    expect(body.textContent).toBe('No previewable files in the latest response.');
+  });
+});
+
+describe('Codex terminal response link matching', () => {
+  function appForTranscript() {
+    const app = Object.create(CodemanApp.prototype);
+    app._sanitizeHtml = (html: string) => html;
+    return app;
+  }
+
+  it('uses the explicit destination behind an underlined label', () => {
+    const app = appForTranscript();
+    const session = { workingDir: '/work/project' };
+    expect(
+      app._findCodexResponseFile(
+        [
+          { role: 'assistant', text: 'See [Word brief](<out/Word draft.docx>).' },
+          { role: 'assistant', text: 'Repeated [Word brief](file:///work/project/out/Word%20draft.docx).' },
+        ],
+        'Word brief',
+        session
+      )
+    ).toBe('/work/project/out/Word draft.docx');
+  });
+
+  it('resolves a native sidebar filename only when its destination is unique', () => {
+    const app = appForTranscript();
+    const session = { workingDir: '/work/project' };
+    const message = { role: 'assistant', text: '[Preview image](file:///work/project/Image%20draft.png)' };
+    expect(app._findCodexResponseFile([message], 'Image draft.png', session, true)).toBe(
+      '/work/project/Image draft.png'
+    );
+    expect(
+      app._findCodexResponseFile(
+        [
+          message,
+          {
+            role: 'assistant',
+            text: '[Other](<out/Image draft.png>)',
+          },
+        ],
+        'Image draft.png',
+        session,
+        true
+      )
+    ).toBeNull();
+  });
+
+  it.each([
+    '[Word brief](out/different.docx)',
+    '[Word brief](https://example.test/report.docx)',
+    '[Word brief](src/script.ts)',
+  ])('declines an ambiguous label when another reference is %s', (other) => {
+    const app = appForTranscript();
+    expect(
+      app._findCodexResponseFile(
+        [
+          { role: 'assistant', text: '[Word brief](out/report.docx)' },
+          { role: 'assistant', text: other },
+        ],
+        'Word brief',
+        { workingDir: '/work/project' }
+      )
+    ).toBeNull();
   });
 });

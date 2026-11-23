@@ -3760,6 +3760,47 @@ Object.assign(CodemanApp.prototype, {
     if (headerBtn) headerBtn.setAttribute('aria-expanded', 'false');
   },
 
+  _setFilePreviewDocked(dock) {
+    const overlay = this.$('filePreviewOverlay');
+    if (!overlay || dock === overlay.classList.contains('is-docked')) return;
+    if (dock) {
+      const terminalWrap = this.$('terminalContainer')?.closest('.terminal-wrap');
+      if (!terminalWrap || !overlay.parentElement) return;
+      this._filePreviewOverlayHome = overlay.parentElement;
+      terminalWrap.after(overlay);
+    } else {
+      this._filePreviewOverlayHome?.append(overlay);
+      this._filePreviewOverlayHome = null;
+    }
+    overlay.classList.toggle('is-docked', dock);
+    this.$('filePreviewDockBtn')?.setAttribute('aria-pressed', String(dock));
+  },
+
+  _isFilePreviewDocked() {
+    const overlay = this.$('filePreviewOverlay');
+    return (
+      overlay?.classList.contains('is-docked') &&
+      overlay.parentElement?.matches('.main:not(.tiles-active, .webview-active)') &&
+      window.matchMedia?.('(min-width: 1180px)').matches
+    );
+  },
+
+  toggleFilePreviewDock() {
+    const overlay = this.$('filePreviewOverlay');
+    if (!overlay?.classList.contains('visible')) return;
+    this._setFilePreviewDocked(!overlay.classList.contains('is-docked'));
+  },
+
+  _maybeCloseDockedFilePreviewOnEscape(event) {
+    const overlay = this.$('filePreviewOverlay');
+    if (!this._isFilePreviewDocked() || !overlay?.classList.contains('visible') || !overlay.contains(event.target)) return false;
+    event.preventDefault();
+    event.stopPropagation();
+    this.closeFilePreview();
+    if (!overlay.classList.contains('visible')) this.terminal?.focus();
+    return true;
+  },
+
   /**
    * Whether a path is absolute and provably OUTSIDE this session's workspace.
    *
@@ -3866,6 +3907,7 @@ Object.assign(CodemanApp.prototype, {
 
     if (!overlay || !bodyEl) return;
 
+    if (options.dock) this._setFilePreviewDocked?.(true);
     this._recordFilePreviewHistory(filePath, sessionId, attachmentId, options);
     this._bindFilePreviewChrome();
 
@@ -4396,6 +4438,7 @@ Object.assign(CodemanApp.prototype, {
         if (ev.key !== 'ArrowLeft' && ev.key !== 'ArrowRight') return;
         if (!this.$('filePreviewOverlay')?.classList.contains('visible')) return;
         const t = ev.target;
+        if (this._isFilePreviewDocked?.() && !this.$('filePreviewOverlay')?.contains(t)) return;
         if (t && (t.isContentEditable || (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) && !t.classList?.contains('xterm-helper-textarea')))) return;
         // Swallowed even at the ends of the list: otherwise the terminal behind the overlay
         // types it as word-left/right, and on a header button the browser's own Alt+← goes Back.
@@ -4526,6 +4569,7 @@ Object.assign(CodemanApp.prototype, {
     const overlay = this.$('filePreviewOverlay');
     if (overlay) {
       overlay.classList.remove('visible');
+      this._setFilePreviewDocked?.(false);
     }
     // The overlay is hidden with display:none, which stops it being PAINTED and
     // nothing else: a <video>/<audio> inside it keeps playing, keeps its audio

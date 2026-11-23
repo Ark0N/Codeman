@@ -501,6 +501,79 @@
   global.codemanCurrentSkinIsLight = currentSkinIsLight;
 })(window);
 
+// Codex's sidebar owns its tab bar and file picker. Their labels are UI
+// chrome, so the ordinary path linkifier must never open a suffix of one.
+function codexSidebarFileRow(terminal, row) {
+  const buffer = terminal.buffer.active;
+  const top = buffer.viewportY;
+  if (row < top) return null;
+  const line = buffer.getLine(row);
+  if (!line?.getCell) return null;
+  for (let headerRow = top; headerRow <= Math.min(row, top + 2); headerRow++) {
+    const header = buffer.getLine(headerRow);
+    if (!header?.translateToString(true).trimEnd().endsWith('+')) continue;
+    for (let divider = terminal.cols - 2; divider >= 0; divider--) {
+      if (header.getCell(divider)?.getChars() !== '│') continue;
+      if (buffer.getLine(headerRow + 1)?.getCell?.(divider)?.getChars() !== '│') continue;
+      const tabs = header.translateToString(true, divider + 1).trim();
+      if (tabs !== '+' && !tabs.endsWith('×') && !/×\s+\+$/.test(tabs)) continue;
+      if (row !== headerRow && line.getCell(divider)?.getChars() !== '│') continue;
+      const entries = [];
+      const addEntry = (from, to) => {
+        while (from < to && !line.getCell(from)?.getChars().trim()) from++;
+        while (to > from && !line.getCell(to - 1)?.getChars().trim()) {
+          if (line.getCell(to - 1)?.getWidth() === 0) break;
+          to--;
+        }
+        const label = line.translateToString(false, from, to).trim();
+        if (label && !label.includes('…') && previewsInFileViewer(label)) entries.push({ label, start: from, end: to });
+      };
+      if (row === headerRow) {
+        let from = divider + 1;
+        for (let col = from; col < terminal.cols; col++) {
+          if (line.getCell(col)?.getChars() !== '×') continue;
+          addEntry(from, col);
+          from = col + 1;
+        }
+        return { divider, entries };
+      }
+      // The chooser can also be opened with a keyboard shortcut. Its file
+      // rows follow the heading and use either the normal or selected marker.
+      let inChooser = false;
+      for (let scan = headerRow + 1; scan < row; scan++) {
+        const text = buffer.getLine(scan)?.translateToString(true, divider + 1).trim();
+        if (text === 'Open in sidebar') inChooser = true;
+        if (inChooser && /^(?:Markdown files|Files)\s+\d+$/.test(text)) {
+          const file = line.translateToString(true, divider + 1);
+          const marker = file.match(/^\s*(?:›\s+)?·\s+/);
+          if (!marker) return null;
+          const from = divider + 1 + marker[0].length;
+          let end = terminal.cols;
+          // On wider panels Codex appends a styled directory after two spaces.
+          const titleCell = line.getCell(from);
+          for (let col = from + 1; col + 1 < terminal.cols; col++) {
+            const firstSpace = line.getCell(col);
+            const secondSpace = line.getCell(col + 1);
+            if (!firstSpace || !secondSpace || firstSpace.getChars().trim() || secondSpace.getChars().trim()) continue;
+            if (
+              firstSpace.getFgColor?.() !== titleCell?.getFgColor?.() ||
+              firstSpace.getFgColorMode?.() !== titleCell?.getFgColorMode?.() ||
+              firstSpace.isDim?.() !== titleCell?.isDim?.() ||
+              line.translateToString(true, col).trim() === 'Project root'
+            ) {
+              end = col;
+              break;
+            }
+          }
+          addEntry(from, end);
+          return { divider, entries };
+        }
+      }
+    }
+  }
+  return null;
+}
+
 Object.assign(CodemanApp.prototype, {
   // ═══════════════════════════════════════════════════════════════
   // Terminal Setup — xterm.js config and input handling
@@ -2476,6 +2549,18 @@ Object.assign(CodemanApp.prototype, {
                   setHovered(false);
                 },
               });
+            }
+          }
+        }
+
+        if (self.sessions?.get(getSessionId())?.mode === 'codex') {
+          const sidebar = codexSidebarFileRow(terminal, bufferLineNumber - 1);
+          if (sidebar) {
+            const lineEnd = bufferLineNumber * terminal.cols + terminal.cols;
+            const sidebarStart = bufferLineNumber * terminal.cols + sidebar.divider + 2;
+            for (let i = links.length - 1; i >= 0; i--) {
+              const { start, end } = links[i].range;
+              if (start.y * terminal.cols + start.x <= lineEnd && end.y * terminal.cols + end.x >= sidebarStart) links.splice(i, 1);
             }
           }
         }
@@ -6456,6 +6541,56 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
+  _codexTerminalLinkLabel(terminal, clientX, clientY) {
+    const pos = this._clientPointToCell(clientX, clientY, terminal);
+    const buffer = terminal.buffer?.active;
+    if (!pos || !buffer) return null;
+    const row = pos.row + buffer.viewportY;
+    const line = buffer.getLine(row - 1);
+    if (!line) return null;
+
+    const col = pos.col - 1;
+    const sidebar = codexSidebarFileRow(terminal, row - 1);
+    if (sidebar && col > sidebar.divider) {
+      const entry = sidebar.entries.find(({ start, end }) => col >= start && col < end);
+      return entry ? { ...entry, row, sidebar: true } : null;
+    }
+    if (line.isWrapped || buffer.getLine(row)?.isWrapped) return null;
+    const underlined = (index) => {
+      const cell = line.getCell(index);
+      return cell?.getWidth() === 0 || Boolean(cell?.isUnderline?.());
+    };
+    if (!underlined(col)) return null;
+    let start = col;
+    let end = col + 1;
+    while (start > 0 && underlined(start - 1)) start--;
+    while (end < terminal.cols && underlined(end)) end++;
+    const label = line.translateToString(false, start, end).trim();
+    return label && label.length <= 240 ? { label, row, start, end } : null;
+  },
+
+  async _openCodexTerminalResponseFile(terminal, sessionId, session, point, clicked, stillCurrent, forward) {
+    let path;
+    try {
+      const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/last-response?context=full`, {
+        signal: AbortSignal.timeout(3000),
+      });
+      if (response.ok) {
+        const { data } = await response.json();
+        if (Array.isArray(data?.messages)) path = this._findCodexResponseFile(data.messages, clicked.label, session, clicked.sidebar);
+      }
+    } catch {
+      // Preserve the native click if the transcript cannot be resolved.
+    }
+    if (!stillCurrent()) return;
+    const current = this._codexTerminalLinkLabel(terminal, point.clientX, point.clientY);
+    if (!current || current.label !== clicked.label || current.row !== clicked.row ||
+        current.start !== clicked.start || current.end !== clicked.end || current.sidebar !== clicked.sidebar) return;
+
+    if (path) await this._openResponseFile(path, sessionId);
+    else forward();
+  },
+
   // Desktop counterpart of the touchend tap branch: hand-encode an SGR report
   // for a plain left-click when the server strips mouse DECSETs (see
   // _shouldReportMouseToCli). Every skip below is a click that already has
@@ -6480,12 +6615,30 @@ Object.assign(CodemanApp.prototype, {
     if (ev.shiftKey || ev.altKey || ev.ctrlKey || ev.metaKey) return;
     const mode = terminal.modes?.mouseTrackingMode;
     if (mode && mode !== 'none') return;
-    if (!this._shouldReportMouseToCli(target.sessionId)) return;
     if (terminal.hasSelection?.()) return;
     if (target.linkHovered ?? this._linkHovered) return; // link provider hover/leave callbacks (registerFilePathLinkProvider)
     if (performance.now() <= (this._trustedTapMouseSuppressUntil || 0)) return;
     if (!ev.target?.closest?.('.xterm-screen')) return;
-    this._sendSyntheticSgrTap(ev.clientX, ev.clientY, target);
+    const sessionId = target.sessionId || this.activeSessionId;
+    const session = this.sessions?.get(sessionId);
+    const { clientX, clientY } = ev;
+    const forward = () => {
+      if (this._shouldReportMouseToCli(sessionId)) this._sendSyntheticSgrTap(clientX, clientY, target);
+    };
+    this._codexTerminalLinkClicks ??= new WeakMap();
+    const click = Symbol();
+    this._codexTerminalLinkClicks.set(terminal, click);
+    const link = session?.mode === 'codex' && this._codexTerminalLinkLabel(terminal, clientX, clientY);
+    if (!link) {
+      forward();
+      return;
+    }
+
+    const stillCurrent = () =>
+      this._codexTerminalLinkClicks.get(terminal) === click &&
+      (target.sessionId ? terminal.element?.isConnected : this.activeSessionId === sessionId && this.terminal === terminal);
+    void this._openCodexTerminalResponseFile(terminal, sessionId, session, { clientX, clientY }, link, stillCurrent, forward)
+      .catch((error) => console.error('Unable to open Codex terminal response file:', error));
   },
 
   /**

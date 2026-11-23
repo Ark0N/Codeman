@@ -493,6 +493,46 @@ describe('terminal touch tap mouse guard', () => {
     expect(sent).toEqual([{ id: 'sess-1', data: '\x1b[<0;21;6M\x1b[<0;21;6m' }]);
   });
 
+  it('desktop click: resolves a Codex label from underlined cells before forwarding mouse input', () => {
+    const { app } = loadTerminalUiHarness();
+    const session = { mode: 'codex', cliMouseTracking: true };
+    app.activeSessionId = 'sess-1';
+    app.sessions = new Map([['sess-1', session]]);
+    app.terminal = createTerminalGrid(['• Word brief', '', '› '], 2);
+    const getLine = app.terminal.buffer.active.getLine;
+    app.terminal.buffer.active.getLine = (row: number) => {
+      const line = getLine(row);
+      if (row !== 0) return line;
+      return {
+        ...line,
+        translateToString: (_trim: boolean, start: number, end: number) => '• Word brief'.slice(start, end),
+        getCell: (column: number) => ({ getWidth: () => 1, isUnderline: () => column >= 2 && column < 12 }),
+      };
+    };
+    app._openCodexTerminalResponseFile = vi.fn().mockResolvedValue(undefined);
+    app._sendSyntheticSgrTap = vi.fn();
+
+    app._handleDesktopTerminalClick({
+      isTrusted: true,
+      button: 0,
+      detail: 1,
+      clientX: 40,
+      clientY: 10,
+      target: { closest: () => ({}) },
+    });
+
+    expect(app._openCodexTerminalResponseFile).toHaveBeenCalledWith(
+      app.terminal,
+      'sess-1',
+      session,
+      { clientX: 40, clientY: 10 },
+      { label: 'Word brief', row: 1, start: 2, end: 12 },
+      expect.any(Function),
+      expect.any(Function)
+    );
+    expect(app._sendSyntheticSgrTap).not.toHaveBeenCalled();
+  });
+
   it('desktop click: skips clicks that already have a meaning elsewhere', () => {
     const { app } = loadTerminalUiHarness();
     const sent: string[] = [];

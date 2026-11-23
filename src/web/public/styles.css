@@ -11923,6 +11923,54 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
   display: flex;
 }
 
+#filePreviewDockBtn {
+  display: none;
+}
+
+@media (min-width: 1180px) {
+  html {
+    --file-preview-dock-width: clamp(400px, 35vw, 620px);
+  }
+
+  body:has(.main:not(.tiles-active, .webview-active) > .terminal-wrap) #filePreviewDockBtn {
+    display: inline-flex;
+  }
+
+  .main:not(.tiles-active, .webview-active) > .file-preview-overlay.is-docked {
+    position: relative;
+    inset: auto;
+    flex: 0 0 var(--file-preview-dock-width);
+    min-width: 0;
+    min-height: 0;
+    align-items: stretch;
+    background: transparent;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
+  .main:not(.tiles-active, .webview-active) > .file-preview-overlay.is-docked .file-preview-window {
+    width: 100% !important;
+    height: 100% !important;
+    min-width: 0;
+    min-height: 0;
+    max-height: none;
+    border-radius: 0;
+    resize: none;
+  }
+
+  .main:not(.tiles-active, .webview-active) > .file-preview-overlay.is-docked :is(#filePreviewExpandBtn, #filePreviewResize) {
+    display: none;
+  }
+
+  #filePreviewDockBtn[aria-pressed='true'] {
+    color: var(--accent);
+  }
+
+  body:has(.main:not(.tiles-active, .webview-active) > .file-preview-overlay.is-docked.visible) .attachment-card-stack {
+    right: calc(var(--file-preview-dock-width) + 18px);
+  }
+}
+
 /* Folder grid (panels-ui.js openFolderGrid): one step BELOW the file preview, so a
    tile opens its preview on top and closing that preview lands back on the grid. */
 .folder-grid-overlay {
@@ -13596,6 +13644,11 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
 .response-viewer.visible {
   display: flex;
   transform: translateY(0);
+}
+
+#responseFilesBtn[hidden],
+.response-viewer[data-files-only='true'] :is(#responseViewerMore, #responseViewerCopy, #responseViewerCopyMarkdown) {
+  display: none !important;
 }
 
 .response-viewer-header {
