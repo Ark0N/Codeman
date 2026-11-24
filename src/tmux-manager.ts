@@ -286,7 +286,8 @@ const PANE_LIST_SEP = '|';
  * `#{pane_dead_time}` is what tells one exit from the next. tmux 3.8 prints a
  * blank `#{pane_pid}` once a pane's program has exited, so the pid cannot do it
  * there, and the time is stamped once per exit, so a respawned pane that exits
- * again reads as a new exit even with the same status.
+ * again reads as a new exit even with the same status. The stamp is in whole
+ * seconds, so two exits with the same status in the same second read as one.
  *
  * `#{pane_current_path}` comes last on purpose: a directory name may contain the
  * separator, and only the final field can absorb it without ambiguity.
@@ -3965,7 +3966,9 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    * changed status, a changed signal, a different pane pid or a different exit
    * time all start a new observation — the pid and the time are what catch a
    * second command in the same pane that happened to exit the same way (the
-   * time alone on tmux 3.8, which blanks a dead pane's pid).
+   * time alone on tmux 3.8, which blanks a dead pane's pid). `#{pane_dead_time}`
+   * is stamped to the second, so two exits with the same status in the same
+   * second read as one there.
    *
    * The same rule decides the read count: a repeat of the stored exit adds one,
    * and anything that starts a new observation starts the count again at 1.
