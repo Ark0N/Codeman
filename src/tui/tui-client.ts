@@ -507,6 +507,54 @@ export function tuiSwitchAttachHook(tty: string): string {
   );
 }
 
+/**
+ * Session hook that gives the window back to the TUI's terminal when you type
+ * there. Indexed so it does not replace a user's own `client-active` hook, and
+ * next to the switch guard's `[90]`.
+ *
+ * Why it is needed: the attach sets `window-size latest`, but Codeman's web
+ * resize (`resizeWindow()` in tmux-manager.ts) runs `resize-window`, which
+ * puts the window back on `manual` at the browser's size. A phone opening the
+ * session mid-attach therefore pinned the window to the phone, and typing or
+ * pasting in the terminal changed nothing until the user detached and
+ * attached again.
+ *
+ * Set per session (`set-hook -t`), never globally: it lives and dies with the
+ * attach's sessions and never reaches a session the TUI did not dress.
+ */
+export const TUI_FOLLOW_TYPING_HOOK = 'client-active[91]';
+
+/**
+ * `set-hook` command for `TUI_FOLLOW_TYPING_HOOK`. tmux runs `client-active`
+ * when a client becomes the latest one on its session, which includes typing
+ * or pasting after another client did (measured on tmux 3.8). Only this TUI's
+ * client (`client_tty`) puts `latest` back; a browser tab's client is left to
+ * Codeman's own arbitration (`Session.resize()`).
+ *
+ * ⚠️ `set-window-option` takes no `-t` here on purpose. tmux parses a hook's
+ * command when the hook is set, and an unquoted `#{session_name}` there
+ * starts a comment (measured: "-t expects an argument"). Without `-t` the
+ * command targets the window of the client that fired the hook, which is the
+ * one it is meant for.
+ */
+export function tuiFollowTypingHook(tty: string): string {
+  return `if-shell -F "#{==:#{client_tty},${tty}}" "set-window-option window-size latest"`;
+}
+
+/**
+ * The tty a `client-active[91]` hook line from `show-hooks -t` was set for,
+ * or null when the line is not one of ours. The closed form `,<tty>}` is
+ * matched, so `/dev/pts/4` is not read out of a hook for `/dev/pts/41`.
+ */
+export function tuiFollowTypingHookTty(line: string): string | null {
+  const text = line.trim();
+  if (!text.startsWith(`${TUI_FOLLOW_TYPING_HOOK} `)) return null;
+  if (!text.includes('set-window-option window-size latest')) return null;
+  const match = /#\{==:#\{client_tty\},(\/dev\/[^}]+)\}/.exec(text);
+  const tty = match?.[1] ?? '';
+  return isTuiClientTty(tty) ? tty : null;
+}
+
 const LEGACY_TUI_SWITCH = /^switch-client -t (\S+?)(?: \\; set-window-option -t \1 window-size latest)?$/;
 
 /**
@@ -1172,6 +1220,57 @@ export class TuiClient {
     }
   }
 
+  /**
+   * Install `TUI_FOLLOW_TYPING_HOOK` on one session for this terminal. Best
+   * effort, like the rest of the attach dressing: false leaves the attach as it
+   * was before the hook existed (the window follows the terminal until the web
+   * UI resizes it).
+   *
+   * A hook at that index that is not ours is the user's and is left alone. One
+   * of ours for another tty is replaced: it belongs to a TUI that was killed
+   * before its restore (a stale tty), or to a second TUI on the same session,
+   * and the newest attach is the one in front of the user.
+   */
+  async armFollowTyping(muxName: string, clientTty: string): Promise<boolean> {
+    if (!MUX_NAME_PATTERN.test(muxName) || !isTuiClientTty(clientTty)) return false;
+    try {
+      const current = await this.readFollowTypingHook(muxName);
+      if (current !== null && tuiFollowTypingHookTty(current) === null) return false;
+      await this.exec('tmux', [
+        '-L',
+        this.socket,
+        'set-hook',
+        '-t',
+        muxName,
+        TUI_FOLLOW_TYPING_HOOK,
+        tuiFollowTypingHook(clientTty),
+      ]);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Undo `armFollowTyping`, but only while the hook still names this tty: a
+   * second TUI that attached later owns it now.
+   */
+  async disarmFollowTyping(muxName: string, clientTty: string): Promise<void> {
+    if (!MUX_NAME_PATTERN.test(muxName) || !isTuiClientTty(clientTty)) return;
+    try {
+      const current = await this.readFollowTypingHook(muxName);
+      if (current === null || tuiFollowTypingHookTty(current) !== clientTty) return;
+      await this.exec('tmux', ['-L', this.socket, 'set-hook', '-u', '-t', muxName, TUI_FOLLOW_TYPING_HOOK]);
+    } catch {
+      /* the session may be gone (the user exited the agent from inside the attach) */
+    }
+  }
+
+  /** The session's own `client-active[91]` line, or null when nothing is set there. */
+  private async readFollowTypingHook(muxName: string): Promise<string | null> {
+    const { stdout } = await this.exec('tmux', ['-L', this.socket, 'show-hooks', '-t', muxName]);
+    return stdout.split('\n').find((line) => line.startsWith(`${TUI_FOLLOW_TYPING_HOOK} `)) ?? null;
+  }
   /**
    * Give back a switch key, but only while it is still one of ours.
    *

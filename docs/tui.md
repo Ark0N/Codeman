@@ -216,6 +216,16 @@ exactly as it was on detach, along with each window's size. Every session the st
 can switch to is dressed and sized the same way, so switching is instant and lands
 in a pane that already fills your terminal.
 
+The window follows whoever used it last, as plain tmux does. If a browser tab (a
+phone, say) opens or resizes the session while you are attached, Codeman sizes the
+window to that tab, and your terminal shows a smaller pane. Type, paste or resize
+your terminal and the window fills it again. The TUI does this with a
+`client-active[91]` hook on each session it dressed, which only acts for this
+terminal's tmux client, and it removes the hooks on detach. Typing in the browser
+tab is left to Codeman's own sizing rules. tmux older than 3.3 has no
+`client-active` hook, so there the pane stays at the browser's size until you
+detach and attach again.
+
 Detaching leaves the agent running; typing `exit` or pressing `Ctrl+D` would end it,
 which is the difference the bar exists to make obvious. If an agent does exit, its
 pane stays as a corpse: the TUI refuses to attach to a dead pane and offers `r` to

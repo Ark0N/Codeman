@@ -638,6 +638,7 @@ export async function beginAttachHandoff(
   const banner = bannerFor(muxName, label);
   const dressed: Array<{ muxName: string; options: TuiSessionOptions }> = [];
   const resized: Array<{ muxName: string; sizing: TuiWindowSizing }> = [];
+  const followTyping: string[] = [];
   const targets = new Map<string, string>([[muxName, label]]);
   for (const tab of tabs.slice(0, 9)) {
     if (tab.muxName && !targets.has(tab.muxName)) targets.set(tab.muxName, tab.label);
@@ -659,6 +660,15 @@ export async function beginAttachHandoff(
     // let the session we are actually opening follow the terminal live.
     if (cols && rows && rows > 1) await client.presizeWindow(target, cols, rows - 1);
     if (target === muxName) await client.followAttachingClient(target);
+    // ⚠️ `latest` does not hold for the whole attach. A browser that opens or
+    // resizes this session mid-attach goes through Codeman's `resize-window`,
+    // which puts the window back on `manual` at the BROWSER's size: a phone
+    // opening it left the terminal showing a phone-sized pane, and typing or
+    // pasting here changed nothing until a detach and a fresh attach. The hook
+    // puts `latest` back when THIS terminal is used again, the way plain tmux
+    // follows whoever typed last. Needs the tty for its guard, like the switch
+    // keys, so without one the attach keeps the old behaviour.
+    if (guarded && (await client.armFollowTyping(target, tty as string))) followTyping.push(target);
   }
   // ⚠️ Armed LAST, as the final tmux call before the caller's `spawnSync`. The
   // hook is one-shot for this tty, so a TUI killed between arming and attaching
@@ -676,6 +686,9 @@ export async function beginAttachHandoff(
       if (tty && isTuiClientTty(tty)) await client.disarmTuiSwitchGuard(tty);
       if (oneKey) await client.unbindDetachKey(ONE_KEY_DETACH, 'root');
       if (claimed && alias) await client.unbindDetachKey(alias);
+      // The hooks before the size: a hook left armed would put `latest` back
+      // the next time anything fired it, after the browser re-pinned the window.
+      for (const target of followTyping) await client.disarmFollowTyping(target, tty as string);
       // Options first, then the size: dropping the status bar gives its row
       // back to the pane, and the resize is what re-pins the browser's
       // authority over the window.
