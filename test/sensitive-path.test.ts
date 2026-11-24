@@ -19,6 +19,7 @@
 import { homedir } from 'node:os';
 import { describe, expect, it } from 'vitest';
 import { isSensitivePath } from '../src/web/sensitive-path.js';
+import { initTrustedProxySecret, resetTrustedProxySecretForTests } from '../src/config/trusted-proxy.js';
 
 const HOME = '/home/dev';
 const dotenvPaths: Array<[string, string]> = [
@@ -80,6 +81,7 @@ describe('isSensitivePath', () => {
       ['codeman hook secret', `${HOME}/.codeman/hook-secret`],
       ['codeman user table', `${HOME}/.codeman/users.json`],
       ['codeman hook secret on a named instance', `${HOME}/.codeman-beta/hook-secret`],
+      ['codeman trusted-proxy secret (documented name)', `${HOME}/.codeman/proxy-secret`],
       // state.json persists SessionState.envOverrides, and the env allowlist
       // admits key-shaped names (GEMINI_API_KEY, CLAUDE_CODE_*), so it can hold
       // a live credential. Named once .json became previewable from outside the
@@ -234,6 +236,31 @@ describe('isSensitivePath', () => {
       ['a .claude.json under some OTHER home', `${HOME}/.claude.json`],
     ])('keeps %s servable', (_label, path) => {
       expect(isSensitivePath(path)).toBe(false);
+    });
+  });
+
+  describe('the configured trusted-proxy secret file', () => {
+    it('blocks CODEMAN_TRUSTED_PROXY_SECRET_FILE whatever its name, and only while configured', () => {
+      const prev = process.env.CODEMAN_TRUSTED_PROXY_SECRET_FILE;
+      const file = '/srv/secrets/codeman-sso.key';
+      try {
+        delete process.env.CODEMAN_TRUSTED_PROXY_SECRET_FILE;
+        resetTrustedProxySecretForTests();
+        expect(isSensitivePath(file)).toBe(false);
+        process.env.CODEMAN_TRUSTED_PROXY_SECRET_FILE = file;
+        expect(isSensitivePath(file)).toBe(true);
+        expect(isSensitivePath('/srv/secrets/other.txt')).toBe(false);
+        // Once the secret is read, the variable is gone from process.env (so sessions don't
+        // inherit it); the path stays blocked through the trusted-proxy module.
+        initTrustedProxySecret();
+        expect(process.env.CODEMAN_TRUSTED_PROXY_SECRET_FILE).toBeUndefined();
+        expect(isSensitivePath(file)).toBe(true);
+        expect(isSensitivePath('/srv/secrets/other.txt')).toBe(false);
+      } finally {
+        resetTrustedProxySecretForTests();
+        if (prev === undefined) delete process.env.CODEMAN_TRUSTED_PROXY_SECRET_FILE;
+        else process.env.CODEMAN_TRUSTED_PROXY_SECRET_FILE = prev;
+      }
     });
   });
 });

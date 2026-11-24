@@ -10,6 +10,7 @@
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { posix } from 'node:path';
 import { StaleExpirationMap } from '../../utils/index.js';
 import type { AuthSessionRecord } from '../ports/auth-port.js';
 import { isAllowedRequestHost, isAllowedRequestOrigin, type HostPolicy } from '../network-auth-policy.js';
@@ -22,9 +23,25 @@ import {
 } from '../../config/auth-config.js';
 import { getHookSecret, HOOK_SECRET_HEADER } from '../../config/hook-secret.js';
 import { isMultiUserMode } from '../../config/multiuser.js';
-import { findUser, setPassword, touchLastLogin, verifyPassword } from '../../user-store.js';
+import {
+  getTrustedProxyConfig,
+  initTrustedProxySecret,
+  resolveTrustedProxyUserHeader,
+  takeTrustedProxyHeaders,
+  type PresentedProxyHeaders,
+  type TrustedProxyConfig,
+} from '../../config/trusted-proxy.js';
+import {
+  findUser,
+  isValidUsername,
+  normalizeUsername,
+  setPassword,
+  touchLastLogin,
+  verifyPassword,
+} from '../../user-store.js';
 import { webviewCapabilities } from '../../webview-capabilities.js';
-import { capabilityFromHtmlViewPath, htmlViewCapabilities } from '../../html-view-capabilities.js';
+import { capabilityFromHtmlViewPath, HTML_VIEW_PREFIX, htmlViewCapabilities } from '../../html-view-capabilities.js';
+import { WEBVIEW_PROXY_PREFIX } from '../../config/webview-limits.js';
 import {
   capabilityFromProxyPath,
   capabilityFromReferer,
@@ -56,6 +73,8 @@ interface AuthState {
   userFailures: StaleExpirationMap<string, number> | null;
   /** Per-(username, client IP) Basic-auth failure bucket (multi-user only). */
   userIpFailures: StaleExpirationMap<string, number> | null;
+  /** Wrong trusted-proxy secret presentations, per client IP (multi-user + proxy secret only). */
+  proxySecretFailures: StaleExpirationMap<string, number> | null;
 }
 
 /** Rate-limit response for a client that exceeded the failure cap. */
@@ -112,9 +131,7 @@ function checkHookSecretBypass(
   hookSecretFailures: StaleExpirationMap<string, number>
 ): 'bypass' | 'rejected' | 'continue' {
   if ((req.url === '/api/hook-event' || req.url === '/api/status-telemetry') && req.method === 'POST') {
-    const ip = req.ip;
-    const isLoopback = ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
-    if (isLoopback) {
+    if (isLoopbackIp(req.ip)) {
       const presented = Buffer.from(req.headers[HOOK_SECRET_HEADER.toLowerCase()]?.toString() ?? '');
       const expected = Buffer.from(getHookSecret());
       if (presented.length === expected.length && timingSafeEqual(presented, expected)) {
@@ -133,6 +150,111 @@ function checkHookSecretBypass(
     // Non-localhost hook requests fall through to normal auth
   }
   return 'continue';
+}
+
+/** Whether a socket address is loopback. The one test both secret-gated paths (hook, proxy) use. */
+function isLoopbackIp(ip: string): boolean {
+  return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+}
+
+/**
+ * The trusted-proxy headers each request presented, keyed by request. Filled by the first
+ * auth hook (`registerTrustedProxyHeaderStrip`), which also deletes the headers from the
+ * request; read by `checkTrustedProxyIdentity`. A WeakMap, so nothing outlives the request.
+ */
+const presentedProxyHeaders = new WeakMap<FastifyRequest, PresentedProxyHeaders>();
+
+/** Minimum interval between `touchLastLogin` writes for proxy sign-ins, per user. */
+const PROXY_LAST_LOGIN_INTERVAL_MS = 15 * 60 * 1000;
+
+/**
+ * Take the trusted-proxy headers off EVERY request before any other auth logic, route or
+ * exemption (web-tab relay, HTML view, QR) can see them, in every auth mode. Registered
+ * first in `registerAuthMiddleware`, i.e. right after the Host guard.
+ */
+function registerTrustedProxyHeaderStrip(app: FastifyInstance): void {
+  const userHeader = resolveTrustedProxyUserHeader();
+  app.addHook('onRequest', (req, _reply, done) => {
+    presentedProxyHeaders.set(req, takeTrustedProxyHeaders(req.headers, userHeader));
+    done();
+  });
+}
+
+/**
+ * Trusted reverse-proxy identity (see src/config/trusted-proxy.ts). Returns:
+ *  - 'continue'      : no proxy secret header; fall through to cookie / Basic auth
+ *  - 'authenticated' : req.authUser is set from the proxy's username header
+ *  - 'rejected'      : a reply was already sent
+ *
+ * Fails CLOSED once the secret header is present at all, even empty: a wrong secret or a
+ * non-loopback source (401), or a missing username, one the user store's rule rejects,
+ * or one with no enabled account (403, no challenge) is refused outright and never falls
+ * through to the cookie or Basic paths, so a misconfigured proxy cannot silently degrade
+ * into some other identity. A username header WITHOUT the secret header is ignored
+ * (normal auth applies).
+ *
+ * The username is matched exactly, by the store's own rule (`normalizeUsername`, then
+ * `isValidUsername`): no cutting at `@`, no character replacement. A duplicated header
+ * arrives joined ("alice, bob") and fails that rule.
+ *
+ * The secret is compared BEFORE the failure bucket is consulted, like the hook secret:
+ * a correct secret always passes, so local junk requests (which share 127.0.0.1 with
+ * the proxy) cannot lock sign-in out. Only failures are counted and throttled, in their
+ * own per-IP bucket, so a broken proxy cannot lock out the Basic or hook paths either.
+ */
+async function checkTrustedProxyIdentity(
+  req: FastifyRequest,
+  reply: FastifyReply,
+  config: TrustedProxyConfig,
+  proxySecretFailures: StaleExpirationMap<string, number>,
+  lastLoginTouched: Map<string, number>
+): Promise<'continue' | 'authenticated' | 'rejected'> {
+  const presented = presentedProxyHeaders.get(req);
+  if (!presented?.secretPresent) return 'continue';
+
+  const clientIp = req.ip;
+  const given = Buffer.from(presented.secret);
+  const expected = Buffer.from(config.secret);
+  const secretOk = isLoopbackIp(clientIp) && given.length === expected.length && timingSafeEqual(given, expected);
+  if (!secretOk) {
+    const failures = proxySecretFailures.get(clientIp) ?? 0;
+    if (failures >= AUTH_FAILURE_MAX) {
+      sendAuthRateLimit(reply, proxySecretFailures, clientIp);
+      return 'rejected';
+    }
+    proxySecretFailures.set(clientIp, failures + 1);
+    reply.code(401).send('Unauthorized: trusted proxy secret rejected');
+    return 'rejected';
+  }
+
+  // The proxy vouched for the request, so none of the refusals below is a failed guess:
+  // 403, no challenge, no bucket.
+  const username = normalizeUsername(presented.user);
+  if (!username) {
+    reply.code(403).send('Forbidden: trusted proxy sent no username');
+    return 'rejected';
+  }
+  let user: Awaited<ReturnType<typeof findUser>>;
+  try {
+    user = isValidUsername(username) ? await findUser(username) : undefined;
+  } catch {
+    reply.code(503).send('Service Unavailable: user store unreadable');
+    return 'rejected';
+  }
+  if (!user || user.disabled) {
+    reply.code(403).send('Forbidden: no enabled Codeman account for this user');
+    return 'rejected';
+  }
+  // No mustChangePassword lockbox: the person did not sign in with a Codeman password,
+  // so a pending one-time password has nothing to do with this request.
+  req.authUser = { username: user.username, role: user.role, viaTrustedProxy: true };
+  // Keep "last login" meaningful for proxy sign-ins, without a store write per request.
+  const now = Date.now();
+  if (now - (lastLoginTouched.get(user.username) ?? 0) >= PROXY_LAST_LOGIN_INTERVAL_MS) {
+    lastLoginTouched.set(user.username, now);
+    void touchLastLogin(user.username).catch(() => {});
+  }
+  return 'authenticated';
 }
 
 /**
@@ -269,6 +391,64 @@ export function isLostWebviewRootFrame(req: FastifyRequest): boolean {
   return !carriesAuthCredentials(req.headers, AUTH_COOKIE_NAME);
 }
 
+/**
+ * Which capability prefix a request falls under, judged the way a reverse proxy's path
+ * matcher does: query dropped, percent-decoded once, dot segments and doubled slashes
+ * resolved, case-insensitive. A proxy forwards everything it matches this way WITHOUT its
+ * sign-in, so the refusal below must recognise every such spelling, not only the literal
+ * one Codeman's own routes use. Any token shape counts: a malformed token is still a
+ * request the proxy let through.
+ */
+export function capabilityPrefixOf(rawUrl: string): 'webview' | 'html-view' | null {
+  let path = rawUrl.split('?')[0];
+  try {
+    path = decodeURIComponent(path);
+  } catch {
+    // Malformed escape: judge the raw path.
+  }
+  // Fold U+0130 (capital I with dot above) to a plain "i" first: Go's lowercasing, which
+  // Caddy's matcher uses, does that, while toLowerCase() yields "i" + U+0307 and would miss
+  // the prefix. Written as an escape so Unicode normalisation can't split it.
+  path = posix
+    .normalize(path)
+    .replace(/\u0130/g, 'i')
+    .toLowerCase();
+  if (path.startsWith(`${WEBVIEW_PROXY_PREFIX}/`)) return 'webview';
+  if (path.startsWith(`${HTML_VIEW_PREFIX}/`)) return 'html-view';
+  return null;
+}
+
+/**
+ * A request under a capability prefix (`/webview/...`, `/html-view/...`, judged by
+ * `capabilityPrefixOf`) that the capability exemptions above did NOT let through: no live
+ * capability, whatever the token looks like (or a method the exemption never covers).
+ * Refused here with what the route answers an authenticated caller for an unknown
+ * capability (403 for a web tab, 404 for an HTML view), WITHOUT a Basic challenge and
+ * WITHOUT counting a failure.
+ *
+ * Only used when trusted-proxy sign-in is configured. There, these paths reach Codeman
+ * WITHOUT the proxy's own sign-in (their sandboxed frames carry no credentials, so the
+ * proxy has to let them through; see the trusted-proxy docs). Falling through to the
+ * credential checks would expose the password check and a `WWW-Authenticate` prompt to
+ * anyone who can reach the proxy, and let anonymous requests fill the per-IP failure
+ * bucket, which behind the proxy is always 127.0.0.1, locking out Basic sign-in from
+ * loopback. Without a proxy, these paths keep the normal 401 challenge.
+ *
+ * @returns true when the reply was sent.
+ */
+function serveRefusedCapabilityPath(req: FastifyRequest, reply: FastifyReply): boolean {
+  const kind = capabilityPrefixOf(req.url ?? '');
+  if (kind === 'webview') {
+    reply.code(403).type('text/plain').send('Forbidden: unknown or expired webview capability');
+    return true;
+  }
+  if (kind === 'html-view') {
+    reply.code(404).header('Content-Type', 'text/plain; charset=utf-8').send('Not found');
+    return true;
+  }
+  return false;
+}
+
 /** Send the static recovery page (lostWebviewFramePage) with its own CSP, uncached. */
 export function sendLostWebviewFramePage(reply: FastifyReply): FastifyReply {
   reply.header('content-security-policy', LOST_FRAME_PAGE_CSP);
@@ -323,11 +503,17 @@ export function registerAuthMiddleware(app: FastifyInstance, https: boolean, bas
     hookSecretFailures: null,
     userFailures: null,
     userIpFailures: null,
+    proxySecretFailures: null,
   };
 
   // Always declare req.authUser so downstream reads are safe (single-user leaves it
   // undefined; the ownership helpers then default to a synthetic admin).
   if (!app.hasRequestDecorator('authUser')) app.decorateRequest('authUser', undefined);
+
+  // First, in every auth mode: take the trusted-proxy headers off the request, so no
+  // later hook, exemption or route (e.g. the web-tab relay) can forward the secret.
+  registerTrustedProxyHeaderStrip(app);
+  initTrustedProxySecret();
 
   const multiUser = isMultiUserMode();
   const authPassword = process.env.CODEMAN_PASSWORD;
@@ -387,6 +573,15 @@ export function registerAuthMiddleware(app: FastifyInstance, https: boolean, bas
       ttlMs: AUTH_FAILURE_WINDOW_MS,
       refreshOnGet: false,
     });
+    // Trusted reverse-proxy identity (opt-in). Its own failure bucket, like the hook
+    // secret's, so wrong proxy secrets never count against the Basic login path.
+    const trustedProxy = getTrustedProxyConfig(true);
+    if (trustedProxy) {
+      state.proxySecretFailures = new StaleExpirationMap<string, number>({
+        ttlMs: AUTH_FAILURE_WINDOW_MS,
+        refreshOnGet: false,
+      });
+    }
     registerMultiUserAuthHook(
       app,
       https,
@@ -395,7 +590,10 @@ export function registerAuthMiddleware(app: FastifyInstance, https: boolean, bas
       hookSecretFailures,
       state.userFailures,
       state.userIpFailures,
-      basePath
+      basePath,
+      trustedProxy && state.proxySecretFailures
+        ? { config: trustedProxy, failures: state.proxySecretFailures, lastLoginTouched: new Map<string, number>() }
+        : null
     );
     return state;
   }
@@ -517,7 +715,12 @@ function registerMultiUserAuthHook(
   hookSecretFailures: StaleExpirationMap<string, number>,
   userFailures: StaleExpirationMap<string, number>,
   userIpFailures: StaleExpirationMap<string, number>,
-  basePath = ''
+  basePath = '',
+  trustedProxy: {
+    config: TrustedProxyConfig;
+    failures: StaleExpirationMap<string, number>;
+    lastLoginTouched: Map<string, number>;
+  } | null = null
 ): void {
   const setSessionCookie = (reply: FastifyReply, token: string) =>
     reply.setCookie(AUTH_COOKIE_NAME, token, {
@@ -642,6 +845,25 @@ function registerMultiUserAuthHook(
     if (hasValidHtmlViewCapability(req)) return;
     // A web-tab frame that lost its prefix: hand it back to its tab, no credentials involved.
     if (serveLostWebviewFrame(req, reply)) return;
+    // Behind an authenticating proxy, capability paths reach Codeman without the proxy's
+    // sign-in: refuse a non-exempt one with the route's own answer, no challenge, no count.
+    if (trustedProxy && serveRefusedCapabilityPath(req, reply)) return;
+
+    // 0. Trusted reverse-proxy identity, checked BEFORE the cookie: when the proxy
+    // vouches for a person on this request, that is authoritative, and a stale cookie
+    // from an earlier Basic login in the same browser must not override it. No cookie
+    // is minted: the proxy presents the identity on every new request and WebSocket
+    // upgrade. A stream that is already open is not re-checked.
+    if (trustedProxy) {
+      const proxied = await checkTrustedProxyIdentity(
+        req,
+        reply,
+        trustedProxy.config,
+        trustedProxy.failures,
+        trustedProxy.lastLoginTouched
+      );
+      if (proxied !== 'continue') return;
+    }
 
     const clientIp = req.ip;
 

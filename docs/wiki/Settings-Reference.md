@@ -299,6 +299,9 @@ Some things are configured before the server starts, not in the UI:
 | `CODEMAN_ALLOWED_HOSTS`             | Extra Host and Origin allowlist entries for a reverse proxy.            |
 | `CODEMAN_INSTANCE`                  | Scopes the data directory and tmux socket together. Required for a second instance. |
 | `CODEMAN_MULTIUSER`                 | Enables multi-user mode.                                                |
+| `CODEMAN_TRUSTED_PROXY_SECRET_FILE` | Experimental, multi-user only. A file (mode 600) holding the secret that lets an authenticating reverse proxy on the same host sign people in (single sign-on). A setup that cannot be used stops the start. See [Multi-User Mode](Multi-User-Mode#single-sign-on-through-a-reverse-proxy). |
+| `CODEMAN_TRUSTED_PROXY_SECRET`      | The same secret given directly. Both variables are read once at startup and then removed from the environment, so sessions don't inherit them; the file variant is preferred. |
+| `CODEMAN_TRUSTED_PROXY_USER_HEADER` | Header that proxy puts the Codeman username in. `X-Codeman-User` by default; only an `X-…` header or `Remote-User` is accepted. |
 | `CODEMAN_GESTURE`                   | Makes gesture control available to be enabled.                          |
 | `CODEMAN_DOCKER_BRIDGE_HOOKS`       | Lets in-container hooks reach the host on a loopback bind.              |
 | `CODEMAN_FILE_PICKER_ROOTS`         | Extra roots for the path picker.                                        |

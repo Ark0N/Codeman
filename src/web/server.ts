@@ -216,6 +216,7 @@ import {
   sendLostWebviewFramePage,
 } from './middleware/auth.js';
 import { isMultiUserMode } from '../config/multiuser.js';
+import { getTrustedProxyConfig, initTrustedProxySecret, trustedProxyConfigError } from '../config/trusted-proxy.js';
 import { bootstrapInitialAdmin, findUser, hasUsers, resolveClaudeModeForUsername } from '../user-store.js';
 import { installRouteErrorHandler } from './route-error-handler.js';
 import { installEmptyApiPostParser } from './request-body-parser.js';
@@ -586,6 +587,7 @@ export class WebServer extends EventEmitter {
   private hookSecretFailures: StaleExpirationMap<string, number> | null = null;
   private userFailures: StaleExpirationMap<string, number> | null = null;
   private userIpFailures: StaleExpirationMap<string, number> | null = null;
+  private proxySecretFailures: StaleExpirationMap<string, number> | null = null;
   private pushStore: PushSubscriptionStore = new PushSubscriptionStore();
   /** ntfy / Slack / Discord / generic webhook for the push events; config in webhook.json (0600). */
   private webhookNotifier = new WebhookNotifier(() => readWebhookConfig(getDataDir()), webviewFetch);
@@ -1119,6 +1121,7 @@ export class WebServer extends EventEmitter {
       this.hookSecretFailures = authState.hookSecretFailures;
       this.userFailures = authState.userFailures;
       this.userIpFailures = authState.userIpFailures;
+      this.proxySecretFailures = authState.proxySecretFailures;
     }
 
     // Bodyless API POSTs may arrive as empty chunked streams through a proxy.
@@ -3470,6 +3473,14 @@ export class WebServer extends EventEmitter {
   }
 
   async start(): Promise<void> {
+    // Trusted reverse-proxy sign-in (opt-in): read the secret now, which also removes it
+    // and the file path from process.env, and refuse to start on a configured setup that
+    // can't be used, so a typo never falls back silently to password sign-in. Not skipped
+    // in test mode: the refusal itself is under test.
+    initTrustedProxySecret();
+    const proxyConfigError = trustedProxyConfigError(isMultiUserMode());
+    if (proxyConfigError) throw new Error(proxyConfigError);
+
     // Multi-user first boot: create the initial admin from CODEMAN_USERNAME/PASSWORD
     // if there are no users yet, else refuse to start (there would be no way in).
     if (isMultiUserMode() && !this.testMode) {
@@ -3659,6 +3670,17 @@ export class WebServer extends EventEmitter {
         console.warn(palette.warn('     • keep this bind and accept the risk: --allow-unauthenticated-network'));
         console.warn(palette.muted('   See docs/security-architecture.md for details.\n'));
       }
+    }
+
+    // Trusted reverse-proxy sign-in (opt-in): say when it is on. An unusable setup never
+    // gets here (refused at the top of start()).
+    const proxyConfig = getTrustedProxyConfig(isMultiUserMode());
+    if (proxyConfig) {
+      console.log(
+        palette.muted(
+          `Trusted-proxy sign-in enabled (experimental): loopback requests with the proxy secret sign in as the account named in ${proxyConfig.userHeader}.`
+        )
+      );
     }
 
     // Set API URL for child processes (MCP server, spawned sessions)
@@ -4885,6 +4907,10 @@ export class WebServer extends EventEmitter {
     if (this.userIpFailures) {
       this.userIpFailures.dispose();
       this.userIpFailures = null;
+    }
+    if (this.proxySecretFailures) {
+      this.proxySecretFailures.dispose();
+      this.proxySecretFailures = null;
     }
     this.activePlanOrchestrators.clear();
     this.cleaningUp.clear();

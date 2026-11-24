@@ -107,7 +107,12 @@ similar). The sandboxed frame is opaque-origin, so its stylesheet, script, and A
 requests do not carry the proxy's authentication cookie; the proxy redirects them to
 the login provider, where CORS/CSP kills them, and the embedded app renders
 unstyled or broken while the Codeman page around it works fine. Trusted mode
-(**Open sandboxed** off) keeps a real origin and the cookie, so it works. The
+(**Open sandboxed** off) keeps a real origin and the cookie, so it works. ⚠️ In trusted
+mode the relay forwards the browser's cookies to the dashboard, all but
+`codeman_session`, and that includes the proxy's own session cookie unless the proxy
+removes it from the requests it forwards to Codeman (the Caddy example in
+[`docs/wiki/Multi-User-Mode.md`](wiki/Multi-User-Mode.md#single-sign-on-through-a-reverse-proxy)
+does). The
 **Test** button cannot catch this: it checks that the Codeman *server* can reach the
 upstream, not that a sandboxed *browser* frame can load assets through the public
 authentication layer.

@@ -590,6 +590,144 @@ Full feature guide: [`docker-cases.md`](docker-cases.md).
 - **Clone Repo does not lend the server's git sign-in to non-admins.** A clone writes only inside the caller's own case space, so it is not admin-gated, but the server account's git credential helpers (the Docker image's opt-in `gh`/`az` helpers, or any `gh auth setup-git`) are shared by every user. A non-admin's clone and preflight therefore run with `git -c credential.helper=`, which empties the helper list including the URL-scoped entries (`cloneWithoutCredentialHelpers` in `case-routes.ts`, argv pinned in `test/git-clone.test.ts`). This closes the Clone Repo path only: the account's SSH keys still apply to an `ssh://` URL, and a non-admin's agent sessions run as the same account, consistent with the first bullet above. Docker cases are a second route to the same sign-in: with `CODEMAN_AGENT_IMAGE_INSTALL_GH`/`_AZ` on, a non-admin's Docker case with credential seeding on (the default) receives a copy of the server account's `gh`/`az` sign-in, exactly as it receives the Claude and Codex credentials.
 - **Admin actions are audited** append‑only to `~/.codeman/admin-audit.jsonl` (acting admin, action, target, IP). Passwords set by an admin create/reset are one‑time (returned once, force change). Under Basic auth, `logout` only truly ends QR‑issued sessions — to lock someone out, disable the account or reset the password (a proper login form is a deferred Phase 6).
 
+### Trusted reverse‑proxy sign‑in (opt‑in, multi‑user only)
+
+A shared secret lets an authenticating reverse proxy on the same host (oauth2‑proxy behind
+Caddy or nginx, Apache `mod_auth_openidc`, Authelia, …) sign people in through an identity
+provider such as Entra ID, Google or Keycloak, in place of the Basic prompt. Source:
+`src/config/trusted-proxy.ts`, `checkTrustedProxyIdentity` and
+`registerTrustedProxyHeaderStrip` in `middleware/auth.ts`; tests in
+`test/trusted-proxy-auth.test.ts`; a worked Caddy + oauth2‑proxy setup in
+[`docs/wiki/Multi-User-Mode.md`](wiki/Multi-User-Mode.md#single-sign-on-through-a-reverse-proxy).
+
+**Experimental** ([versioning-policy.md](versioning-policy.md)): the three settings, the two
+headers and the `viaTrustedProxy` field of `GET /api/me` may change until they are promoted
+by an explicit decision.
+
+"Trusted proxy" names this sign-in only. It is not forwarded-address trust: Codeman still
+does not read `X-Forwarded-For`, `trustProxy` stays `false`, and `req.ip` stays the socket
+peer (§3).
+
+- **What the proxy sends.** After it has authenticated the person, the proxy adds
+  `X-Codeman-Proxy-Secret: <secret>` and `X-Codeman-User: <codeman username>`. It must
+  delete both headers from the incoming client request first. The username header can be
+  renamed with `CODEMAN_TRUSTED_PROXY_USER_HEADER`, but only to an `X-…` extension header
+  or `Remote-User`, never a reserved one (`X-Forwarded-For/Host/Proto/…`, `X-Real-IP`,
+  `X-Codeman-*`, CSRF/method-override headers; `X-Forwarded-User/Email/Preferred-Username`
+  are allowed): the header is removed from every request, so it must not be one anything
+  else needs. A rejected name stops the start (see below), so it is never removed.
+- **The secret.** At least 32 printable ASCII characters, from
+  `CODEMAN_TRUSTED_PROXY_SECRET_FILE` (preferred: a 0600 file, so only a path is in the
+  environment, like the hook secret's `CODEMAN_HOOK_SECRET_FILE`) or
+  `CODEMAN_TRUSTED_PROXY_SECRET`. It is read once at auth setup, before any session is
+  spawned or restored, and both variables are then deleted from `process.env`, because
+  every session inherits Codeman's environment. That keeps them out of child processes
+  and nothing more: an inline secret stays visible in `/proc/<pid>/environ` for the life
+  of the server. A tmux server
+  that an earlier Codeman started with the variable set keeps its own copy of that
+  environment until it is restarted. A configured setup that cannot be used stops the start
+  with a message that says why, as the first boot without users does: a secret file that
+  is unreadable, empty, or readable by group or others (the mode is not checked on
+  Windows); a short or non-ASCII secret; both
+  variables set; a secret set in single-user mode; a rejected username header name. The
+  length floor matters because a correct secret is never refused, so the limiter only
+  turns a `401` into a `429` and the secret's entropy is what slows a guesser. The configured file (any name) and
+  `~/.codeman*/proxy-secret` are on the `isSensitivePath` blocklist, so downloads and
+  attachments refuse them.
+- **What the secret separates.** Every local process reaches the loopback port, so
+  loopback alone proves nothing; the secret is what a local process lacks. It is not a
+  boundary against code that can read the secret file or Codeman's memory, i.e. anything
+  running as Codeman's OS account, which includes every agent session (the multi‑user
+  threat model at the top of §10a: sessions share that account). Said plainly: any session that
+  runs as Codeman's OS account can read the secret and sign in as anyone, an admin
+  included, over loopback. That is the same class as editing `users.json`, which that
+  account can also do.
+- **When Codeman believes it.** Only when ALL hold: multi‑user mode is on; a valid secret
+  is configured; the request arrives on a **loopback socket** (`req.ip`, which ignores
+  `X‑Forwarded‑For`, §3); and the presented secret matches
+  (`timingSafeEqual` on equal lengths, like the hook secret). The loopback test is one
+  function, `isLoopbackIp`, shared with the hook-secret bypass, so the two secret-gated
+  loopback paths cannot drift apart.
+- **The headers never travel further.** The first auth hook, right after the Host guard
+  and in every auth mode, reads both headers and deletes them from the request, before
+  any exemption (QR, web‑tab and HTML‑view capabilities) or route runs. So the web‑tab
+  relay cannot forward the secret to a dashboard (as a second layer the relay also drops both default names and
+  the configured username header; its WebSocket leg sends only `origin` and `cookie`).
+- **No auto‑provisioning.** The username must name an existing, enabled account, so an
+  admin still decides who has an account. Unknown or disabled → `403`. The value is matched
+  exactly: `normalizeUsername()` (trimmed, lower-cased, as for Basic logins), then the
+  username rule, and nothing else. No domain is cut off and no character replaced, so an
+  email address names no account, and a header that arrives twice (Node joins it as
+  `admin, bob`) is refused, never split. Mapping the IdP's identity onto a Codeman
+  username is the proxy's job.
+- **Fails closed once the secret header is present, even empty.** A wrong or empty secret,
+  a non‑loopback source, or a missing username is refused outright and never falls
+  through to the cookie or Basic paths, so a misconfigured proxy cannot degrade into
+  another identity. A username header WITHOUT the secret header is ignored, and normal
+  auth applies. With a valid secret, a missing username or an unknown or disabled account
+  gets a plain `403` with no `WWW-Authenticate`.
+- **Rate limiting.** The secret is compared first, like the hook secret: a correct secret
+  always passes, so junk requests from other local processes (which share `127.0.0.1`
+  with the proxy) cannot lock sign‑in out. Only failures are counted, per IP, in their
+  own bucket (`AUTH_FAILURE_MAX` per `AUTH_FAILURE_WINDOW_MS`, then `429`), separate from
+  the Basic and hook buckets.
+- **Precedence and lifetime.** Checked before the session cookie (the proxy's identity is
+  authoritative on that request; a stale cookie from an earlier Basic login in the same
+  browser does not override it, and is neither read nor refreshed). No `codeman_session` cookie is minted: the proxy
+  authorizes every new request and WebSocket upgrade. A terminal WebSocket or SSE stream
+  that is already open stays open until it disconnects: neither ending the proxy session
+  nor disabling the account closes it. Disabling the account refuses new authenticated
+  requests and upgrades; it does NOT revoke the account's web‑tab / HTML‑view
+  capabilities, which behind the proxy are reachable without its sign‑in, so to cut
+  someone off also use the Admin Panel **Logout** for them (it revokes both capability
+  stores) or delete the account. A password reset or Logout alone does not
+  cut off a proxy sign-in: it uses no password and holds no cookie, so the next request the
+  proxy vouches for signs the person in again. Proxy sign-ins update the account's
+  last-login time at most every 15 minutes, throttled in memory before the user store is
+  touched.
+- **`mustChangePassword`** does not gate a proxy sign‑in (no Codeman password was used),
+  and `GET /api/me` reports `mustChangePassword: false` plus `viaTrustedProxy: true`, so
+  the browser does not force a password change. The account's Codeman password still
+  works wherever the loopback port is reachable without the proxy (an SSH tunnel, the
+  managed tunnel), and such a request is not covered by the identity provider's MFA.
+  Password sign-in has to stay: Codeman's own clients (`codeman agent`, `mcp`, `notify`,
+  `attach`, `tui`, the skill) sign in with Basic on loopback. For an account used only
+  through the proxy, create it without a password; the generated one-time password can be
+  discarded, and the pending `mustChangePassword` then only shows as a label. A user's own logout / "Revoke all" ends Codeman cookies, not the
+  proxy's session (`/oauth2/sign_out` does that).
+- **Web tabs and rendered HTML files** authenticate by the capability in their URL,
+  because their sandboxed frames send no cookies, not even the proxy's. The proxy must
+  therefore let `/webview/*` and `/html-view/*` through without its own sign‑in (and
+  without adding the secret, and without forwarding `Authorization`); the wiki example
+  does. With trusted‑proxy sign‑in configured, a request under those prefixes that the
+  capability exemptions do not let through, whatever its token looks like, is refused with
+  the route's own answer
+  (`403` web tab, `404` HTML view) BEFORE the credential checks: no Basic challenge, no
+  password check, no failure count (`serveRefusedCapabilityPath`). The prefix is judged
+  the way a proxy's path matcher would (`capabilityPrefixOf`: case‑insensitive,
+  percent‑decoded, dot segments and doubled slashes resolved), since the proxy forwards
+  every such spelling without its sign‑in. Otherwise anonymous
+  requests through the proxy could probe passwords and fill the per‑IP bucket, which
+  behind the proxy is always `127.0.0.1`, locking out Basic sign‑in from loopback.
+  Without a proxy configured these paths keep the normal `401` challenge. One limit
+  follows from the exemption being by prefix: a sandboxed frame's request that lands
+  outside its prefix goes through the proxy's sign-in without a cookie and fails there,
+  so the `Referer` form and the lost-frame recovery page (§10b) are not reachable for
+  sandboxed frames behind the proxy.
+- **The proxy's own session cookie.** A cookie-based proxy's session cookie is a sign-in
+  for the whole site. Codeman does not know its name, and the web-tab relay forwards
+  browser cookies (all but `codeman_session`) to a dashboard opened in trusted mode. The
+  proxy must remove its cookie from every request it forwards to Codeman, on the
+  capability paths and after its own sign-in check; the wiki example does.
+- **Unchanged:** the Host allowlist and Origin guard (set `CODEMAN_ALLOWED_HOSTS` to the
+  proxy's hostname), the hook‑secret loopback bypass (a proxy should still refuse
+  `/api/hook-event`, `/api/status-telemetry` and their `/api/v1/` aliases from outside;
+  local hooks call the loopback port directly), and Basic sign‑in for requests without
+  the secret header. Admin actions through the proxy are audited with IP `127.0.0.1`, as
+  with any reverse proxy.
+- **Not supported:** Docker Compose installs where Codeman runs in a container and the
+  proxy on the host; the proxy then connects from the bridge address, not loopback.
+
 ---
 
 ## 10b. Web tabs (dashboard proxy)
@@ -629,6 +767,8 @@ Opt-in by a click, macOS only, admin-only in multi-user mode on every verb. The 
 | Env / flag | Effect |
 |------------|--------|
 | `CODEMAN_PASSWORD` (+ `CODEMAN_USERNAME`) | Enable HTTP Basic auth |
+| `CODEMAN_TRUSTED_PROXY_SECRET_FILE` / `CODEMAN_TRUSTED_PROXY_SECRET` | Multi‑user only: trust a same‑host authenticating reverse proxy that presents this secret (≥ 32 printable ASCII chars; the file variant is preferred; both variables are removed from the environment once read; a setup that cannot be used stops the start) and a username header. Experimental — see §10a |
+| `CODEMAN_TRUSTED_PROXY_USER_HEADER` | Header the trusted proxy puts the Codeman username in (default `X-Codeman-User`) |
 | `--host` / `CODEMAN_HOST` | Bind host (default `127.0.0.1`) |
 | `CODEMAN_ALLOWED_HOSTS` | Extra `Host`/`Origin` allowlist entries for reverse proxies (comma‑separated; exact host, or leading‑dot `.suffix` for subdomains) — see §3 |
 | `--base-url` / `CODEMAN_BASE_URL` | Sub‑path prefix Codeman is mounted under behind a reverse proxy, e.g. `/codeman` (default `/`); the proxy must forward the prefix unchanged. Independent of `CODEMAN_ALLOWED_HOSTS` |
@@ -650,6 +790,7 @@ Opt-in by a click, macOS only, admin-only in multi-user mode on every verb. The 
 | Bind‑host classification, env‑flag parsing, Host/Origin allowlist (`buildHostPolicy` / `isAllowedRequestHost` / `isAllowedRequestOrigin`) | `src/web/network-auth-policy.ts` |
 | Start‑and‑warn policy | `src/web/server.ts` (`WebServer.start()`) |
 | Auth pipeline, rate limiting, security headers, CORS, Host/Origin guard (`registerHostGuard`) | `src/web/middleware/auth.ts` |
+| Trusted reverse‑proxy sign‑in: secret loading, header names, header stripping | `src/config/trusted-proxy.ts` |
 | File‑path containment (realpath‑before‑check) | `src/web/route-helpers.ts` (`validateSessionFilePath`) |
 | File routes, caps, SVG handling, download blocklist | `src/web/routes/file-routes.ts` |
 | Instance/socket/data‑dir scoping | `src/config/instance.ts` |

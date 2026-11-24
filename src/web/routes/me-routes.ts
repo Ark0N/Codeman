@@ -1,7 +1,7 @@
 /**
  * @fileoverview Self-service identity routes (multi-user + single-user).
  *
- * - GET  /api/me            : who am I ({ username, role, mustChangePassword }).
+ * - GET  /api/me            : who am I ({ username, role, mustChangePassword, viaTrustedProxy }).
  *                             Works in single-user mode too, returning the synthetic
  *                             admin so the frontend has one "am I admin" code path.
  * - POST /api/me/password   : change my own password (verifies the current one,
@@ -35,13 +35,17 @@ export function registerMeRoutes(app: FastifyInstance, ctx: AuthPort): void {
     }
     const user = getAuthUser(req);
     const record = await findUser(user.username);
+    // A trusted-proxy sign-in never used the Codeman password, so a pending one-time
+    // password must not open the forced change-password modal (admin-ui.js).
+    const viaTrustedProxy = !!user.viaTrustedProxy;
     return {
       success: true,
       data: {
         username: user.username,
         role: user.role,
-        mustChangePassword: !!record?.mustChangePassword,
+        mustChangePassword: viaTrustedProxy ? false : !!record?.mustChangePassword,
         multiUser: true,
+        viaTrustedProxy,
       },
     };
   });
