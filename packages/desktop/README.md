@@ -34,7 +34,7 @@ cannot do.
 | **Start Codeman** | On the This Mac tab, and when `http://127.0.0.1:<port>` or `http://localhost:<port>` answers nothing, one click runs `codeman web -d` (or `~/.codeman/app`) with your login shell's environment, so the server gets your real PATH (Homebrew, nvm) for the agents it spawns. zsh, bash and other POSIX shells run the start themselves; fish, nu, xonsh, tcsh and other shells only report their environment, and the start runs under `/bin/sh` with it. Offered for those two addresses only: `codeman web -d` listens on 127.0.0.1. |
 | **Login** | The app answers the server's HTTP Basic login requests itself, with the login you connected with, so the page keeps working after the server restarts (a restart forgets every session cookie). It answers only for Codeman's own pages under the server's base path: a web tab or a rendered HTML file that asks for a Basic login of its own is left to WebKit and never gets your Codeman password. WebKit keeps no copy of the login, so every request for it gets the current one. Each connect first clears the app's cookies, so connecting to the same server as another user really switches users (local storage, where Codeman keeps its per-device settings, stays; a dashboard in a web tab that keeps its own login in a cookie may ask for it again). A page that still gets a 401 reloads once. If the server refuses the login (the password was changed, say), the app does not keep sending it: it checks it with a single probe, and only if the server refuses that too does the connect screen come back with a notice. That does not take focus from the app you are in: if Codeman is in the background, its Dock icon bounces. |
 | **Dialogs** | Codeman's `confirm()`, `prompt()` and `alert()` (Delete case, Kill all sessions, Update Codeman, discarding unsaved edits, ...) show as native macOS dialogs. wry implements none of them, and without them WKWebView answers Cancel without showing anything. Each dialog's first line names the page it comes from, and says so when that is an embedded frame (a web tab, a rendered HTML preview), so a frame cannot pass its text off as Codeman's. |
-| **Full screen** | `⌃⌘F` or the green button. The last state is restored at launch; *Always Open in Full Screen* forces it. Leaving full screen returns to the saved window size and position. On a MacBook with a camera housing (the notch), macOS's full screen leaves a black bar across the top of the display. **View > Full Screen Uses the Area Beside the Camera** (off until you turn it on, and only in the menu on a Mac with such a display) makes full screen cover the whole display instead: Codeman's header moves up beside the camera, its tabs to the left and its toolbar to the right, and the terminal gains the height of the bar. Every way into full screen then takes it on that display (the green button, the menu item, `⌃⌘F`, the launch into full screen), and turning the option on or off while the window is in full screen changes it over at once. On a display without a housing nothing changes. See Decisions for what it trades, and Known limits. |
+| **Full screen** | `⌃⌘F` or the green button. The last state is restored at launch; *Always Open in Full Screen* forces it. Leaving full screen returns to the saved window size and position. On a MacBook with a camera housing (the notch), macOS's full screen leaves a black bar across the top of the display. **Full Screen Uses the Area Beside the Camera** (on unless you turn it off; in the View menu and as a switch in Codeman's App Settings under Appearance > Mac App, both only on a Mac with such a display) makes full screen cover the whole display instead: Codeman's header moves up beside the camera, its tabs on both sides of it and its toolbar at the right, and the terminal gains the height of the bar. Every way into full screen then takes it on that display (the green button, the menu item, `⌃⌘F`, the launch into full screen), and turning the option on or off while the window is in full screen changes it over at once. On a display without a housing nothing changes. See Decisions for what it trades, and Known limits. |
 | **Menus** | A real Edit menu (without one, `⌘C`/`⌘V` do nothing in a WKWebView), Reload `⌘R`, Switch Server `⇧⌘O`, Developer Tools `⌥⌘I`. The page sees every key first, so Codeman's own shortcuts keep working. If the main window ends up showing a raw file instead of Codeman, `⌘R` takes it back to Codeman. |
 | **Pop-outs** | Implements Codeman's existing native-wrapper bridge, `window.CodemanHost` (`openInHostWindow` in `src/web/public/app.js`), so popping out a session or a file preview opens a real app window, and the pop-out icon is on by default. Session and rendered-HTML pop-outs come only from Codeman's own pop-out button. A `window.open` from page script opens only Codeman's file and download windows, without taking keyboard focus, at most 3 at once and then 1 per second. Only Codeman's own pop-out pages become app windows (see Decisions); when the app refuses one, Codeman shows a toast. Each pop-out opens a step down and to the right of the window in use, never exactly on top of another one. A web tab's *Open in new tab* opens the dashboard in your default browser, as it would from a browser tab. |
 | **Links** | On Codeman's own pages (the dashboard and session windows), a link to another site opens in your default browser, also on `⌘`-click or a middle click. Pages can send at most 3 links to the browser at once, then 1 per second. Inside a rendered HTML preview or a web tab, a plain link to another site does nothing, while one that asks for a new window (`target="_blank"`, `window.open`) opens in your default browser within the same budget (see Known limits). |
@@ -301,21 +301,35 @@ shrink the display's active area as soon as a window reaches behind the housing.
 
 It is not a Space, and that is the trade: the window covers the desktop it is
 on, there is no slide animation, a three-finger swipe does not lead to it, and
-another app's window on that desktop comes up in front of it. That is why it is
-an option. On a display without a housing macOS's full screen already uses
-every pixel, so the option changes nothing there and the window keeps its Space.
+another app's window on that desktop comes up in front of it. That is why it
+can be turned off, in the View menu or with the switch in Codeman's App
+Settings (Appearance > Mac App), which is the same setting: the page asks the
+app through `CodemanHost.setWholeScreen()` and the app tells every page what
+the switch shows. It is on by default: on a display with a housing the black
+bar costs more than the Space gives. On a display without a housing macOS's
+full screen already uses every pixel, so the option changes nothing there and
+the window keeps its Space.
+
+**Leaving macOS's full screen leaves the window without a first responder.**
+A window that comes out of a native Space is its own first responder and takes
+no keys, so a window that goes on to cover the whole display (the option
+turned on while in macOS's full screen) gives the keys to the web view itself.
+Seen on a MacBook Pro before the fix: the cursor stayed hollow and typing went
+nowhere until a click.
 
 **A page is drawn behind the housing only after it said it copes.** The housing
 hides whatever is behind it, so the header has to keep its controls out of the
 way, and only the page can do that. Codeman's page says so through
 `CodemanHost.cutoutReady()` (`src/web/public/host-cutout.js`) and is then told
 where the housing is, in points from the top-left corner, and lays its header
-out around it. Until a page has said so the web view stays below the housing
+out around it: the tab that would sit under the housing starts just right of
+it, and a toolbar that would reach it is moved past it. Until a page has said
+so the web view stays below the housing
 and the strip above it is black, as in macOS's full screen. That covers an
 older Codeman server (its page never says it), the connect page, a raw file,
 and a layout the page itself declines: with the tabs grouped by state, by case
-or as a ledger in the header strip, every row of tabs would have to end at the
-housing, which costs more height than the strip gives. Only Codeman's own app
+or as a ledger in the header strip, the rows are laid out by rules the page
+cannot open a gap in. Only Codeman's own app
 shell may say it (`policy::parse_ipc`), so a rendered HTML file or a web tab
 cannot get the page drawn behind the camera.
 
@@ -531,19 +545,20 @@ crosses, so the login is never on a command line.
   Mac mini, which has no housing and no screen session). Not seen: the window
   behind a real housing, the menu bar sliding in over it, the change-over from
   macOS's full screen, a second display, and closing the lid.
-- **In that mode the tabs get the room left of the camera only.** A wrapped tab
-  strip runs its later rows across the whole width, but its first row ends at
-  the housing, and the room between the housing and the toolbar stays empty. On
-  a 14 inch display that is about three tabs fewer in the first row, so with
-  many tabs the strip can need one row more, which takes back what the bar
-  gave. With the tabs in the sidebar or the rail, or with a few tabs, the whole
-  height of the bar is gained.
+- **In that mode the tabs go around the camera in the classic tab strip only.**
+  A row of tabs loses the width of the housing and 8 points on each side of it,
+  nothing else. With the tabs grouped by state, by case or as a ledger in the
+  header strip the page stays below the camera, with the black strip above it.
+- **Turning the option on while in macOS's full screen shows the normal window
+  for under a second**, between the Space closing and the window covering the
+  display.
 - **Minimize does nothing in that mode** (`⌘M` beeps): the window has no title
   bar, as in macOS's full screen. The menu item says *Toggle Full Screen* in
   both kinds of full screen.
 - **A MacBook started with its lid closed has no menu item for it** until the
   app is started with the built-in display open: the item only exists while a
-  display with a housing is connected at launch, or the option is already on.
+  display with a housing is connected at launch. The switch in App Settings
+  shows as soon as a page loads while such a display is connected.
 - **Self-signed HTTPS is refused.** A server started with `codeman web --https`
   uses a self-signed certificate, and WKWebView rejects it (wry has no trust
   override). Use `http://127.0.0.1:3000` for a server on this Mac. For another

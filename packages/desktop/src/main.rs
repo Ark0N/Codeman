@@ -1384,7 +1384,12 @@ impl App {
                 self.config_dirty = true;
                 self.to_connect_page(json!({ "type": "prefs", "startFullscreen": value }));
             }
-            menu_id::WHOLE_SCREEN => self.toggle_whole_screen(),
+            menu_id::WHOLE_SCREEN => {
+                // muda has already flipped the item's check mark.
+                if let Some(on) = self.menu.whole_screen.as_ref().map(|item| item.is_checked()) {
+                    self.set_whole_screen(on);
+                }
+            }
             menu_id::DEVTOOLS => {
                 if let Some(w) = self.focused_window_id().and_then(|id| self.windows.get(&id)) {
                     w.webview.open_devtools();
@@ -1437,27 +1442,35 @@ impl App {
                         whole_screen::set_page_ready(&w.window, ready);
                     }
                     self.sync_whole_screen(window);
+                    // A page that announces itself has just loaded: its
+                    // settings switch needs the option's state.
+                    self.tell_whole_screen_option(Some(window));
                 }
                 #[cfg(not(target_os = "macos"))]
                 let _ = ready;
             }
+            HostCmd::SetWholeScreen(on) => self.set_whole_screen(on),
         }
     }
 
-    /// View > Full Screen Uses the Area Beside the Camera. A main window that
-    /// is in full screen changes over at once, so the user sees what the
-    /// option does: out of macOS's full screen and, once its Space has closed
+    /// View > Full Screen Uses the Area Beside the Camera, and the same switch
+    /// in Codeman's settings page. A main window that is in full screen
+    /// changes over at once, so the user sees what the option does: out of
+    /// macOS's full screen and, once its Space has closed
     /// (`retry_fullscreen`), over the whole display, or straight back from the
     /// whole display into macOS's.
-    fn toggle_whole_screen(&mut self) {
-        let Some(on) = self.menu.whole_screen.as_ref().map(|item| item.is_checked()) else {
-            return;
-        };
+    fn set_whole_screen(&mut self, on: bool) {
+        // The menu item and every page's switch show the same thing, whichever
+        // of them was used.
+        if let Some(item) = &self.menu.whole_screen {
+            item.set_checked(on);
+        }
         self.config.whole_screen = on;
         self.config_dirty = true;
         #[cfg(target_os = "macos")]
         {
             whole_screen::set_enabled(on);
+            self.tell_whole_screen_option(None);
             let Some(main) = self.windows.get(&self.main_id) else {
                 return;
             };
@@ -1472,6 +1485,18 @@ impl App {
                 return;
             }
             self.fullscreen_retry = Some((Instant::now() + FULLSCREEN_FIRST_CHECK, 0));
+        }
+    }
+
+    /// Tells one window's page, or every window's, what the option's switch in
+    /// its settings shows (whole_screen::option_script).
+    #[cfg(target_os = "macos")]
+    fn tell_whole_screen_option(&self, only: Option<WindowId>) {
+        let script = whole_screen::option_script(whole_screen::available(), self.config.whole_screen);
+        for (id, w) in &self.windows {
+            if only.is_none_or(|one| one == *id) {
+                let _ = w.webview.evaluate_script(&script);
+            }
         }
     }
 
@@ -2172,7 +2197,7 @@ impl App {
         // frame; the saved one is kept for the next launch. Nor is it while
         // the window animates into or out of macOS's full screen, which tao
         // stops reporting as full screen the moment the app asks it to leave
-        // (toggle_whole_screen).
+        // (set_whole_screen).
         #[cfg(target_os = "macos")]
         let transitional = whole_screen::in_transition(w);
         #[cfg(not(target_os = "macos"))]

@@ -168,6 +168,15 @@ pub fn page_script(cutout: Option<Cutout>) -> String {
     )
 }
 
+/// Tells the page what its settings switch shows: whether this Mac has a
+/// display the option does anything on, and whether the option is on. Like
+/// [`page_script`], it does nothing in a page without the cutout module.
+pub fn option_script(available: bool, enabled: bool) -> String {
+    format!(
+        "window.CodemanHostCutout&&typeof window.CodemanHostCutout.option==='function'&&window.CodemanHostCutout.option({{available:{available},enabled:{enabled}}});"
+    )
+}
+
 // NSApplicationPresentationOptions, as plain bits so the rule below is tested
 // on any host (`imp` asserts they match AppKit's).
 const AUTO_HIDE_DOCK: usize = 1 << 0;
@@ -960,12 +969,19 @@ mod imp {
         changed(id);
     }
 
+    /// Puts the keys back where they were before the title bar went or came.
+    /// A window is its own first responder when nothing else is, and takes no
+    /// keys: one that has just come out of macOS's full screen is left like
+    /// that (seen on a MacBook Pro: the option ticked while in macOS's full
+    /// screen, and typing went nowhere until a click). The page then gets the
+    /// keys, being the only thing in the window.
     fn restore_responder(window: &NSWindow, responder: Option<Retained<NSResponder>>) {
-        if let Some(responder) = responder {
-            // A window is its own first responder when nothing else is.
-            if !ptr::eq(Retained::as_ptr(&responder).cast::<NSWindow>(), ptr::from_ref(window)) {
-                window.makeFirstResponder(Some(&responder));
-            }
+        let other = responder.filter(|r| !ptr::eq(Retained::as_ptr(r).cast::<NSWindow>(), ptr::from_ref(window)));
+        if let Some(responder) = other {
+            window.makeFirstResponder(Some(&responder));
+        } else if let Some(web_view) = with_tracked(key(window), |t| t.web_view.clone()) {
+            let page: &NSResponder = &web_view;
+            window.makeFirstResponder(Some(page));
         }
     }
 
@@ -1232,6 +1248,33 @@ mod tests {
             page_script(None),
             "window.CodemanHostCutout&&typeof window.CodemanHostCutout.apply==='function'\
              &&window.CodemanHostCutout.apply(null);"
+        );
+    }
+
+    #[test]
+    fn the_page_is_told_what_its_settings_switch_shows() {
+        assert_eq!(
+            option_script(true, false),
+            "window.CodemanHostCutout&&typeof window.CodemanHostCutout.option==='function'\
+             &&window.CodemanHostCutout.option({available:true,enabled:false});"
+        );
+        assert!(option_script(false, true).ends_with(".option({available:false,enabled:true});"));
+    }
+
+    /// Measured on a MacBook Pro (Mac17,13, macOS 27.2) at its default
+    /// resolution: a housing 59 pt wide in a strip 40 pt high.
+    #[test]
+    fn a_narrow_housing_is_read_like_a_wide_one() {
+        assert_eq!(
+            housing(1512.0, 40.0, 726.5, 726.5),
+            Some(Housing {
+                height: 40.0,
+                cutout: Some(Cutout {
+                    left: 726.5,
+                    width: 59.0,
+                    height: 40.0,
+                }),
+            })
         );
     }
 

@@ -63,6 +63,8 @@ pub fn respond(request: Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
 ///   controls clear of a camera housing, so a full screen over the whole
 ///   display may put the page behind it (`whole_screen.rs`; the page's side is
 ///   `src/web/public/host-cutout.js`). Anything but `false` is a yes.
+/// - `setWholeScreen(on)` is the settings page's switch for that full screen
+///   (View > Full Screen Uses the Area Beside the Camera). Only `true` is on.
 pub const HOST_SHIM: &str = r#"(function () {
   'use strict';
   if (!/^https?:$/.test(location.protocol) || window.CodemanHost) return;
@@ -93,7 +95,8 @@ pub const HOST_SHIM: &str = r#"(function () {
       },
       closeWindow: function () { post({ cmd: 'closeWindow' }); },
       focusWindow: function () { post({ cmd: 'focusWindow' }); },
-      cutoutReady: function (ready) { post({ cmd: 'cutoutReady', ready: ready !== false }); }
+      cutoutReady: function (ready) { post({ cmd: 'cutoutReady', ready: ready !== false }); },
+      setWholeScreen: function (on) { return post({ cmd: 'wholeScreen', on: on === true }); }
     })
   });
 
@@ -279,6 +282,7 @@ mod tests {
             "closeWindow",
             "focusWindow",
             "cutoutReady",
+            "setWholeScreen",
             "__codemanDesktopRefused",
             "sessionExpired",
             "'auxclick'",

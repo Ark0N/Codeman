@@ -2605,6 +2605,21 @@
                   </div>
                 </div>
               </div>
+
+              <!-- Codeman Desktop's own option (host-cutout.js). Shown by settings-ui.js only inside the
+                   Mac app on a MacBook whose display has a camera housing; the value lives in the app. -->
+              <div class="set-group" id="appSettingsHostGroup" style="display: none">
+                <div class="set-group-head"><h4>Mac App</h4><span class="set-scope">device</span></div>
+                <div class="set-group-body">
+                  <div class="set-row" data-search="full screen fullscreen camera notch housing whole display black bar mac app macbook">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Full Screen Uses the Area Beside the Camera</span>
+                      <span class="set-row-desc">Full screen covers the whole display, and the tabs and toolbar sit beside the camera. Off uses the full screen of macOS, which leaves a black bar across the top.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsHostWholeScreen"><span class="slider"></span></label>
+                  </div>
+                </div>
+              </div>
             </section>
 
             <!-- ══ Animations ═══════════════════════════════════════════════

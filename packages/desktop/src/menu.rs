@@ -202,9 +202,9 @@ pub fn build_menu(config: &Config) -> muda::Result<AppMenu> {
         None,
     );
     // Only where it can do something: a display with a camera housing is
-    // connected, or the option is already on (a MacBook started with its lid
-    // closed still gets the item that turns it off).
-    let whole_screen = (whole_screen_available() || config.whole_screen).then(|| {
+    // connected. The option is on unless it was turned off, so its own value
+    // says nothing about the Mac.
+    let whole_screen = whole_screen_available().then(|| {
         CheckMenuItem::with_id(
             menu_id::WHOLE_SCREEN,
             "Full Screen Uses the Area Beside the Camera",

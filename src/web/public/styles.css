@@ -2325,7 +2325,7 @@ html[data-tab-orientation='vertical'].tab-rail-compact
    Not while the toolbar is laid out around a camera housing (html.host-cutout, further down), which decides
    where it starts. */
 @media (min-width: 769px) {
-  html[data-header-right-width]:not(.host-cutout):not([data-tab-orientation='vertical']):not(
+  html[data-header-right-width]:not(.host-cutout-toolbar):not([data-tab-orientation='vertical']):not(
       [data-session-list='sidebar']
     )
     body:not(.solo-mode)
@@ -2420,18 +2420,21 @@ body.solo-mode .header-divider {
 /* A camera housing over the header row (host-cutout.js). Codeman Desktop can take a MacBook's whole display,
    and the page's top edge is then the display's, with the housing (the notch) covering a piece of this row.
    The app says where it is: --host-cutout-left, -width and -height, in pixels from the viewport's top-left
-   corner. The toolbar's box then starts just left of the housing and runs to the header's right edge
-   (0.75rem is the header's own padding), and its padding puts the first control just right of the housing.
-   That one box keeps the whole row clear: the tabs, or a solo window's title, end where it begins, and the
-   L-shaped strip sizes its corner from it (`_syncTabStripCorner()`), so a wrapped strip's first rows stop
-   short of the housing too. A toolbar wider than the room beside the housing wraps onto a second line, below
-   it. Every layout has this box (strip, sidebar, rail, solo window), so the rule has no exceptions. */
+   corner. The tabs go around it by a margin the module sets (`fitTabs`), which needs no rule here.
+
+   This rule is for a toolbar that would reach the housing (`html.host-cutout-toolbar`, decided by the module's
+   `fitToolbar`: many readings, a width the user dragged, a solo window's title in the same row). Its box then
+   starts just left of the housing and runs to the header's right edge (0.75rem is the header's own padding),
+   and its padding puts the first control just right of the housing. That one box keeps the row clear: the
+   tabs, or a solo window's title, end where it begins, and the L-shaped strip sizes its corner from it
+   (`_syncTabStripCorner()`). A toolbar wider than the room beside the housing wraps onto a second line, below
+   it. --host-cutout-gap is the module's GAP: change the two together. */
 @media (min-width: 769px) {
   html.host-cutout {
     --host-cutout-gap: 8px;
   }
 
-  html.host-cutout .header > .header-right {
+  html.host-cutout-toolbar .header > .header-right {
     box-sizing: border-box;
     flex: 0 0 auto;
     width: calc(100vw - 0.75rem - var(--host-cutout-left) + var(--host-cutout-gap));
@@ -2446,7 +2449,7 @@ body.solo-mode .header-divider {
   }
 
   /* The box's left edge is the housing's, not a width to drag. */
-  html.host-cutout .header-divider {
+  html.host-cutout-toolbar .header-divider {
     display: none;
   }
 }
