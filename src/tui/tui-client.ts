@@ -1457,6 +1457,53 @@ export class TuiClient {
     return cleared;
   }
 
+  /**
+   * Drop `client-active[91]` hooks a previous TUI never got to remove.
+   *
+   * Same leak as the banners above: a terminal that dies while attached never
+   * reaches `restore()`. A leaked hook acts only for its tty, so it is harmless
+   * until a pty reuses that number, and then it hands a window to whatever
+   * client got it. This sweep removes ours whose tty has no live tmux client.
+   *
+   * ⚠️ `ownTty` is never swept. The sweep runs fire-and-forget at startup, and
+   * an Enter pressed before it finishes arms this terminal's hook before this
+   * terminal is a tmux client, so the client listing cannot vouch for it yet.
+   * A second TUI mid-attach is a live client and is left alone the same way.
+   */
+  async clearLeakedFollowTyping(ownTty: string | null = readControllingTty()): Promise<number> {
+    let names: string[];
+    let live: Set<string>;
+    try {
+      const { stdout } = await this.exec('tmux', ['-L', this.socket, 'list-sessions', '-F', '#{session_name}']);
+      names = stdout
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => MUX_NAME_PATTERN.test(line));
+      const clients = await this.exec('tmux', ['-L', this.socket, 'list-clients', '-F', '#{client_tty}']);
+      live = new Set(clients.stdout.split('\n').map((line) => line.trim()));
+    } catch {
+      return 0;
+    }
+    let cleared = 0;
+    for (const name of names) {
+      let tty: string | null;
+      try {
+        const current = await this.readFollowTypingHook(name);
+        tty = current === null ? null : tuiFollowTypingHookTty(current);
+      } catch {
+        continue;
+      }
+      if (tty === null || tty === ownTty || live.has(tty)) continue;
+      try {
+        await this.exec('tmux', ['-L', this.socket, 'set-hook', '-u', '-t', name, TUI_FOLLOW_TYPING_HOOK]);
+        cleared += 1;
+      } catch {
+        /* the session went away mid-sweep */
+      }
+    }
+    return cleared;
+  }
+
   private async setOption(args: readonly string[]): Promise<void> {
     try {
       await this.exec('tmux', ['-L', this.socket, 'set-option', ...args]);

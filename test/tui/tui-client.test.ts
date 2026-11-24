@@ -897,6 +897,53 @@ describe('TuiClient.clearLeakedAttachBanners', () => {
   });
 });
 
+describe('TuiClient.clearLeakedFollowTyping', () => {
+  const ours = (tty: string): string => `${TUI_FOLLOW_TYPING_HOOK} ${tuiFollowTypingHook(tty)}`;
+
+  function sweeper(hooks: Record<string, string>, clients: string[]): { client: TuiClient; unset: string[] } {
+    const unset: string[] = [];
+    const exec: TuiExecFile = async (_file, args) => {
+      if (args.includes('list-sessions')) return { stdout: Object.keys(hooks).join('\n'), stderr: '' };
+      if (args.includes('list-clients')) return { stdout: clients.join('\n'), stderr: '' };
+      if (args.includes('show-hooks')) return { stdout: hooks[args[args.indexOf('-t') + 1] ?? ''] ?? '', stderr: '' };
+      if (args.includes('set-hook')) unset.push(args[args.indexOf('-t') + 1] ?? '');
+      return { stdout: '', stderr: '' };
+    };
+    return { client: new TuiClient({ baseUrl, socket: 'codeman-beta', exec }), unset };
+  }
+
+  it('removes ours for a tty with no live client, and nothing else', async () => {
+    const { client, unset } = sweeper(
+      {
+        // A TUI killed mid-attach (window closed, SSH dropped).
+        'codeman-aaaa1111': ours('/dev/pts/7'),
+        // A second TUI attached right now.
+        'codeman-bbbb2222': ours('/dev/pts/8'),
+        // The user's own hook at that index.
+        'codeman-cccc3333': `${TUI_FOLLOW_TYPING_HOOK} display-message mine`,
+        'codeman-dddd4444': '',
+      },
+      ['/dev/pts/8', '/dev/pts/2']
+    );
+    expect(await client.clearLeakedFollowTyping(null)).toBe(1);
+    expect(unset).toEqual(['codeman-aaaa1111']);
+  });
+
+  it("never sweeps this terminal's own hook, which an early Enter may have armed already", async () => {
+    const { client, unset } = sweeper({ 'codeman-aaaa1111': ours('/dev/pts/7') }, []);
+    expect(await client.clearLeakedFollowTyping('/dev/pts/7')).toBe(0);
+    expect(unset).toEqual([]);
+  });
+
+  it('reports nothing rather than throwing when there is no tmux server', async () => {
+    const exec: TuiExecFile = async () => {
+      throw new Error('no server running on /tmp/tmux-1000/codeman-beta');
+    };
+    const client = new TuiClient({ baseUrl, socket: 'codeman-beta', exec });
+    await expect(client.clearLeakedFollowTyping(null)).resolves.toBe(0);
+  });
+});
+
 describe('parseDetachKey', () => {
   // Verbatim from `tmux -L codeman list-keys -T prefix` on tmux 3.4, trimmed to
   // the two lines that matter. They differ only by case, which is the whole

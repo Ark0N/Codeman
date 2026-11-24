@@ -1278,6 +1278,7 @@ class TuiApp {
     // Fire and forget: a bar stranded by a previous run is cosmetic, so it must
     // never delay the first frame or fail a start.
     void this.client.clearLeakedAttachBanners().catch(() => undefined);
+    void this.client.clearLeakedFollowTyping().catch(() => undefined);
 
     return new Promise<number>((resolve) => {
       this.resolveExit = resolve;
