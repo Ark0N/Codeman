@@ -538,13 +538,16 @@ crosses, so the login is never on a command line.
   built-in display's brightness when the lid opens again, and an Apple display
   with its own light sensor. If the logo does not move under a closed lid, the
   menu line says "stayed dark".
-- **Full screen over the whole display has not been seen on a real MacBook
-  yet** (as of this change). The decisions, the menu, the page's layout around
-  the housing and every AppKit fact the overrides rest on were checked (the
-  page in Chromium at the sizes of the 14 and 16 inch displays, the rest on a
-  Mac mini, which has no housing and no screen session). Not seen: the window
-  behind a real housing, the menu bar sliding in over it, the change-over from
-  macOS's full screen, a second display, and closing the lid.
+- **Full screen over the whole display was seen on one MacBook Pro so far**
+  (Mac17,13, macOS 27.2.1, built-in display only, a housing 59 points wide in
+  a strip 40 points high, 2026-11-25): the launch into it, typing, the menu bar
+  sliding in over the header, leaving and entering, the change-over both ways,
+  a relaunch and `⌘W`, with the Dock and the menu bar back every time. Not
+  seen: a second display, closing the lid, and a MacBook with the wider housing
+  of earlier models (the page was checked at those sizes in Chromium only).
+  Not yet seen on that MacBook either, as of this change: the option being on
+  by default, the switch in App Settings, and typing right after the option is
+  turned on from macOS's full screen (a fix for what that run found).
 - **In that mode the tabs go around the camera in the classic tab strip only.**
   A row of tabs loses the width of the housing and 8 points on each side of it,
   nothing else. With the tabs grouped by state, by case or as a ledger in the
