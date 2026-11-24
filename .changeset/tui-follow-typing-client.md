@@ -2,4 +2,4 @@
 'aicodeman': patch
 ---
 
-`codeman tui`: a terminal attached to a session takes the window size back when you type, paste or resize it, after a browser tab (a phone, for example) opened or resized the same session and Codeman sized the window to that tab. Until now the terminal kept showing a small pane until a detach and a fresh attach. The attach sets a `client-active` hook on the sessions it dressed that acts only for its own tmux client, and removes it on detach. Needs tmux 3.3 or newer.
+`codeman tui`: while a terminal is attached, the window follows whichever client was used last, as plain tmux does. Before, a browser tab (a phone, for example) that opened or resized the same session pinned the window to the tab's size, and typing or pasting in the terminal did not take it back until a detach and a fresh attach. Now typing, pasting or resizing the terminal fills it again, and typing in the tab gives the tab the size. The attach sets two hooks and an owner option on the sessions it dressed and removes them on detach; a TUI killed mid-attach has its leftovers removed by the next `codeman tui`. Needs tmux 3.3 or newer.

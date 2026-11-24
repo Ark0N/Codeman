@@ -664,10 +664,11 @@ export async function beginAttachHandoff(
     // resizes this session mid-attach goes through Codeman's `resize-window`,
     // which puts the window back on `manual` at the BROWSER's size: a phone
     // opening it left the terminal showing a phone-sized pane, and typing or
-    // pasting here changed nothing until a detach and a fresh attach. The hook
-    // puts `latest` back when THIS terminal is used again, the way plain tmux
-    // follows whoever typed last. Needs the tty for its guard, like the switch
-    // keys, so without one the attach keeps the old behaviour.
+    // pasting here changed nothing until a detach and a fresh attach. The
+    // follow hooks (TUI_FOLLOW_HOOKS) keep the window on `latest`, so it
+    // follows whichever client was used last, this terminal included. They
+    // need the tty to name their owner, like the switch keys, so without one
+    // the attach keeps the old behaviour.
     if (guarded && (await client.armFollowTyping(target, tty as string))) followTyping.push(target);
   }
   // ⚠️ Armed LAST, as the final tmux call before the caller's `spawnSync`. The
@@ -686,8 +687,9 @@ export async function beginAttachHandoff(
       if (tty && isTuiClientTty(tty)) await client.disarmTuiSwitchGuard(tty);
       if (oneKey) await client.unbindDetachKey(ONE_KEY_DETACH, 'root');
       if (claimed && alias) await client.unbindDetachKey(alias);
-      // The hooks before the size: a hook left armed would put `latest` back
-      // the next time anything fired it, after the browser re-pinned the window.
+      // The follow hooks before the size: the restore below is a
+      // `resize-window`, and an armed `after-resize-window` hook would put
+      // `latest` straight back over the browser's size.
       for (const target of followTyping) await client.disarmFollowTyping(target, tty as string);
       // Options first, then the size: dropping the status bar gives its row
       // back to the pane, and the resize is what re-pins the browser's

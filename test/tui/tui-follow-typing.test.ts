@@ -5,8 +5,9 @@
  * Against a real tmux on a private socket (never Codeman's). Two attach clients
  * on ptys: one is the TUI's terminal, the other is what a browser tab is (one
  * `tmux attach-session` per session, sized by Codeman). The browser's resize is
- * what `TmuxManager.resizeWindow()` runs: `resize-window -x -y`, which puts the
- * window on `manual`.
+ * what `Session.resize()` does: resize its client's pty, then
+ * `TmuxManager.resizeWindow()`'s `resize-window -x -y`, which puts the window
+ * on `manual`.
  *
  * Port: N/A (no server)
  */
@@ -14,7 +15,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { execFileSync, execSync } from 'node:child_process';
 import { rmSync } from 'node:fs';
 import * as pty from 'node-pty';
-import { TUI_FOLLOW_TYPING_HOOK, TuiClient } from '../../src/tui/tui-client.js';
+import { TUI_FOLLOW_HOOKS, TUI_FOLLOW_OWNER, TuiClient } from '../../src/tui/tui-client.js';
 
 const hasTmux = (() => {
   try {
@@ -106,7 +107,7 @@ describe.skipIf(!hasTmux)('TUI attach follows the terminal you type in', () => {
     if (socketPath.endsWith(`/${socket}`)) rmSync(socketPath, { force: true });
   });
 
-  it('gives the window back to the TUI terminal on its next keystroke, and only to that terminal', async () => {
+  it('follows whichever client was used last, the TUI terminal included', async () => {
     run(['new-session', '-d', '-s', alpha, '-x', '120', '-y', '40', 'cat']);
     run(['set-option', '-g', 'status', 'off']);
     run(['set-window-option', '-t', alpha, 'window-size', 'manual']);
@@ -116,72 +117,92 @@ describe.skipIf(!hasTmux)('TUI attach follows the terminal you type in', () => {
     expect(await waitFor(() => (tuiTty = ttyOf(tui)) !== '')).toBe(true);
     expect(await client.followAttachingClient(alpha)).toBe(true);
     expect(await client.armFollowTyping(alpha, tuiTty)).toBe(true);
-    expect(hooks()).toContain(TUI_FOLLOW_TYPING_HOOK);
-    // The closed form, which disarm and re-arm match on.
-    expect(hooks()).toContain(`#{client_tty},${tuiTty}}`);
-    // Set on the session, not the server: no other session gets it.
-    expect(run(['show-hooks', '-g'])).not.toContain(TUI_FOLLOW_TYPING_HOOK);
+    for (const name of Object.keys(TUI_FOLLOW_HOOKS)) expect(hooks()).toContain(name);
+    expect(run(['show-options', '-t', alpha])).toContain(`${TUI_FOLLOW_OWNER} ${tuiTty}`);
+    // Set on the session, not the server: no other session gets them.
+    expect(run(['show-hooks', '-g'])).not.toContain('[91]');
     expect(await waitFor(() => windowSize() === '200x50 latest')).toBe(true);
 
-    // A phone opens the session: its client attaches and Codeman pins the window.
+    // A phone opens the session: Codeman's client attaches and is resized to it.
     const browser = attach(60, 30);
     expect(await waitFor(() => ttyOf(browser) !== '')).toBe(true);
-    run(['resize-window', '-t', alpha, '-x', '60', '-y', '30']);
-    expect(windowSize()).toBe('60x30 manual');
+    await browserResize(browser, 61, 30);
+    expect(windowSize()).toBe('61x30 latest');
 
-    // Typing in the browser tab is Codeman's business, not the hook's.
-    browser.write('b');
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    expect(windowSize()).toBe('60x30 manual');
-
-    // Typing in the TUI terminal takes it back. This is the bug: without the
-    // hook the window stayed 60x30 manual here for the rest of the attach.
+    // The bug: without the hooks the window stayed 61x30 manual here, and
+    // typing in the terminal changed nothing for the rest of the attach.
     tui.write('a');
     expect(await waitFor(() => windowSize() === '200x50 latest')).toBe(true);
 
-    // Resizing the TUI terminal is using it too: tmux makes the resized client
-    // the latest one, so the hook fires without a keystroke (measured on 3.8).
-    await browserResize(browser, 62, 30);
-    expect(windowSize()).toBe('62x30 manual');
-    tui.resize(150, 45);
-    expect(await waitFor(() => windowSize() === '150x45 latest')).toBe(true);
+    // A browser opening a session sends a FORCED resize at its current size.
+    // Its pty does not change, so tmux keeps the terminal as the latest client
+    // and the window stays where the user is typing.
+    await browserResize(browser, 61, 30);
+    expect(windowSize()).toBe('200x50 latest');
 
-    // The browser resizing its client makes THAT client the latest one, so
-    // the TUI's next keystroke is a change of client and fires the hook again.
-    await browserResize(browser, 62, 31);
-    expect(windowSize()).toBe('62x31 manual');
+    // Typing in the browser tab gives the window to the tab...
+    browser.write('b');
+    expect(await waitFor(() => windowSize() === '61x30 latest')).toBe(true);
+    // ...and typing in the terminal takes it back.
     tui.write('a');
+    expect(await waitFor(() => windowSize() === '200x50 latest')).toBe(true);
+
+    // Codeman's own attach (`setManualWindowSize()`) sets manual with no resize.
+    browser.write('b');
+    expect(await waitFor(() => windowSize() === '61x30 latest')).toBe(true);
+    run(['set-window-option', '-t', alpha, 'window-size', 'manual']);
+    tui.write('a');
+    expect(await waitFor(() => windowSize() === '200x50 latest')).toBe(true);
+
+    // Resizing the terminal is using it too.
+    browser.write('b');
+    expect(await waitFor(() => windowSize() === '61x30 latest')).toBe(true);
+    tui.resize(150, 45);
     expect(await waitFor(() => windowSize() === '150x45 latest')).toBe(true);
   });
 
-  it('disarms only its own hook, and never replaces one of the user', async () => {
-    const tuiTty = ttyOf(clients[0]);
+  it('stops when disarmed, leaves a second TUI and the user alone', async () => {
+    const [tui, browser] = clients;
+    const tuiTty = ttyOf(tui);
     expect(tuiTty).not.toBe('');
 
-    // Another tty's restore leaves this attach's hook alone (pts/4 vs pts/41 included).
+    // Another tty's restore leaves this attach armed (pts/4 vs pts/41 included).
     await client.disarmFollowTyping(alpha, `${tuiTty}1`);
-    expect(hooks()).toContain(TUI_FOLLOW_TYPING_HOOK);
+    expect(run(['show-options', '-t', alpha])).toContain(TUI_FOLLOW_OWNER);
 
     await client.disarmFollowTyping(alpha, tuiTty);
-    expect(hooks()).not.toContain(TUI_FOLLOW_TYPING_HOOK);
-    // Disarmed means the next keystroke changes nothing.
-    await browserResize(clients[1], 64, 30);
-    clients[0].write('a');
+    expect(run(['show-options', '-t', alpha])).not.toContain(TUI_FOLLOW_OWNER);
+    expect(hooks()).not.toContain('[91]');
+    // Disarmed: Codeman's resize pins the window again, and typing changes nothing.
+    await browserResize(browser, 64, 30);
+    expect(windowSize()).toBe('64x30 manual');
+    tui.write('a');
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(windowSize()).toBe('64x30 manual');
 
-    // A hook of the user's own at that index is never overwritten.
-    run(['set-hook', '-t', alpha, TUI_FOLLOW_TYPING_HOOK, 'display-message mine']);
+    // Hooks left without an owner (a removal that failed) do nothing.
+    for (const [name, command] of Object.entries(TUI_FOLLOW_HOOKS)) run(['set-hook', '-t', alpha, name, command]);
+    await browserResize(browser, 65, 30);
+    tui.write('a');
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(windowSize()).toBe('65x30 manual');
+    for (const name of Object.keys(TUI_FOLLOW_HOOKS)) run(['set-hook', '-u', '-t', alpha, name]);
+
+    // A hook of the user's own at either index is never overwritten.
+    run(['set-hook', '-t', alpha, 'after-resize-window[91]', 'display-message mine']);
     expect(await client.armFollowTyping(alpha, tuiTty)).toBe(false);
     expect(hooks()).toContain('display-message mine');
-    await client.disarmFollowTyping(alpha, tuiTty);
-    expect(hooks()).toContain('display-message mine');
-    run(['set-hook', '-u', '-t', alpha, TUI_FOLLOW_TYPING_HOOK]);
+    expect(run(['show-options', '-t', alpha])).not.toContain(TUI_FOLLOW_OWNER);
+    run(['set-hook', '-u', '-t', alpha, 'after-resize-window[91]']);
 
-    // One of ours for a stale tty (a TUI killed before its restore) is taken over.
-    expect(await client.armFollowTyping(alpha, `${tuiTty}1`)).toBe(true);
+    // A leaked owner (a TUI killed mid-attach) is swept once its client is gone.
+    expect(await client.armFollowTyping(alpha, '/dev/ttys999')).toBe(true);
+    expect(await client.clearLeakedFollowTyping(null)).toBe(1);
+    expect(run(['show-options', '-t', alpha])).not.toContain(TUI_FOLLOW_OWNER);
+    expect(hooks()).not.toContain('[91]');
+    // A live one is not.
     expect(await client.armFollowTyping(alpha, tuiTty)).toBe(true);
-    expect(hooks()).toContain(`#{client_tty},${tuiTty}}`);
-    expect(hooks()).not.toContain(`#{client_tty},${tuiTty}1}`);
+    expect(await client.clearLeakedFollowTyping(null)).toBe(0);
+    expect(run(['show-options', '-t', alpha])).toContain(`${TUI_FOLLOW_OWNER} ${tuiTty}`);
   });
 });
