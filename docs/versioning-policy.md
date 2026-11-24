@@ -63,7 +63,9 @@ These may change in a **MINOR** (or even PATCH) release without a MAJOR bump:
 3. **Experimental / opt-in features**, regardless of the app's version:
    Gesture Control (beta), Agent Teams
    (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`), the native-wrapper window bridge
-   (`window.CodemanHost.openWindow` / `closeWindow` / `focusWindow`), and
+   (`window.CodemanHost.openWindow` / `closeWindow` / `focusWindow` /
+   `cutoutReady`, and `window.CodemanHostCutout.apply`, which a wrapper calls
+   to say where a display's camera housing is), and
    anything labeled experimental in the UI or docs. These may change or be
    removed at any time.
 

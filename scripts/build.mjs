@@ -121,6 +121,7 @@ run('minify tab-layout-browser.js', 'npx esbuild dist/web/public/tab-layout-brow
 run('minify app.js', 'npx esbuild dist/web/public/app.js --minify --outfile=dist/web/public/app.js --allow-overwrite');
 run('minify tab-rail-resize.js', 'npx esbuild dist/web/public/tab-rail-resize.js --minify --outfile=dist/web/public/tab-rail-resize.js --allow-overwrite');
 run('minify header-divider.js', 'npx esbuild dist/web/public/header-divider.js --minify --outfile=dist/web/public/header-divider.js --allow-overwrite');
+run('minify host-cutout.js', 'npx esbuild dist/web/public/host-cutout.js --minify --outfile=dist/web/public/host-cutout.js --allow-overwrite');
 run('minify terminal-ui.js', 'npx esbuild dist/web/public/terminal-ui.js --minify --outfile=dist/web/public/terminal-ui.js --allow-overwrite');
 run('minify respawn-ui.js', 'npx esbuild dist/web/public/respawn-ui.js --minify --outfile=dist/web/public/respawn-ui.js --allow-overwrite');
 run('minify ralph-panel.js', 'npx esbuild dist/web/public/ralph-panel.js --minify --outfile=dist/web/public/ralph-panel.js --allow-overwrite');
@@ -151,6 +152,7 @@ console.log('\n[build] content-hash cache busting');
     'app.js',
     'tab-rail-resize.js',
     'header-divider.js',
+    'host-cutout.js',
     'terminal-ui.js',
     'respawn-ui.js',
     'ralph-panel.js',

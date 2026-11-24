@@ -1,0 +1,5 @@
+---
+'aicodeman': patch
+---
+
+**Mac app: full screen over the whole display.** On a MacBook with a camera housing (the notch), macOS's full screen leaves a black bar across the top of the display. With **View > Full Screen Uses the Area Beside the Camera** turned on, the Mac app's full screen covers the whole display instead: Codeman's header moves up beside the camera, the tabs to its left and the toolbar to its right, and the terminal gains the height of the bar. The green button, the menu item, ⌃⌘F and the launch into full screen all follow the option, and switching it while the window is in full screen changes it over at once. It is off until you turn it on, because it is not a macOS Space: the window covers the desktop it is on instead of sliding into a Space of its own. The page stays below the camera, as before, with a Codeman server from before this release and while the tabs are grouped by state, by case or as a ledger in the header strip, where ending every row of tabs at the camera would cost more room than the bar gives.

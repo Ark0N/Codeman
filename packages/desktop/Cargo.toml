@@ -36,18 +36,21 @@ security-framework = "3"
 # through wry and tao, so no new crate is added.
 libc = "0.2"
 # JavaScript dialogs, HTTP Basic challenges, clearing cookies and the window's
-# content size (src/macos.rs). The versions wry already pulls in, so no new
-# crate is added.
+# content size (src/macos.rs), and full screen over the whole display
+# (src/whole_screen.rs). The versions wry already pulls in, so no new crate is
+# added.
 objc2 = { version = "0.6.5", default-features = false, features = ["std"] }
 block2 = { version = "0.6.2", default-features = false, features = ["std"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "std",
     "objc2-core-foundation",
     "block2",
+    "NSArray",
     "NSBundle",
     "NSDate",
     "NSDictionary",
     "NSGeometry",
+    "NSNotification",
     "NSObject",
     "NSOperation",
     "NSProcessInfo",
@@ -71,6 +74,7 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = [
     "NSButton",
     "NSControl",
     "NSResponder",
+    "NSScreen",
     "NSTextField",
     "NSView",
     "NSWindow",

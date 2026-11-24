@@ -5,7 +5,9 @@
 //! browser tab cannot: a connect screen that remembers servers (`config`,
 //! `login`), runs or installs Codeman on this machine (`setup`,
 //! `local_server`, `gui_install`) and installs it on another one over SSH
-//! (`terminal_install`), real full screen, native menus (`menu`), pop-outs as
+//! (`terminal_install`), real full screen (on a MacBook with a camera
+//! housing over the whole display, if asked: `whole_screen`), native menus
+//! (`menu`), pop-outs as
 //! app windows (Codeman's `window.CodemanHost` bridge), downloads to
 //! ~/Downloads, passwords in the Keychain (`credentials`), on macOS the
 //! JavaScript dialogs and HTTP Basic challenges wry leaves out (`macos`), and
@@ -41,6 +43,9 @@ mod policy;
 mod probe;
 mod setup;
 mod terminal_install;
+// The pure half is only used by the macOS half and the tests.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod whole_screen;
 
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
@@ -198,6 +203,14 @@ enum UserEvent {
     OldHelperRemoved(keep_awake::AdminOutcome),
     /// What the closed lid did with the logo last (logo::watch_lid_status).
     LogoLidStatus(String),
+    /// A window entered or left full screen over the whole display
+    /// (whole_screen.rs), named by `whole_screen::window_key`. The green
+    /// button and the menu item ask AppKit, not the app, so this is how the
+    /// app hears of it.
+    #[cfg(target_os = "macos")]
+    WholeScreenChanged {
+        window: usize,
+    },
 }
 
 struct ProbeDone {
@@ -329,8 +342,11 @@ struct App {
     /// The connect page opens the agent chooser when it next loads: the menu
     /// asked for it from a Codeman page.
     add_agent_on_load: bool,
+    /// The main window goes into full screen once the event loop runs.
+    fullscreen_at_launch: bool,
     /// While the main window may still have to be put into the full screen it
-    /// asked for at launch: when to look next, and how many retries were made.
+    /// asked for (at launch, or when the kind of full screen was switched):
+    /// when to look next, and how many retries were made.
     fullscreen_retry: Option<(Instant, u8)>,
     /// The child that watches the connected server and blinks the logo.
     logo_watch: logo::Watcher,
@@ -378,6 +394,15 @@ fn main() {
     };
     let config_path = config_path.filter(|_| can_save);
     let notice = (!can_save).then(|| SETTINGS_UNREADABLE.to_string());
+    #[cfg(target_os = "macos")]
+    {
+        whole_screen::set_enabled(config.whole_screen);
+        // Runs inside an AppKit callback: only post an event.
+        let changed_proxy = proxy.clone();
+        whole_screen::set_change_handler(Box::new(move |window| {
+            let _ = changed_proxy.send_event(UserEvent::WholeScreenChanged { window });
+        }));
+    }
     logo::recover_at_launch();
     // A lid keeper that was killed left lid sleep off; and 1.50.1's helper, where
     // it is still installed, gets nothing to act on.
@@ -393,6 +418,8 @@ fn main() {
         create_main_window(&event_loop, &config).unwrap_or_else(|e| fatal(&format!("Could not open a window: {e}")));
     let webview = build_webview(&window, true, true, Load::ConnectPage, &proxy, &phase)
         .unwrap_or_else(|e| fatal(&format!("Could not create the web view: {e}")));
+    #[cfg(target_os = "macos")]
+    whole_screen::install(&window, &webview);
     let main_id = window.id();
 
     let mut windows = HashMap::new();
@@ -424,6 +451,7 @@ fn main() {
         keychain,
         install_reader: Arc::new(AtomicU64::new(0)),
         add_agent_on_load: false,
+        fullscreen_at_launch: wants_fullscreen,
         fullscreen_retry: wants_fullscreen.then(|| (Instant::now() + FULLSCREEN_FIRST_CHECK, 0)),
         logo_watch: logo::Watcher::default(),
         keep_awake: keep_awake::KeepAwake::new(move |generation, text| {
@@ -483,8 +511,12 @@ fn placed_position(window: &Window) -> Result<PhysicalPosition<i32>, NotSupporte
     }
 }
 
-/// The main window, and whether it was asked into full screen (App's
-/// `fullscreen_retry` then makes sure it gets there).
+/// The main window, and whether it is to open in full screen. It is built at
+/// its windowed frame and put into full screen once the event loop runs
+/// (`fullscreen_at_launch`; `fullscreen_retry` then makes sure it gets there),
+/// never built into it: a window built straight into full screen gets the
+/// whole screen as its frame, and that is the frame AppKit puts back when the
+/// user leaves full screen.
 fn create_main_window(
     target: &EventLoopWindowTarget<UserEvent>,
     config: &Config,
@@ -508,15 +540,29 @@ fn create_main_window(
         }
     }
     let window = builder.build(target)?;
-    // Full screen is entered after the window exists at its windowed frame,
-    // not set on the builder: a window built straight into full screen gets
-    // the whole screen as its frame, and that is the frame AppKit puts back
-    // when the user leaves full screen.
     let fullscreen = config.start_fullscreen || config.window.is_some_and(|f| f.fullscreen);
-    if fullscreen {
-        window.set_fullscreen(Some(Fullscreen::Borderless(None)));
-    }
     Ok((window, fullscreen))
+}
+
+/// Puts `window` into full screen: over the whole display where that applies
+/// (whole_screen.rs), macOS's own everywhere else. A window that is still on
+/// its way out of macOS's full screen is left alone; the caller asks again.
+fn enter_full_screen(window: &Window) {
+    #[cfg(target_os = "macos")]
+    match whole_screen::enter(window) {
+        whole_screen::Entry::Entered | whole_screen::Entry::Busy => return,
+        whole_screen::Entry::NotWanted => {}
+    }
+    window.set_fullscreen(Some(Fullscreen::Borderless(None)));
+}
+
+/// Whether `window` is in full screen, of either kind.
+fn in_full_screen(window: &Window) -> bool {
+    #[cfg(target_os = "macos")]
+    if whole_screen::is_active(window) {
+        return true;
+    }
+    window.fullscreen().is_some()
 }
 
 /// The Authorization header for a login, when there is a password.
@@ -770,6 +816,11 @@ impl App {
                     self.menu.window_menu.set_as_windows_menu_for_nsapp();
                     self.menu.help_menu.set_as_help_menu_for_nsapp();
                 }
+                if std::mem::take(&mut self.fullscreen_at_launch) {
+                    if let Some(main) = self.windows.get(&self.main_id) {
+                        enter_full_screen(&main.window);
+                    }
+                }
             }
             Event::WindowEvent { window_id, event, .. } => self.on_window_event(window_id, event, target, control_flow),
             Event::UserEvent(event) => self.on_user_event(event, target),
@@ -824,12 +875,14 @@ impl App {
         };
     }
 
-    /// The main window asked for full screen at launch: if it is not there
-    /// yet, ask again, a few times at most. tao reports a window as full
-    /// screen from the moment it is asked and puts that back only when the
-    /// entry fails, so `fullscreen()` being None means it failed. Stops once
-    /// the window is in full screen or minimized, so a user who leaves full
-    /// screen later is never pulled back.
+    /// The main window asked for full screen (at launch, or to change the kind
+    /// it is in): if it is not there yet, ask again, a few times at most. tao
+    /// reports a window as full screen from the moment it is asked and puts
+    /// that back only when the entry fails, so `fullscreen()` being None means
+    /// it failed, or that the window is on its way to the whole display and
+    /// has to leave macOS's full screen first. Stops once the window is in
+    /// full screen or minimized, so a user who leaves full screen later is
+    /// never pulled back.
     fn retry_fullscreen(&mut self, now: Instant) {
         let Some((_, attempts)) = self.fullscreen_retry else {
             return;
@@ -838,10 +891,10 @@ impl App {
         let Some(main) = self.windows.get(&self.main_id) else {
             return;
         };
-        if main.window.fullscreen().is_some() || main.window.is_minimized() || attempts >= FULLSCREEN_ATTEMPTS {
+        if in_full_screen(&main.window) || main.window.is_minimized() || attempts >= FULLSCREEN_ATTEMPTS {
             return;
         }
-        main.window.set_fullscreen(Some(Fullscreen::Borderless(None)));
+        enter_full_screen(&main.window);
         self.fullscreen_retry = Some((now + FULLSCREEN_RETRY_EVERY, attempts + 1));
     }
 
@@ -875,7 +928,14 @@ impl App {
                     *control_flow = ControlFlow::Exit;
                 }
             }
-            WindowEvent::Moved(_) | WindowEvent::Resized(_) if id == self.main_id => self.record_main_frame(),
+            WindowEvent::Moved(_) | WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => {
+                // A window over the whole display follows the display it is on.
+                #[cfg(target_os = "macos")]
+                self.sync_whole_screen(id);
+                if id == self.main_id {
+                    self.record_main_frame();
+                }
+            }
             _ => {}
         }
     }
@@ -894,6 +954,20 @@ impl App {
                 }
             }
             UserEvent::LogoLidStatus(line) => self.show_lid_status(line),
+            #[cfg(target_os = "macos")]
+            UserEvent::WholeScreenChanged { window } => {
+                let id = self
+                    .windows
+                    .iter()
+                    .find(|(_, w)| whole_screen::window_key(&w.window) == window)
+                    .map(|(id, _)| *id);
+                if let Some(id) = id {
+                    self.sync_whole_screen(id);
+                    if id == self.main_id {
+                        self.record_main_frame();
+                    }
+                }
+            }
             UserEvent::ServerStartDone {
                 generation,
                 url,
@@ -952,6 +1026,15 @@ impl App {
                 }
                 if let Some(w) = self.windows.get_mut(&window) {
                     w.committed = Url::parse(&url).ok();
+                }
+                // A new document has not said that it keeps clear of a camera
+                // housing: its web view stays below it until it does.
+                #[cfg(target_os = "macos")]
+                {
+                    if let Some(w) = self.windows.get(&window) {
+                        whole_screen::set_page_ready(&w.window, false);
+                    }
+                    self.sync_whole_screen(window);
                 }
             }
             UserEvent::DownloadStarted { window, url, file_name } => {
@@ -1301,6 +1384,7 @@ impl App {
                 self.config_dirty = true;
                 self.to_connect_page(json!({ "type": "prefs", "startFullscreen": value }));
             }
+            menu_id::WHOLE_SCREEN => self.toggle_whole_screen(),
             menu_id::DEVTOOLS => {
                 if let Some(w) = self.focused_window_id().and_then(|id| self.windows.get(&id)) {
                     w.webview.open_devtools();
@@ -1346,6 +1430,60 @@ impl App {
             }
             HostCmd::OpenExternal(raw) => self.open_external_raw(&raw),
             HostCmd::SessionExpired => self.on_session_expired(window),
+            HostCmd::CutoutReady(ready) => {
+                #[cfg(target_os = "macos")]
+                {
+                    if let Some(w) = self.windows.get(&window) {
+                        whole_screen::set_page_ready(&w.window, ready);
+                    }
+                    self.sync_whole_screen(window);
+                }
+                #[cfg(not(target_os = "macos"))]
+                let _ = ready;
+            }
+        }
+    }
+
+    /// View > Full Screen Uses the Area Beside the Camera. A main window that
+    /// is in full screen changes over at once, so the user sees what the
+    /// option does: out of macOS's full screen and, once its Space has closed
+    /// (`retry_fullscreen`), over the whole display, or straight back from the
+    /// whole display into macOS's.
+    fn toggle_whole_screen(&mut self) {
+        let Some(on) = self.menu.whole_screen.as_ref().map(|item| item.is_checked()) else {
+            return;
+        };
+        self.config.whole_screen = on;
+        self.config_dirty = true;
+        #[cfg(target_os = "macos")]
+        {
+            whole_screen::set_enabled(on);
+            let Some(main) = self.windows.get(&self.main_id) else {
+                return;
+            };
+            let window = &main.window;
+            let whole = whole_screen::is_active(window);
+            if on && !whole && window.fullscreen().is_some() && whole_screen::applies_to(window) {
+                window.set_fullscreen(None);
+            } else if !on && whole {
+                whole_screen::leave(window);
+                window.set_fullscreen(Some(Fullscreen::Borderless(None)));
+            } else {
+                return;
+            }
+            self.fullscreen_retry = Some((Instant::now() + FULLSCREEN_FIRST_CHECK, 0));
+        }
+    }
+
+    /// Brings a window in line with full screen over the whole display: its
+    /// frame, how far its web view stays below a camera housing, and what its
+    /// page knows about the housing (whole_screen::sync).
+    #[cfg(target_os = "macos")]
+    fn sync_whole_screen(&self, id: WindowId) {
+        if let Some(w) = self.windows.get(&id) {
+            if let Some(script) = whole_screen::sync(&w.window) {
+                let _ = w.webview.evaluate_script(&script);
+            }
         }
     }
 
@@ -1937,6 +2075,8 @@ impl App {
                 return false;
             }
         };
+        #[cfg(target_os = "macos")]
+        whole_screen::install(&window, &webview);
         let kind = Kind::Popout {
             opened_url,
             hidden_for_download: false,
@@ -1984,6 +2124,10 @@ impl App {
         if id == self.main_id {
             return;
         }
+        #[cfg(target_os = "macos")]
+        if let Some(w) = self.windows.get(&id) {
+            whole_screen::forget(&w.window);
+        }
         self.windows.remove(&id);
         self.downloads.retain(|(window, _), _| *window != id);
     }
@@ -2016,7 +2160,7 @@ impl App {
             return;
         };
         let w = &main.window;
-        let fullscreen = w.fullscreen().is_some();
+        let fullscreen = in_full_screen(w);
         let mut frame = self.config.window.unwrap_or(WindowFrame {
             x: 0.0,
             y: 0.0,
@@ -2025,8 +2169,15 @@ impl App {
             fullscreen,
         });
         // In full screen or minimized the live geometry is not the windowed
-        // frame; the saved one is kept for the next launch.
-        if !fullscreen && !w.is_minimized() {
+        // frame; the saved one is kept for the next launch. Nor is it while
+        // the window animates into or out of macOS's full screen, which tao
+        // stops reporting as full screen the moment the app asks it to leave
+        // (toggle_whole_screen).
+        #[cfg(target_os = "macos")]
+        let transitional = whole_screen::in_transition(w);
+        #[cfg(not(target_os = "macos"))]
+        let transitional = false;
+        if !fullscreen && !transitional && !w.is_minimized() {
             let sf = w.scale_factor();
             if let Ok(pos) = placed_position(w) {
                 let p = pos.to_logical::<f64>(sf);

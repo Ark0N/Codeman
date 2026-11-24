@@ -17,6 +17,7 @@ pub mod menu_id {
     pub const ADD_AGENT: &str = "add-agent";
     pub const RELOAD: &str = "reload";
     pub const START_FULLSCREEN: &str = "start-fullscreen";
+    pub const WHOLE_SCREEN: &str = "whole-screen";
     pub const LOGO_BLINK: &str = "logo-blink";
     pub const DEVTOOLS: &str = "devtools";
     pub const HELP_DOCS: &str = "help-docs";
@@ -28,6 +29,10 @@ pub struct AppMenu {
     pub window_menu: Submenu,
     pub help_menu: Submenu,
     pub start_fullscreen: CheckMenuItem,
+    /// Full screen over the whole display (whole_screen.rs). None on a Mac with
+    /// no camera housing in sight, where macOS's full screen already uses
+    /// every pixel.
+    pub whole_screen: Option<CheckMenuItem>,
     /// The one switch for the logo. None on a Mac without a lit logo, which has no
     /// such menu.
     pub logo_switch: Option<CheckMenuItem>,
@@ -120,6 +125,16 @@ fn build_keep_awake(config: &Config) -> muda::Result<(Submenu, KeepAwakeMenu)> {
     ))
 }
 
+#[cfg(target_os = "macos")]
+fn whole_screen_available() -> bool {
+    crate::whole_screen::available()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn whole_screen_available() -> bool {
+    false
+}
+
 pub fn build_menu(config: &Config) -> muda::Result<AppMenu> {
     let bar = Menu::new();
     let about = PredefinedMenuItem::about(
@@ -186,6 +201,18 @@ pub fn build_menu(config: &Config) -> muda::Result<AppMenu> {
         config.start_fullscreen,
         None,
     );
+    // Only where it can do something: a display with a camera housing is
+    // connected, or the option is already on (a MacBook started with its lid
+    // closed still gets the item that turns it off).
+    let whole_screen = (whole_screen_available() || config.whole_screen).then(|| {
+        CheckMenuItem::with_id(
+            menu_id::WHOLE_SCREEN,
+            "Full Screen Uses the Area Beside the Camera",
+            true,
+            config.whole_screen,
+            None,
+        )
+    });
     let view = Submenu::with_items(
         "View",
         true,
@@ -208,6 +235,11 @@ pub fn build_menu(config: &Config) -> muda::Result<AppMenu> {
             ),
         ],
     )?;
+    // Right under "Always Open in Full Screen", before the logo items and the separator.
+    if let Some(item) = &whole_screen {
+        view.insert(item, 4)?;
+    }
+    let after_full_screen = 4 + usize::from(whole_screen.is_some());
     // Only a Mac with a lit Apple logo has these items at all: the switch, and the
     // style for each state behind it.
     let mut logo_styles = Vec::new();
@@ -235,11 +267,11 @@ pub fn build_menu(config: &Config) -> muda::Result<AppMenu> {
             }
             submenu.append(&group)?;
         }
-        // Right under "Always Open in Full Screen", before the separator.
+        // Under the full-screen items, before the separator.
         let lid = MenuItem::new(logo::lid_status_line(), false, None);
-        view.insert(&switch, 4)?;
-        view.insert(&submenu, 5)?;
-        view.insert(&lid, 6)?;
+        view.insert(&switch, after_full_screen)?;
+        view.insert(&submenu, after_full_screen + 1)?;
+        view.insert(&lid, after_full_screen + 2)?;
         logo_switch = Some(switch);
         logo_lid = Some(lid);
     }
@@ -269,6 +301,7 @@ pub fn build_menu(config: &Config) -> muda::Result<AppMenu> {
         window_menu,
         help_menu,
         start_fullscreen,
+        whole_screen,
         logo_switch,
         logo_styles,
         keep_awake,

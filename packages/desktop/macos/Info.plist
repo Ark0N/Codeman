@@ -31,6 +31,14 @@
 	<true/>
 	<key>NSSupportsAutomaticGraphicsSwitching</key>
 	<true/>
+	<!-- The app handles the camera housing of a MacBook display itself
+	     (src/whole_screen.rs): its full screen can cover the whole display,
+	     and nothing is drawn behind the housing. Without this key macOS may
+	     shrink the display's active area ("compatibility mode") as soon as a
+	     window reaches behind the housing, and Finder's Get Info offers
+	     "Scale to fit below built-in camera". -->
+	<key>NSPrefersDisplaySafeAreaCompatibilityMode</key>
+	<false/>
 	<key>NSHumanReadableCopyright</key>
 	<string>MIT License, Codeman Contributors</string>
 	<!-- Voice dictation and gesture control ask for these; without the
