@@ -1240,18 +1240,32 @@ export class TuiClient {
    * installed. An owner already recorded is replaced: it is a TUI killed before
    * its restore, or a second TUI on the same session, and the newest attach is
    * the one in front of the user.
+   *
+   * ⚠️ A half-done arm is undone before answering false, because `restore()`
+   * only disarms what armed. tmux before 3.3 has no `client-active` hook, so
+   * there the owner is set and the first hook is refused; left alone, the
+   * owner would stay on the session for good.
    */
   async armFollowTyping(muxName: string, clientTty: string): Promise<boolean> {
     if (!MUX_NAME_PATTERN.test(muxName) || !isTuiClientTty(clientTty)) return false;
     try {
       const hooks = await this.readFollowHooks(muxName);
       if (Object.values(hooks).includes('theirs')) return false;
+    } catch {
+      return false;
+    }
+    try {
       await this.exec('tmux', ['-L', this.socket, 'set-option', '-t', muxName, TUI_FOLLOW_OWNER, clientTty]);
       for (const [name, command] of Object.entries(TUI_FOLLOW_HOOKS)) {
         await this.exec('tmux', ['-L', this.socket, 'set-hook', '-t', muxName, name, command]);
       }
       return true;
     } catch {
+      try {
+        await this.dropFollowTyping(muxName);
+      } catch {
+        /* the session is gone, or tmux is: nothing is left to undo then */
+      }
       return false;
     }
   }

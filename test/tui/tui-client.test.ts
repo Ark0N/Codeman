@@ -527,7 +527,9 @@ describe('the follow hooks', () => {
    * A fake tmux holding one session's options and hooks, so arm, disarm and
    * the sweep run against state rather than a script of canned answers.
    */
-  function fakeTmux(initial: { owner?: string; hooks?: Record<string, string>; clients?: string[] } = {}) {
+  function fakeTmux(
+    initial: { owner?: string; hooks?: Record<string, string>; clients?: string[]; refuseHook?: string } = {}
+  ) {
     const state = { owner: initial.owner ?? null, hooks: { ...(initial.hooks ?? {}) } as Record<string, string> };
     const writes: string[] = [];
     const exec: TuiExecFile = async (_file, args) => {
@@ -543,6 +545,9 @@ describe('the follow hooks', () => {
       if (verb === 'show-hooks') {
         const lines = Object.entries(state.hooks).map(([name, command]) => `${name} ${command}`);
         return { stdout: lines.join('\n'), stderr: '' };
+      }
+      if (verb === 'set-hook' && !args.includes('-u') && args.includes(initial.refuseHook ?? '\0')) {
+        throw new Error(`invalid option: ${initial.refuseHook}`);
       }
       writes.push(args.slice(2).join(' '));
       if (verb === 'set-option' && args.includes('-u')) state.owner = null;
@@ -595,6 +600,13 @@ describe('the follow hooks', () => {
       'set-hook -u -t codeman-1a2b3c4d client-active[91]',
       'set-hook -u -t codeman-1a2b3c4d after-resize-window[91]',
     ]);
+    expect(state).toEqual({ owner: null, hooks: {} });
+  });
+
+  it('undoes a half-done arm, as on a tmux without client-active (before 3.3)', async () => {
+    const { client, state } = fakeTmux({ refuseHook: 'client-active[91]' });
+    await expect(client.armFollowTyping('codeman-1a2b3c4d', '/dev/pts/4')).resolves.toBe(false);
+    // restore() disarms only what armed, so nothing may be left behind here.
     expect(state).toEqual({ owner: null, hooks: {} });
   });
 
