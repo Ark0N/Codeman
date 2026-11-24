@@ -23615,7 +23615,13 @@ html[data-session-list='sidebar'][data-sidebar='collapsed'] .session-sidebar .ta
     font-weight: 500;
   }
 
-  .session-tabs-host > .session-tabs.tabs-ledger > .session-tab .tab-status {
+  /* The bar replaces the dot, except on a WORKING cell: the bar is green for
+     idle and working alike, so the dot and its orbiting ring
+     (.tab-status.busy::after) stay, the same "working" mark the classic strip
+     and the home screens draw. An exited agent's cell hides it anyway, as the
+     classic strip hides the ring there. */
+  .session-tabs-host > .session-tabs.tabs-ledger > .session-tab .tab-status:not(.busy),
+  .session-tabs-host > .session-tabs.tabs-ledger > .session-tab.tab-agent-exited .tab-status {
     display: none;
   }
 
