@@ -337,9 +337,10 @@ export interface PaneRow {
  * seen again" from "a second command in the same pane that also exited with
  * the same status", so the `at` stamp can hold across the first and must not
  * across the second. Either may be absent: tmux 3.8 blanks the pid of a dead
- * pane, and a tmux before 3.4 has no exit time. {@link PaneExit} itself stays free of it: the pid on
- * the session record is the attach client's, and a second pid there would
- * invite exactly the confusion Ark0N/Codeman#446 is about.
+ * pane, and a tmux that does not know `#{pane_dead_time}` prints it empty.
+ * {@link PaneExit} itself stays free of both: the pid on the session record is
+ * the attach client's, and a second pid there would invite exactly the
+ * confusion Ark0N/Codeman#446 is about.
  */
 export interface PaneExitObservation {
   /** `#{pane_pid}` of the pane this reading came from, when tmux reported one. */
@@ -405,6 +406,25 @@ export function parsePaneRows(output: string): PaneRow[] {
     });
   }
   return rows;
+}
+
+/** What {@link TmuxManager.killSession} reads about a pane before it signals anything. */
+export interface PaneKillRead {
+  /** `#{pane_dead}` was 1: the pane's program exited, so no process is left to signal. */
+  dead: boolean;
+  /** `#{pane_pid}`, or null when tmux printed none (tmux 3.8 for a dead pane) or the read failed. */
+  pid: number | null;
+}
+
+/**
+ * Parse the kill path's `#{pane_dead}|#{pane_pid}` read. Exported for unit testing.
+ * Only an explicit `1` is dead; anything else keeps the old behaviour of
+ * signalling the pid (or the recorded one when tmux printed none).
+ */
+export function parsePaneKillRead(output: string): PaneKillRead {
+  const [deadFlag = '', pidField = ''] = output.trim().split(PANE_LIST_SEP);
+  const pid = parseInt(pidField, 10);
+  return { dead: deadFlag === '1', pid: Number.isNaN(pid) ? null : pid };
 }
 
 /**
@@ -2886,24 +2906,26 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
   }
 
   /**
-   * {@link getPanePid} without blocking the event loop, for the kill path: a close
-   * must not stall every other session's I/O while tmux answers.
+   * The kill path's pane read: the pane pid and whether the pane is dead, in one
+   * `display-message`, without blocking the event loop (a close must not stall
+   * every other session's I/O while tmux answers). A failed read answers
+   * `{ dead: false, pid: null }`, so the caller falls back to the recorded pid
+   * exactly as before.
    */
-  private async getPanePidAsync(muxName: string): Promise<number | null> {
-    if (IS_TEST_MODE) return 99999;
+  private async readPaneForKill(muxName: string): Promise<PaneKillRead> {
+    if (IS_TEST_MODE) return { dead: false, pid: 99999 };
     if (!isValidMuxName(muxName)) {
-      console.error('[TmuxManager] Invalid session name in getPanePidAsync:', muxName);
-      return null;
+      console.error('[TmuxManager] Invalid session name in readPaneForKill:', muxName);
+      return { dead: false, pid: null };
     }
     try {
-      const { stdout } = await execAsync(`${this.tmux()} display-message -t "${muxName}" -p '#{pane_pid}'`, {
-        encoding: 'utf-8',
-        timeout: EXEC_TIMEOUT_MS,
-      });
-      const pid = parseInt(stdout.trim(), 10);
-      return Number.isNaN(pid) ? null : pid;
+      const { stdout } = await execAsync(
+        `${this.tmux()} display-message -t "${muxName}" -p '#{pane_dead}${PANE_LIST_SEP}#{pane_pid}'`,
+        { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
+      );
+      return parsePaneKillRead(stdout);
     } catch {
-      return null;
+      return { dead: false, pid: null };
     }
   }
 
@@ -3245,6 +3267,62 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
   }
 
   /**
+   * Strategies 1 and 2 of {@link killSession}: SIGTERM then SIGKILL the pane
+   * process's killable descendants, then its process group. Every pid it
+   * targets is appended to `allPids` for the final verify. Only ever called
+   * with the pid of a LIVE pane.
+   */
+  private async killPaneProcessTree(mode: SessionMode, panePid: number, allPids: number[]): Promise<void> {
+    allPids.push(panePid);
+
+    // Strategy 1: Kill all child processes recursively (but never a shared daemon the
+    // pane's CLI started for every session of that CLI: see killableDescendants)
+    let childPids = await this.killableDescendants(mode, panePid, await this.getChildPidsFresh(panePid));
+    if (childPids.length > 0) {
+      console.log(`[TmuxManager] Found ${childPids.length} child processes to kill`);
+      allPids.push(...childPids);
+
+      for (const childPid of [...childPids].reverse()) {
+        if (this.isProcessAlive(childPid)) {
+          try {
+            process.kill(childPid, 'SIGTERM');
+          } catch {
+            // Process may already be dead
+          }
+        }
+      }
+
+      // Most children are gone within a few ms; the re-scan below still runs, to
+      // catch anything spawned since the first one.
+      await waitForProcessesExit(childPids, { timeoutMs: TMUX_KILL_WAIT_MS });
+
+      childPids = await this.killableDescendants(mode, panePid, await this.getChildPidsFresh(panePid));
+      for (const childPid of childPids) {
+        if (this.isProcessAlive(childPid)) {
+          try {
+            process.kill(childPid, 'SIGKILL');
+          } catch {
+            // Process already terminated
+          }
+        }
+      }
+    }
+
+    // Strategy 2: Kill the entire process group
+    if (this.isProcessAlive(panePid)) {
+      try {
+        process.kill(-panePid, 'SIGTERM');
+        await waitForProcessesExit([panePid], { timeoutMs: GRACEFUL_SHUTDOWN_WAIT_MS });
+        if (this.isProcessAlive(panePid)) {
+          process.kill(-panePid, 'SIGKILL');
+        }
+      } catch {
+        // Process group may not exist or already terminated
+      }
+    }
+  }
+
+  /**
    * Kill a tmux session and all its child processes.
    * Uses a 4-strategy approach (children → process group → tmux kill → SIGKILL).
    * In test mode: removes from memory only (no real kill).
@@ -3364,58 +3442,23 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       return true;
     }
 
-    // Get current PID (may have changed)
-    const currentPid = (await this.getPanePidAsync(session.muxName)) || session.pid;
+    // Get current PID (may have changed). A dead pane has no process left to
+    // signal, and the pid on the record is the one that exited, which the OS may
+    // since have handed to an unrelated process: walking its tree or signalling
+    // it could kill that. tmux 3.8 prints no pid for a dead pane, so without this
+    // check the fallback below would pick that stale pid every time. Only the
+    // kill-session below runs for it.
+    const pane = await this.readPaneForKill(session.muxName);
+    const currentPid = pane.dead ? null : (pane.pid ?? session.pid);
 
-    console.log(`[TmuxManager] Killing session ${session.muxName} (PID ${currentPid})`);
+    console.log(
+      currentPid === null
+        ? `[TmuxManager] Killing session ${session.muxName} (pane dead, PID ${session.pid} not signalled)`
+        : `[TmuxManager] Killing session ${session.muxName} (PID ${currentPid})`
+    );
 
-    const allPids: number[] = [currentPid];
-
-    // Strategy 1: Kill all child processes recursively (but never a shared daemon the
-    // pane's CLI started for every session of that CLI: see killableDescendants)
-    let childPids = await this.killableDescendants(session.mode, currentPid, await this.getChildPidsFresh(currentPid));
-    if (childPids.length > 0) {
-      console.log(`[TmuxManager] Found ${childPids.length} child processes to kill`);
-      allPids.push(...childPids);
-
-      for (const childPid of [...childPids].reverse()) {
-        if (this.isProcessAlive(childPid)) {
-          try {
-            process.kill(childPid, 'SIGTERM');
-          } catch {
-            // Process may already be dead
-          }
-        }
-      }
-
-      // Most children are gone within a few ms; the re-scan below still runs, to
-      // catch anything spawned since the first one.
-      await waitForProcessesExit(childPids, { timeoutMs: TMUX_KILL_WAIT_MS });
-
-      childPids = await this.killableDescendants(session.mode, currentPid, await this.getChildPidsFresh(currentPid));
-      for (const childPid of childPids) {
-        if (this.isProcessAlive(childPid)) {
-          try {
-            process.kill(childPid, 'SIGKILL');
-          } catch {
-            // Process already terminated
-          }
-        }
-      }
-    }
-
-    // Strategy 2: Kill the entire process group
-    if (this.isProcessAlive(currentPid)) {
-      try {
-        process.kill(-currentPid, 'SIGTERM');
-        await waitForProcessesExit([currentPid], { timeoutMs: GRACEFUL_SHUTDOWN_WAIT_MS });
-        if (this.isProcessAlive(currentPid)) {
-          process.kill(-currentPid, 'SIGKILL');
-        }
-      } catch {
-        // Process group may not exist or already terminated
-      }
-    }
+    const allPids: number[] = [];
+    if (currentPid !== null) await this.killPaneProcessTree(session.mode, currentPid, allPids);
 
     // Strategy 3: Kill tmux session by name (guard the name before it reaches the shell).
     // Async: tmux takes tens of ms to tear a session down, and execSync held the
@@ -3457,7 +3500,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     }
 
     // Strategy 4: Direct kill by PID as final fallback
-    if (this.isProcessAlive(currentPid)) {
+    if (currentPid !== null && this.isProcessAlive(currentPid)) {
       try {
         process.kill(currentPid, 'SIGKILL');
       } catch {

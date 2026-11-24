@@ -16,6 +16,7 @@ import {
   buildRemoteLaunchCommand,
   formatPaneSnapshot,
   parsePaneRows,
+  parsePaneKillRead,
   derivePaneExits,
   hasObservablePaneSession,
   endedAdoptedAttaches,
@@ -1478,6 +1479,27 @@ describe('parsePaneRows', () => {
       currentPath: '/srv',
     });
     expect(parsePaneRows('codeman-aaaa|1234|0||||/srv')[0].deadTime).toBeUndefined();
+  });
+});
+
+describe('parsePaneKillRead', () => {
+  it('reads a live pane as its pid', () => {
+    expect(parsePaneKillRead('0|4242\n')).toEqual({ dead: false, pid: 4242 });
+  });
+
+  it('reads a dead pane as dead, with the pid tmux 3.8 leaves blank', () => {
+    // killSession must not walk or signal the recorded pid of an exited program:
+    // the OS may have reused it for an unrelated process.
+    expect(parsePaneKillRead('1|\n')).toEqual({ dead: true, pid: null });
+  });
+
+  it('reads a dead pane as dead on a tmux that still prints its pid', () => {
+    expect(parsePaneKillRead('1|4242')).toEqual({ dead: true, pid: 4242 });
+  });
+
+  it('treats an unreadable answer as not dead, so the recorded pid is still used', () => {
+    expect(parsePaneKillRead('')).toEqual({ dead: false, pid: null });
+    expect(parsePaneKillRead('|')).toEqual({ dead: false, pid: null });
   });
 });
 
