@@ -1238,6 +1238,35 @@ describe('TmuxManager (unit)', () => {
       }
     });
 
+    it('treats the resolved spelling of the launch directory as no answer too (macOS /private/tmp)', async () => {
+      // On macOS /tmp is a symlink and a pane reports its process cwd resolved.
+      realpathOverrides.set('/tmp', '/private/tmp');
+      mockedExecSync.mockImplementation((cmd: string) => {
+        if (typeof cmd === 'string' && cmd.includes(' list-panes ')) {
+          return ['codeman-aaaa1111|101|0||||/private/tmp', 'codeman-bbbb2222|102|0||||/tmp'].join('\n');
+        }
+        return '';
+      });
+      try {
+        const NonTestTmuxManager = await importWithTmuxCommandsEnabled();
+        const nonTestManager = new NonTestTmuxManager();
+        try {
+          await nonTestManager.reconcileSessions();
+          const dirs = Object.fromEntries(nonTestManager.getSessions().map((s) => [s.muxName, s.workingDir]));
+          expect(dirs).toEqual({
+            'codeman-aaaa1111': process.cwd(),
+            'codeman-bbbb2222': process.cwd(),
+          });
+        } finally {
+          nonTestManager.destroy();
+        }
+      } finally {
+        realpathOverrides.clear();
+      }
+    });
+  });
+
+  describe('a dead pane tmux printed no pid for (tmux 3.8)', () => {
     // tmux 3.8 prints a blank `#{pane_pid}` for a dead pane. Reading that as "no such
     // session" dropped the record of a session whose agent had exited, while its tmux
     // session stayed on the socket where nothing would ever find it again.
@@ -1296,30 +1325,44 @@ describe('TmuxManager (unit)', () => {
       }
     });
 
-    it('treats the resolved spelling of the launch directory as no answer too (macOS /private/tmp)', async () => {
-      // On macOS /tmp is a symlink and a pane reports its process cwd resolved.
-      realpathOverrides.set('/tmp', '/private/tmp');
-      mockedExecSync.mockImplementation((cmd: string) => {
-        if (typeof cmd === 'string' && cmd.includes(' list-panes ')) {
-          return ['codeman-aaaa1111|101|0||||/private/tmp', 'codeman-bbbb2222|102|0||||/tmp'].join('\n');
-        }
-        return '';
+    // The recorded pid of a dead pane belongs to the program that exited, and the OS
+    // may have handed it to an unrelated process since: closing must not signal it.
+    it('closes a session whose pane is dead without signalling its recorded pid', async () => {
+      const defaultExec = mockedExec.getMockImplementation();
+      mockedExec.mockImplementation(((cmd: string, optionsOrCallback?: unknown, maybeCallback?: unknown) => {
+        const callback = (typeof optionsOrCallback === 'function' ? optionsOrCallback : maybeCallback) as
+          | ((err: Error | null, out: unknown, stderr: string) => void)
+          | undefined;
+        // promisify(exec) on this mock resolves with the second argument. tmux 3.8
+        // prints a dead pane's pid blank, so a pid-only read answers an empty line.
+        const stdout = cmd.includes(' display-message ') ? (cmd.includes('#{pane_dead}') ? '1|\n' : '\n') : '';
+        if (callback) setImmediate(() => callback(null, { stdout, stderr: '' }, ''));
+        return { on: vi.fn(), kill: vi.fn(), pid: 12345 };
+      }) as unknown as typeof exec);
+      const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+      const NonTestTmuxManager = await importWithTmuxCommandsEnabled();
+      const nonTestManager = new NonTestTmuxManager();
+      nonTestManager.registerSession({
+        sessionId: 'dead5555',
+        muxName: 'codeman-dead5555',
+        pid: 4242,
+        createdAt: Date.now(),
+        workingDir: '/tmp',
+        mode: 'claude',
+        attached: false,
       });
+
       try {
-        const NonTestTmuxManager = await importWithTmuxCommandsEnabled();
-        const nonTestManager = new NonTestTmuxManager();
-        try {
-          await nonTestManager.reconcileSessions();
-          const dirs = Object.fromEntries(nonTestManager.getSessions().map((s) => [s.muxName, s.workingDir]));
-          expect(dirs).toEqual({
-            'codeman-aaaa1111': process.cwd(),
-            'codeman-bbbb2222': process.cwd(),
-          });
-        } finally {
-          nonTestManager.destroy();
-        }
+        expect(await nonTestManager.killSession('dead5555')).toBe(true);
+        expect(kill.mock.calls.filter(([pid]) => Math.abs(Number(pid)) === 4242)).toEqual([]);
+        const commands = mockedExec.mock.calls.map(([cmd]) => String(cmd));
+        expect(commands.some((cmd) => cmd.includes('display-message') && cmd.includes('#{pane_dead}'))).toBe(true);
+        expect(commands.some((cmd) => cmd.includes('kill-session -t "codeman-dead5555"'))).toBe(true);
+        expect(nonTestManager.getSession('dead5555')).toBeUndefined();
       } finally {
-        realpathOverrides.clear();
+        kill.mockRestore();
+        mockedExec.mockImplementation(defaultExec!);
+        nonTestManager.destroy();
       }
     });
   });
