@@ -706,7 +706,10 @@ peer (§3).
   password check, no failure count (`serveRefusedCapabilityPath`). The prefix is judged
   the way a proxy's path matcher would (`capabilityPrefixOf`: case‑insensitive,
   percent‑decoded, dot segments and doubled slashes resolved), since the proxy forwards
-  every such spelling without its sign‑in. Otherwise anonymous
+  every such spelling without its sign‑in. Under a base path (`CODEMAN_BASE_URL`) the
+  mount prefix is judged the same way: the server strips only its literal spelling, so
+  the refusal removes the normalised prefix once before it looks for the capability
+  prefix. Otherwise anonymous
   requests through the proxy could probe passwords and fill the per‑IP bucket, which
   behind the proxy is always `127.0.0.1`, locking out Basic sign‑in from loopback.
   Without a proxy configured these paths keep the normal `401` challenge. One limit
