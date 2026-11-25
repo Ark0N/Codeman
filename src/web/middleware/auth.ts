@@ -66,6 +66,12 @@ function sendAuthRateLimit(reply: FastifyReply, failures: StaleExpirationMap<str
   reply.code(429).send('Too Many Requests — try again later');
 }
 
+/** 401 with a Basic challenge, so a browser shows its login dialog. */
+function challengeBasicAuth(reply: FastifyReply): void {
+  reply.header('WWW-Authenticate', 'Basic realm="Codeman"');
+  reply.code(401).send('Unauthorized');
+}
+
 /** Parse a `Basic base64(user:pass)` header into its parts, or null if malformed. */
 function parseBasicAuth(header?: string): { username: string; password: string } | null {
   if (!header || !header.startsWith('Basic ')) return null;
@@ -485,6 +491,16 @@ export function registerAuthMiddleware(app: FastifyInstance, https: boolean, bas
       return;
     }
 
+    // No credentials at all is not a guess: challenge it without counting or limiting.
+    // Counting it locked users out after every server restart (cookie sessions live in
+    // memory): an open tab's background requests carry only the dead cookie, ten of them
+    // filled the bucket within seconds, and the 429 that followed never re-prompted the
+    // browser for a password, so reloading could not recover until the window expired.
+    if (!auth) {
+      challengeBasicAuth(reply);
+      return;
+    }
+
     // Rate limit only requests that failed to authenticate on this attempt.
     const failures = authFailures.get(clientIp) ?? 0;
     if (failures >= AUTH_FAILURE_MAX) {
@@ -495,8 +511,7 @@ export function registerAuthMiddleware(app: FastifyInstance, https: boolean, bas
     // Auth failed — track failure count
     authFailures.set(clientIp, failures + 1);
 
-    reply.header('WWW-Authenticate', 'Basic realm="Codeman"');
-    reply.code(401).send('Unauthorized');
+    challengeBasicAuth(reply);
   });
 
   return state;
@@ -622,8 +637,7 @@ function registerMultiUserAuthHook(
       sendAuthRateLimit(reply, userFailures, normUser);
       return;
     }
-    reply.header('WWW-Authenticate', 'Basic realm="Codeman"');
-    reply.code(401).send('Unauthorized');
+    challengeBasicAuth(reply);
   };
 
   app.addHook('onRequest', async (req, reply) => {
@@ -703,6 +717,15 @@ function registerMultiUserAuthHook(
     // which is every reload after a restart: cookie sessions live in memory, so the
     // browser replays its cached Basic header on many parallel requests at once. A
     // request with no verify in flight for its credentials is gated as normal.
+    //
+    // No Authorization header at all is not a guess and runs no scrypt: challenge it
+    // before the gates, without counting. Counting it let an open tab's background
+    // requests after a restart (cookie sessions live in memory) fill the per-IP bucket,
+    // which then refused even the correct password, and a 429 never re-prompts a browser.
+    if (!req.headers.authorization) {
+      challengeBasicAuth(reply);
+      return;
+    }
     const creds = parseBasicAuth(req.headers.authorization);
     const normUser = creds ? creds.username.trim().toLowerCase() : '';
     const flightKey = creds ? verifyFlightKey(clientIp, normUser, creds.password) : '';
@@ -746,10 +769,9 @@ function registerMultiUserAuthHook(
       return;
     }
 
-    // No credentials presented: count against the per-IP bucket and challenge.
+    // A malformed Authorization header: count against the per-IP bucket and challenge.
     authFailures.set(clientIp, ipFail + 1);
-    reply.header('WWW-Authenticate', 'Basic realm="Codeman"');
-    reply.code(401).send('Unauthorized');
+    challengeBasicAuth(reply);
   });
 }
 

@@ -236,7 +236,8 @@ Notes and current limits:
 The first request prompts for HTTP Basic credentials. On success the server issues an opaque
 `codeman_session` cookie (24 hour lifetime, extended on activity, validated server-side so
 it cannot be forged offline). Ten failed attempts from one IP produce a `429` with a 15
-minute decay.
+minute decay. A request with no credentials, such as an open tab whose cookie a restart
+invalidated, is never counted and always gets the login prompt.
 
 A valid cookie or a correct password recovers immediately even while an attacker is hammering
 the same IP, which matters because all tunnel traffic arrives from one loopback address.
