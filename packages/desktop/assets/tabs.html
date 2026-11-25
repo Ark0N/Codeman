@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Codeman tabs</title>
+<style>
+  /* The tab strip: a 38px web view across the top of the window, under the
+     macOS traffic lights. One tab per Codeman server; the native side owns
+     the tabs and sends the whole list on every change. */
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #141519; }
+  body {
+    font: 500 13px/1 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+    color: #a3a8b1; cursor: default;
+    -webkit-user-select: none; user-select: none;
+  }
+  #strip {
+    position: relative; height: 38px; display: flex; align-items: flex-end; gap: 4px;
+    padding: 0 8px 0 78px; overflow: hidden; background: #141519;
+  }
+  #strip.fullscreen { padding-left: 10px; }
+  /* The bottom line is drawn under the tabs, so the active tab covers it and
+     joins the page below. */
+  #strip::after {
+    content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 1px;
+    background: #23252b; pointer-events: none; z-index: 1;
+  }
+  .icon-btn {
+    align-self: center; flex: none; width: 28px; height: 28px; padding: 0; border: 0;
+    border-radius: 7px; background: transparent; color: #8b9099;
+    display: flex; align-items: center; justify-content: center; cursor: default; outline: none;
+  }
+  .icon-btn:hover { background: #1b1d22; color: #c9ccd2; }
+  #overview { margin-right: 6px; }
+  #overview.on { background: #2563eb; color: #ffffff; }
+  #new { margin-left: 2px; }
+  /* Empty strip moves the window, so some of it stays empty however many
+     tabs there are. */
+  #fill { flex: 1 0 48px; align-self: stretch; }
+
+  /* The tabs share the room evenly: 200px each, down to 72px; past that the
+     row is clipped, never wrapped or scrolled. */
+  #tabs {
+    display: flex; align-items: flex-end; gap: 2px; flex: 0 1 auto; min-width: 0;
+    height: 100%; overflow: hidden;
+  }
+  .tab {
+    --c: #94a3b8;
+    /* width, not only flex-basis: the row's own width is worked out from
+       its tabs' widths, and flex-basis does not count there. */
+    position: relative; flex: 0 1 auto; width: 200px; min-width: 72px; height: 31px;
+    display: flex; align-items: center; gap: 8px; padding: 0 7px 0 10px;
+    border-radius: 9px 9px 0 0; color: #a3a8b1; overflow: hidden;
+  }
+  .tab:hover { background: #1b1d22; }
+  /* A thin line between two tabs neither in front nor under the pointer, so a
+     badge at a tab's right end reads as that tab's and not the next one's. */
+  .tab + .tab::before {
+    content: ''; position: absolute; left: 0; top: 9px; bottom: 7px; width: 1px;
+    background: #2c2f37; pointer-events: none;
+  }
+  .tab.active::before, .tab.active + .tab::before,
+  .tab:hover::before, .tab:hover + .tab::before { display: none; }
+  .tab.active {
+    z-index: 2; background: #0b0c0f; color: #e8eaed;
+    box-shadow: inset 0 2px 0 var(--c), inset 1px 0 0 #23252b, inset -1px 0 0 #23252b;
+  }
+  /* The tab button itself is a transparent layer over the whole tab, so a
+     click anywhere on it is one target and the name, icon and badge stay
+     plain text for the screen reader's label. */
+  .hit {
+    position: absolute; inset: 0; z-index: 0; margin: 0; padding: 0; border: 0;
+    background: transparent; border-radius: inherit; cursor: default; outline: none;
+  }
+  .ico { flex: none; display: flex; color: var(--c); }
+  .tab.connect .ico { color: #60a5fa; }
+  .name { flex: 1 1 auto; min-width: 0; line-height: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tab.offline .name { color: #6b7079; }
+  .tab.renaming .name { display: none; }
+  .rename {
+    position: relative; z-index: 1; flex: 1 1 auto; min-width: 0; height: 21px; margin: 0;
+    padding: 0 5px; border: 1px solid #3b82f6; border-radius: 5px; background: #0b0c0f;
+    color: #e8eaed; font: inherit; outline: none; -webkit-user-select: text; user-select: text;
+  }
+  .badge { flex: none; display: none; }
+  .badge.needs {
+    display: block; min-width: 18px; height: 18px; padding: 0 6px; border-radius: 9px;
+    background: #f87171; color: #2a0707; font: 700 11px/18px -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+    text-align: center; font-variant-numeric: tabular-nums;
+  }
+  .badge.waiting { display: block; width: 9px; height: 9px; border-radius: 50%; background: #fbbf24; }
+  .badge.working {
+    display: block; width: 11px; height: 11px; border-radius: 50%;
+    border: 2px solid #60a5fa; border-right-color: transparent; animation: spin 1s linear infinite;
+  }
+  .badge.offline { display: block; width: 10px; height: 10px; border-radius: 50%; border: 1.5px dashed #6b7079; }
+  .spin {
+    display: block; width: 12px; height: 12px; margin: 1.5px; border-radius: 50%;
+    border: 2px solid #30333b; border-top-color: var(--c); animation: spin 0.9s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .close {
+    position: relative; z-index: 1; flex: none; width: 16px; height: 16px; padding: 0; border: 0;
+    border-radius: 4px; background: transparent; color: #8b9099; cursor: default; outline: none;
+    display: none; align-items: center; justify-content: center;
+  }
+  .tab:hover .close, .tab.active .close { display: flex; }
+  .close:hover { background: #2a2d34; color: #e8eaed; }
+  /* Only while a tab is dragged do the others slide aside. */
+  #tabs.dragging .tab { transition: transform 150ms ease; }
+  #tabs.dragging .tab.lifted { transition: none; z-index: 3; background: #1b1d22; }
+  #tabs.dragging .tab.lifted.active { background: #0b0c0f; }
+  @media (prefers-reduced-motion: reduce) {
+    .badge.working, .spin { animation: none; }
+    #tabs.dragging .tab { transition: none; }
+  }
+</style>
+</head>
+<body>
+<div id="strip">
+  <button id="overview" class="icon-btn" type="button" tabindex="-1" aria-label="All servers" aria-pressed="false" title="All servers (⌘0)">
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="1.5" y="1.5" width="5" height="5" rx="1.2"></rect><rect x="9.5" y="1.5" width="5" height="5" rx="1.2"></rect><rect x="1.5" y="9.5" width="5" height="5" rx="1.2"></rect><rect x="9.5" y="9.5" width="5" height="5" rx="1.2"></rect></svg>
+  </button>
+  <div id="tabs" role="tablist" aria-label="Servers"></div>
+  <button id="new" class="icon-btn" type="button" tabindex="-1" aria-label="New server tab" title="New server tab (⌘T)">
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M8 2.5v11M2.5 8h11"></path></svg>
+  </button>
+  <div id="fill"></div>
+</div>
+<script>
+(function () {
+  'use strict';
+
+  var FALLBACK_COLOR = '#94a3b8';
+  var COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+  var MAX_NAME = 40;
+  var DRAG_START_PX = 4;
+  var SVG_NS = 'http://www.w3.org/2000/svg';
+
+  var strip = document.getElementById('strip');
+  var tabsEl = document.getElementById('tabs');
+  var overviewBtn = document.getElementById('overview');
+  var newBtn = document.getElementById('new');
+
+  function post(msg) { try { window.ipc.postMessage(JSON.stringify(msg)); } catch (e) { /* not in the app */ } }
+
+  // Everything below arrives from the native side, and most of it was typed
+  // on a server (names, URLs): it is only ever set as text or as a checked
+  // attribute value, never parsed as markup or CSS.
+  function str(v) { return typeof v === 'string' ? v : ''; }
+  function color(v) { return typeof v === 'string' && COLOR_RE.test(v) ? v : FALLBACK_COLOR; }
+  function count(v) {
+    var n = Math.floor(Number(v));
+    return isFinite(n) && n > 0 ? n : 0;
+  }
+  function shortcut(v) {
+    var n = Number(v);
+    return n >= 1 && n <= 9 && Math.floor(n) === n ? n : null;
+  }
+
+  function normTab(t) {
+    if (!t || typeof t !== 'object') return null;
+    var id = Number(t.id);
+    if (!isFinite(id)) return null;
+    var st = t.status && typeof t.status === 'object' ? t.status : {};
+    return {
+      id: id,
+      name: str(t.name),
+      color: color(t.color),
+      active: t.active === true,
+      kind: t.kind === 'connect' || t.kind === 'loading' ? t.kind : 'server',
+      local: t.local === true,
+      url: str(t.url),
+      key: shortcut(t.key),
+      needs: count(st.needsYou),
+      waiting: count(st.waiting),
+      working: count(st.working),
+      offline: st.offline === true
+    };
+  }
+
+  // One badge, by precedence: needs you, waiting, working, not answering.
+  function badgeOf(t) {
+    if (t.kind === 'connect') return '';
+    if (t.needs) return 'needs';
+    if (t.waiting) return 'waiting';
+    if (t.working) return 'working';
+    if (t.offline) return 'offline';
+    return '';
+  }
+
+  function statusWords(t) {
+    if (t.kind === 'loading') return ['Connecting'];
+    if (t.kind === 'connect') return [];
+    var out = [];
+    if (t.needs) out.push(t.needs + (t.needs === 1 ? ' needs you' : ' need you'));
+    if (t.waiting) out.push(t.waiting + ' waiting');
+    if (t.working) out.push(t.working + ' working');
+    if (t.offline) out.push('Not answering');
+    return out;
+  }
+
+  function displayName(t) { return t.name || 'Untitled'; }
+
+  // ---- icons (fixed shapes from this file; no outside text goes in) ----
+  function svg(size, width, parts) {
+    var s = document.createElementNS(SVG_NS, 'svg');
+    s.setAttribute('width', String(size));
+    s.setAttribute('height', String(size));
+    s.setAttribute('viewBox', '0 0 16 16');
+    s.setAttribute('fill', 'none');
+    s.setAttribute('stroke', 'currentColor');
+    s.setAttribute('stroke-width', String(width));
+    s.setAttribute('aria-hidden', 'true');
+    parts.forEach(function (p) {
+      var el = document.createElementNS(SVG_NS, p[0]);
+      Object.keys(p[1]).forEach(function (k) { el.setAttribute(k, p[1][k]); });
+      s.appendChild(el);
+    });
+    return s;
+  }
+  var ICONS = {
+    local: function () {
+      return svg(15, 1.5, [['rect', { x: '2.5', y: '3', width: '11', height: '7.5', rx: '1.2' }], ['path', { d: 'M1 13h14' }]]);
+    },
+    server: function () {
+      return svg(15, 1.5, [
+        ['rect', { x: '2', y: '2', width: '12', height: '5', rx: '1.2' }],
+        ['rect', { x: '2', y: '9', width: '12', height: '5', rx: '1.2' }],
+        ['path', { d: 'M4.5 4.5h1M4.5 11.5h1' }]
+      ]);
+    },
+    connect: function () { return svg(15, 1.7, [['path', { d: 'M8 2.5v11M2.5 8h11' }]]); },
+    loading: function () {
+      var s = document.createElement('span');
+      s.className = 'spin';
+      return s;
+    },
+    close: function () { return svg(10, 1.6, [['path', { d: 'M3 3l10 10M13 3L3 13' }]]); }
+  };
+  function iconKind(t) {
+    if (t.kind === 'connect' || t.kind === 'loading') return t.kind;
+    return t.local ? 'local' : 'server';
+  }
+
+  // ---- state ----
+  var state = { tabs: [], overviewActive: false, fullscreen: false };
+  var lastJson = '';
+  var views = new Map(); // tab id -> the tab's elements and what they show
+  var renaming = null; // { id, input, initial }
+  var drag = null; // a press on a tab that may turn into a drag
+  var pendingRender = false;
+  var rendering = false;
+  var suppressClick = false;
+
+  function createView(id) {
+    var root = document.createElement('div');
+    root.className = 'tab';
+    root.setAttribute('role', 'presentation');
+    root.dataset.id = String(id);
+    var hit = document.createElement('button');
+    hit.type = 'button';
+    hit.className = 'hit';
+    hit.tabIndex = -1;
+    hit.setAttribute('role', 'tab');
+    var ico = document.createElement('span');
+    ico.className = 'ico';
+    ico.setAttribute('aria-hidden', 'true');
+    var name = document.createElement('span');
+    name.className = 'name';
+    name.setAttribute('aria-hidden', 'true');
+    var badge = document.createElement('span');
+    badge.className = 'badge';
+    badge.setAttribute('aria-hidden', 'true');
+    var close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'close';
+    close.tabIndex = -1;
+    close.setAttribute('aria-label', 'Close tab');
+    close.title = 'Close tab';
+    close.appendChild(ICONS.close());
+    root.appendChild(hit);
+    root.appendChild(ico);
+    root.appendChild(name);
+    root.appendChild(badge);
+    root.appendChild(close);
+    var v = { id: id, root: root, hit: hit, ico: ico, name: name, badge: badge, close: close, icon: '', badgeKind: null, tab: null };
+    views.set(id, v);
+    return v;
+  }
+
+  function updateView(v, t) {
+    v.tab = t;
+    var bk = badgeOf(t);
+    var cls = 'tab' + (t.active ? ' active' : '') + (bk === 'offline' ? ' offline' : '') +
+      (t.kind !== 'server' ? ' ' + t.kind : '') + (renaming && renaming.id === t.id ? ' renaming' : '');
+    if (v.root.className !== cls) v.root.className = cls;
+    v.root.style.setProperty('--c', t.color);
+    var ik = iconKind(t);
+    if (v.icon !== ik) {
+      v.icon = ik;
+      v.ico.replaceChildren(ICONS[ik]());
+    }
+    var label = displayName(t);
+    if (v.name.textContent !== label) v.name.textContent = label;
+    var btext = bk === 'needs' ? (t.needs > 99 ? '99+' : String(t.needs)) : '';
+    if (v.badgeKind !== bk + btext) {
+      v.badgeKind = bk + btext;
+      v.badge.className = 'badge' + (bk ? ' ' + bk : '');
+      v.badge.textContent = btext;
+    }
+    var words = statusWords(t);
+    v.hit.setAttribute('aria-selected', t.active ? 'true' : 'false');
+    v.hit.setAttribute('aria-label', [label].concat(words).join(', '));
+    // The strip is too short for a hover card under it, so the native
+    // tooltip carries the same lines.
+    var lines = [label + (t.key ? '  ⌘' + t.key : '')];
+    if (t.url) lines.push(t.url);
+    v.hit.title = lines.concat(words).join('\n');
+  }
+
+  function render() {
+    if (drag && drag.active) { pendingRender = true; return; }
+    pendingRender = false;
+    rendering = true;
+    strip.classList.toggle('fullscreen', state.fullscreen);
+    overviewBtn.classList.toggle('on', state.overviewActive);
+    overviewBtn.setAttribute('aria-pressed', state.overviewActive ? 'true' : 'false');
+    var seen = new Set();
+    state.tabs.forEach(function (t, i) {
+      var v = views.get(t.id) || createView(t.id);
+      updateView(v, t);
+      seen.add(t.id);
+      var at = tabsEl.children[i];
+      if (at !== v.root) tabsEl.insertBefore(v.root, at || null);
+    });
+    views.forEach(function (v, id) {
+      if (seen.has(id)) return;
+      if (renaming && renaming.id === id) endRename('gone');
+      v.root.remove();
+      views.delete(id);
+    });
+    rendering = false;
+    // Moving a tab in the row takes the focus from a rename under way: give it back.
+    if (renaming && document.activeElement !== renaming.input) renaming.input.focus();
+  }
+
+  function applyState(msg) {
+    var seen = new Set();
+    var tabs = [];
+    (Array.isArray(msg.tabs) ? msg.tabs : []).forEach(function (raw) {
+      var t = normTab(raw);
+      if (!t || seen.has(t.id)) return;
+      seen.add(t.id);
+      tabs.push(t);
+    });
+    var next = { tabs: tabs, overviewActive: msg.overviewActive === true, fullscreen: msg.fullscreen === true };
+    var json = JSON.stringify(next);
+    if (json === lastJson && !pendingRender) return;
+    lastJson = json;
+    state = next;
+    render();
+  }
+
+  // ---- rename ----
+  function startRename(id) {
+    var v = views.get(id);
+    if (!v || (drag && drag.active)) return;
+    if (renaming) {
+      if (renaming.id === id) { renaming.input.focus(); return; }
+      endRename('commit');
+    }
+    var input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'rename';
+    input.maxLength = MAX_NAME;
+    input.spellcheck = false;
+    input.autocomplete = 'off';
+    input.setAttribute('aria-label', 'Tab name');
+    input.value = v.tab ? v.tab.name.slice(0, MAX_NAME) : '';
+    renaming = { id: id, input: input, before: v.tab ? v.tab.name : '', initial: input.value.trim() };
+    v.root.classList.add('renaming');
+    v.root.insertBefore(input, v.badge);
+    input.addEventListener('keydown', function (ev) {
+      ev.stopPropagation();
+      if (ev.key === 'Enter') { ev.preventDefault(); endRename('commit'); }
+      else if (ev.key === 'Escape') { ev.preventDefault(); endRename('cancel'); }
+    });
+    input.addEventListener('blur', function () {
+      if (rendering) return;
+      if (renaming && renaming.input === input) endRename('commit');
+    });
+    // The keyboard reaches this field only while this web view is the first
+    // responder, and the native side hands it back to the page below after
+    // every other click on the strip: ask for it.
+    post({ cmd: 'editing' });
+    input.focus();
+    input.select();
+  }
+
+  // how: 'commit' (Enter, a click elsewhere), 'cancel' (Escape) or 'gone'
+  // (the tab was closed). Every rename that ends on a tab still there posts
+  // one rename, a cancelled or unchanged one with the name the tab had: the
+  // native side takes that as "rename finished" and hands the keyboard back
+  // to the page below.
+  function endRename(how) {
+    var r = renaming;
+    if (!r) return;
+    renaming = null;
+    var name = r.input.value.trim().slice(0, MAX_NAME);
+    r.input.remove();
+    var v = views.get(r.id);
+    if (v) v.root.classList.remove('renaming');
+    if (how === 'gone') return;
+    if (how === 'cancel' || name === r.initial) {
+      post({ cmd: 'rename', id: r.id, name: r.before });
+      return;
+    }
+    // Shown at once; an empty name is the default the native side picks.
+    if (v && name) v.name.textContent = name;
+    post({ cmd: 'rename', id: r.id, name: name });
+  }
+
+  // ---- drag to reorder ----
+  function beginDrag() {
+    var roots = Array.prototype.slice.call(tabsEl.children);
+    drag.roots = roots;
+    drag.from = roots.indexOf(drag.root);
+    if (drag.from < 0) { drag = null; return; }
+    drag.rects = roots.map(function (r) { return r.getBoundingClientRect(); });
+    var r0 = drag.rects[drag.from];
+    var gap = roots.length > 1 ? drag.rects[1].left - drag.rects[0].right : 0;
+    drag.step = r0.width + gap;
+    drag.to = drag.from;
+    drag.active = true;
+    if (renaming) endRename('commit');
+    try { drag.root.setPointerCapture(drag.pointerId); } catch (e) { /* the pointer is gone */ }
+    tabsEl.classList.add('dragging');
+    drag.root.classList.add('lifted');
+  }
+
+  function moveDrag(dx) {
+    var rects = drag.rects;
+    var r0 = rects[drag.from];
+    var minDx = rects[0].left - r0.left;
+    var maxDx = rects[rects.length - 1].right - r0.right;
+    dx = Math.max(minDx, Math.min(maxDx, dx));
+    drag.root.style.transform = 'translateX(' + dx + 'px)';
+    var centre = r0.left + r0.width / 2 + dx;
+    var to = 0;
+    for (var i = 0; i < rects.length; i++) {
+      if (i !== drag.from && centre > rects[i].left + rects[i].width / 2) to++;
+    }
+    drag.to = to;
+    drag.roots.forEach(function (r, i) {
+      if (i === drag.from) return;
+      var shift = 0;
+      if (drag.from < to && i > drag.from && i <= to) shift = -drag.step;
+      else if (to < drag.from && i >= to && i < drag.from) shift = drag.step;
+      r.style.transform = shift ? 'translateX(' + shift + 'px)' : '';
+    });
+  }
+
+  function endDrag(commit) {
+    var d = drag;
+    drag = null;
+    if (!d || !d.active) return;
+    try { d.root.releasePointerCapture(d.pointerId); } catch (e) { /* already released */ }
+    // The slide stops before the tabs move, so nothing animates back.
+    tabsEl.classList.remove('dragging');
+    d.root.classList.remove('lifted');
+    d.roots.forEach(function (r) { r.style.transform = ''; });
+    // The click that ends a drag is not a select.
+    suppressClick = true;
+    setTimeout(function () { suppressClick = false; }, 0);
+    if (commit && d.to !== d.from) {
+      var at = state.tabs.findIndex(function (t) { return t.id === d.id; });
+      if (at >= 0) {
+        var moved = state.tabs.splice(at, 1)[0];
+        state.tabs.splice(d.to, 0, moved);
+        lastJson = JSON.stringify(state);
+      }
+      post({ cmd: 'move', id: d.id, to: d.to });
+      pendingRender = true;
+    }
+    if (pendingRender) render();
+  }
+
+  function tabOf(target) {
+    var root = target && target.closest ? target.closest('.tab') : null;
+    return root && views.has(Number(root.dataset.id)) ? Number(root.dataset.id) : null;
+  }
+  function inside(target, sel) { return !!(target && target.closest && target.closest(sel)); }
+
+  // ---- events ----
+  var middleDownOn = null;
+
+  document.addEventListener('mousedown', function (ev) {
+    var t = ev.target;
+    if (renaming && t !== renaming.input) endRename('commit');
+    if (inside(t, 'input')) return;
+    // The strip never takes the focus or starts a selection.
+    ev.preventDefault();
+    if (ev.button === 1) { middleDownOn = tabOf(t); return; }
+    if (ev.button !== 0 || ev.ctrlKey) return;
+    if (inside(t, '.tab, button')) return;
+    // The second press of a double click zooms, as a title bar does. Decided
+    // here, not on dblclick: the first press's window drag may keep WebKit
+    // from ever seeing a dblclick.
+    if (ev.detail === 2) post({ cmd: 'zoom' });
+    if (ev.detail > 1) return;
+    post({ cmd: 'drag' });
+  });
+
+  // Middle click closes, as in a browser (auxclick is not in every WebKit).
+  document.addEventListener('mouseup', function (ev) {
+    if (ev.button !== 1) return;
+    var id = tabOf(ev.target);
+    if (id !== null && id === middleDownOn) post({ cmd: 'close', id: id });
+    middleDownOn = null;
+  });
+
+  document.addEventListener('dblclick', function (ev) {
+    var t = ev.target;
+    var id = tabOf(t);
+    if (id !== null) {
+      if (!inside(t, '.close, input')) startRename(id);
+      return;
+    }
+  });
+
+  // WebKit's own menu (Reload, Inspect Element) never shows on the strip,
+  // the rename field included; only a tab has a menu, the native one, and
+  // not while its name is being typed.
+  document.addEventListener('contextmenu', function (ev) {
+    ev.preventDefault();
+    var id = inside(ev.target, 'input') ? null : tabOf(ev.target);
+    if (id !== null) post({ cmd: 'menu', id: id });
+  });
+
+  tabsEl.addEventListener('click', function (ev) {
+    if (suppressClick) { suppressClick = false; return; }
+    if (ev.ctrlKey) return; // a Control-click is the right click: the menu answers it
+    var id = tabOf(ev.target);
+    if (id === null || inside(ev.target, 'input')) return;
+    if (inside(ev.target, '.close')) post({ cmd: 'close', id: id });
+    else post({ cmd: 'select', id: id });
+  });
+
+  tabsEl.addEventListener('pointerdown', function (ev) {
+    if (ev.button !== 0 || ev.ctrlKey || !ev.isPrimary) return;
+    var id = tabOf(ev.target);
+    if (id === null || inside(ev.target, '.close, input')) return;
+    drag = { id: id, root: views.get(id).root, pointerId: ev.pointerId, startX: ev.clientX, active: false };
+  });
+
+  document.addEventListener('pointermove', function (ev) {
+    if (!drag || ev.pointerId !== drag.pointerId) return;
+    var dx = ev.clientX - drag.startX;
+    if (!drag.active) {
+      if (Math.abs(dx) < DRAG_START_PX) return;
+      beginDrag();
+      if (!drag) return;
+    }
+    moveDrag(dx);
+  });
+
+  document.addEventListener('pointerup', function (ev) {
+    if (drag && ev.pointerId === drag.pointerId) endDrag(true);
+  });
+  document.addEventListener('pointercancel', function (ev) {
+    if (drag && ev.pointerId === drag.pointerId) endDrag(false);
+  });
+  window.addEventListener('blur', function () { if (drag) endDrag(false); });
+
+  overviewBtn.addEventListener('click', function () { post({ cmd: 'overview' }); });
+  newBtn.addEventListener('click', function () { post({ cmd: 'new' }); });
+
+  function onNative(msg) {
+    if (typeof msg === 'string') {
+      try { msg = JSON.parse(msg); } catch (e) { return; }
+    }
+    if (!msg || typeof msg !== 'object') return;
+    if (msg.type === 'state') applyState(msg);
+    else if (msg.type === 'rename') {
+      var id = Number(msg.id);
+      if (isFinite(id)) startRename(id);
+    }
+  }
+
+  Object.defineProperty(window, '__codemanTabs', {
+    value: Object.freeze({ onNative: onNative }),
+    writable: false,
+    configurable: false,
+    enumerable: false
+  });
+
+  post({ cmd: 'ready' });
+})();
+</script>
+</body>
+</html>

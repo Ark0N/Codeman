@@ -5,6 +5,10 @@ use std::borrow::Cow;
 use wry::http::{header::CONTENT_TYPE, Request, Response, StatusCode};
 
 const CONNECT_HTML: &[u8] = include_bytes!("../assets/connect.html");
+/// The tab strip across the top of the window, and the overview of every
+/// server (tabs.rs).
+const TABS_HTML: &[u8] = include_bytes!("../assets/tabs.html");
+const OVERVIEW_HTML: &[u8] = include_bytes!("../assets/overview.html");
 const ICON_PNG: &[u8] = include_bytes!("../assets/icon.png");
 
 /// The connect page loads nothing from outside the app.
@@ -14,6 +18,8 @@ const CSP: &str = "default-src 'none'; script-src 'unsafe-inline'; style-src 'un
 pub fn respond(request: Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
     let (body, mime): (&'static [u8], &str) = match request.uri().path() {
         "/" | "/index.html" => (CONNECT_HTML, "text/html; charset=utf-8"),
+        "/tabs.html" => (TABS_HTML, "text/html; charset=utf-8"),
+        "/overview.html" => (OVERVIEW_HTML, "text/html; charset=utf-8"),
         "/icon.png" => (ICON_PNG, "image/png"),
         _ => {
             return Response::builder()
@@ -242,6 +248,24 @@ pub fn refused_script(session_id: Option<&str>) -> String {
     )
 }
 
+/// Hands a message to one of the app's own pages: the connect page
+/// (`__codemanDesktop`), the tab strip (`__codemanTabs`) or the overview
+/// (`__codemanOverview`). The message is JSON, which is also a JavaScript
+/// expression.
+pub fn native_message_script(global: &str, msg: &serde_json::Value) -> String {
+    format!("window.{global} && window.{global}.onNative({msg})")
+}
+
+/// Selects a session in Codeman's page, as a click on its tab would (the
+/// overview's rows). `id` has passed `tabs::is_session_id`, and goes in as a
+/// JSON string all the same.
+pub fn select_session_script(id: &str) -> String {
+    let id = serde_json::to_string(id).unwrap_or_else(|_| "\"\"".into());
+    format!(
+        "try {{ if (window.app && typeof window.app.selectSession === 'function') window.app.selectSession({id}); }} catch (e) {{}}"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -268,6 +292,26 @@ mod tests {
         assert_eq!(get("/icon.png").status(), StatusCode::OK);
         assert_eq!(get("/../etc/passwd").status(), StatusCode::NOT_FOUND);
         assert_eq!(get("/other.js").status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn serves_the_strip_and_the_overview() {
+        for (path, global) in [("/tabs.html", "__codemanTabs"), ("/overview.html", "__codemanOverview")] {
+            let page = get(path);
+            assert_eq!(page.status(), StatusCode::OK, "{path}");
+            assert_eq!(page.headers()["content-security-policy"], CSP, "{path}");
+            assert!(String::from_utf8_lossy(page.body()).contains(global), "{path}");
+        }
+    }
+
+    #[test]
+    fn page_scripts_carry_json() {
+        let msg = serde_json::json!({ "type": "state", "name": "a\"b</script>" });
+        let script = native_message_script("__codemanTabs", &msg);
+        assert!(script.starts_with("window.__codemanTabs && window.__codemanTabs.onNative({"));
+        assert!(script.contains(r#""a\"b</script>""#));
+        let select = select_session_script("abc-1");
+        assert!(select.contains(r#"selectSession("abc-1")"#));
     }
 
     #[test]

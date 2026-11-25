@@ -21,8 +21,14 @@
 //! of it: every challenge comes back here and gets the login of that moment,
 //! never one an earlier connect left behind.
 //!
-//! Two smaller helpers live here too: `clear_cookies`, which empties the web
-//! views' cookie jar before a login so an earlier user's session cookie cannot
+//! Each server tab hands over a login of its own (`set_credentials`, keyed by
+//! the tab), and a challenge is answered with the login of the tab whose server
+//! it is (`pick`), and only to a web view of that tab (`bind_view`), so two
+//! tabs never answer for each other, even when one tab's page fetches from
+//! the other's server.
+//!
+//! Two smaller helpers live here too: `clear_cookies`, which removes one
+//! server's cookies before a login so an earlier user's session cookie cannot
 //! win over the new login, and `content_size`, the window's content area.
 //!
 //! `install` adds the missing methods to the classes of the delegates wry made,
@@ -145,6 +151,40 @@ fn bare_host(host: &str) -> &str {
     host.strip_prefix('[').and_then(|h| h.strip_suffix(']')).unwrap_or(host)
 }
 
+/// Which tab's login a challenge is for. The URL that got the 401 belongs to
+/// the tab whose server the protection space names and whose base path holds
+/// it, the deepest one when several do (a server at `/` and another below a
+/// path on the same origin, behind one proxy); then that tab answers only when
+/// the URL is in its scope (`policy::challenge_in_scope`). So a web tab of the
+/// deeper server never gets the login of the server above it. None: no tab's
+/// server, so WebKit's own handling.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn pick<'a>(challenge: &Challenge<'_>, saved: &'a [(u64, BasicCredentials)]) -> Option<(u64, &'a BasicCredentials)> {
+    let failed = challenge.failed?;
+    let (tab, owner) = saved
+        .iter()
+        .filter(|(_, s)| {
+            credentials_match(s, challenge.scheme, challenge.host, challenge.port)
+                && crate::policy::within_base(failed, &s.server)
+        })
+        .max_by_key(|(_, s)| s.server.path().len())?;
+    crate::policy::challenge_in_scope(failed, &owner.server).then_some((*tab, owner))
+}
+
+/// Whether a cookie the store keeps for `domain` goes to pages of `host`: a
+/// host-only cookie of that host (Codeman's own, which names no domain), or a
+/// domain cookie (`.example.ts.net`) the host lies under. Case-insensitive,
+/// IPv6 brackets ignored.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn cookie_for_host(domain: &str, host: &str) -> bool {
+    let host = bare_host(host).to_ascii_lowercase();
+    let domain = bare_host(domain.trim()).to_ascii_lowercase();
+    match domain.strip_prefix('.') {
+        Some(parent) => host == parent || host.ends_with(&domain),
+        None => !domain.is_empty() && host == domain,
+    }
+}
+
 /// How a dialog names the page that opened it ("localhost:3000"), from a
 /// security origin's host and port (0 = the scheme's default, left out).
 fn origin_label(host: &str, port: i64) -> Option<String> {
@@ -182,25 +222,51 @@ pub fn install(webview: &wry::WebView) {
     imp::install(webview);
 }
 
-/// The login HTTP Basic challenges from that server are answered with
-/// (`None`: answer none), from the next challenge on: WebKit keeps no copy of
-/// an earlier one. Also re-arms the refusal report. Main thread only.
+/// The login HTTP Basic challenges from tab `tab`'s server are answered with
+/// (`None`: that tab answers none), from the next challenge on: WebKit keeps
+/// no copy of an earlier one. Also re-arms that tab's refusal report. Main
+/// thread only.
 #[cfg(target_os = "macos")]
-pub fn set_credentials(creds: Option<BasicCredentials>) {
-    imp::set_credentials(creds);
+pub fn set_credentials(tab: u64, creds: Option<BasicCredentials>) {
+    imp::set_credentials(tab, creds);
 }
 
-/// Called on the main thread, once per `set_credentials`, when the server
-/// refused the saved login. It runs inside a WebKit callback, so it should
-/// only post an event, never touch windows directly.
+/// Called on the main thread with the tab, once per `set_credentials` of that
+/// tab, when its server refused the saved login. It runs inside a WebKit
+/// callback, so it should only post an event, never touch windows directly.
 #[cfg(target_os = "macos")]
-pub fn set_auth_rejected_handler(handler: Box<dyn Fn()>) {
+pub fn set_auth_rejected_handler(handler: Box<dyn Fn(u64)>) {
     imp::set_auth_rejected_handler(handler);
 }
 
-/// Removes every cookie from the app's default website data store, which all
-/// of its web views use, then calls `done`. Only cookies: local storage, where
-/// Codeman keeps per-device settings, stays. Main thread only.
+/// Ties a web view to a tab: a Basic challenge from that web view is answered
+/// with that tab's login only, never another tab's, whatever server the
+/// request went to. Call it for every server page and pop-out web view. Main
+/// thread only.
+#[cfg(target_os = "macos")]
+pub fn bind_view(webview: &wry::WebView, tab: u64) {
+    imp::bind_view(webview, tab);
+}
+
+/// A closed tab's web views answer no challenge any more.
+#[cfg(target_os = "macos")]
+pub fn forget_tab(tab: u64) {
+    imp::forget_tab(tab);
+}
+
+/// Whether WebKit gives each server a data store of its own
+/// (`dataStoreForIdentifier:`, macOS 14 and later). wry falls back to the
+/// default store without it, and so does `clear_cookies`.
+#[cfg(target_os = "macos")]
+pub fn own_stores_available() -> bool {
+    imp::os_major_version() >= 14
+}
+
+/// Removes the cookies of `host` (`cookie_for_host`) from a data store: the
+/// server's own (`store`, on a macOS that has them) or the default one, then
+/// calls `done`. Only that host's cookies, so the other servers' tabs stay
+/// logged in, and only cookies: local storage, where Codeman keeps
+/// per-device settings, stays. Main thread only.
 ///
 /// `done` runs exactly once, on the main thread, as its own operation on the
 /// main queue: never before this returns and never inside a WebKit callback.
@@ -209,8 +275,8 @@ pub fn set_auth_rejected_handler(handler: Box<dyn Fn()>) {
 /// nothing and calls `done` right away on the calling thread. If WebKit never
 /// answers at all, `done` never runs: the caller's own deadline covers that.
 #[cfg(target_os = "macos")]
-pub fn clear_cookies(done: Box<dyn FnOnce()>) {
-    imp::clear_cookies(done);
+pub fn clear_cookies(store: Option<[u8; 16]>, host: String, done: Box<dyn FnOnce()>) {
+    imp::clear_cookies(store, host, done);
 }
 
 /// The window's content area in points (`contentRectForFrameRect` of its
@@ -244,28 +310,38 @@ mod imp {
     use objc2::{msg_send, sel, ClassType, Message};
     use objc2_app_kit::{NSAlert, NSAlertFirstButtonReturn, NSTextField, NSView, NSWindow};
     use objc2_foundation::{
-        MainThreadMarker, NSDate, NSInteger, NSOperationQueue, NSPoint, NSRect, NSSet, NSSize, NSString,
-        NSURLAuthenticationChallenge, NSURLAuthenticationMethodHTTPBasic, NSURLCredential, NSURLCredentialPersistence,
-        NSURLProtectionSpace, NSURLRequest, NSURLResponse, NSURLSessionAuthChallengeDisposition, NSURL,
+        MainThreadMarker, NSArray, NSHTTPCookie, NSInteger, NSOperationQueue, NSPoint, NSProcessInfo, NSRect, NSSize,
+        NSString, NSURLAuthenticationChallenge, NSURLAuthenticationMethodHTTPBasic, NSURLCredential,
+        NSURLCredentialPersistence, NSURLProtectionSpace, NSURLRequest, NSURLResponse,
+        NSURLSessionAuthChallengeDisposition, NSURL, NSUUID,
     };
-    use objc2_web_kit::{WKFrameInfo, WKSecurityOrigin, WKWebsiteDataStore, WKWebsiteDataTypeCookies};
+    use objc2_web_kit::{WKFrameInfo, WKSecurityOrigin, WKWebsiteDataStore};
     use tao::platform::macos::WindowExtMacOS;
     use url::Url;
     use wry::WebViewExtMacOS;
 
-    use super::{decide, dialog_title, origin_label, BasicCredentials, Challenge, ChallengeAnswer};
+    use super::{
+        cookie_for_host, decide, dialog_title, origin_label, pick, BasicCredentials, Challenge, ChallengeAnswer,
+    };
 
     /// Page text in a dialog is cut at this many UTF-16 units, so a huge
     /// message cannot push the alert's buttons off the screen.
     const MAX_DIALOG_UTF16: usize = 2000;
 
+    /// What the app is told, with the tab, when a server refuses its login.
+    type RejectedHandler = Rc<dyn Fn(u64)>;
+
     thread_local! {
-        /// The login challenges are answered with; `None` answers none.
-        static SAVED: RefCell<Option<BasicCredentials>> = const { RefCell::new(None) };
-        /// The server refused `SAVED` and the app was told; `set_credentials` clears it.
-        static REJECTED: Cell<bool> = const { Cell::new(false) };
-        /// Told once when the server refuses `SAVED`.
-        static ON_REJECTED: RefCell<Option<Rc<dyn Fn()>>> = const { RefCell::new(None) };
+        /// The login of each tab that has one, by tab.
+        static SAVED: RefCell<Vec<(u64, BasicCredentials)>> = const { RefCell::new(Vec::new()) };
+        /// The tabs whose server refused their login, the app told; a tab's
+        /// `set_credentials` takes it out again.
+        static REJECTED: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
+        /// The tab of each server page and pop-out web view, by the address of
+        /// its WKWebView (`bind_view`).
+        static VIEWS: RefCell<Vec<(usize, u64)>> = const { RefCell::new(Vec::new()) };
+        /// Told once, with the tab, when a server refuses its login.
+        static ON_REJECTED: RefCell<Option<RejectedHandler>> = const { RefCell::new(None) };
     }
 
     // The added methods, with every object argument as a raw pointer: WebKit
@@ -365,61 +441,145 @@ mod imp {
         }
     }
 
-    pub(super) fn set_credentials(creds: Option<BasicCredentials>) {
+    pub(super) fn set_credentials(tab: u64, creds: Option<BasicCredentials>) {
         if MainThreadMarker::new().is_none() {
             eprintln!("codeman-desktop: macos::set_credentials called off the main thread; ignored");
             return;
         }
-        let stored = SAVED.try_with(|saved| saved.try_borrow_mut().map(|mut saved| *saved = creds).is_ok());
+        let stored = SAVED.try_with(|saved| {
+            saved
+                .try_borrow_mut()
+                .map(|mut saved| {
+                    saved.retain(|(t, _)| *t != tab);
+                    if let Some(creds) = creds {
+                        saved.push((tab, creds));
+                    }
+                })
+                .is_ok()
+        });
         if stored != Ok(true) {
             eprintln!("codeman-desktop: could not store the login for Basic challenges");
         }
-        let _ = REJECTED.try_with(|rejected| rejected.set(false));
+        let _ = REJECTED.try_with(|rejected| {
+            if let Ok(mut rejected) = rejected.try_borrow_mut() {
+                rejected.retain(|t| *t != tab);
+            }
+        });
     }
 
-    pub(super) fn set_auth_rejected_handler(handler: Box<dyn Fn()>) {
+    pub(super) fn bind_view(webview: &wry::WebView, tab: u64) {
+        if MainThreadMarker::new().is_none() {
+            return;
+        }
+        let address = Retained::as_ptr(&WebViewExtMacOS::webview(webview)) as usize;
+        let _ = VIEWS.try_with(|views| {
+            if let Ok(mut views) = views.try_borrow_mut() {
+                // A WKWebView freed earlier may have left its address behind.
+                views.retain(|(a, _)| *a != address);
+                views.push((address, tab));
+            }
+        });
+    }
+
+    pub(super) fn forget_tab(tab: u64) {
+        let _ = VIEWS.try_with(|views| {
+            if let Ok(mut views) = views.try_borrow_mut() {
+                views.retain(|(_, t)| *t != tab);
+            }
+        });
+    }
+
+    /// The tab a WKWebView belongs to, by its address.
+    fn tab_of_view(web_view: *mut AnyObject) -> Option<u64> {
+        let address = web_view as usize;
+        VIEWS
+            .try_with(|views| {
+                views
+                    .try_borrow()
+                    .ok()
+                    .and_then(|views| views.iter().find(|(a, _)| *a == address).map(|(_, t)| *t))
+            })
+            .ok()
+            .flatten()
+    }
+
+    pub(super) fn os_major_version() -> isize {
+        NSProcessInfo::processInfo().operatingSystemVersion().majorVersion
+    }
+
+    pub(super) fn set_auth_rejected_handler(handler: Box<dyn Fn(u64)>) {
         if MainThreadMarker::new().is_none() {
             eprintln!("codeman-desktop: macos::set_auth_rejected_handler called off the main thread; ignored");
             return;
         }
-        let handler: Rc<dyn Fn()> = Rc::from(handler);
+        let handler: RejectedHandler = Rc::from(handler);
         let stored = ON_REJECTED.try_with(|slot| slot.try_borrow_mut().map(|mut slot| *slot = Some(handler)).is_ok());
         if stored != Ok(true) {
             eprintln!("codeman-desktop: could not store the login-refused handler");
         }
     }
 
-    pub(super) fn clear_cookies(done: Box<dyn FnOnce()>) {
-        if MainThreadMarker::new().is_none() {
+    pub(super) fn clear_cookies(store: Option<[u8; 16]>, host: String, done: Box<dyn FnOnce()>) {
+        let Some(mtm) = MainThreadMarker::new() else {
             eprintln!("codeman-desktop: macos::clear_cookies called off the main thread; cookies kept");
             // `done` was made on this thread, so it runs here instead of being
             // sent to another one.
             run_done(done);
             return;
-        }
+        };
         // Every way out of here, a panic included, either hands `pending` to
-        // WebKit's completion handler or drops it, and both pass `done` on.
-        let pending = Pending(Cell::new(Some(done)));
-        let _ = catch_unwind(AssertUnwindSafe(|| autoreleasepool(|_| remove_cookies(pending))));
+        // WebKit's completion handlers or drops it, and both pass `done` on.
+        let pending = Rc::new(Pending(Cell::new(Some(done))));
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            autoreleasepool(|_| remove_cookies(mtm, store, host, pending))
+        }));
     }
 
-    fn remove_cookies(pending: Pending) {
-        // SAFETY: class methods called on the main thread (checked by the
-        // caller), with nil handled by the `Option` return types.
-        let store: Option<Retained<WKWebsiteDataStore>> =
-            unsafe { msg_send![WKWebsiteDataStore::class(), defaultDataStore] };
-        let since: Option<Retained<NSDate>> = unsafe { msg_send![NSDate::class(), distantPast] };
-        let (Some(store), Some(since)) = (store, since) else {
-            eprintln!("codeman-desktop: no website data store; cookies kept");
-            return;
+    fn remove_cookies(mtm: MainThreadMarker, store: Option<[u8; 16]>, host: String, pending: Rc<Pending>) {
+        // The same store wry gave the server's web view: its own on a macOS that
+        // has them, else the default one. `dataStoreForIdentifier:` does not
+        // exist before macOS 14, and an all-zero identifier throws.
+        let own = store.filter(|id| os_major_version() >= 14 && id.iter().any(|b| *b != 0));
+        // SAFETY: class methods called on the main thread (the marker).
+        let data_store: Retained<WKWebsiteDataStore> = match own {
+            Some(id) => unsafe { WKWebsiteDataStore::dataStoreForIdentifier(&NSUUID::from_bytes(id), mtm) },
+            None => unsafe { WKWebsiteDataStore::defaultDataStore(mtm) },
         };
-        // SAFETY: an immutable string constant exported by WebKit.
-        let types = NSSet::from_slice(&[unsafe { WKWebsiteDataTypeCookies }]);
-        let completion = RcBlock::new(move || pending.finish());
-        // SAFETY: main thread; WebKit copies the block, keeps it until the
-        // cookies are gone and then calls it. Dropping our reference after the
-        // call is fine.
-        unsafe { store.removeDataOfTypes_modifiedSince_completionHandler(&types, &since, &completion) };
+        // SAFETY: a property read on the main thread.
+        let cookies = unsafe { data_store.httpCookieStore() };
+        let delete_from = cookies.clone();
+        let fetched = RcBlock::new(move |all: std::ptr::NonNull<NSArray<NSHTTPCookie>>| {
+            // SAFETY: WebKit hands a valid array for the length of this call.
+            let all = unsafe { all.as_ref() };
+            let mine: Vec<Retained<NSHTTPCookie>> = autoreleasepool(|_| {
+                all.to_vec()
+                    .into_iter()
+                    .filter(|cookie| rust_string(&cookie.domain()).is_some_and(|d| cookie_for_host(&d, &host)))
+                    .collect()
+            });
+            if mine.is_empty() {
+                pending.finish();
+                return;
+            }
+            // `done` goes once the last of them is deleted.
+            let left = Rc::new(Cell::new(mine.len()));
+            for cookie in &mine {
+                let left = left.clone();
+                let pending = pending.clone();
+                let deleted = RcBlock::new(move || {
+                    left.set(left.get().saturating_sub(1));
+                    if left.get() == 0 {
+                        pending.finish();
+                    }
+                });
+                // SAFETY: main thread (WebKit calls this handler there); WebKit
+                // copies the block and calls it once the cookie is gone.
+                unsafe { delete_from.deleteCookie_completionHandler(cookie, Some(&deleted)) };
+            }
+        });
+        // SAFETY: main thread; WebKit copies the block, calls it with the
+        // store's cookies, and releases it.
+        unsafe { cookies.getAllCookies(&fetched) };
     }
 
     /// `done` until it is passed on: by the completion handler, or, when
@@ -692,7 +852,7 @@ mod imp {
     extern "C-unwind" fn did_receive_challenge(
         _this: *mut AnyObject,
         _cmd: Sel,
-        _web_view: *mut AnyObject,
+        web_view: *mut AnyObject,
         challenge: *mut NSURLAuthenticationChallenge,
         handler: *mut ChallengeHandler,
     ) {
@@ -700,22 +860,24 @@ mod imp {
         let Some(handler) = (unsafe { handler.as_ref() }) else {
             return;
         };
-        let reply = catch_unwind(AssertUnwindSafe(|| reply_to(unsafe { challenge.as_ref() }))).unwrap_or_default();
+        let tab = tab_of_view(web_view);
+        let reply = catch_unwind(AssertUnwindSafe(|| reply_to(unsafe { challenge.as_ref() }, tab))).unwrap_or_default();
         let credential = reply
             .credential
             .as_ref()
             .map_or(ptr::null_mut(), |c| Retained::as_ptr(c).cast_mut());
         handler.call((reply.disposition, credential));
         // Told after WebKit has its answer, so the app's handler cannot delay it.
-        if reply.report {
-            notify_rejected();
+        if let Some(tab) = reply.report {
+            notify_rejected(tab);
         }
     }
 
     struct Reply {
         disposition: NSURLSessionAuthChallengeDisposition,
         credential: Option<Retained<NSURLCredential>>,
-        report: bool,
+        /// The tab whose server refused its login, to tell the app.
+        report: Option<u64>,
     }
 
     impl Default for Reply {
@@ -723,12 +885,14 @@ mod imp {
             Reply {
                 disposition: NSURLSessionAuthChallengeDisposition::PerformDefaultHandling,
                 credential: None,
-                report: false,
+                report: None,
             }
         }
     }
 
-    fn reply_to(challenge: Option<&NSURLAuthenticationChallenge>) -> Reply {
+    /// `tab`: the tab of the web view that was challenged, whose login is the
+    /// only one it may get. None (a view of no tab): no login at all.
+    fn reply_to(challenge: Option<&NSURLAuthenticationChallenge>, tab: Option<u64>) -> Reply {
         let Some(challenge) = challenge else {
             return Reply::default();
         };
@@ -762,10 +926,13 @@ mod imp {
             let failed = failure_url(challenge);
 
             let saved = SAVED
-                .try_with(|saved| saved.try_borrow().ok().and_then(|saved| saved.clone()))
+                .try_with(|saved| saved.try_borrow().ok().map(|saved| saved.clone()))
                 .ok()
-                .flatten();
-            let rejected = REJECTED.try_with(Cell::get).unwrap_or(false);
+                .flatten()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|(t, _)| Some(*t) == tab)
+                .collect::<Vec<_>>();
             let asked = Challenge {
                 basic,
                 proxy,
@@ -775,8 +942,14 @@ mod imp {
                 previous_failures: previous_failures as i64,
                 failed: failed.as_ref(),
             };
-            match (decide(&asked, saved.as_ref(), rejected), saved) {
-                (ChallengeAnswer::UseCredential, Some(saved)) => {
+            let picked = pick(&asked, &saved);
+            let rejected = picked.is_some_and(|(tab, _)| {
+                REJECTED
+                    .try_with(|rejected| rejected.try_borrow().is_ok_and(|r| r.contains(&tab)))
+                    .unwrap_or(false)
+            });
+            match (decide(&asked, picked.map(|(_, s)| s), rejected), picked) {
+                (ChallengeAnswer::UseCredential, Some((_, saved))) => {
                     let user = NSString::from_str(&saved.username);
                     let password = NSString::from_str(&saved.password);
                     // None: WebKit uses it for this request only and stores
@@ -797,26 +970,32 @@ mod imp {
                         Some(credential) => Reply {
                             disposition: NSURLSessionAuthChallengeDisposition::UseCredential,
                             credential: Some(credential),
-                            report: false,
+                            report: None,
                         },
                         None => Reply::default(),
                     }
                 }
-                (ChallengeAnswer::CancelAndReport, _) => {
-                    let _ = REJECTED.try_with(|rejected| rejected.set(true));
+                (ChallengeAnswer::CancelAndReport, Some((tab, _))) => {
+                    let _ = REJECTED.try_with(|rejected| {
+                        if let Ok(mut rejected) = rejected.try_borrow_mut() {
+                            rejected.push(tab);
+                        }
+                    });
                     eprintln!("codeman-desktop: {host}:{port} refused the saved login; not sending it again");
                     Reply {
                         disposition: NSURLSessionAuthChallengeDisposition::CancelAuthenticationChallenge,
                         credential: None,
-                        report: true,
+                        report: Some(tab),
                     }
                 }
                 (ChallengeAnswer::Cancel, _) => Reply {
                     disposition: NSURLSessionAuthChallengeDisposition::CancelAuthenticationChallenge,
                     credential: None,
-                    report: false,
+                    report: None,
                 },
-                (ChallengeAnswer::Default | ChallengeAnswer::UseCredential, _) => Reply::default(),
+                (ChallengeAnswer::Default | ChallengeAnswer::UseCredential | ChallengeAnswer::CancelAndReport, _) => {
+                    Reply::default()
+                }
             }
         })
     }
@@ -833,7 +1012,7 @@ mod imp {
         Url::parse(&rust_string(&*text?)?).ok()
     }
 
-    fn notify_rejected() {
+    fn notify_rejected(tab: u64) {
         // Cloned out first: the handler may call `set_credentials` or
         // `set_auth_rejected_handler`, which would find the cell borrowed.
         let handler = ON_REJECTED
@@ -841,7 +1020,7 @@ mod imp {
             .ok()
             .flatten();
         if let Some(handler) = handler {
-            if catch_unwind(AssertUnwindSafe(|| handler())).is_err() {
+            if catch_unwind(AssertUnwindSafe(|| handler(tab))).is_err() {
                 eprintln!("codeman-desktop: the login-refused handler panicked");
             }
         }
@@ -1073,5 +1252,46 @@ mod tests {
         // A frame nothing names (about:srcdoc under an opaque origin) still
         // gets a first line of the app's own, never its own text in bold.
         assert_eq!(dialog_title(None), "An embedded page says:");
+    }
+
+    #[test]
+    fn each_tab_answers_for_its_own_server() {
+        let saved = vec![
+            (1, saved("http://127.0.0.1:3000/")),
+            (2, saved("http://127.0.0.1:5000/")),
+            (3, saved("http://h:3000/")),
+            (4, saved("http://h:3000/codeman/")),
+        ];
+        let at = |port: i64, host: &'static str, failed: &Url| {
+            let c = challenge("http", host, port, 0, Some(failed));
+            pick(&c, &saved).map(|(tab, _)| tab)
+        };
+        assert_eq!(at(3000, "127.0.0.1", &url("http://127.0.0.1:3000/api/status")), Some(1));
+        assert_eq!(at(5000, "127.0.0.1", &url("http://127.0.0.1:5000/api/status")), Some(2));
+        assert_eq!(at(4000, "127.0.0.1", &url("http://127.0.0.1:4000/api/status")), None);
+        // Below a base path the deeper server wins; elsewhere the root one.
+        assert_eq!(at(3000, "h", &url("http://h:3000/codeman/api/status")), Some(4));
+        assert_eq!(at(3000, "h", &url("http://h:3000/api/status")), Some(3));
+        // A web tab under either is nobody's.
+        assert_eq!(at(3000, "h", &url("http://h:3000/webview/cap/")), None);
+        assert_eq!(at(3000, "h", &url("http://h:3000/codeman/webview/cap/")), None);
+        let none: Vec<(u64, BasicCredentials)> = Vec::new();
+        let c = challenge("http", "h", 3000, 0, None);
+        assert!(pick(&c, &none).is_none());
+    }
+
+    #[test]
+    fn cookies_go_with_their_host() {
+        assert!(cookie_for_host("127.0.0.1", "127.0.0.1"));
+        assert!(cookie_for_host("Studio.Example.ts.net", "studio.example.ts.net"));
+        assert!(cookie_for_host(".example.ts.net", "studio.example.ts.net"));
+        assert!(cookie_for_host(".example.ts.net", "example.ts.net"));
+        assert!(cookie_for_host("::1", "[::1]"));
+        assert!(!cookie_for_host("atlas.example.ts.net", "studio.example.ts.net"));
+        assert!(!cookie_for_host(".other.ts.net", "studio.example.ts.net"));
+        assert!(!cookie_for_host("example.ts.net", "studio.example.ts.net"));
+        assert!(!cookie_for_host("localhost", "127.0.0.1"));
+        assert!(!cookie_for_host("", "127.0.0.1"));
+        assert!(!cookie_for_host(".ample.ts.net", "studio.example.ts.net"));
     }
 }

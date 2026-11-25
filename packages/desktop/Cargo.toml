@@ -35,8 +35,8 @@ security-framework = "3"
 # Ignoring signals in the logo blinker (src/logo.rs). Already in the tree
 # through wry and tao, so no new crate is added.
 libc = "0.2"
-# JavaScript dialogs, HTTP Basic challenges, clearing cookies and the window's
-# content size (src/macos.rs). The versions wry already pulls in, so no new
+# JavaScript dialogs, HTTP Basic challenges, clearing one server's cookies and
+# the window's content size (src/macos.rs). The versions wry already pulls in, so no new
 # crate is added.
 objc2 = { version = "0.6.5", default-features = false, features = ["std"] }
 block2 = { version = "0.6.2", default-features = false, features = ["std"] }
@@ -44,10 +44,12 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "std",
     "objc2-core-foundation",
     "block2",
+    "NSArray",
     "NSBundle",
     "NSDate",
     "NSDictionary",
     "NSGeometry",
+    "NSHTTPCookie",
     "NSObject",
     "NSOperation",
     "NSProcessInfo",
@@ -61,6 +63,7 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "NSURLRequest",
     "NSURLResponse",
     "NSURLSession",
+    "NSUUID",
     "NSValue",
 ] }
 objc2-app-kit = { version = "0.3.2", default-features = false, features = [
@@ -80,6 +83,7 @@ objc2-web-kit = { version = "0.3.2", default-features = false, features = [
     "block2",
     "objc2-app-kit",
     "WKFrameInfo",
+    "WKHTTPCookieStore",
     "WKNavigationDelegate",
     "WKSecurityOrigin",
     "WKUIDelegate",
