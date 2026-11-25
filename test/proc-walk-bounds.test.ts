@@ -146,11 +146,14 @@ describe('collectDescendants', () => {
  * even with both caps bypassed.
  */
 describe('TmuxManager uses the bounded walk', () => {
-  /** Build a tree `width` wide and `depth` deep, rooted at 1. */
+  /** A pane's pid. Never 0 or 1: the kill path walks nothing for those (kill-pid-guard.test.ts). */
+  const ROOT = 1000;
+
+  /** Build a tree `width` wide and `depth` deep, rooted at ROOT. */
   function bigTree(width: number, depth: number): Map<number, number[]> {
     const t = new Map<number, number[]>();
-    let next = 2;
-    let frontier = [1];
+    let next = ROOT + 1;
+    let frontier = [ROOT];
     for (let d = 0; d < depth; d += 1) {
       const nf: number[] = [];
       for (const p of frontier) {
@@ -163,7 +166,7 @@ describe('TmuxManager uses the bounded walk', () => {
     return t;
   }
 
-  async function walkVia(fixture: Map<number, number[]>): Promise<number[]> {
+  async function walkVia(fixture: Map<number, number[]>, root = ROOT): Promise<number[]> {
     const { TmuxManager } = await import('../src/tmux-manager.js');
     const Klass = TmuxManager as unknown as {
       refreshProcSnapshot(): Promise<Map<number, number[]>>;
@@ -174,7 +177,7 @@ describe('TmuxManager uses the bounded walk', () => {
     Klass.procSnapshot = { at: Date.now(), byParent: fixture };
     try {
       const mgr = new TmuxManager();
-      return await (mgr as unknown as { getChildPidsFresh(pid: number): Promise<number[]> }).getChildPidsFresh(1);
+      return await (mgr as unknown as { getChildPidsFresh(pid: number): Promise<number[]> }).getChildPidsFresh(root);
     } finally {
       Klass.refreshProcSnapshot = original;
       Klass.procSnapshot = null;
@@ -190,7 +193,7 @@ describe('TmuxManager uses the bounded walk', () => {
 
   it('honours the depth cap on a deep chain', async () => {
     const chainTree = new Map<number, number[]>();
-    for (let i = 1; i < 40; i += 1) chainTree.set(i, [i + 1]);
+    for (let i = ROOT; i < ROOT + 39; i += 1) chainTree.set(i, [i + 1]);
 
     const out = await walkVia(chainTree);
 
@@ -202,6 +205,16 @@ describe('TmuxManager uses the bounded walk', () => {
     // test completing at all is the assertion, plus the bound holding.
     const out = await walkVia(bigTree(4, 6));
     expect(out.length).toBeLessThanOrEqual(PROC_WALK_MAX_NODES);
+  });
+
+  it.each([0, 1])('walks nothing below pid %i, whose children are the whole machine', async (root) => {
+    const machine = new Map([
+      [0, [1, 2]],
+      [1, [900]],
+      [900, [901]],
+    ]);
+    expect(await walkVia(machine, root)).toEqual([]);
+    expect(await walkVia(machine, 900)).toEqual([901]);
   });
 });
 
