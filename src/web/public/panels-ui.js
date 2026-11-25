@@ -376,7 +376,14 @@ Object.assign(CodemanApp.prototype, {
    * for, typing a filter the moment it opens.
    */
   _rememberOverlayFocus(key) {
-    this[key] = (typeof document !== 'undefined' && document.activeElement) || null;
+    if (typeof document === 'undefined') {
+      this[key] = null;
+      return;
+    }
+    // The same answer a FocusTrap dialog saves (keyboard-accessory.js): an overlay
+    // opened by a mouse press goes back to the field the user was typing in, not
+    // to the pressed button.
+    this[key] = (typeof FocusTrap === 'function' ? FocusTrap.focusToReturn() : document.activeElement) || null;
   },
 
   /**
