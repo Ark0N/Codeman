@@ -226,6 +226,7 @@
     Tabs: '标签页',
     'Toggle Session Sidebar': '切换会话侧边栏',
     'Copy Selection': '复制选中内容',
+    'Find in Terminal': '在终端中查找',
     'Copy Selection (interrupts when nothing is selected)': '复制选中内容（无选中内容时中断）',
     'Focus Tabs': '聚焦标签页',
     Wheel: '滚轮',

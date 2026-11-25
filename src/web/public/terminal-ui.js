@@ -801,6 +801,7 @@ Object.assign(CodemanApp.prototype, {
     }
 
     this._installOsc52Clipboard(this.terminal);
+    this._installTerminalFind();
 
     const container = document.getElementById('terminalContainer');
     this.terminal.open(container);
@@ -856,6 +857,9 @@ Object.assign(CodemanApp.prototype, {
       if (ev.type === 'keydown' && this.shouldOpenCommandPaletteFromShortcut?.(ev)) {
         return false;
       }
+
+      // Find bar chord (Ctrl+Shift+F by default): opened by the document capture handler; keep it out of the PTY.
+      if (this.isTerminalFindChord?.(ev)) return false;
 
       // Tile grid chords (Ctrl+Shift+G, Alt+Shift+Arrows): the capture handler
       // has already acted on one that applies, and its preventDefault() does not
@@ -7593,5 +7597,142 @@ Object.assign(CodemanApp.prototype, {
     } catch (err) {
       console.error('[search] jump failed', err);
     }
+  },
+});
+
+// Terminal find bar (default Ctrl+Shift+F): xterm's SearchAddon over the text the browser holds
+// in scrollback. A fullscreen CLI that keeps its older text itself (Claude) is only searchable
+// for what is on screen.
+Object.assign(CodemanApp.prototype, {
+  _FIND_DECORATIONS: {
+    matchBackground: '#5c4a00',
+    matchOverviewRuler: '#d7ba7d',
+    activeMatchBackground: '#a86f00',
+    activeMatchColorOverviewRuler: '#ffcc66',
+  },
+
+  /** Called once after terminal.open(). A missing vendor bundle just leaves the find bar off. */
+  _installTerminalFind() {
+    if (typeof SearchAddon === 'undefined' || this._searchAddon) return;
+    try {
+      this._searchAddon = new SearchAddon.SearchAddon();
+      this.terminal.loadAddon(this._searchAddon);
+      this._searchAddon.onDidChangeResults((r) => this._renderTerminalFindCount(r));
+    } catch (_e) {
+      this._searchAddon = null;
+      return;
+    }
+    // Capture phase: runs before xterm sees the key, and the xterm handler also refuses it.
+    document.addEventListener(
+      'keydown',
+      (ev) => {
+        if (!this.isTerminalFindChord(ev)) return;
+        ev.preventDefault();
+        this.openTerminalFind();
+      },
+      true
+    );
+  },
+
+  /**
+   * On unless the user switched it off in App Settings (an absent key means ON). Never while the
+   * tile grid is open: the main terminal is parked then, and its text is not the focused tile's.
+   */
+  terminalFindEnabled() {
+    return (
+      !!this._searchAddon &&
+      this.loadAppSettingsFromStorage().terminalFindEnabled !== false &&
+      !this._tilesOwnTerminal?.()
+    );
+  },
+
+  /** The registry entry `find-in-terminal` (rebindable, listed in the Ctrl+? overlay). */
+  isTerminalFindChord(ev) {
+    if (ev.type !== 'keydown' || (!ev.ctrlKey && !ev.metaKey && !ev.altKey)) return false;
+    if (typeof this.getShortcutRegistry !== 'function' || typeof this.matchesShortcutEvent !== 'function') return false;
+    const entry = this.getShortcutRegistry().find((s) => s.id === 'find-in-terminal');
+    return !!entry && !entry.disabled && this.matchesShortcutEvent(ev, entry) && this.terminalFindEnabled();
+  },
+
+  openTerminalFind() {
+    if (!this.terminalFindEnabled()) return;
+    let bar = document.getElementById('terminalFindBar');
+    if (!bar) bar = this._buildTerminalFindBar();
+    bar.hidden = false;
+    const input = bar.querySelector('.tf-input');
+    // Start from the selected text, the way a browser's find does.
+    const selected = this.terminal?.hasSelection?.() ? this.terminal.getSelection().trim() : '';
+    if (selected && !selected.includes('\n')) input.value = selected.slice(0, 200);
+    input.focus();
+    input.select();
+    if (input.value) this._terminalFindStep(1);
+  },
+
+  closeTerminalFind() {
+    const bar = document.getElementById('terminalFindBar');
+    if (!bar || bar.hidden) return;
+    bar.hidden = true;
+    this._searchAddon?.clearDecorations();
+    this.terminal?.focus();
+  },
+
+  _buildTerminalFindBar() {
+    const bar = document.createElement('div');
+    bar.id = 'terminalFindBar';
+    bar.className = 'terminal-find-bar';
+    bar.setAttribute('role', 'search');
+    bar.setAttribute('data-i18n-skip', '');
+    bar.innerHTML =
+      '<div class="tf-row">' +
+      '<input class="tf-input" type="text" spellcheck="false" autocomplete="off" aria-label="Find in terminal" placeholder="Find in terminal">' +
+      '<span class="tf-count" aria-live="polite"></span>' +
+      '<button type="button" class="tf-btn tf-prev" title="Previous match (Shift+Enter)" aria-label="Previous match">&uarr;</button>' +
+      '<button type="button" class="tf-btn tf-next" title="Next match (Enter)" aria-label="Next match">&darr;</button>' +
+      '<button type="button" class="tf-btn tf-close" title="Close (Esc)" aria-label="Close find bar">&times;</button>' +
+      '</div>';
+    const host = document.getElementById('terminalContainer')?.parentElement || document.body;
+    host.appendChild(bar);
+    const input = bar.querySelector('.tf-input');
+    input.addEventListener('input', () => this._terminalFindStep(1, true));
+    // On the bar, not the input: focus can be on a button when Esc is pressed. The document's
+    // capture-phase Escape handler (app.js) stands aside for anything inside the bar.
+    bar.addEventListener('keydown', (ev) => {
+      if (ev.key !== 'Escape') return;
+      ev.preventDefault();
+      this.closeTerminalFind();
+    });
+    input.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') {
+        ev.preventDefault();
+        this._terminalFindStep(ev.shiftKey ? -1 : 1);
+      }
+    });
+    bar.querySelector('.tf-prev').addEventListener('click', () => this._terminalFindStep(-1));
+    bar.querySelector('.tf-next').addEventListener('click', () => this._terminalFindStep(1));
+    bar.querySelector('.tf-close').addEventListener('click', () => this.closeTerminalFind());
+    return bar;
+  },
+
+  /** `incremental`: re-run from the current match while typing instead of skipping past it. */
+  _terminalFindStep(direction, incremental = false) {
+    const input = document.querySelector('#terminalFindBar .tf-input');
+    const term = input?.value || '';
+    if (!term) {
+      this._searchAddon?.clearDecorations();
+      this._renderTerminalFindCount(null);
+      return false;
+    }
+    const opts = { decorations: this._FIND_DECORATIONS, incremental };
+    return direction < 0 ? this._searchAddon.findPrevious(term, opts) : this._searchAddon.findNext(term, opts);
+  },
+
+  _renderTerminalFindCount(r) {
+    const el = document.querySelector('#terminalFindBar .tf-count');
+    if (!el) return;
+    const term = document.querySelector('#terminalFindBar .tf-input')?.value;
+    if (!term) el.textContent = '';
+    else if (!r || !r.resultCount) el.textContent = 'No matches';
+    // xterm stops counting at 1000 matches and reports resultIndex -1 past it.
+    else el.textContent = r.resultIndex >= 0 ? `${r.resultIndex + 1} of ${r.resultCount}` : `${r.resultCount}+`;
   },
 });

@@ -1638,6 +1638,8 @@ export const SettingsUpdateSchema = z
      * inboxes stay). On, pending messages between agents survive a server restart.
      */
     agentInboxPersistEnabled: z.boolean().optional(),
+    // Terminal find bar (default Ctrl+Shift+F). An absent key means ON.
+    terminalFindEnabled: z.boolean().optional(),
     /**
      * Experimental agent coordination (src/web/routes/agent-session-routes.ts): bounded
      * inspection and the guarded stage/submit routes behind `codeman agent inspect|stage|submit`.
