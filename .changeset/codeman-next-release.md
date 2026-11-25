@@ -16,6 +16,8 @@
 
 **iPhone keyboard suggestions, dictation and hold-delete work in the terminal (#839, fixes #830).** Tapping a suggestion used to send only its first letter, and holding delete never went word by word. Suggestions, text replacement, dictation and held delete now reach the agent as one ordered edit, in the main terminal, the split pane and every tile. A delayed Enter or paste stays with the session it was typed for when you switch tabs, and backspace deletes a whole emoji.
 
+**Mac app: server tabs (#816).** The Mac app keeps several Codeman servers open in one window, one tab each in the title bar, and switches between them with a click or ⌘1 to ⌘8. Every tab shows whether its server needs you, is waiting, is working or is offline, and ⌘0 shows all servers at once with the ones that need you first. ⌘T opens another server, a tab can be renamed, coloured and dragged, ⇧⌘T reopens a closed one, and your tabs come back at the next launch. On macOS 14 and later every server keeps its own login and cookies; before macOS 14 a second tab on the same machine is refused. Behaviour change: only the server you used last keeps its per-device settings (font size, skin); every other server starts those fresh once.
+
 **Fixes.**
 
 - **An open tab after a restart no longer locks everyone out (#838).** A request with no `Authorization` header always gets the login prompt and is no longer counted as a failed login. Before, an open tab's background requests filled the per-IP limit within seconds of a restart, and everyone behind the same tunnel address was locked out for 15 minutes. Wrong passwords and malformed headers are counted as before.
