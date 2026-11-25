@@ -13,6 +13,14 @@
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { describe, expect, it } from 'vitest';
+import { ZerolagInputAddon } from '../packages/xterm-zerolag-input/src/zerolag-input-addon.js';
+
+const MULTI_CODE_POINT_EMOJI = [
+  ['red heart', '\u2764\uFE0F'],
+  ['skin tone', '\u{1F44D}\u{1F3FD}'],
+  ['flag', '\u{1F1EB}\u{1F1F7}'],
+  ['ZWJ family', '\u{1F468}\u200D\u{1F469}\u200D\u{1F467}\u200D\u{1F466}'],
+] as const;
 
 type Listener = (event: Record<string, unknown>) => void;
 
@@ -741,6 +749,58 @@ describe('edit-based sync of the helper textarea (autocorrect replacements)', ()
     expect(e.sent.slice(2)).toEqual(['\x7f']);
   });
 
+  it.each(MULTI_CODE_POINT_EMOJI)('deletes a whole %s with one DEL', (_name, emoji) => {
+    const e = editSyncHarness();
+    e.create(true);
+    typeKeys(e, 'ok');
+    e.keydown();
+    e.edit(`ok${emoji}`);
+    e.flush();
+    const before = e.sent.length;
+    e.keydown();
+    e.edit('ok');
+    e.flush();
+    expect(e.sent.slice(before)).toEqual(['\x7f']);
+  });
+
+  it.each([
+    ['Thai', '\u0E01\u0E34\u0E48'],
+    ['Hindi', '\u0915\u094D\u0937'],
+  ])('types %s combining marks one field state at a time as plain appends', (_name, word) => {
+    // Each keystroke extends the last grapheme cluster; re-typing that cluster would
+    // make a code-point line editor (zsh) double the base letter.
+    const e = editSyncHarness();
+    e.create(true);
+    typeKeys(e, word);
+    expect(e.sent).toEqual(Array.from(word));
+    expect(e.line()).toBe(word);
+  });
+
+  it.each(MULTI_CODE_POINT_EMOJI)(
+    'keeps the local-echo draft at ok when the %s is deleted (real overlay)',
+    (_name, emoji) => {
+      const e = editSyncHarness();
+      e.create(true);
+      typeKeys(e, 'ok');
+      e.keydown();
+      e.edit(`ok${emoji}`);
+      e.flush();
+      // Local echo buffers what the recovery emits; each DEL drops one overlay grapheme.
+      const overlay = new ZerolagInputAddon();
+      overlay.appendText(e.sent.join(''));
+      expect(overlay.pendingText).toBe(`ok${emoji}`);
+      const before = e.sent.length;
+      e.keydown();
+      e.edit('ok');
+      e.flush();
+      for (const data of e.sent.slice(before)) {
+        if (data === '\x7f') expect(overlay.removeChar()).toBe('pending');
+        else overlay.appendText(data);
+      }
+      expect(overlay.pendingText).toBe('ok');
+    }
+  );
+
   it('stays out of the way while composing, and leaves xterm alone without its internals', () => {
     const h = editSyncHarness();
     h.create(true);
@@ -770,12 +830,15 @@ describe('edit-based sync of the helper textarea (autocorrect replacements)', ()
     expect(terminalSource).toMatch(/getCompositionHelper:\s*\(\)\s*=>\s*this\.terminal\?\._core\?\._compositionHelper/);
   });
 
-  it('editBetween counts code points and replaces everything after the common prefix', () => {
+  it('editBetween counts grapheme clusters and replaces everything after the common prefix', () => {
     const { editBetween } = editSyncHarness().exposed.CodemanKeyCode229Recovery;
     expect(editBetween('abc', 'abcd')).toEqual({ deleted: 0, inserted: 'd' });
     expect(editBetween('abc', 'ab')).toEqual({ deleted: 1, inserted: '' });
     expect(editBetween('testing the peompt', 'testing the prompt ')).toEqual({ deleted: 5, inserted: 'rompt ' });
     expect(editBetween('x😀', 'x')).toEqual({ deleted: 1, inserted: '' });
+    expect(editBetween('x\u{1F44D}\u{1F3FD}', 'x')).toEqual({ deleted: 1, inserted: '' });
     expect(editBetween('', '')).toEqual({ deleted: 0, inserted: '' });
+    // A mark typed onto the last letter is a plain append, not a DEL and a re-typed cluster.
+    expect(editBetween('\u0E01', '\u0E01\u0E34')).toEqual({ deleted: 0, inserted: '\u0E34' });
   });
 });

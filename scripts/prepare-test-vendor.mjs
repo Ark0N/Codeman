@@ -17,7 +17,7 @@
  * this script adds is FRESHNESS and independence from install time: a checkout
  * installed with `--ignore-scripts`, or one borrowing another tree's
  * `node_modules`, never ran postinstall, and an edit to the zerolag package after
- * install leaves the bundle stale. It runs as `pretest:mobile`.
+ * install leaves the bundle stale. It runs as `pretest:mobile` and `pretest:browser`.
  *
  * Mirrors the vendor steps in scripts/build.mjs, targeting the source tree. Same
  * inputs and output names, so the page markup needs no test-only branch. That

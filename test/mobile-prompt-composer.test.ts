@@ -50,6 +50,10 @@ function loadComposer(sessionId = 'session-1') {
     _echoPassthroughSessions: new Set<string>(),
     _predictiveEcho: { clearPredictions: vi.fn() },
     _sendInputAsync: vi.fn(),
+    _enqueueInput: vi.fn(),
+    _focusedPane: () => ({ sessionId: app.activeSessionId, isPrimary: true }),
+    _paneForSession: (id: string) => (id === app.activeSessionId ? app._focusedPane() : null),
+    _prepareExternalInput: vi.fn(),
     _uploadAndInsertImages: vi.fn(async () => ['/tmp/image-one.png']),
     _promptAttachKind: (file: { type: string; name?: string }) =>
       file.type.startsWith('image/')
@@ -265,12 +269,21 @@ describe('mobile prompt composer', () => {
     (document.querySelector('.paste-send') as HTMLButtonElement).click();
 
     expect(app.terminal.paste).not.toHaveBeenCalled();
-    expect(app._sendInputAsync).toHaveBeenCalledOnce();
-    expect(app._sendInputAsync).toHaveBeenNthCalledWith(1, 'session-1', '\x1b[200~first line\rsecond line\x1b[201~');
+    expect(app._enqueueInput).toHaveBeenCalledOnce();
+    expect(app._enqueueInput).toHaveBeenCalledWith('session-1', [
+      { write: '\x1b[200~first line\rsecond line\x1b[201~' },
+      { gap: 120 },
+      { write: '\r', useMux: true },
+    ]);
+    expect(app._prepareExternalInput).toHaveBeenLastCalledWith(
+      { sessionId: 'session-1', isPrimary: true },
+      'accessory-compose-send',
+      { flushEcho: true }
+    );
     expect(composeButton.classList.contains('has-draft')).toBe(false);
-    expect(timers).toContainEqual(expect.objectContaining({ delay: 120 }));
+    expect(timers.some((timer) => timer.delay === 120)).toBe(false);
     runTimers();
-    expect(app._sendInputAsync).toHaveBeenNthCalledWith(2, 'session-1', '\r', { useMux: true });
+    expect(app._enqueueInput).toHaveBeenCalledOnce();
     expect(document.querySelector('.prompt-composer-overlay')).toBeNull();
 
     bar.composePrompt();
@@ -287,11 +300,15 @@ describe('mobile prompt composer', () => {
     (document.querySelector('.paste-send') as HTMLButtonElement).click();
 
     expect(app.terminal.paste).not.toHaveBeenCalled();
-    expect(app._sendInputAsync).toHaveBeenCalledWith('session-1', '\x1b[200~still\rmultiline\x1b[201~');
+    expect(app._enqueueInput).toHaveBeenCalledWith('session-1', [
+      { write: '\x1b[200~still\rmultiline\x1b[201~' },
+      { gap: 120 },
+      { write: '\r', useMux: true },
+    ]);
     expect(document.querySelector('.prompt-composer-overlay')).toBeNull();
     expect(app.showToast).not.toHaveBeenCalled();
     runTimers();
-    expect(app._sendInputAsync).toHaveBeenLastCalledWith('session-1', '\r', { useMux: true });
+    expect(app._enqueueInput).toHaveBeenCalledOnce();
   });
 
   it('releases echo passthrough after a composed prompt is queued', () => {
@@ -343,8 +360,8 @@ describe('mobile prompt composer', () => {
 
     (document.querySelector('.paste-send') as HTMLButtonElement).click();
 
-    expect(app._sendInputAsync).toHaveBeenCalledOnce();
-    expect((app._sendInputAsync.mock.calls[0][1] as string).length).toBe(64 * 1024);
+    expect(app._enqueueInput).toHaveBeenCalledOnce();
+    expect(app._enqueueInput.mock.calls[0][1][0].write.length).toBe(64 * 1024);
     expect(app.showToast).not.toHaveBeenCalled();
   });
 
@@ -369,6 +386,7 @@ describe('mobile prompt composer', () => {
 
   it('uploads images without writing into the PTY and inserts their paths into the draft', async () => {
     const { app, bar, document } = loadComposer();
+    app._focusedPane = () => ({ sessionId: 'session-2', isPrimary: false });
     let finishUpload!: (paths: string[]) => void;
     app._uploadAndInsertImages.mockImplementation(
       () => new Promise<string[]>((resolveUpload) => (finishUpload = resolveUpload))
@@ -388,7 +406,7 @@ describe('mobile prompt composer', () => {
     finishUpload(['/tmp/image-one.png']);
     await vi.waitFor(() => expect(input.value).toBe('review /tmp/image-one.png'));
 
-    expect(app._uploadAndInsertImages).toHaveBeenCalledWith([image], { insert: false });
+    expect(app._uploadAndInsertImages).toHaveBeenCalledWith([image], { insert: false, sessionId: 'session-2' });
     expect((document.querySelector('.paste-send') as HTMLButtonElement).disabled).toBe(false);
     expect(app.terminal.paste).not.toHaveBeenCalled();
     expect(app._sendInputAsync).not.toHaveBeenCalled();
@@ -603,7 +621,7 @@ describe('mobile prompt composer', () => {
     Object.defineProperty(fileInput, 'files', { configurable: true, value: [video, pdf, script] });
 
     fileInput.dispatchEvent(new document.defaultView!.Event('change', { bubbles: true }));
-    expect(app._uploadAndInsertImages).toHaveBeenCalledWith([video, pdf], { insert: false });
+    expect(app._uploadAndInsertImages).toHaveBeenCalledWith([video, pdf], { insert: false, sessionId: 'session-1' });
     expect(app.showToast).toHaveBeenCalledWith('1 file skipped: unsupported type', 'info');
     await vi.waitFor(() => expect(textarea(document).value).toContain('/tmp/image-one.png'));
   });
@@ -668,7 +686,7 @@ describe('mobile prompt composer', () => {
     });
     input.dispatchEvent(event);
     expect(event.defaultPrevented).toBe(true);
-    expect(app._uploadAndInsertImages).toHaveBeenCalledWith([video], { insert: false });
+    expect(app._uploadAndInsertImages).toHaveBeenCalledWith([video], { insert: false, sessionId: 'session-1' });
   });
 });
 
@@ -697,11 +715,10 @@ describe('mobile shell Paste', () => {
     send.click();
     runTimers();
 
-    expect(app._sendInputAsync).toHaveBeenCalledOnce();
-    expect(app._sendInputAsync).toHaveBeenCalledWith(
-      'session-1',
-      '\x1b[200~cd ~/dotfiles\rgit pull\r./sync.sh\x1b[201~'
-    );
+    expect(app._enqueueInput).toHaveBeenCalledOnce();
+    expect(app._enqueueInput).toHaveBeenCalledWith('session-1', [
+      { write: '\x1b[200~cd ~/dotfiles\rgit pull\r./sync.sh\x1b[201~' },
+    ]);
     expect(document.querySelector('.paste-overlay')).toBeNull();
   });
 
@@ -711,7 +728,7 @@ describe('mobile shell Paste', () => {
 
     send.click();
 
-    expect(app._sendInputAsync).toHaveBeenCalledWith('session-1', '\x1b[200~echo one\recho two\x1b[201~');
+    expect(app._enqueueInput).toHaveBeenCalledWith('session-1', [{ write: '\x1b[200~echo one\recho two\x1b[201~' }]);
   });
 
   it('drops paste markers inside the text, so a pasted ESC[201~ cannot end the bracket early', () => {
@@ -722,7 +739,7 @@ describe('mobile shell Paste', () => {
 
     send.click();
 
-    expect(app._sendInputAsync).toHaveBeenCalledWith('session-1', '\x1b[200~echo safe\rrm -rf ~/x\x1b[201~');
+    expect(app._enqueueInput).toHaveBeenCalledWith('session-1', [{ write: '\x1b[200~echo safe\rrm -rf ~/x\x1b[201~' }]);
   });
 
   it('drops a paste marker hidden inside another one', () => {
@@ -732,7 +749,7 @@ describe('mobile shell Paste', () => {
 
     send.click();
 
-    expect(app._sendInputAsync).toHaveBeenCalledWith('session-1', '\x1b[200~ok\rrm -rf ~/x\x1b[201~');
+    expect(app._enqueueInput).toHaveBeenCalledWith('session-1', [{ write: '\x1b[200~ok\rrm -rf ~/x\x1b[201~' }]);
   });
 
   it('refuses a paste longer than one input frame and keeps the text for trimming', () => {
@@ -741,7 +758,7 @@ describe('mobile shell Paste', () => {
 
     send.click();
 
-    expect(app._sendInputAsync).not.toHaveBeenCalled();
+    expect(app._enqueueInput).not.toHaveBeenCalled();
     expect(app.showToast).toHaveBeenCalledWith(expect.stringContaining('too long'), 'error');
     expect(document.querySelector('.paste-overlay')).not.toBeNull();
     expect(input.value.length).toBe(bar._composerMaxLength + 1);
@@ -754,7 +771,8 @@ describe('mobile shell Paste', () => {
 
     send.click();
 
-    expect(app._sendInputAsync).toHaveBeenCalledWith('session-1', '\x1b[200~ls\rpwd\x1b[201~');
+    expect(app._enqueueInput).toHaveBeenCalledWith('session-1', [{ write: '\x1b[200~ls\rpwd\x1b[201~' }]);
+    expect(app._prepareExternalInput).not.toHaveBeenCalled();
   });
 
   it('uploads a picked image to the shell it was opened for after a tab switch', () => {
@@ -816,7 +834,7 @@ describe('mobile shell Paste', () => {
     send.click();
     runTimers();
 
-    expect(app._sendInputAsync).not.toHaveBeenCalled();
+    expect(app._enqueueInput).not.toHaveBeenCalled();
     expect(document.querySelector('.paste-overlay')).toBeNull();
   });
 });

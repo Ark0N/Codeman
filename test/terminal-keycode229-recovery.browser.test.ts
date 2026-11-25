@@ -66,6 +66,8 @@ describe('orphaned terminal input recovery wiring', () => {
     await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => (window as any).app?.terminal, null, { timeout: 30000 });
     await page.waitForFunction(() => (window as any).app?._keyCode229Recovery, null, { timeout: 30000 });
+    expect(await page.evaluate(() => (window as any).app._iosNativeInput)).toBeNull();
+    expect(await page.evaluate(() => Boolean((window as any).app._keyCode229Recovery))).toBe(true);
   }, 90000);
 
   afterAll(async () => {
@@ -96,19 +98,16 @@ describe('orphaned terminal input recovery wiring', () => {
       const textarea = document.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement;
       const originalSessionId = app.activeSessionId;
       const originalLocalEcho = app._localEchoEnabled;
-      const originalSendInput = app._sendInputAsync;
-      const originalPendingInput = app._pendingInput;
-      const originalLastKeystrokeTime = app._lastKeystrokeTime;
-      const sent: string[] = [];
+      const originalSendInput = app._enqueueReliableInput;
+      const sent: Array<[string, string]> = [];
       let xtermEmitted = 0;
       const rec = app._keyCode229Recovery;
 
       try {
         app.activeSessionId = 'cod388-browser-regression';
         app._localEchoEnabled = false;
-        app._pendingInput = '';
-        app._lastKeystrokeTime = 0;
-        app._sendInputAsync = (_sessionId: string, chunk: string) => sent.push(chunk);
+        app.sessions.set('cod388-browser-regression', { mode: 'shell' });
+        app._enqueueReliableInput = (sessionId: string, chunk: string) => sent.push([sessionId, chunk]);
         // The controller object is Object.freeze()d, so count xterm's own
         // canonical emissions by swapping the (writable) property on app.
         app._keyCode229Recovery = {
@@ -138,13 +137,14 @@ describe('orphaned terminal input recovery wiring', () => {
         }
 
         await new Promise((resolve) => setTimeout(resolve, 60));
-        return { sent, xtermEmitted };
+        return { sent: sent.map(([, chunk]) => chunk), xtermEmitted };
       } finally {
         app.activeSessionId = originalSessionId;
         app._localEchoEnabled = originalLocalEcho;
-        app._sendInputAsync = originalSendInput;
-        app._pendingInput = originalPendingInput;
-        app._lastKeystrokeTime = originalLastKeystrokeTime;
+        app._enqueueReliableInput = originalSendInput;
+        app.sessions.delete('cod388-browser-regression');
+        app._pendingInput.delete('cod388-browser-regression');
+        app._lastKeystrokeTime.delete('cod388-browser-regression');
         app._keyCode229Recovery = rec;
         textarea.value = '';
       }
@@ -207,17 +207,14 @@ describe('orphaned terminal input recovery wiring', () => {
       const textarea = document.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement;
       const originalSessionId = app.activeSessionId;
       const originalLocalEcho = app._localEchoEnabled;
-      const originalSendInput = app._sendInputAsync;
-      const originalPendingInput = app._pendingInput;
-      const originalLastKeystrokeTime = app._lastKeystrokeTime;
-      const sent: string[] = [];
+      const originalSendInput = app._enqueueReliableInput;
+      const sent: Array<[string, string]> = [];
 
       try {
         app.activeSessionId = 'cod388-browser-batched';
         app._localEchoEnabled = false;
-        app._pendingInput = '';
-        app._lastKeystrokeTime = 0;
-        app._sendInputAsync = (_sessionId: string, chunk: string) => sent.push(chunk);
+        app.sessions.set('cod388-browser-batched', { mode: 'shell' });
+        app._enqueueReliableInput = (sessionId: string, chunk: string) => sent.push([sessionId, chunk]);
         textarea.focus();
 
         // One task, no awaits between the three dispatches.
@@ -245,14 +242,16 @@ describe('orphaned terminal input recovery wiring', () => {
         Object.defineProperties(enterDown, { keyCode: { value: 13 }, which: { value: 13 } });
         textarea.dispatchEvent(enterDown);
 
-        await new Promise((resolve) => setTimeout(resolve, 80));
-        return { wire: sent.join('') };
+        // Keep real browser timers: this exercises xterm's platform-clock recovery and FIFO gaps.
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        return { wire: sent.map(([, chunk]) => chunk).join('') };
       } finally {
         app.activeSessionId = originalSessionId;
         app._localEchoEnabled = originalLocalEcho;
-        app._sendInputAsync = originalSendInput;
-        app._pendingInput = originalPendingInput;
-        app._lastKeystrokeTime = originalLastKeystrokeTime;
+        app._enqueueReliableInput = originalSendInput;
+        app.sessions.delete('cod388-browser-batched');
+        app._pendingInput.delete('cod388-browser-batched');
+        app._lastKeystrokeTime.delete('cod388-browser-batched');
         textarea.value = '';
       }
     }, data);
@@ -283,10 +282,8 @@ describe('orphaned terminal input recovery wiring', () => {
       const textarea = document.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement;
       const originalSessionId = app.activeSessionId;
       const originalLocalEcho = app._localEchoEnabled;
-      const originalSendInput = app._sendInputAsync;
-      const originalPendingInput = app._pendingInput;
-      const originalLastKeystrokeTime = app._lastKeystrokeTime;
-      const sent: string[] = [];
+      const originalSendInput = app._enqueueReliableInput;
+      const sent: Array<[string, string]> = [];
       const key229 = () => {
         const down = new KeyboardEvent('keydown', { key: 'Unidentified', bubbles: true, cancelable: true });
         Object.defineProperties(down, { keyCode: { value: 229 }, which: { value: 229 } });
@@ -296,9 +293,8 @@ describe('orphaned terminal input recovery wiring', () => {
       try {
         app.activeSessionId = 'cod388-browser-autocorrect';
         app._localEchoEnabled = false;
-        app._pendingInput = '';
-        app._lastKeystrokeTime = 0;
-        app._sendInputAsync = (_sessionId: string, chunk: string) => sent.push(chunk);
+        app.sessions.set('cod388-browser-autocorrect', { mode: 'shell' });
+        app._enqueueReliableInput = (sessionId: string, chunk: string) => sent.push([sessionId, chunk]);
         textarea.value = '';
         textarea.focus();
 
@@ -316,17 +312,18 @@ describe('orphaned terminal input recovery wiring', () => {
         await new Promise((resolve) => setTimeout(resolve, 80));
 
         const line: string[] = [];
-        for (const ch of sent.join('')) {
+        for (const ch of sent.map(([, chunk]) => chunk).join('')) {
           if (ch === '\x7f') line.pop();
           else line.push(ch);
         }
-        return { raw: sent.join(''), line: line.join(''), textarea: textarea.value };
+        return { raw: sent.map(([, chunk]) => chunk).join(''), line: line.join(''), textarea: textarea.value };
       } finally {
         app.activeSessionId = originalSessionId;
         app._localEchoEnabled = originalLocalEcho;
-        app._sendInputAsync = originalSendInput;
-        app._pendingInput = originalPendingInput;
-        app._lastKeystrokeTime = originalLastKeystrokeTime;
+        app._enqueueReliableInput = originalSendInput;
+        app.sessions.delete('cod388-browser-autocorrect');
+        app._pendingInput.delete('cod388-browser-autocorrect');
+        app._lastKeystrokeTime.delete('cod388-browser-autocorrect');
         textarea.value = '';
       }
     });
@@ -353,10 +350,8 @@ describe('orphaned terminal input recovery wiring', () => {
       const textarea = document.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement;
       const originalSessionId = app.activeSessionId;
       const originalLocalEcho = app._localEchoEnabled;
-      const originalSendInput = app._sendInputAsync;
-      const originalPendingInput = app._pendingInput;
-      const originalLastKeystrokeTime = app._lastKeystrokeTime;
-      const sent: string[] = [];
+      const originalSendInput = app._enqueueReliableInput;
+      const sent: Array<[string, string]> = [];
       const keydown = (init: KeyboardEventInit, keyCode: number) => {
         const down = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init });
         Object.defineProperties(down, { keyCode: { value: keyCode }, which: { value: keyCode } });
@@ -367,9 +362,8 @@ describe('orphaned terminal input recovery wiring', () => {
       try {
         app.activeSessionId = 'cod388-browser-edit-enter';
         app._localEchoEnabled = localEcho;
-        app._pendingInput = '';
-        app._lastKeystrokeTime = 0;
-        app._sendInputAsync = (_sessionId: string, chunk: string) => sent.push(chunk);
+        app.sessions.set('cod388-browser-edit-enter', { mode: 'shell' });
+        app._enqueueReliableInput = (sessionId: string, chunk: string) => sent.push([sessionId, chunk]);
         textarea.value = '';
         textarea.focus();
 
@@ -394,17 +388,18 @@ describe('orphaned terminal input recovery wiring', () => {
         await new Promise((resolve) => setTimeout(resolve, 250)); // local echo delays the \r by 80 ms
 
         const line: string[] = [];
-        for (const ch of sent.join('')) {
+        for (const ch of sent.map(([, chunk]) => chunk).join('')) {
           if (ch === '\x7f') line.pop();
           else line.push(ch);
         }
-        return { raw: sent.join(''), line: line.join('') };
+        return { raw: sent.map(([, chunk]) => chunk).join(''), line: line.join('') };
       } finally {
         app.activeSessionId = originalSessionId;
         app._localEchoEnabled = originalLocalEcho;
-        app._sendInputAsync = originalSendInput;
-        app._pendingInput = originalPendingInput;
-        app._lastKeystrokeTime = originalLastKeystrokeTime;
+        app._enqueueReliableInput = originalSendInput;
+        app.sessions.delete('cod388-browser-edit-enter');
+        app._pendingInput.delete('cod388-browser-edit-enter');
+        app._lastKeystrokeTime.delete('cod388-browser-edit-enter');
         textarea.value = '';
       }
     }, options);
@@ -480,7 +475,7 @@ describe('orphaned terminal input recovery wiring', () => {
           const app = w.app;
           const tile = w.__tile229;
           const textarea = document.querySelector('#tile229Mount .xterm-helper-textarea') as HTMLTextAreaElement;
-          const originalSendInput = app._sendInputAsync;
+          const originalSendInput = app._enqueueReliableInput;
           const originalSessionId = app.activeSessionId;
           const rec = tile._keyCode229Recovery;
           const sent: Array<[string, string]> = [];
@@ -509,7 +504,8 @@ describe('orphaned terminal input recovery wiring', () => {
           };
           try {
             app.activeSessionId = 'cod541-not-the-tile';
-            app._sendInputAsync = (sessionId: string, chunk: string) => sent.push([sessionId, chunk]);
+            app.sessions.set(tileId, { mode: 'shell' });
+            app._enqueueReliableInput = (sessionId: string, chunk: string) => sent.push([sessionId, chunk]);
             if (scenario === 'selfRescued') {
               // Counts xterm's own canonical emissions: the tile's onData reads the property at
               // call time, and the controller object itself is frozen.
@@ -569,7 +565,8 @@ describe('orphaned terminal input recovery wiring', () => {
               tileId,
             };
           } finally {
-            app._sendInputAsync = originalSendInput;
+            app._enqueueReliableInput = originalSendInput;
+            app.sessions.delete(tileId);
             app.activeSessionId = originalSessionId;
             tile._keyCode229Recovery = rec;
             textarea.value = '';

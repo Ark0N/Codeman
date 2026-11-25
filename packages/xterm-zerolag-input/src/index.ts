@@ -8,6 +8,7 @@ export type {
   ZerolagInputState,
   PromptFinder,
   PromptPosition,
+  InputEndAnchor,
   CellDimensions,
 } from './types.js';
 export type { PredictiveEchoOptions, PredictionState } from './predictive-echo-addon.js';

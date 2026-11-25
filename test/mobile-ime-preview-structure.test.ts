@@ -428,52 +428,42 @@ describe('mobile IME preview lifecycle', () => {
   );
 });
 
-/**
- * Rebuilds the real `handleTerminalData` closure from initTerminal's source,
- * so these cases exercise the shipped routing rather than a copy of it.
- */
+/** Runs the real session-bound preprocessing method with deterministic FIFO gaps. */
 function loadHandleTerminalData(app: App, sent: string[]) {
-  const marker = 'const handleTerminalData = (data) => {';
-  const start = terminalSource.indexOf(marker);
-  if (start < 0) throw new Error('handleTerminalData definition not found');
-  const bodyStart = start + marker.length;
-  const end = terminalSource.indexOf('\n    };', bodyStart);
-  if (end < 0) throw new Error('handleTerminalData boundary not found');
   const timers: Array<() => void> = [];
+  const pending = new Map<string, string>();
+  const queues = new Map<string, Array<{ write?: string; gap?: number }>>();
+  const draining = new Set<string>();
   app._sendInputAsync = (_sessionId: string, data: string) => sent.push(data);
-  const context = vm.createContext({
-    console,
-    performance,
-    setTimeout: (callback: () => void) => {
-      timers.push(callback);
-      return timers.length;
-    },
-    clearTimeout: vi.fn(),
-    document: { activeElement: null, getElementById: vi.fn(() => null) },
-    window: {
-      cjkActive: false,
-      CodemanTerminalInput: {
-        BRACKETED_PASTE_START: '\x1b[200~',
-        shouldSuppressTerminalQueryResponse: () => false,
-        isTerminalFocusOrMouseReport: () => false,
-        isComposerNavKey: () => false,
-      },
-    },
-    _crashDiag: { log: vi.fn() },
-    flushInput: () => {
-      app._inputFlushTimeout = null;
-      if (app._pendingInput && app.activeSessionId) {
-        const input = app._pendingInput;
-        app._pendingInput = '';
-        app._sendInputAsync(app.activeSessionId, input);
+  app._sealPendingInput = (sessionId: string) => {
+    const data = pending.get(sessionId);
+    pending.delete(sessionId);
+    if (data) app._enqueueInput(sessionId, [{ write: data }]);
+  };
+  app._appendPendingInput = (sessionId: string, data: string) => {
+    pending.set(sessionId, (pending.get(sessionId) || '') + data);
+    timers.push(() => app._sealPendingInput(sessionId));
+  };
+  app._enqueueInput = (sessionId: string, ops: Array<{ write?: string; gap?: number }>) => {
+    const queue = queues.get(sessionId) || [];
+    queue.push(...ops);
+    queues.set(sessionId, queue);
+    if (draining.has(sessionId)) return;
+    draining.add(sessionId);
+    function drain() {
+      while (queue.length) {
+        const op = queue.shift()!;
+        if (op.gap !== undefined) {
+          timers.push(drain);
+          return;
+        }
+        if (op.write !== undefined) app._sendInputAsync(sessionId, op.write);
       }
-    },
-  });
-  const handler = vm.runInContext(`(function (data) {${terminalSource.slice(bodyStart, end)}\n})`, context) as (
-    this: App,
-    data: string
-  ) => void;
-  return { handle: (data: string) => handler.call(app, data), timers };
+      draining.delete(sessionId);
+    }
+    drain();
+  };
+  return { handle: (data: string) => app._handleTerminalData(data, app.activeSessionId), timers };
 }
 
 describe('mobile IME commit onData routing', () => {
@@ -521,9 +511,9 @@ describe('mobile IME commit onData routing', () => {
       _echoPassthroughSessions: new Set(),
       _flushedOffsets: new Map(),
       _flushedTexts: new Map(),
-      _pendingInput: '',
-      _inputFlushTimeout: null,
-      _lastKeystrokeTime: 0,
+      _pendingInput: new Map(),
+      _inputFlushTimeout: new Map(),
+      _lastKeystrokeTime: new Map(),
       _terminalOutputSeq: 5,
       _mobileImePreview: controller,
     });
@@ -718,5 +708,24 @@ describe('mobile IME commit and authoritative terminal output', () => {
       parseNext();
     }
     expect(controller.noteAuthoritativeOutput).toHaveBeenCalledOnce();
+  });
+});
+
+describe('native owner and preview shared platform gate', () => {
+  it('loads the preview first and delegates native support to its single predicate', () => {
+    const exposed: {
+      navigator: { userAgent: string; maxTouchPoints: number };
+      MobileImePreview?: { isIosWebKitTouch(nav: unknown): boolean };
+      CodemanIosNativeInput?: { isSupported(): boolean };
+    } = {
+      navigator: { userAgent: 'iPhone AppleWebKit/605.1.15', maxTouchPoints: 5 },
+    };
+    const context = vm.createContext({ window: exposed, globalThis: exposed });
+    vm.runInContext(read('src/web/public/mobile-ime-preview.js'), context);
+    vm.runInContext(read('src/web/public/terminal-ios-native-input.js'), context);
+    expect(exposed.CodemanIosNativeInput!.isSupported()).toBe(true);
+    const shared = vi.spyOn(exposed.MobileImePreview!, 'isIosWebKitTouch').mockReturnValue(false);
+    expect(exposed.CodemanIosNativeInput!.isSupported()).toBe(false);
+    expect(shared).toHaveBeenCalledWith(exposed.navigator);
   });
 });

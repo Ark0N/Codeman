@@ -1,4 +1,4 @@
-import type { RenderParams, FontStyle, XtermTerminal } from './types.js';
+import type { RenderParams, FontStyle, XtermTerminal, InputEndAnchor } from './types.js';
 
 // ─── CJK / fullwidth character width detection ───────────────────────
 
@@ -88,6 +88,13 @@ function holdsOnlyRendered(container: HTMLDivElement, state: RenderedLines): boo
   return !state.cursor || children[state.lines.length] === state.cursor;
 }
 
+interface OverlayPlacement {
+  end: InputEndAnchor | null;
+  firstVisible: number;
+  topRow: number;
+  keepsPromptLine: boolean;
+}
+
 /**
  * Render the overlay content into the container element.
  *
@@ -102,7 +109,7 @@ function holdsOnlyRendered(container: HTMLDivElement, state: RenderedLines): boo
  * DOM work, layout and paint, which a long prompt on a phone paid for in
  * dropped frames.
  */
-export function renderOverlay(container: HTMLDivElement, params: RenderParams): void {
+export function renderOverlay(container: HTMLDivElement, params: RenderParams): OverlayPlacement {
   const {
     lines,
     compositionStart,
@@ -233,11 +240,11 @@ export function renderOverlay(container: HTMLDivElement, params: RenderParams): 
   state.lines.length = visibleLines.length;
   state.lineKeys.length = visibleLines.length;
 
-  // Block cursor at end of last line (use visual width for CJK support)
-  if (showCursor) {
-    const lastLine = visibleLines[visibleLines.length - 1];
-    const lastLineLeft = visibleLines.length === 1 && keepsPromptLine ? startCol : 0;
-    const cursorCol = lastLineLeft + stringCellWidth(terminal, lastLine);
+  // Publish the text end from this layout even when the block cursor is hidden.
+  const lastLine = visibleLines[visibleLines.length - 1];
+  const lastLineLeft = visibleLines.length === 1 && keepsPromptLine ? startCol : 0;
+  const cursorCol = lastLineLeft + stringCellWidth(terminal, lastLine ?? '');
+  if (showCursor && lastLine !== undefined) {
     if (cursorCol < totalCols) {
       const cursor = document.createElement('span');
       cursor.style.cssText = 'position:absolute;display:inline-block';
@@ -252,6 +259,12 @@ export function renderOverlay(container: HTMLDivElement, params: RenderParams): 
   }
 
   container.style.display = '';
+  return {
+    end: lastLine === undefined ? null : { col: cursorCol, row: topRow + visibleLines.length - 1 },
+    firstVisible,
+    topRow,
+    keepsPromptLine,
+  };
 }
 
 /**

@@ -51,7 +51,9 @@ describe('xterm private-API dependency guard', () => {
         'CompositionHelper fields installEditSync() uses (terminal-keycode229-recovery.js: ' +
         '_handleAnyTextareaChanges, _coreService, _isComposing, _isSendingComposition, _dataAlreadySent) ' +
         'and the mouse-encoding read _shouldForwardTouchToApp makes (terminal-ui.js: ' +
-        '_core.coreMouseService.activeEncoding), then update VERIFIED_XTERM_VERSION here. ' +
+        '_core.coreMouseService.activeEncoding) and the iOS native-input owner (terminal-ios-native-input.js: ' +
+        '_core._inputEvent, _core._handleTextAreaBlur, _compositionHelper._finalizeComposition, ' +
+        '_compositionHelper._compositionView), then update VERIFIED_XTERM_VERSION here. ' +
         'The accessor is optional-chained, so a renamed field ' +
         'degrades to a silent no-op and the freeze it heals comes back unnoticed.'
     ).toBe(VERIFIED_XTERM_VERSION);
@@ -67,6 +69,12 @@ describe('xterm private-API dependency guard', () => {
   // only to an app that asked for SGR mouse reports; if either name changes the read is undefined
   // and touch quietly stops forwarding to native SGR tracking apps. Property names survive
   // minification, so a string check on the shipped bundle catches a rename on upgrade.
+  // terminal-ios-native-input.js wraps `_inputEvent`, `_handleTextAreaBlur` and `_finalizeComposition`
+  // and reads `_compositionView`; if any is missing its create() returns null, and iOS falls back
+  // to the keyCode-229 recovery, so #830 (suggestions, phrase replacement, held delete) returns
+  // without a signal.
+  // The iOS owner also clears `_unprocessedDeadKey` when native input commits text,
+  // so the next terminal command is not swallowed as part of the dead-key sequence.
   it('still ships the composition-helper and mouse-service fields terminal input depends on', () => {
     const bundle = readFileSync(resolve(root, 'node_modules/@xterm/xterm/lib/xterm.js'), 'utf8');
     for (const name of [
@@ -78,12 +86,18 @@ describe('xterm private-API dependency guard', () => {
       '_dataAlreadySent',
       'coreMouseService',
       'activeEncoding',
+      '_inputEvent',
+      '_unprocessedDeadKey',
+      '_handleTextAreaBlur',
+      '_finalizeComposition',
+      '_compositionView',
     ]) {
       expect(
         bundle,
         `xterm no longer mentions ${name}: re-verify terminal-keycode229-recovery.js installEditSync() ` +
-          'against the new CompositionHelper, and terminal-ui.js _shouldForwardTouchToApp against the ' +
-          'new CoreMouseService (both in src/web/public), before bumping VERIFIED_XTERM_VERSION'
+          'against the new CompositionHelper, terminal-ios-native-input.js create() against the new ' +
+          'CoreBrowserTerminal and CompositionHelper, and terminal-ui.js _shouldForwardTouchToApp against the ' +
+          'new CoreMouseService (all in src/web/public), before bumping VERIFIED_XTERM_VERSION'
       ).toContain(name);
     }
   });

@@ -54,7 +54,14 @@ function load({
   promptResult = true,
   touch = true,
   translate,
-}: { hold?: boolean; promptResult?: boolean; touch?: boolean; translate?: (s: string) => string } = {}) {
+  captureTarget,
+}: {
+  hold?: boolean;
+  promptResult?: boolean;
+  touch?: boolean;
+  translate?: (s: string) => string;
+  captureTarget?: () => string;
+} = {}) {
   const textarea = makeTextarea();
   const sent: string[] = [];
   const prompts: string[] = [];
@@ -88,6 +95,7 @@ function load({
   vm.runInContext(src, context, { filename: 'input-cjk.js' });
   const CjkInput = vm.runInContext('CjkInput', context);
   CjkInput.init({
+    captureTarget,
     send: (t: string) => sent.push(t),
     sendPrompt: (t: string) => {
       prompts.push(t);
@@ -436,6 +444,28 @@ describe('CJK input: Send on Enter', () => {
     expect(textarea.value).toBe(PHANTOM);
     expect(sent).toEqual([]);
     expect(prompts).toEqual([]);
+  });
+
+  it.each([true, false])('a captured target owns the draft across clear (explicit stash: %s)', (stash) => {
+    const { CjkInput, textarea } = load({ captureTarget: () => 'session-b' });
+    CjkInput.restoreDraft('session-a');
+    type(textarea, 'answer for b');
+    if (stash) CjkInput.stashDraft('session-a');
+    CjkInput.clear();
+    CjkInput.restoreDraft('session-a');
+    expect(textarea.value).toBe(PHANTOM);
+    CjkInput.restoreDraft('session-b');
+    expect(textarea.value).toBe(PHANTOM + 'answer for b');
+  });
+
+  it('clear({ discard }) also drops a stash under the captured target', () => {
+    const { CjkInput, textarea } = load({ captureTarget: () => 'session-b' });
+    CjkInput.restoreDraft('session-a');
+    type(textarea, 'answer for b');
+    CjkInput.stashDraft('session-b');
+    CjkInput.clear({ discard: true });
+    CjkInput.restoreDraft('session-b');
+    expect(textarea.value).toBe(PHANTOM);
   });
 
   it('a restored draft is held text: Backspace edits it without a DEL', () => {

@@ -25,7 +25,7 @@
  * @globals {object} VoiceInput
  *
  * @dependency mobile-handlers.js (MobileDetection for device checks)
- * @dependency app.js (uses global `app` for sendInput, showToast, terminal focus)
+ * @dependency app.js (uses global `app` for _sendInputAsync, _enqueueInput, _prepareExternalInput, showToast, terminal focus)
  * @loadorder 3 of 15 — loaded after mobile-handlers.js, before notification-manager.js
  */
 
@@ -1071,19 +1071,18 @@ const VoiceInput = {
     return this._targetSessionId || app.activeSessionId;
   },
 
-  /**
-   * Send text to the dictation's own session. The active session keeps going
-   * through app.sendInput() exactly as before; any other session goes straight
-   * to the durable queue with the same useMux flag sendInput() passes.
-   */
+  /** Send only to the captured dictation session, never the current tab. */
   _sendToTarget(target, text) {
-    if (target === app.activeSessionId) return app.sendInput(text);
     // Closed while dictating: say so instead of queueing text for a session
     // that will only answer 404 (and never typing it into some other tab).
     if (app.sessions && !app.sessions.has(target)) {
       app.showToast?.('That session has closed; dictation not sent', 'warning');
       return Promise.resolve();
     }
+    // Settle the destination's iOS owner, but leave an unsent local-echo draft
+    // in the overlay: flushing it would prepend it to the reviewed dictation.
+    const pane = app._paneForSession?.(target);
+    if (pane) app._prepareExternalInput?.(pane, 'voice-send');
     app._sendInputAsync(target, text, { useMux: true });
     return Promise.resolve();
   },
@@ -1098,6 +1097,7 @@ const VoiceInput = {
       // If a compose overlay is already open, populate its textarea instead of recreating
       const existingTextarea = document.querySelector('.voice-compose-overlay .paste-textarea');
       if (existingTextarea) {
+        existingTextarea.closest('.voice-compose-overlay').dataset.targetSessionId = target;
         existingTextarea.value = trimmed;
         existingTextarea.focus();
         existingTextarea.selectionStart = existingTextarea.selectionEnd = trimmed.length;
@@ -1113,7 +1113,13 @@ const VoiceInput = {
       // sees, so it goes straight to the session instead.
       const isActive = target === app.activeSessionId;
       const tilesOpen = !!app._tilesOwnTerminal?.();
+      const pane = app._focusedPane?.();
       if (isActive && !tilesOpen && app._localEchoEnabled && app._localEchoOverlay) {
+        // Focus may have moved to Pane B, but this overlay still belongs to A.
+        const targetPane = pane?.isPrimary && pane.sessionId === target
+          ? pane
+          : { isPrimary: true, tile: null, terminal: app.terminal, sessionId: target };
+        app._prepareExternalInput?.(targetPane, 'voice-insert');
         app._localEchoOverlay.appendText(trimmed);
       } else {
         this._sendToTarget(target, trimmed).catch(() => {});
@@ -1158,24 +1164,33 @@ const VoiceInput = {
     this._voiceSendHandler = () => {
       const target = this._targetSession();
       if (!target) return;
+      const pane = app._focusedPane?.();
+      const tilesOpen = !!app._tilesOwnTerminal?.();
+      if (target === app.activeSessionId && !tilesOpen) {
+        const targetPane = pane?.isPrimary && pane.sessionId === target
+          ? pane
+          : { isPrimary: true, tile: null, terminal: app.terminal, sessionId: target };
+        app._prepareExternalInput?.(targetPane, 'voice-submit');
+      }
       // Simulate Enter key: if local echo is active, flush its buffer + send \r;
       // otherwise just send \r directly to the PTY. Both the overlay and the
       // predictions belong to the ACTIVE session's MAIN terminal, so a
       // dictation for another session, or for a tile while the grid has the
       // main terminal parked, just sends its Enter there.
-      if (target !== app.activeSessionId || app._tilesOwnTerminal?.()) {
+      if (target !== app.activeSessionId || tilesOpen) {
         this._sendToTarget(target, '\r').catch(() => {});
       } else if (app._localEchoEnabled && app._localEchoOverlay) {
         const text = app._localEchoOverlay.pendingText || '';
         app._localEchoOverlay.clear();
         app._localEchoOverlay.suppressBufferDetection();
-        if (text) app.sendInput(text).catch(() => {});
-        setTimeout(() => app.sendInput('\r').catch(() => {}), 80);
+        const ops = text ? [{ write: text, useMux: true }, { gap: 80 }] : [];
+        ops.push({ write: '\r', useMux: true });
+        app._enqueueInput(target, ops);
       } else {
         // Predict-mode sessions (codex) take this branch: the send bypasses
         // onData, so clear outstanding predictions here (composer will reset)
         app._predictiveEcho?.clearPredictions();
-        app.sendInput('\r').catch(() => {});
+        app._sendInputAsync(target, '\r', { useMux: true });
       }
       // Blink then restore
       gear.classList.add('voice-send-blink');
@@ -1205,6 +1220,7 @@ const VoiceInput = {
     document.querySelector('.voice-compose-overlay')?.remove();
     const overlay = document.createElement('div');
     overlay.className = 'voice-compose-overlay paste-overlay';
+    overlay.dataset.targetSessionId = this._targetSession();
     overlay.innerHTML = `
       <div class="paste-dialog">
         <textarea class="paste-textarea">${text.replace(/</g, '&lt;')}</textarea>
@@ -1219,7 +1235,7 @@ const VoiceInput = {
     const send = () => {
       const val = textarea.value.trim();
       overlay.remove();
-      if (val) this._sendToTarget(this._targetSession(), val + '\r').catch(() => {});
+      if (val) this._sendToTarget(overlay.dataset.targetSessionId, val + '\r').catch(() => {});
     };
     const cancel = () => overlay.remove();
     const newInput = () => {

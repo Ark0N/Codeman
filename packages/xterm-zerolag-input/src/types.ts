@@ -66,6 +66,14 @@ export interface PromptPosition {
   col: number;
 }
 
+/** Viewport position at the end of the visible overlay input. */
+export interface InputEndAnchor {
+  /** Column (0-based); equals the column count at a full line's right edge. */
+  col: number;
+  /** Viewport-relative row (0 = top of viewport). */
+  row: number;
+}
+
 /**
  * Prompt detection strategy.
  *

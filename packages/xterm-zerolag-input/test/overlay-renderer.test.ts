@@ -531,6 +531,29 @@ describe('renderOverlay — staying on screen (totalRows)', () => {
 
     expect(container.style.top).toBe(6 * 17 + 'px');
   });
+
+  it('returns the same placement used for upward growth and tail clipping', () => {
+    const container = document.createElement('div');
+    const params = makeParams({ lines: ['ab', '你好', 'x'], startCol: 3, promptRow: 5, totalRows: 6 });
+    expect(renderOverlay(container, params)).toEqual({
+      end: { col: 1, row: 5 },
+      firstVisible: 0,
+      topRow: 3,
+      keepsPromptLine: true,
+    });
+    expect(renderOverlay(container, { ...params, totalRows: 2 })).toEqual({
+      end: { col: 1, row: 1 },
+      firstVisible: 1,
+      topRow: 0,
+      keepsPromptLine: false,
+    });
+    expect(renderOverlay(container, { ...params, lines: [] })).toEqual({
+      end: null,
+      firstVisible: 0,
+      topRow: 5,
+      keepsPromptLine: true,
+    });
+  });
 });
 
 describe('renderOverlay: rebuilding only the lines that changed', () => {

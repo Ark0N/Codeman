@@ -94,10 +94,11 @@ function loadContext() {
   return {
     CodemanApp: (context as unknown as { __CodemanApp: { prototype: object } }).__CodemanApp,
     windowStub,
+    context,
   };
 }
 
-const { CodemanApp, windowStub } = loadContext();
+const { CodemanApp, windowStub, context } = loadContext();
 
 type App = Record<string, unknown> & {
   _pendingDeliveries: Map<string, Array<{ seq: number; data: string }>>;
@@ -163,6 +164,8 @@ afterEach(() => {
 
 beforeEach(() => {
   windowStub.__coarsePointer = true;
+  delete windowStub.CodemanIosNativeInput;
+  delete context.KeyboardAccessoryBar;
   FakeTerminal.coreFactory = null;
   FakeFit.proposed = { cols: 80, rows: 24 };
   FakeSocket.instances = [];
@@ -1518,4 +1521,215 @@ describe('terminal-tile.js keeps the controller call where it works (source pin)
   it("hands the controller this tile's own composition helper", () => {
     expect(source).toMatch(/getCompositionHelper:\s*\(\)\s*=>\s*this\.terminal\?\._core\?\._compositionHelper/);
   });
+});
+
+describe('TerminalTile iOS native input ownership', () => {
+  type NativeOptions = { terminal: unknown; sendTransaction(ops: string[]): void };
+  const install = (supported = true) => {
+    const owner = {
+      keyFilter: vi.fn(() => true),
+      settle: vi.fn(),
+      reset: vi.fn(),
+      destroy: vi.fn(),
+    };
+    let options: NativeOptions;
+    const dispose = vi.fn();
+    const create = vi.fn((opts: NativeOptions) => {
+      options = opts;
+      return owner;
+    });
+    const attachCaretMarker = vi.fn(() => dispose);
+    windowStub.CodemanIosNativeInput = { isSupported: () => supported, create, attachCaretMarker };
+    return { owner, create, attachCaretMarker, dispose, send: (ops: string[]) => options.sendTransaction(ops) };
+  };
+
+  it('creates an owner and parsed-buffer marker without an anchor, but no 229 recovery, on iOS', async () => {
+    const native = install();
+    const { tile, term } = await connectTile(makeApp());
+    expect(native.create).toHaveBeenCalledOnce();
+    expect(native.create.mock.calls[0][0].terminal).toBe(term);
+    expect(native.attachCaretMarker).toHaveBeenCalledWith(term, native.owner);
+    expect((tile as ControllerTile)._keyCode229Recovery).toBeNull();
+  });
+
+  it('leaves the non-iOS 229 recovery and key handling unchanged', async () => {
+    const native = install(false);
+    const { tile, term } = await connectTile(makeApp());
+    expect(native.create).not.toHaveBeenCalled();
+    expect((tile as ControllerTile)._keyCode229Recovery).not.toBeNull();
+    expect(term.keyHandler!({ type: 'keydown', key: 'a', code: 'KeyA' })).toBe(true);
+  });
+
+  it('falls back to the 229 recovery when the iOS module refuses to create an owner', async () => {
+    const native = install();
+    native.create.mockReturnValueOnce(null);
+    const { tile } = await connectTile(makeApp());
+    expect(native.create).toHaveBeenCalledOnce();
+    expect(native.attachCaretMarker).not.toHaveBeenCalled();
+    expect((tile as ControllerTile)._keyCode229Recovery).not.toBeNull();
+  });
+
+  it('reserves separate DEL writes and insertion for the tile session in one call', async () => {
+    const native = install();
+    const app = makeApp();
+    app.activeSessionId = 'not-the-tile';
+    app._enqueueInput = vi.fn();
+    await connectTile(app);
+    native.send(['\x7f', '\x7f', 'fixed ']);
+    expect(app._enqueueInput).toHaveBeenCalledExactlyOnceWith('s-tile', [
+      { write: '\x7f' },
+      { write: '\x7f' },
+      { write: 'fixed ' },
+    ]);
+  });
+
+  it('falls back per write while retaining the destination captured before sending', async () => {
+    const native = install();
+    const app = makeApp();
+    app._enqueueInput = undefined;
+    const { tile } = await connectTile(app);
+    const send = vi.fn(() => {
+      (tile as Tile & { sessionId: string }).sessionId = 'changed';
+    });
+    app._sendInputAsync = send;
+    native.send(['\x7f', '\x7f', 'x']);
+    expect(send.mock.calls).toEqual([
+      ['s-tile', '\x7f'],
+      ['s-tile', '\x7f'],
+      ['s-tile', 'x'],
+    ]);
+  });
+
+  it('runs keyFilter before recovery, composition and tile chord handling', async () => {
+    const native = install();
+    native.owner.keyFilter.mockReturnValue(false);
+    const app = makeApp();
+    app.tileShortcutFor = vi.fn();
+    const { tile, term } = await connectTile(app);
+    const recovery = { handleKeyEvent: vi.fn() };
+    (tile as ControllerTile)._keyCode229Recovery = recovery;
+    const ev = { type: 'keydown', key: 'Process', keyCode: 229, isComposing: true };
+    expect(term.keyHandler!(ev)).toBe(false);
+    expect(native.owner.keyFilter).toHaveBeenCalledWith(ev);
+    expect(recovery.handleKeyEvent).not.toHaveBeenCalled();
+    expect(app.tileShortcutFor).not.toHaveBeenCalled();
+  });
+
+  it('retains paste, tile chords and Shift+Enter when keyFilter allows them', async () => {
+    const native = install();
+    const app = makeApp();
+    app.tileShortcutFor = vi.fn((ev: { key: string }) => ev.key === 'g');
+    app._handleImagePaste = vi.fn();
+    const { term } = await connectTile(app);
+    expect(term.keyHandler!({ type: 'keydown', key: 'g' })).toBe(false);
+    expect(term.keyHandler!({ type: 'keydown', key: 'v', ctrlKey: true })).toBe(false);
+    expect(app._handleImagePaste).toHaveBeenCalledOnce();
+    expect(term.keyHandler!({ type: 'keydown', key: 'Enter', shiftKey: true })).toBe(false);
+    expect(fetchMock).toHaveBeenCalledWith('/api/sessions/s-tile/send-key', expect.any(Object));
+    expect(native.owner.keyFilter).toHaveBeenCalledTimes(3);
+  });
+
+  it('settles, destroys and disposes on teardown, including a pending edit', async () => {
+    const native = install();
+    const app = makeApp();
+    app._enqueueInput = vi.fn();
+    const { tile, term } = await connectTile(app);
+    native.owner.settle.mockImplementation(() => native.send(['last']));
+    const disposeTerminal = vi.spyOn(term, 'dispose');
+    tile.destroy();
+    tile.destroy();
+    expect(app._enqueueInput).toHaveBeenCalledExactlyOnceWith('s-tile', [{ write: 'last' }]);
+    expect(native.owner.settle).toHaveBeenCalledOnce();
+    expect(native.owner.destroy).toHaveBeenCalledOnce();
+    expect(native.dispose).toHaveBeenCalledOnce();
+    expect(native.owner.settle.mock.invocationCallOrder[0]).toBeLessThan(
+      native.owner.destroy.mock.invocationCallOrder[0]
+    );
+    expect(native.dispose.mock.invocationCallOrder[0]).toBeLessThan(disposeTerminal.mock.invocationCallOrder[0]);
+  });
+
+  it('disposes the prior owner and marker before reinitialization', async () => {
+    const previous = install();
+    const { tile } = await connectTile(makeApp());
+    const next = install();
+    (tile as Tile & { _createInputOwner(): void })._createInputOwner();
+    expect(previous.owner.settle).toHaveBeenCalledOnce();
+    expect(previous.owner.destroy).toHaveBeenCalledOnce();
+    expect(previous.dispose).toHaveBeenCalledOnce();
+    expect(previous.dispose.mock.invocationCallOrder[0]).toBeLessThan(next.create.mock.invocationCallOrder[0]);
+  });
+
+  it('consumes Ctrl once on a single-character insertion, retaining replacement DELs', async () => {
+    const native = install();
+    const app = makeApp();
+    app._enqueueInput = vi.fn();
+    const consumeCtrl = vi.fn(() => '\x03');
+    context.KeyboardAccessoryBar = { isCtrlArmed: () => true, consumeCtrl };
+    await connectTile(app);
+    native.send(['\x7f', '\x7f', 'c']);
+    expect(consumeCtrl).toHaveBeenCalledExactlyOnceWith('c');
+    expect(app._enqueueInput).toHaveBeenCalledExactlyOnceWith('s-tile', [
+      { write: '\x7f' },
+      { write: '\x7f' },
+      { write: '\x03' },
+    ]);
+    expect(native.owner.reset).toHaveBeenCalledExactlyOnceWith('ctrl');
+  });
+
+  it('spends Ctrl on a deletion-only transaction without resetting the owner', async () => {
+    const native = install();
+    const app = makeApp();
+    app._enqueueInput = vi.fn();
+    let armed = true;
+    const consumeCtrl = vi.fn(() => {
+      armed = false;
+      return '\x03';
+    });
+    context.KeyboardAccessoryBar = {
+      isCtrlArmed: () => armed,
+      consumeCtrl,
+      clearCtrl: () => {
+        armed = false;
+      },
+    };
+    await connectTile(app);
+    native.send(['\x7f']);
+    expect(armed).toBe(false);
+    native.send(['c']);
+    expect(app._enqueueInput.mock.calls).toEqual([
+      ['s-tile', [{ write: '\x7f' }]],
+      ['s-tile', [{ write: 'c' }]],
+    ]);
+    expect(consumeCtrl).not.toHaveBeenCalled();
+    expect(native.owner.reset).not.toHaveBeenCalled();
+  });
+
+  // A multi-character suggestion or an emoji has no single key to modify, but it
+  // must still spend the modifier (applyOneShotCtrl in keyboard-accessory.js),
+  // or the next plain `c` would become an interrupt.
+  for (const [label, insertion] of [
+    ['suggestion', 'word'],
+    ['emoji', '👍'],
+  ] as const) {
+    it(`spends Ctrl on a ${label} insertion, so a following c stays c`, async () => {
+      const native = install();
+      const app = makeApp();
+      app._enqueueInput = vi.fn();
+      let armed = true;
+      const consumeCtrl = vi.fn((data: string) => {
+        armed = false;
+        return data.length === 1 ? '\x03' : data;
+      });
+      context.KeyboardAccessoryBar = { isCtrlArmed: () => armed, consumeCtrl };
+      await connectTile(app);
+      native.send([insertion]);
+      native.send(['c']);
+      expect(consumeCtrl).toHaveBeenCalledExactlyOnceWith(insertion);
+      expect(app._enqueueInput.mock.calls).toEqual([
+        ['s-tile', [{ write: insertion }]],
+        ['s-tile', [{ write: 'c' }]],
+      ]);
+      expect(native.owner.reset).toHaveBeenCalledExactlyOnceWith('ctrl');
+    });
+  }
 });

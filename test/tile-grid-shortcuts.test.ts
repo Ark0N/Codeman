@@ -297,7 +297,9 @@ describe('xterm key handlers swallow a chord that applies', () => {
     const src = read('terminal-ui.js');
     const handler = src.slice(src.indexOf('this.terminal.attachCustomKeyEventHandler((ev) => {'));
     const gate = handler.indexOf('if (this.tileShortcutFor?.(ev)) return false;');
-    const enter = handler.indexOf("if (ev.key === 'Enter' && (ev.shiftKey || ev.ctrlKey)) {");
+    // Prefix only: the gate also carries an iOS keyCode guard (#830), so an iOS
+    // suggestion word "Enter" with Shift held is text, not a Shift+Enter chord.
+    const enter = handler.indexOf("if (ev.key === 'Enter' && (ev.shiftKey || ev.ctrlKey)");
     expect(gate).toBeGreaterThan(0);
     expect(gate).toBeLessThan(enter);
   });

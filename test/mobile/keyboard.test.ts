@@ -865,7 +865,7 @@ describe('Virtual Keyboard', () => {
           },
           suppressBufferDetection() {},
         };
-        app._sendInputAsync = (_sessionId: string, input: string) => {
+        app._enqueueReliableInput = (_sessionId: string, input: string) => {
           window.__sentInputs.push(input);
         };
         const settings = app.loadAppSettingsFromStorage();
@@ -1018,7 +1018,7 @@ describe('Virtual Keyboard', () => {
           cliVersion: '2.1.220',
           status: 'running',
         });
-        app._sendInputAsync = (_sessionId: string, input: string) => {
+        app._enqueueReliableInput = (_sessionId: string, input: string) => {
           window.__sentInputs.push(input);
         };
         app.hideWelcome();
@@ -1074,7 +1074,7 @@ describe('Virtual Keyboard', () => {
           mode: 'codex',
           status: 'running',
         });
-        app._sendInputAsync = (_sessionId: string, input: string) => {
+        app._enqueueReliableInput = (_sessionId: string, input: string) => {
           window.__sentInputs.push(input);
         };
         app.hideWelcome();
@@ -1120,7 +1120,7 @@ describe('Virtual Keyboard', () => {
           cliVersion: '2.1.220',
           status: 'working',
         });
-        app._sendInputAsync = (_sessionId: string, input: string) => {
+        app._enqueueReliableInput = (_sessionId: string, input: string) => {
           window.__sentInputs.push(input);
         };
         app.hideWelcome();
@@ -1179,7 +1179,7 @@ describe('Virtual Keyboard', () => {
           cliVersion: '2.1.220',
           status: 'working',
         });
-        app._sendInputAsync = (_sessionId: string, input: string) => {
+        app._enqueueReliableInput = (_sessionId: string, input: string) => {
           window.__sentInputs.push(input);
         };
         app.hideWelcome();
@@ -1273,7 +1273,7 @@ describe('Virtual Keyboard', () => {
           mode: 'codex',
           status: 'running',
         });
-        app._sendInputAsync = (_sessionId: string, input: string) => {
+        app._enqueueReliableInput = (_sessionId: string, input: string) => {
           window.__sentInputs.push(input);
         };
         app.hideWelcome();
@@ -1317,7 +1317,7 @@ describe('Virtual Keyboard', () => {
           mode: 'claude',
           status: 'running',
         });
-        app._sendInputAsync = (_sessionId: string, input: string) => {
+        app._enqueueReliableInput = (_sessionId: string, input: string) => {
           window.__sentInputs.push(input);
         };
         app.hideWelcome();
@@ -1461,7 +1461,7 @@ describe('Virtual Keyboard', () => {
           status: 'running',
         });
         app.hideWelcome();
-        app._sendInputAsync = (_sessionId: string, input: string) => {
+        app._enqueueReliableInput = (_sessionId: string, input: string) => {
           window.__sentInputs.push(input);
         };
         const settings = app.loadAppSettingsFromStorage();
@@ -1542,7 +1542,7 @@ describe('Virtual Keyboard', () => {
           status: 'running',
         });
         app.hideWelcome();
-        app._sendInputAsync = (_sessionId: string, input: string) => {
+        app._enqueueReliableInput = (_sessionId: string, input: string) => {
           window.__sentInputs.push(input);
         };
         const settings = app.loadAppSettingsFromStorage();
@@ -1591,7 +1591,7 @@ describe('Virtual Keyboard', () => {
   // applied to the next character typed on the SYSTEM keyboard, which on a
   // phone reaches the app as xterm onData text, not a key event. These drive
   // the real xterm instance with page.keyboard.type() and assert on what would
-  // go out on the wire (_sendInputAsync), not on DOM state alone.
+  // go out on the wire (_enqueueReliableInput, behind the session FIFO), not on DOM state alone.
 
   describe('Shell keyboard bar', () => {
     let context: BrowserContext;
@@ -1620,14 +1620,14 @@ describe('Virtual Keyboard', () => {
     async function typeAndCapture(text: string): Promise<string[]> {
       await page.evaluate(`(function () {
         window.__sent = [];
-        if (!app.__origSend) app.__origSend = app._sendInputAsync;
-        app._sendInputAsync = function (sessionId, input) { window.__sent.push(input); };
+        if (!app.__origSend) app.__origSend = app._enqueueReliableInput;
+        app._enqueueReliableInput = function (sessionId, input) { window.__sent.push(input); };
         app.terminal.focus();
       })()`);
       await page.keyboard.type(text);
       await page.waitForTimeout(200);
       const sent = (await page.evaluate(`window.__sent`)) as string[];
-      await page.evaluate(`(function () { app._sendInputAsync = app.__origSend; })()`);
+      await page.evaluate(`(function () { app._enqueueReliableInput = app.__origSend; })()`);
       return sent;
     }
 

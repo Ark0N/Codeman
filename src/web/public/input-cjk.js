@@ -17,10 +17,10 @@
  * and a lone digit at a pending dialog goes without it). Shift+Enter is a
  * newline, Esc clears, Backspace and the arrows reach the PTY only from an
  * empty field, and so do the Ctrl shortcuts. Autocorrect is on. A held draft
- * belongs to one session (_owner): clear() stashes it under that session and
- * restoreDraft() brings it back when the session is shown again, except a
- * clear({ discard: true }) (the keyboard bar's clear-line key), which throws
- * it away.
+ * belongs to one session: a captured target takes precedence over _owner when
+ * clear() stashes it, and restoreDraft() brings it back when that session is
+ * shown again, except a clear({ discard: true }) (the keyboard bar's clear-line
+ * key), which throws it away.
  *
  * ## Android IME challenge
  *
@@ -65,6 +65,9 @@
 const CjkInput = (() => {
   let _textarea = null;
   let _send = null;
+  let _captureTarget = null;
+  let _target;
+  let _hasTarget = false;
   let _initialized = false;
   let _composing = false;
   let _flushTimer = null;
@@ -88,10 +91,10 @@ const CjkInput = (() => {
   let _holdApplied = false;
   // Send-on-Enter: held drafts of the sessions switched away from, by session id.
   const _drafts = new Map();
-  // Send-on-Enter: the session the field's text belongs to (the one last shown,
-  // set by restoreDraft). clear() stashes a held draft under it, so every path
-  // that drops the active session before the next cleanup (goHome, the tile
-  // grid's _replaceTileGrid and _onTileAdoptedElsewhere) keeps the answer.
+  // Send-on-Enter: the session last shown, set by restoreDraft. A captured
+  // target takes precedence; otherwise clear() stashes a held draft under this
+  // owner, so paths that drop the active session before the next cleanup
+  // (goHome, _replaceTileGrid and _onTileAdoptedElsewhere) keep the answer.
   let _owner = null;
   const _listeners = {};
 
@@ -195,8 +198,21 @@ const CjkInput = (() => {
     return str.replace(/​/g, '');
   }
 
+  function _holdTarget() {
+    if (!_hasTarget) {
+      _target = _captureTarget?.();
+      _hasTarget = true;
+    }
+  }
+
+  function _targetForSend() {
+    return _hasTarget ? _target : _captureTarget?.();
+  }
+
   function _resetToPhantom() {
     _heldBase = '';
+    _target = undefined;
+    _hasTarget = false;
     // Skip redundant writes: every programmatic value/selection mutation can
     // desync an Android IME's input session (InputConnection) — after which
     // the keyboard composes in its own UI but NO events ever reach the page.
@@ -236,7 +252,7 @@ const CjkInput = (() => {
     const val = _strip(_textarea.value);
     _t(`flush ${val ? 'send len=' + val.length : 'empty'}`);
     if (val) {
-      _send(val);
+      _send(val, _targetForSend());
     }
     _resetToPhantom();
   }
@@ -273,14 +289,15 @@ const CjkInput = (() => {
    *  (terminal-ui.js _sendCjkPrompt). Enter is never part of the text's write:
    *  Codex takes characters arriving in one burst as a paste and folds an Enter
    *  inside it into the paste, and Claude Code does the same for a long burst, so
-   *  even `1\r` in one write sits unsent. Returns false when the text was refused
-   *  (too long, no session), so the field keeps it. */
-  function _sendHeld(val) {
+   *  even `1\r` in one write sits unsent. Returns false when the text is refused
+   *  (too long, no session), so the field keeps it. `sessionId` is the target
+   *  captured when the text started (see _targetForSend). */
+  function _sendHeld(val, sessionId) {
     if (!_sendPrompt) {
       _t('hold send DROP no-prompt-path');
       return false;
     }
-    return _sendPrompt(val) !== false;
+    return _sendPrompt(val, sessionId) !== false;
   }
 
   /** Enter: send what the field holds (or a bare Enter when it is empty) and
@@ -296,11 +313,11 @@ const CjkInput = (() => {
     if (_hold && !val.trim()) val = '';
     if (_hold && val) {
       // Refused (too long, no session): keep the text so nothing is lost.
-      if (!_sendHeld(val)) return false;
+      if (!_sendHeld(val, _targetForSend())) return false;
     } else if (val) {
-      _send(val + '\r');
+      _send(val + '\r', _targetForSend());
     } else {
-      _send('\r');
+      _send('\r', _targetForSend());
     }
     _resetToPhantom();
     if (_hold) _autoGrow();
@@ -336,10 +353,17 @@ const CjkInput = (() => {
       return;
     }
     _t('hold ctrl key');
-    _textarea.value = PHANTOM + before;
-    _textarea.setSelectionRange(1 + at, 1 + at);
-    _heldBase = before;
-    _send(now[at]);
+    // The control key goes to the session this field's text was captured for;
+    // with no draft left, the next answer captures its own destination.
+    const target = _targetForSend();
+    if (!before) {
+      _resetToPhantom();
+    } else {
+      _textarea.value = PHANTOM + before;
+      _textarea.setSelectionRange(1 + at, 1 + at);
+      _heldBase = before;
+    }
+    _send(now[at], target);
   }
 
   /** Send-on-Enter input handling: nothing is flushed, the field only settles.
@@ -353,7 +377,7 @@ const CjkInput = (() => {
       const wasEmpty = !_heldBase;
       _heldBase = _strip(_textarea.value);
       if (!_heldBase) {
-        if (wasEmpty) _send('\x7f');
+        if (wasEmpty) _send('\x7f', _targetForSend());
         _resetToPhantom();
       } else if (!_textarea.value.startsWith(PHANTOM)) {
         // Backspace at the very start of the text deleted the phantom: put it
@@ -397,11 +421,12 @@ const CjkInput = (() => {
   }
 
   return {
-    init({ send, sendPrompt = null }) {
+    init({ send, sendPrompt = null, captureTarget }) {
       if (_initialized) this.destroy();
 
       _send = send;
       _sendPrompt = sendPrompt;
+      _captureTarget = captureTarget;
       _composing = false;
       _printableKeydownAt = null;
       _flushTimer = null;
@@ -461,6 +486,7 @@ const CjkInput = (() => {
       // ── Composition tracking (keyboard IME — works for CJK typing) ──
       _listeners.compositionstart = () => {
         _t(`compstart ${_vdesc(_textarea.value)}`);
+        _holdTarget();
         _composing = true;
         _printableKeydownAt = null;
         _cancelDebouncedFlush();
@@ -515,7 +541,7 @@ const CjkInput = (() => {
         // and the arrows already follow.
         if (e.ctrlKey && CTRL_KEYS[e.key] && (!_hold || _isEffectivelyEmpty())) {
           e.preventDefault();
-          _send(CTRL_KEYS[e.key]);
+          _send(CTRL_KEYS[e.key], _targetForSend());
           return;
         }
 
@@ -527,7 +553,7 @@ const CjkInput = (() => {
         // Backspace: forward to PTY when no real text in textarea
         if (e.key === 'Backspace' && _isEffectivelyEmpty()) {
           e.preventDefault();
-          _send('\x7f');
+          _send('\x7f', _targetForSend());
           _resetToPhantom();
           return;
         }
@@ -539,14 +565,14 @@ const CjkInput = (() => {
         const modNav = _modifiedNavSequence(e);
         if (modNav) {
           e.preventDefault();
-          _send(modNav);
+          _send(modNav, _targetForSend());
           return;
         }
 
         // Arrow/function keys: forward to PTY when no real text
         if (PASSTHROUGH_KEYS[e.key] && _isEffectivelyEmpty()) {
           e.preventDefault();
-          _send(PASSTHROUGH_KEYS[e.key]);
+          _send(PASSTHROUGH_KEYS[e.key], _targetForSend());
           return;
         }
 
@@ -554,6 +580,7 @@ const CjkInput = (() => {
         // the committed text. Let the browser/IME produce the input event so
         // full-width punctuation and other layout transforms are preserved.
         if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey && _isEffectivelyEmpty()) {
+          _holdTarget();
           _printableKeydownAt = performance.now();
           return;
         }
@@ -565,6 +592,7 @@ const CjkInput = (() => {
         _t(`input ${e.inputType || '?'} ic=${e.isComposing} c=${_composing} ${_vdesc(_textarea.value)}`);
         const printableKeydownAt = _printableKeydownAt;
         _printableKeydownAt = null;
+        if (!_isEffectivelyEmpty()) _holdTarget();
         // ── Stuck-composition recovery ──
         // Some IMEs (WeChat/Sogou keyboards) fire compositionstart without a
         // matching compositionend. A stale _composing=true blocks every flush
@@ -591,7 +619,7 @@ const CjkInput = (() => {
           if (_composing) return;
           if (_isEffectivelyEmpty()) {
             _cancelDebouncedFlush();
-            _send('\x7f');
+            _send('\x7f', _targetForSend());
             _resetToPhantom();
             return;
           }
@@ -640,6 +668,15 @@ const CjkInput = (() => {
       return this;
     },
 
+    /** Commit settled text before pane ownership changes; never send composition. */
+    flushNow() {
+      if (!_initialized || !_textarea) return;
+      _cancelDebouncedFlush();
+      clearTimeout(_compositionFlushTimer);
+      _compositionFlushTimer = null;
+      _flush();
+    },
+
     /**
      * Discard pending text and timers (e.g. on session switch, so stale text
      * can't flush into the wrong session). Restores the phantom so backspace
@@ -653,13 +690,15 @@ const CjkInput = (() => {
         // nothing is stashed, any older stash of this session goes too, and the
         // field keeps its owner, since the session shown has not changed.
         if (_owner) _drafts.delete(_owner);
+        if (_hasTarget && _target) _drafts.delete(_target);
       } else {
         // Send-on-Enter: a held draft is stashed for the session it was typed
         // for, whichever path got here. discardDraft() drops the owner of a
         // removed session, so its text is not stashed again.
-        if (_hold && _owner) {
+        const sessionId = _hasTarget && _target ? _target : _owner;
+        if (_hold && sessionId) {
           const draft = _strip(_textarea.value);
-          if (draft.trim()) _drafts.set(_owner, draft);
+          if (draft.trim()) _drafts.set(sessionId, draft);
         }
         _owner = null;
       }
@@ -748,6 +787,7 @@ const CjkInput = (() => {
      * clear(); restoreDraft() puts it back when that session is shown again.
      */
     stashDraft(sessionId) {
+      if (_hasTarget && _target) sessionId = _target;
       if (!_initialized || !_textarea || !_hold || !sessionId) return;
       // An empty field leaves any stash alone: a draft only sits in the map
       // while its session is not shown (restoreDraft takes it out), and the
@@ -771,6 +811,10 @@ const CjkInput = (() => {
       _textarea.value = PHANTOM + draft;
       _textarea.setSelectionRange(_textarea.value.length, _textarea.value.length);
       _heldBase = draft;
+      // The restored text belongs to this session: Enter after a focus move to
+      // another pane must still send it here (see _targetForSend).
+      _target = sessionId;
+      _hasTarget = true;
       _autoGrow();
     },
 
@@ -802,6 +846,9 @@ const CjkInput = (() => {
       window.cjkActive = false;
       _composing = false;
       _printableKeydownAt = null;
+      _target = undefined;
+      _hasTarget = false;
+      _captureTarget = null;
       for (const key of Object.keys(_listeners)) delete _listeners[key];
       _initialized = false;
     },

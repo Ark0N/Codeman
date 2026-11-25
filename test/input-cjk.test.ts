@@ -63,9 +63,10 @@ function makeTextarea(): FakeTextarea {
 const ANDROID_UA = 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0';
 const IOS_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko)';
 
-function loadCjkHarness({ ua = ANDROID_UA }: { ua?: string } = {}) {
+function loadCjkHarness({ ua = ANDROID_UA, captureTarget }: { ua?: string; captureTarget?: () => string } = {}) {
   const textarea = makeTextarea();
   const sent: string[] = [];
+  const targets: Array<string | undefined> = [];
   const windowObj: Record<string, unknown> = {};
   const documentObj = {
     getElementById: (id: string) => (id === 'cjkInput' ? textarea : null),
@@ -88,10 +89,16 @@ function loadCjkHarness({ ua = ANDROID_UA }: { ua?: string } = {}) {
   vm.runInContext(src, context, { filename: 'input-cjk.js' });
   const CjkInput = vm.runInContext('CjkInput', context);
 
-  CjkInput.init({ send: (text: string) => sent.push(text) });
+  CjkInput.init({
+    captureTarget,
+    send: (text: string, target?: string) => {
+      sent.push(text);
+      targets.push(target);
+    },
+  });
   textarea.fire('focus');
 
-  return { CjkInput, textarea, sent, windowObj, documentObj };
+  return { CjkInput, textarea, sent, targets, windowObj, documentObj };
 }
 
 describe('CJK input module', () => {
@@ -101,6 +108,87 @@ describe('CJK input module', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it.each(['input', 'keydown', 'compositionstart'])(
+    'captures the destination at the first %s and releases it after flush',
+    (start) => {
+      let target = 'B';
+      const captureTarget = vi.fn(() => target);
+      const { CjkInput, textarea, sent, targets } = loadCjkHarness({ captureTarget });
+      if (start === 'keydown') textarea.fire('keydown', { key: 'x' });
+      if (start === 'compositionstart') textarea.fire('compositionstart');
+      textarea.value = PHANTOM + '你好';
+      if (start === 'input') textarea.fire('input', { inputType: 'insertText', isComposing: false });
+      target = 'A';
+      if (start === 'keydown') textarea.fire('input', { inputType: 'insertText', isComposing: false });
+      if (start === 'compositionstart') textarea.fire('compositionend');
+      vi.runAllTimers();
+      CjkInput.flushNow();
+      expect(sent).toEqual(['你好']);
+      expect(targets).toEqual(['B']);
+      expect(captureTarget).toHaveBeenCalledTimes(1);
+      textarea.value = PHANTOM + '再见';
+      textarea.fire('input', { inputType: 'insertText', isComposing: false });
+      vi.runAllTimers();
+      expect(targets).toEqual(['B', 'A']);
+    }
+  );
+
+  it.each(['clear', 'escape'])('drops the held destination on %s', (action) => {
+    let target = 'B';
+    const { CjkInput, textarea, targets } = loadCjkHarness({ captureTarget: () => target });
+    textarea.fire('compositionstart');
+    textarea.value = PHANTOM + 'discard';
+    if (action === 'clear') CjkInput.clear();
+    else textarea.fire('keydown', { key: 'Escape' });
+    target = 'A';
+    textarea.value = PHANTOM + 'send';
+    textarea.fire('input', { inputType: 'insertText', isComposing: false });
+    vi.runAllTimers();
+    expect(targets).toEqual(['A']);
+  });
+
+  it.each([
+    { key: 'Enter' },
+    { key: 'c', ctrlKey: true },
+    { key: 'ArrowUp' },
+    { key: 'End', ctrlKey: true },
+    { key: 'Backspace' },
+  ])('routes direct $key control keys through the held or fresh destination', (key) => {
+    let target = 'B';
+    const { CjkInput, textarea, targets } = loadCjkHarness({ captureTarget: () => target });
+    textarea.fire('compositionstart');
+    textarea.fire('compositionend');
+    target = 'A';
+    textarea.fire('keydown', key);
+    expect(targets).toEqual(['B']);
+    CjkInput.clear();
+    textarea.fire('keydown', key);
+    expect(targets).toEqual(['B', 'A']);
+  });
+
+  it('routes phantom deletion to a freshly captured destination', () => {
+    const { textarea, sent, targets } = loadCjkHarness({ captureTarget: () => 'B' });
+    textarea.value = '';
+    textarea.fire('input', { inputType: 'deleteContentBackward', isComposing: false });
+    expect(sent).toEqual(['\x7f']);
+    expect(targets).toEqual(['B']);
+  });
+
+  it('flushNow leaves provisional composition untouched until it commits', () => {
+    const { CjkInput, textarea, sent } = loadCjkHarness();
+    textarea.fire('compositionstart');
+    textarea.value = PHANTOM + '你好';
+    CjkInput.flushNow();
+    vi.runAllTimers();
+    expect(sent).toEqual([]);
+    expect(textarea.value).toBe(PHANTOM + '你好');
+    textarea.fire('compositionend');
+    CjkInput.flushNow();
+    expect(sent).toEqual(['你好']);
+    vi.runAllTimers();
+    expect(sent).toEqual(['你好']);
   });
 
   it('sends committed text after a normal composition cycle', () => {

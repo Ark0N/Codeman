@@ -644,6 +644,7 @@ Object.assign(CodemanApp.prototype, {
       };
       const controller = MobileImePreview.create({
         textarea,
+        ownsNativeInput: () => !!this._iosNativeInput,
         // An ancestor of the textarea: its capture-phase keydown listener runs
         // before xterm's capture listener on the textarea, which finalizes the
         // composition and emits the commit synchronously.
@@ -744,7 +745,418 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
+  _initTerminalInputOwner() {
+    this._destroyIosNativeInput();
+    this._destroyKeyCode229Recovery();
+    if (window.CodemanIosNativeInput?.isSupported?.() === true) {
+      this._iosNativeInput = window.CodemanIosNativeInput.create?.({
+        terminal: this.terminal,
+        sendTransaction: (ops) => this._sendNativeInputTransaction(ops),
+        onCaret: () => this._syncMobileHelperTextareaToCursor(),
+        onTransaction: (transaction) => {
+          this._mobileImePreview?.nativeTransaction?.(transaction);
+          if (transaction.inserted) {
+            this._mobileImeCommitOutputSeq = this._terminalOutputSeq || 0;
+            if (this._localEchoEnabled && !this._echoPassthroughSessions?.has(this.activeSessionId)) {
+              this._transferMobileImeCommitToLocalEcho();
+            }
+          }
+        },
+        isScreenReaderMode: () => this.terminal?.options?.screenReaderMode === true,
+      });
+      if (this._iosNativeInput) {
+        this._iosCaretMarker = window.CodemanIosNativeInput.attachCaretMarker?.(this.terminal, this._iosNativeInput, {
+          anchor: (caret) => this._nativeInputCaretAnchor(caret),
+          subscribe: (callback) => this._localEchoOverlay?.onLayout?.(callback),
+        });
+        return;
+      }
+      // create() refused (screen reader, missing xterm internals): keep master's
+      // soft-keyboard recovery rather than leaving iOS with neither.
+      this._iosNativeInput = null;
+    }
+    try {
+      this._keyCode229Recovery = window.CodemanKeyCode229Recovery?.create?.({
+        textarea: this.terminal.textarea,
+        emitRecovered: (data) => this._handleTerminalData(data, this.activeSessionId),
+        getCompositionHelper: () => this.terminal?._core?._compositionHelper,
+        isScreenReaderMode: () => this.terminal?.options?.screenReaderMode === true,
+      });
+    } catch {
+      this._keyCode229Recovery = null;
+    }
+  },
+
+  _nativeInputCaretAnchor(caret) {
+    const overlay = this._localEchoOverlay;
+    if (
+      this._localEchoEnabled &&
+      !this._echoPassthroughSessions?.has(this.activeSessionId) &&
+      (overlay?.pendingText || overlay?.getFlushed?.().count)
+    ) {
+      const committed = overlay.committedText;
+      if (typeof committed !== 'string' || !committed.endsWith(caret.text)) return 'hide';
+      return overlay.getInputAnchor?.(committed.length - caret.text.length + caret.offset) || 'hide';
+    }
+    return null;
+  },
+
+  _destroyIosNativeInput() {
+    if (typeof this._iosCaretMarker === 'function') this._iosCaretMarker();
+    else this._iosCaretMarker?.destroy?.();
+    this._iosCaretMarker = null;
+    this._iosNativeInput?.destroy?.();
+    this._iosNativeInput = null;
+  },
+
+  // Printable input is batched per session, never against the terminal's later
+  // activeSessionId. Control actions and lifecycle boundaries seal it first.
+  _appendPendingInput(sessionId, data) {
+    if (!this._pendingInput) this._pendingInput = new Map();
+    this._pendingInput.set(sessionId, (this._pendingInput.get(sessionId) || '') + data);
+  },
+
+  _takeLocalEchoInput(sessionId) {
+    const text = this._localEchoOverlay?.pendingText || '';
+    this._localEchoOverlay?.clear();
+    // Suppress detection so PTY-echoed text isn't re-detected as user input.
+    this._localEchoOverlay?.suppressBufferDetection();
+    // Enter commits all text; control chars (Ctrl+C, Escape) change cursor
+    // position or abort readline, making flushed text tracking invalid.
+    // The same ownership handoff is used before paste and composer navigation.
+    this._flushedOffsets?.delete(sessionId);
+    this._flushedTexts?.delete(sessionId);
+    return text;
+  },
+
+  _submitMainInput(sessionId) {
+    this._sealPendingInput(sessionId);
+    if (this._localEchoEnabled && !this._echoPassthroughSessions?.has(sessionId)) {
+      const text = this._takeLocalEchoInput(sessionId);
+      // Enter reserves the full buffered text, a short delay so text arrives
+      // first, and CR together. Later same-session writes cannot overtake CR,
+      // even when a tab switch flushes the next line during the 80 ms window.
+      this._enqueueInput(sessionId, [{ write: text }, { gap: 80 }, { write: '\r' }]);
+    } else {
+      this._echoPassthroughSessions?.delete(sessionId);
+      // The CR bypasses onData here, so tell the codex predictor about it as
+      // typed Enter does (it clears the prediction run).
+      this._predictHookOnData('\r');
+      this._enqueueInput(sessionId, [{ write: '\r' }]);
+    }
+  },
+
+  _submitModifiedEnter(sessionId, key) {
+    this._prepareExternalInput({ terminal: this.terminal, sessionId, isPrimary: true }, 'modified-enter');
+    const text = this._localEchoEnabled ? this._takeLocalEchoInput(sessionId) : '';
+    this._enqueueInput(sessionId, [...(text ? [{ write: text }, { gap: 80 }] : []), { key }]);
+  },
+
+  _prepareExternalInput(pane, reason, opts = {}) {
+    if (!pane?.terminal || !pane.sessionId || pane.tile?._destroyed) return;
+    const host = pane.isPrimary ? this : pane.tile;
+    host?._iosNativeInput?.settle?.();
+    this._sealPendingInput(pane.sessionId);
+    if (opts.flushEcho && pane.isPrimary && this._localEchoEnabled &&
+        !this._echoPassthroughSessions?.has(pane.sessionId)) {
+      const text = this._takeLocalEchoInput(pane.sessionId);
+      if (text) this._enqueueInput(pane.sessionId, [{ write: text }]);
+    }
+    host?._iosNativeInput?.reset?.(reason);
+    host?._mobileImePreview?.reset?.();
+    if (host) host._mobileImeCommitOutputSeq = null;
+  },
+
+  submitFromToolbar() {
+    const pane = this._focusedPane();
+    if (!pane?.terminal || !pane.sessionId || pane.tile?._destroyed || !this.sessions.has(pane.sessionId)) return;
+    // Typed Enter spends an armed one-shot Ctrl in onData; this CR skips onData.
+    if (typeof KeyboardAccessoryBar !== 'undefined') KeyboardAccessoryBar.clearCtrl?.();
+    // The CR goes on the FIFO, not through xterm's triggerDataEvent(data, true),
+    // so its scrollOnUserInput never runs; scroll to the prompt as it would.
+    const terminal = pane.terminal;
+    if (terminal.options?.scrollOnUserInput !== false && typeof terminal.scrollToBottom === 'function') {
+      terminal.scrollToBottom();
+    }
+    this._prepareExternalInput(pane, 'submit');
+    if (pane.isPrimary) this._submitMainInput(pane.sessionId);
+    else this._sendInputAsync(pane.sessionId, '\r');
+  },
+
+  _sendNativeInputTransaction(ops) {
+    const sessionId = this.activeSessionId;
+    if (!sessionId) return;
+    this._sealPendingInput(sessionId);
+    // A replacement can contain several DELs followed by an insertion. Decide
+    // the one-shot modifier once for the insertion, never once per DEL; each
+    // deletion still needs its own pending/flushed local-echo classification.
+    const writes = [];
+    let ctrlIndex = -1;
+    if (typeof KeyboardAccessoryBar !== 'undefined' && KeyboardAccessoryBar.isCtrlArmed?.()) {
+      ctrlIndex = ops.findIndex((data) => data !== '\x7f' && !window.CodemanTerminalInput?.isTerminalFocusOrMouseReport(data));
+      if (ctrlIndex === -1 && ops.includes('\x7f')) KeyboardAccessoryBar.clearCtrl?.();
+    }
+    for (let i = 0; i < ops.length; i++) {
+      const data = i === ctrlIndex ? KeyboardAccessoryBar.consumeCtrl(ops[i]) : ops[i];
+      this._handleTerminalData(data, sessionId, writes);
+    }
+    this._enqueueInput(sessionId, writes);
+    if (ctrlIndex !== -1) this._iosNativeInput?.reset?.('ctrl');
+  },
+
+  // Local echo mode: buffer keystrokes locally (shown in overlay) and only
+  // send to PTY on Enter. Avoids out-of-order delivery on high-latency
+  // mobile connections. The overlay + localStorage persistence ensure input
+  // survives tab switches and reconnects; accepted FIFO items stay session-owned.
+  _handleTerminalData(data, sessionId, transactionWrites = null) {
+    // Before anything can rewrite `data`: is this chunk the IME's commit?
+    const isImeCommit = this._consumeMobileImeTerminalData(data);
+    const input = window.CodemanTerminalInput;
+    // Mouse SGR reports (tap-to-position) are NOT IME input — they must reach
+    // the PTY even while the CJK input field owns focus. Without this exception
+    // tapping to move the cursor silently does nothing whenever Chinese input
+    // is on, because cjkActive stays true the whole time the field is visible.
+    const isMouseReport = /^\x1b\[<\d+;\d+;\d+[Mm]$/.test(data);
+    // CJK input has focus — block xterm from sending keystrokes to PTY.
+    if (!isMouseReport && (window.cjkActive || document.activeElement?.id === 'cjkInput')) {
+      // Self-heal: if the CJK field is visible but focus drifted to xterm's
+      // hidden textarea (e.g. something called terminal.focus()), everything
+      // typed lands HERE and is swallowed — keyboard shows the IME composing
+      // while both the CJK field and the terminal stay empty. Route focus
+      // back so the very next keystroke lands in the CJK field again.
+      // Only GENUINE typed input qualifies: onData also fires for xterm's
+      // self-generated query replies (DA/DSR/CPR/OSC during Ink redraws),
+      // which arrive no matter what has focus — so require focus to be on
+      // xterm's own textarea and bail on query replies, or this would steal
+      // focus from the rename/search/settings inputs while output streams.
+      const cjkEl = document.getElementById('cjkInput');
+      if (
+        cjkEl?.classList.contains('cjk-input-visible') &&
+        document.activeElement === this.terminal.textarea &&
+        !input?.shouldSuppressTerminalQueryResponse(data)
+      ) {
+        _crashDiag.log('CJK regain-focus (onData swallowed input)');
+        cjkEl.focus();
+      }
+      return;
+    }
+    // Filter terminal query replies generated by xterm.js itself.
+    // Forwarding them through the WebSocket injects DA/DSR/CPR replies
+    // into the foreground process as typed input (for example "0;276;0c").
+    if (!sessionId || input?.shouldSuppressTerminalQueryResponse(data)) return;
+    // ── One-shot Ctrl (mobile shell bar, issue #262) ──
+    // A virtual keyboard reports no usable key events, so a keydown hook
+    // would never see the character the modifier applies to: it arrives
+    // here as onData text. Sits AFTER the query-response filter so xterm's
+    // own DA/CPR replies can never spend the modifier, and BEFORE every
+    // send path so the control byte follows the normal control-char route
+    // (immediate flush, local-echo state cleared).
+    //
+    // Mouse and focus reports are skipped rather than suppressed: they are
+    // real bytes the PTY still needs, they just were not typed by anyone.
+    // A shell session passes mouse DECSETs through, so with vim or htop
+    // running, one tap on the terminal used to spend the modifier silently
+    // (measured against a real shell). See isTerminalFocusOrMouseReport.
+    // Native transactions already applied Ctrl once before entering this path.
+    if (!transactionWrites && typeof KeyboardAccessoryBar !== 'undefined' && KeyboardAccessoryBar.isCtrlArmed?.() &&
+        !input?.isTerminalFocusOrMouseReport(data)) {
+      data = KeyboardAccessoryBar.consumeCtrl(data);
+      this._iosNativeInput?.reset?.('ctrl');
+    }
+    this._lastTerminalData = { data, time: performance.now() };
+    const send = (text) => {
+      if (!text) return;
+      if (transactionWrites) transactionWrites.push({ write: text });
+      else {
+        this._appendPendingInput(sessionId, text);
+        this._sealPendingInput(sessionId);
+      }
+    };
+    // Control/Enter/paste/transaction input seals this session's older printable
+    // batch before reserving its own FIFO position. No timer resolves a target.
+    if (transactionWrites || data.charCodeAt(0) < 32 || data.length > 1 || data === '\x7f') this._sealPendingInput(sessionId);
+    // ── Local Echo Pass-through ──
+    // After a composer nav key (arrow/Home/End/Delete) the real cursor may
+    // sit mid-text, where the overlay's append-only buffering would corrupt
+    // both the preview and the submitted text. Such sessions are handed
+    // back to plain PTY echo until Enter or Ctrl+C submits/cancels the
+    // composer line (see the nav-key branch below).
+    const echoPassthrough = this._localEchoEnabled && this._echoPassthroughSessions?.has(sessionId);
+    if (echoPassthrough && (data === '\r' || data === '\x03')) this._echoPassthroughSessions.delete(sessionId);
+    // ── Local Echo Mode ──
+    // When enabled, keystrokes are buffered locally in the overlay for
+    // instant visual feedback. Nothing is sent to the PTY until Enter
+    // (or a control char) is pressed — avoids out-of-order char delivery.
+    // An IME commit takes the same printable/paste branch as typed text,
+    // and the overlay then shows it in place of the preview.
+    if (this._localEchoEnabled && !echoPassthrough) {
+      if (data === '\x7f') {
+        const source = this._localEchoOverlay?.removeChar();
+        if (source === 'flushed') {
+          // Sync app-level flushed Maps (per-session state for tab switching).
+          const { count, text } = this._localEchoOverlay.getFlushed();
+          if (this._flushedOffsets?.has(sessionId)) {
+            if (count === 0) {
+              this._flushedOffsets.delete(sessionId);
+              this._flushedTexts?.delete(sessionId);
+            } else {
+              this._flushedOffsets.set(sessionId, count);
+              this._flushedTexts?.set(sessionId, text);
+            }
+          }
+        }
+        // Nothing pending, nothing flushed, nothing detected: the composer may
+        // still hold text the overlay cannot see (buffer detection is suppressed
+        // after a control-char flush), so forward the backspace instead of
+        // swallowing it (issue #218); an empty composer ignores it.
+        if (source === 'flushed' || source === false) send(data);
+        // 'pending' = removed unsent text (no PTY backspace needed).
+        return;
+      }
+      if (/^[\r\n]+$/.test(data)) {
+        // The shared submit helper reserves buffered text + gap + CR atomically.
+        this._submitMainInput(sessionId);
+        return;
+      }
+      if (data.charCodeAt(0) >= 32) {
+        // Paste: append to overlay only (sent on Enter).
+        // Printable char: add to overlay only (sent on Enter).
+        if (data.length > 1) this._localEchoOverlay?.appendText(data);
+        else this._localEchoOverlay?.addChar(data);
+        if (isImeCommit && this._localEchoOverlay) this._transferMobileImeCommitToLocalEcho();
+        return;
+      }
+      // Preserve xterm-generated terminal responses that survived query filtering.
+      // These arrive via triggerDataEvent when the terminal processes buffer
+      // data (DA responses, OSC color queries, mode reports, etc.). They are NOT
+      // user input and must not clear flushed text state. Covers CSI (\x1b[),
+      // OSC (\x1b]), DCS (\x1bP), APC (\x1b_), PM (\x1b^), SOS (\x1bX), and
+      // other multi-byte ESC sequences. Single-byte ESC (user pressing Escape)
+      // still falls through to the control char handler below.
+      if (data.length > 1 && data.charCodeAt(0) === 27) {
+        // Bracketed paste (terminal.paste() while DECSET 2004 is on):
+        // flush typed-but-unsent overlay text FIRST so the pasted block
+        // lands after it in the composer, not before it (issue #219).
+        // The paste sequence gets its own delayed write: Codex's
+        // paste-burst handling drops keystrokes that arrive in the SAME
+        // PTY read as a bracketed paste (verified against codex 0.147),
+        // mirroring the delayed CR in the Enter helper above. Reserve both
+        // writes and the gap together so later input cannot overtake the paste.
+        if (data.startsWith(input.BRACKETED_PASTE_START)) {
+          const text = this._takeLocalEchoInput(sessionId);
+          this._enqueueInput(sessionId, [...(text ? [{ write: text }, { gap: 80 }] : []), { write: data }]);
+          return;
+        }
+        // Composer nav keys (arrows, Home/End, Delete, PgUp/PgDn):
+        // flush unsent text so the key edits the real composer state,
+        // then hand the session to plain PTY echo until Enter/Ctrl+C.
+        // The cursor may now sit mid-text, where append-only buffering
+        // cannot track edits (issue #218).
+        if (input.isComposerNavKey(data)) {
+          const text = this._takeLocalEchoInput(sessionId);
+          if (!this._echoPassthroughSessions) this._echoPassthroughSessions = new Set();
+          this._echoPassthroughSessions.add(sessionId);
+          send(text + data);
+          return;
+        }
+        // Multi-byte escape sequence — forward to PTY without clearing
+        // overlay/flushed state (terminal response, not user input).
+        send(data);
+        return;
+      }
+      // During buffer load (tab switch), stray control chars from
+      // terminal response processing must not wipe the flushed state
+      // that selectSession() is actively restoring.
+      if (this._restoringFlushedState) {
+        send(data);
+        return;
+      }
+      // Control chars (Ctrl+C, single ESC): send buffered text + control char
+      // immediately through the session FIFO. Tab uses the same text flush.
+      const text = this._takeLocalEchoInput(sessionId);
+      // Tab key: send pending text + Tab to PTY for tab completion.
+      // Set a flag so flushPendingWrites() re-detects buffer text when
+      // the PTY response arrives (event-driven, with the fallback below).
+      if (data === '\t') {
+        // Snapshot prompt line text BEFORE flushing — used to distinguish
+        // real Tab completions from pre-existing Claude UI text.
+        let baseText = '';
+        try {
+          const p = this._localEchoOverlay?.findPrompt?.();
+          const buf = this.terminal.buffer.active;
+          const line = p && buf.getLine(buf.viewportY + p.row);
+          if (line) baseText = line.translateToString(true).slice(p.col + 2).trimEnd();
+        } catch {}
+        this._tabCompletionBaseText = baseText;
+        this._tabCompletionSessionId = sessionId;
+        this._tabCompletionRetries = 0;
+        // Fallback: if flushPendingWrites() detection misses the completion
+        // (e.g., flicker filter delays data, or xterm hasn't processed writes
+        // by the time the callback fires), retry detection after a delay.
+        // This ensures the overlay renders even without further terminal data.
+        // Both callbacks retain the captured session's completion ownership.
+        clearTimeout(this._tabCompletionFallback);
+        this._tabCompletionFallback = setTimeout(() => {
+          this._tabCompletionFallback = null;
+          if (this._tabCompletionSessionId !== sessionId) return;
+          const ov = this._localEchoOverlay;
+          if (!ov || ov.pendingText) return;
+          this.terminal.write('', () => {
+            if (this._tabCompletionSessionId !== sessionId) return;
+            ov.resetBufferDetection();
+            const detected = ov.detectBufferText();
+            if (detected && detected !== this._tabCompletionBaseText) {
+              this._tabCompletionSessionId = null;
+              this._tabCompletionRetries = 0;
+              this._tabCompletionBaseText = null;
+              ov.rerender();
+            }
+          });
+        }, 300);
+      }
+      send(text + data);
+      return;
+    }
+    // ── Predictive Echo (codex): visual only. A plain statement, never a
+    // `return`: control ALWAYS falls through into the send path below,
+    // which is the byte-identity guarantee for #218/#219/#220/#222 —
+    // with the predictor active, absent or throwing, the wire sees the
+    // same bytes. Body in _predictHookOnData (vm-testable).
+    this._predictHookOnData(data);
+    // Native transactions collect remote writes in order and bypass printable
+    // batching; the caller appends the entire transaction to its captured FIFO.
+    if (transactionWrites) {
+      send(data);
+      return;
+    }
+    // ── Normal Mode (echo disabled) ──
+    // PTY/Ink handles character echoing; only printable bursts are batched.
+    this._appendPendingInput(sessionId, data);
+    // Control chars (Enter, Ctrl+C, escape sequences), paste and DEL — flush
+    // immediately into the FIFO, behind any accepted delayed reservation.
+    if (data.charCodeAt(0) < 32 || data.length > 1 || data === '\x7f') {
+      this._sealPendingInput(sessionId);
+      return;
+    }
+    // Regular chars — flush immediately if typed after a gap (>50ms),
+    // otherwise coalesce rapid keystrokes with a zero-delay task. Timestamp,
+    // pending text and timer belong to this session, not the currently active one.
+    if (!this._lastKeystrokeTime) this._lastKeystrokeTime = new Map();
+    if (!this._inputFlushTimeout) this._inputFlushTimeout = new Map();
+    const now = performance.now();
+    const last = this._lastKeystrokeTime.get(sessionId) || 0;
+    this._lastKeystrokeTime.set(sessionId, now);
+    // Single char after a gap — send immediately, no setTimeout latency.
+    if (now - last > 50) this._sealPendingInput(sessionId);
+    else if (!this._inputFlushTimeout.has(sessionId)) {
+      // Rapid sequence (paste or fast typing) — coalesce via a zero-delay task.
+      this._inputFlushTimeout.set(sessionId, setTimeout(() => this._sealPendingInput(sessionId), 0));
+    }
+  },
+
   initTerminal() {
+    if (this.terminal) this._settleMainInput('terminal');
+    this._destroyIosNativeInput();
     // Load scrollback setting from localStorage, treating DEFAULT_SCROLLBACK as a floor
     // so users who picked up the previous (smaller) default get the new minimum on upgrade.
     const stored = parseInt(localStorage.getItem('codeman-scrollback'));
@@ -817,17 +1229,19 @@ Object.assign(CodemanApp.prototype, {
     // punctuation; returning false here would stop xterm before it can diff
     // the helper textarea and emit the committed Unicode text.
     this.terminal.attachCustomKeyEventHandler((ev) => {
+      let nativeKeyResult;
       try {
         // Deliberately runs for EVERY keydown, not just keyCode 229: the
         // controller snapshots a counter and reads nothing off the event, and
         // the devices this exists for report `key: 'Unidentified'` with no
         // reliable identity to gate on. Gating it would make recovery inert
         // exactly where it is needed. Cost is one assignment.
-        this._keyCode229Recovery?.handleKeyEvent?.(ev);
+        if (this._iosNativeInput) nativeKeyResult = this._iosNativeInput.keyFilter?.(ev);
+        else this._keyCode229Recovery?.handleKeyEvent?.(ev);
       } catch {
         // The fallback must never interfere with xterm's canonical handler.
       }
-      if (ev.isComposing || ev.key === 'Process' || ev.keyCode === 229) return true;
+      if (ev.isComposing || ev.key === 'Process' || ev.keyCode === 229) return nativeKeyResult ?? true;
 
       // Let the app's Alt/Option session-nav and Command Palette shortcuts reach the document keydown handler
       // (app.js switches tabs by PHYSICAL e.code) instead of xterm injecting ESC<char> into
@@ -961,37 +1375,14 @@ Object.assign(CodemanApp.prototype, {
       // This handler also runs for keypress/keyup: xterm drops a keypress carrying Ctrl/Alt
       // but NOT one carrying only Shift, so unless every event type is swallowed here,
       // Shift+Enter's keypress sends a bare \r (submit) after the newline. Only keydown sends.
-      if (ev.key === 'Enter' && (ev.shiftKey || ev.ctrlKey)) {
+      if (ev.key === 'Enter' && (ev.shiftKey || ev.ctrlKey) && (!this._iosNativeInput || ev.keyCode === 13)) {
         if (ev.type === 'keydown' && this.activeSessionId) {
-          if (this._localEchoEnabled) {
-            const text = this._localEchoOverlay?.pendingText || '';
-            this._localEchoOverlay?.clear();
-            this._localEchoOverlay?.suppressBufferDetection();
-            this._flushedOffsets?.delete(this.activeSessionId);
-            this._flushedTexts?.delete(this.activeSessionId);
-            if (text) {
-              this._pendingInput += text;
-              flushInput();
-            }
-            setTimeout(() => {
-              fetch(`/api/sessions/${this.activeSessionId}/send-key`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ key: ev.ctrlKey ? 'C-Enter' : 'S-Enter' }),
-              });
-            }, text ? 80 : 0);
-          } else {
-            fetch(`/api/sessions/${this.activeSessionId}/send-key`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ key: ev.ctrlKey ? 'C-Enter' : 'S-Enter' }),
-            });
-          }
+          this._submitModifiedEnter(this.activeSessionId, ev.ctrlKey ? 'C-Enter' : 'S-Enter');
         }
         return false;
       }
 
-      return true;
+      return nativeKeyResult ?? true;
     });
 
     // WebGL renderer for GPU-accelerated terminal rendering.
@@ -1080,13 +1471,12 @@ Object.assign(CodemanApp.prototype, {
     this._cjkInput = null;
     if (typeof CjkInput !== 'undefined') {
       this._cjkInput = CjkInput.init({
-        send: (text) => {
-          this._handleCjkInput(text);
-        },
+        captureTarget: () => this._focusedPane()?.sessionId,
+        send: (text, sessionId) => this._handleCjkInput(text, sessionId),
         // Send on Enter: a long or multi-line held answer goes out like the
         // mobile prompt composer's Send (one bracketed paste, then Enter as a
         // separate delayed write), bound to the session it was typed for.
-        sendPrompt: (text) => this._sendCjkPrompt(text),
+        sendPrompt: (text, sessionId) => this._sendCjkPrompt(text, sessionId),
       });
     }
 
@@ -1745,356 +2135,8 @@ Object.assign(CodemanApp.prototype, {
     this.terminalResizeObserver = new ResizeObserver(throttledResize);
     this.terminalResizeObserver.observe(container);
 
-    // Handle keyboard input — send to PTY immediately, no local echo.
-    // PTY/Ink handles all character echoing to avoid desync ("typing visible below" bug).
-    this._pendingInput = '';
-    this._inputFlushTimeout = null;
-    this._lastKeystrokeTime = 0;
-
-    const flushInput = () => {
-      this._inputFlushTimeout = null;
-      if (this._pendingInput && this.activeSessionId) {
-        const input = this._pendingInput;
-        const sessionId = this.activeSessionId;
-        this._pendingInput = '';
-        this._sendInputAsync(sessionId, input);
-      }
-    };
-
-    // Local echo mode: buffer keystrokes locally (shown in overlay) and only
-    // send to PTY on Enter.  Avoids out-of-order delivery on high-latency
-    // mobile connections.  The overlay + localStorage persistence ensure input
-    // survives tab switches and reconnects.
-
-    const handleTerminalData = (data) => {
-      // Before anything can rewrite `data`: is this chunk the IME's commit?
-      const isImeCommit = this._consumeMobileImeTerminalData(data);
-      // Mouse SGR reports (tap-to-position) are NOT IME input — they must reach
-      // the PTY even while the CJK input field owns focus. Without this exception
-      // tapping to move the cursor silently does nothing whenever Chinese input
-      // is on, because cjkActive stays true the whole time the field is visible.
-      const isMouseReport = /^\x1b\[<\d+;\d+;\d+[Mm]$/.test(data);
-      // CJK input has focus — block xterm from sending keystrokes to PTY
-      if (!isMouseReport && (window.cjkActive || document.activeElement?.id === 'cjkInput')) {
-        // Self-heal: if the CJK field is visible but focus drifted to xterm's
-        // hidden textarea (e.g. something called terminal.focus()), everything
-        // typed lands HERE and is swallowed — keyboard shows the IME composing
-        // while both the CJK field and the terminal stay empty. Route focus
-        // back so the very next keystroke lands in the CJK field again.
-        // Only GENUINE typed input qualifies: onData also fires for xterm's
-        // self-generated query replies (DA/DSR/CPR/OSC during Ink redraws),
-        // which arrive no matter what has focus — so require focus to be on
-        // xterm's own textarea and bail on query replies, or this would steal
-        // focus from the rename/search/settings inputs while output streams.
-        const cjkEl = document.getElementById('cjkInput');
-        if (
-          cjkEl?.classList.contains('cjk-input-visible') &&
-          document.activeElement === this.terminal.textarea &&
-          !window.CodemanTerminalInput?.shouldSuppressTerminalQueryResponse(data)
-        ) {
-          _crashDiag.log('CJK regain-focus (onData swallowed input)');
-          cjkEl.focus();
-        }
-        return;
-      }
-      if (this.activeSessionId) {
-        // Filter terminal query replies generated by xterm.js itself.
-        // Forwarding them through the WebSocket injects DA/DSR/CPR replies
-        // into the foreground process as typed input (for example "0;276;0c").
-        if (
-          window.CodemanTerminalInput?.shouldSuppressTerminalQueryResponse(data)
-        ) {
-          return;
-        }
-
-        // ── One-shot Ctrl (mobile shell bar, issue #262) ──
-        // A virtual keyboard reports no usable key events, so a keydown hook
-        // would never see the character the modifier applies to: it arrives
-        // here as onData text. Sits AFTER the query-response filter so xterm's
-        // own DA/CPR replies can never spend the modifier, and BEFORE every
-        // send path so the control byte follows the normal control-char route
-        // (immediate flush, local-echo state cleared).
-        //
-        // Mouse and focus reports are skipped rather than suppressed: they are
-        // real bytes the PTY still needs, they just were not typed by anyone.
-        // A shell session passes mouse DECSETs through, so with vim or htop
-        // running, one tap on the terminal used to spend the modifier silently
-        // (measured against a real shell). See isTerminalFocusOrMouseReport.
-        if (
-          typeof KeyboardAccessoryBar !== 'undefined' &&
-          KeyboardAccessoryBar.isCtrlArmed?.() &&
-          !window.CodemanTerminalInput?.isTerminalFocusOrMouseReport(data)
-        ) {
-          data = KeyboardAccessoryBar.consumeCtrl(data);
-        }
-
-        this._lastTerminalData = { data, time: performance.now() };
-
-        // ── Local Echo Pass-through ──
-        // After a composer nav key (arrow/Home/End/Delete) the real cursor may
-        // sit mid-text, where the overlay's append-only buffering would corrupt
-        // both the preview and the submitted text. Such sessions are handed
-        // back to plain PTY echo until Enter or Ctrl+C submits/cancels the
-        // composer line (see the nav-key branch below).
-        const echoPassthrough =
-          this._localEchoEnabled && this._echoPassthroughSessions?.has(this.activeSessionId);
-        if (echoPassthrough && (data === '\r' || data === '\x03')) {
-          this._echoPassthroughSessions.delete(this.activeSessionId);
-        }
-
-        // ── Local Echo Mode ──
-        // When enabled, keystrokes are buffered locally in the overlay for
-        // instant visual feedback.  Nothing is sent to the PTY until Enter
-        // (or a control char) is pressed — avoids out-of-order char delivery.
-        // An IME commit takes the same printable/paste branch as typed text,
-        // and the overlay then shows it in place of the preview.
-        if (this._localEchoEnabled && !echoPassthrough) {
-          if (data === '\x7f') {
-            const source = this._localEchoOverlay?.removeChar();
-            if (source === 'flushed') {
-              // Sync app-level flushed Maps (per-session state for tab switching)
-              const { count, text } = this._localEchoOverlay.getFlushed();
-              if (this._flushedOffsets?.has(this.activeSessionId)) {
-                if (count === 0) {
-                  this._flushedOffsets.delete(this.activeSessionId);
-                  this._flushedTexts?.delete(this.activeSessionId);
-                } else {
-                  this._flushedOffsets.set(this.activeSessionId, count);
-                  this._flushedTexts?.set(this.activeSessionId, text);
-                }
-              }
-              this._pendingInput += data;
-              flushInput();
-            } else if (source === false) {
-              // Nothing pending, nothing flushed, nothing detected. The
-              // composer may still hold text the overlay cannot see (buffer
-              // detection is suppressed after a control-char flush), so
-              // forward the backspace instead of swallowing it (issue #218);
-              // an empty composer ignores it.
-              this._pendingInput += data;
-              flushInput();
-            }
-            // 'pending' = removed unsent text (no PTY backspace needed)
-            return;
-          }
-          if (/^[\r\n]+$/.test(data)) {
-            // Enter: send full buffered text + \r to PTY in one shot
-            const text = this._localEchoOverlay?.pendingText || '';
-            this._localEchoOverlay?.clear();
-            // Suppress detection so PTY-echoed text isn't re-detected as user input
-            this._localEchoOverlay?.suppressBufferDetection();
-            // Clear flushed offset and text — Enter commits all text
-            this._flushedOffsets?.delete(this.activeSessionId);
-            this._flushedTexts?.delete(this.activeSessionId);
-            if (this._inputFlushTimeout) {
-              clearTimeout(this._inputFlushTimeout);
-              this._inputFlushTimeout = null;
-            }
-            if (text) {
-              this._pendingInput += text;
-              flushInput();
-            }
-            // Send \r after a short delay so text arrives first
-            setTimeout(() => {
-              this._pendingInput += '\r';
-              flushInput();
-            }, 80);
-            return;
-          }
-          if (data.length > 1 && data.charCodeAt(0) >= 32) {
-            // Paste: append to overlay only (sent on Enter)
-            this._localEchoOverlay?.appendText(data);
-            if (isImeCommit && this._localEchoOverlay) this._transferMobileImeCommitToLocalEcho();
-            return;
-          }
-          if (data.charCodeAt(0) < 32) {
-            // Skip xterm-generated terminal responses.
-            // These arrive via triggerDataEvent when the terminal processes
-            // buffer data (DA responses, OSC color queries, mode reports, etc.).
-            // They are NOT user input and must not clear flushed text state.
-            // Covers: CSI (\x1b[), OSC (\x1b]), DCS (\x1bP), APC (\x1b_),
-            // PM (\x1b^), SOS (\x1bX), and any other multi-byte ESC sequence.
-            // Single-byte ESC (user pressing Escape) still falls through to
-            // the control char handler below.
-            if (data.length > 1 && data.charCodeAt(0) === 27) {
-              // Bracketed paste (terminal.paste() while DECSET 2004 is on):
-              // flush typed-but-unsent overlay text FIRST so the pasted block
-              // lands after it in the composer, not before it (issue #219).
-              // The paste sequence gets its own delayed write: Codex's
-              // paste-burst handling drops keystrokes that arrive in the SAME
-              // PTY read as a bracketed paste (verified against codex 0.147),
-              // mirroring the delayed \r in the Enter branch above.
-              if (data.startsWith(window.CodemanTerminalInput.BRACKETED_PASTE_START)) {
-                const hadPending = !!this._localEchoOverlay?.pendingText;
-                this._flushLocalEchoPending();
-                if (hadPending) {
-                  flushInput();
-                  setTimeout(() => {
-                    this._pendingInput += data;
-                    flushInput();
-                  }, 80);
-                } else {
-                  this._pendingInput += data;
-                  flushInput();
-                }
-                return;
-              }
-              // Composer nav keys (arrows, Home/End, Delete, PgUp/PgDn):
-              // flush unsent text so the key edits the real composer state,
-              // then hand the session to plain PTY echo until Enter/Ctrl+C.
-              // The cursor may now sit mid-text, where append-only buffering
-              // cannot track edits (issue #218).
-              if (window.CodemanTerminalInput.isComposerNavKey(data)) {
-                this._flushLocalEchoPending();
-                if (!this._echoPassthroughSessions) this._echoPassthroughSessions = new Set();
-                this._echoPassthroughSessions.add(this.activeSessionId);
-                this._pendingInput += data;
-                flushInput();
-                return;
-              }
-              // Multi-byte escape sequence — forward to PTY without clearing
-              // overlay/flushed state (terminal response, not user input)
-              this._pendingInput += data;
-              flushInput();
-              return;
-            }
-            // During buffer load (tab switch), stray control chars from
-            // terminal response processing must not wipe the flushed state
-            // that selectSession() is actively restoring.
-            if (this._restoringFlushedState) {
-              this._pendingInput += data;
-              flushInput();
-              return;
-            }
-            // Tab key: send pending text + Tab to PTY for tab completion.
-            // Set a flag so flushPendingWrites() re-detects buffer text when
-            // the PTY response arrives (event-driven, no fixed timer).
-            if (data === '\t') {
-              const text = this._localEchoOverlay?.pendingText || '';
-              this._localEchoOverlay?.clear();
-              this._flushedOffsets?.delete(this.activeSessionId);
-              this._flushedTexts?.delete(this.activeSessionId);
-              if (text) {
-                this._pendingInput += text;
-              }
-              this._pendingInput += data;
-              if (this._inputFlushTimeout) {
-                clearTimeout(this._inputFlushTimeout);
-                this._inputFlushTimeout = null;
-              }
-              // Snapshot prompt line text BEFORE flushing — used to distinguish
-              // real Tab completions from pre-existing Claude UI text.
-              let baseText = '';
-              try {
-                const p = this._localEchoOverlay?.findPrompt?.();
-                if (p) {
-                  const buf = this.terminal.buffer.active;
-                  const line = buf.getLine(buf.viewportY + p.row);
-                  if (line)
-                    baseText = line
-                      .translateToString(true)
-                      .slice(p.col + 2)
-                      .trimEnd();
-                }
-              } catch {}
-              this._tabCompletionBaseText = baseText;
-              flushInput();
-              this._tabCompletionSessionId = this.activeSessionId;
-              this._tabCompletionRetries = 0;
-              // Fallback: if flushPendingWrites() detection misses the completion
-              // (e.g., flicker filter delays data, or xterm hasn't processed writes
-              // by the time the callback fires), retry detection after a delay.
-              // This ensures the overlay renders even without further terminal data.
-              if (this._tabCompletionFallback) clearTimeout(this._tabCompletionFallback);
-              const selfTab = this;
-              this._tabCompletionFallback = setTimeout(() => {
-                selfTab._tabCompletionFallback = null;
-                if (!selfTab._tabCompletionSessionId || selfTab._tabCompletionSessionId !== selfTab.activeSessionId)
-                  return;
-                const ov = selfTab._localEchoOverlay;
-                if (!ov || ov.pendingText) return;
-                selfTab.terminal.write('', () => {
-                  if (!selfTab._tabCompletionSessionId) return;
-                  ov.resetBufferDetection();
-                  const detected = ov.detectBufferText();
-                  if (detected && detected !== selfTab._tabCompletionBaseText) {
-                    selfTab._tabCompletionSessionId = null;
-                    selfTab._tabCompletionRetries = 0;
-                    selfTab._tabCompletionBaseText = null;
-                    ov.rerender();
-                  }
-                });
-              }, 300);
-              return;
-            }
-            // Control chars (Ctrl+C, single ESC): send buffered text + control char immediately
-            const text = this._localEchoOverlay?.pendingText || '';
-            this._localEchoOverlay?.clear();
-            // Suppress detection so PTY-echoed text isn't re-detected as user input
-            this._localEchoOverlay?.suppressBufferDetection();
-            // Clear flushed offset and text — control chars (Ctrl+C, Escape) change
-            // cursor position or abort readline, making flushed text tracking invalid.
-            this._flushedOffsets?.delete(this.activeSessionId);
-            this._flushedTexts?.delete(this.activeSessionId);
-            if (text) {
-              this._pendingInput += text;
-            }
-            this._pendingInput += data;
-            if (this._inputFlushTimeout) {
-              clearTimeout(this._inputFlushTimeout);
-              this._inputFlushTimeout = null;
-            }
-            flushInput();
-            return;
-          }
-          if (data.length === 1 && data.charCodeAt(0) >= 32) {
-            // Printable char: add to overlay only (sent on Enter)
-            this._localEchoOverlay?.addChar(data);
-            if (isImeCommit && this._localEchoOverlay) this._transferMobileImeCommitToLocalEcho();
-            return;
-          }
-        }
-
-        // ── Predictive Echo (codex): visual only. A plain statement, never a
-        // `return`: control ALWAYS falls through into the send path below,
-        // which is the byte-identity guarantee for #218/#219/#220/#222 —
-        // with the predictor active, absent or throwing, the wire sees the
-        // same bytes. Body in _predictHookOnData (vm-testable).
-        this._predictHookOnData(data);
-
-        // ── Normal Mode (echo disabled) ──
-        this._pendingInput += data;
-
-        // Control chars (Enter, Ctrl+C, escape sequences) — flush immediately
-        if (data.charCodeAt(0) < 32 || data.length > 1) {
-          if (this._inputFlushTimeout) {
-            clearTimeout(this._inputFlushTimeout);
-            this._inputFlushTimeout = null;
-          }
-          flushInput();
-          return;
-        }
-
-        // Regular chars — flush immediately if typed after a gap (>50ms),
-        // otherwise batch via microtask to coalesce rapid keystrokes (paste).
-        const now = performance.now();
-        if (now - this._lastKeystrokeTime > 50) {
-          // Single char after a gap — send immediately, no setTimeout latency
-          if (this._inputFlushTimeout) {
-            clearTimeout(this._inputFlushTimeout);
-            this._inputFlushTimeout = null;
-          }
-          this._lastKeystrokeTime = now;
-          flushInput();
-        } else {
-          // Rapid sequence (paste or fast typing) — coalesce via microtask
-          this._lastKeystrokeTime = now;
-          if (!this._inputFlushTimeout) {
-            this._inputFlushTimeout = setTimeout(flushInput, 0);
-          }
-        }
-      }
-    };
+    // Capture the session when xterm produces data, not when its printable batch flushes.
+    const handleTerminalData = (data) => this._handleTerminalData(data, this.activeSessionId);
 
     // Chrome on Android delivers a `composed: true` input event preceded by a
     // keydown, which is exactly the shape xterm's _inputEvent refuses to
@@ -2110,16 +2152,7 @@ Object.assign(CodemanApp.prototype, {
     // connect() key handler and onData) wires its own controller the same way
     // for every grid tile and the split's Pane B; keep the two in step.
     // create() returns null unless the primary pointer is coarse (#716).
-    try {
-      this._keyCode229Recovery = window.CodemanKeyCode229Recovery?.create?.({
-        textarea: this.terminal.textarea,
-        emitRecovered: (data) => handleTerminalData(data),
-        getCompositionHelper: () => this.terminal?._core?._compositionHelper,
-        isScreenReaderMode: () => this.terminal?.options?.screenReaderMode === true,
-      });
-    } catch {
-      this._keyCode229Recovery = null;
-    }
+    this._initTerminalInputOwner();
     this.terminal.onData((data) => {
       // Canonical xterm data. Telling the controller is what lets it know a
       // keystroke was already delivered and needs no recovery.
@@ -4397,23 +4430,6 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
-   * Flush the local-echo overlay's unsent text into `_pendingInput` (no
-   * trailing Enter) and reset overlay + flushed-state tracking. Used before
-   * forwarding sequences that must arrive AFTER the typed text (bracketed
-   * paste, composer nav keys). The caller forwards its own sequence: nav keys
-   * ride the same write, pastes get a delayed second write because codex
-   * drops keys that share a PTY read with a bracketed paste.
-   */
-  _flushLocalEchoPending() {
-    const text = this._localEchoOverlay?.pendingText || '';
-    this._localEchoOverlay?.clear();
-    this._localEchoOverlay?.suppressBufferDetection();
-    this._flushedOffsets?.delete(this.activeSessionId);
-    this._flushedTexts?.delete(this.activeSessionId);
-    if (text) this._pendingInput += text;
-  },
-
-  /**
    * Update local echo overlay state based on settings.
    * Enabled whenever the setting is on — works during idle AND busy.
    * Position is tracked dynamically by _findPrompt() on every render.
@@ -4431,9 +4447,22 @@ Object.assign(CodemanApp.prototype, {
     const settings = this.loadAppSettingsFromStorage();
     const session = this.activeSessionId ? this.sessions.get(this.activeSessionId) : null;
     const echoEnabled = settings.localEchoEnabled ?? MobileDetection.isTouchDevice();
-    const shouldEnable = !!(echoEnabled && session);
-    if (this._localEchoEnabled && !shouldEnable) {
-      this._localEchoOverlay?.clear();
+    // Per-session echo policy: 'buffer' (overlay), 'predict' (codex
+    // write-through, see the onData predict hook), 'off'. Only 'buffer'
+    // turns the overlay on; this is the one place the mode decides it.
+    let policy = 'off';
+    if (session && echoEnabled) {
+      if (session.mode === 'codex') policy = 'predict';
+      else if (session.mode !== 'shell') policy = 'buffer';
+    }
+    const shouldEnable = policy === 'buffer';
+    if (!!this._localEchoEnabled !== shouldEnable) {
+      this._settleMainInput('echo-policy');
+      if (!shouldEnable) {
+        // Plain PTY echo now owns the line; never restore the overlay snapshot.
+        this._flushedOffsets?.delete(this.activeSessionId);
+        this._flushedTexts?.delete(this.activeSessionId);
+      }
     }
     this._localEchoEnabled = shouldEnable;
 
@@ -4471,8 +4500,7 @@ Object.assign(CodemanApp.prototype, {
         // keystrokes until Enter starves all of that, so codex sessions use
         // plain PTY echo like shell — visually augmented by the predictive
         // write-through echo (see _localEchoPolicy below and the onData hook).
-        // Disable the buffer overlay by clearing any pending text.
-        this._localEchoOverlay.clear();
+        // The policy boundary above already settled and flushed the overlay.
         this._localEchoEnabled = false;
       } else {
         // Codex/Claude-style TUIs usually expose a ❯ prompt. During active
@@ -4507,15 +4535,6 @@ Object.assign(CodemanApp.prototype, {
       }
     }
 
-    // Per-session echo policy: 'buffer' (overlay), 'predict' (codex
-    // write-through, see the onData predict hook), 'off'. _localEchoEnabled
-    // keeps its exact historical values above (false for codex/shell), so
-    // every existing consumer is unchanged; this field is purely additive.
-    let policy = 'off';
-    if (session && echoEnabled) {
-      if (session.mode === 'codex') policy = 'predict';
-      else if (session.mode !== 'shell') policy = 'buffer';
-    }
     this._localEchoPolicy = policy;
     if (policy !== 'predict') this._predictiveEcho?.clearPredictions();
   },
@@ -4543,11 +4562,13 @@ Object.assign(CodemanApp.prototype, {
 
   // CJK textarea already provides visual feedback — bypass local echo
   // buffering so each composed word reaches the PTY immediately.
-  _handleCjkInput(text) {
-    if (!this.activeSessionId) {
-      _crashDiag.log(`CJK send DROP no-session len=${text.length}`);
-      return;
-    }
+  _handleCjkInput(text, sessionId) {
+    const pane = sessionId ? this._paneForSession(sessionId) : this._focusedPane();
+    if (sessionId && !this.sessions.has(sessionId)) return;
+    if (!pane && !sessionId) return;
+    sessionId = sessionId || pane.sessionId;
+    if (!sessionId) return;
+    if (pane) this._prepareExternalInput(pane, 'cjk');
     // ── One-shot Ctrl (mobile shell bar, issue #262) ──
     // While the CJK field is visible it OWNS the keyboard: onData returns early
     // for everything it swallows, and the focus router even redirects
@@ -4566,8 +4587,8 @@ Object.assign(CodemanApp.prototype, {
     }
     // Bypasses onData (like insertTerminalText): predictions cannot see this
     if (this._localEchoPolicy === 'predict') this._predictiveEcho?.clearPredictions();
-    _crashDiag.log(`CJK send→${this.activeSessionId.slice(0, 8)} len=${text.length}`);
-    this._sendInputAsync(this.activeSessionId, text);
+    _crashDiag.log(`CJK send→${sessionId.slice(0, 8)} len=${text.length}`);
+    this._sendInputAsync(sessionId, text);
   },
 
   /**
@@ -4578,7 +4599,9 @@ Object.assign(CodemanApp.prototype, {
    * does the same for a long burst. Same split as TmuxManager.sendInput: a
    * single character is typed (a selection dialog ignores a pasted `3`, then
    * Enter confirms the highlighted option), anything else goes through the
-   * composer's path as one bracketed paste. The session is captured now, so the
+   * composer's path as one bracketed paste. The session is the one CjkInput
+   * captured when the text was started (`_targetForSend()`), and the text, the
+   * 120 ms gap and the Enter are reserved on that session's FIFO, so the
    * delayed Enter cannot follow a tab switch. A lone digit while the session
    * shows a permission or question dialog goes out without the Enter: the
    * dialog acts on the digit itself, and a later Enter would confirm whatever
@@ -4587,9 +4610,9 @@ Object.assign(CodemanApp.prototype, {
    * false when nothing was sent (no session, too long), so the field keeps the
    * text.
    */
-  _sendCjkPrompt(text) {
-    const sessionId = this.activeSessionId;
-    if (!sessionId || typeof KeyboardAccessoryBar === 'undefined') {
+  _sendCjkPrompt(text, targetSessionId) {
+    const sessionId = targetSessionId || this._focusedPane()?.sessionId;
+    if (!sessionId || !this.sessions.has(sessionId) || typeof KeyboardAccessoryBar === 'undefined') {
       _crashDiag.log(`CJK prompt DROP no-session len=${text.length}`);
       return false;
     }
@@ -4599,15 +4622,17 @@ Object.assign(CodemanApp.prototype, {
     KeyboardAccessoryBar.clearCtrl?.();
     _crashDiag.log(`CJK prompt→${sessionId.slice(0, 8)} len=${text.length}`);
     if ([...text].length === 1) {
+      const pane = this._paneForSession(sessionId);
+      if (pane) this._prepareExternalInput(pane, 'cjk-prompt');
       if (this._localEchoPolicy === 'predict') this._predictiveEcho?.clearPredictions();
-      this._sendInputAsync(sessionId, text);
       const hooks = this.pendingHooks?.get(sessionId);
       const awaitingChoice = !!hooks && (hooks.has('permission_prompt') || hooks.has('elicitation_dialog'));
       if (/^\d$/.test(text) && awaitingChoice) {
-        _crashDiag.log(`CJK prompt digit answers a dialog, no Enter`);
+        _crashDiag.log(`CJK prompt digit answers dialog, no Enter`);
+        this._enqueueInput(sessionId, [{ write: text }]);
         return true;
       }
-      setTimeout(() => this._sendInputAsync(sessionId, '\r', { useMux: true }), 120);
+      this._enqueueInput(sessionId, [{ write: text }, { gap: 120 }, { write: '\r', useMux: true }]);
       return true;
     }
     return KeyboardAccessoryBar._sendComposedPrompt(sessionId, text);
@@ -5074,8 +5099,24 @@ Object.assign(CodemanApp.prototype, {
     return { terminal: this.terminal, sessionId: this.activeSessionId, isPrimary: true, tile: null };
   },
 
+  /** Resolve the live native-input owner independently of keyboard focus. */
+  _paneForSession(sessionId) {
+    if (!sessionId) return null;
+    if (this.activeSessionId === sessionId && !this._tilesOwnTerminal?.() && this.terminal) {
+      return { terminal: this.terminal, sessionId, isPrimary: true, tile: null };
+    }
+    const tile = this._splitPane?.sessionId === sessionId && !this._splitPane._destroyed
+      ? this._splitPane
+      : this._tileFor?.(sessionId);
+    if (!tile?.terminal || tile._destroyed) return null;
+    return { terminal: tile.terminal, sessionId, isPrimary: false, tile };
+  },
+
   /** Record which second pane holds the keyboard (null: the primary terminal). */
   _noteFocusedTile(tile) {
+    if ((tile || null) !== (this._focusedTile || null) && typeof CjkInput !== 'undefined') {
+      CjkInput.flushNow?.();
+    }
     this._focusedTile = tile || null;
   },
 
@@ -5104,27 +5145,28 @@ Object.assign(CodemanApp.prototype, {
 
   /** Insert editable text at the active prompt without pressing Enter. */
   insertTerminalText(text) {
-    if (!this.activeSessionId || !text) return;
+    const pane = this._focusedPane();
+    if (!text || !pane?.sessionId || !pane.terminal || pane.tile?._destroyed) return;
+    this._prepareExternalInput(pane, 'insert');
     // A tile or the split's Pane B holds the keyboard: the text belongs to that
     // pane's session. Those panes have no local-echo overlay, and the main
     // overlay is parked behind the grid, so send it straight to the pane.
-    const pane = this._focusedPane?.();
     if (pane && !pane.isPrimary) {
       this._sendInputAsync(pane.sessionId, text);
       pane.terminal?.focus();
       return;
     }
-    // Under predict the text goes out via sendInput (bypasses onData), so the
+    // Under predict the text goes out via _sendInputAsync (bypasses onData), so the
     // hook never sees it: clear outstanding predictions here instead.
     if (this._localEchoPolicy === 'predict') this._predictiveEcho?.clearPredictions();
     if (
       this._localEchoEnabled &&
       this._localEchoOverlay &&
-      !this._echoPassthroughSessions?.has(this.activeSessionId)
+      !this._echoPassthroughSessions?.has(pane.sessionId)
     ) {
       this._localEchoOverlay.appendText(text);
     } else {
-      this.sendInput(text).catch(() => {});
+      this._sendInputAsync(pane.sessionId, text, { useMux: true });
     }
     this.terminal?.focus();
   },
@@ -5134,26 +5176,23 @@ Object.assign(CodemanApp.prototype, {
    * from Ctrl+L (clear display) and the agent's destructive `/clear` command.
    */
   clearTerminalInput() {
-    if (!this.activeSessionId) return;
-
+    const pane = this._focusedPane();
+    if (!pane?.sessionId || !pane.terminal || pane.tile?._destroyed) return;
+    this._prepareExternalInput(pane, 'clear');
     // discard: the line is thrown away, so a Send on Enter draft must not be
-    // stashed and come back on the next visit to this session.
+    // stashed to come back on the next visit to this session.
     if (typeof CjkInput !== 'undefined') CjkInput.clear({ discard: true });
     // A tile or Pane B holds the keyboard: its TUI owns the editable buffer
     // (no local-echo overlay there), so kill the line in that pane's session,
     // never in the parked main pane's.
-    const pane = this._focusedPane?.();
     if (pane && !pane.isPrimary) {
       this._sendInputAsync(pane.sessionId, '\x15');
       this.showToast?.('Input cleared', 'success');
       pane.terminal?.focus();
       return;
     }
-    if (this._inputFlushTimeout) {
-      clearTimeout(this._inputFlushTimeout);
-      this._inputFlushTimeout = null;
-    }
-    this._pendingInput = '';
+    // Accepted printable batches were sealed by the external-input boundary;
+    // only unsent overlay text is discarded below.
     // Composer content is about to change out from under any predictions
     if (this._localEchoPolicy === 'predict') this._predictiveEcho?.clearPredictions();
 
@@ -5161,16 +5200,16 @@ Object.assign(CodemanApp.prototype, {
       const flushed = this._localEchoOverlay.getFlushed?.() || { count: 0, text: '' };
       this._localEchoOverlay.clear();
       this._localEchoOverlay.suppressBufferDetection();
-      this._flushedOffsets?.delete(this.activeSessionId);
-      this._flushedTexts?.delete(this.activeSessionId);
+      this._flushedOffsets?.delete(pane.sessionId);
+      this._flushedTexts?.delete(pane.sessionId);
       const flushedLength = Array.from(flushed.text || '').length;
       if (flushedLength > 0) {
-        this.sendInput('\x7f'.repeat(flushedLength)).catch(() => {});
+        this._sendInputAsync(pane.sessionId, '\x7f'.repeat(flushedLength), { useMux: true });
       }
     } else {
       // In non-local-echo mode the TUI already owns the editable buffer. Ctrl+U
       // is the conventional kill-line key supported by shells and agent TUIs.
-      this.sendInput('\x15').catch(() => {});
+      this._sendInputAsync(pane.sessionId, '\x15', { useMux: true });
     }
 
     this.showToast?.('Input cleared', 'success');
@@ -7178,19 +7217,6 @@ Object.assign(CodemanApp.prototype, {
     // wording wrapped to two, which is a lot of the terminal to cover for a
     // notice about a condition that resolves itself.
     this.showToast('Another device is setting the width — scroll sideways', 'info');
-  },
-
-  /**
-   * Send input to the active session.
-   * @param {string} input - Text to send (include \r for Enter)
-   * @returns {Promise<void>}
-   */
-  async sendInput(input) {
-    if (!this.activeSessionId || !input) return;
-    // Route through the durable, exactly-once delivery layer (useMux for the
-    // POST fallback) so voice / keyboard-accessory / paste input also survives a
-    // dropped link instead of being lost in a single best-effort fetch.
-    this._sendInputAsync(this.activeSessionId, input, { useMux: true });
   },
 
   // ═══════════════════════════════════════════════════════════════

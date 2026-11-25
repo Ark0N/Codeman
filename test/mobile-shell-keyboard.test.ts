@@ -160,6 +160,7 @@ function loadBar(sessionMode = 'claude') {
     activeSessionId: 'session-1',
     sessions: new Map<string, { mode: string }>([['session-1', { mode: sessionMode }]]),
     terminal: { focus: vi.fn() },
+    _enqueueInput: vi.fn(),
   };
   const fetchMock = vi.fn(() => Promise.resolve({ ok: true, catch: () => {} }));
   const barElement = fakeBarElement();
@@ -499,10 +500,14 @@ describe('one-shot Ctrl through the CJK input field', () => {
     const app = Object.create(CodemanApp.prototype) as {
       activeSessionId: string;
       _sendInputAsync: ReturnType<typeof vi.fn>;
+      _focusedPane: () => { terminal: object; sessionId: string; isPrimary: boolean };
+      _prepareExternalInput: (...args: unknown[]) => void;
       _handleCjkInput(text: string): void;
     };
     app.activeSessionId = 'cjk-session';
     app._sendInputAsync = vi.fn();
+    app._focusedPane = () => ({ terminal: {}, sessionId: app.activeSessionId, isPrimary: true });
+    app._prepareExternalInput = vi.fn();
     return { app, bar };
   }
 
@@ -549,27 +554,43 @@ describe('one-shot Ctrl through the CJK input field', () => {
 });
 
 describe('Send on Enter: a held answer goes out with Enter as its own write', () => {
-  // _sendCjkPrompt is CjkInput's sendPrompt callback. Anything longer than one
-  // character goes to the composer's _sendComposedPrompt with the session
-  // captured at Enter, so the delayed Enter cannot follow a tab switch.
+  // _sendCjkPrompt is CjkInput's sendPrompt callback, called with the session
+  // CjkInput captured for the text (_targetForSend). Anything longer than one
+  // character goes to the composer's _sendComposedPrompt for that session; one
+  // character, the 120 ms gap and Enter are reserved on that session's FIFO, so
+  // the delayed Enter cannot follow a tab switch.
+  type PromptApp = {
+    activeSessionId: string | null;
+    sessions: Map<string, { mode: string }>;
+    pendingHooks?: Map<string, Set<string>>;
+    _focusedPane(): { sessionId: string | null; terminal: object; isPrimary: boolean } | null;
+    _paneForSession(id: string): null;
+    _enqueueReliableInput(id: string, input: string, opts?: { useMux?: boolean }): void;
+    _sendCjkPrompt(text: string, sessionId?: string): boolean;
+  };
   function promptApp() {
     const { CodemanApp, bar } = loadTerminalModule();
     bar.clearCtrl();
-    const app = Object.create(CodemanApp.prototype) as {
-      activeSessionId: string | null;
-      _sendCjkPrompt(text: string): boolean;
-    };
+    const app = Object.create(CodemanApp.prototype) as PromptApp;
     app.activeSessionId = 'session-a';
+    app.sessions = new Map([
+      ['session-a', { mode: 'claude' }],
+      ['session-b', { mode: 'claude' }],
+    ]);
+    app._focusedPane = () => ({ sessionId: app.activeSessionId, terminal: {}, isPrimary: true });
+    app._paneForSession = () => null;
+    const writes: Array<[string, string, boolean]> = [];
+    app._enqueueReliableInput = (id, input, opts) => void writes.push([id, input, opts?.useMux === true]);
     const composed = vi
       .spyOn(bar as unknown as { _sendComposedPrompt: (s: string, t: string) => boolean }, '_sendComposedPrompt')
       .mockReturnValue(true);
-    return { app, bar, composed };
+    return { app, bar, composed, writes };
   }
 
-  it('sends through the composer path, bound to the session active at Enter', () => {
+  it('sends through the composer path for the captured session, not the active one', () => {
     const { app, composed } = promptApp();
-    expect(app._sendCjkPrompt('line one\nline two')).toBe(true);
     app.activeSessionId = 'session-b';
+    expect(app._sendCjkPrompt('line one\nline two', 'session-a')).toBe(true);
     expect(composed).toHaveBeenCalledWith('session-a', 'line one\nline two');
     composed.mockRestore();
   });
@@ -577,28 +598,28 @@ describe('Send on Enter: a held answer goes out with Enter as its own write', ()
   it('spends an armed one-shot Ctrl, like any multi-character chunk', () => {
     const { app, bar, composed } = promptApp();
     bar.toggleCtrl();
-    app._sendCjkPrompt('x'.repeat(100));
+    app._sendCjkPrompt('x'.repeat(100), 'session-a');
     expect(bar.isCtrlArmed()).toBe(false);
     composed.mockRestore();
   });
 
-  it('types a single character, then Enter ~120 ms later to the same session', () => {
+  it('types a single character, then Enter 120 ms later on the same session FIFO across a switch', () => {
     // Codex folds an Enter that arrives in the same burst as the text into a
     // paste, even for `1\r`; a selection dialog ignores a pasted digit. Same
-    // split as TmuxManager.sendInput (submitsAsKeys).
+    // split as the tmux manager's submitsAsKeys path.
     vi.useFakeTimers();
     try {
-      const { app, composed } = promptApp();
-      const writes: Array<[string, string, unknown]> = [];
-      (app as unknown as { _sendInputAsync: unknown })._sendInputAsync = (id: string, input: string, opts?: unknown) =>
-        writes.push([id, input, opts]);
-      expect(app._sendCjkPrompt('1')).toBe(true);
-      expect(writes).toEqual([['session-a', '1', undefined]]);
+      const { app, composed, writes } = promptApp();
+      expect(app._sendCjkPrompt('1', 'session-a')).toBe(true);
+      expect(writes).toEqual([['session-a', '1', false]]);
       app.activeSessionId = 'session-b';
       vi.advanceTimersByTime(119);
       expect(writes).toHaveLength(1);
       vi.advanceTimersByTime(1);
-      expect(writes[1]).toEqual(['session-a', '\r', { useMux: true }]);
+      expect(writes).toEqual([
+        ['session-a', '1', false],
+        ['session-a', '\r', true],
+      ]);
       expect(composed).not.toHaveBeenCalled();
       composed.mockRestore();
     } finally {
@@ -613,19 +634,11 @@ describe('Send on Enter: a held answer goes out with Enter as its own write', ()
     vi.useFakeTimers();
     try {
       for (const hook of ['permission_prompt', 'elicitation_dialog']) {
-        const { app, composed } = promptApp();
-        const writes: Array<[string, string, unknown]> = [];
-        (app as unknown as { _sendInputAsync: unknown })._sendInputAsync = (
-          id: string,
-          input: string,
-          opts?: unknown
-        ) => writes.push([id, input, opts]);
-        (app as unknown as { pendingHooks: Map<string, Set<string>> }).pendingHooks = new Map([
-          ['session-a', new Set([hook])],
-        ]);
-        expect(app._sendCjkPrompt('2')).toBe(true);
+        const { app, composed, writes } = promptApp();
+        app.pendingHooks = new Map([['session-a', new Set([hook])]]);
+        expect(app._sendCjkPrompt('2', 'session-a')).toBe(true);
         vi.advanceTimersByTime(500);
-        expect(writes).toEqual([['session-a', '2', undefined]]);
+        expect(writes).toEqual([['session-a', '2', false]]);
         composed.mockRestore();
       }
     } finally {
@@ -641,21 +654,13 @@ describe('Send on Enter: a held answer goes out with Enter as its own write', ()
         ['permission_prompt', 'y'],
       ];
       for (const [hook, text] of cases) {
-        const { app, composed } = promptApp();
-        const writes: Array<[string, string, unknown]> = [];
-        (app as unknown as { _sendInputAsync: unknown })._sendInputAsync = (
-          id: string,
-          input: string,
-          opts?: unknown
-        ) => writes.push([id, input, opts]);
-        (app as unknown as { pendingHooks: Map<string, Set<string>> }).pendingHooks = new Map([
-          ['session-a', new Set([hook])],
-        ]);
-        expect(app._sendCjkPrompt(text)).toBe(true);
+        const { app, composed, writes } = promptApp();
+        app.pendingHooks = new Map([['session-a', new Set([hook])]]);
+        expect(app._sendCjkPrompt(text, 'session-a')).toBe(true);
         vi.advanceTimersByTime(120);
         expect(writes).toEqual([
-          ['session-a', text, undefined],
-          ['session-a', '\r', { useMux: true }],
+          ['session-a', text, false],
+          ['session-a', '\r', true],
         ]);
         composed.mockRestore();
       }
@@ -666,19 +671,22 @@ describe('Send on Enter: a held answer goes out with Enter as its own write', ()
 
   it('pastes even a short word: only one character is typed', () => {
     const { app, composed } = promptApp();
-    expect(app._sendCjkPrompt('yes')).toBe(true);
+    expect(app._sendCjkPrompt('yes', 'session-a')).toBe(true);
     expect(composed).toHaveBeenCalledWith('session-a', 'yes');
     composed.mockRestore();
   });
 
   it('reports a refusal so the field keeps the text', () => {
-    const { app, composed } = promptApp();
+    const { app, composed, writes } = promptApp();
     composed.mockReturnValue(false);
-    expect(app._sendCjkPrompt('x'.repeat(100))).toBe(false);
+    expect(app._sendCjkPrompt('x'.repeat(100), 'session-a')).toBe(false);
+    // A captured session that closed meanwhile, or no session at all, sends nothing.
+    expect(app._sendCjkPrompt('1', 'session-gone')).toBe(false);
     app.activeSessionId = null;
     expect(app._sendCjkPrompt('x'.repeat(100))).toBe(false);
     expect(app._sendCjkPrompt('1')).toBe(false);
     expect(composed).toHaveBeenCalledTimes(1);
+    expect(writes).toEqual([]);
     composed.mockRestore();
   });
 });
@@ -724,14 +732,15 @@ describe('composer nav keys from the bar', () => {
     const app = loaded.app as unknown as Record<string, unknown>;
     app._localEchoEnabled = true;
     app._localEchoOverlay = overlay;
-    app.sendInput = vi.fn();
     app._flushedOffsets = new Map([['session-1', 3]]);
     app._flushedTexts = new Map([['session-1', 'dra']]);
     return { ...loaded, app, overlay };
   }
 
-  const sentKeys = (fetchMock: { mock: { calls: unknown[][] } }) =>
-    fetchMock.mock.calls.map((call) => JSON.parse((call[1] as { body: string }).body).input);
+  const sentKeys = (enqueue: { mock: { calls: unknown[][] } }) =>
+    enqueue.mock.calls.flatMap((call) =>
+      (call[1] as { write?: string }[]).filter((op) => op.write?.startsWith('\x1b')).map((op) => op.write)
+    );
 
   it.each(['simple', 'extended'])('exposes Shift arrows in the %s agent layout', (mode) => {
     const { bar, barElement } = loadBar('codex');
@@ -744,19 +753,15 @@ describe('composer nav keys from the bar', () => {
     ['shift-left', '\x1b[1;2D'],
     ['shift-right', '\x1b[1;2C'],
   ])('%s flushes the draft before navigation and hands editing to the PTY', (action, sequence) => {
-    const { bar, app, overlay, fetchMock } = barWithDraft('unfinished follow-up');
-    const events: string[] = [];
-    app.sendInput = vi.fn(() => events.push('draft'));
-    fetchMock.mockImplementation(() => {
-      events.push('key');
-      return Promise.resolve({ ok: true, catch: () => {} });
-    });
+    const { bar, app, overlay } = barWithDraft('unfinished follow-up');
 
     bar.handleAction(action);
 
-    expect(app.sendInput).toHaveBeenCalledWith('unfinished follow-up');
-    expect(events).toEqual(['draft', 'key']);
-    expect(sentKeys(fetchMock)).toEqual([sequence]);
+    expect(app._enqueueInput).toHaveBeenCalledWith('session-1', [
+      { write: 'unfinished follow-up', useMux: true },
+      { gap: 120 },
+      { write: sequence },
+    ]);
     expect(overlay.pendingText).toBe('');
     expect([...(app._echoPassthroughSessions as Set<string>)]).toEqual(['session-1']);
   });
@@ -768,12 +773,15 @@ describe('composer nav keys from the bar', () => {
     // goes on painting the draft over the same row and still believes it is
     // pending. Flushing first is also what makes the draft recoverable: the
     // CLI stashes the live composer and hands it back on Down.
-    const { bar, app, overlay, fetchMock } = barWithDraft('draft I typed');
+    const { bar, app, overlay } = barWithDraft('draft I typed');
 
     bar.handleAction('scroll-up');
 
-    expect(app.sendInput).toHaveBeenCalledWith('draft I typed');
-    expect(sentKeys(fetchMock)).toEqual(['\x1b[A']);
+    expect(app._enqueueInput).toHaveBeenCalledWith('session-1', [
+      { write: 'draft I typed', useMux: true },
+      { gap: 120 },
+      { write: '\x1b[A' },
+    ]);
     expect(overlay.pendingText).toBe('');
     expect(overlay.suppressBufferDetection).toHaveBeenCalled();
     // The overlay's bookkeeping for this session has to go with it.
@@ -793,15 +801,14 @@ describe('composer nav keys from the bar', () => {
   });
 
   it('sends all four arrows and skips the flush when there is no draft', () => {
-    const { bar, app, fetchMock } = barWithDraft('');
+    const { bar, app } = barWithDraft('');
 
     bar.handleAction('scroll-up');
     bar.handleAction('scroll-down');
     bar.handleAction('arrow-left');
     bar.handleAction('arrow-right');
 
-    expect(sentKeys(fetchMock)).toEqual(['\x1b[A', '\x1b[B', '\x1b[D', '\x1b[C']);
-    expect(app.sendInput).not.toHaveBeenCalled();
+    expect(sentKeys(app._enqueueInput as ReturnType<typeof vi.fn>)).toEqual(['\x1b[A', '\x1b[B', '\x1b[D', '\x1b[C']);
   });
 });
 
