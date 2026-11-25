@@ -213,6 +213,7 @@ set_xauthrequest = true          # return the identity as X-Auth-Request-* heade
 skip_provider_button = true
 upstreams = ["static://202"]     # forward_auth only, nothing to proxy
 cookie_secure = true
+cookie_samesite = "lax"          # never sent from a sandboxed web-tab frame
 cookie_expire = "12h"            # sign in again after this (default 168h)
 cookie_refresh = "1h"            # re-check with the provider this often
 scope = "openid email profile offline_access"   # offline_access: a refresh token (Entra ID)
@@ -225,6 +226,19 @@ person disabled at the provider keeps access until the cookie expires. `cookie_r
 needs a refresh token: without one (for Entra ID, without `offline_access` in the scope),
 oauth2-proxy can't refresh, and people are sent back through sign-in whenever the ID token
 expires, about hourly.
+
+Set `cookie_samesite`. oauth2-proxy puts no `SameSite` attribute on its cookie unless it is
+configured, and browsers disagree about a cookie without one. With `lax`, a sandboxed
+web-tab frame does not send the proxy's cookie in any browser.
+
+The username Codeman gets is only as trustworthy as the claim it comes from:
+
+- **Register the app as single-tenant.** The proxy trusts values that the administrators
+  of the signing-in person's tenant control, so only your own tenant may sign in.
+- **`email` and `preferred_username` are mutable.** An administrator can change them, and
+  an address can be given to another person later. That person then gets the Codeman
+  account the address maps to, until you remove its row from the `map` below. Go through
+  the table when people leave or are renamed.
 
 ### Caddy
 
@@ -302,6 +316,8 @@ codeman.example.com {
 				reverse_proxy 127.0.0.1:3000 {
 					header_up X-Codeman-Proxy-Secret {env.CODEMAN_TRUSTED_PROXY_SECRET}
 					header_up X-Codeman-User {codeman_user}
+					# Codeman needs only the two headers above.
+					header_up -X-Auth-Request-Email
 				}
 			}
 		}
@@ -320,6 +336,9 @@ Codeman cannot see a mistake here:
 - **The proxy's own cookie stops at the proxy.** The `request_header Cookie …` lines remove
   it on both routes. With a different `cookie_name` in oauth2-proxy, change the name in
   the pattern.
+- **oauth2-proxy's identity headers stop at the proxy too.** `header_up -X-Auth-Request-Email`
+  removes the address on the way to Codeman, because the web-tab relay passes headers it
+  does not know on to dashboards.
 
 Check the order Caddy will actually use with
 `caddy adapt --config Caddyfile --adapter caddyfile` before going live. With
@@ -337,7 +356,8 @@ fetch('/api/me', { headers: { 'X-Codeman-User': 'someone-else' } }).then((r) => 
 The `map` is a list you maintain. If your provider can put the Codeman username into the
 ID token (for example the AD logon name: Entra ID can add it with a claims mapping policy
 that emits `user.onpremisessamaccountname` as a custom claim; the app then needs
-`acceptMappedClaims` enabled), let oauth2-proxy return that claim as a header. That needs
+`acceptMappedClaims` enabled, which belongs only on a single-tenant app registration), let
+oauth2-proxy return that claim as a header. That needs
 oauth2-proxy 7.15.5 or later with its alpha config (`--alpha-config`), and the claim must
 be listed in the provider's `additionalClaims`, otherwise the header stays empty:
 
@@ -381,13 +401,16 @@ route {
 	reverse_proxy 127.0.0.1:3000 {
 		header_up X-Codeman-Proxy-Secret {env.CODEMAN_TRUSTED_PROXY_SECRET}
 		header_up X-Codeman-User {http.request.header.X-Auth-Request-Codeman-User}
+		header_up -X-Auth-Request-Email
+		header_up -X-Auth-Request-Codeman-User
 	}
 }
 ```
 
 Adding a person is then: allow them at the identity provider, and
 `codeman users add <name>`. Codeman usernames allow letters, digits, `_` and `-` only, so
-the claim must fit that. A browser that signed in before the claim existed needs to sign
+the claim must fit that. A logon name with a dot (`jane.doe`) does not: for such accounts
+keep the `map`. A browser that signed in before the claim existed needs to sign
 out (`/oauth2/sign_out`) and in again.
 
 ### Things to know
@@ -407,7 +430,8 @@ out (`/oauth2/sign_out`) and in again.
   prompt or failure count, so anonymous requests can't probe passwords or lock out the
   password sign-in.
 - **When the proxy session expires**, API calls and the live-update stream get a redirect
-  to the sign-in page instead of a `401`; reload the page. The `rd=` return address is not
+  to the sign-in page instead of a `401`. A page cannot follow it, so an open Codeman page
+  shows "Reconnecting" and does not recover by itself: reload it to sign in again. The `rd=` return address is not
   URL-encoded, so a query string with `&` loses everything after the first one.
 - **`mustChangePassword` is ignored** for proxy sign-ins, since no Codeman password was
   used, and `GET /api/me` reports it as `false` for them. A person's own "Revoke all" and logout end Codeman cookies, not the proxy's
