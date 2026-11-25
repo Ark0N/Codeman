@@ -208,7 +208,9 @@ Environment="CODEMAN_ALLOWED_HOSTS=codeman.example.com"
 
 If the service already has allowed hosts, include them in the same comma-separated
 value. If you already set the variable through an `EnvironmentFile=`, update that
-file. For a named Codeman instance, use its systemd unit name in both commands.
+file. For a named instance the unit is `codeman-web-<instance>.service` (for example
+`codeman-web-beta.service`; `CODEMAN_INSTANCE=beta codeman service status` prints it).
+Use that name in both commands.
 
 Save the drop-in and restart Codeman:
 
@@ -216,9 +218,12 @@ Save the drop-in and restart Codeman:
 systemctl --user restart codeman-web.service
 ```
 
-The drop-in lives outside the app checkout and persists across normal Codeman
-updates. Open the proxy URL and attach to a terminal to check both the page and the
-WebSocket connection.
+Re-running the installer or `codeman service install` rewrites `codeman-web.service`
+itself and does not carry `CODEMAN_ALLOWED_HOSTS` over, so keep the setting in the
+drop-in (`~/.config/systemd/user/codeman-web.service.d/override.conf`), not in the unit
+file. Installs, updates and `install.sh uninstall` leave that folder alone, so delete it
+by hand if you remove Codeman. Open the proxy URL and attach to a terminal to check both
+the page and the WebSocket connection.
 
 ### Mounting under a sub-path
 
