@@ -1232,7 +1232,9 @@ describe('TmuxManager (unit)', () => {
           .map(([cmd]) => cmd)
           .filter((cmd): cmd is string => typeof cmd === 'string' && cmd.includes(' list-panes '));
         expect(listCalls).toHaveLength(1);
-        expect(listCalls[0]).toContain("|#{pane_current_path}'");
+        // The last two fields: the exit time that tells one exit from the next
+        // on tmux 3.8, then the directory, which must stay last.
+        expect(listCalls[0]).toContain("|#{pane_dead_time}|#{pane_current_path}'");
       } finally {
         nonTestManager.destroy();
       }
@@ -1335,7 +1337,11 @@ describe('TmuxManager (unit)', () => {
           | undefined;
         // promisify(exec) on this mock resolves with the second argument. tmux 3.8
         // prints a dead pane's pid blank, so a pid-only read answers an empty line.
-        const stdout = cmd.includes(' display-message ') ? (cmd.includes('#{pane_dead}') ? '1|\n' : '\n') : '';
+        const stdout = cmd.includes(' display-message ')
+          ? cmd.includes('#{pane_dead}')
+            ? '1||1795091616\n'
+            : '\n'
+          : '';
         if (callback) setImmediate(() => callback(null, { stdout, stderr: '' }, ''));
         return { on: vi.fn(), kill: vi.fn(), pid: 12345 };
       }) as unknown as typeof exec);
@@ -1359,6 +1365,49 @@ describe('TmuxManager (unit)', () => {
         expect(commands.some((cmd) => cmd.includes('display-message') && cmd.includes('#{pane_dead}'))).toBe(true);
         expect(commands.some((cmd) => cmd.includes('kill-session -t "codeman-dead5555"'))).toBe(true);
         expect(nonTestManager.getSession('dead5555')).toBeUndefined();
+      } finally {
+        kill.mockRestore();
+        mockedExec.mockImplementation(defaultExec!);
+        nonTestManager.destroy();
+      }
+    });
+
+    // The counterpart: the dead-pane rule must not stop a close from killing a
+    // pane whose program still runs.
+    it('still signals the process tree of a live pane on close', async () => {
+      const defaultExec = mockedExec.getMockImplementation();
+      mockedExec.mockImplementation(((cmd: string, optionsOrCallback?: unknown, maybeCallback?: unknown) => {
+        const callback = (typeof optionsOrCallback === 'function' ? optionsOrCallback : maybeCallback) as
+          | ((err: Error | null, out: unknown, stderr: string) => void)
+          | undefined;
+        // promisify(exec) on this mock resolves with the second argument. A live
+        // pane: not dead, its own pid, no exit time.
+        const stdout = cmd.includes(' display-message ') ? (cmd.includes('#{pane_dead}') ? '0|4343|\n' : '4343\n') : '';
+        if (callback) setImmediate(() => callback(null, { stdout, stderr: '' }, ''));
+        return { on: vi.fn(), kill: vi.fn(), pid: 12345 };
+      }) as unknown as typeof exec);
+      const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+      const NonTestTmuxManager = await importWithTmuxCommandsEnabled();
+      const nonTestManager = new NonTestTmuxManager();
+      nonTestManager.registerSession({
+        sessionId: 'beef5555',
+        muxName: 'codeman-beef5555',
+        pid: 4242,
+        createdAt: Date.now(),
+        workingDir: '/tmp',
+        mode: 'claude',
+        attached: false,
+      });
+
+      try {
+        expect(await nonTestManager.killSession('beef5555')).toBe(true);
+        // The pid tmux printed is signalled, not the recorded one.
+        expect(kill.mock.calls.some(([pid]) => Math.abs(Number(pid)) === 4343)).toBe(true);
+        expect(kill.mock.calls.filter(([pid]) => Math.abs(Number(pid)) === 4242)).toEqual([]);
+        const commands = mockedExec.mock.calls.map(([cmd]) => String(cmd));
+        expect(commands.some((cmd) => cmd.includes('display-message') && cmd.includes('#{pane_dead}'))).toBe(true);
+        expect(commands.some((cmd) => cmd.includes('kill-session -t "codeman-beef5555"'))).toBe(true);
+        expect(nonTestManager.getSession('beef5555')).toBeUndefined();
       } finally {
         kill.mockRestore();
         mockedExec.mockImplementation(defaultExec!);
@@ -1511,9 +1560,20 @@ describe('parsePaneRows', () => {
     expect(row.currentPath).toBeUndefined();
   });
 
-  it('still skips a live pane with a blank pid, which is a bad read', () => {
-    expect(parsePaneRows('codeman-aaaa||0||||/home/user/project')).toEqual([]);
+  // Measured on tmux 3.4: the pid goes blank when the pty closes, and
+  // `#{pane_dead}` turns 1 only once tmux has collected the exit status, which
+  // took seconds for some exits. A restart in that window must keep the session.
+  it('keeps a pane whose pid went blank before tmux marked it dead', () => {
+    const [row] = parsePaneRows('codeman-aaaa||0||||/home/user/project');
+    expect(row).toBeDefined();
+    expect(row.pid).toBeUndefined();
+    expect(row.dead).toBe(false);
+    expect(row.currentPath).toBe('/home/user/project');
+  });
+
+  it('still skips a row with neither a pid nor a dead flag, which is a bad read', () => {
     expect(parsePaneRows('codeman-aaaa||')).toEqual([]);
+    expect(parsePaneRows('codeman-aaaa||||||/home/user/project')).toEqual([]);
   });
 
   it('reads the exit time, and leaves it undefined while the pane runs', () => {
@@ -1527,17 +1587,26 @@ describe('parsePaneRows', () => {
 
 describe('parsePaneKillRead', () => {
   it('reads a live pane as its pid', () => {
-    expect(parsePaneKillRead('0|4242\n')).toEqual({ dead: false, pid: 4242 });
+    expect(parsePaneKillRead('0|4242|\n')).toEqual({ dead: false, pid: 4242 });
   });
 
   it('reads a dead pane as dead, with the pid tmux 3.8 leaves blank', () => {
     // killSession must not walk or signal the recorded pid of an exited program:
     // the OS may have reused it for an unrelated process.
-    expect(parsePaneKillRead('1|\n')).toEqual({ dead: true, pid: null });
+    expect(parsePaneKillRead('1||1795091616\n')).toEqual({ dead: true, pid: null });
+    expect(parsePaneKillRead('1||\n')).toEqual({ dead: true, pid: null });
   });
 
-  it('reads a dead pane as dead on a tmux that still prints its pid', () => {
-    expect(parsePaneKillRead('1|4242')).toEqual({ dead: true, pid: 4242 });
+  it('reads a dead pane as dead on a tmux that still prints its pid, once it has an exit time', () => {
+    expect(parsePaneKillRead('1|4242|1795091616')).toEqual({ dead: true, pid: 4242 });
+  });
+
+  // Before tmux 3.7 `#{pane_dead}` means only that the pty is closed. A program
+  // that closed its tty and ignores SIGHUP still runs there, with its pid
+  // printed and no exit time, and the close must still signal it.
+  it('does not trust a dead flag with a pid and no exit time (tmux 3.3a to 3.6)', () => {
+    expect(parsePaneKillRead('1|4242|')).toEqual({ dead: false, pid: 4242 });
+    expect(parsePaneKillRead('1|4242')).toEqual({ dead: false, pid: 4242 });
   });
 
   it('treats an unreadable answer as not dead, so the recorded pid is still used', () => {
