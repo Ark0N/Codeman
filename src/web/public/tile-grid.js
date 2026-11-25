@@ -2651,6 +2651,20 @@ Object.assign(CodemanApp.prototype, {
     // Aborts any in-flight normal select at its next _isStaleSelect check.
     const selectGen = ++this._selectGeneration;
     this._hideWebviewLayer?.();
+    // The one CJK field follows tile focus, and Enter sends to the session
+    // active at that moment: a Send on Enter draft typed for one tile must not
+    // go to the next. Stash it for the tile left, show the one focused (also
+    // the draft openTileGrid's cleanup stashed for the session it parked).
+    if (typeof CjkInput !== 'undefined') {
+      if (this.activeSessionId && this.activeSessionId !== sessionId) {
+        // A tile closed from this tab is already gone from this.sessions and
+        // its draft discarded: stashing it again would leave it in the map
+        // until the page reloads.
+        if (this.sessions?.has(this.activeSessionId)) CjkInput.stashDraft?.(this.activeSessionId);
+        CjkInput.clear();
+      }
+      CjkInput.restoreDraft?.(sessionId);
+    }
     this.activeSessionId = sessionId;
     grid.focusedId = sessionId;
     // Moving focus off a zoomed tile restores the grid, as selecting another

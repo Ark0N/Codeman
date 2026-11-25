@@ -207,6 +207,73 @@ export function capabilityFromReferer(referer: string | undefined, basePath = ''
   }
 }
 
+/** `Sec-Fetch-Dest` values that describe a page fetching for itself, not navigating. */
+const ASSET_FETCH_DESTS = new Set([
+  'script',
+  'style',
+  'image',
+  'font',
+  'manifest',
+  'worker',
+  'sharedworker',
+  'audio',
+  'video',
+  'track',
+  'embed',
+  'object',
+  'empty',
+]);
+
+/** Codeman's own missing files: a 404 here says nothing about a web tab. */
+const CODEMAN_OWN_404 =
+  /^\/(?:favicon\.ico|manifest\.json|manifest\.webmanifest|robots\.txt|apple-touch-icon[\w.-]*)$/i;
+
+/**
+ * Whether a 404 looks like a proxied dashboard's root-absolute request that
+ * escaped the prefix.
+ *
+ * This decides NOTHING about the response — the request cannot be relayed (a
+ * masked frame's `Referer` carries no capability, which is exactly why the
+ * Referer fallback above declined). It exists so the failure is diagnosable:
+ * the symptom of an escaped URL is a blank page or a spinner that never
+ * resolves, with nothing in the log to say why. Naming the path turns that into
+ * one grep.
+ *
+ * Deliberately conservative — a masked landing frame (`Referer` path `/`), an
+ * asset-shaped `Sec-Fetch-Dest`, same origin, not the API, not one of Codeman's
+ * own files. A false positive is a log line, never a behaviour change.
+ *
+ * @param input - method, request URL and headers of the 404.
+ * @returns the escaped path (no query), or null when it is not that shape.
+ */
+export function escapedWebviewAssetPath(input: {
+  method: string;
+  url: string;
+  headers: Record<string, string | string[] | undefined>;
+}): string | null {
+  if (input.method !== 'GET' && input.method !== 'HEAD') return null;
+  const path = input.url.split('?')[0] ?? '';
+  if (path.startsWith('/api') || CODEMAN_OWN_404.test(path)) return null;
+
+  const single = (value: string | string[] | undefined): string | undefined =>
+    Array.isArray(value) ? value[0] : value;
+  const dest = single(input.headers['sec-fetch-dest']);
+  if (!dest || !ASSET_FETCH_DESTS.has(dest.toLowerCase())) return null;
+
+  const host = single(input.headers.host);
+  const referer = single(input.headers.referer);
+  if (!host || !referer) return null;
+  try {
+    const from = new URL(referer);
+    // Same origin, and the masked landing path: a real Codeman page's assets all
+    // resolve, so a 404 from one is not this shape.
+    if (from.host !== host || from.pathname !== '/') return null;
+  } catch {
+    return null;
+  }
+  return path;
+}
+
 /** Remove the `frame-ancestors` directive from a CSP, preserving the rest. */
 export function stripFrameAncestors(csp: string): string {
   return csp
@@ -296,6 +363,20 @@ export function rewriteSetCookie(cookie: string, capability: string, secureConte
   return out.join('; ');
 }
 
+/**
+ * Put a server-held credential in front of the cookies the browser sent.
+ *
+ * Order matters: a `Cookie` header can name the same cookie twice, and parsers
+ * that collapse it into a map keep the FIRST value (RFC 6265 §5.4 leaves the
+ * choice open; the common Node parsers take the first). The browser may still
+ * hold a stale copy of the same dsh cookie from an earlier proxied response, so
+ * the credential minted by the running process must lead, with everything else
+ * preserved behind it.
+ */
+export function mergeCookieHeader(browserCookie: string | undefined, injectedCookie: string): string {
+  return browserCookie ? `${injectedCookie}; ${browserCookie}` : injectedCookie;
+}
+
 /** Drop named cookies from a `Cookie` request header, returning undefined if none remain. */
 export function filterCookieHeader(cookie: string | undefined, drop: string[]): string | undefined {
   if (!cookie) return undefined;
@@ -311,7 +392,21 @@ export function filterCookieHeader(cookie: string | undefined, drop: string[]): 
 export function buildUpstreamRequestHeaders(
   incoming: Record<string, string | string[] | undefined>,
   upstream: URL,
-  opts: { forwardCookies: boolean; sessionCookieName: string; refererPath?: string; relayBodyLength?: boolean }
+  opts: {
+    forwardCookies: boolean;
+    sessionCookieName: string;
+    refererPath?: string;
+    relayBodyLength?: boolean;
+    /**
+     * A credential the SERVER holds for this dashboard, put in front of whatever
+     * browser cookies were forwarded (see `mergeCookieHeader` for why the order
+     * matters). `dsh web` mints its session cookie for a loopback authority the
+     * browser never visits, so the proxy is the only party that can present it
+     * (see `deepseek-web-server.ts`); the managed tab is trusted, which means the
+     * browser may also carry other cookies dsh set, and those must survive.
+     */
+    injectedCookie?: string;
+  }
 ): Record<string, string> {
   const headers: Record<string, string> = {};
 
@@ -341,6 +436,14 @@ export function buildUpstreamRequestHeaders(
     const raw = incoming['cookie'];
     const cookie = filterCookieHeader(Array.isArray(raw) ? raw.join('; ') : raw, [opts.sessionCookieName]);
     if (cookie) headers['cookie'] = cookie;
+  }
+
+  // In front of the relayed cookies rather than after them, so a stale browser
+  // copy of the same cookie cannot shadow the one minted by the running process
+  // (the parser keeps the first value). Other cookies are kept: a managed dsh tab
+  // is trusted, so dsh's own non-auth cookies may legitimately be there.
+  if (opts.injectedCookie) {
+    headers['cookie'] = mergeCookieHeader(headers['cookie'], opts.injectedCookie);
   }
 
   // Present as if the browser were talking to the dashboard directly. Apps that
@@ -647,6 +750,79 @@ try{
 }
 
 /**
+ * Make a page's own RELATIVE `<base href>` absolute under the proxy prefix.
+ *
+ * A base element is resolved against the document's URL, and {@link runtimeUrlShim}
+ * deliberately rewrites that URL to strip the proxy prefix. So a page shipping
+ * `<base href="./">` — which is what a Vite build does, DeepSeek Harness among
+ * them — has its base re-resolved to Codeman's ROOT the moment the shim runs:
+ * every module script, stylesheet and `fetch('./api')` then asks the Codeman
+ * origin instead of the dashboard. The visible symptom is not an error page but
+ * a blank one: the markup and inline `<style>` paint (dsh paints a dark
+ * `#151517`), the module 404s, and nothing else ever renders.
+ *
+ * Resolving it here, while the prefix is still known, keeps the author's target
+ * (the document as it existed before masking) and is idempotent: an
+ * already-absolute path resolves to itself. Cross-origin bases are the author
+ * pointing at a CDN and are left exactly as written.
+ *
+ * The document path matters: a base in `/webview/<cap>/app/page.html` is
+ * relative to `/webview/<cap>/app/`, not to the proxy root, or a page served
+ * from a subdirectory would resolve its assets one level too high.
+ *
+ * @param html - document with attributes already rebased.
+ * @param prefix - proxy prefix the document was served from.
+ * @param documentPath - upstream path of the document, without the leading slash.
+ * @returns the document with a relative base href made absolute.
+ */
+function rebaseRelativeBase(html: string, prefix: string, documentPath: string): string {
+  const documentUrl = `http://codeman.invalid${prefix}${documentPath.replace(/^\/+/, '')}`;
+  return html.replace(
+    /(<base\b[^>]*?\bhref\s*=\s*)(["'])([^"']*)\2/i,
+    (match: string, head: string, quote: string, href: string) => {
+      let resolved: URL;
+      try {
+        // A stand-in origin: only the path is kept, and a different origin here
+        // is exactly the "absolute base" case this must not touch.
+        resolved = new URL(href, documentUrl);
+      } catch {
+        return match;
+      }
+      if (resolved.origin !== 'http://codeman.invalid') return match;
+      return `${head}${quote}${resolved.pathname}${resolved.search}${resolved.hash}${quote}`;
+    }
+  );
+}
+
+/**
+ * Rewrite root-absolute specifiers of dynamic `import()` calls in `<script>`
+ * bodies.
+ *
+ * A dynamic import is the one URL no other layer can reach: it is not an
+ * attribute, so `<base>` does not apply to it; it is not `fetch()`, so the runtime
+ * shim cannot rewrite it; and the browser resolves it against the ORIGIN root, not
+ * the document. SvelteKit's inline bootstrap is exactly this shape
+ * (`import("/_app/…")`), and the failure mode is silent: the module 404s against
+ * Codeman and the app's own loading spinner never resolves.
+ *
+ * ⚠️ Scoped to script bodies on purpose. Running the same regex over the whole
+ * document also rewrote visible text — `<pre>import("/x")</pre>` became a broken
+ * example — which is a rendering bug, not a loader the browser was going to run.
+ *
+ * @param html - document with attributes already rebased.
+ * @param prefix - proxy prefix to put in front of a `/`-rooted specifier.
+ */
+function rewriteScriptImports(html: string, prefix: string): string {
+  return html.replace(
+    /(<script\b[^>]*>)([^]*?)(<\/script>)/gi,
+    (_match: string, open: string, body: string, close: string) =>
+      open +
+      body.replace(/\bimport\s*\(\s*(["'])\/(?!\/)/g, (_import: string, quote: string) => `import(${quote}${prefix}`) +
+      close
+  );
+}
+
+/**
  * Inject `<base href="/webview/<cap>/">` plus the runtime URL shim, and rebase
  * root-absolute `src`/`href`/`action` attributes, which `<base>` alone does not
  * affect.
@@ -654,14 +830,27 @@ try{
  * Three layers, because no single one is sufficient: `<base>` for parser-resolved
  * relative URLs, attribute rewriting for root-absolute markup, and the shim for
  * URLs built at runtime.
+ *
+ * @param html - the upstream document.
+ * @param capability - capability the document is being served under.
+ * @param basePath - reverse-proxy mount prefix (`''` at root).
+ * @param documentPath - upstream path of the document, without the leading slash.
+ *   Used to resolve the page's own relative `<base>` against its directory.
  */
-export function rewriteHtml(html: string, capability: string, basePath = ''): string {
+export function rewriteHtml(html: string, capability: string, basePath = '', documentPath = ''): string {
   const prefix = proxyPrefixFor(capability, basePath);
 
   // Fresh regexes per call: module-level /g patterns carry `lastIndex` between calls.
-  const rebased = html
-    .replace(/(\s(?:src|href|action)\s*=\s*")\/(?!\/)/gi, `$1${prefix}`)
-    .replace(/(\s(?:src|href|action)\s*=\s*')\/(?!\/)/gi, `$1${prefix}`);
+  const rebased = rebaseRelativeBase(
+    rewriteScriptImports(
+      html
+        .replace(/(\s(?:src|href|action)\s*=\s*")\/(?!\/)/gi, `$1${prefix}`)
+        .replace(/(\s(?:src|href|action)\s*=\s*')\/(?!\/)/gi, `$1${prefix}`),
+      prefix
+    ),
+    prefix,
+    documentPath
+  );
 
   // A page that ships its own <base> keeps it (overriding it would break the
   // author's intent), but it STILL needs the shim, which is the layer that

@@ -269,7 +269,7 @@ import {
   registerCliRegistryRoutes,
   registerLocalModelRoutes,
 } from './routes/index.js';
-import { isLostWebviewFrameNavigation } from './webview-proxy.js';
+import { escapedWebviewAssetPath, isLostWebviewFrameNavigation } from './webview-proxy.js';
 import { CronService } from '../cron/cron-service.js';
 import { caseSessionSettled } from '../case-rename.js';
 
@@ -359,6 +359,38 @@ function getOrCreateSelfSignedCert(): { key: string; cert: string } {
     key: readFileSync(keyPath, 'utf-8'),
     cert: readFileSync(certPath, 'utf-8'),
   };
+}
+
+/**
+ * One warn per escaped path per few minutes.
+ *
+ * A page whose boot module 404s retries in a loop, so an undeduped warn would
+ * bury the log it is meant to explain. Capped so a page emitting unbounded
+ * unique paths cannot grow the map without limit.
+ */
+const escapedWebviewWarnedAt = new Map<string, number>();
+const ESCAPED_WEBVIEW_WARN_TTL_MS = 5 * 60_000;
+
+/**
+ * Name a root-absolute request that escaped a web tab's proxy prefix.
+ *
+ * Nothing is retried or rewritten here — the request genuinely has no capability
+ * to relay to. This exists because that failure is otherwise silent: the tab
+ * shows a blank page or a spinner that never resolves, and the log says nothing.
+ *
+ * @param path - request path already judged as that shape.
+ */
+function warnEscapedWebviewAsset(path: string): void {
+  const now = Date.now();
+  const last = escapedWebviewWarnedAt.get(path);
+  if (last !== undefined && now - last < ESCAPED_WEBVIEW_WARN_TTL_MS) return;
+  if (escapedWebviewWarnedAt.size >= 200) escapedWebviewWarnedAt.clear();
+  escapedWebviewWarnedAt.set(path, now);
+  console.warn(
+    `[Webview] ${path} escaped the proxy: a web tab asked for a root-absolute URL that no Codeman route serves. ` +
+      `Its URL is masked, so the Referer cannot identify the dashboard. Usual cause: a URL built at runtime ` +
+      `(dynamic import(), worker, service worker) or an import inside an external script. The tab will look blank or stuck.`
+  );
 }
 
 export class WebServer extends EventEmitter {
@@ -1294,6 +1326,11 @@ export class WebServer extends EventEmitter {
       // and the relay declines unless the Referer carries a live capability, so
       // genuinely unknown `/api` paths still get the envelope below.
       if (await tryWebviewRefererFallback(req, reply, this.basePath)) return reply;
+      // No capability in the Referer, so this cannot be relayed — but if it has
+      // the shape of a dashboard asset, say so once. Silent 404s here are what
+      // turned a boot-module failure into a "blank tab" mystery more than once.
+      const escaped = escapedWebviewAssetPath({ method: req.method, url: req.url, headers: req.headers });
+      if (escaped) warnEscapedWebviewAsset(escaped);
       // An authenticated web-tab frame (Basic auth, or trusted mode with a cookie)
       // that navigated itself off its proxy prefix: the runtime shim masks the
       // prefix so the page's router sees its own path, and a reload of that page
@@ -2133,6 +2170,19 @@ export class WebServer extends EventEmitter {
       '</head>',
       () => `<script>window.__codemanKeyboardHoldModes=${JSON.stringify(keyboardHoldClis)};</script>\n</head>`
     );
+    // Which run modes take the wheel as SGR reports while they track the mouse
+    // (`_shouldForwardWheelToApp`), keyed by id with the `wheelForward` rule itself, so a
+    // custom clis.json entry shaped like pi forwards under its own id. `never` is left out.
+    // Disabled entries are kept (`listClis`, not `enabledClis`): disabling a CLI never ends
+    // its running sessions, and their wheel must keep working across a reload.
+    // `minVersion` is a free string a user's clis.json sets, hence the script escaper.
+    const wheelForwardClis = Object.fromEntries(
+      listClis()
+        .filter((entry) => entry.capabilities.wheelForward.mode !== 'never')
+        .map((entry) => [entry.id, entry.capabilities.wheelForward])
+    );
+    const wheelForwardJson = escapeScriptJson(JSON.stringify(wheelForwardClis));
+    html = html.replace('</head>', () => `<script>window.__codemanWheelForward=${wheelForwardJson};</script>\n</head>`);
     if (!soloSessionId && process.env.CODEMAN_GESTURE === '1') {
       html = html.replace('</head>', () => `<script>window.__codemanGestureAvailable=true;</script>\n</head>`);
       if (settings.gestureControlEnabled === true) {

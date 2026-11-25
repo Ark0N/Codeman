@@ -38,7 +38,7 @@ import {
   symlinkSync,
   readdirSync,
 } from 'node:fs';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { spawn, execFileSync, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { diffRequiredEnvKeys, parseEnvKeys } from '../src/web/self-update.js';
@@ -637,5 +637,72 @@ describe('version_older_than', () => {
       encoding: 'utf-8',
     }).trim();
     expect(out).toBe(older ? 'yes' : 'no');
+  });
+});
+
+/**
+ * A listener whose accept queue is full, so the kernel drops further SYNs and a
+ * connect to it gets no answer, the same thing a WSL host does for a CLOSED
+ * 127.0.0.1 port. Held by a python3 child, since Node accepts every connection
+ * as it arrives and so can never leave its own queue full.
+ */
+const HAS_PYTHON = spawnSync('python3', ['-c', 'pass']).status === 0;
+const SILENT_LISTENER = [
+  'import socket, sys, time',
+  's = socket.socket(); s.bind(("127.0.0.1", 0)); s.listen(0)',
+  'port = s.getsockname()[1]; held = []',
+  'for _ in range(3):',
+  '    c = socket.socket(); c.setblocking(False)',
+  '    try: c.connect(("127.0.0.1", port))',
+  '    except BlockingIOError: pass',
+  '    held.append(c)',
+  'time.sleep(0.3); print(port, flush=True); time.sleep(60)',
+].join('\n');
+
+describe.skipIf(process.platform !== 'linux' || !HAS_PYTHON)('port_answers', () => {
+  /** Runs the script's own port_answers on host/port, returning its status and how long it took. */
+  function probe(host: string, port: number): { status: number | null; ms: number } {
+    const script = [
+      'set -euo pipefail',
+      `eval "$(sed -n '/^port_answers() {/,/^}/p' "$1")"`,
+      'if port_answers "$2" "$3"; then exit 0; else exit 1; fi',
+    ].join('\n');
+    const started = Date.now();
+    const res = spawnSync('bash', ['-c', script, '_', join(ROOT, 'docker/Start-Codeman.sh'), host, String(port)], {
+      encoding: 'utf-8',
+      timeout: 10_000,
+    });
+    return { status: res.status, ms: Date.now() - started };
+  }
+
+  it('gives up on a connect that gets no answer within about a second, and reads it as free', async () => {
+    const child = spawn('python3', ['-I', '-c', SILENT_LISTENER], { stdio: ['ignore', 'pipe', 'ignore'] });
+    try {
+      const port = await new Promise<number>((resolve, reject) => {
+        child.stdout!.once('data', (chunk: Buffer) => resolve(Number(String(chunk).trim())));
+        child.once('exit', () => reject(new Error('listener exited')));
+      });
+      const { status, ms } = probe('127.0.0.1', port);
+      expect(status).toBe(1);
+      expect(ms).toBeLessThan(3000);
+    } finally {
+      child.kill();
+    }
+  });
+
+  it('still answers at once for a listening port and a closed one', async () => {
+    const server = createServer();
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as { port: number }).port;
+    try {
+      const open = probe('127.0.0.1', port);
+      expect(open.status).toBe(0);
+      expect(open.ms).toBeLessThan(1000);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+    const closed = probe('::1', port);
+    expect(closed.status).toBe(1);
+    expect(closed.ms).toBeLessThan(1000);
   });
 });

@@ -288,6 +288,39 @@ dsh fences its `/api` behind a browser-trust check on the request authority, and
 Codeman web tab reaches it through Codeman's own origin via the webview proxy, not
 directly. Without it the page renders and every API call fails.
 
+Since dsh's browser-auth gate, the index is not public either: boot prints
+`dsh web: http://127.0.0.1:<port>/?token=<one-time token>` and only a request
+carrying that token is answered with the `dsh-auth-*` cookie that authorizes
+everything after it. The saved tab deliberately keeps the clean URL, so the
+browser can never present that token, and the tab used to open on dsh's 401 page.
+`src/deepseek-web-server.ts` now reads the token out of the captured boot output,
+trades it for the cookie once at startup, and `webview-routes.ts` presents that
+cookie on both the HTTP and WebSocket legs — scoped to the exact loopback
+authority it was minted for, so a repointed or stale tab cannot carry it
+elsewhere. The reader scans every `dsh web:` line (dsh prints diagnostics such as
+`dsh web: loading profiles` under the same prefix before the banner) and only
+complete lines, so a banner split across two output chunks is waited for rather
+than parsed truncated. Before the token URL is fetched it must name `127.0.0.1`
+on the port the supervisor just spawned, so a banner cannot aim the server-side
+request at another host or local service. A dsh without the gate prints a
+token-less banner and keeps working unchanged. If a token is printed but the
+exchange still fails, the server keeps running (its page serves, just 401) and is
+marked unusable for reuse: the next start request stops and respawns it, which is
+the "restart `dsh web`" the warning asks the user to perform.
+
+The cookie is also bound to a person, not to a URL. `managed` is accepted from the
+client on `POST/PATCH /api/webviews` and `GET /api/deepseek/web` publishes the live
+port, so a saved record pointing at that port is not an entitlement by itself: the
+proxy presents the cookie only when the tab's owner holds the same
+privileged-commands grant `POST /api/deepseek/web` requires, and in multi-user mode
+only to the owner whose request started that process. A different owner's start
+request restarts the server rather than reusing a cookie that is not theirs, which
+is why the shared instance is effectively single-user at a time. On a trusted
+managed tab the cookie is sent ahead of whatever cookies dsh itself set in the
+browser, rather than replacing them; leading matters because a `Cookie` header can
+name the same cookie twice and the first value is the one the dashboard parses, so
+a stale browser copy must not shadow the one the running process minted.
+
 ## 7. Docker and remote cases
 
 Docker cases work: the agent image installs `dsh` and bootstraps a `dsh-tui`

@@ -13,6 +13,7 @@ import { describe, it, expect } from 'vitest';
 import {
   applyLiveMetrics,
   applyMuxNames,
+  attachTargetError,
   beginAttachHandoff,
   buildAttachBanner,
   buildListLines,
@@ -30,6 +31,7 @@ import {
   planResume,
   previewIntervalMs,
   previewNoteFor,
+  resolveAttachTarget,
   resyncDelayMs,
   sameFrame,
   samePreview,
@@ -913,5 +915,60 @@ describe('planResume', () => {
     expect(planResume({ ...base, sessionId: 'codeman-w1', workingDir: '/home/dev' })).toMatchObject({
       kind: 'refuse',
     });
+  });
+});
+
+describe('resolveAttachTarget (codeman tui <session>)', () => {
+  function named(name: string, group: TuiRow['group'], sessionId: string): TuiRow {
+    return {
+      session: { sessionId, sources: ['live'], name },
+      state: group === 'recent' ? 'recent' : 'idle',
+      group,
+      since: 0,
+    };
+  }
+  const rows: TuiRow[] = [
+    named('api', 'working', 'aaaaaaaa01'),
+    named('docs', 'idle', 'bbbbbbbb02'),
+    named('twin', 'idle', 'cccccccc03'),
+    named('twin', 'needs-you', 'dddddddd04'),
+    named('old', 'recent', 'eeeeeeee05'),
+    named('docs', 'recent', 'ffffffff06'),
+  ];
+
+  it('keeps digits-only as a list position, as a number or as a string', () => {
+    expect(resolveAttachTarget(rows, 2)).toEqual({ kind: 'row', row: rows[1] });
+    expect(resolveAttachTarget(rows, '2')).toEqual({ kind: 'row', row: rows[1] });
+    expect(resolveAttachTarget(rows, '7')).toEqual({ kind: 'none' });
+  });
+
+  it('attaches the one live session with that exact name, ignoring a finished namesake', () => {
+    expect(resolveAttachTarget(rows, 'api')).toEqual({ kind: 'row', row: rows[0] });
+    expect(resolveAttachTarget(rows, 'docs')).toEqual({ kind: 'row', row: rows[1] });
+  });
+
+  it('matches case-sensitively and never by prefix', () => {
+    expect(resolveAttachTarget(rows, 'API')).toEqual({ kind: 'none' });
+    expect(resolveAttachTarget(rows, 'ap')).toEqual({ kind: 'none' });
+  });
+
+  it('refuses a name two live sessions share, naming their positions', () => {
+    expect(resolveAttachTarget(rows, 'twin')).toEqual({ kind: 'ambiguous', positions: [3, 4] });
+  });
+
+  it('says a name only history carries is finished, not missing', () => {
+    expect(resolveAttachTarget(rows, 'old')).toEqual({ kind: 'finished' });
+    expect(resolveAttachTarget(rows, 'nope')).toEqual({ kind: 'none' });
+  });
+
+  it('words each refusal for a human and points at --list', () => {
+    expect(attachTargetError({ kind: 'ambiguous', positions: [3, 4] }, 'twin')).toMatch(
+      /2 live sessions are named twin \(3, 4 in the list\)[\s\S]*codeman tui 3/
+    );
+    expect(attachTargetError({ kind: 'finished' }, 'old')).toContain('no live session named old');
+    expect(attachTargetError({ kind: 'none' }, 'nope')).toContain('there is no session named nope');
+    expect(attachTargetError({ kind: 'none' }, 9)).toContain('there is no session 9');
+    for (const kind of ['finished', 'none'] as const)
+      expect(attachTargetError({ kind }, 'x')).toContain('codeman tui --list');
   });
 });

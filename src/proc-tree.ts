@@ -32,6 +32,23 @@ export const PROC_WALK_MAX_DEPTH = 10;
 /** Hard ceiling on collected descendants. A backstop, not an expected limit. */
 export const PROC_WALK_MAX_NODES = 500;
 
+/**
+ * Whether a session kill may signal `pid`, or walk the tree below it: a real process of
+ * the user's, so an integer above 1.
+ *
+ * On 2026-11-25 a kill that got pid 0 took down every process of the account: all of the
+ * user's sessions, tmux itself and the systemd user manager. The children of pid 0 are
+ * the whole machine, so the bounds above do not help (500 processes are most of one), and
+ * `kill(-1)` means every process one may signal while `kill(0)` means one's own group.
+ *
+ * tmux answers 0 for a pane with no process (`split-window ''`), and that 0 reaches the
+ * session record through the pane list read at server start. So 0 is an ordinary answer
+ * here, not a corrupt one, and it means "nothing to signal".
+ */
+export function isSignalablePid(pid: number | null | undefined): pid is number {
+  return typeof pid === 'number' && Number.isInteger(pid) && pid > 1;
+}
+
 export interface WalkOptions {
   maxDepth?: number;
   maxNodes?: number;

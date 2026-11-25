@@ -13,6 +13,7 @@ import {
   buildUpstreamRequestHeaders,
   capabilityFromProxyPath,
   capabilityFromReferer,
+  escapedWebviewAssetPath,
   extractFrameAncestors,
   filterCookieHeader,
   isFramableCrossOrigin,
@@ -238,6 +239,56 @@ describe('buildUpstreamRequestHeaders', () => {
     expect(headers.authorization).toBeUndefined();
   });
 
+  // `dsh web` mints its session cookie for the loopback authority the proxy
+  // dials, which the browser has never visited and cannot store anything for.
+  // The supervisor holds it instead. The managed tab is trusted, so the browser's
+  // other dsh cookies are still present and must be kept alongside it.
+  it('puts the server-held credential ahead of the filtered browser cookies', () => {
+    const headers = buildUpstreamRequestHeaders({ cookie: 'codeman_session=SECRET; dash=1' }, upstream, {
+      forwardCookies: true,
+      sessionCookieName: 'codeman_session',
+      injectedCookie: 'dsh-auth-p=v1.payload.sig',
+    });
+    expect(headers.cookie).toBe('dsh-auth-p=v1.payload.sig; dash=1');
+  });
+
+  it('keeps every non-Codeman browser cookie when injecting the server credential', () => {
+    const headers = buildUpstreamRequestHeaders(
+      { cookie: 'dsh-ui=dark; codeman_session=SECRET; dsh-settings=z' },
+      upstream,
+      {
+        forwardCookies: true,
+        sessionCookieName: 'codeman_session',
+        injectedCookie: 'dsh-auth-p=v1.payload.sig',
+      }
+    );
+    expect(headers.cookie).toBe('dsh-auth-p=v1.payload.sig; dsh-ui=dark; dsh-settings=z');
+  });
+
+  // A `Cookie` header may name the same cookie twice, and the first value is the
+  // one parsers keep. The browser can still hold a dsh cookie from an earlier
+  // proxied response, so the server's fresh copy has to lead or the stale one wins
+  // and the tab goes back to the 401 this whole path exists to prevent.
+  it('keeps the server credential in front of a stale browser copy of the same name', () => {
+    const headers = buildUpstreamRequestHeaders({ cookie: 'dsh-auth-p=STALE; dsh-ui=dark' }, upstream, {
+      forwardCookies: true,
+      sessionCookieName: 'codeman_session',
+      injectedCookie: 'dsh-auth-p=FRESH',
+    });
+    // The stale copy is still forwarded behind it (dropping it would need its own
+    // name parsing), but the parser sees FRESH first, which is what authenticates.
+    expect(headers.cookie).toBe('dsh-auth-p=FRESH; dsh-auth-p=STALE; dsh-ui=dark');
+  });
+
+  it('sends the server-held credential even when browser cookies are not forwarded', () => {
+    const headers = buildUpstreamRequestHeaders({}, upstream, {
+      forwardCookies: false,
+      sessionCookieName: 'codeman_session',
+      injectedCookie: 'dsh-auth-p=v1.payload.sig',
+    });
+    expect(headers.cookie).toBe('dsh-auth-p=v1.payload.sig');
+  });
+
   it('presents Origin/Referer as if the browser talked to the dashboard directly', () => {
     const headers = buildUpstreamRequestHeaders({ origin: 'https://codeman.local' }, upstream, {
       forwardCookies: false,
@@ -345,6 +396,38 @@ describe('rewriteHtml', () => {
     expect(out.match(/<base/g)).toHaveLength(1);
   });
 
+  // A Vite build ships `<base href="./">`, and the runtime shim rewrites the
+  // document URL to strip the prefix — so "./" would resolve to Codeman's root
+  // and every module script would 404 behind an otherwise-painted page.
+  it('resolves a page-relative <base> against the prefix before the shim masks the URL', () => {
+    const out = rewriteHtml('<html><head><base href="./"></head></html>', CAP);
+    expect(out).toContain(`<base href="${PREFIX}">`);
+    expect(out.match(/<base/g)).toHaveLength(1);
+  });
+
+  it('keeps a sub-path in a relative <base> inside the proxy prefix', () => {
+    const out = rewriteHtml('<html><head><base target="_blank" href="./sub/"></head></html>', CAP);
+    expect(out).toContain(`<base target="_blank" href="${PREFIX}sub/">`);
+  });
+
+  // A document served from a subdirectory resolves its relative base against
+  // ITS directory, not the proxy root: `/webview/<cap>/app/page.html` with
+  // `<base href="./">` must point at `/webview/<cap>/app/`.
+  it("resolves a relative <base> against the document's own directory", () => {
+    const out = rewriteHtml('<html><head><base href="./"></head></html>', CAP, '', 'app/page.html');
+    expect(out).toContain(`<base href="${PREFIX}app/">`);
+  });
+
+  it('resolves a ../ base from the document directory', () => {
+    const out = rewriteHtml('<html><head><base href="../assets/"></head></html>', CAP, '', 'app/sub/page.html');
+    expect(out).toContain(`<base href="${PREFIX}app/assets/">`);
+  });
+
+  it('leaves a cross-origin <base> exactly as the author wrote it', () => {
+    const out = rewriteHtml('<html><head><base href="https://cdn.example/x/"></head></html>', CAP);
+    expect(out).toContain('<base href="https://cdn.example/x/">');
+  });
+
   it('still injects the runtime shim when the page ships its own <base>', () => {
     // The shim is the only layer that catches runtime-built URLs, so an early
     // return on an existing <base> would silently break those pages.
@@ -356,6 +439,48 @@ describe('rewriteHtml', () => {
   it('injects the shim into every rewritten document', () => {
     expect(rewriteHtml('<html><head></head></html>', CAP)).toContain('<script>');
     expect(rewriteHtml('just text', CAP)).toContain('<script>');
+  });
+
+  // SvelteKit's inline bootstrap does `import("/_app/…")`. A dynamic import is
+  // neither an attribute nor a fetch(), so `<base>` and the runtime shim both
+  // miss it and the module loads from Codeman's root — the app then sits on its
+  // own spinner forever.
+  it('rewrites root-absolute dynamic import() specifiers', () => {
+    const dq = rewriteHtml('<head><script>import("/_app/entry.js")</script></head>', CAP);
+    expect(dq).toContain(`import("${PREFIX}_app/entry.js")`);
+    const sq = rewriteHtml("<head><script>import( '/x.js' )</script></head>", CAP);
+    expect(sq).toContain(`import('${PREFIX}x.js' )`);
+  });
+
+  it('leaves relative and cross-origin import() specifiers alone', () => {
+    const out = rewriteHtml(
+      `<head><script>import("./a.js");import("//cdn.example/b.js");import("https://cdn.example/c.js")</script></head>`,
+      CAP
+    );
+    expect(out).toContain('import("./a.js")');
+    expect(out).toContain('import("//cdn.example/b.js")');
+    expect(out).toContain('import("https://cdn.example/c.js")');
+  });
+
+  // The rewrite is for specifiers a loader will execute, not for the word
+  // appearing in the page a reader sees.
+  it('leaves import() in visible text alone', () => {
+    const out = rewriteHtml(
+      `<html><body><pre>import("/example.js")</pre><code>import('/other.js')</code></body></html>`,
+      CAP
+    );
+    expect(out).toContain('<pre>import("/example.js")</pre>');
+    expect(out).toContain("<code>import('/other.js')</code>");
+    expect(out).not.toContain(`${PREFIX}example.js`);
+  });
+
+  it('rewrites imports in every script body, including one with attributes', () => {
+    const out = rewriteHtml(
+      `<head><script type="module">import("/_app/a.js")</script><script defer>import('/b.js')</script></head>`,
+      CAP
+    );
+    expect(out).toContain(`import("${PREFIX}_app/a.js")`);
+    expect(out).toContain(`import('${PREFIX}b.js')`);
   });
 
   it('rebases root-absolute src/href/action, which <base> cannot fix', () => {
@@ -856,5 +981,57 @@ describe('lost-frame recovery', () => {
     expect(has({ cookie: 'theme=dark; codeman_session=abc' })).toBe(true);
     expect(has({ cookie: ['theme=dark', 'codeman_session=abc'] })).toBe(true);
     expect(has({ authorization: 'Basic YWRtaW46eA==' })).toBe(true);
+  });
+});
+
+describe('escapedWebviewAssetPath: naming a 404 a web tab caused', () => {
+  const req = (over: Record<string, unknown> = {}) => ({
+    method: 'GET',
+    url: '/_app/immutable/entry/start.js',
+    ...over,
+    headers: {
+      host: 'codeman.example:3001',
+      referer: 'http://codeman.example:3001/',
+      'sec-fetch-dest': 'script',
+      ...((over.headers as Record<string, string | string[] | undefined> | undefined) ?? {}),
+    },
+  });
+
+  it('recognises a root-absolute module a masked frame asked for', () => {
+    expect(escapedWebviewAssetPath(req())).toBe('/_app/immutable/entry/start.js');
+  });
+
+  it('drops the query string, which carries no diagnostic value', () => {
+    expect(escapedWebviewAssetPath(req({ url: '/_app/x.js?v=17' }))).toBe('/_app/x.js');
+  });
+
+  it('ignores every shape that is not a dashboard asset', () => {
+    // A navigation is the lost-frame recovery's job, not this one's.
+    expect(
+      escapedWebviewAssetPath(req({ headers: { host: 'h', referer: 'http://h/', 'sec-fetch-dest': 'document' } }))
+    ).toBeNull();
+    // Codeman's own missing files say nothing about a web tab.
+    expect(
+      escapedWebviewAssetPath(
+        req({ url: '/favicon.ico', headers: { host: 'h', referer: 'http://h/', 'sec-fetch-dest': 'image' } })
+      )
+    ).toBeNull();
+    // A real Codeman page's assets resolve; only a masked landing (`/`) is this shape.
+    expect(
+      escapedWebviewAssetPath(req({ headers: { host: 'h', referer: 'http://h/settings', 'sec-fetch-dest': 'script' } }))
+    ).toBeNull();
+    // Cross-origin referer, API paths, writes, and no referer at all.
+    expect(
+      escapedWebviewAssetPath(req({ headers: { host: 'h', referer: 'http://other/', 'sec-fetch-dest': 'script' } }))
+    ).toBeNull();
+    expect(escapedWebviewAssetPath(req({ url: '/api/thing' }))).toBeNull();
+    expect(escapedWebviewAssetPath(req({ method: 'POST' }))).toBeNull();
+    expect(escapedWebviewAssetPath(req({ headers: { host: 'h' } }))).toBeNull();
+  });
+
+  it('accepts the array headers a proxy front end can produce', () => {
+    expect(
+      escapedWebviewAssetPath(req({ headers: { host: ['h'], referer: ['http://h/'], 'sec-fetch-dest': ['image'] } }))
+    ).toBe('/_app/immutable/entry/start.js');
   });
 });

@@ -743,6 +743,11 @@
     "For local Claude sessions, opening the on-screen keyboard keeps the session's size and scrolls the view instead, so Claude does not reprint its screen and lose transcript lines. Full-screen interfaces (Codex, Claude's fullscreen mode) are resized as before.":
       '对于本地 Claude 会话，打开屏幕键盘时会保持会话尺寸并改为滚动视图，这样 Claude 不会重绘屏幕而丢失对话记录行。全屏界面（Codex、Claude 的全屏模式）仍像以前一样调整尺寸。',
     'CJK Input': '中日韩输入',
+    'Input Field: Send on Enter': '输入框：按 Enter 发送',
+    'CJK input (Enter = send, Esc = clear)': '中日韩输入（Enter 发送，Esc 清除）',
+    'Type, Enter to send (Shift+Enter: new line, Esc: clear)': '输入文字，按 Enter 发送（Shift+Enter 换行，Esc 清除）',
+    'With CJK Input on, keep typed text in the field until Enter instead of sending it as you type, so you can scroll the terminal and edit before sending. Autocorrect is on in this mode.':
+      '开启中日韩输入后，输入的文字会保留在输入框中，直到按下 Enter 才发送，而不是边输入边发送，这样可以先滚动终端、编辑后再发送。此模式下会开启自动更正。',
     'Extended Keyboard Bar': '扩展键盘栏',
     'Gesture Control (beta)': '手势控制（测试版）',
     'Wheel Scrolls Local History': '滚轮滚动本地历史',

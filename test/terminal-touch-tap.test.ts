@@ -2,6 +2,12 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import vm from 'node:vm';
 import { describe, expect, it, vi } from 'vitest';
+import { STOCK_CLIS } from '../src/config/cli-registry/stock.js';
+
+/** The wheel-forwarding rules, read off the registry as the server builds `window.__codemanWheelForward`. */
+const WHEEL_FORWARD = Object.fromEntries(
+  STOCK_CLIS.filter((e) => e.capabilities.wheelForward.mode !== 'never').map((e) => [e.id, e.capabilities.wheelForward])
+);
 
 function loadTerminalUiHarness() {
   const CodemanApp = function CodemanApp(this: any) {};
@@ -10,7 +16,7 @@ function loadTerminalUiHarness() {
   let activeElement: unknown = null;
   // The module hangs its constants off window (CodemanTerminalInput) and the URL branch of
   // the link provider opens through window.open, so tests need a handle on the same object.
-  const windowRef: Record<string, any> = {};
+  const windowRef: Record<string, any> = { __codemanWheelForward: WHEEL_FORWARD };
   const context = vm.createContext({
     window: windowRef,
     document: {
@@ -137,6 +143,28 @@ describe('terminal touch tap mouse guard', () => {
 
     setActiveElement(textarea);
     expect(app._isMobileTerminalInputFocused()).toBe(true);
+  });
+
+  it('a content touchstart blurs xterm input but leaves the pinned CJK field focused', () => {
+    const { app, setActiveElement } = loadTerminalUiHarness();
+    setActiveElement({ id: '', classList: { contains: (c: string) => c === 'xterm-helper-textarea' } });
+    expect(app._contentTouchStartBlurs()).toBe(true);
+    // A swipe that starts on the live screen must not close the keyboard the field owns.
+    setActiveElement({ id: 'cjkInput', classList: { contains: () => false } });
+    expect(app._contentTouchStartBlurs()).toBe(false);
+    setActiveElement(null);
+    expect(app._contentTouchStartBlurs()).toBe(true);
+  });
+
+  it('the content touchstart only blurs through _contentTouchStartBlurs()', () => {
+    // The touchstart listener lives in initTerminal, which this harness does not run,
+    // so pin its one line: an unconditional blur there closes the pinned field's
+    // keyboard on every swipe that starts on the live screen.
+    const code = readFileSync(resolve(import.meta.dirname, '../src/web/public/terminal-ui.js'), 'utf8');
+    const branch = code.slice(code.indexOf("if (touchStartIntent === 'content') {"));
+    const body = branch.slice(0, branch.indexOf('// Hold still and this press becomes a text selection.'));
+    expect(body).toContain('if (this._contentTouchStartBlurs()) this._blurMobileTerminalInput();');
+    expect(body.match(/_blurMobileTerminalInput\(\)/g)).toHaveLength(1);
   });
 
   it('routes a readback row to the TUI while keeping the prompt row as keyboard input', () => {
@@ -967,8 +995,26 @@ describe('terminal link tap', () => {
     app._isOutsideWorktreePath = () => false;
     windowRef.open = vi.fn();
     app.registerFilePathLinkProvider();
-    return { app, windowRef, sent };
+    return { app, windowRef, sent, setActiveElement: harness.setActiveElement };
   }
+
+  it('a link tap closes the keyboard of the pinned CJK field, which touchstart left focused', () => {
+    const line = 'Login at https://claude.ai/oauth/authorize?code=true&client_id=abc to finish';
+    const { app, setActiveElement } = linkHarness([line, '', '❯ ']);
+    const cjk = { id: 'cjkInput', classList: { contains: () => false }, blur: vi.fn() };
+    setActiveElement(cjk);
+    expect(app._handleMobileTerminalTap(at(line.indexOf('https')), false, 'content')).toBe('link');
+    expect(cjk.blur).toHaveBeenCalled();
+  });
+
+  it('a link tap leaves focus alone otherwise (touchstart already blurred xterm input)', () => {
+    const line = 'Login at https://claude.ai/oauth/authorize?code=true&client_id=abc to finish';
+    const { app, setActiveElement } = linkHarness([line, '', '❯ ']);
+    const other = { id: '', classList: { contains: () => false }, blur: vi.fn() };
+    setActiveElement(other);
+    expect(app._handleMobileTerminalTap(at(line.indexOf('https')), false, 'content')).toBe('link');
+    expect(other.blur).not.toHaveBeenCalled();
+  });
 
   it('opens a URL under the finger in a new tab', () => {
     const line = 'Login at https://claude.ai/oauth/authorize?code=true&client_id=abc to finish';

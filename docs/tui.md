@@ -18,6 +18,7 @@ tmux rather than proxying bytes.
 codeman tui              # the dashboard
 codeman tui --list       # print the numbered session list and exit
 codeman tui 2            # attach straight to session 2 of that list
+codeman tui api-docs     # attach straight to the live session named api-docs
 ```
 
 The two fast paths are the scriptable ones.
@@ -83,6 +84,15 @@ The same world through `--list`:
 
 The numbers are the same on both surfaces, so `codeman tui --list` then
 `codeman tui 4` is one thought.
+
+A number moves as sessions change state; a name does not. `codeman tui <name>`
+attaches to the live session whose name is exactly `<name>` (case-sensitive,
+never a prefix, never the folder), so the same line gets you back into the same
+session from any folder or a fresh SSH login. Digits only always mean a list
+number. Session names are not unique in Codeman, so when two live sessions share
+the name it refuses and prints their numbers instead of guessing; a name only a
+RECENT row carries says the session has finished. Both refusals are printed
+before the terminal check, so a script can tell them apart without a TTY.
 
 ## The four groups
 

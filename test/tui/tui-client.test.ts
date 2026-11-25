@@ -1015,3 +1015,35 @@ describe('resumeSession', () => {
     expect(recorded).toHaveLength(1);
   });
 });
+
+describe('TuiClient key-table reads on a tmux that lists a one-binding table as nothing', () => {
+  // tmux 3.7 through 3.7c (fixed in 3.8) print nothing for `list-keys -T prefix` when
+  // the table holds exactly one binding, which is how Codeman leaves it. Reading that as "free"
+  // would let the TUI claim a key the user has bound.
+  const fullListing =
+    'bind-key    -T copy-mode    C-a                    send-keys -X start-of-line\n' +
+    'bind-key    -T prefix       C-b                    send-prefix\n' +
+    'bind-key    -T root         F1                     detach-client\n';
+  function client(direct: string) {
+    const calls: string[][] = [];
+    const exec = async (_file: string, args: readonly string[]) => {
+      calls.push([...args]);
+      return { stdout: args.includes('-T') ? direct : fullListing, stderr: '' };
+    };
+    return { tui: new TuiClient({ socket: 'cod563', exec }), calls };
+  }
+
+  it('falls back to the full listing when the table answer is blank', async () => {
+    const { tui, calls } = client('');
+    expect(await tui.readPrefixBinding('C-b')).toBe('send-prefix');
+    expect(await tui.readPrefixBinding('F1', 'root')).toBe('detach-client');
+    expect(await tui.readPrefixBinding('x')).toBeNull();
+    expect(calls.some((args) => args.length === 3 && args[2] === 'list-keys')).toBe(true);
+  });
+
+  it('keeps the table answer when there is one, with no second call', async () => {
+    const { tui, calls } = client('bind-key -T prefix d detach-client\n');
+    expect(await tui.readDetachKey()).toBe('d');
+    expect(calls).toEqual([['-L', 'cod563', 'list-keys', '-T', 'prefix']]);
+  });
+});

@@ -14,11 +14,12 @@ import { execSync, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { dataPath } from '../../config/instance.js';
 import { readHostSensors } from '../../host-sensors.js';
+import { createCpuUsageMeter } from '../../cpu-usage.js';
 import { ApiErrorCode, createErrorResponse, getErrorMessage, type NiceConfig } from '../../types.js';
 import { isExplicitlyEnabled, isUnauthenticatedTunnelAcknowledged } from '../network-auth-policy.js';
 import { isMultiUserMode } from '../../config/multiuser.js';
 import { findUser, canUsernameRunPrivilegedCommands } from '../../user-store.js';
-import { getAuthUser, isAdmin, requireAdmin, canAccessOwned, revokeUserSessions } from '../route-helpers.js';
+import { getAuthUser, isAdmin, requireAdmin, canAccessOwned, revokeUserSessions, ownerFor } from '../route-helpers.js';
 import {
   ConfigUpdateSchema,
   SettingsUpdateSchema,
@@ -93,6 +94,15 @@ const SCREENSHOTS_DIR = dataPath('screenshots');
 /** Cached CPU count — doesn't change at runtime */
 const CPU_COUNT = cpus().length;
 
+/** Header CPU use; the 1-minute load average per core only when the platform reports no core times. */
+const cpuUsagePercent = createCpuUsageMeter(
+  cpus,
+  () => performance.now(),
+  () =>
+    // That is also the platform where cpus() is empty, so CPU_COUNT can be 0 here.
+    CPU_COUNT > 0 ? Math.min(100, Math.round((loadavg()[0] / CPU_COUNT) * 100)) : 0
+);
+
 function parseOptionalNumber(value: string | undefined): number | undefined {
   if (value === undefined || value.trim() === '') return undefined;
   const parsed = Number(value);
@@ -125,9 +135,7 @@ function getSystemStats(): {
       usedMem = totalMem - freemem();
     }
 
-    // CPU load average (1 min) as percentage (rough approximation)
-    const load = loadavg()[0];
-    const cpuPercent = Math.min(100, Math.round((load / CPU_COUNT) * 100));
+    const cpuPercent = cpuUsagePercent();
 
     return {
       cpu: cpuPercent,
@@ -659,7 +667,10 @@ export function registerSystemRoutes(
     if (!dir) return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getDeepSeekNotFoundMessage());
 
     const { startDeepSeekWeb } = await import('../../deepseek-web-server.js');
-    const result = await startDeepSeekWeb(dir, authority);
+    // The launch cookie is bound to the identity whose request started the
+    // process, so `ownerFor` (undefined in single-user) is recorded here rather
+    // than the synthetic admin `getAuthUser` would report.
+    const result = await startDeepSeekWeb(dir, authority, ownerFor(req));
     if (!result.ok) return createErrorResponse(ApiErrorCode.OPERATION_FAILED, result.error);
     return { success: true, data: { port: result.port, url: result.url, reused: result.reused } };
   });

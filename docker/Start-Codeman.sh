@@ -156,10 +156,33 @@ ask() {
   fi
 }
 
+# True when host $1 accepts a connection on port $2 within about a second.
+# A listening port answers at once and a closed one is normally refused at
+# once, but on WSL a connect to a closed 127.0.0.1 port is dropped and only
+# fails at the kernel's connect timeout, minutes later. No answer in time
+# reads as free. Bash 3.2 clean: no `timeout` (macOS ships none), no `wait -n`.
+port_answers() {
+  local pid tries=0
+  (exec 3<>"/dev/tcp/$1/$2") 2>/dev/null &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    if ((tries >= 20)); then
+      kill "$pid" 2>/dev/null
+      # The 2>/dev/null keeps bash 3.2 from printing a "Terminated" job line on
+      # the first-run path; bash 5.2 prints nothing without it, so CI won't notice.
+      wait "$pid" 2>/dev/null
+      return 1
+    fi
+    tries=$((tries + 1))
+    sleep 0.05
+  done
+  wait "$pid"
+}
+
 # True when something on this host already accepts connections on the port.
 # bash's /dev/tcp needs no extra tool on Linux or macOS.
 port_in_use() {
-  (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null || (exec 3<>"/dev/tcp/::1/$1") 2>/dev/null
+  port_answers 127.0.0.1 "$1" || port_answers ::1 "$1"
 }
 
 first_free_port() {

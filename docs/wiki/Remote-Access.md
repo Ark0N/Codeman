@@ -255,6 +255,7 @@ works well in SSH clients like Termius or Blink:
 ```bash
 codeman tui           # the dashboard
 codeman tui 2         # attach straight to session 2
+codeman tui api-docs  # attach to the live session named api-docs
 codeman tui --list    # numbered list, then exit
 ```
 

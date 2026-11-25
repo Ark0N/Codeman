@@ -112,7 +112,7 @@ const MOBILE_RESIZE_RETRY_MS = 30000;       // Small-viewport resize re-send whi
 const AUTO_CLOSE_NOTIFICATION_MS = 8000;    // Auto-close browser notifications
 const DEFAULT_TOAST_DURATION_MS = 3000;     // How long a corner toast stays by default
 const MIN_NOTIFICATION_DURATION_MS = 1000;  // Shortest configurable toast / browser-notification time
-const MAX_NOTIFICATION_DURATION_MS = 300000;              // General UI throttle delay
+const MAX_NOTIFICATION_DURATION_MS = 300000; // Longest configurable toast / browser-notification time
 const TERMINAL_CHUNK_SIZE = 32 * 1024;      // 32KB chunks for terminal buffer loading
 const TERMINAL_TAIL_SIZE = 1024 * 1024;     // 1MB tail for initial load (more scrollback on tab switch)
 // A shell's automatic loads (tab select, drop recovery, a tile's load) read
@@ -130,7 +130,7 @@ const TERMINAL_TAIL_SIZE = 1024 * 1024;     // 1MB tail for initial load (more s
 const SHELL_LOAD_HISTORY_LINES = 10000;
 const SHELL_LOAD_BASE_QUERY = `full=1&tail=${TERMINAL_TAIL_SIZE}&alt=recording`;
 const SHELL_LOAD_QUERY = `${SHELL_LOAD_BASE_QUERY}&lines=${SHELL_LOAD_HISTORY_LINES}`;
-const SYNC_WAIT_TIMEOUT_MS = 50;     // System stats polling
+const SYNC_WAIT_TIMEOUT_MS = 50;            // Wait timeout for terminal sync
 const TUI_REDRAW_SETTLE_MS = 400;           // Grace for a TUI to redraw after a real resize, before fetching its buffer
 
 // Z-index base values for layered floating windows

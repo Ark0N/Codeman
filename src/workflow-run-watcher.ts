@@ -40,6 +40,7 @@ import { join } from 'node:path';
 import { watch as chokidarWatch, type FSWatcher as ChokidarWatcher } from 'chokidar';
 
 import type { WorkflowRunInfo, WorkflowRunSummary, WorkflowAgentInfo, WorkflowRunPhase } from './types/workflow-run.js';
+import { closeWatcherOnError } from './utils/close-watcher-on-error.js';
 import { LRUMap } from './utils/lru-map.js';
 import {
   WORKFLOW_RUN_POLL_INTERVAL_MS,
@@ -865,10 +866,8 @@ export class WorkflowRunWatcher extends EventEmitter {
       // subagents/workflows/ children are wf_<id>/ DIRS — catch their add/remove too.
       watcher.on('addDir', handler);
       watcher.on('unlinkDir', handler);
-      watcher.on('error', () => {
-        // chokidar surfaced an error for this dir — drop the watcher; poll still covers it.
-        this.removeDirWatcher(workflowsDir);
-      });
+      // chokidar surfaced an error for this dir — drop the watcher; poll still covers it.
+      closeWatcherOnError(watcher, () => this.dirWatchers.delete(workflowsDir));
       this.dirWatchers.set(workflowsDir, watcher);
     } catch {
       // Watch setup failed — periodic poll still discovers changes.

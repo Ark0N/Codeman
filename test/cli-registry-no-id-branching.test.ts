@@ -435,7 +435,6 @@ describe('declared-for-later fields', () => {
   const DECLARED_FOR_LATER = [
     'accent',
     'capabilities.echo',
-    'capabilities.wheelForward',
     'capabilities.keyboardAccessory',
     'capabilities.maxFrameBytes',
     // The Docker credential-seeding path still reads its own CRED_STORES table: this shape

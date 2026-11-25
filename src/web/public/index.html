@@ -13,7 +13,8 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <link rel="apple-touch-icon" href="icon-192.png">
-  <link rel="manifest" href="manifest.json">
+  <!-- use-credentials: the manifest fetch otherwise omits the session cookie, so a password-protected install answers 401 and the browser refuses to install the app. -->
+  <link rel="manifest" href="manifest.json" crossorigin="use-credentials">
   <title>Codeman</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%2360a5fa'/%3E%3Cstop offset='100%25' stop-color='%233b82f6'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='6' fill='%230a0a0a'/%3E%3Cpath d='M18 4L8 18h6l-2 10 10-14h-6z' fill='url(%23g)'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="styles.css">
@@ -2063,6 +2064,13 @@
                       <span class="set-row-desc">Dedicated IME field for Chinese, Japanese and Korean composition.</span>
                     </div>
                     <label class="switch switch-sm"><input type="checkbox" id="appSettingsCjkInput"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row" data-search="cjk input send on enter hold draft pinned prompt field phone">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Input Field: Send on Enter</span>
+                      <span class="set-row-desc">With CJK Input on, keep typed text in the field until Enter instead of sending it as you type, so you can scroll the terminal and edit before sending. Autocorrect is on in this mode.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsCjkHoldUntilEnter"><span class="slider"></span></label>
                   </div>
                   <div class="set-row" data-search="extended keyboard bar tab esc arrows phone">
                     <div class="set-row-text">

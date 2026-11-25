@@ -28,8 +28,19 @@ import { STOCK_CLIS } from '../src/config/cli-registry/stock.js';
  */
 const PAGE_KEY_MODES = STOCK_CLIS.filter((e) => e.capabilities.transcriptPageKeys === true).map((e) => e.id);
 
+/**
+ * The run modes that take the wheel as SGR reports, read off the shipped registry the way
+ * the server builds `__codemanWheelForward` (every `wheelForward` other than `never`).
+ */
+const WHEEL_FORWARD = Object.fromEntries(
+  STOCK_CLIS.filter((e) => e.capabilities.wheelForward.mode !== 'never').map((e) => [e.id, e.capabilities.wheelForward])
+);
+
 function loadTerminalUiHarness(
-  windowGlobals: Record<string, unknown> = { __codemanTranscriptPageKeys: PAGE_KEY_MODES }
+  windowGlobals: Record<string, unknown> = {
+    __codemanTranscriptPageKeys: PAGE_KEY_MODES,
+    __codemanWheelForward: WHEEL_FORWARD,
+  }
 ) {
   const CodemanApp = function CodemanApp(this: any) {};
   const logs: string[] = [];
@@ -924,6 +935,96 @@ describe('pi wheel forwarding (fullscreen by default since 1.0.0)', () => {
     expect(app._maybePageCliTranscript({ shiftKey: false }, -18)).toBe(false);
     app._flushWheelSgrQueue();
     expect(sent).toEqual([]);
+  });
+});
+
+describe('wheel forwarding read from the injected wheelForward map, for any CLI id', () => {
+  // A custom CLI (clis.json, e.g. a pi wrapper under its own id) that strips its mouse
+  // DECSETs gets `cliMouseTracking` like pi, but the gate used to name copilot and pi by id,
+  // so its wheel hit an empty local buffer after every tab switch or reload.
+  function customApp(
+    map: Record<string, unknown> | undefined,
+    session: { mode: string; cliMouseTracking?: boolean; cliVersion?: string }
+  ) {
+    const globals: Record<string, unknown> = { __codemanTranscriptPageKeys: PAGE_KEY_MODES };
+    if (map) globals.__codemanWheelForward = map;
+    const { app } = loadTerminalUiHarness(globals);
+    app.activeSessionId = 'sess-1';
+    app.sessions = new Map([['sess-1', session]]);
+    app.terminal = {
+      rows: 36,
+      modes: { mouseTrackingMode: 'none' },
+      buffer: { active: { type: 'normal', viewportY: 0, baseY: 0, length: 36 } },
+    };
+    return app;
+  }
+
+  it('forwards a custom id the map lists as always, only while it tracks the mouse', () => {
+    const map = { 'pi-locked': { mode: 'always' } };
+    const tracking = customApp(map, { mode: 'pi-locked', cliMouseTracking: true });
+    expect(tracking._shouldForwardWheelToApp({ shiftKey: false })).toBe(true);
+    expect(tracking._shouldForwardWheelToApp({ shiftKey: true })).toBe(false);
+    expect(customApp(map, { mode: 'pi-locked', cliMouseTracking: false })._shouldForwardWheelToApp({})).toBe(false);
+    expect(customApp(map, { mode: 'pi-locked' })._shouldForwardWheelToApp({})).toBe(false);
+  });
+
+  it('applies a version-gated rule to a custom id: at or above minVersion only, unknown version never', () => {
+    const map = { 'my-cli': { mode: 'version-gated', minVersion: '2.0.0' } };
+    const at = (cliVersion?: string) =>
+      customApp(map, { mode: 'my-cli', cliMouseTracking: true, cliVersion })._shouldForwardWheelToApp({});
+    expect(at('1.9.9')).toBe(false);
+    expect(at('2.0.0')).toBe(true);
+    expect(at('2.0.1')).toBe(true);
+    expect(at(undefined)).toBe(false);
+  });
+
+  it('a version-gated rule whose minVersion is not three numbers forwards nothing, whatever the CLI version', () => {
+    // The schema takes any string up to 20 characters. A minimum that cannot be read as
+    // MAJOR.MINOR.PATCH must refuse, the conservative answer an unreadable session version gets.
+    for (const minVersion of ['', '0', '2.0', '1.2.3.4', '0.bad.999', 'x.y.z', '2..0', '+2.0.0', '0x1.0.0']) {
+      const app = customApp(
+        { 'my-cli': { mode: 'version-gated', minVersion } },
+        { mode: 'my-cli', cliMouseTracking: true, cliVersion: '9.9.9' }
+      );
+      expect(app._shouldForwardWheelToApp({}), JSON.stringify(minVersion)).toBe(false);
+    }
+    // A well-formed minimum keeps working, a leading `v` and surrounding spaces included.
+    for (const minVersion of ['9.9.9', 'v2.0.0', ' 2.0.0 ']) {
+      const app = customApp(
+        { 'my-cli': { mode: 'version-gated', minVersion } },
+        { mode: 'my-cli', cliMouseTracking: true, cliVersion: '9.9.9' }
+      );
+      expect(app._shouldForwardWheelToApp({}), JSON.stringify(minVersion)).toBe(true);
+    }
+  });
+
+  it('a version-gated rule with no minVersion (the schema allows it) forwards nothing and does not throw', () => {
+    const app = customApp(
+      { 'my-cli': { mode: 'version-gated' } },
+      { mode: 'my-cli', cliMouseTracking: true, cliVersion: '9.9.9' }
+    );
+    expect(app._shouldForwardWheelToApp({})).toBe(false);
+  });
+
+  it('never forwards an id the map leaves out, and nothing at all from a page rendered without the map', () => {
+    expect(
+      customApp(
+        { 'pi-locked': { mode: 'always' } },
+        { mode: 'other', cliMouseTracking: true }
+      )._shouldForwardWheelToApp({})
+    ).toBe(false);
+    for (const mode of ['claude', 'codex', 'copilot', 'pi']) {
+      expect(
+        customApp(undefined, { mode, cliMouseTracking: true, cliVersion: '9.9.9' })._shouldForwardWheelToApp({}),
+        mode
+      ).toBe(false);
+    }
+  });
+
+  it('a map entry of mode never forwards, even for a stock id', () => {
+    expect(
+      customApp({ pi: { mode: 'never' } }, { mode: 'pi', cliMouseTracking: true })._shouldForwardWheelToApp({})
+    ).toBe(false);
   });
 });
 
