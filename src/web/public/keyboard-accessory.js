@@ -27,6 +27,8 @@
  *
  * - FocusTrap (class) — Traps Tab/Shift+Tab keyboard focus within a modal element.
  *   Saves and restores previously focused element on deactivate. Used by the modal dialogs.
+ *   A dialog opened by a mouse press goes back to the field the user was typing in when
+ *   the press began (FocusTrap.focusToReturn), not to the pressed control.
  *
  * @globals {object} KeyboardAccessoryBar
  * @globals {object} PathPicker
@@ -1846,6 +1848,13 @@ const KeyboardAccessoryBar = {
 /**
  * FocusTrap - Traps keyboard focus within an element (typically a modal).
  * Saves the previously focused element and restores focus when deactivated.
+ *
+ * What it saves is {@link FocusTrap.focusToReturn}, not `document.activeElement`.
+ * By the time a dialog opens, the mouse press that opened it has already moved
+ * focus: in Chromium and Firefox the pressed control took it, and in WebKit on
+ * macOS (Safari, the Mac app) a button takes no focus from the mouse, so the
+ * press clears focus to `<body>`. Handing either one back left the keyboard out
+ * of the terminal the user was typing in until they clicked it again.
  */
 class FocusTrap {
   constructor(element) {
@@ -1854,8 +1863,96 @@ class FocusTrap {
     this.boundHandleKeydown = this.handleKeydown.bind(this);
   }
 
+  /**
+   * The element a dialog that is about to open should hand the keyboard back to
+   * when it closes.
+   *
+   * That is `document.activeElement`, with one exception: a dialog opened by a
+   * mouse press while the user was typing in a field (a terminal's textarea, the
+   * CJK field, a search box). The field is the answer when that press is the
+   * only reason focus is somewhere else now, which is the case when focus sits
+   * on the pressed control or on nothing at all.
+   *
+   * ⚠️ One press, and only from a typing field. A press made from a button (a
+   * dialog opened from inside another dialog) still returns to the pressed
+   * control, and the field of an earlier press is not carried over: it can be
+   * behind a dialog that has opened since. The one exception is a press on a
+   * menu item, see {@link FocusTrap._notePress}. A control reached with the
+   * keyboard keeps the usual pattern too, because any key forgets the press.
+   *
+   * ⚠️ Asking spends the press. Whatever is pressed inside the dialog that is
+   * opening starts with nothing remembered, so nothing in it can hand the
+   * keyboard to a field behind it.
+   */
+  static focusToReturn() {
+    const active = document.activeElement || null;
+    const press = FocusTrap._press;
+    FocusTrap._press = null;
+    if (!press || !press.field || press.field === active || press.field.isConnected === false) return active;
+    const moved =
+      !active ||
+      active === document.body ||
+      active === press.target ||
+      (typeof active.contains === 'function' && active.contains(press.target));
+    return moved ? press.field : active;
+  }
+
+  /** True for an element text is typed into: a textarea, a text-like input, an editable region. */
+  static isTypingField(el) {
+    if (!el || el === document.body) return false;
+    const tag = String(el.tagName || '').toUpperCase();
+    if (tag === 'TEXTAREA') return true;
+    if (tag === 'INPUT') return !FocusTrap.NON_TEXT_INPUT_TYPES.includes(String(el.type || 'text').toLowerCase());
+    return el.isContentEditable === true;
+  }
+
+  /**
+   * Remember what a mouse press began on and which typing field had the keyboard.
+   *
+   * ⚠️ `pointerdown`, not `mousedown` or `click`: moving focus is the default
+   * action of `mousedown`, which comes after it, so `activeElement` is still the
+   * element that had the keyboard before the press.
+   *
+   * ⚠️ A finger or a pen forgets the press and records nothing: on a touch device
+   * a focused field means the on-screen keyboard, and handing focus back to it
+   * would raise the keyboard when a dialog closes.
+   *
+   * ⚠️ A press on an item of a menu (`[role="menu"]`) keeps the field of the
+   * press before it, the one that opened the menu: a tile's menu button and then
+   * "Session options" are two presses and one way into a dialog. No other press
+   * inherits a field.
+   */
+  static _notePress(e) {
+    if (!e || e.pointerType !== 'mouse') {
+      FocusTrap._press = null;
+      return;
+    }
+    const active = document.activeElement;
+    const target = e.target || null;
+    let field = FocusTrap.isTypingField(active) ? active : null;
+    if (!field && FocusTrap._press && typeof target?.closest === 'function' && target.closest('[role="menu"]')) {
+      field = FocusTrap._press.field;
+    }
+    FocusTrap._press = { target, field };
+  }
+
+  /** Any key but a modifier held for the click (Shift+click) ends the press's say. */
+  static _forgetPress(e) {
+    if (e && FocusTrap.MODIFIER_KEYS.includes(e.key)) return;
+    FocusTrap._press = null;
+  }
+
+  /** Install the two document listeners behind {@link FocusTrap.focusToReturn}, once per page. */
+  static watchPresses() {
+    if (FocusTrap._watching) return;
+    if (typeof document === 'undefined' || typeof document.addEventListener !== 'function') return;
+    FocusTrap._watching = true;
+    document.addEventListener('pointerdown', FocusTrap._notePress, true);
+    document.addEventListener('keydown', FocusTrap._forgetPress, true);
+  }
+
   activate() {
-    this.previouslyFocused = document.activeElement;
+    this.previouslyFocused = FocusTrap.focusToReturn();
     this.element.addEventListener('keydown', this.boundHandleKeydown);
 
     // Focus first focusable element after a brief delay (for CSS transitions)
@@ -1907,3 +2004,11 @@ class FocusTrap {
     }
   }
 }
+
+/** The last mouse press, `{ target, field }`, or null. See {@link FocusTrap._notePress}. */
+FocusTrap._press = null;
+FocusTrap._watching = false;
+/** `<input>` types nobody types text into; every other type counts as a typing field. */
+FocusTrap.NON_TEXT_INPUT_TYPES = ['button', 'checkbox', 'color', 'file', 'hidden', 'image', 'radio', 'range', 'reset', 'submit'];
+FocusTrap.MODIFIER_KEYS = ['Shift', 'Control', 'Alt', 'Meta'];
+FocusTrap.watchPresses();

@@ -28,6 +28,7 @@ export const BROWSER_TEST_GLOBS = [
   'test/tab-layout-editing.browser.test.ts',
   'test/tab-rail-search.browser.test.ts',
   'test/tab-focus.browser.test.ts',
+  'test/dialog-focus-return.browser.test.ts',
   'test/session-sidebar-ux.browser.test.ts',
   'test/header-divider.browser.test.ts',
   'test/tab-strip-corner.browser.test.ts',
