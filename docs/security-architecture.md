@@ -708,8 +708,11 @@ peer (§3).
   percent‑decoded, dot segments and doubled slashes resolved), since the proxy forwards
   every such spelling without its sign‑in. Under a base path (`CODEMAN_BASE_URL`) the
   mount prefix is judged the same way: the server strips only its literal spelling, so
-  the refusal removes the normalised prefix once before it looks for the capability
-  prefix. Otherwise anonymous
+  the refusal looks for the capability prefix in the normalised path as it arrives and,
+  when that path starts with the mount prefix, once more with the mount prefix removed.
+  A match in either form is refused. The path as it arrives comes first, because under
+  a mount named like a capability prefix (`/webview`) the literal mount is already gone.
+  Otherwise anonymous
   requests through the proxy could probe passwords and fill the per‑IP bucket, which
   behind the proxy is always `127.0.0.1`, locking out Basic sign‑in from loopback.
   Without a proxy configured these paths keep the normal `401` challenge. One limit
