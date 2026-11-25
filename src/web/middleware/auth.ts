@@ -401,8 +401,12 @@ export function isLostWebviewRootFrame(req: FastifyRequest): boolean {
  *
  * `rawUrl` has been through `stripBasePath()`, which removes the mount prefix only in its
  * literal spelling, so under `basePath` a re-spelled prefix (`/CODEMAN/webview/x`,
- * `/%63odeman/...`, `//codeman/...`, `/x/../codeman/...`) is still in front. After the
- * normalisation, the lower-cased base path is removed once when the path starts with it.
+ * `/%63odeman/...`, `//codeman/...`, `/x/../codeman/...`) is still in front. So the
+ * normalised path is judged as it is first, and only when that is no capability path and
+ * it starts with the lower-cased base path, once more with the base path removed once.
+ * Either match counts. As it is comes first because the literal prefix may already be
+ * gone: under a mount named `/webview`, `/webview/webview/x` arrives as `/webview/x`, and
+ * removing the base again would lose the capability prefix itself.
  */
 export function capabilityPrefixOf(rawUrl: string, basePath = ''): 'webview' | 'html-view' | null {
   let path = rawUrl.split('?')[0];
@@ -418,8 +422,13 @@ export function capabilityPrefixOf(rawUrl: string, basePath = ''): 'webview' | '
     .normalize(path)
     .replace(/\u0130/g, 'i')
     .toLowerCase();
+  const asIs = capabilityPrefixOfNormalised(path);
+  if (asIs) return asIs;
   const base = basePath.toLowerCase();
-  if (base && path.startsWith(`${base}/`)) path = path.slice(base.length);
+  return base && path.startsWith(`${base}/`) ? capabilityPrefixOfNormalised(path.slice(base.length)) : null;
+}
+
+function capabilityPrefixOfNormalised(path: string): 'webview' | 'html-view' | null {
   if (path.startsWith(`${WEBVIEW_PROXY_PREFIX}/`)) return 'webview';
   if (path.startsWith(`${HTML_VIEW_PREFIX}/`)) return 'html-view';
   return null;

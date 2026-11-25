@@ -352,6 +352,13 @@ describe('capabilityPrefixOf judges a path the way a proxy matcher does', () => 
     ['/other/webview/x', '/codeman', null],
     ['/codeman', '/codeman', null],
     ['/CODEMAN/webview/x', '', null], // root mount: no prefix to remove
+    // A mount named like a capability prefix: the server has already stripped the literal
+    // mount, so what arrives must also be judged as it is.
+    ['/webview/x', '/webview', 'webview'], // from /webview/webview/x
+    ['/html-view/x', '/html-view', 'html-view'], // from /html-view/html-view/x
+    ['/webview/nested/x', '/webview/nested', 'webview'], // from /webview/nested/webview/nested/x
+    ['/WEBVIEW/webview/x', '/webview', 'webview'],
+    ['/api/me', '/webview', null],
   ] as const)('%s under "%s" -> %s', (url, basePath, expected) => {
     expect(capabilityPrefixOf(url, basePath)).toBe(expected);
   });
@@ -953,6 +960,22 @@ describe('under a base path, every spelling of the mount prefix is refused like 
       expect(res.challenge, rawPath).toBeUndefined();
     }
     const ok = await rawGet(port, '/codeman/api/me', { authorization: basic('bob', 'bobpass123') });
+    expect(ok.status).toBe(200);
+  });
+
+  it('keeps the capability prefix on a mount named like it', async () => {
+    useSecret({ inline: SECRET });
+    const s = new WebServer(0, false, true, '127.0.0.1', undefined, false, '/webview');
+    await s.start();
+    extraServers.push(s);
+    const port = s.boundPort;
+    // The server strips the literal mount, so this arrives as /webview/x.
+    for (let i = 0; i < 60; i++) {
+      const res = await rawGet(port, '/webview/webview/x');
+      expect(res.status).toBe(403);
+      expect(res.challenge).toBeUndefined();
+    }
+    const ok = await rawGet(port, '/webview/api/me', { authorization: basic('bob', 'bobpass123') });
     expect(ok.status).toBe(200);
   });
 });
