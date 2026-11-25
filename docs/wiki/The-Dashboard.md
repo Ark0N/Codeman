@@ -43,7 +43,7 @@ per device, so a sidebar on your desktop does not force one onto your phone.
 | ---------------------- | ------------------------------------------------------------------------------------ |
 | **By state**           | Groups the tabs by what each session needs from you (below).                         |
 | **By case**            | One box per case, labelled with the case and its tab count. Inside a box, `w75-api-gateway` reads just `w75`. A case with one tab gets a box with a colour swatch. |
-| **Ledger**             | The same list on an aligned column grid: equal cells, monospace names, a coloured bar on the left of each cell instead of the dot (yellow waiting, red needs you). Desktop header only. |
+| **Ledger**             | The same list on an aligned column grid: equal cells, monospace names, a coloured bar on the left of each cell instead of the dot (yellow waiting, red needs you); a working session keeps its spinning ring. Desktop header only. |
 | **Classic** (default)  | The single list in tab order, as before.                                             |
 
 **By state** groups the tabs like this, most urgent on top:

@@ -345,6 +345,29 @@ describe('tab layouts by case and ledger (static)', () => {
     );
   });
 
+  it('keeps the working spinner on a ledger cell', () => {
+    // The bar replaces the status dot, but it is green for idle and working
+    // alike, and the spinner is the dot's own ::after ring: hiding every dot
+    // left a working session with no mark at all.
+    const hides: string[] = [];
+    postcss.parse(css).walkAtRules('media', (media: AtRule) => {
+      if (media.params !== '(min-width: 768px)') return;
+      media.walkRules((rule: Rule) => {
+        if (!rule.selector.includes('.tabs-ledger')) return;
+        if (!rule.nodes.some((n) => n.type === 'decl' && n.prop === 'display' && n.value === 'none')) return;
+        hides.push(...rule.selectors.filter((s) => s.includes('.tab-status')));
+      });
+    });
+    expect(hides.length).toBeGreaterThan(0);
+    for (const selector of hides) {
+      // Each one either spares a busy dot or is the exited-agent cell, whose
+      // ring the classic strip hides too.
+      expect(selector.endsWith('.tab-status:not(.busy)') || selector.includes('.tab-agent-exited')).toBe(true);
+    }
+    // The ring the cell keeps is the shared one every strip draws.
+    expect(css).toMatch(/\.session-tab \.tab-status\.busy::after \{[^}]*animation: tab-load-spin/);
+  });
+
   it('dissolves the boxes into the one chip row on phones', () => {
     expect(mobileCss).toMatch(
       /:where\(\.header\) \.session-tabs-host > \.session-tabs\.tabs-clusters > \.tab-cluster \{\s*display: contents;/
