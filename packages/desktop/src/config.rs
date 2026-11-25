@@ -45,6 +45,10 @@ pub struct Config {
     pub auto_connect: bool,
     /// Always open in full screen (otherwise the last state is restored).
     pub start_fullscreen: bool,
+    /// On a display with a camera housing, full screen covers the whole
+    /// display, the strip beside the camera included (whole_screen.rs). On
+    /// unless it was turned off; a display without a housing never sees it.
+    pub whole_screen: bool,
     /// Whether the lit Apple logo shows what the agents are doing, and its style
     /// for each state (logo.rs). The menu only shows on a Mac that has one. A
     /// value this version does not know reads as off: a bad style must not make
@@ -80,6 +84,7 @@ impl Default for Config {
             servers: Vec::new(),
             auto_connect: true,
             start_fullscreen: false,
+            whole_screen: true,
             logo_blink: BlinkStyles::default(),
             keep_awake: keep_awake::Settings::default(),
             window: None,
@@ -471,6 +476,19 @@ mod tests {
     }
 
     #[test]
+    fn full_screen_over_the_whole_display_is_on_until_turned_off() {
+        assert!(Config::default().whole_screen);
+        // A file from before the option.
+        let c: Config = serde_json::from_str(r#"{"startFullscreen":true}"#).unwrap();
+        assert!(c.whole_screen);
+        let c: Config = serde_json::from_str(r#"{"wholeScreen":false}"#).unwrap();
+        assert!(!c.whole_screen);
+        // Turned off, it stays off across a save.
+        let back: Config = serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap();
+        assert!(!back.whole_screen);
+    }
+
+    #[test]
     fn the_style_a_mac_saved_before_there_were_states_is_kept() {
         use crate::logo::BlinkStyle;
         let c: Config = serde_json::from_str(r#"{"logoBlink":"heartbeat"}"#).unwrap();
@@ -486,6 +504,7 @@ mod tests {
         assert!(c.remember("http://127.0.0.1:3000/", None, false).is_empty());
         assert!(c.remember("https://box.ts.net/", Some("admin"), true).is_empty());
         c.start_fullscreen = true;
+        c.whole_screen = true;
         c.window = Some(WindowFrame {
             x: 10.0,
             y: 20.0,

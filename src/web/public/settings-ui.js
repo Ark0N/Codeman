@@ -600,6 +600,7 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('appSettingsMobileOverview').checked = settings.mobileOverviewEnabled ?? defaults.mobileOverviewEnabled ?? false;
     const mobileOverviewItem = document.getElementById('appSettingsMobileOverviewItem');
     if (mobileOverviewItem) mobileOverviewItem.style.display = MobileDetection.getDeviceType() === 'mobile' ? '' : 'none';
+    this.syncHostWholeScreenSetting();
     // Session Manager, Away Digest and Cron buttons all default OFF (opt-in under
     // Display → Header Displays; the Cron button also ships with btn-cron--hidden
     // in the template, so an unchecked box and a hidden button stay consistent).
@@ -3101,9 +3102,30 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
+  /**
+   * Codeman Desktop's own option (host-cutout.js): full screen over the whole display of a MacBook whose
+   * display has a camera housing. The group shows only where the app says this Mac has such a display, and
+   * the value is the app's: read from it here, written to it by saveAppSettings, never part of the settings
+   * blob or of what the server stores. The app calls this again whenever the option changes (its View menu).
+   */
+  syncHostWholeScreenSetting() {
+    const group = document.getElementById('appSettingsHostGroup');
+    const box = document.getElementById('appSettingsHostWholeScreen');
+    if (!group || !box) return;
+    const option = window.CodemanHostCutout?.wholeScreen?.() ?? null;
+    group.style.display = option?.available ? '' : 'none';
+    box.checked = option?.enabled === true;
+  },
+
   async saveAppSettings() {
     const keepOpen = this._keepSettingsOpenOnce === true;
     this._keepSettingsOpenOnce = false;
+    // The Mac app's own option goes to the app, whatever becomes of the rest of this save.
+    const hostOption = window.CodemanHostCutout?.wholeScreen?.() ?? null;
+    const hostBox = document.getElementById('appSettingsHostWholeScreen');
+    if (hostOption?.available && hostBox && hostBox.checked !== hostOption.enabled) {
+      window.CodemanHostCutout.setWholeScreen(hostBox.checked);
+    }
     // Gesture overlay is injected at page render (server-side), so a change to it
     // only takes effect on reload — remember the prior value to decide below.
     const _prev = this.loadAppSettingsFromStorage();

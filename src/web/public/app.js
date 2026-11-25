@@ -7014,6 +7014,9 @@ class CodemanApp {
     container.classList.remove('tabs-corner');
     this._decideTabOverflow(container);
     this._syncTabStripCorner(container);
+    // Beside a camera housing (Codeman Desktop, host-cutout.js) the tabs go around it. Last, once the strip's
+    // mode is decided: the gap depends on where the tabs ended up.
+    window.CodemanHostCutout?.fitTabs?.(container);
   }
 
   _decideTabOverflow(container) {
@@ -7064,6 +7067,8 @@ class CodemanApp {
 
     // Measure the natural one-row overflow, then enable wrapping only if needed.
     container.classList.remove('tabs-auto-wrap');
+    // The gap at a camera housing is part of what one row has to hold.
+    window.CodemanHostCutout?.fitTabs?.(container);
     const shouldWrap = window.CodemanTabOverflow?.shouldAutoWrapTabs
       ? window.CodemanTabOverflow.shouldAutoWrapTabs({
           deviceType,

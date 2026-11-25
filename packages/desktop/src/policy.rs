@@ -585,6 +585,13 @@ pub enum HostCmd {
     /// The page got a 401 from its own server: the session cookie is gone (a
     /// server restart) and the page cannot recover on its own.
     SessionExpired,
+    /// Whether the page keeps its controls clear of a camera housing when it
+    /// is told where one is (whole_screen.rs), and so may be drawn behind it.
+    /// A page says no for a layout that would only lose room that way.
+    CutoutReady(bool),
+    /// Codeman's settings page turned "full screen uses the area beside the
+    /// camera" on or off (the View menu's item, from the page).
+    SetWholeScreen(bool),
 }
 
 /// Calls the bundled connect page makes.
@@ -720,11 +727,26 @@ enum RawConnect {
 #[derive(Deserialize)]
 #[serde(tag = "cmd", rename_all = "camelCase", deny_unknown_fields)]
 enum RawHost {
-    OpenWindow { url: String },
+    OpenWindow {
+        url: String,
+    },
     CloseWindow,
     FocusWindow,
-    OpenExternal { url: String },
+    OpenExternal {
+        url: String,
+    },
     SessionExpired,
+    CutoutReady {
+        #[serde(default = "yes")]
+        ready: bool,
+    },
+    WholeScreen {
+        on: bool,
+    },
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// The shape of a CLI catalogue id. It becomes one argument of `install.sh`,
@@ -821,6 +843,8 @@ pub fn parse_ipc(frame_url: &str, body: &str, phase: &Phase, is_main_window: boo
         RawHost::FocusWindow => HostCmd::FocusWindow,
         RawHost::OpenExternal { url } if url.len() <= MAX_URL_LEN => HostCmd::OpenExternal(url),
         RawHost::SessionExpired => HostCmd::SessionExpired,
+        RawHost::CutoutReady { ready } => HostCmd::CutoutReady(ready),
+        RawHost::WholeScreen { on } => HostCmd::SetWholeScreen(on),
         _ => return None,
     };
     Some(Ipc::Host(cmd))
@@ -1536,6 +1560,48 @@ mod tests {
             ),
             Some(Ipc::Host(HostCmd::SessionExpired))
         );
+        // The dashboard and a session pop-out both say when they keep clear
+        // of a camera housing.
+        assert_eq!(
+            parse_ipc(main, r#"{"cmd":"cutoutReady","ready":true}"#, &loaded, true),
+            Some(Ipc::Host(HostCmd::CutoutReady(true)))
+        );
+        assert_eq!(
+            parse_ipc(
+                "http://127.0.0.1:3000/session/1",
+                r#"{"cmd":"cutoutReady","ready":true}"#,
+                &loaded,
+                false
+            ),
+            Some(Ipc::Host(HostCmd::CutoutReady(true)))
+        );
+        // A layout that would only lose room behind the housing says no; a
+        // message without the field is a yes, and a field of another type is
+        // no message at all.
+        assert_eq!(
+            parse_ipc(main, r#"{"cmd":"cutoutReady","ready":false}"#, &loaded, true),
+            Some(Ipc::Host(HostCmd::CutoutReady(false)))
+        );
+        assert_eq!(
+            parse_ipc(main, r#"{"cmd":"cutoutReady"}"#, &loaded, true),
+            Some(Ipc::Host(HostCmd::CutoutReady(true)))
+        );
+        assert_eq!(
+            parse_ipc(main, r#"{"cmd":"cutoutReady","ready":"yes"}"#, &loaded, true),
+            None
+        );
+        // The settings page's switch for the whole-display full screen: on or
+        // off, said outright. No field, or one of another type, is no message.
+        assert_eq!(
+            parse_ipc(main, r#"{"cmd":"wholeScreen","on":true}"#, &loaded, true),
+            Some(Ipc::Host(HostCmd::SetWholeScreen(true)))
+        );
+        assert_eq!(
+            parse_ipc(main, r#"{"cmd":"wholeScreen","on":false}"#, &loaded, true),
+            Some(Ipc::Host(HostCmd::SetWholeScreen(false)))
+        );
+        assert_eq!(parse_ipc(main, r#"{"cmd":"wholeScreen"}"#, &loaded, true), None);
+        assert_eq!(parse_ipc(main, r#"{"cmd":"wholeScreen","on":1}"#, &loaded, true), None);
         // Untrusted surfaces, other origins, connect commands: refused.
         for frame in [
             "http://127.0.0.1:3000/html-view/c/x.html",
@@ -1548,6 +1614,14 @@ mod tests {
         ] {
             assert_eq!(parse_ipc(frame, r#"{"cmd":"focusWindow"}"#, &loaded, true), None);
             assert_eq!(parse_ipc(frame, r#"{"cmd":"sessionExpired"}"#, &loaded, true), None);
+            // A rendered HTML file or a web tab must not get the page drawn
+            // behind the camera by claiming it copes.
+            assert_eq!(parse_ipc(frame, r#"{"cmd":"cutoutReady"}"#, &loaded, true), None);
+            // Nor may one change the app's own settings.
+            assert_eq!(
+                parse_ipc(frame, r#"{"cmd":"wholeScreen","on":false}"#, &loaded, true),
+                None
+            );
         }
         assert_eq!(
             parse_ipc(main, r#"{"cmd":"startServer","url":"x"}"#, &loaded, true),

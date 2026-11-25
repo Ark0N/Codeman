@@ -498,6 +498,10 @@
       '会话列表显示为顶栏横向标签条，或左侧可折叠侧边栏（Alt+B）。完整侧边栏为每个会话显示与主界面相同的详细信息。',
     'Tall Tabs (Name + Folder)': '双行标签（名称 + 文件夹）',
     'Pop-out Button on Tabs': '标签页弹出窗口按钮',
+    'Mac App': 'Mac 应用',
+    'Full Screen Uses the Area Beside the Camera': '全屏使用摄像头两侧的区域',
+    'Full screen covers the whole display, and the tabs and toolbar sit beside the camera. Off uses the full screen of macOS, which leaves a black bar across the top.':
+      '全屏覆盖整个显示屏，标签页和工具栏位于摄像头两侧。关闭后使用 macOS 自带的全屏，顶部会留下一条黑边。',
     'New Session Button on Tabs': '标签页新建会话按钮',
     'A + on the tab that starts a session in the same case and group, in any installed CLI.':
       '标签页上的 + 按钮，可在同一案例和分组中，用任一已安装的 CLI 启动新会话。',
