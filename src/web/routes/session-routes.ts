@@ -4476,14 +4476,14 @@ export function registerSessionRoutes(
         );
       }
 
-      const availability = await checkDockerAvailable(host.engine);
+      const sessionDocker = toSessionDocker(host, dockerCase);
+      const availability = await checkDockerAvailable(sessionDocker.engine, sessionDocker);
       if (!availability.ok) {
         return createErrorResponse(
           ApiErrorCode.OPERATION_FAILED,
           availability.error || 'docker daemon is not available'
         );
       }
-      const sessionDocker = toSessionDocker(host, dockerCase);
       // An ADOPTED container skips every image-side gate: we never run `docker
       // create`, so the image is the user's business, and `ensureAgentBaseImage`
       // would build/require an image that has nothing to do with their container.

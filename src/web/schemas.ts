@@ -1214,11 +1214,12 @@ export const DockerImportSchema = z.object({
 });
 
 // One-click "Run in Docker" case creation. name/description behave like a normal
-// case; the docker fields are OPTIONAL overrides of the predefined defaults (the
-// checkbox alone, with no overrides, uses the shared `default` host).
+// case. A saved host can be selected by ID, or the caller can use the legacy
+// built-in settings with optional per-case overrides.
 export const DockerQuickCreateSchema = z.object({
   name: z.string().regex(/^[a-zA-Z0-9_-]+$/, 'Invalid case name format'),
   description: z.string().max(1000).optional(),
+  hostId: DockerHostSchema.shape.id.optional(),
   image: z
     .string()
     .min(1)

@@ -92,6 +92,8 @@ Set `CODEMAN_AGENT_IMAGE_GIT_USER_NAME` and `CODEMAN_AGENT_IMAGE_GIT_USER_EMAIL`
 
 On the **New case → Create New** tab there's a **🐳 Run in an isolated Docker container** checkbox. Checking it alone is enough: Codeman creates the case folder in `~/codeman-cases/<name>`, spins up a hardened container with sensible defaults (auto-provisioning a shared `default` host), and starts the session inside it. No host/image/network fields to fill in.
 
+Open **Container settings → Container profile** to reuse a saved Docker or Podman profile. The case gets its own workspace and container with the profile’s image and runtime settings. Choose **Built-in settings** to use the resource presets or enter overrides for this case. In multi-user mode, saved profiles are available to admins.
+
 Click the checkbox's **Container settings** to optionally tweak the predefined defaults, including a **Template** picker:
 
 | Template | Memory | CPUs | GPUs |

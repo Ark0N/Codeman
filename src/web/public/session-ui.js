@@ -3935,6 +3935,7 @@ Object.assign(CodemanApp.prototype, {
     const me = window.__codemanUser || {};
     const customRow = document.getElementById('newCaseCustomPathToggleRow');
     if (customRow) customRow.style.display = me.multiUser && me.role !== 'admin' ? 'none' : '';
+    void this.loadDockerQuickProfiles();
     this.toggleNewCaseCustomPath();
     document.getElementById('linkCaseName').value = '';
     document.getElementById('linkCasePath').value = '';
@@ -4103,6 +4104,34 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
+  async loadDockerQuickProfiles() {
+    const select = document.getElementById('quickDockerHost');
+    const row = document.getElementById('quickDockerHostRow');
+    if (!select || !row) return;
+    row.hidden = true;
+    select.selectedIndex = 0;
+    select.options.length = 1;
+    this.syncDockerQuickProfile();
+
+    // Each opening refreshes the list. An earlier request may finish later.
+    const request = this._apiJson('/api/docker-hosts');
+    this._dockerQuickProfileRequest = request;
+    const profiles = await request;
+    if (this._dockerQuickProfileRequest !== request || !Array.isArray(profiles)) return;
+    for (const { id, label, engine } of profiles) {
+      select.add(new Option(`${label} (${engine === 'podman' ? 'Podman' : 'Docker'})`, id));
+    }
+    row.hidden = profiles.length === 0;
+  },
+
+  syncDockerQuickProfile() {
+    const select = document.getElementById('quickDockerHost');
+    const overrides = document.getElementById('quickDockerOverrides');
+    if (!select || !overrides) return;
+    select.disabled = !document.getElementById('newCaseDocker')?.checked;
+    overrides.hidden = !select.disabled && !!select.value;
+  },
+
   /**
    * Custom-folder row for Create New: shows or hides the parent-folder field, and keeps it and the
    * Docker option mutually exclusive (a Docker case has its own workspace flow, and the quick-create
@@ -4133,6 +4162,7 @@ Object.assign(CodemanApp.prototype, {
       docker.disabled = custom.checked;
       docker.title = custom.checked ? 'Not available with a custom folder' : '';
     }
+    this.syncDockerQuickProfile();
     this.updateNewCasePathPreview();
   },
 
@@ -4192,8 +4222,9 @@ Object.assign(CodemanApp.prototype, {
       return;
     }
     const endpoint = inDocker ? '/api/cases/docker-quickcreate' : '/api/cases';
+    const hostId = document.getElementById('quickDockerHost')?.value;
     const payload = inDocker
-      ? { name, description, ...this._collectDockerQuickSettings() }
+      ? { name, description, ...(hostId ? { hostId } : this._collectDockerQuickSettings()) }
       : customFolder
         ? { name, description, path: this._newCaseTargetPath() }
         : { name, description };
