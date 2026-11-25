@@ -42,9 +42,18 @@
 //! own full screen looks like. So an old server never ends up with its tabs
 //! behind the camera.
 //!
+//! The Dock and the menu bar are fully hidden while the pointer is over the
+//! page and only auto-hide once it reaches the edge one of them slides in from
+//! (`reach`, followed by a timer in `imp`). Auto-hiding alone is not enough:
+//! macOS keeps an invisible window in the place of an auto-hidden menu bar,
+//! as high as the housing, and it takes every click there. That is the strip
+//! this mode exists to use, so a click on a tab or a toolbar button in the top
+//! row brought the menu bar in and never reached the page (seen on macOS 27).
+//! A fully hidden menu bar leaves nothing there.
+//!
 //! What this mode gives up: it is not a Space. The window covers the desktop it
 //! is on, there is no slide animation, and other apps' windows on that desktop
-//! come up in front of it. That is why it is an option and not the default.
+//! come up in front of it. That is why it can be turned off.
 //!
 //! The decisions are pure and unit-tested here; `imp` only reads AppKit and
 //! applies them. Like `macos`, it never panics on purpose (the release build
@@ -185,24 +194,110 @@ const AUTO_HIDE_MENU_BAR: usize = 1 << 2;
 const HIDE_MENU_BAR: usize = 1 << 3;
 const PRESENTATION_FULL_SCREEN: usize = 1 << 10;
 
-/// The presentation options to set when a window enters this mode, and the
+/// How the Dock and the menu bar are kept out of the way while a window is in
+/// this mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Hiding {
+    /// Fully hidden. macOS then keeps nothing of its own at the top of the
+    /// display, and a click beside the housing reaches the page.
+    Hidden,
+    /// Auto-hidden: they slide in when the pointer pushes against their edge.
+    /// While this holds, macOS keeps an invisible window where the menu bar
+    /// will appear, and that window takes every click there (seen on macOS 27:
+    /// a click on a tab in the top row brought the menu bar in and never
+    /// reached the page). So it only holds while the pointer is at an edge.
+    Sliding,
+}
+
+/// Which of macOS's two bars the pointer went for last, for a window in this
+/// mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Reach {
+    /// Neither: the pointer is over the page.
+    #[default]
+    Inside,
+    /// It touched the top edge of the display, or a menu is open.
+    MenuBar,
+    /// It touched the edge the Dock is on.
+    Dock,
+}
+
+/// How far the pointer is from the top edge of the display a window in this
+/// mode is on, and from the edge the Dock is on, in points.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Pointer {
+    pub top: f64,
+    pub dock: f64,
+}
+
+/// The pointer counts as at an edge within this many points of it.
+const EDGE: f64 = 2.0;
+/// Having touched the top edge, the pointer is still with the menu bar within
+/// this many points of it. The bar is as high as the housing (32 to 45 points).
+const MENU_BAR_BAND: f64 = 72.0;
+/// Having touched the Dock's edge, the pointer is still with the Dock within
+/// this many points of it (the largest Dock, magnified, stays below that).
+const DOCK_BAND: f64 = 200.0;
+
+/// Where the pointer is now, given where it was (`now`): it has to touch an
+/// edge to count as going for a bar, and to move well clear of the bar to
+/// count as back over the page, so a bar that slid in is not pulled away from
+/// under the pointer. None is a pointer on another display: nothing changes.
+pub fn reach(now: Reach, pointer: Option<Pointer>, menu_open: bool) -> Reach {
+    // A menu hangs from the menu bar: the bar stays wherever the pointer goes.
+    if menu_open {
+        return Reach::MenuBar;
+    }
+    let Some(pointer) = pointer else {
+        return now;
+    };
+    if pointer.top <= EDGE {
+        return Reach::MenuBar;
+    }
+    if pointer.dock <= EDGE {
+        return Reach::Dock;
+    }
+    match now {
+        Reach::MenuBar if pointer.top <= MENU_BAR_BAND => Reach::MenuBar,
+        Reach::Dock if pointer.dock <= DOCK_BAND => Reach::Dock,
+        _ => Reach::Inside,
+    }
+}
+
+/// How the bars are kept away for where the pointer is.
+pub fn hiding(reach: Reach) -> Hiding {
+    match reach {
+        Reach::Inside => Hiding::Hidden,
+        Reach::MenuBar | Reach::Dock => Hiding::Sliding,
+    }
+}
+
+/// The presentation options to set while a window is in this mode, and the
 /// bits of them that were not set before (to take off again on the way out).
-/// None when they must be left alone: inside a native full-screen Space AppKit
-/// owns them, and setting them there throws.
+/// `before` is what the app has without this module's bits. None when the
+/// options must be left alone: inside a native full-screen Space AppKit owns
+/// them, and setting them there throws.
 ///
-/// AppKit also throws for a combination it does not allow (an auto-hidden menu
-/// bar needs a hidden or auto-hidden Dock, and each pair excludes itself), so
-/// only what is missing is added, to options that were valid before.
-pub fn presentation_for_entry(before: usize) -> Option<(usize, usize)> {
+/// AppKit also throws for a combination it does not allow (a hidden menu bar
+/// needs a hidden Dock, an auto-hidden one a hidden or auto-hidden Dock, and
+/// each pair excludes itself), so only what is missing is added, to options
+/// that were valid before, and the menu bar is only fully hidden over a Dock
+/// that is.
+pub fn presentation_for_entry(before: usize, hiding: Hiding) -> Option<(usize, usize)> {
     if before & PRESENTATION_FULL_SCREEN != 0 {
         return None;
     }
+    let hidden = hiding == Hiding::Hidden;
     let mut after = before;
     if after & (AUTO_HIDE_DOCK | HIDE_DOCK) == 0 {
-        after |= AUTO_HIDE_DOCK;
+        after |= if hidden { HIDE_DOCK } else { AUTO_HIDE_DOCK };
     }
     if after & (AUTO_HIDE_MENU_BAR | HIDE_MENU_BAR) == 0 {
-        after |= AUTO_HIDE_MENU_BAR;
+        after |= if hidden && after & HIDE_DOCK != 0 {
+            HIDE_MENU_BAR
+        } else {
+            AUTO_HIDE_MENU_BAR
+        };
     }
     Some((after, after & !before))
 }
@@ -222,22 +317,24 @@ pub fn presentation_for_exit(current: usize, added: usize) -> Option<usize> {
     (after != current).then_some(after)
 }
 
-/// What to do so the presentation options match `wanted` (some window is in
-/// this mode), given the ones in force and the bits this module `added` so
-/// far: the options to set, if they have to change, and the bits it will have
-/// added from then on. None while AppKit owns the options (a native
-/// full-screen Space is in front): nothing is set and nothing forgotten, and
-/// the caller asks again when that changes, so what was added is taken off
-/// later rather than never.
-pub fn presentation_step(current: usize, added: usize, wanted: bool) -> Option<(Option<usize>, usize)> {
+/// What to do so the presentation options match `wanted` (how the bars are
+/// kept away while some window is in this mode, None when none is), given the
+/// ones in force and the bits this module `added` so far: the options to set,
+/// if they have to change, and the bits it will have added from then on. None
+/// while AppKit owns the options (a native full-screen Space is in front):
+/// nothing is set and nothing forgotten, and the caller asks again when that
+/// changes, so what was added is taken off later rather than never.
+pub fn presentation_step(current: usize, added: usize, wanted: Option<Hiding>) -> Option<(Option<usize>, usize)> {
     if current & PRESENTATION_FULL_SCREEN != 0 {
         return None;
     }
-    if wanted {
-        let (after, new) = presentation_for_entry(current)?;
-        return Some(((after != current).then_some(after), added | new));
-    }
-    Some((presentation_for_exit(current, added), 0))
+    let Some(hiding) = wanted else {
+        return Some((presentation_for_exit(current, added), 0));
+    };
+    // From what the app has without this module's bits, so going from hidden
+    // to auto-hidden and back swaps the bits instead of piling them up.
+    let (after, new) = presentation_for_entry(current & !added, hiding)?;
+    Some(((after != current).then_some(after), new))
 }
 
 /// How long a change into or out of macOS's full screen may take before it is
@@ -400,21 +497,22 @@ mod imp {
     use objc2::ffi::class_addMethod;
     use objc2::rc::Retained;
     use objc2::runtime::{AnyClass, AnyObject, Imp, NSObjectProtocol, ProtocolObject, Sel};
-    use objc2::{msg_send, sel, ClassType, Message};
+    use objc2::{msg_send, sel, AllocAnyThread, ClassType, Message};
     use objc2_app_kit::{
-        NSApplication, NSApplicationDidChangeScreenParametersNotification, NSApplicationPresentationOptions,
-        NSResponder, NSScreen, NSView, NSWindow, NSWindowDidEnterFullScreenNotification,
-        NSWindowDidExitFullScreenNotification, NSWindowStyleMask, NSWindowWillEnterFullScreenNotification,
-        NSWindowWillExitFullScreenNotification,
+        NSApplication, NSApplicationDidBecomeActiveNotification, NSApplicationDidChangeScreenParametersNotification,
+        NSApplicationDidResignActiveNotification, NSApplicationPresentationOptions, NSEvent,
+        NSMenuDidBeginTrackingNotification, NSMenuDidEndTrackingNotification, NSResponder, NSScreen, NSView, NSWindow,
+        NSWindowDidEnterFullScreenNotification, NSWindowDidExitFullScreenNotification, NSWindowStyleMask,
+        NSWindowWillEnterFullScreenNotification, NSWindowWillExitFullScreenNotification,
     };
     use objc2_foundation::{
-        MainThreadMarker, NSNotification, NSNotificationCenter, NSNotificationName, NSOperationQueue, NSPoint, NSRect,
-        NSSize,
+        ns_string, MainThreadMarker, NSNotification, NSNotificationCenter, NSNotificationName, NSOperationQueue,
+        NSPoint, NSRect, NSSize, NSTimer, NSUserDefaults,
     };
     use tao::platform::macos::WindowExtMacOS;
     use wry::WebViewExtMacOS;
 
-    use super::{Entry, Housing, Layout, NativeTransition, Toggle};
+    use super::{Entry, Housing, Layout, NativeTransition, Pointer, Reach, Toggle};
 
     const _: () = {
         assert!(NSApplicationPresentationOptions::AutoHideDock.bits() == super::AUTO_HIDE_DOCK);
@@ -472,6 +570,29 @@ mod imp {
         static OVERRIDDEN: Cell<usize> = const { Cell::new(0) };
         /// The displays are being watched.
         static WATCHING_SCREENS: Cell<bool> = const { Cell::new(false) };
+        /// Which of macOS's bars the pointer went for last (`pointer_moved`).
+        static REACH: Cell<Reach> = const { Cell::new(Reach::Inside) };
+        /// A menu of the menu bar is open.
+        static MENU_OPEN: Cell<bool> = const { Cell::new(false) };
+        /// The timer that follows the pointer while a window is in this mode
+        /// and the app is in front.
+        static POINTER_WATCH: RefCell<Option<Retained<NSTimer>>> = const { RefCell::new(None) };
+        /// The menu bar's menus and the app coming to the front are being watched.
+        static WATCHING_APP: Cell<bool> = const { Cell::new(false) };
+        /// The edge the Dock is on, read when the pointer watch starts.
+        static DOCK_EDGE: Cell<DockEdge> = const { Cell::new(DockEdge::Bottom) };
+    }
+
+    /// How often the pointer is looked at. Pushing against an edge takes a
+    /// person longer than this, so the bar still slides in under the push.
+    const POINTER_INTERVAL: f64 = 0.08;
+
+    /// The edge of the display the Dock is on.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum DockEdge {
+        Bottom,
+        Left,
+        Right,
     }
 
     /// Told the window (`key`) that entered or left this mode.
@@ -852,11 +973,14 @@ mod imp {
         super::toggle(whole, native, enabled() && tracked.is_some(), housing)
     }
 
-    /// Makes the Dock and the menu bar auto-hide while `wanted` (a window is
-    /// in this mode) and puts them back afterwards. Called again whenever that
-    /// may have become possible: inside a native full-screen Space AppKit owns
-    /// the options, and nothing is changed or forgotten until it is left.
+    /// Keeps the Dock and the menu bar out of the way while `wanted` (a
+    /// window is in this mode) and puts them back afterwards: hidden while the
+    /// pointer is over the page, auto-hidden once it reaches the edge one of
+    /// them slides in from (`pointer_moved`). Called again whenever that may
+    /// have become possible: inside a native full-screen Space AppKit owns the
+    /// options, and nothing is changed or forgotten until it is left.
     fn reconcile_presentation(wanted: bool) {
+        watch_pointer(wanted);
         let added = ADDED.try_with(Cell::get).unwrap_or(0);
         if !wanted && added == 0 {
             return;
@@ -865,13 +989,164 @@ mod imp {
             return;
         };
         let app = NSApplication::sharedApplication(mtm);
-        let Some((set, added)) = super::presentation_step(app.presentationOptions().bits(), added, wanted) else {
+        let hiding = wanted.then(|| super::hiding(REACH.try_with(Cell::get).unwrap_or_default()));
+        let Some((set, added)) = super::presentation_step(app.presentationOptions().bits(), added, hiding) else {
             return;
         };
         if let Some(options) = set {
             app.setPresentationOptions(NSApplicationPresentationOptions::from_bits_retain(options));
         }
         let _ = ADDED.try_with(|slot| slot.set(added));
+    }
+
+    /// Follows the pointer while `wanted` and the app is in front (its options
+    /// only hold then, and a timer that has nothing to decide should not run).
+    /// A timer and not an event monitor: the app gets no mouse events while the
+    /// pointer is over the menu bar, the Dock, or the window macOS keeps in the
+    /// menu bar's place.
+    fn watch_pointer(wanted: bool) {
+        let Some(mtm) = MainThreadMarker::new() else {
+            return;
+        };
+        watch_app();
+        let on = wanted && NSApplication::sharedApplication(mtm).isActive();
+        let running = POINTER_WATCH
+            .try_with(|slot| slot.try_borrow().map_or(on, |slot| slot.is_some()))
+            .unwrap_or(on);
+        if on == running {
+            return;
+        }
+        // Every watch starts over the page: the bars are hidden until the
+        // pointer is seen at an edge.
+        let _ = REACH.try_with(|reach| reach.set(Reach::Inside));
+        let timer = on.then(|| {
+            let _ = DOCK_EDGE.try_with(|edge| edge.set(dock_edge()));
+            let block = RcBlock::new(|_: NonNull<NSTimer>| {
+                let _ = catch_unwind(pointer_moved);
+            });
+            // SAFETY: the block captures nothing and runs on the run loop of
+            // the main thread, where it was made.
+            let timer =
+                unsafe { NSTimer::scheduledTimerWithTimeInterval_repeats_block(POINTER_INTERVAL, true, &block) };
+            timer.setTolerance(POINTER_INTERVAL / 4.0);
+            timer
+        });
+        let old = POINTER_WATCH
+            .try_with(|slot| {
+                slot.try_borrow_mut()
+                    .ok()
+                    .map(|mut slot| std::mem::replace(&mut *slot, timer))
+            })
+            .ok()
+            .flatten()
+            .flatten();
+        if let Some(old) = old {
+            old.invalidate();
+        }
+    }
+
+    /// The timer's tick, and whenever something else may have changed the
+    /// answer: looks where the pointer is and changes how the bars are kept
+    /// away when it reached an edge or came back from one.
+    fn pointer_moved() {
+        if active_windows(None).is_empty() {
+            return;
+        }
+        let now = REACH.try_with(Cell::get).unwrap_or_default();
+        let menu_open = MENU_OPEN.try_with(Cell::get).unwrap_or(false);
+        let next = super::reach(now, pointer(), menu_open);
+        if next != now {
+            let _ = REACH.try_with(|reach| reach.set(next));
+            reconcile_presentation(true);
+        }
+    }
+
+    /// The pointer on the display of a window in this mode. None when it is on
+    /// another display.
+    fn pointer() -> Option<Pointer> {
+        let at = NSEvent::mouseLocation();
+        let frames: Vec<NSRect> = WINDOWS
+            .try_with(|list| {
+                list.try_borrow().map_or_else(
+                    |_| Vec::new(),
+                    |list| {
+                        list.iter()
+                            .filter(|t| t.saved.is_some())
+                            .filter_map(|t| t.fitted)
+                            .collect()
+                    },
+                )
+            })
+            .unwrap_or_default();
+        let edge = DOCK_EDGE.try_with(Cell::get).unwrap_or(DockEdge::Bottom);
+        frames.iter().find_map(|frame| {
+            // AppKit counts from the bottom left.
+            let left = at.x - frame.origin.x;
+            let right = frame.origin.x + frame.size.width - at.x;
+            let bottom = at.y - frame.origin.y;
+            let top = frame.origin.y + frame.size.height - at.y;
+            // The last row and column of a display report its full size: a
+            // point of slack, or the edges themselves would count as outside.
+            if left < -1.0 || right < -1.0 || bottom < -1.0 || top < -1.0 {
+                return None;
+            }
+            let dock = match edge {
+                DockEdge::Bottom => bottom,
+                DockEdge::Left => left,
+                DockEdge::Right => right,
+            };
+            Some(Pointer { top, dock })
+        })
+    }
+
+    /// Where the Dock is, from the Dock's own preferences. It is at the bottom
+    /// unless they say otherwise.
+    fn dock_edge() -> DockEdge {
+        let Some(dock) = NSUserDefaults::initWithSuiteName(NSUserDefaults::alloc(), Some(ns_string!("com.apple.dock")))
+        else {
+            return DockEdge::Bottom;
+        };
+        match dock
+            .stringForKey(ns_string!("orientation"))
+            .map(|edge| edge.to_string())
+            .as_deref()
+        {
+            Some("left") => DockEdge::Left,
+            Some("right") => DockEdge::Right,
+            _ => DockEdge::Bottom,
+        }
+    }
+
+    /// A menu of the menu bar opening and closing, and the app coming to the
+    /// front or leaving it. An open menu keeps the bar it hangs from; the
+    /// pointer is only followed while the app is in front.
+    fn watch_app() {
+        if WATCHING_APP.try_with(|watching| watching.replace(true)).unwrap_or(true) {
+            return;
+        }
+        // SAFETY: constant names exported by AppKit.
+        let (menu_began, menu_ended, became_active, resigned_active) = unsafe {
+            (
+                NSMenuDidBeginTrackingNotification,
+                NSMenuDidEndTrackingNotification,
+                NSApplicationDidBecomeActiveNotification,
+                NSApplicationDidResignActiveNotification,
+            )
+        };
+        // The notification center keeps the registrations for the life of the app.
+        let _ = observe(menu_began, None, || menu_tracking(true));
+        let _ = observe(menu_ended, None, || menu_tracking(false));
+        for name in [became_active, resigned_active] {
+            let _ = observe(name, None, || {
+                on_next_turn(|| reconcile_presentation(!active_windows(None).is_empty()));
+            });
+        }
+    }
+
+    fn menu_tracking(open: bool) {
+        let _ = MENU_OPEN.try_with(|flag| flag.set(open));
+        // Outside the notification, like every change of the options here.
+        on_next_turn(pointer_moved);
     }
 
     fn enter(window: &NSWindow) {
@@ -1280,24 +1555,49 @@ mod tests {
 
     #[test]
     fn entering_hides_the_dock_and_the_menu_bar_and_remembers_what_it_added() {
+        // Over the page both are fully hidden, so nothing of macOS is left at the top.
         assert_eq!(
-            presentation_for_entry(0),
+            presentation_for_entry(0, Hiding::Hidden),
+            Some((HIDE_DOCK | HIDE_MENU_BAR, HIDE_DOCK | HIDE_MENU_BAR))
+        );
+        // At an edge both slide in under the pointer.
+        assert_eq!(
+            presentation_for_entry(0, Hiding::Sliding),
             Some((AUTO_HIDE_DOCK | AUTO_HIDE_MENU_BAR, AUTO_HIDE_DOCK | AUTO_HIDE_MENU_BAR))
         );
         // A Dock that is hidden already keeps its own bit; only the menu bar is added.
         assert_eq!(
-            presentation_for_entry(HIDE_DOCK),
+            presentation_for_entry(HIDE_DOCK, Hiding::Sliding),
             Some((HIDE_DOCK | AUTO_HIDE_MENU_BAR, AUTO_HIDE_MENU_BAR))
         );
         assert_eq!(
-            presentation_for_entry(AUTO_HIDE_DOCK),
-            Some((AUTO_HIDE_DOCK | AUTO_HIDE_MENU_BAR, AUTO_HIDE_MENU_BAR))
+            presentation_for_entry(HIDE_DOCK, Hiding::Hidden),
+            Some((HIDE_DOCK | HIDE_MENU_BAR, HIDE_MENU_BAR))
         );
-        // Both out of the way already: nothing to add, nothing to undo.
-        let both = AUTO_HIDE_DOCK | AUTO_HIDE_MENU_BAR;
-        assert_eq!(presentation_for_entry(both), Some((both, 0)));
-        let hidden = HIDE_DOCK | HIDE_MENU_BAR;
-        assert_eq!(presentation_for_entry(hidden), Some((hidden, 0)));
+        // A Dock the app already auto-hides stays as it is, and AppKit refuses a
+        // hidden menu bar over it: the menu bar auto-hides in both cases.
+        for hiding in [Hiding::Hidden, Hiding::Sliding] {
+            assert_eq!(
+                presentation_for_entry(AUTO_HIDE_DOCK, hiding),
+                Some((AUTO_HIDE_DOCK | AUTO_HIDE_MENU_BAR, AUTO_HIDE_MENU_BAR))
+            );
+            // Both out of the way already: nothing to add, nothing to undo.
+            let both = AUTO_HIDE_DOCK | AUTO_HIDE_MENU_BAR;
+            assert_eq!(presentation_for_entry(both, hiding), Some((both, 0)));
+            let hidden = HIDE_DOCK | HIDE_MENU_BAR;
+            assert_eq!(presentation_for_entry(hidden, hiding), Some((hidden, 0)));
+        }
+    }
+
+    /// AppKit throws for these: both of a pair, a menu bar out of the way over
+    /// a Dock that is not, a hidden menu bar over a Dock that only auto-hides.
+    fn appkit_accepts(options: usize) -> bool {
+        let dock = options & (AUTO_HIDE_DOCK | HIDE_DOCK);
+        let menu = options & (AUTO_HIDE_MENU_BAR | HIDE_MENU_BAR);
+        dock != AUTO_HIDE_DOCK | HIDE_DOCK
+            && menu != AUTO_HIDE_MENU_BAR | HIDE_MENU_BAR
+            && (menu == 0 || dock != 0)
+            && (menu != HIDE_MENU_BAR || dock == HIDE_DOCK)
     }
 
     #[test]
@@ -1311,22 +1611,23 @@ mod tests {
             HIDE_DOCK | AUTO_HIDE_MENU_BAR,
             HIDE_DOCK | HIDE_MENU_BAR,
         ] {
-            let (after, added) = presentation_for_entry(before).expect("not in a Space");
-            // Never both of a pair, and a hidden menu bar always has a hidden Dock.
-            assert_ne!(after & (AUTO_HIDE_DOCK | HIDE_DOCK), AUTO_HIDE_DOCK | HIDE_DOCK);
-            assert_ne!(
-                after & (AUTO_HIDE_MENU_BAR | HIDE_MENU_BAR),
-                AUTO_HIDE_MENU_BAR | HIDE_MENU_BAR
-            );
-            assert_ne!(after & (AUTO_HIDE_DOCK | HIDE_DOCK), 0);
-            assert_eq!(after & !added, before);
+            assert!(appkit_accepts(before));
+            for hiding in [Hiding::Hidden, Hiding::Sliding] {
+                let (after, added) = presentation_for_entry(before, hiding).expect("not in a Space");
+                assert!(appkit_accepts(after), "{before:#b} {hiding:?} -> {after:#b}");
+                // Both bars are out of the way, and what the app had is kept.
+                assert_ne!(after & (AUTO_HIDE_DOCK | HIDE_DOCK), 0);
+                assert_ne!(after & (AUTO_HIDE_MENU_BAR | HIDE_MENU_BAR), 0);
+                assert_eq!(after & !added, before);
+            }
         }
     }
 
     #[test]
     fn the_options_are_left_alone_inside_a_native_full_screen_space() {
         let space = PRESENTATION_FULL_SCREEN | AUTO_HIDE_DOCK | AUTO_HIDE_MENU_BAR;
-        assert_eq!(presentation_for_entry(space), None);
+        assert_eq!(presentation_for_entry(space, Hiding::Hidden), None);
+        assert_eq!(presentation_for_entry(space, Hiding::Sliding), None);
         assert_eq!(presentation_for_exit(space, AUTO_HIDE_DOCK | AUTO_HIDE_MENU_BAR), None);
     }
 
@@ -1334,6 +1635,8 @@ mod tests {
     fn leaving_takes_off_only_what_entering_added() {
         let both = AUTO_HIDE_DOCK | AUTO_HIDE_MENU_BAR;
         assert_eq!(presentation_for_exit(both, both), Some(0));
+        let hidden = HIDE_DOCK | HIDE_MENU_BAR;
+        assert_eq!(presentation_for_exit(hidden, hidden), Some(0));
         assert_eq!(
             presentation_for_exit(HIDE_DOCK | AUTO_HIDE_MENU_BAR, AUTO_HIDE_MENU_BAR),
             Some(HIDE_DOCK)
@@ -1346,29 +1649,145 @@ mod tests {
 
     #[test]
     fn the_options_follow_whether_a_window_is_in_this_mode() {
-        let both = AUTO_HIDE_DOCK | AUTO_HIDE_MENU_BAR;
-        // A first window enters: both are set and remembered.
-        assert_eq!(presentation_step(0, 0, true), Some((Some(both), both)));
+        let hidden = HIDE_DOCK | HIDE_MENU_BAR;
+        // A first window enters: both are hidden and remembered.
+        assert_eq!(
+            presentation_step(0, 0, Some(Hiding::Hidden)),
+            Some((Some(hidden), hidden))
+        );
         // A second one enters, or the same question is asked again: nothing to set, nothing forgotten.
-        assert_eq!(presentation_step(both, both, true), Some((None, both)));
+        assert_eq!(
+            presentation_step(hidden, hidden, Some(Hiding::Hidden)),
+            Some((None, hidden))
+        );
         // The last one leaves: both come off and nothing is owed any more.
-        assert_eq!(presentation_step(both, both, false), Some((Some(0), 0)));
+        assert_eq!(presentation_step(hidden, hidden, None), Some((Some(0), 0)));
         // Nothing was ever added: nothing to do.
-        assert_eq!(presentation_step(0, 0, false), Some((None, 0)));
+        assert_eq!(presentation_step(0, 0, None), Some((None, 0)));
         // Something else already took them off: nothing to set, and nothing owed.
-        assert_eq!(presentation_step(0, both, false), Some((None, 0)));
+        assert_eq!(presentation_step(0, hidden, None), Some((None, 0)));
+    }
+
+    #[test]
+    fn the_bars_go_from_hidden_to_sliding_and_back_without_piling_up() {
+        let hidden = HIDE_DOCK | HIDE_MENU_BAR;
+        let sliding = AUTO_HIDE_DOCK | AUTO_HIDE_MENU_BAR;
+        // The pointer reached an edge: the hidden pair is swapped for the sliding one.
+        assert_eq!(
+            presentation_step(hidden, hidden, Some(Hiding::Sliding)),
+            Some((Some(sliding), sliding))
+        );
+        // It came back over the page.
+        assert_eq!(
+            presentation_step(sliding, sliding, Some(Hiding::Hidden)),
+            Some((Some(hidden), hidden))
+        );
+        // Left from either: everything this module set comes off.
+        assert_eq!(presentation_step(sliding, sliding, None), Some((Some(0), 0)));
+        assert_eq!(presentation_step(hidden, hidden, None), Some((Some(0), 0)));
+        // A Dock the app hides itself is never touched by the swap.
+        assert_eq!(
+            presentation_step(HIDE_DOCK | HIDE_MENU_BAR, HIDE_MENU_BAR, Some(Hiding::Sliding)),
+            Some((Some(HIDE_DOCK | AUTO_HIDE_MENU_BAR), AUTO_HIDE_MENU_BAR))
+        );
+        // Every step along the way is one AppKit accepts.
+        for (current, added) in [(0, 0), (hidden, hidden), (sliding, sliding)] {
+            for wanted in [Some(Hiding::Hidden), Some(Hiding::Sliding), None] {
+                let (set, _) = presentation_step(current, added, wanted).expect("not in a Space");
+                assert!(appkit_accepts(set.unwrap_or(current)));
+            }
+        }
     }
 
     #[test]
     fn inside_a_native_space_the_options_wait_and_nothing_is_forgotten() {
-        let both = AUTO_HIDE_DOCK | AUTO_HIDE_MENU_BAR;
-        let space = PRESENTATION_FULL_SCREEN | both;
+        let both = HIDE_DOCK | HIDE_MENU_BAR;
+        let space = PRESENTATION_FULL_SCREEN | AUTO_HIDE_DOCK | AUTO_HIDE_MENU_BAR;
         // The last window left this mode while a pop-out's Space was in front:
         // the answer is "not now", so the bits stay on the books...
-        assert_eq!(presentation_step(space, both, false), None);
-        assert_eq!(presentation_step(space, 0, true), None);
+        assert_eq!(presentation_step(space, both, None), None);
+        assert_eq!(presentation_step(space, 0, Some(Hiding::Hidden)), None);
+        assert_eq!(presentation_step(space, both, Some(Hiding::Sliding)), None);
         // ...and come off once the Space has closed and AppKit put the app's own options back.
-        assert_eq!(presentation_step(both, both, false), Some((Some(0), 0)));
+        assert_eq!(presentation_step(both, both, None), Some((Some(0), 0)));
+    }
+
+    /// The pointer `top` points below the top edge, far from the Dock's.
+    fn below_top(top: f64) -> Option<Pointer> {
+        Some(Pointer { top, dock: 500.0 })
+    }
+
+    /// The pointer `dock` points from the Dock's edge, far from the top.
+    fn from_dock(dock: f64) -> Option<Pointer> {
+        Some(Pointer { top: 500.0, dock })
+    }
+
+    #[test]
+    fn a_pointer_over_the_page_keeps_the_bars_hidden_so_a_click_beside_the_camera_arrives() {
+        // Anywhere in the strip beside the housing, short of the edge itself.
+        for top in [3.0, 8.0, 20.0, 39.0, 44.0] {
+            assert_eq!(reach(Reach::Inside, below_top(top), false), Reach::Inside);
+        }
+        assert_eq!(reach(Reach::Inside, from_dock(40.0), false), Reach::Inside);
+        assert_eq!(hiding(Reach::Inside), Hiding::Hidden);
+    }
+
+    #[test]
+    fn a_pointer_at_the_top_edge_lets_the_menu_bar_slide_in() {
+        assert_eq!(reach(Reach::Inside, below_top(0.0), false), Reach::MenuBar);
+        assert_eq!(reach(Reach::Inside, below_top(1.0), false), Reach::MenuBar);
+        assert_eq!(hiding(Reach::MenuBar), Hiding::Sliding);
+        // It stays while the pointer is on the bar or just below it...
+        assert_eq!(reach(Reach::MenuBar, below_top(20.0), false), Reach::MenuBar);
+        assert_eq!(reach(Reach::MenuBar, below_top(MENU_BAR_BAND), false), Reach::MenuBar);
+        // ...and is hidden again once the pointer is back over the page.
+        assert_eq!(
+            reach(Reach::MenuBar, below_top(MENU_BAR_BAND + 1.0), false),
+            Reach::Inside
+        );
+        // From there the strip takes clicks again without the edge being touched.
+        assert_eq!(reach(Reach::Inside, below_top(20.0), false), Reach::Inside);
+    }
+
+    #[test]
+    fn an_open_menu_keeps_the_menu_bar_wherever_the_pointer_goes() {
+        assert_eq!(reach(Reach::MenuBar, below_top(300.0), true), Reach::MenuBar);
+        // Opened from the keyboard, with the pointer over the page.
+        assert_eq!(reach(Reach::Inside, below_top(300.0), true), Reach::MenuBar);
+        assert_eq!(reach(Reach::Dock, None, true), Reach::MenuBar);
+        // Closed: the pointer decides again.
+        assert_eq!(reach(Reach::MenuBar, below_top(300.0), false), Reach::Inside);
+    }
+
+    #[test]
+    fn a_pointer_at_the_docks_edge_lets_the_dock_slide_in() {
+        assert_eq!(reach(Reach::Inside, from_dock(0.5), false), Reach::Dock);
+        assert_eq!(hiding(Reach::Dock), Hiding::Sliding);
+        // Over the Dock, magnified or not, it stays.
+        assert_eq!(reach(Reach::Dock, from_dock(90.0), false), Reach::Dock);
+        assert_eq!(reach(Reach::Dock, from_dock(DOCK_BAND), false), Reach::Dock);
+        assert_eq!(reach(Reach::Dock, from_dock(DOCK_BAND + 1.0), false), Reach::Inside);
+        // The Dock's band is no reason to keep the menu bar's place taken:
+        // having touched the top, the pointer near the Dock's edge is over the page.
+        assert_eq!(reach(Reach::MenuBar, from_dock(90.0), false), Reach::Inside);
+    }
+
+    #[test]
+    fn the_pointer_can_go_from_one_bar_straight_to_the_other() {
+        assert_eq!(reach(Reach::MenuBar, from_dock(1.0), false), Reach::Dock);
+        assert_eq!(reach(Reach::Dock, below_top(1.0), false), Reach::MenuBar);
+        // A corner where the Dock's edge meets the top: the menu bar wins.
+        assert_eq!(
+            reach(Reach::Inside, Some(Pointer { top: 0.0, dock: 0.0 }), false),
+            Reach::MenuBar
+        );
+    }
+
+    #[test]
+    fn a_pointer_on_another_display_changes_nothing() {
+        for now in [Reach::Inside, Reach::MenuBar, Reach::Dock] {
+            assert_eq!(reach(now, None, false), now);
+        }
     }
 
     #[test]

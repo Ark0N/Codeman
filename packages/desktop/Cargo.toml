@@ -57,6 +57,7 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "NSRange",
     "NSSet",
     "NSString",
+    "NSTimer",
     "NSURL",
     "NSURLAuthenticationChallenge",
     "NSURLCredential",
@@ -64,6 +65,7 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "NSURLRequest",
     "NSURLResponse",
     "NSURLSession",
+    "NSUserDefaults",
     "NSValue",
 ] }
 objc2-app-kit = { version = "0.3.2", default-features = false, features = [
@@ -73,6 +75,8 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = [
     "NSApplication",
     "NSButton",
     "NSControl",
+    "NSEvent",
+    "NSMenu",
     "NSResponder",
     "NSScreen",
     "NSTextField",

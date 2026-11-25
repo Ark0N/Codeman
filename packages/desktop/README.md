@@ -34,7 +34,7 @@ cannot do.
 | **Start Codeman** | On the This Mac tab, and when `http://127.0.0.1:<port>` or `http://localhost:<port>` answers nothing, one click runs `codeman web -d` (or `~/.codeman/app`) with your login shell's environment, so the server gets your real PATH (Homebrew, nvm) for the agents it spawns. zsh, bash and other POSIX shells run the start themselves; fish, nu, xonsh, tcsh and other shells only report their environment, and the start runs under `/bin/sh` with it. Offered for those two addresses only: `codeman web -d` listens on 127.0.0.1. |
 | **Login** | The app answers the server's HTTP Basic login requests itself, with the login you connected with, so the page keeps working after the server restarts (a restart forgets every session cookie). It answers only for Codeman's own pages under the server's base path: a web tab or a rendered HTML file that asks for a Basic login of its own is left to WebKit and never gets your Codeman password. WebKit keeps no copy of the login, so every request for it gets the current one. Each connect first clears the app's cookies, so connecting to the same server as another user really switches users (local storage, where Codeman keeps its per-device settings, stays; a dashboard in a web tab that keeps its own login in a cookie may ask for it again). A page that still gets a 401 reloads once. If the server refuses the login (the password was changed, say), the app does not keep sending it: it checks it with a single probe, and only if the server refuses that too does the connect screen come back with a notice. That does not take focus from the app you are in: if Codeman is in the background, its Dock icon bounces. |
 | **Dialogs** | Codeman's `confirm()`, `prompt()` and `alert()` (Delete case, Kill all sessions, Update Codeman, discarding unsaved edits, ...) show as native macOS dialogs. wry implements none of them, and without them WKWebView answers Cancel without showing anything. Each dialog's first line names the page it comes from, and says so when that is an embedded frame (a web tab, a rendered HTML preview), so a frame cannot pass its text off as Codeman's. |
-| **Full screen** | `⌃⌘F` or the green button. The last state is restored at launch; *Always Open in Full Screen* forces it. Leaving full screen returns to the saved window size and position. On a MacBook with a camera housing (the notch), macOS's full screen leaves a black bar across the top of the display. **Full Screen Uses the Area Beside the Camera** (on unless you turn it off; in the View menu and as a switch in Codeman's App Settings under Appearance > Mac App, both only on a Mac with such a display) makes full screen cover the whole display instead: Codeman's header moves up beside the camera, its tabs on both sides of it and its toolbar at the right, and the terminal gains the height of the bar. Every way into full screen then takes it on that display (the green button, the menu item, `⌃⌘F`, the launch into full screen), and turning the option on or off while the window is in full screen changes it over at once. On a display without a housing nothing changes. See Decisions for what it trades, and Known limits. |
+| **Full screen** | `⌃⌘F` or the green button. The last state is restored at launch; *Always Open in Full Screen* forces it. Leaving full screen returns to the saved window size and position. On a MacBook with a camera housing (the notch), macOS's full screen leaves a black bar across the top of the display. **Full Screen Uses the Area Beside the Camera** (on unless you turn it off; in the View menu and as a switch in Codeman's App Settings under Appearance > Mac App, both only on a Mac with such a display) makes full screen cover the whole display instead: Codeman's header moves up beside the camera, its tabs on both sides of it and its toolbar at the right, and the terminal gains the height of the bar. Every way into full screen then takes it on that display (the green button, the menu item, `⌃⌘F`, the launch into full screen), and turning the option on or off while the window is in full screen changes it over at once. The menu bar and the Dock still slide in when the pointer is pushed against the top edge or the Dock's edge. On a display without a housing nothing changes. See Decisions for what it trades, and Known limits. |
 | **Menus** | A real Edit menu (without one, `⌘C`/`⌘V` do nothing in a WKWebView), Reload `⌘R`, Switch Server `⇧⌘O`, Developer Tools `⌥⌘I`. The page sees every key first, so Codeman's own shortcuts keep working. If the main window ends up showing a raw file instead of Codeman, `⌘R` takes it back to Codeman. |
 | **Pop-outs** | Implements Codeman's existing native-wrapper bridge, `window.CodemanHost` (`openInHostWindow` in `src/web/public/app.js`), so popping out a session or a file preview opens a real app window, and the pop-out icon is on by default. Session and rendered-HTML pop-outs come only from Codeman's own pop-out button. A `window.open` from page script opens only Codeman's file and download windows, without taking keyboard focus, at most 3 at once and then 1 per second. Only Codeman's own pop-out pages become app windows (see Decisions); when the app refuses one, Codeman shows a toast. Each pop-out opens a step down and to the right of the window in use, never exactly on top of another one. A web tab's *Open in new tab* opens the dashboard in your default browser, as it would from a browser tab. |
 | **Links** | On Codeman's own pages (the dashboard and session windows), a link to another site opens in your default browser, also on `⌘`-click or a middle click. Pages can send at most 3 links to the browser at once, then 1 per second. Inside a rendered HTML preview or a web tab, a plain link to another site does nothing, while one that asks for a new window (`target="_blank"`, `window.open`) opens in your default browser within the same budget (see Known limits). |
@@ -281,7 +281,7 @@ changes that. What reaches it is the older kind of full screen, the one
 terminals offer for the same reason (Ghostty's `macos-non-native-fullscreen`,
 WezTerm's `macos_fullscreen_extend_behind_notch`, iTerm2's and kitty's
 traditional full screen): the window loses its title bar, the Dock and the menu
-bar auto-hide, and the window gets the display's whole frame
+bar are hidden, and the window gets the display's whole frame
 (`src/whole_screen.rs`). Every request for full screen ends in
 `-[NSWindow toggleFullScreen:]`, so the app adds an override of that one method
 to tao's window class and decides there, which is what makes the green button
@@ -292,7 +292,7 @@ full screen never overlap: AppKit says when a window begins and ends a change
 into or out of its own full screen, and while one is under way the app neither
 takes the title bar off nor saves the window's frame, so switching the option
 while the window is in macOS's full screen waits for the Space to close first.
-The Dock and the menu bar are set to auto-hide only while a window is in this
+The Dock and the menu bar are out of the way only while a window is in this
 mode, and what could not be set or taken off because a native Space was in
 front is done when that changes.
 `NSPrefersDisplaySafeAreaCompatibilityMode` is `false` in `Info.plist`, which
@@ -309,6 +309,27 @@ the switch shows. It is on by default: on a display with a housing the black
 bar costs more than the Space gives. On a display without a housing macOS's
 full screen already uses every pixel, so the option changes nothing there and
 the window keeps its Space.
+
+**The menu bar and the Dock are hidden, and only auto-hide once the pointer
+reaches their edge.** Auto-hiding them, which is what a full screen like this
+normally does, is not enough here. macOS keeps an invisible window in the
+place of an auto-hidden menu bar, as high as the camera housing, and that
+window takes every click made there. The strip beside the housing is exactly
+that place, so with auto-hide a click on a tab or a toolbar button in the top
+row brought the menu bar in and never reached the page (seen on macOS 27.2,
+with a plain AppKit window as much as with this app; hovering still worked,
+which is why it looked fine). With the menu bar fully hidden macOS keeps
+nothing there and the click arrives. So the app hides both bars while the
+pointer is over the page, and switches to auto-hide only when the pointer
+touches the top edge of the display or the edge the Dock is on: pushing on
+then slides the bar in, as in any full screen. It goes back to hidden once the
+pointer has moved clear of the bar again (72 points from the top, 200 from the
+Dock's edge), and never while a menu is open, since the menu hangs from the
+bar. A timer looks at the pointer 12 times a second while a window is in the
+mode and the app is in front; the app gets no mouse events over the menu bar,
+the Dock or macOS's own window, so an event monitor could not tell when to go
+back. AppKit refuses a hidden menu bar over a Dock that only auto-hides, which
+is why the two always change together.
 
 **Leaving macOS's full screen leaves the window without a first responder.**
 A window that comes out of a native Space is its own first responder and takes
@@ -540,14 +561,25 @@ crosses, so the login is never on a command line.
   menu line says "stayed dark".
 - **Full screen over the whole display was seen on one MacBook Pro so far**
   (Mac17,13, macOS 27.2.1, built-in display only, a housing 59 points wide in
-  a strip 40 points high, 2026-11-25): the launch into it, typing, the menu bar
-  sliding in over the header, leaving and entering, the change-over both ways,
-  a relaunch and `⌘W`, with the Dock and the menu bar back every time. Not
-  seen: a second display, closing the lid, and a MacBook with the wider housing
-  of earlier models (the page was checked at those sizes in Chromium only).
-  Not yet seen on that MacBook either, as of this change: the option being on
-  by default, the switch in App Settings, and typing right after the option is
-  turned on from macOS's full screen (a fix for what that run found).
+  a strip 40 points high, 2026-11-25): the launch into it with the option
+  never set, typing, tabs on both sides of the housing with a tab selected on
+  either side, pointer clicks on the tabs and buttons in the top row, the menu
+  bar and the Dock sliding in when the pointer is pushed against their edge, a
+  menu staying open while the pointer moves down it, leaving and entering, the
+  change-over both ways from the View menu and from the switch in App
+  Settings, typing right after each, another app in front and back, a relaunch
+  and `⌘W`, with the Dock and the menu bar back every time. The pointer in
+  those runs was driven by synthetic events posted where the hardware's enter
+  the system, not by a hand on the trackpad. Not seen: a second display,
+  closing the lid, a Dock at the left or right edge, and a MacBook with the
+  wider housing of earlier models (the page was checked at those sizes in
+  Chromium only).
+- **In that mode the pointer has to leave the top of the display before the
+  top row takes clicks again once the menu bar was called.** Touching the top
+  edge hands the strip to the menu bar until the pointer is 72 points below it
+  again; a click in the top row in between goes to the menu bar. Reaching for
+  a tab and overshooting to the very edge therefore brings the menu bar in,
+  as it does in any full-screen window.
 - **In that mode the tabs go around the camera in the classic tab strip only.**
   A row of tabs loses the width of the housing and 8 points on each side of it,
   nothing else. With the tabs grouped by state, by case or as a ledger in the
