@@ -161,7 +161,7 @@ by presence in a server‑side map, so they cannot be forged offline.
 ### Rate limiting / lockout recovery
 
 Failed logins are tracked **per IP**: 10 failures (`AUTH_FAILURE_MAX`) → `429`, with a 15‑minute decay. Multi-user mode replaces that with three buckets, all with the same decay: a wider per-IP **pre-gate** of 50 failures (`AUTH_IP_FAILURE_MAX`), checked before the scrypt verify, which bounds scrypt cost from one source and tolerates many users behind one egress IP; a **per-(username, IP)** gate of 10 failures (`AUTH_FAILURE_MAX`), also checked before the verify, which is what caps verified guesses against one account from one source; and a **per-username** bucket, checked after the verify, that answers `429` to failed guesses from the 10th on, from any IP (the count is incremented before the check). The last two exist in multi-user mode only. So the wider per-IP cap does not widen guessing against any one account from one IP, and other IPs cannot lock an account out.
-A request with no `Authorization` header is never counted (step 4), so an open
+A request with no `Authorization` header, or an empty one, is never counted (step 4), so an open
 tab after a restart cannot fill any bucket. The QR path has its own separate limiter.
 
 The lockout check sits **after** the cookie/credential checks (step 5, not first).

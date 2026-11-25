@@ -363,9 +363,11 @@ export function registerAuthMiddleware(app: FastifyInstance, https: boolean, bas
 
   // Separate hook-secret failure counter (COD-54). MUST NOT share authFailures:
   // legacy (pre-secret) hook configs fire constantly from 127.0.0.1, and counting
-  // their 401s against the shared bucket would 429 every cookie-less request from
-  // loopback — locking out the Basic-Auth login path (and, through a tunnel, every
-  // client, since tunneled traffic also arrives as 127.0.0.1).
+  // their 401s against the shared bucket would fill it for loopback: every wrong or
+  // malformed login from there would get a 429 (and in multi-user mode a correct
+  // password too, once the pre-verify gate is full), locking out the Basic-Auth login
+  // path and, through a tunnel, every client, since tunneled traffic also arrives as
+  // 127.0.0.1. A request with no Authorization header is never counted or refused.
   state.hookSecretFailures = new StaleExpirationMap<string, number>({
     ttlMs: AUTH_FAILURE_WINDOW_MS,
     refreshOnGet: false,
