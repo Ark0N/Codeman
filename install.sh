@@ -2341,20 +2341,31 @@ xml_unescape() {
 }
 
 # Read one assignment from the unit's Environment= directives. Each line can
-# hold several assignments, quoted as whole words. Later assignments and empty
-# directives override earlier values. The unit is read as data.
+# hold several assignments. Quotes are removed wherever they sit in a word, as
+# systemd does (KEY="a b" and "KEY=a b" are the same assignment); backslash
+# escapes inside quotes are kept for systemd_env_unescape, and a line whose
+# quote never closes assigns nothing. Later assignments and empty directives
+# override earlier values. The unit is read as data.
 read_systemd_environment() {
     awk -v key="$2=" '
         /^[[:space:]]*Environment[[:space:]]*=/ {
-            sub(/^[[:space:]]*Environment[[:space:]]*=[[:space:]]*/, "")
-            if ($0 == "") value = ""
-            while (match($0, /^("([^"\\]|\\.)*"|\047([^\047\\]|\\.)*\047|[^[:space:]"\047][^[:space:]]*)([[:space:]]|$)/)) {
-                word = substr($0, 1, RLENGTH)
-                $0 = substr($0, RLENGTH + 1)
-                sub(/^[[:space:]]+/, "")
-                sub(/[[:space:]]$/, "", word)
-                if (word ~ /^["\047]/) word = substr(word, 2, length(word) - 2)
-                if (index(word, key) == 1) value = substr(word, length(key) + 1)
+            line = $0
+            sub(/^[[:space:]]*Environment[[:space:]]*=[[:space:]]*/, "", line)
+            if (line == "") { value = ""; next }
+            n = length(line); word = ""; inword = 0; q = ""
+            for (i = 1; i <= n + 1; i++) {
+                c = (i <= n) ? substr(line, i, 1) : " "
+                if (q != "") {
+                    if (c == "\\" && i < n) { word = word c substr(line, i + 1, 1); i++; continue }
+                    if (c == q) { q = ""; continue }
+                    word = word c; continue
+                }
+                if (c == "\"" || c == "\047") { q = c; inword = 1; continue }
+                if (c ~ /[[:space:]]/) {
+                    if (inword && index(word, key) == 1) value = substr(word, length(key) + 1)
+                    word = ""; inword = 0; continue
+                }
+                word = word c; inword = 1
             }
         }
         END { print value }
@@ -4460,7 +4471,11 @@ print_done_screen() {
     fi
     if [[ "$EXISTING_MULTIUSER" != "1" ]]; then
         echo -e "    ${BOLD}Users${NC}     Create the first admin with ${CYAN}codeman users add <name> --admin${NC} before enabling multi-user mode."
-        echo -e "              To start manually, run ${CYAN}$(start_command_hint) --multiuser${NC}"
+        # Only where no service runs: next to a working service this line would start a
+        # second server on the same data dir and tmux socket.
+        if [[ "$launch" != "2" || "$service_ok" != "true" ]]; then
+            echo -e "              To start manually, run ${CYAN}$(start_command_hint) --multiuser${NC}"
+        fi
         if [[ "$launch" == "2" ]]; then
             case "$svc" in
                 systemd)

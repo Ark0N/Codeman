@@ -994,6 +994,19 @@ describe('install.sh multi-user guidance and reconfiguration', () => {
     expect(output).toContain('[Service]');
     expect(output).toContain('systemctl --user daemon-reload && systemctl --user restart codeman-web');
     expect(output).not.toContain('EnvironmentVariables');
+    // Next to a working service the manual start line would start a second server on the
+    // same data dir and tmux socket, so it is not printed there.
+    expect(output).not.toContain('codeman web --multiuser');
+  });
+
+  it('keeps the manual start line when the service setup failed', () => {
+    const output = drive('SERVICE_TYPE=systemd; read_existing_binding; print_done_screen 2 false', {
+      path: unit,
+      content: '[Service]\n',
+    });
+    expect(output).toContain('The service was set up but is not running yet');
+    expect(output).toContain('codeman web --multiuser');
+    expect(output).toContain('Environment=CODEMAN_MULTIUSER=1');
   });
 
   it('prints the exact LaunchAgent edit and unload/load sequence', () => {
@@ -1006,6 +1019,7 @@ describe('install.sh multi-user guidance and reconfiguration', () => {
     expect(guidance.indexOf(unload)).toBeGreaterThan(-1);
     expect(guidance.indexOf(load)).toBeGreaterThan(guidance.indexOf(unload));
     expect(guidance).not.toContain('daemon-reload');
+    expect(output).not.toContain('codeman web --multiuser');
   });
 
   it.each([
@@ -1014,6 +1028,9 @@ describe('install.sh multi-user guidance and reconfiguration', () => {
     ['systemd', unit, '  Environment = CODEMAN_MULTIUSER=1   ', true],
     ['systemd', unit, 'Environment="NOTE=two words" CODEMAN_MULTIUSER=1 NODE_ENV=production', true],
     ['systemd', unit, "Environment='CODEMAN_MULTIUSER=1' NODE_ENV=production", true],
+    // systemd unquotes anywhere in a word, so a hand-quoted VALUE is the same setting.
+    ['systemd', unit, 'Environment=CODEMAN_MULTIUSER="1"', true],
+    ['systemd', unit, "Environment=CODEMAN_MULTIUSER='true'", true],
     ['systemd', unit, 'Environment=CODEMAN_MULTIUSER=1 CODEMAN_MULTIUSER=0', false],
     ['systemd', unit, 'Environment=CODEMAN_MULTIUSER=1\nEnvironment=CODEMAN_MULTIUSER=false', false],
     ['systemd', unit, 'Environment=CODEMAN_MULTIUSER=1\nEnvironment=', false],
@@ -1071,6 +1088,31 @@ describe('install.sh multi-user guidance and reconfiguration', () => {
     expect(output).toMatch(/^Environment=CODEMAN_HOST=0\.0\.0\.0$/m);
     expect(output).toContain('Environment="CODEMAN_PASSWORD=test password"');
     expect(output).not.toContain('CODEMAN_MULTIUSER');
+  });
+
+  it.each([
+    ['Environment=CODEMAN_PASSWORD="my pass"', 'Environment="CODEMAN_PASSWORD=my pass"'],
+    ['Environment=CODEMAN_PASSWORD="hunter2"', 'Environment="CODEMAN_PASSWORD=hunter2"'],
+    ['Environment="CODEMAN_PASSWORD=a\\"b\\\\c"', 'Environment="CODEMAN_PASSWORD=a\\"b\\\\c"'],
+  ])('keeps a hand-written password across a re-run: %s', (written, kept) => {
+    const output = drive(
+      `
+        parse_flags --port 4000 --service
+        choose_network_binding >/dev/null
+        setup_systemd_service >/dev/null
+        cat "$HOME/${unit}"
+      `,
+      { path: unit, content: ['[Service]', 'Environment=CODEMAN_HOST=0.0.0.0', written].join('\n') }
+    );
+    expect(output.split('\n')).toContain(kept);
+  });
+
+  it('assigns nothing from a line whose quote never closes', () => {
+    const output = drive('read_existing_binding; echo "multi=$EXISTING_MULTIUSER"', {
+      path: unit,
+      content: '[Service]\nEnvironment="CODEMAN_MULTIUSER=1\n',
+    });
+    expect(output).toContain('multi=0');
   });
 });
 
