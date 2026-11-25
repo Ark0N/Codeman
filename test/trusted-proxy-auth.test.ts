@@ -20,7 +20,7 @@ import fastifyWebsocket from '@fastify/websocket';
 import WebSocket from 'ws';
 import { WebServer } from '../src/web/server.js';
 import { TmuxManager } from '../src/tmux-manager.js';
-import { createUser, invalidateUsersCache, updateUser } from '../src/user-store.js';
+import { createUser, invalidateUsersCache, touchLastLogin, updateUser } from '../src/user-store.js';
 import { AUTH_FAILURE_MAX } from '../src/config/auth-config.js';
 import {
   getTrustedProxyConfig,
@@ -37,6 +37,17 @@ import { createMockRouteContext } from './mocks/index.js';
 import { getLifecycleLog } from '../src/session-lifecycle-log.js';
 
 vi.spyOn(TmuxManager, 'isTmuxAvailable').mockReturnValue(true);
+
+// touchLastLogin is fire-and-forget in the auth hook; wrapped so its calls can be counted.
+vi.mock('../src/user-store.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/user-store.js')>();
+  return { ...actual, touchLastLogin: vi.fn(actual.touchLastLogin) };
+});
+
+/** Wait for every last-login write started so far, so none races a test that edits users.json. */
+async function settleLastLoginWrites(): Promise<void> {
+  await Promise.all(vi.mocked(touchLastLogin).mock.results.map((r) => r.value));
+}
 
 const SECRET = 'a'.repeat(24) + 'b'.repeat(24); // 48 chars
 
@@ -253,6 +264,10 @@ describe('trusted-proxy config', () => {
         'Sec-WebSocket-Key',
         'X-Forwarded-For',
         'X-Real-IP',
+        'X-Requested-With',
+        'X-HTTP-Method-Override',
+        'X-CSRF-Token',
+        'X-XSRF-Token',
         'x-codeman-proxy-secret',
         'X-Codeman-Hook-Secret',
         'not a header',
@@ -299,33 +314,46 @@ describe('takeTrustedProxyHeaders', () => {
 
 describe('capabilityPrefixOf judges a path the way a proxy matcher does', () => {
   it.each([
-    ['/webview/x', 'webview'],
-    ['/webview/', 'webview'],
-    ['/webview/x?q=1', 'webview'],
-    [`/webview/${'a'.repeat(200)}/y`, 'webview'],
-    ['/webview/bad*token!/z', 'webview'],
-    ['/WEBVIEW/x', 'webview'],
-    ['/%77ebview/x', 'webview'],
-    ['//webview/x', 'webview'],
-    ['/a/../webview/x', 'webview'],
-    ['/html-view/x', 'html-view'],
-    ['/HTML-View/a/b', 'html-view'],
-    ['/html-view%2Fx', 'html-view'],
-    ['/WEBV%C4%B0EW/x', 'webview'], // U+0130 İ: Caddy's matcher folds it to "i"
-    ['/HTML-V%C4%B0EW/a', 'html-view'],
-    ['/webv%C4%B1ew/x', null], // U+0131 dotless ı: folded to "i" by neither side
-    ['/webview', null],
-    ['/webviewfoo', null],
-    ['/webviewfoo/x', null],
-    ['/html-view', null],
-    ['/html-viewer/x', null],
-    ['/', null],
-    ['/api/me', null],
-    ['/api/webviews', null],
-    ['/x/webview/y', null],
-    ['/webview/../api/me', null],
-  ] as const)('%s -> %s', (url, expected) => {
-    expect(capabilityPrefixOf(url)).toBe(expected);
+    ['/webview/x', '', 'webview'],
+    ['/webview/', '', 'webview'],
+    ['/webview/x?q=1', '', 'webview'],
+    [`/webview/${'a'.repeat(200)}/y`, '', 'webview'],
+    ['/webview/bad*token!/z', '', 'webview'],
+    ['/WEBVIEW/x', '', 'webview'],
+    ['/%77ebview/x', '', 'webview'],
+    ['//webview/x', '', 'webview'],
+    ['/a/../webview/x', '', 'webview'],
+    ['/html-view/x', '', 'html-view'],
+    ['/HTML-View/a/b', '', 'html-view'],
+    ['/html-view%2Fx', '', 'html-view'],
+    ['/WEBV%C4%B0EW/x', '', 'webview'], // U+0130 İ: Caddy's matcher folds it to "i"
+    ['/HTML-V%C4%B0EW/a', '', 'html-view'],
+    ['/webv%C4%B1ew/x', '', null], // U+0131 dotless ı: folded to "i" by neither side
+    ['/webview', '', null],
+    ['/webviewfoo', '', null],
+    ['/webviewfoo/x', '', null],
+    ['/html-view', '', null],
+    ['/html-viewer/x', '', null],
+    ['/', '', null],
+    ['/api/me', '', null],
+    ['/api/webviews', '', null],
+    ['/x/webview/y', '', null],
+    ['/webview/../api/me', '', null],
+    // Under a base path: the server strips only the literal prefix, so every other
+    // spelling of it still reaches the hook in front of the capability prefix.
+    ['/webview/x', '/codeman', 'webview'], // literal prefix, already stripped
+    ['/CODEMAN/webview/x', '/codeman', 'webview'],
+    ['/%63odeman/webview/x', '/codeman', 'webview'],
+    ['//codeman/webview/x', '/codeman', 'webview'],
+    ['/x/../codeman/webview/x', '/codeman', 'webview'],
+    ['/CODEMAN/html-view/x', '/codeman', 'html-view'],
+    ['/codeman/webview/x', '/CodeMan', 'webview'],
+    ['/codemanx/webview/x', '/codeman', null],
+    ['/other/webview/x', '/codeman', null],
+    ['/codeman', '/codeman', null],
+    ['/CODEMAN/webview/x', '', null], // root mount: no prefix to remove
+  ] as const)('%s under "%s" -> %s', (url, basePath, expected) => {
+    expect(capabilityPrefixOf(url, basePath)).toBe(expected);
   });
 });
 
@@ -413,11 +441,13 @@ describe('the auth middleware strips the headers before any route sees them', ()
         method: 'GET',
         url: '/echo',
         remoteAddress: '127.0.0.1',
-        headers: { 'x-codeman-proxy-secret': SECRET, 'x-forwarded-user': 'bob' },
+        headers: { 'x-codeman-proxy-secret': SECRET, 'x-forwarded-user': 'bob', 'x-codeman-user': 'alice' },
       });
       expect(res.statusCode).toBe(200);
       expect(res.json().user).toBe('bob');
       expect(res.json().headers['x-forwarded-user']).toBeUndefined();
+      // The default header is removed too, though it is no longer read.
+      expect(res.json().headers['x-codeman-user']).toBeUndefined();
     } finally {
       delete process.env.CODEMAN_TRUSTED_PROXY_USER_HEADER;
       await app.close();
@@ -594,6 +624,52 @@ describe('trusted-proxy sign-in', () => {
     await updateUser('frank', { disabled: true });
     invalidateUsersCache();
     expect((await me(proxied('frank'))).status).toBe(403);
+  });
+
+  it('records the last login on a proxy sign-in at most every 15 minutes per user', async () => {
+    const app = appOf(await freshServer());
+    const calls = () => vi.mocked(touchLastLogin).mock.calls.filter(([u]) => u === 'erin').length;
+    const before = calls();
+    const realNow = Date.now();
+    const nowSpy = vi.spyOn(Date, 'now');
+    try {
+      for (const [minutes, expected] of [
+        [0, 1],
+        [14, 1],
+        [15, 2],
+      ] as const) {
+        nowSpy.mockReturnValue(realNow + minutes * 60_000);
+        expect((await injectMe(app, '127.0.0.1', proxied('erin'))).statusCode).toBe(200);
+        expect(calls(), `after ${minutes} min`).toBe(before + expected);
+      }
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('answers 503 when the user store is unreadable, without falling back to a cookie or Basic', async () => {
+    const app = appOf(await freshServer());
+    const login = await injectMe(app, '127.0.0.1', { authorization: basic('bob', 'bobpass123') });
+    const token = /codeman_session=([^;]+)/.exec(String(login.headers['set-cookie']))![1];
+    await settleLastLoginWrites();
+    const usersFile = path.join(dataDir, 'users.json');
+    const original = await fs.readFile(usersFile, 'utf-8');
+    try {
+      await fs.writeFile(usersFile, '{ not json');
+      invalidateUsersCache();
+      const withCredentials: Record<string, string>[] = [
+        { cookie: `codeman_session=${token}` },
+        { authorization: basic('bob', 'bobpass123') },
+      ];
+      for (const extra of withCredentials) {
+        const res = await injectMe(app, '127.0.0.1', proxied('alice', SECRET, extra));
+        expect(res.statusCode, Object.keys(extra)[0]).toBe(503);
+        expect(res.body).toMatch(/user store unreadable/);
+      }
+    } finally {
+      await fs.writeFile(usersFile, original);
+      invalidateUsersCache();
+    }
   });
 
   it('does not apply the mustChangePassword lockbox to a proxy sign-in', async () => {
@@ -839,7 +915,68 @@ describe('terminal WebSocket through a proxy sign-in is owner-scoped', () => {
   });
 });
 
+describe('under a base path, every spelling of the mount prefix is refused like the literal one', () => {
+  /** GET with the path sent exactly as written (fetch would normalise it). */
+  function rawGet(port: number, rawPath: string, headers: Record<string, string> = {}) {
+    return new Promise<{ status: number; challenge: string | undefined }>((resolve, reject) => {
+      const req = http.request(
+        { host: '127.0.0.1', port, path: rawPath, headers: { host: `localhost:${port}`, ...headers } },
+        (res) => {
+          res.resume();
+          res.on('end', () =>
+            resolve({ status: res.statusCode ?? 0, challenge: res.headers['www-authenticate'] as string | undefined })
+          );
+        }
+      );
+      req.on('error', reject);
+      req.end();
+    });
+  }
+
+  it('answers each with the route refusal, no challenge and no count, so Basic still signs in', async () => {
+    useSecret({ inline: SECRET });
+    const s = new WebServer(0, false, true, '127.0.0.1', undefined, false, '/codeman');
+    await s.start();
+    extraServers.push(s);
+    const port = s.boundPort;
+    const cases = [
+      ['/CODEMAN/webview/x', 403],
+      ['/%63odeman/webview/x', 403],
+      ['//codeman/webview/x', 403],
+      ['/x/../codeman/webview/x', 403],
+      ['/CODEMAN/html-view/x', 404],
+    ] as const;
+    for (let i = 0; i < 60; i++) {
+      const [rawPath, status] = cases[i % cases.length];
+      const res = await rawGet(port, rawPath);
+      expect(res.status, rawPath).toBe(status);
+      expect(res.challenge, rawPath).toBeUndefined();
+    }
+    const ok = await rawGet(port, '/codeman/api/me', { authorization: basic('bob', 'bobpass123') });
+    expect(ok.status).toBe(200);
+  });
+});
+
 describe('trusted-proxy sign-in is off without its preconditions', () => {
+  it('keeps the normal challenge for capability paths', async () => {
+    useSecret();
+    try {
+      const app = appOf(await freshServer());
+      for (const url of ['/webview/x', `/html-view/${'A'.repeat(24)}/index.html`]) {
+        const res = await app.inject({
+          method: 'GET',
+          url,
+          remoteAddress: '127.0.0.1',
+          headers: { host: 'localhost' },
+        });
+        expect(res.statusCode, url).toBe(401);
+        expect(res.headers['www-authenticate'], url).toMatch(/Basic/);
+      }
+    } finally {
+      useSecret({ inline: SECRET });
+    }
+  });
+
   it('ignores the headers when no secret is configured', async () => {
     useSecret();
     try {

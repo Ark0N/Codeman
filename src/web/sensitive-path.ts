@@ -33,9 +33,8 @@
  */
 
 import { homedir } from 'node:os';
-import { realpathSync } from 'node:fs';
 import { join } from 'node:path';
-import { trustedProxySecretFilePath } from '../config/trusted-proxy.js';
+import { trustedProxySecretFilePath, trustedProxySecretFileRealPath } from '../config/trusted-proxy.js';
 
 const SENSITIVE_PATTERNS: RegExp[] = [
   // System account databases.
@@ -162,17 +161,12 @@ const HOME_SENSITIVE_MEMBERS = ['.claude.json', '.claude/settings.json', '.claud
  * Whether `absPath` is the configured trusted-proxy secret file
  * (`CODEMAN_TRUSTED_PROXY_SECRET_FILE`, any name and location). The variable is removed
  * from `process.env` once the secret is read, so the path comes from the trusted-proxy
- * module, which keeps it.
+ * module, which keeps it, as configured and with symlinks resolved (resolved once).
  */
 function isTrustedProxySecretFile(absPath: string): boolean {
   const file = trustedProxySecretFilePath();
   if (!file) return false;
-  if (absPath === file) return true;
-  try {
-    return absPath === realpathSync(file);
-  } catch {
-    return false;
-  }
+  return absPath === file || absPath === trustedProxySecretFileRealPath();
 }
 
 /**

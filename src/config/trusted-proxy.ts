@@ -26,7 +26,8 @@
  * is read ONCE and both `CODEMAN_TRUSTED_PROXY_SECRET` and
  * `CODEMAN_TRUSTED_PROXY_SECRET_FILE` are then deleted from `process.env`, because every
  * session Codeman spawns inherits that environment. The file's resolved path stays in
- * this module (`trustedProxySecretFilePath`) for the sensitive-path blocklist.
+ * this module (`trustedProxySecretFilePath`, `trustedProxySecretFileRealPath`) for the
+ * sensitive-path blocklist.
  *
  * A configured setup that can't be used stops the server from starting
  * (`trustedProxyConfigError`, thrown from `WebServer.start()`), so a typo never falls
@@ -37,7 +38,7 @@
  * e.g. the web-tab relay, can forward or log them.
  */
 
-import { readFileSync, statSync } from 'node:fs';
+import { readFileSync, realpathSync, statSync } from 'node:fs';
 import type { IncomingHttpHeaders } from 'node:http';
 import { resolve } from 'node:path';
 
@@ -85,6 +86,8 @@ interface LoadedSecret {
   problem?: string;
   /** Absolute path of `CODEMAN_TRUSTED_PROXY_SECRET_FILE`, when it was set. */
   filePath?: string;
+  /** That path with symlinks resolved, when it could be resolved. */
+  fileRealPath?: string;
 }
 
 let loaded: LoadedSecret | null = null;
@@ -101,6 +104,7 @@ function loadSecret(): LoadedSecret {
   delete process.env.CODEMAN_TRUSTED_PROXY_SECRET;
   delete process.env.CODEMAN_TRUSTED_PROXY_SECRET_FILE;
   const filePath = file ? resolve(file) : undefined;
+  const fileRealPath = filePath ? realPathOrUndefined(filePath) : undefined;
 
   let secret: string | undefined;
   let problem: string | undefined;
@@ -130,8 +134,16 @@ function loadSecret(): LoadedSecret {
         'the trusted-proxy secret must be printable ASCII without spaces (generate one with: openssl rand -hex 32)';
     }
   }
-  loaded = { secret, problem, filePath };
+  loaded = { secret, problem, filePath, fileRealPath };
   return loaded;
+}
+
+function realPathOrUndefined(path: string): string | undefined {
+  try {
+    return realpathSync(path);
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -152,6 +164,16 @@ export function trustedProxySecretFilePath(): string | null {
   if (loaded) return loaded.filePath ?? null;
   const file = process.env.CODEMAN_TRUSTED_PROXY_SECRET_FILE?.trim();
   return file ? resolve(file) : null;
+}
+
+/**
+ * The secret file's path with symlinks resolved, or null (not configured, or it can't be
+ * resolved). Resolved once when the secret is read; before that, from the environment.
+ */
+export function trustedProxySecretFileRealPath(): string | null {
+  if (loaded) return loaded.fileRealPath ?? null;
+  const file = trustedProxySecretFilePath();
+  return (file && realPathOrUndefined(file)) ?? null;
 }
 
 /** Test-only: forget the cached secret so the next call re-reads the environment. */

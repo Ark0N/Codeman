@@ -398,8 +398,13 @@ export function isLostWebviewRootFrame(req: FastifyRequest): boolean {
  * sign-in, so the refusal below must recognise every such spelling, not only the literal
  * one Codeman's own routes use. Any token shape counts: a malformed token is still a
  * request the proxy let through.
+ *
+ * `rawUrl` has been through `stripBasePath()`, which removes the mount prefix only in its
+ * literal spelling, so under `basePath` a re-spelled prefix (`/CODEMAN/webview/x`,
+ * `/%63odeman/...`, `//codeman/...`, `/x/../codeman/...`) is still in front. After the
+ * normalisation, the lower-cased base path is removed once when the path starts with it.
  */
-export function capabilityPrefixOf(rawUrl: string): 'webview' | 'html-view' | null {
+export function capabilityPrefixOf(rawUrl: string, basePath = ''): 'webview' | 'html-view' | null {
   let path = rawUrl.split('?')[0];
   try {
     path = decodeURIComponent(path);
@@ -413,6 +418,8 @@ export function capabilityPrefixOf(rawUrl: string): 'webview' | 'html-view' | nu
     .normalize(path)
     .replace(/\u0130/g, 'i')
     .toLowerCase();
+  const base = basePath.toLowerCase();
+  if (base && path.startsWith(`${base}/`)) path = path.slice(base.length);
   if (path.startsWith(`${WEBVIEW_PROXY_PREFIX}/`)) return 'webview';
   if (path.startsWith(`${HTML_VIEW_PREFIX}/`)) return 'html-view';
   return null;
@@ -436,8 +443,8 @@ export function capabilityPrefixOf(rawUrl: string): 'webview' | 'html-view' | nu
  *
  * @returns true when the reply was sent.
  */
-function serveRefusedCapabilityPath(req: FastifyRequest, reply: FastifyReply): boolean {
-  const kind = capabilityPrefixOf(req.url ?? '');
+function serveRefusedCapabilityPath(req: FastifyRequest, reply: FastifyReply, basePath = ''): boolean {
+  const kind = capabilityPrefixOf(req.url ?? '', basePath);
   if (kind === 'webview') {
     reply.code(403).type('text/plain').send('Forbidden: unknown or expired webview capability');
     return true;
@@ -847,7 +854,7 @@ function registerMultiUserAuthHook(
     if (serveLostWebviewFrame(req, reply)) return;
     // Behind an authenticating proxy, capability paths reach Codeman without the proxy's
     // sign-in: refuse a non-exempt one with the route's own answer, no challenge, no count.
-    if (trustedProxy && serveRefusedCapabilityPath(req, reply)) return;
+    if (trustedProxy && serveRefusedCapabilityPath(req, reply, basePath)) return;
 
     // 0. Trusted reverse-proxy identity, checked BEFORE the cookie: when the proxy
     // vouches for a person on this request, that is authoritative, and a stale cookie
