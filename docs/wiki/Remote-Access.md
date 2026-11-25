@@ -190,6 +190,36 @@ and is not one.
 Also make sure the proxy forwards WebSocket upgrades. The terminal is a WebSocket, and the
 upgrade runs the same Host and Origin checks, closing with code `4003` on failure.
 
+### Persist the allowlist for a systemd user service
+
+On Linux, add the hostname to the service environment with a systemd drop-in. For the
+default service, run:
+
+```bash
+systemctl --user edit codeman-web.service
+```
+
+Add this to the editable portion:
+
+```ini
+[Service]
+Environment="CODEMAN_ALLOWED_HOSTS=codeman.example.com"
+```
+
+If the service already has allowed hosts, include them in the same comma-separated
+value. If you already set the variable through an `EnvironmentFile=`, update that
+file. For a named Codeman instance, use its systemd unit name in both commands.
+
+Save the drop-in and restart Codeman:
+
+```bash
+systemctl --user restart codeman-web.service
+```
+
+The drop-in lives outside the app checkout and persists across normal Codeman
+updates. Open the proxy URL and attach to a terminal to check both the page and the
+WebSocket connection.
+
 ### Mounting under a sub-path
 
 By default Codeman assumes it is served at the origin root (`/`). To mount it under a
