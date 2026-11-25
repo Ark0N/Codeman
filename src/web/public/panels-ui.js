@@ -2841,7 +2841,8 @@ Object.assign(CodemanApp.prototype, {
     const statusEl = this.$('fileBrowserStatus');
     if (!statusEl || !data) return;
     if (this._ensureFileBrowserState().filter.trim()) {
-      statusEl.textContent = `${this._fileBrowserLocalMatchCount || 0} matches in loaded folders · Enter to search workspace`;
+      const localCount = this._fileBrowserLocalMatchCount || 0;
+      statusEl.textContent = `${localCount} ${localCount === 1 ? 'match' : 'matches'} in loaded folders · Enter to search workspace`;
       return;
     }
     let { totalFiles, totalDirectories, truncated } = data;
@@ -3294,7 +3295,14 @@ Object.assign(CodemanApp.prototype, {
         // Automatic restoration must not bypass a failed page's explicit Retry action.
         if (expandedOnly && container._listing?.error) return null;
         const cursor = container._listing?.nextCursor ?? container.nextCursor;
-        if (!cursor) return null;
+        // The server lists a folder's directories before its files, across every page. So once
+        // a loaded page holds a file, no later page can hold the folder that is looked for.
+        if (!cursor || nodes.some(node => node.type === 'file')) {
+          // A restore that cannot find its folder holds an expansion for a folder that is gone
+          // (deleted or renamed). Forget it, or every Refresh looks for it again.
+          if (expandedOnly) this.fileBrowserExpandedDirs.delete(target);
+          return null;
+        }
         await this._loadFileBrowserDirectory(container === data ? '' : container.path, { more: true });
         if (!current() || container._listing?.error) return null;
         continue;
@@ -3342,7 +3350,13 @@ Object.assign(CodemanApp.prototype, {
     let content = '';
     if (listing?.loading) content = escapeHtml('Loading folder...');
     else if (listing?.error) {
-      content = `${escapeHtml(listing.error)} · ${escapeHtml('Incomplete folder')} <button type="button" data-file-browser-load="${listing.failedMore ? 'more' : 'retry'}" data-path="${escapeHtml(path)}">${escapeHtml('Retry loading')}</button>`;
+      // Separate elements: the translator replaces a text node only when its WHOLE text is an
+      // entry, so the error and the label joined into one node were never translated.
+      content = `<span>${escapeHtml(listing.error)}</span> · <span>${escapeHtml('Incomplete folder')}</span> <button type="button" data-file-browser-load="${listing.failedMore ? 'more' : 'retry'}" data-path="${escapeHtml(path)}">${escapeHtml('Retry loading')}</button>`;
+    } else if (path && !Array.isArray(container.children)) {
+      // Drawn open before its own request started (it waits its turn in the restore after a
+      // Refresh): an unfinished load is never shown as an empty folder.
+      content = escapeHtml('Loading folder...');
     } else if (cursor) {
       content = `<button type="button" data-file-browser-load="more" data-path="${escapeHtml(path)}">${escapeHtml('Load more')}</button>`;
     } else if (path && Array.isArray(container.children) && !container.children.length) {
@@ -3849,6 +3863,9 @@ Object.assign(CodemanApp.prototype, {
     if (!current()) return;
     if (!paths) { this._promptFileBrowserDirectoryReload(); return; }
     this._leaveFileBrowserSearchForDirectory(paths, normalState);
+    // The tree is drawn again with every folder that was expanded before. A reveal that was
+    // waiting for the tree to load ran in place of the restore, so load those folders now.
+    await this._restoreFileBrowserExpandedDirs(normalState);
   },
 
   _leaveFileBrowserSearchForDirectory(paths, normalState) {

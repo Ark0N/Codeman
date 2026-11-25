@@ -1713,7 +1713,7 @@
   function translateDynamic(source) {
     const patterns = [
       [
-        /^(\d+) matches in loaded folders · Enter to search workspace$/,
+        /^(\d+) match(?:es)? in loaded folders · Enter to search workspace$/,
         (_m, n) => `已加载的文件夹中有 ${n} 个匹配项 · 按 Enter 搜索工作区`,
       ],
       [

@@ -553,6 +553,127 @@ describe('Files panel lazy browsing behavior (#759)', () => {
     expect(ui.paths()).toContain('src/deep/needle.ts');
   });
 
+  // The server lists a folder's directories before its files across every page, so a loaded
+  // file proves no later page holds the folder a restore is looking for.
+  it('stops looking for an expanded folder that is gone at the first page holding a file, and forgets it', async () => {
+    ui.server.respond = (url) =>
+      url.searchParams.get('path') === 'gone' ? page([file('gone/a.ts')]) : page([folder('gone'), file('a.ts')]);
+    await open();
+    await expand('gone');
+    ui.server.respond = (url) => {
+      if (url.searchParams.get('cursor') === 'c1') return page([file('b.ts')], 'c2');
+      if (url.searchParams.get('cursor') === 'c2') return page([file('c.ts')]);
+      return page([folder('empty'), file('a.ts')], 'c1');
+    };
+    const before = ui.requests.length;
+    await ui.app.refreshFileBrowser();
+    await settle();
+    expect(ui.requests.slice(before).map((url) => url.searchParams.get('cursor') ?? '')).toEqual(['']);
+    expect(ui.app.fileBrowserExpandedDirs.has('gone')).toBe(false);
+    expect(ui.tree.querySelector('[data-file-browser-load="more"]')).not.toBeNull();
+  });
+
+  it('still restores an expanded folder that moved to a later page of directories', async () => {
+    await open();
+    await expand('src');
+    ui.server.respond = (url) => {
+      if (url.searchParams.get('path') === 'src') return page([file('src/visible.ts')]);
+      return url.searchParams.has('cursor') ? page([folder('src'), file('z.ts')]) : page([folder('empty')], 'two');
+    };
+    const before = ui.requests.length;
+    await ui.app.refreshFileBrowser();
+    await settle();
+    expect(
+      ui.requests.slice(before).map((url) => url.searchParams.get('path') ?? url.searchParams.get('cursor') ?? '')
+    ).toEqual(['', 'two', 'src']);
+    expect(ui.app.fileBrowserExpandedDirs.has('src')).toBe(true);
+    expect(ui.paths()).toContain('src/visible.ts');
+  });
+
+  it('keeps the expansion of a folder behind a failed page: only a folder known to be gone is forgotten', async () => {
+    await open();
+    await expand('src');
+    ui.server.respond = (url) => {
+      if (url.searchParams.has('cursor')) return response(null, false);
+      return page([folder('empty')], 'two');
+    };
+    await ui.app.refreshFileBrowser();
+    await settle();
+    expect(ui.app.fileBrowserExpandedDirs.has('src')).toBe(true);
+  });
+
+  const stateLines = () =>
+    [...ui.tree.querySelectorAll<HTMLElement>('.file-tree-listing-state')].map((line) => line.textContent!.trim());
+
+  it('shows an expanded folder that waits for its turn in the restore as loading, never as empty', async () => {
+    await open();
+    await expand('src');
+    await expand('empty');
+    const held = deferred<Response>();
+    const original = ui.server.respond;
+    ui.server.respond = (url) => (url.searchParams.get('path') === 'src' ? held.promise : original(url));
+    void ui.app.refreshFileBrowser();
+    await settle();
+    // `src` is being fetched and `empty` has not started: both are drawn open and both say so.
+    expect(stateLines()).toEqual(['Loading folder...', 'Loading folder...']);
+    held.resolve(page([file('src/visible.ts')]));
+    await settle();
+    expect(stateLines()).toEqual(['No files in this folder']);
+    expect(ui.paths()).toContain('src/visible.ts');
+  });
+
+  it('loads the other expanded folders after a search-result folder was opened while the tree was loading', async () => {
+    await open();
+    await expand('empty');
+    const root = deferred<Response>();
+    const original = ui.server.respond;
+    let holdRoot = true;
+    ui.server.respond = (url) =>
+      holdRoot && !url.searchParams.has('q') && !url.searchParams.has('path') ? root.promise : original(url);
+    void ui.app.loadFileBrowser('sess-A', { force: true });
+    await runSearch();
+    const before = ui.requests.length;
+    ui.clickFolder('src/deep');
+    await settle();
+    expect(ui.requests).toHaveLength(before); // waits for the tree
+    holdRoot = false;
+    root.resolve(page([folder('empty'), folder('src'), file('README.md')]));
+    await settle();
+    expect(ui.requests.slice(before).map((url) => url.searchParams.get('path') ?? '')).toEqual([
+      'src',
+      'src/deep',
+      'empty',
+    ]);
+    expect(ui.paths()).toContain('src/deep/needle.ts');
+    expect(stateLines()).toEqual(['No files in this folder']);
+  });
+
+  it('keeps a failed folder error and its label in separate elements, so each can be translated', async () => {
+    const original = ui.server.respond;
+    ui.server.respond = (url) => (url.searchParams.get('path') === 'src' ? response(null, false) : original(url));
+    await open();
+    await expand('src');
+    const line = ui.tree.querySelector('.file-tree-listing-state')!;
+    expect([...line.querySelectorAll('span')].map((span) => span.textContent)).toEqual([
+      'Folder unavailable',
+      'Incomplete folder',
+    ]);
+  });
+
+  it('counts one local match in the singular', async () => {
+    await open();
+    ui.type('README');
+    await settle();
+    expect(ui.document.getElementById('fileBrowserStatus')!.textContent).toBe(
+      '1 match in loaded folders · Enter to search workspace'
+    );
+    ui.type('e');
+    await settle();
+    expect(ui.document.getElementById('fileBrowserStatus')!.textContent).toMatch(
+      /^\d+ matches in loaded folders · Enter to search workspace$/
+    );
+  });
+
   it('preserves a local filter across a hidden toggle without silently starting whole-workspace search', async () => {
     await open();
     await expand('src');

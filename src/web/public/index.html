@@ -640,7 +640,7 @@
         <button type="button" class="file-browser-root-switch" id="fileBrowserRootSwitch" onclick="app.toggleFileBrowserRoot()">Session folder</button>
       </div>
       <div class="file-browser-search">
-        <input type="text" id="fileBrowserSearch" placeholder="Filter loaded files · Enter to search workspace" oninput="app.filterFileBrowser(this.value)" onkeydown="if (event.key === 'Enter' && !event.isComposing) { event.preventDefault(); app.searchFileBrowser(this.value); }">
+        <input type="text" id="fileBrowserSearch" enterkeyhint="search" placeholder="Filter loaded files · Enter to search workspace" oninput="app.filterFileBrowser(this.value)" onkeydown="if (event.key === 'Enter' && !event.isComposing) { event.preventDefault(); app.searchFileBrowser(this.value); }">
       </div>
       <div class="file-browser-body" id="fileBrowserTree">
         <div class="file-browser-empty">Select a session to view files</div>

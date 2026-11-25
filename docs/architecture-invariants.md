@@ -839,7 +839,13 @@ Expand All opens only loaded folders. Refresh retains visible expansion state; a
 restoration skips recorded load errors and hidden-off expansions before requesting pages.
 Hidden-path checks are relative to the listing root, so a worktree's dotted prefix does not
 hide its ordinary folders. Explicit Retry loads the failed folder/page; errors retain entries
-already loaded. Tests: `test/routes/file-routes-lazy.test.ts`, `test/file-browser-lazy.test.ts`
+already loaded. A page lists the folder's directories before its files, and that order holds
+across pages, so a restore or a reveal that has a file loaded for a folder stops asking for
+more pages: the folder it looks for is not there. A restore then forgets that expansion
+(the folder was deleted or renamed); one stopped by a failed page keeps it. An expanded
+folder whose own request has not started is drawn with the loading line, never as an empty
+folder, and a search-result folder opened while the tree was still loading runs the restore
+when it is done. Tests: `test/routes/file-routes-lazy.test.ts`, `test/file-browser-lazy.test.ts`
 and `test/mobile/file-browser.test.ts`.
 
 The recursive listing and `q` search policies below remain unchanged for existing callers.
