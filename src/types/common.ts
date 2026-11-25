@@ -99,6 +99,24 @@ export interface FilesystemBrowseData {
   truncated: boolean;
 }
 
+/** One page of immediate children for GET /sessions/:id/files?lazy=1. */
+export interface LazyFileListingData {
+  root: string;
+  worktree?: { name: string; path: string; outside?: true };
+  lazy: true;
+  tree: Array<{
+    name: string;
+    path: string;
+    type: 'file' | 'directory';
+    size?: number;
+    extension?: string;
+  }>;
+  totalFiles: number;
+  totalDirectories: number;
+  truncated: boolean;
+  nextCursor?: string;
+}
+
 /** Response payload for `PUT /api/sessions/:id/file-content` (File Viewer edit mode). */
 export interface FileWriteData {
   /** Workspace-relative path as submitted */

@@ -905,6 +905,49 @@ already serves non-media text inert (`text/plain`, `nosniff`), so this just
 keeps the server from storing what it would serve or an agent could run, and
 html and svg are the ones deliberately kept out.
 
+## Listing a directory (`GET /api/v1/sessions/:id/files?lazy=1`)
+
+The Files panel opts into one-directory listings for local workspaces with
+`lazy=1`. Without `path`, the response lists immediate children of the selected
+root. Expanding a folder sends its returned `path` to the same endpoint.
+Directories omit `children` until the browser loads them. No descendant scan or
+shared depth/node budget is spent on a lazy listing.
+
+For example, the panel starts with `?lazy=1&root=live-any`, then requests
+`?lazy=1&root=live-any&path=<returned-path>` to expand a folder. URL-encode the
+returned path; it is not necessarily relative to the selected root.
+
+The success envelope contains `data.root`, `lazy: true`, `tree`, per-page
+`totalFiles`/`totalDirectories`, and `truncated`. Pages contain at most 500 entries,
+directories first and then names in ascending order. A non-final page includes
+an opaque `nextCursor`; pass it back as `cursor` with the same session, root,
+path and `showHidden` preference. A cursor is a continuation key, not a filesystem
+snapshot: changes before that key become visible on Refresh. Each request reads
+the named directory's entries and obtains file metadata only for its page.
+
+`showHidden=true` adds dot-prefixed entries; the existing generated-directory
+exclusions remain. Requested folders retain workspace realpath confinement and
+bounded reachability probes. Missing folders return 404, non-directories 400,
+out-of-scope/excluded/hidden paths 403, and unavailable folders 422. Invalid or
+incompatible cursors return 400.
+
+Symbolic links retain the existing file-row representation, so the browser does
+not expand directory links. Preview and download still use their existing path guards.
+
+The existing `root=live`/`root=live-any` worktree rules and `worktree` metadata
+apply. Paths remain relative to `workingDir` for inside worktrees and absolute
+for followed outside worktrees. SSH sessions retain the existing listing behavior;
+this mode adds no remote filesystem capability.
+
+Without `lazy=1`, recursive listing responses are unchanged. A valid `q` query
+uses the existing flat search response, including when `lazy=1` is present.
+Search retains its 5,000-entry scan budget, 1,000-match cap, depth limit (default
+5, maximum 10), and read ceiling. It reports `truncated: true` when a limit or an
+unreachable folder leaves the search incomplete. Existing `q` responses are unchanged.
+
+The panel's filtering, search, pagination and retry controls are described in
+[Working With Files](wiki/Working-With-Files.md#the-file-viewer).
+
 ## Deleting a file (`DELETE /api/v1/sessions/:id/files?path=`)
 
 The Files panel's delete button. `path` is what the listing gave the row: relative to the

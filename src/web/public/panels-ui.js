@@ -2719,6 +2719,7 @@ Object.assign(CodemanApp.prototype, {
         searchEpoch: 0,
         ownerSessionId,
         view: 'normal',
+        workspaceSearch: false,
         normalState: this.fileBrowserData
           ? { sessionId: ownerSessionId, showHidden, treeEpoch: 0, phase: 'ready', data: this.fileBrowserData }
           : null,
@@ -2753,6 +2754,7 @@ Object.assign(CodemanApp.prototype, {
     state.deferredDirectoryTarget = null;
     state.filter = '';
     state.view = 'normal';
+    state.workspaceSearch = false;
     state.sessionRootPinned = false;
     state.pinnedWorktree = null;
     this.fileBrowserData = null;
@@ -2798,6 +2800,7 @@ Object.assign(CodemanApp.prototype, {
     state.deferredDirectoryTarget = null;
     state.filter = '';
     state.view = 'normal';
+    state.workspaceSearch = false;
     state.sessionRootPinned = false;
     state.pinnedWorktree = null;
     this.fileBrowserData = null;
@@ -2837,8 +2840,21 @@ Object.assign(CodemanApp.prototype, {
   _renderFileBrowserNormalStatus(data, showHidden) {
     const statusEl = this.$('fileBrowserStatus');
     if (!statusEl || !data) return;
-    const { totalFiles, totalDirectories, truncated } = data;
-    statusEl.textContent = `${totalFiles} files, ${totalDirectories} dirs${truncated ? ' (truncated)' : ''}${showHidden ? ' · hidden shown' : ''}`;
+    if (this._ensureFileBrowserState().filter.trim()) {
+      statusEl.textContent = `${this._fileBrowserLocalMatchCount || 0} matches in loaded folders · Enter to search workspace`;
+      return;
+    }
+    let { totalFiles, totalDirectories, truncated } = data;
+    if (data.lazy === true) {
+      totalFiles = 0;
+      totalDirectories = 0;
+      const count = nodes => nodes.forEach(node => {
+        if (node.type === 'directory') { totalDirectories++; count(node.children || []); }
+        else totalFiles++;
+      });
+      count(data.tree);
+    }
+    statusEl.textContent = `${totalFiles} files, ${totalDirectories} dirs${data.lazy ? ' · loaded folders' : truncated ? ' (truncated)' : ''}${showHidden ? ' · hidden shown' : ''}`;
   },
 
   _isFileBrowserNormalCompatible(candidate, sessionId, showHidden, treeEpoch) {
@@ -3084,6 +3100,7 @@ Object.assign(CodemanApp.prototype, {
     const state = this._ensureFileBrowserState();
     const rawInput = typeof state.filter === 'string' ? state.filter : '';
     const query = rawInput.trim();
+    const workspaceSearch = state.workspaceSearch === true;
 
     if (state.inFlight?.timer !== undefined && state.inFlight?.timer !== null) {
       clearTimeout(state.inFlight.timer);
@@ -3112,7 +3129,8 @@ Object.assign(CodemanApp.prototype, {
     if (!query || query.length > 256) return;
     const continuation = { ownerSessionId, showHidden, treeEpoch, searchEpoch, rawInput, query };
     if (this._canContinueFileBrowserHiddenReload(continuation, state.normalState)) {
-      this.filterFileBrowser(rawInput);
+      if (workspaceSearch) this.searchFileBrowser(rawInput);
+      else this.filterFileBrowser(rawInput);
     }
   },
 
@@ -3157,7 +3175,7 @@ Object.assign(CodemanApp.prototype, {
     const request = (async () => {
       try {
         const res = await fetch(
-          `/api/sessions/${encodeURIComponent(sessionId)}/files?depth=5&showHidden=${showHidden}${this._fileBrowserRootParam()}`,
+          `/api/sessions/${encodeURIComponent(sessionId)}/files?lazy=1&showHidden=${showHidden}${this._fileBrowserRootParam()}`,
         );
         if (!res.ok) throw new Error('Failed to load files');
         const result = await res.json();
@@ -3175,6 +3193,9 @@ Object.assign(CodemanApp.prototype, {
         this.fileBrowserData = data;
         const deferredRendered = this._completeDeferredFileBrowserDirectory?.(nextNormalState) === true;
         if (!deferredRendered) this._renderFileBrowserNormalState(nextNormalState);
+        if (data.lazy === true && !deferredRendered) {
+          await this._restoreFileBrowserExpandedDirs(nextNormalState);
+        }
       } catch (error) {
         if (!this._isFileBrowserTreeContextCurrent(record, true)) return;
         const nextNormalState = {
@@ -3198,6 +3219,164 @@ Object.assign(CodemanApp.prototype, {
     return record.promise;
   },
 
+  _isFileBrowserDirectoryRequestCurrent(request) {
+    return this._isFileBrowserTreeContextCurrent(request) &&
+      this.activeSessionId === request.sessionId &&
+      this._ensureFileBrowserState().normalState?.data === request.data &&
+      this._fileBrowserRootParam() === request.rootParam &&
+      this.$('fileBrowserPanel')?.classList.contains('visible') === true;
+  },
+
+  // A page belongs to one tree epoch. Refresh, visibility, root and owner changes can never
+  // append an old response to a replacement tree, even if the same folder is expanded again.
+  _loadFileBrowserDirectory(path, { more = false } = {}) {
+    const state = this._ensureFileBrowserState();
+    const normal = state.normalState;
+    const data = normal?.data;
+    if (normal?.phase !== 'ready' || data?.lazy !== true) return Promise.resolve();
+    const container = path ? this._findFileBrowserDirectory(data.tree, path)?.target : data;
+    if (!container) return Promise.resolve();
+    const listing = container._listing ||= { nextCursor: container.nextCursor || null };
+    if (listing.promise) return listing.promise;
+    if (more ? !listing.nextCursor : path && Array.isArray(container.children)) return Promise.resolve();
+    const cursor = more ? listing.nextCursor : null;
+    const request = {
+      sessionId: normal.sessionId, showHidden: normal.showHidden, treeEpoch: normal.treeEpoch,
+      data, rootParam: this._fileBrowserRootParam(),
+    };
+    if (!this._isFileBrowserDirectoryRequestCurrent(request)) return Promise.resolve();
+    listing.loading = true;
+    listing.error = null;
+    listing.failedMore = more;
+    const work = (async () => {
+      try {
+        const res = await fetch(`/api/sessions/${encodeURIComponent(request.sessionId)}/files?lazy=1&showHidden=${request.showHidden}${request.rootParam}${path ? `&path=${encodeURIComponent(path)}` : ''}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`);
+        const result = await res.json();
+        const page = this._validateFileBrowserTreeEnvelope(result);
+        if (!res.ok || !page || page.lazy !== true) throw new Error(result?.error || 'Folder unavailable');
+        if (page.root !== data.root) throw new Error('Workspace changed; refresh files');
+        if (!this._isFileBrowserDirectoryRequestCurrent(request)) return;
+        const key = path ? 'children' : 'tree';
+        const previous = more ? container[key] || [] : [];
+        const known = new Set(previous.map(node => node.path));
+        container[key] = [...previous, ...page.tree.filter(node => !known.has(node.path))];
+        listing.nextCursor = page.nextCursor || null;
+        if (!path) {
+          data.nextCursor = listing.nextCursor;
+          data.truncated = Boolean(listing.nextCursor);
+        }
+      } catch (error) {
+        if (this._isFileBrowserDirectoryRequestCurrent(request)) {
+          listing.error = this._normalizeFileBrowserTreeError(error);
+        }
+      } finally {
+        listing.loading = false;
+        listing.promise = null;
+        if (this._isFileBrowserDirectoryRequestCurrent(request)) this._renderFileBrowserNormalState(normal);
+      }
+    })();
+    listing.promise = work;
+    this._renderFileBrowserNormalState(normal);
+    return work;
+  },
+
+  // Follow only the ancestor chain of the named folder. Continuation is explicit for ordinary
+  // browsing; revealing a search hit/restoring an expansion reads the pages needed to reach it.
+  async _revealFileBrowserDirectory(target, normal, current, expandedOnly = false) {
+    const data = normal.data;
+    let container = data;
+    const paths = [];
+    while (current()) {
+      const nodes = container === data ? container.tree : container.children || [];
+      let found = nodes.find(node => node.type === 'directory' &&
+        (node.path === target || target.startsWith(node.path + '/') || target.startsWith(node.path + '\\')));
+      if (!found) {
+        // Automatic restoration must not bypass a failed page's explicit Retry action.
+        if (expandedOnly && container._listing?.error) return null;
+        const cursor = container._listing?.nextCursor ?? container.nextCursor;
+        if (!cursor) return null;
+        await this._loadFileBrowserDirectory(container === data ? '' : container.path, { more: true });
+        if (!current() || container._listing?.error) return null;
+        continue;
+      }
+      if (expandedOnly && !this.fileBrowserExpandedDirs.has(found.path)) return null;
+      if (expandedOnly && found._listing?.error) return null;
+      paths.push(found.path);
+      await this._loadFileBrowserDirectory(found.path);
+      if (!current() || found._listing?.error) return null;
+      if (found.path === target) return paths;
+      container = found;
+    }
+    return null;
+  },
+
+  async _restoreFileBrowserExpandedDirs(normal) {
+    if (normal?.data?.lazy !== true) return;
+    const request = { ...normal, rootParam: this._fileBrowserRootParam() };
+    const current = () => this._isFileBrowserDirectoryRequestCurrent(request);
+    // Root rows are immediate children, so their common path prefix is the listing root in
+    // returned-path terms. Dot segments in an inside worktree's prefix do not make its entries
+    // hidden. Skip inapplicable expansions before searching any continuation pages for them.
+    const first = normal.data.tree[0];
+    const rootPrefix = first?.name ? first.path.slice(0, -first.name.length) : null;
+    const separator = normal.data.root?.startsWith('/') ? '/' : '\\';
+    for (const path of [...this.fileBrowserExpandedDirs]) {
+      if (!current()) return;
+      if (rootPrefix === null || !path.startsWith(rootPrefix)) continue;
+      if (!normal.showHidden && path.slice(rootPrefix.length).split(separator).some(part => part.startsWith('.'))) continue;
+      await this._revealFileBrowserDirectory(path, normal, current, true);
+    }
+  },
+
+  _restoreFileBrowserAfterLoad(path, normal) {
+    if (normal?.data?.lazy !== true || this._ensureFileBrowserState().normalState !== normal) return;
+    const container = path ? this._findFileBrowserDirectory(normal.data.tree, path)?.target : normal.data;
+    if (container && !container._listing?.error && (!path || Array.isArray(container.children))) {
+      return this._restoreFileBrowserExpandedDirs(normal);
+    }
+  },
+
+  _fileBrowserListingControls(container, path, depth) {
+    const listing = container._listing;
+    const cursor = listing?.nextCursor ?? container.nextCursor;
+    let content = '';
+    if (listing?.loading) content = escapeHtml('Loading folder...');
+    else if (listing?.error) {
+      content = `${escapeHtml(listing.error)} · ${escapeHtml('Incomplete folder')} <button type="button" data-file-browser-load="${listing.failedMore ? 'more' : 'retry'}" data-path="${escapeHtml(path)}">${escapeHtml('Retry loading')}</button>`;
+    } else if (cursor) {
+      content = `<button type="button" data-file-browser-load="more" data-path="${escapeHtml(path)}">${escapeHtml('Load more')}</button>`;
+    } else if (path && Array.isArray(container.children) && !container.children.length) {
+      content = escapeHtml('No files in this folder');
+    }
+    return content ? `<div class="file-tree-incomplete file-tree-listing-state" data-depth="${depth}"${this._fileBrowserDepthStyle(depth)}>${content}</div>` : '';
+  },
+
+  // Legacy CSS covers depths 0–9; lazy browsing can reach deeper folders.
+  _fileBrowserDepthStyle(depth) {
+    return depth > 9 ? ` style="padding-inline-start: ${0.5 + depth * 0.75}rem"` : '';
+  },
+
+  // Ordered, case-insensitive substring pieces; no user-supplied regular expression.
+  _filterFileBrowserLoadedTree(nodes, query) {
+    const pieces = query.toLowerCase().split('*').filter(Boolean);
+    let count = 0;
+    const filter = entries => entries.flatMap(node => {
+      const text = (query.includes('/') ? node.path : node.name).toLowerCase();
+      let offset = 0;
+      const matches = pieces.every(piece => {
+        const next = text.indexOf(piece, offset);
+        if (next < 0) return false;
+        offset = next + piece.length;
+        return true;
+      });
+      if (matches) count++;
+      const children = filter(node.children || []);
+      return matches || children.length ? [{ ...node, ...(node.children && { children }) }] : [];
+    });
+    const tree = filter(nodes);
+    return { tree, count };
+  },
+
   renderFileBrowserTree(ownerSessionId) {
     const treeEl = this.$('fileBrowserTree');
     if (!treeEl || !this.fileBrowserData) return;
@@ -3206,9 +3385,12 @@ Object.assign(CodemanApp.prototype, {
     const owner = ownerSessionId || state.normalState?.sessionId || state.ownerSessionId || this.activeSessionId;
     if (!owner) return;
 
-    const { tree } = this.fileBrowserData;
+    const query = state.view === 'normal' ? state.filter.trim() : '';
+    const filtered = query ? this._filterFileBrowserLoadedTree(this.fileBrowserData.tree, query) : null;
+    const tree = filtered ? filtered.tree : this.fileBrowserData.tree;
+    this._fileBrowserLocalMatchCount = filtered?.count || 0;
     if (!tree || tree.length === 0) {
-      treeEl.innerHTML = '<div class="file-browser-empty">No files found</div>';
+      treeEl.innerHTML = `<div class="file-browser-empty">${escapeHtml(query ? 'No matches in loaded folders · Enter to search workspace' : 'No files found')}</div>`;
       return;
     }
 
@@ -3217,7 +3399,7 @@ Object.assign(CodemanApp.prototype, {
 
     const renderNode = (node, depth) => {
       const isDir = node.type === 'directory';
-      const isExpanded = this.fileBrowserExpandedDirs.has(node.path);
+      const isExpanded = query ? !!node.children?.length : this.fileBrowserExpandedDirs.has(node.path);
 
       const icon = isDir
         ? (isExpanded ? '\uD83D\uDCC2' : '\uD83D\uDCC1')
@@ -3245,7 +3427,7 @@ Object.assign(CodemanApp.prototype, {
         : '';
 
       html.push(`
-        <div class="file-tree-item" data-path="${escapeHtml(node.path)}" data-type="${escapeHtml(node.type)}" data-depth="${depth}">
+        <div class="file-tree-item" data-path="${escapeHtml(node.path)}" data-type="${escapeHtml(node.type)}" data-depth="${depth}"${this._fileBrowserDepthStyle(depth)}>
           ${expandIcon}
           <span class="file-tree-icon">${icon}</span>
           <span class="${nameClass}">${escapeHtml(node.name)}</span>
@@ -3264,7 +3446,9 @@ Object.assign(CodemanApp.prototype, {
 
       // The scan stopped at a limit or the folder did not answer, so what is listed above is not all
       // of it. Not a .file-tree-item: the click wiring below would try to open it as a file.
-      if (isDir && isExpanded && node.incomplete === true) {
+      if (isDir && isExpanded && this.fileBrowserData.lazy === true && !query) {
+        html.push(this._fileBrowserListingControls(node, node.path, depth + 1));
+      } else if (isDir && isExpanded && node.incomplete === true) {
         html.push(`<div class="file-tree-incomplete" data-depth="${depth + 1}">${escapeHtml('Not fully scanned')}</div>`);
       }
     };
@@ -3272,8 +3456,17 @@ Object.assign(CodemanApp.prototype, {
     for (const node of tree) {
       renderNode(node, 0);
     }
+    if (this.fileBrowserData.lazy === true && !query) html.push(this._fileBrowserListingControls(this.fileBrowserData, '', 0));
 
     treeEl.innerHTML = html.join('');
+
+    treeEl.querySelectorAll('[data-file-browser-load]').forEach(button => {
+      button.addEventListener('click', () => {
+        const normal = this._ensureFileBrowserState().normalState;
+        this._loadFileBrowserDirectory(button.dataset.path, { more: button.dataset.fileBrowserLoad === 'more' })
+          .then(() => this._restoreFileBrowserAfterLoad(button.dataset.path, normal));
+      });
+    });
 
     // Add click handlers
     treeEl.querySelectorAll('.file-tree-item').forEach(item => {
@@ -3307,14 +3500,40 @@ Object.assign(CodemanApp.prototype, {
       this.fileBrowserExpandedDirs.delete(path);
     } else {
       this.fileBrowserExpandedDirs.add(path);
+      const normal = this._ensureFileBrowserState().normalState;
+      this._loadFileBrowserDirectory(path).then(() => this._restoreFileBrowserAfterLoad(path, normal));
     }
     this.renderFileBrowserTree();
   },
 
   filterFileBrowser(value) {
     const state = this._ensureFileBrowserState();
+    if (state.inFlight?.timer != null) clearTimeout(state.inFlight.timer);
+    state.searchEpoch++;
+    state.inFlight = null;
+    state.matches = [];
+    state.deferredDirectoryTarget = null;
+    state.filter = this.fileBrowserFilter = String(value ?? '');
+    state.view = 'normal';
+    state.workspaceSearch = false;
+    this._syncFileBrowserExpandBtn();
+    if (state.filter.trim().length > 256) {
+      const message = 'Search queries are limited to 256 characters';
+      state.view = 'query-error';
+      const treeEl = this.$('fileBrowserTree');
+      if (treeEl) treeEl.innerHTML = `<div class="file-browser-empty">${escapeHtml(message)}</div>`;
+      const statusEl = this.$('fileBrowserStatus');
+      if (statusEl) statusEl.textContent = message;
+      return;
+    }
+    this._renderFileBrowserNormalState(state.normalState);
+  },
+
+  searchFileBrowser(value = this.fileBrowserFilter) {
+    const state = this._ensureFileBrowserState();
     const rawInput = String(value ?? '');
     const query = rawInput.trim();
+    state.workspaceSearch = query.length > 0 && query.length <= 256;
     state.searchEpoch++;
     state.filter = rawInput;
     state.deferredDirectoryTarget = null;
@@ -3424,7 +3643,7 @@ Object.assign(CodemanApp.prototype, {
       view: state.view,
     };
     if (matches.length === 0) {
-      treeEl.innerHTML = `<div class="file-browser-empty">${escapeHtml('No matches')}</div>`;
+      treeEl.innerHTML = `<div class="file-browser-empty">${escapeHtml(data.truncated ? 'Search incomplete; no matches in scanned files' : 'No matches')}</div>`;
     } else {
       const ownerPath = encodeURIComponent(ownerSessionId);
       const canDelete = this._fileBrowserCanDelete(ownerSessionId);
@@ -3571,6 +3790,10 @@ Object.assign(CodemanApp.prototype, {
       return;
     }
 
+    if (normalState.data.lazy === true) {
+      return this._revealFileBrowserSearchDirectory(target, normalState);
+    }
+
     const found = this._findFileBrowserDirectory(normalState.data?.tree, target.path);
     if (!found) {
       this._promptFileBrowserDirectoryReload();
@@ -3605,6 +3828,11 @@ Object.assign(CodemanApp.prototype, {
       return false;
     }
 
+    if (normalState.data.lazy === true) {
+      this._revealFileBrowserSearchDirectory(target, normalState);
+      return true;
+    }
+
     const found = this._findFileBrowserDirectory(normalState.data?.tree, target.path);
     if (!found) {
       this._promptFileBrowserDirectoryReload();
@@ -3612,6 +3840,15 @@ Object.assign(CodemanApp.prototype, {
     }
     this._leaveFileBrowserSearchForDirectory([...found.ancestors, found.target.path], normalState);
     return true;
+  },
+
+  async _revealFileBrowserSearchDirectory(target, normalState) {
+    const current = () => this._isFileBrowserDirectoryContextCurrent(target) &&
+      this._ensureFileBrowserState().normalState === normalState;
+    const paths = await this._revealFileBrowserDirectory(target.path, normalState, current);
+    if (!current()) return;
+    if (!paths) { this._promptFileBrowserDirectoryReload(); return; }
+    this._leaveFileBrowserSearchForDirectory(paths, normalState);
   },
 
   _leaveFileBrowserSearchForDirectory(paths, normalState) {
@@ -3626,6 +3863,7 @@ Object.assign(CodemanApp.prototype, {
     state.deferredDirectoryTarget = null;
     state.view = 'normal';
     this.fileBrowserFilter = '';
+    state.workspaceSearch = false;
 
     const input = this.$?.('fileBrowserSearch');
     if (input) input.value = '';
@@ -3639,7 +3877,7 @@ Object.assign(CodemanApp.prototype, {
 
   expandAllDirectories(nodes) {
     for (const node of nodes) {
-      if (node.type === 'directory') {
+      if (node.type === 'directory' && Array.isArray(node.children)) {
         this.fileBrowserExpandedDirs.add(node.path);
         if (node.children) {
           this.expandAllDirectories(node.children);
@@ -3681,11 +3919,10 @@ Object.assign(CodemanApp.prototype, {
     state.matches = [];
     state.deferredDirectoryTarget = null;
     state.view = 'normal';
+    state.workspaceSearch = false;
     this.fileBrowserFilter = '';
-    this.fileBrowserExpandedDirs.clear();
-    this.fileBrowserAllExpanded = false;
     const expandBtn = this.$('fileBrowserExpandBtn');
-    if (expandBtn) expandBtn.innerHTML = '\u229E';
+    if (expandBtn) expandBtn.innerHTML = this.fileBrowserAllExpanded ? '\u229F' : '\u229E';
     const searchInput = this.$('fileBrowserSearch');
     if (searchInput) searchInput.value = '';
     this._syncFileBrowserExpandBtn();

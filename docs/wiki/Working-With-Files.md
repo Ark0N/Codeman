@@ -11,14 +11,38 @@ moved into ([Git Worktrees](Git-Worktrees#when-an-agent-moves-into-a-worktree)).
 button is on by default on a desktop and off on a phone. The setting is per device: switch it
 in **App Settings → Header & Panels** on the device you want it on.
 
-The panel and its search list up to 5,000 files and folders per load, shallow levels first and
-taking turns between folders, so one huge folder cannot use up that limit before the ones after it,
-or the folders inside it, get a turn. They also stop opening folders after reading 250,000 entries,
-so a workspace with several enormous folders can still leave later ones unread. When a workspace is
-bigger than either limit the status line says `(truncated)`, and an expanded folder the scan did
-not finish shows **Not fully scanned** rather than looking empty. A folder that does not answer,
-such as a network mount that went away, is skipped rather than waited on and is marked the same way,
-so a search can miss what is inside it. The panel's Refresh button tries it again.
+For local workspaces, opening the panel lists the root's immediate files and folders.
+Expanding a folder loads its contents, without scanning the folders inside it. Each page holds
+up to 500 entries; **Load more** beneath a folder, or at the bottom of the root listing, adds
+the next page. A large subtree no longer uses up the listing budget for unrelated folders.
+Collapsing and reopening a loaded folder reuses its cached contents.
+
+Use the search box as follows:
+
+- **Type to filter loaded entries.** This makes no request and cannot find a file in a folder
+  you have not loaded. Matching ignores case; `*` separates pieces that must appear in order.
+- **Press Enter to search the workspace**, including folders you have not opened, under the
+  root the panel is showing. Click a folder in the results to load its ancestors and browse it.
+- **Clear the box to return to your tree**, with its expanded folders and loaded pages.
+
+Workspace search keeps its existing limits: a 5,000-entry scan budget, up to 1,000 matches,
+and depth and read limits. A limit or an unreachable folder can leave the search incomplete.
+The status then says `(truncated)`; with no results the panel says **Search incomplete; no
+matches in scanned files**, rather than implying the whole workspace has no matches. You can
+still browse folders directly to reach files the search did not scan.
+
+**Expand/Collapse All** opens folders whose contents are already loaded, or collapses them;
+it does not fetch every folder in the workspace. The show-hidden button adds dot-prefixed files and
+folders alongside ordinary entries and keeps the current filter or search and applicable
+expanded folders. Generated directories such as `.git`, `node_modules`, `dist` and `build`
+remain excluded.
+
+**Refresh** clears the search and reloads the root and visible expanded folders, keeping
+their expansion state. Contents behind a collapsed folder load when you reopen it. If a
+folder or its next page fails to load, its error and **Retry loading** button appear there;
+entries already loaded stay visible. Retry acts on that folder or page, while Refresh
+reloads the visible tree. A failed load is never presented as an empty folder.
+If the initial root listing fails, use Refresh.
 
 Each file row has a download arrow and a × that deletes the file after you confirm. Both show
 when you point at the row, and always on a touch screen. Delete removes one file at a time,

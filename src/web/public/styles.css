@@ -11803,6 +11803,36 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
   cursor: default;
 }
 
+.file-tree-incomplete button {
+  margin-inline-start: 0.25rem;
+  padding: 0.2rem 0.45rem;
+  color: var(--text-primary);
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  font: inherit;
+  font-style: normal;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.file-tree-listing-state {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.file-tree-incomplete button:hover,
+.file-tree-incomplete button:focus-visible {
+  background: var(--bg-hover);
+}
+
+@media (pointer: coarse) {
+  .file-tree-incomplete button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+
 .file-tree-icon {
   width: 1rem;
   text-align: center;

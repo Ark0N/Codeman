@@ -1,5 +1,5 @@
 /**
- * @fileoverview File Viewer server-side search (COD-341).
+ * @fileoverview Explicit File Viewer workspace search (COD-341, Enter submission since #759).
  *
  * The browser module is loaded as the real CodemanApp mixin in a VM. The fake
  * DOM intentionally implements only the element contract used by the File
@@ -332,7 +332,7 @@ function loadRealSelectSessionHarness(options: { terminalFailure?: boolean } = {
 async function startSearch(app: Record<string, any>, query = 'widget') {
   const input = app.$('fileBrowserSearch');
   if (input) input.value = query;
-  app.filterFileBrowser(query);
+  app.searchFileBrowser(query);
   await vi.advanceTimersByTimeAsync(250);
 }
 
@@ -382,10 +382,10 @@ describe('File Viewer server search', () => {
     vi.useRealTimers();
   });
 
-  it('debounces for 250ms and encodes the owner and exact trimmed query', async () => {
+  it('debounces explicit workspace submissions and encodes the owner and exact trimmed query', async () => {
     const { app, pending } = loadPanel();
 
-    app.filterFileBrowser('src & docs');
+    app.searchFileBrowser('src & docs');
     await vi.advanceTimersByTimeAsync(249);
     expect(pending).toHaveLength(0);
 
@@ -398,12 +398,12 @@ describe('File Viewer server search', () => {
 
   it('is a safe no-op without a panel or session and can lazily adopt a later active owner', async () => {
     const { app, elements, pending } = loadPanel({ sessionId: null });
-    app.filterFileBrowser('before-session');
+    app.searchFileBrowser('before-session');
     await vi.advanceTimersByTimeAsync(250);
     expect(pending).toHaveLength(0);
 
     app.activeSessionId = 'session/B';
-    app.filterFileBrowser('after-session');
+    app.searchFileBrowser('after-session');
     await vi.advanceTimersByTimeAsync(250);
     expect(pending[0].url).toBe(
       '/api/sessions/session%2FB/files?depth=5&showHidden=false&q=after-session&root=live-any'
@@ -414,7 +414,7 @@ describe('File Viewer server search', () => {
     expect(elements.fileBrowserTree.innerHTML).toContain('No matches');
 
     delete elements.fileBrowserPanel;
-    app.filterFileBrowser('without-panel');
+    app.searchFileBrowser('without-panel');
     await vi.advanceTimersByTimeAsync(250);
     expect(pending).toHaveLength(1);
   });
@@ -424,34 +424,34 @@ describe('File Viewer server search', () => {
     app._ensureFileBrowserState();
 
     app.activeSessionId = null;
-    app.filterFileBrowser('missing-active');
+    app.searchFileBrowser('missing-active');
     await vi.advanceTimersByTimeAsync(250);
     expect(pending).toHaveLength(0);
     expect(elements.fileBrowserTree.innerHTML).toBe('');
     expect(app._fileBrowserState.inFlight).toBeNull();
 
     app.activeSessionId = 'session/B';
-    app.filterFileBrowser('wrong-active');
+    app.searchFileBrowser('wrong-active');
     await vi.advanceTimersByTimeAsync(250);
     expect(pending).toHaveLength(0);
     expect(elements.fileBrowserTree.innerHTML).toBe('');
     expect(app._fileBrowserState.inFlight).toBeNull();
   });
 
-  it('cancels the prior debounce and clears a deferred directory target on every input', async () => {
+  it('cancels the prior debounce and clears a deferred directory target on every submission', async () => {
     const { app, pending } = loadPanel();
     app._ensureFileBrowserState().deferredDirectoryTarget = {
       ownerSessionId: 'session/A',
       path: 'old-directory',
     };
 
-    app.filterFileBrowser('first query');
+    app.searchFileBrowser('first query');
     await vi.advanceTimersByTimeAsync(200);
     app._fileBrowserState.deferredDirectoryTarget = {
       ownerSessionId: 'session/A',
       path: 'another-directory',
     };
-    app.filterFileBrowser('second query');
+    app.searchFileBrowser('second query');
 
     expect(app._fileBrowserState.deferredDirectoryTarget).toBeNull();
     await vi.advanceTimersByTimeAsync(249);
@@ -583,9 +583,9 @@ describe('File Viewer server search', () => {
 
   it('keeps query B rendered when its response beats an already-launched query A', async () => {
     const { app, elements, pending } = loadPanel();
-    app.filterFileBrowser('query A');
+    app.searchFileBrowser('query A');
     await vi.advanceTimersByTimeAsync(250);
-    app.filterFileBrowser('query B');
+    app.searchFileBrowser('query B');
     await vi.advanceTimersByTimeAsync(250);
     expect(pending).toHaveLength(2);
 
@@ -624,9 +624,9 @@ describe('File Viewer server search', () => {
       truncated: false,
     };
 
-    app.filterFileBrowser('cache');
+    app.searchFileBrowser('cache');
     expect(elements.fileBrowserTree.innerHTML).toContain('Searching');
-    app.filterFileBrowser('   ');
+    app.searchFileBrowser('   ');
 
     expect(pending).toHaveLength(0);
     expect(elements.fileBrowserTree.innerHTML).toContain('cached.ts');
@@ -662,7 +662,7 @@ describe('File Viewer server search', () => {
 
   it('accepts 256 trimmed characters', async () => {
     const { app, pending } = loadPanel();
-    app.filterFileBrowser(`  ${'x'.repeat(256)}  `);
+    app.searchFileBrowser(`  ${'x'.repeat(256)}  `);
 
     await vi.advanceTimersByTimeAsync(250);
 
@@ -672,7 +672,7 @@ describe('File Viewer server search', () => {
 
   it('rejects 257 trimmed characters without a request', async () => {
     const { app, elements, pending } = loadPanel();
-    app.filterFileBrowser('x'.repeat(257));
+    app.searchFileBrowser('x'.repeat(257));
 
     await vi.advanceTimersByTimeAsync(1_000);
 
@@ -794,7 +794,7 @@ describe('File Viewer server search', () => {
       expect(elements.fileBrowserTree.innerHTML).toContain('Loading files');
       expect(elements.fileBrowserTree.innerHTML).not.toContain('old-result.ts');
       expect(elements.fileBrowserTree.innerHTML).not.toContain('old-preference.ts');
-      expect(pending[1].url).toBe('/api/sessions/session%2FA/files?depth=5&showHidden=true&root=live-any');
+      expect(pending[1].url).toBe('/api/sessions/session%2FA/files?lazy=1&showHidden=true&root=live-any');
 
       pending[1].reply.resolve(response(successfulTree('new-preference.ts')));
       await toggle;
@@ -885,8 +885,8 @@ describe('File Viewer server search', () => {
       const firstToggle = app.toggleFileBrowserHidden();
       const secondToggle = app.toggleFileBrowserHidden();
       expect(pending.slice(1).map(({ url }) => url)).toEqual([
-        '/api/sessions/session%2FA/files?depth=5&showHidden=true&root=live-any',
-        '/api/sessions/session%2FA/files?depth=5&showHidden=false&root=live-any',
+        '/api/sessions/session%2FA/files?lazy=1&showHidden=true&root=live-any',
+        '/api/sessions/session%2FA/files?lazy=1&showHidden=false&root=live-any',
       ]);
 
       pending[1].reply.resolve(response(successfulTree('stale-hidden.ts')));
@@ -923,7 +923,7 @@ describe('File Viewer server search', () => {
       expect(pending).toHaveLength(2);
 
       elements.fileBrowserSearch.value = '';
-      app.filterFileBrowser('');
+      app.searchFileBrowser('');
       expect(elements.fileBrowserTree.innerHTML).toContain('&lt;img src=x onerror=boom&gt;');
     });
 
@@ -947,7 +947,7 @@ describe('File Viewer server search', () => {
       expect(elements.fileBrowserTree.innerHTML).toContain('newer.ts');
       expect(app._fileBrowserState.normalState).toMatchObject({ phase: 'error', error: 'new preference failed' });
       elements.fileBrowserSearch.value = '';
-      app.filterFileBrowser('');
+      app.searchFileBrowser('');
       expect(elements.fileBrowserTree.innerHTML).toContain('new preference failed');
     });
 
@@ -960,7 +960,7 @@ describe('File Viewer server search', () => {
         const { app, elements, pending } = loadPanel();
         const query = 'x'.repeat(257);
         elements.fileBrowserSearch.value = query;
-        app.filterFileBrowser(query);
+        app.searchFileBrowser(query);
         const message = elements.fileBrowserTree.innerHTML;
         const beforeSearchEpoch = app._fileBrowserState.searchEpoch;
         const beforeTreeEpoch = app._fileBrowserState.treeEpoch;
@@ -981,7 +981,7 @@ describe('File Viewer server search', () => {
         expect(elements.fileBrowserTree.innerHTML).toBe(message);
         expect(pending).toHaveLength(1);
         elements.fileBrowserSearch.value = '';
-        app.filterFileBrowser('');
+        app.searchFileBrowser('');
         if (fail) expect(elements.fileBrowserTree.innerHTML).toContain('hidden tree failed');
         else expect(elements.fileBrowserTree.innerHTML).toContain('hidden-ready.ts');
       }
@@ -1061,10 +1061,10 @@ describe('File Viewer server search', () => {
       app.fileBrowserExpandedDirs.add('existing');
       elements.fileBrowserExpandBtn.innerHTML = '\u229F';
       elements.fileBrowserSearch.value = 'query';
-      app.filterFileBrowser('query');
+      app.searchFileBrowser('query');
 
       elements.fileBrowserSearch.value = '';
-      app.filterFileBrowser('');
+      app.searchFileBrowser('');
 
       expect(elements.fileBrowserExpandBtn.disabled).toBe(false);
       expect(elements.fileBrowserExpandBtn.innerHTML).toBe('\u229F');
@@ -1230,7 +1230,7 @@ describe('File Viewer server search', () => {
       expect(app._fileBrowserState.deferredDirectoryTarget).not.toBeNull();
 
       elements.fileBrowserSearch.value = 'new query';
-      app.filterFileBrowser('new query');
+      app.searchFileBrowser('new query');
       expect(app._fileBrowserState.deferredDirectoryTarget).toBeNull();
       pending[0].reply.resolve(
         response(successfulTree('unused', { tree: unixTree, totalFiles: 1, totalDirectories: 3 }))
@@ -1266,7 +1266,7 @@ describe('File Viewer server search', () => {
       expect(app._fileBrowserState.normalState).toMatchObject({ phase: 'error', error: 'tree failed' });
 
       elements.fileBrowserSearch.value = '';
-      app.filterFileBrowser('');
+      app.searchFileBrowser('');
       expect(elements.fileBrowserTree.innerHTML).toContain('tree failed');
     });
 
@@ -1424,10 +1424,10 @@ describe('File Viewer server search', () => {
       expect(failed.elements.fileBrowserTree.innerHTML).toContain('&lt;img src=x onerror=boom&gt;');
     });
 
-    it('refresh invalidates both work classes, clears navigation state, and forces an epoch-safe replacement', async () => {
+    it('refresh invalidates both work classes, preserves expansion, and forces an epoch-safe replacement', async () => {
       const { app, elements, pending } = loadPanel();
       const stale = app.loadFileBrowser('session/A');
-      app.filterFileBrowser('old query');
+      app.searchFileBrowser('old query');
       app.fileBrowserExpandedDirs.add('src');
       app.fileBrowserAllExpanded = true;
       app._fileBrowserState.deferredDirectoryTarget = { ownerSessionId: 'session/A', path: 'src' };
@@ -1442,8 +1442,8 @@ describe('File Viewer server search', () => {
       expect(app._fileBrowserState.matches).toEqual([]);
       expect(app._fileBrowserState.deferredDirectoryTarget).toBeNull();
       expect(app._fileBrowserState.view).toBe('normal');
-      expect(app.fileBrowserExpandedDirs.size).toBe(0);
-      expect(app.fileBrowserAllExpanded).toBe(false);
+      expect([...app.fileBrowserExpandedDirs]).toEqual(['src']);
+      expect(app.fileBrowserAllExpanded).toBe(true);
       expect(elements.fileBrowserExpandBtn.disabled).toBe(false);
       expect(elements.fileBrowserSearch.value).toBe('');
       expect(elements.fileBrowserTree.innerHTML).toContain('Loading files');
@@ -1512,8 +1512,8 @@ describe('File Viewer server search', () => {
       app._fileBrowserState.ownerSessionId = 'session/B';
       app.activeSessionId = 'session/B';
       const loadB = app.loadFileBrowser('session/B');
-      app.filterFileBrowser('temporary');
-      app.filterFileBrowser('');
+      app.searchFileBrowser('temporary');
+      app.searchFileBrowser('');
 
       expect(elements.fileBrowserTree.innerHTML).toContain('Loading files');
       expect(elements.fileBrowserTree.innerHTML).not.toContain('cached-A.ts');
@@ -1525,9 +1525,9 @@ describe('File Viewer server search', () => {
     it('settles a compatible tree behind search without repainting and keeps tree/search epochs independent', async () => {
       const { app, elements, pending } = loadPanel();
       const treeLoad = app.loadFileBrowser('session/A');
-      app.filterFileBrowser('query A');
+      app.searchFileBrowser('query A');
       await vi.advanceTimersByTimeAsync(250);
-      app.filterFileBrowser('query B');
+      app.searchFileBrowser('query B');
       await vi.advanceTimersByTimeAsync(250);
       expect(pending).toHaveLength(3);
 
@@ -1683,7 +1683,7 @@ describe('File Viewer server search', () => {
       expect(immediateState.ownerSessionId).toBe('session/B');
       expect(immediateState.resizeCalls).toBe(1);
       expect(immediateState.fileUrls).toEqual([
-        '/api/sessions/session%2FB/files?depth=5&showHidden=false&root=live-any',
+        '/api/sessions/session%2FB/files?lazy=1&showHidden=false&root=live-any',
       ]);
 
       expect(filePending).toHaveLength(1);
@@ -1737,7 +1737,7 @@ describe('File Viewer server search', () => {
       const { app, elements, pending } = loadPanel();
       app.fileBrowserData = successfulTree('old-A.ts').data;
       app.renderFileBrowserTree('session/A');
-      app.filterFileBrowser('old query');
+      app.searchFileBrowser('old query');
       app.fileBrowserExpandedDirs.add('src');
       app.fileBrowserAllExpanded = true;
       app._fileBrowserState.deferredDirectoryTarget = { ownerSessionId: 'session/A', path: 'src' };
@@ -1766,7 +1766,7 @@ describe('File Viewer server search', () => {
       expect(elements.fileBrowserTree.querySelectorAll('.file-tree-item')).toHaveLength(0);
       expect(elements.fileBrowserTree.innerHTML).toContain('Loading files');
       expect(pending.map(({ url }) => url)).toEqual([
-        '/api/sessions/session%2FB/files?depth=5&showHidden=false&root=live-any',
+        '/api/sessions/session%2FB/files?lazy=1&showHidden=false&root=live-any',
       ]);
 
       await vi.advanceTimersByTimeAsync(250);
@@ -1805,11 +1805,11 @@ describe('File Viewer server search', () => {
       const { app, pending } = loadPanel();
       app.activeSessionId = 'session/B';
       app._activateFileBrowserSession('session/B');
-      app.filterFileBrowser('during load');
+      app.searchFileBrowser('during load');
       await vi.advanceTimersByTimeAsync(250);
 
       expect(pending.map(({ url }) => url)).toEqual([
-        '/api/sessions/session%2FB/files?depth=5&showHidden=false&root=live-any',
+        '/api/sessions/session%2FB/files?lazy=1&showHidden=false&root=live-any',
         '/api/sessions/session%2FB/files?depth=5&showHidden=false&q=during%20load&root=live-any',
       ]);
       expect(pending.every(({ url }) => !url.includes('session%2FA'))).toBe(true);
@@ -1827,9 +1827,9 @@ describe('File Viewer server search', () => {
 
       expect(secondA).not.toBe(firstA);
       expect(pending.map(({ url }) => url)).toEqual([
-        '/api/sessions/session%2FA/files?depth=5&showHidden=false&root=live-any',
-        '/api/sessions/session%2FB/files?depth=5&showHidden=false&root=live-any',
-        '/api/sessions/session%2FA/files?depth=5&showHidden=false&root=live-any',
+        '/api/sessions/session%2FA/files?lazy=1&showHidden=false&root=live-any',
+        '/api/sessions/session%2FB/files?lazy=1&showHidden=false&root=live-any',
+        '/api/sessions/session%2FA/files?lazy=1&showHidden=false&root=live-any',
       ]);
 
       pending[0].reply.resolve(response(successfulTree('stale-A.ts')));
@@ -1864,7 +1864,7 @@ describe('File Viewer server search', () => {
 
     it('cancels an unlaunched debounce and clears all hide-reset controls and navigation state', async () => {
       const { app, elements, pending } = loadPanel();
-      app.filterFileBrowser('not launched');
+      app.searchFileBrowser('not launched');
       app.fileBrowserExpandedDirs.add('src');
       app.fileBrowserAllExpanded = true;
       app._fileBrowserState.matches = [{ name: 'old.ts' }];
