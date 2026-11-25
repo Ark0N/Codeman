@@ -22,7 +22,7 @@
  */
 
 import { EventEmitter } from 'node:events';
-import { collectDescendants, descendantsInPaneGroup } from './proc-tree.js';
+import { collectDescendants, descendantsInPaneGroup, isSignalablePid } from './proc-tree.js';
 import {
   foreignViewSessionName,
   buildForeignDockerViewKillCommand,
@@ -3148,6 +3148,8 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    * its process-group and tmux fallbacks.
    */
   private async getChildPidsFresh(pid: number): Promise<number[]> {
+    // The children of pid 0 or 1 are the whole machine (see isSignalablePid).
+    if (!isSignalablePid(pid)) return [];
     let byParent: ReadonlyMap<number, readonly number[]>;
     try {
       byParent = await Promise.race([
@@ -3203,6 +3205,19 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       console.warn(`[TmuxManager] Could not read process groups for pane ${panePid}; killing every descendant:`, err);
       return descendants;
     }
+  }
+
+  /**
+   * The one way this class signals a process. Refuses what is not a session's process
+   * (see {@link isSignalablePid}); a negative `pid` is the process group, so it is judged
+   * by its absolute value and `-1` (everything) and `-0` (our own group) are refused too.
+   */
+  private signalProcess(pid: number, signal: 'SIGTERM' | 'SIGKILL'): void {
+    if (!isSignalablePid(Math.abs(pid))) {
+      console.error(`[TmuxManager] Refusing to send ${signal} to pid ${pid}`);
+      return;
+    }
+    process.kill(pid, signal);
   }
 
   // Check if a process is still alive. Signal decisions only: an unreaped zombie
@@ -3348,10 +3363,15 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
     // Get current PID (may have changed)
     const currentPid = (await this.getPanePidAsync(session.muxName)) || session.pid;
+    // An empty pane has no process: tmux says 0, and so does the record once a server
+    // start has read it. Nothing is signalled then, and only tmux is asked to close it.
+    const hasProcess = isSignalablePid(currentPid);
 
-    console.log(`[TmuxManager] Killing session ${session.muxName} (PID ${currentPid})`);
+    console.log(
+      `[TmuxManager] Killing session ${session.muxName} (${hasProcess ? `PID ${currentPid}` : `no process, pane pid ${currentPid}`})`
+    );
 
-    const allPids: number[] = [currentPid];
+    const allPids: number[] = hasProcess ? [currentPid] : [];
 
     // Strategy 1: Kill all child processes recursively (but never a shared daemon the
     // pane's CLI started for every session of that CLI: see killableDescendants)
@@ -3363,7 +3383,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       for (const childPid of [...childPids].reverse()) {
         if (this.isProcessAlive(childPid)) {
           try {
-            process.kill(childPid, 'SIGTERM');
+            this.signalProcess(childPid, 'SIGTERM');
           } catch {
             // Process may already be dead
           }
@@ -3378,7 +3398,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       for (const childPid of childPids) {
         if (this.isProcessAlive(childPid)) {
           try {
-            process.kill(childPid, 'SIGKILL');
+            this.signalProcess(childPid, 'SIGKILL');
           } catch {
             // Process already terminated
           }
@@ -3387,12 +3407,12 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     }
 
     // Strategy 2: Kill the entire process group
-    if (this.isProcessAlive(currentPid)) {
+    if (hasProcess && this.isProcessAlive(currentPid)) {
       try {
-        process.kill(-currentPid, 'SIGTERM');
+        this.signalProcess(-currentPid, 'SIGTERM');
         await waitForProcessesExit([currentPid], { timeoutMs: GRACEFUL_SHUTDOWN_WAIT_MS });
         if (this.isProcessAlive(currentPid)) {
-          process.kill(-currentPid, 'SIGKILL');
+          this.signalProcess(-currentPid, 'SIGKILL');
         }
       } catch {
         // Process group may not exist or already terminated
@@ -3439,9 +3459,9 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     }
 
     // Strategy 4: Direct kill by PID as final fallback
-    if (this.isProcessAlive(currentPid)) {
+    if (hasProcess && this.isProcessAlive(currentPid)) {
       try {
-        process.kill(currentPid, 'SIGKILL');
+        this.signalProcess(currentPid, 'SIGKILL');
       } catch {
         // Already dead
       }
