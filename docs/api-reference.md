@@ -61,8 +61,8 @@ payload return `{ "success": true, "data": {} }`.
 
 ⚠️ **A `401` is not an envelope.** Authentication is rejected
 in a request hook, before any handler runs, and it replies with the bare string
-`Unauthorized` (`Unauthorized: hook secret required` on the hook path) plus
-`WWW-Authenticate: Basic realm="Codeman"`. With trusted-proxy sign-in on (experimental,
+`Unauthorized` plus `WWW-Authenticate: Basic realm="Codeman"` (on the hook path it is
+`Unauthorized: hook secret required`, without that header). With trusted-proxy sign-in on (experimental,
 see [Authentication](#authentication)) the same hook has more plain-text replies: a `401`
 without `WWW-Authenticate`, a `403` and a `503` for a refused proxy identity, and a `403`
 or `404` for a `/webview/` or `/html-view/` path without a live capability. There is no `success`, no `error`, and no
