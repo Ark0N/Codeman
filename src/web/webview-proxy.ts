@@ -746,6 +746,58 @@ try{
     }).observe(doc.documentElement,{subtree:true,childList:true,attributes:true,attributeFilter:A});
   }
 }catch(e){}
+// Sandboxed frames (no allow-same-origin) get an opaque origin, where the Web
+// Storage API throws on first touch. A dashboard that keeps its token or theme
+// there dies mid-boot and paints its own loading screen forever, with nothing
+// said. Tell the parent tab, which can offer trusted mode instead of leaving the
+// user staring at a spinner.
+//
+// Do NOT probe storage here: in an opaque origin merely reading the property
+// throws, so a boot-time check would report every sandboxed page, including one
+// that never touches storage. Wrap the getters instead, before any page script
+// runs. The first page access calls the original getter, rethrows its failure
+// unchanged (so the page sees the SecurityError it would have seen), and reports
+// that failure to the parent once per load. In an unsandboxed frame the original
+// getter succeeds: the real Storage object is returned and nothing is posted.
+try{
+  if(window.parent&&window.parent!==window){
+    var storageReported=false;
+    var guardStorage=function(name){
+      try{
+        var owner=window;
+        var desc=null;
+        while(owner&&!desc){
+          desc=Object.getOwnPropertyDescriptor(owner,name);
+          owner=Object.getPrototypeOf(owner);
+        }
+        if(!desc)return;
+        var origGet=desc.get;
+        if(typeof origGet!=='function'){
+          if(!('value' in desc))return;
+          origGet=function(){return desc.value;};
+        }
+        var wrapped={
+          configurable:true,
+          enumerable:desc.enumerable!==false,
+          get:function(){
+            try{return origGet.call(window);}
+            catch(e){
+              if(!storageReported){
+                storageReported=true;
+                try{window.parent.postMessage({type:'codeman:webview-needs-origin'},'*');}catch(_e){}
+              }
+              throw e;
+            }
+          }
+        };
+        if(typeof desc.set==='function')wrapped.set=desc.set;
+        Object.defineProperty(window,name,wrapped);
+      }catch(e){}
+    };
+    guardStorage('localStorage');
+    guardStorage('sessionStorage');
+  }
+}catch(e){}
 }catch(e){}})();</script>`;
 }
 

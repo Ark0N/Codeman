@@ -1661,6 +1661,11 @@
       '此端点标识已保留给 {name} 在此 Mac 上运行的模型。请换一个标识。',
     'Coding agents use git and Python. This Mac has no developer tools yet, so macOS will offer to install them the first time an agent needs one.':
       '编程智能体会用到 git 和 Python。此 Mac 尚未安装开发者工具，因此在智能体首次需要时，macOS 会提示安装。',
+    // A web tab whose sandbox blocked its storage: the notice replaces its loading screen.
+    'This dashboard needs unsandboxed mode': '这个面板需要非沙盒模式',
+    "It tried to use browser storage, which this tab's sandbox blocks. Unsandboxed mode lets the dashboard share Codeman's origin, so it can read this page and call its API. Only use it for a dashboard you control.":
+      '它尝试使用浏览器存储，而当前页签的沙盒禁止了这一点。非沙盒模式会让面板与 Codeman 同源，从而可以读取本页并调用其 API。请只对你掌控的面板这样做。',
+    'Reload unsandboxed': '以非沙盒模式重载',
   });
 
   const ZH_CN_LOWER = new Map(Object.entries(ZH_CN).map(([key, value]) => [key.toLocaleLowerCase('en'), value]));
