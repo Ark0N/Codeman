@@ -1386,7 +1386,19 @@ describe('TmuxManager (unit)', () => {
         if (callback) setImmediate(() => callback(null, { stdout, stderr: '' }, ''));
         return { on: vi.fn(), kill: vi.fn(), pid: 12345 };
       }) as unknown as typeof exec);
-      const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+      // The pane's process exits on its first real signal, as a live CLI does.
+      // Afterwards the liveness probe (`kill(pid, 0)`) throws, so the kill path
+      // stops waiting before it reads /proc, which this file mocks (Linux CI).
+      let paneAlive = true;
+      const kill = vi.spyOn(process, 'kill').mockImplementation(((pid: number, signal?: string | number) => {
+        if (Math.abs(pid) !== 4343) return true;
+        if (signal === 0) {
+          if (paneAlive) return true;
+          throw Object.assign(new Error('kill ESRCH'), { code: 'ESRCH' });
+        }
+        paneAlive = false;
+        return true;
+      }) as typeof process.kill);
       const NonTestTmuxManager = await importWithTmuxCommandsEnabled();
       const nonTestManager = new NonTestTmuxManager();
       nonTestManager.registerSession({
