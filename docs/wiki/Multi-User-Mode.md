@@ -216,6 +216,8 @@ cookie_secure = true
 cookie_samesite = "lax"          # never sent from a sandboxed web-tab frame
 cookie_expire = "12h"            # sign in again after this (default 168h)
 cookie_refresh = "1h"            # re-check with the provider this often
+cookie_csrf_per_request = true   # one CSRF cookie per sign-in, so parallel ones don't collide
+cookie_csrf_per_request_limit = 5
 scope = "openid email profile offline_access"   # offline_access: a refresh token (Entra ID)
 ```
 
@@ -303,7 +305,16 @@ codeman.example.com {
 					copy_headers X-Auth-Request-Email
 					@unauthenticated status 401
 					handle_response @unauthenticated {
-						redir * /oauth2/start?rd={scheme}://{hostport}{uri}
+						# Only a page navigation can complete a sign-in. Everything else
+						# (fetch, the live-update stream, WebSockets) gets a 401.
+						@background {
+							header Sec-Fetch-Mode *
+							not header Sec-Fetch-Mode navigate
+						}
+						route {
+							respond @background "Sign-in required" 401
+							redir * /oauth2/start?rd={scheme}://{hostport}{uri}
+						}
 					}
 				}
 
@@ -336,6 +347,12 @@ Codeman cannot see a mistake here:
 - **The proxy's own cookie stops at the proxy.** The `request_header Cookie …` lines remove
   it on both routes. With a different `cookie_name` in oauth2-proxy, change the name in
   the pattern.
+- **Only a page navigation is sent to the sign-in.** A request the page makes in the
+  background gets a `401`. Without that rule an open Codeman page whose proxy session has
+  ended keeps starting sign-ins in the background, several per second. Each one replaces
+  oauth2-proxy's CSRF cookie, and the person's real sign-in then ends on oauth2-proxy's
+  error page ("CSRF token mismatch"). `cookie_csrf_per_request` covers the remaining case
+  of several tabs signing in at once.
 - **oauth2-proxy's identity headers stop at the proxy too.** `header_up -X-Auth-Request-Email`
   removes the address on the way to Codeman, because the web-tab relay passes headers it
   does not know on to dashboards.
@@ -389,7 +406,14 @@ route {
 		copy_headers X-Auth-Request-Email X-Auth-Request-Codeman-User
 		@unauthenticated status 401
 		handle_response @unauthenticated {
-			redir * /oauth2/start?rd={scheme}://{hostport}{uri}
+			@background {
+				header Sec-Fetch-Mode *
+				not header Sec-Fetch-Mode navigate
+			}
+			route {
+				respond @background "Sign-in required" 401
+				redir * /oauth2/start?rd={scheme}://{hostport}{uri}
+			}
 		}
 	}
 
@@ -429,9 +453,9 @@ out (`/oauth2/sign_out`) and in again.
   (`403` / `404`) without a password check,
   prompt or failure count, so anonymous requests can't probe passwords or lock out the
   password sign-in.
-- **When the proxy session expires**, API calls and the live-update stream get a redirect
-  to the sign-in page instead of a `401`. A page cannot follow it, so an open Codeman page
-  shows "Reconnecting" and does not recover by itself: reload it to sign in again. The `rd=` return address is not
+- **When the proxy session expires**, API calls and the live-update stream get the proxy's
+  `401`. An open Codeman page then shows "No connection to the Codeman server" and does
+  not recover by itself: reload it to sign in again. The `rd=` return address is not
   URL-encoded, so a query string with `&` loses everything after the first one.
 - **`mustChangePassword` is ignored** for proxy sign-ins, since no Codeman password was
   used, and `GET /api/me` reports it as `false` for them. A person's own "Revoke all" and logout end Codeman cookies, not the proxy's
