@@ -382,9 +382,10 @@ function paneField(fields: string[], index: number): number | undefined {
  * - Skips entries with an empty name, and entries where tmux answered neither a
  *   pid nor `#{pane_dead}`, which is a bad read. tmux 3.8 blanks `#{pane_pid}`
  *   as soon as the pane's pty closes, while `#{pane_dead}` turns 1 only once
- *   tmux has collected the exit status (several seconds for some exits,
- *   measured on tmux 3.4). A row with no pid and `pane_dead` 0 is that window,
- *   and dropping it would report a live session as gone.
+ *   tmux has collected the exit status. Collecting it took several seconds for
+ *   some exits (measured on tmux 3.4, where the pid itself stays). A row with
+ *   no pid and `pane_dead` 0 is that window, and dropping it would report a
+ *   live session as gone.
  * - Leaves every field after the pid undefined when it is blank or absent, so a
  *   row from an older tmux still yields its pid.
  */
@@ -3482,12 +3483,15 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     // check the fallback below would pick that stale pid every time. Only the
     // kill-session below runs for it. A blank pid with `#{pane_dead}` still 0
     // (tmux 3.8, pty closed, exit not collected yet) keeps the fallback: tmux
-    // has not reaped that process, so its pid cannot have been reused.
-    // An empty pane has no process either: tmux says 0, and so does the record
-    // once a server start has read it. Nothing is signalled for pid 0 or 1
-    // (isSignalablePid), and only tmux is asked to close the session.
+    // has not reaped the pane's process yet. That holds when the recorded pid is
+    // the one the pane was started with; a hand-run `respawn-pane` breaks it.
+    // A pid of 0 is no pid either: tmux prints it for an empty active pane
+    // (`split-window ''`) before 3.8, beside a session's running agent, so
+    // `||` falls back to the recorded pid as master always did. Nothing is
+    // ever signalled for 0 or 1 (isSignalablePid): then only tmux is asked to
+    // close the session.
     const pane = await this.readPaneForKill(session.muxName);
-    const candidatePid = pane.dead ? null : (pane.pid ?? session.pid);
+    const candidatePid = pane.dead ? null : pane.pid || session.pid;
     const currentPid = candidatePid !== null && isSignalablePid(candidatePid) ? candidatePid : null;
 
     console.log(
@@ -3495,7 +3499,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         ? `[TmuxManager] Killing session ${session.muxName} (PID ${currentPid})`
         : pane.dead
           ? `[TmuxManager] Killing session ${session.muxName} (pane dead, PID ${session.pid} not signalled)`
-          : `[TmuxManager] Killing session ${session.muxName} (no process, pane pid ${candidatePid})`
+          : `[TmuxManager] Killing session ${session.muxName} (no usable pid, recorded ${session.pid}, nothing signalled)`
     );
 
     const allPids: number[] = [];
