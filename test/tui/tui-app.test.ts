@@ -624,6 +624,7 @@ describe('the way out when F1 is taken, on a socket with no detach key', () => {
       restoreSessionOptions: async () => true,
       readWindowSizing: async () => null,
       presizeWindow: async () => true,
+      clearLeakedFollowTyping: async () => 0,
       followAttachingClient: async () => true,
       restoreWindowSizing: async () => true,
     } as unknown as TuiClient;
@@ -672,6 +673,7 @@ describe('attach switch keys stay on the TUI client', () => {
       restoreSessionOptions: async () => true,
       readWindowSizing: async () => null,
       presizeWindow: async () => true,
+      clearLeakedFollowTyping: async () => 0,
       followAttachingClient: async () => {
         order.push('follow');
         return true;
@@ -747,6 +749,10 @@ describe('attach takes the window back from a browser when the terminal is used'
       restoreSessionOptions: async () => undefined,
       readWindowSizing: async () => ({ cols: 60, rows: 30, mode: 'manual' }),
       presizeWindow: async () => true,
+      clearLeakedFollowTyping: async () => {
+        calls.push('sweep');
+        return 0;
+      },
       followAttachingClient: async (muxName: string) => {
         calls.push(`follow ${muxName}`);
         return true;
@@ -773,8 +779,10 @@ describe('attach takes the window back from a browser when the terminal is used'
   it('arms the hook on every session the strip can reach, and drops it before the size is put back', async () => {
     const { client, calls } = sizingFake();
     const handoff = await beginAttachHandoff(client, 'codeman-aaaa1111', 'w1', tabs, 200, 50, '/dev/pts/4');
+    // Leaks first, so a killed TUI's hook cannot undo the presize. Then
     // Alt+2 lands in the second session, and a phone can pin that one too.
     expect(calls).toEqual([
+      'sweep',
       'follow codeman-aaaa1111',
       'arm codeman-aaaa1111 /dev/pts/4',
       'arm codeman-bbbb2222 /dev/pts/4',

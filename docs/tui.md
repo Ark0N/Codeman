@@ -7,7 +7,7 @@ tmux pane with one keystroke.
 
 It is **additional, not a replacement**: the web UI stays the primary surface and
 gets every feature first. The TUI exists for the terminal workflow (SSH, Termius,
-a tmux window you keep open all day), and it is a *client* of the running server,
+a tmux window you keep open all day), and it is a _client_ of the running server,
 so the two surfaces can never disagree about what a session is doing. It is also
 not a multiplexer: tmux still owns every pane, and attaching hands the terminal to
 tmux rather than proxying bytes.
@@ -27,11 +27,11 @@ Neither sets up a screen, so both are as quick as the one API call they make, an
 
 What it needs:
 
-| Needs | What you get |
-| --- | --- |
+| Needs             | What you get                                                                                                                                                                                                                                                                                                                 |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Full features** | A running Codeman server (states, approvals, preview, prompts, search, digest). The TUI finds it the way `codeman attach` does: `CODEMAN_API_URL`, else loopback on `CODEMAN_PORT` for this `CODEMAN_INSTANCE`. The self-signed certificate an `--https` install generates is accepted, as it is everywhere else in the CLI. |
-| **Server down** | It still starts, in **degraded mode**: sessions are enumerated straight from `tmux -L codeman` plus a read-only peek at `state.json`, and attach is the only verb. See [Troubleshooting](#troubleshooting). |
-| **A terminal** | `codeman tui` refuses to run when stdin/stdout are not a TTY, and says to use `--list` instead. A cron job or a pipe therefore fails loudly rather than emitting escape codes into a log. |
+| **Server down**   | It still starts, in **degraded mode**: sessions are enumerated straight from `tmux -L codeman` plus a read-only peek at `state.json`, and attach is the only verb. See [Troubleshooting](#troubleshooting).                                                                                                                  |
+| **A terminal**    | `codeman tui` refuses to run when stdin/stdout are not a TTY, and says to use `--list` instead. A cron job or a pipe therefore fails loudly rather than emitting escape codes into a log.                                                                                                                                    |
 
 ## What it looks like
 
@@ -98,13 +98,13 @@ before the terminal check, so a script can tell them apart without a TTY.
 
 Groups are always in this order, and a session is in exactly one of them:
 
-| Group | Glyph | Means | Comes from |
-| --- | --- | --- | --- |
-| **NEEDS YOU** | `⚠` | A permission or question dialog is blocking the agent | The approvals inbox (`permission_prompt` hooks, with the on-screen options parsed; for Codex, a dialog read off its screen) |
-| | `✋` | Waiting for your next instruction, or errored | `idle_prompt`, or an errored session (equally something only a human clears) |
-| **WORKING** | `✻` animating | A turn is running | The same working classification the web dashboard uses |
-| **IDLE** | `○` | Live, but sitting there | |
-| **RECENT** | `✔` | A past session from the unified list | History rows, no live pane |
+| Group         | Glyph         | Means                                                 | Comes from                                                                                                                  |
+| ------------- | ------------- | ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| **NEEDS YOU** | `⚠`           | A permission or question dialog is blocking the agent | The approvals inbox (`permission_prompt` hooks, with the on-screen options parsed; for Codex, a dialog read off its screen) |
+|               | `✋`          | Waiting for your next instruction, or errored         | `idle_prompt`, or an errored session (equally something only a human clears)                                                |
+| **WORKING**   | `✻` animating | A turn is running                                     | The same working classification the web dashboard uses                                                                      |
+| **IDLE**      | `○`           | Live, but sitting there                               |                                                                                                                             |
+| **RECENT**    | `✔`           | A past session from the unified list                  | History rows, no live pane                                                                                                  |
 
 Ordering inside a group is "the one that has waited longest, first": blocked
 sessions sort by how long the dialog has been up, working sessions by when their
@@ -121,20 +121,20 @@ same item announced twice does not ring twice.
 
 ## Keymap
 
-| Key | Does |
-| --- | --- |
-| `↑` `↓` or `j` `k` | Move the cursor. PageUp/PageDown jump five rows. |
-| `Enter` | Attach to the selected session (see [Attaching](#attaching)) |
-| `1`-`9` | Jump to that row and attach. When a dialog is on screen, a digit answers it instead (see below). |
-| `y` | Approve the selected session's dialog |
-| `n` | Deny it, or **start a new session** when there is no dialog |
-| `p` | Send one line to the selected session without attaching |
-| `x` | Kill the selected session; `y` confirms, any other key cancels |
-| `/` | Search sessions, events and files |
-| `g` | Away digest: what happened while you were gone |
-| `?` | Help overlay |
-| `Esc` | Close whatever overlay is open |
-| `q` or `Ctrl+C` | Quit, restoring the screen you started with |
+| Key                | Does                                                                                             |
+| ------------------ | ------------------------------------------------------------------------------------------------ |
+| `↑` `↓` or `j` `k` | Move the cursor. PageUp/PageDown jump five rows.                                                 |
+| `Enter`            | Attach to the selected session (see [Attaching](#attaching))                                     |
+| `1`-`9`            | Jump to that row and attach. When a dialog is on screen, a digit answers it instead (see below). |
+| `y`                | Approve the selected session's dialog                                                            |
+| `n`                | Deny it, or **start a new session** when there is no dialog                                      |
+| `p`                | Send one line to the selected session without attaching                                          |
+| `x`                | Kill the selected session; `y` confirms, any other key cancels                                   |
+| `/`                | Search sessions, events and files                                                                |
+| `g`                | Away digest: what happened while you were gone                                                   |
+| `?`                | Help overlay                                                                                     |
+| `Esc`              | Close whatever overlay is open                                                                   |
+| `q` or `Ctrl+C`    | Quit, restoring the screen you started with                                                      |
 
 Inside the `p` composer and the `/` query: `←` `→` `Home` `End` `Delete`
 `Backspace` plus `Ctrl+A` / `Ctrl+E` / `Ctrl+U` / `Ctrl+W`, `Enter` to send or open,
@@ -217,15 +217,19 @@ can switch to is dressed and sized the same way, so switching is instant and lan
 in a pane that already fills your terminal.
 
 The window follows whoever used it last, as plain tmux does. If a browser tab (a
-phone, say) opens or resizes the session while you are attached, the window takes
-that tab's size, and your terminal shows a smaller pane. Type, paste or resize your
-terminal and the window fills it again; type in the tab and the tab gets it back.
-The TUI does this with two hooks on each session it dressed (`client-active[91]`
-and `after-resize-window[91]`) and a session option naming your terminal
-(`@codeman-tui-follow`), and removes all three on detach. A TUI that was killed
-while attached (a closed window, a dropped SSH) leaves them behind, and the next
-`codeman tui` removes them. tmux older than 3.3 has no `client-active` hook, so
-there the pane stays at the browser's size until you detach and attach again.
+phone, say) resizes the session while you are attached, the window takes that tab's
+size, and your terminal shows a smaller pane. Type, paste or resize your terminal and
+the window fills it again; type in the tab, or press its Redraw, and the tab gets it
+back. A tab that only opens the session at the size it already had changes nothing.
+The TUI does this with one hook on each session it dressed (`client-active[91]`) and
+two session options naming your terminal and the TUI process (`@codeman-tui-follow`,
+`@codeman-tui-follow-pid`), and removes all three on detach. It sets nothing on a
+session where you have a hook of your own at that index, or anywhere while you have
+a global `client-active` hook, which a session hook would hide. A TUI that was killed
+while attached (a closed window, a dropped SSH) leaves them behind; the next
+`codeman tui`, including `codeman tui <n>`, removes them before it attaches. tmux
+older than 3.3 has no `client-active` hook, so there the pane stays at the browser's
+size until you detach and attach again.
 
 Detaching leaves the agent running; typing `exit` or pressing `Ctrl+D` would end it,
 which is the difference the bar exists to make obvious. If an agent does exit, its
@@ -234,11 +238,11 @@ resume the conversation in a fresh one instead.
 
 Three cases:
 
-| Where you are | What happens |
-| --- | --- |
-| Not in tmux | `tmux -L codeman attach-session` |
-| Already in tmux on Codeman's socket | `switch-client`, so you do not nest |
-| In tmux on a **different** socket | Refused, with an explanation: detach from that tmux first, then run `codeman tui` again |
+| Where you are                       | What happens                                                                            |
+| ----------------------------------- | --------------------------------------------------------------------------------------- |
+| Not in tmux                         | `tmux -L codeman attach-session`                                                        |
+| Already in tmux on Codeman's socket | `switch-client`, so you do not nest                                                     |
+| In tmux on a **different** socket   | Refused, with an explanation: detach from that tmux first, then run `codeman tui` again |
 
 A direct-PTY session has no pane to attach to, and says so.
 
@@ -278,7 +282,7 @@ server. Start the server (`codeman web -d`, or `systemctl --user start codeman-w
 and the banner clears on its own: the TUI keeps re-probing.
 
 **It found the wrong server, or none.** Discovery is instance-scoped. A beta
-instance (`CODEMAN_INSTANCE=beta`) has its own data dir *and* its own tmux socket,
+instance (`CODEMAN_INSTANCE=beta`) has its own data dir _and_ its own tmux socket,
 so its TUI sees only its own sessions. Set `CODEMAN_PORT` or `CODEMAN_API_URL`
 explicitly when you run more than one.
 
