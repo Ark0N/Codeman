@@ -230,6 +230,7 @@ import {
 import { readDeepSeekLastResponse } from '../../deepseek-transcript.js';
 import { appendClaudeCustomTitle } from '../../claude-session-title.js';
 import { UPLOADS_DIR } from '../paste-image-gc.js';
+import { ClaudeTranscriptReader } from '../claude-response-transcript.js';
 
 // Path to linked-cases registry (same file used by case-routes resolveCasePath)
 const LINKED_CASES_FILE = dataPath('linked-cases.json');
@@ -1084,6 +1085,14 @@ function wakeableHost(host: RemoteHost): WakeableRemote {
     extraSshOptions: host.extraSshOptions,
   };
 }
+
+/**
+ * The transcript path a `context=full` read started a session's watcher on, per session.
+ * A hook moves the watcher whenever its own path changes, but a session without working hooks
+ * never does, so after a `/clear` the read moves the watcher it started itself. A watcher whose
+ * path no longer matches the entry was moved by a hook, and from then on the read leaves it alone.
+ */
+const readStartedWatchers = new WeakMap<Session, string>();
 
 export function registerSessionRoutes(
   app: FastifyInstance,
@@ -2936,160 +2945,9 @@ export function registerSessionRoutes(
     return best.sessionId;
   }
 
-  interface ClaudeResponseMessage {
-    kind: 'prompt' | 'response';
-    label: 'Prompt' | 'Response';
-    role: 'user' | 'assistant';
-    text: string;
-    timestamp?: string;
-    turn: number;
-    queued?: boolean;
-  }
-
-  interface ClaudeTranscriptEntry {
-    type?: string;
-    timestamp?: string;
-    isMeta?: boolean;
-    isSidechain?: boolean;
-    isCompactSummary?: boolean;
-    message?: { content?: unknown };
-    // A prompt typed while Claude is working is absorbed mid-turn and recorded
-    // ONLY here — the CLI never re-emits it as a `user` row. Every field stays
-    // optional and unvalidated: `queued_command` is not a documented CLI
-    // contract, so a missing/renamed field must mean "skip", which is also what
-    // the CLI's own non-human queue entries (commandMode 'task-notification',
-    // no `origin` key) require. Shape observed on Claude Code 2.1.220-2.1.251.
-    attachment?: {
-      type?: string;
-      prompt?: string;
-      commandMode?: string;
-      timestamp?: string;
-      origin?: { kind?: string };
-    };
-  }
-
-  function extractClaudeText(content: unknown, separator: string): string {
-    if (typeof content === 'string') return content;
-    if (!Array.isArray(content)) return '';
-    return content
-      .filter(
-        (block): block is { type: string; text: string } =>
-          !!block &&
-          typeof block === 'object' &&
-          (block as { type?: string }).type === 'text' &&
-          typeof (block as { text?: string }).text === 'string'
-      )
-      .map((block) => block.text)
-      .join(separator);
-  }
-
-  function isClaudeSyntheticUserMessage(entry: ClaudeTranscriptEntry, text: string): boolean {
-    if (entry.isMeta || entry.isCompactSummary) return true;
-    return /^(?:<local-command|<command-name>|<task-notification>|<system-reminder>|<teammate-message\b|Another Claude session sent a message:|Base directory for this skill:)/i.test(
-      text
-    );
-  }
-
-  /**
-   * Claude writes an append-only event log: tool results arrive as user rows,
-   * thinking/tool_use rows carry no text, and a prompt typed while the agent is
-   * working is only ever recorded as an `attachment/queued_command` row. But one
-   * assistant row IS one whole model message: measured across ~/.claude/projects
-   * (CLI 2.1.220-2.1.251) no assistant row carries more than one content block
-   * and no message id carries more than one text block, so there is nothing to
-   * reassemble. Emit one card per row and group them with `turn` instead of
-   * concatenating a human turn's replies into a single card (#169), which fused
-   * up to 74 distinct model messages into one card. Splitting is safe for
-   * markdown: no adjacent pair of assistant text rows in the corpus continues a
-   * table, a list, or an open code fence.
-   */
-  function parseClaudeResponseTranscript(
-    content: string,
-    full: boolean
-  ): { text: string; timestamp: string; messages?: ClaudeResponseMessage[] } {
-    let lastText = '';
-    let lastTimestamp = '';
-    const messages: ClaudeResponseMessage[] = [];
-    // #169's replay guards, kept: they now SKIP a duplicated row instead of
-    // concatenating it into the previous card.
-    const currentUserFragments = new Set<string>();
-    const currentAssistantFragments = new Set<string>();
-    // Turn 0 is reserved for anything emitted before the first human prompt.
-    let turn = 0;
-
-    const pushUserMessage = (text: string, timestamp: string | undefined, queued: boolean): void => {
-      // A run of consecutive human inputs (a mid-turn queued burst) is ONE turn,
-      // so the viewer renders it under one badge instead of one badge per line.
-      if (messages.at(-1)?.role !== 'user') turn += 1;
-      const message: ClaudeResponseMessage = { kind: 'prompt', label: 'Prompt', role: 'user', text, timestamp, turn };
-      if (queued) message.queued = true;
-      messages.push(message);
-      currentUserFragments.add(text);
-      currentAssistantFragments.clear();
-    };
-
-    for (const line of content.split('\n')) {
-      if (!line) continue;
-      let entry: ClaudeTranscriptEntry;
-      try {
-        entry = JSON.parse(line) as ClaudeTranscriptEntry;
-      } catch {
-        continue;
-      }
-      // Sidechains belong to agents/forks, not the main conversation. Meta user
-      // rows include repeated image dimensions and other UI-generated context.
-      if (entry.isSidechain) continue;
-
-      // A prompt typed while Claude is working is absorbed mid-turn and lives
-      // ONLY in an attachment row, so it was lost outright. `origin.kind` and
-      // `commandMode` separate the human's queue entries from the CLI's own:
-      // measured over 57 real transcripts on 2026-09-01, 322 queued_command rows
-      // split 163 `prompt`/`human` and 159 `task-notification`, and not one of
-      // those 159 carries an `origin` key. The 163 human rows become 162 user
-      // cards here — one is a verbatim repeat inside a still-unanswered user run
-      // and is collapsed by the dedup guard below — out of 353 user cards total.
-      if (entry.type === 'attachment') {
-        if (!full) continue;
-        const queued = entry.attachment;
-        if (!queued || queued.type !== 'queued_command') continue;
-        if (queued.origin?.kind !== 'human' || queued.commandMode !== 'prompt') continue;
-        const text = typeof queued.prompt === 'string' ? queued.prompt.trim() : '';
-        if (!text || isClaudeSyntheticUserMessage(entry, text)) continue;
-        if (currentUserFragments.has(text)) continue;
-        pushUserMessage(text, queued.timestamp || entry.timestamp, true);
-        continue;
-      }
-
-      if (entry.type === 'user') {
-        const text = extractClaudeText(entry.message?.content, '\n').trim();
-        // A tool_result block has no text block and naturally drops out here.
-        if (!text || isClaudeSyntheticUserMessage(entry, text)) continue;
-        if (!full) continue;
-        // Claude replays the initial user row while restoring a transcript, and
-        // a CLI that also wrote an absorbed prompt as a user row would double it.
-        // Both collapse here. The same prompt sent again AFTER a reply is a
-        // legitimate second turn, because that reply cleared the set.
-        if (currentUserFragments.has(text)) continue;
-        pushUserMessage(text, entry.timestamp, false);
-        continue;
-      }
-
-      if (entry.type !== 'assistant') continue;
-      const text = extractClaudeText(entry.message?.content, '\n\n').trim();
-      if (!text) continue;
-      lastText = text;
-      lastTimestamp = entry.timestamp || '';
-      if (!full) continue;
-
-      // Replayed snapshots repeat an identical text block inside one turn.
-      if (currentAssistantFragments.has(text)) continue;
-      messages.push({ kind: 'response', label: 'Response', role: 'assistant', text, timestamp: entry.timestamp, turn });
-      currentAssistantFragments.add(text);
-      currentUserFragments.clear();
-    }
-
-    return full ? { text: lastText, timestamp: lastTimestamp, messages } : { text: lastText, timestamp: lastTimestamp };
-  }
+  // Each transcript's parse so far, so a read parses only what was appended since the last one
+  // (claude-response-transcript.ts). The chat view reads on every `transcript:update`.
+  const claudeTranscripts = new ClaudeTranscriptReader();
 
   /**
    * Where THIS session's claude keeps its conversations: `<config dir>/projects` and
@@ -3145,32 +3003,58 @@ export function registerSessionRoutes(
     }
   }
 
+  // Where each conversation's transcript was last found, keyed by projects folder and id. The scan
+  // below stats one path per project folder, and the chat view reads on every reload, so a hit here
+  // costs one stat. A path that no longer names a file is dropped and the scan runs again.
+  const transcriptPathCache = new LRUMap<string, string>({ maxSize: 256 });
+
   /** Locate a top-level Claude transcript, including recovered tmux sessions. */
   async function findClaudeTranscript(
     projectsDir: string,
     conversationId: string,
     codemanSessionId: string
   ): Promise<{ sessionId: string; path: string } | null> {
-    let projectDirs: import('node:fs').Dirent[];
-    try {
-      projectDirs = await fs.readdir(projectsDir, { withFileTypes: true });
-    } catch {
-      return null;
-    }
+    let projectDirs: import('node:fs').Dirent[] | null = null;
+    const readProjectDirs = async (): Promise<import('node:fs').Dirent[] | null> => {
+      if (projectDirs) return projectDirs;
+      try {
+        projectDirs = await fs.readdir(projectsDir, { withFileTypes: true });
+      } catch {
+        return null;
+      }
+      return projectDirs;
+    };
 
     const safeIds = [...new Set([conversationId, codemanSessionId])].filter((value) => /^[a-zA-Z0-9._-]+$/.test(value));
     for (const candidateId of safeIds) {
-      for (const projectDir of projectDirs) {
+      const cacheKey = `${projectsDir}\0${candidateId}`;
+      const cached = transcriptPathCache.get(cacheKey);
+      if (cached) {
+        const stat = await fs.stat(cached).catch(() => null);
+        if (stat?.isFile()) return { sessionId: candidateId, path: cached };
+        transcriptPathCache.delete(cacheKey);
+      }
+      const dirs = await readProjectDirs();
+      if (!dirs) return null;
+      for (const projectDir of dirs) {
         if (!projectDir.isDirectory()) continue;
         const jsonlPath = join(projectsDir, projectDir.name, `${candidateId}.jsonl`);
         try {
           const stat = await fs.stat(jsonlPath);
-          if (stat.isFile()) return { sessionId: candidateId, path: jsonlPath };
+          if (stat.isFile()) {
+            transcriptPathCache.set(cacheKey, jsonlPath);
+            return { sessionId: candidateId, path: jsonlPath };
+          }
         } catch {
           /* continue */
         }
       }
     }
+
+    // The fallback below is never cached: it picks among files by a prefix, and a new one can
+    // change the answer.
+    const allProjectDirs = await readProjectDirs();
+    if (!allProjectDirs) return null;
 
     // If mux-sessions.json was lost or stale, reconcileSessions() historically
     // recovered `codeman-40568a29` as `restored-40568a29` and used the server cwd.
@@ -3182,7 +3066,7 @@ export function registerSessionRoutes(
     const candidates: Array<{ sessionId: string; path: string; mtimeMs: number }> = [];
     const uuidPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 
-    for (const projectDir of projectDirs) {
+    for (const projectDir of allProjectDirs) {
       if (!projectDir.isDirectory()) continue;
       const dirPath = join(projectsDir, projectDir.name);
       let files: import('node:fs').Dirent[];
@@ -3340,17 +3224,35 @@ export function registerSessionRoutes(
       }
     }
 
-    try {
-      const content = await fs.readFile(transcript.path, 'utf8');
-      const parsed = parseClaudeResponseTranscript(content, wantsMessages);
-      if (context === 'turn') {
-        return {
-          text: parsed.text,
-          timestamp: parsed.timestamp,
-          messages: selectLastAnsweredTurn(parsed.messages ?? []),
-        };
+    // The chat view lives on the watcher's events (tool starts, new lines). A watcher normally
+    // starts at the session's first hook or statusline report, so a session the server picked up
+    // mid-turn (a restart) has none until one of those arrives. Start one from the file just found
+    // when none runs. A watcher this read started itself follows the conversation to its new file
+    // after a `/clear`, since no hook or statusline report moves it. A watcher that a hook or a
+    // statusline report started or moved is never touched: the reported path stays the authority.
+    // A remote session's file is not here. The reads above await, so the session may have been
+    // deleted or detached meanwhile, and a watcher started for it then would never be stopped.
+    if (context === 'full' && !session.remote && ctx.sessions.get(session.id) === session) {
+      const current = ctx.getTranscriptPath(session.id);
+      if (current === null) {
+        ctx.startTranscriptWatcher(session.id, transcript.path);
+        readStartedWatchers.set(session, transcript.path);
+      } else if (readStartedWatchers.get(session) === current) {
+        if (current !== transcript.path) {
+          ctx.startTranscriptWatcher(session.id, transcript.path);
+          readStartedWatchers.set(session, transcript.path);
+        }
+      } else {
+        readStartedWatchers.delete(session);
       }
-      return parsed;
+    }
+
+    try {
+      const parsed = await claudeTranscripts.read(transcript.path);
+      if (context === 'turn') {
+        return { text: parsed.text, timestamp: parsed.timestamp, messages: selectLastAnsweredTurn(parsed.messages) };
+      }
+      return wantsMessages ? parsed : { text: parsed.text, timestamp: parsed.timestamp };
     } catch {
       return wantsMessages ? { text: '', timestamp: '', messages: [] } : { text: '', timestamp: '' };
     }

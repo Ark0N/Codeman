@@ -289,6 +289,10 @@ const _SSE_HANDLER_MAP = [
   // (and its turn ends, from _onSessionIdle: one handler per event in this map)
   [SSE_EVENTS.TRANSCRIPT_TOOL_END, '_onEditHistoryTranscriptEvent'],
 
+  // Chat view (chat-view.js): re-read the conversation as the transcript grows. Turn starts and
+  // ends reach it from _onSessionWorking / _onSessionIdle.
+  [SSE_EVENTS.TRANSCRIPT_UPDATE, '_onChatViewTranscriptUpdate'],
+
   // Tunnel
   [SSE_EVENTS.TUNNEL_STARTED, '_onTunnelStarted'],
   [SSE_EVENTS.TUNNEL_STOPPED, '_onTunnelStopped'],
@@ -534,6 +538,16 @@ const DEFAULT_SHORTCUTS = [
     // brackets are registry entries, and the registry claims Alt for KeyK and Slash only.
     bindings: [{ modifiers: ['alt'], key: 'b', code: 'KeyB' }],
     action: 'toggleSessionSidebar',
+  },
+  {
+    id: 'toggle-chat-view',
+    group: 'Session',
+    label: 'Toggle Chat / Terminal View',
+    // Alt+Shift+C: no browser binds it, and the xterm key handler swallows it only while the
+    // active session can show the chat view (shouldToggleChatViewFromShortcut), so elsewhere
+    // the chord still reaches the terminal.
+    bindings: [{ modifiers: ['alt', 'shift'], key: 'C', code: 'KeyC' }],
+    action: 'toggleChatView',
   },
   // Tile grid (tile-grid.js). Dispatched by tileShortcutFor()/runTileShortcut()
   // and deliberately absent from SHORTCUT_ACTIONS: each applies only in some
@@ -1159,6 +1173,8 @@ class CodemanApp {
       this.tabAlerts.set(sessionId, 'idle');
     }
     this.renderSessionTabs();
+    // An open chat view shows a dialog the pane is waiting on (chat-view.js).
+    this.onChatViewHooksChanged?.(sessionId);
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -2435,6 +2451,8 @@ class CodemanApp {
     if (session.id === this.activeSessionId) this._reconcileKeyboardHold?.();
     // The agent moved into or out of a git worktree while the Files panel is open (#765).
     if (session.id === this.activeSessionId) this._followFileBrowserWorktree?.(session);
+    // A started or switched agent can change whether the chat view applies (chat-view.js).
+    if (session.id === this.activeSessionId) this._chatViewSync?.();
     // Update parentSessionName for any subagents belonging to this session
     // (fixes stale name display after session rename)
     this.updateSubagentParentNames(session.id);
@@ -2462,6 +2480,7 @@ class CodemanApp {
     // Dashboard: a detached session ended → clear its detached state/timers.
     if (this.detachedSessions.has(data.id)) this._redock(data.id);
     this._cleanupSessionData(data.id);
+    this._chatViewForget?.(data.id);
     // ⚠️ Skip the whole active-session handoff while THIS tab is closing that
     // session: closeSession() owns the follow-up selection and moves you to the
     // next tab, so acting here would race it and flash the welcome screen (or
@@ -3656,6 +3675,7 @@ class CodemanApp {
     // An open Edit history panel re-reads at the end of its session's turn (edit-history-ui.js),
     // not after Codeman's own keep-alive turn, which edits nothing.
     if (!data.keepAlive) this.onEditHistorySessionIdle?.(data.id);
+    this.onChatViewTurnEvent?.(data.id, true, data.keepAlive);
     // Start stuck detection timer (only if no respawn running). Not at the end of Codeman's
     // own keep-alive turn (`keepAlive`): the session has been waiting since the last real
     // turn, whose timer is still running or has already fired.
@@ -3681,6 +3701,7 @@ class CodemanApp {
       this.sendPendingCtrlL(data.id);
       if (data.id === this.activeSessionId) this._updateLocalEchoState();
     }
+    this.onChatViewTurnEvent?.(data.id, false, data.keepAlive);
     // Clear stuck detection timer, unless this is Codeman's own keep-alive turn, which is
     // no sign of life from the agent's side.
     const timer = data.keepAlive ? null : this.idleTimers.get(data.id);
@@ -5116,6 +5137,8 @@ class CodemanApp {
         });
       }
     });
+    // The chat view's per-device choices of sessions that are gone (chat-view.js).
+    this._chatViewPruneModes?.(new Set(data.sessions.map((s) => s.id)));
 
     // Server is source of truth for open sessions — don't resurrect stale tabs
     // from localStorage (would show phantom "ended" tabs when a session was closed
@@ -5275,6 +5298,9 @@ class CodemanApp {
         // The fresh session record may no longer qualify for a keyboard row hold.
         this._reconcileKeyboardHold?.();
         void this._onSessionNeedsRefresh({ id: restoreId });
+        // The transcript events sent during the outage are lost, so the chat view re-reads the
+        // conversation now (a no-op while Chat is not showing).
+        this._chatViewReload?.({ immediate: true });
         // The split pane's second terminal reconnects on its own backoff (up to
         // 10 s between tries); the server is back now, so skip the wait. A no-op
         // while its socket is open, stopped for good, or destroyed.
@@ -10095,6 +10121,8 @@ class CodemanApp {
     this.refreshHostWakeBanner?.(sessionId);
     // An open Edit history panel follows the active session (edit-history-ui.js; no poll).
     this.onEditHistoryActiveSession?.(sessionId);
+    // The chat view follows the active session too, showing it or the terminal (chat-view.js).
+    this.onChatViewActiveSession?.(sessionId);
 
     // Restore flushed offset AND text IMMEDIATELY so backspace/typing work during
     // the async buffer load.  Without this, the offset is 0 during the
@@ -11312,6 +11340,7 @@ class CodemanApp {
       moveActiveTabLeft: () => this.moveActiveTabLeft(),
       moveActiveTabRight: () => this.moveActiveTabRight(),
       toggleSessionSidebar: () => this.toggleSessionSidebar(),
+      toggleChatView: () => this.toggleChatView?.(),
     };
   }
 

@@ -1514,6 +1514,95 @@ function findMarkdownAnchorTarget(root, href) {
   return null;
 }
 
+// ─── Chat view (chat-view.js) ─────────────────────────────────────────────────
+// Pure halves of the chat view, the rendered conversation that replaces the terminal
+// as a session's main view (docs/chat-view-plan.md). The module owns the DOM; these
+// decide what it shows, so a test can pin them without a browser.
+
+/** A prompt longer than this many lines, or characters, is folded. */
+const CHAT_PROMPT_FOLD_LINES = 12;
+const CHAT_PROMPT_FOLD_CHARS = 2400;
+/** What a folded prompt still shows. */
+const CHAT_PROMPT_HEAD_LINES = 6;
+const CHAT_PROMPT_HEAD_CHARS = 800;
+
+/**
+ * The messages the chat view draws, in order: prompts and answers with text, without
+ * the keep-warm turns Codeman sends on its own (`keepAlive`, set by the transcript reader).
+ */
+function chatViewVisibleMessages(messages) {
+  if (!Array.isArray(messages)) return [];
+  return messages.filter(
+    (m) =>
+      !!m &&
+      (m.role === 'user' || m.role === 'assistant') &&
+      typeof m.text === 'string' &&
+      m.text.trim() !== '' &&
+      m.keepAlive !== true
+  );
+}
+
+/** Identity of a drawn message: a transcript row never changes once written. */
+function chatViewMessageKey(m) {
+  return `${m.role}\u0000${typeof m.turn === 'number' ? m.turn : ''}\u0000${m.queued ? 'q' : ''}\u0000${m.text}`;
+}
+
+/**
+ * How to bring the drawn thread up to date. `none` when nothing changed, `append`
+ * when the new list only adds messages after the drawn ones (the usual case while a
+ * turn runs), else `replace` (a `/clear`, a rewritten transcript, another session).
+ */
+function chatViewRenderPlan(drawnKeys, nextKeys) {
+  const drawn = Array.isArray(drawnKeys) ? drawnKeys : [];
+  const next = Array.isArray(nextKeys) ? nextKeys : [];
+  if (drawn.length > next.length) return { mode: 'replace' };
+  for (let i = 0; i < drawn.length; i++) {
+    if (drawn[i] !== next[i]) return { mode: 'replace' };
+  }
+  if (drawn.length === next.length) return { mode: 'none' };
+  return { mode: 'append', from: drawn.length };
+}
+
+/**
+ * A prompt as the user wrote it. Claude Code stores a pasted block (which every multi-line
+ * prompt sent through tmux is) inside `<pasted_content id="…">…</pasted_content id="…">` (the
+ * closing tag repeats the id, measured on Claude Code 2.1.331); the markdown
+ * renderer reads that as a raw HTML block and runs its lines together. Only matched pairs are
+ * unwrapped, so a prompt that merely mentions the tag is left alone.
+ */
+function chatViewPromptText(text) {
+  return String(text ?? '').replace(
+    /<pasted_content(?:\s[^>]*)?>\n?([\s\S]*?)\n?<\/pasted_content(?:\s[^>]*)?>/g,
+    (_match, body) => body
+  );
+}
+
+/** A running turn's length as the CLI shows it: `14s`, `2m 05s`, `1h 03m`. */
+function chatViewElapsed(ms) {
+  const total = Math.max(0, Math.floor((Number(ms) || 0) / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const sec = total % 60;
+  if (h > 0) return `${h}h ${String(m).padStart(2, '0')}m`;
+  if (m > 0) return `${m}m ${String(sec).padStart(2, '0')}s`;
+  return `${sec}s`;
+}
+
+/**
+ * Whether a prompt is folded, and what its folded form shows: the first lines, capped
+ * in characters so one enormous pasted line folds too.
+ */
+function chatViewPromptFold(text) {
+  const value = String(text ?? '');
+  const lines = value.split('\n');
+  if (lines.length <= CHAT_PROMPT_FOLD_LINES && value.length <= CHAT_PROMPT_FOLD_CHARS) {
+    return { folded: false, head: value, totalLines: lines.length };
+  }
+  let head = lines.slice(0, CHAT_PROMPT_HEAD_LINES).join('\n');
+  if (head.length > CHAT_PROMPT_HEAD_CHARS) head = `${head.slice(0, CHAT_PROMPT_HEAD_CHARS)}…`;
+  return { folded: true, head, totalLines: lines.length };
+}
+
 if (typeof window !== 'undefined') {
   window.WEBGL_FALLBACK = WEBGL_FALLBACK;
   window.evaluateWebGLLongTaskTrip = evaluateWebGLLongTaskTrip;
@@ -1580,6 +1669,14 @@ if (typeof window !== 'undefined') {
   window.CodemanTabSearch = {
     needle: tabSearchNeedle,
     filter: filterTabSearchRows,
+  };
+  window.CodemanChatView = {
+    visibleMessages: chatViewVisibleMessages,
+    messageKey: chatViewMessageKey,
+    renderPlan: chatViewRenderPlan,
+    promptFold: chatViewPromptFold,
+    promptText: chatViewPromptText,
+    elapsed: chatViewElapsed,
   };
   window.CodemanInputLimit = {
     FRAME_MAX_CHARS: INPUT_FRAME_MAX_CHARS,
@@ -1914,6 +2011,7 @@ const SSE_EVENTS = {
   TRANSCRIPT_PLAN_MODE: 'transcript:plan_mode',
   TRANSCRIPT_TOOL_START: 'transcript:tool_start',
   TRANSCRIPT_TOOL_END: 'transcript:tool_end',
+  TRANSCRIPT_UPDATE: 'transcript:update',
 
   // Clipboard
   CLIPBOARD_WRITE: 'clipboard:write',

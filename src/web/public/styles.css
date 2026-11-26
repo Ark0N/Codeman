@@ -4399,6 +4399,9 @@ html[data-tab-logos='off'] .home-sessions-harness {
   overflow: hidden;
   /* Anchor for the partial-history banner, which overlays rather than stacks. */
   position: relative;
+  /* Keeps the chat view's layers (20 and 21) inside the terminal area, so the
+     narrow-width session sidebar drawer (z-index 12, mobile.css) stays above them. */
+  isolation: isolate;
 }
 
 /* Partial-history banner (#258).
@@ -19618,6 +19621,15 @@ html[data-session-list="sidebar"][data-sidebar="collapsed"] .btn-sidebar-toggle 
   top: 28px;
 }
 
+/* Pane A's split header is the first child of .terminal-wrap, so the chat layer and its switch start below it. */
+.terminal-pane-a-header ~ .chat-view {
+  top: 28px;
+}
+
+.terminal-pane-a-header ~ .chat-view-toggle {
+  top: 36px;
+}
+
 .split-harness.run-mode-dot {
   font-size: 13px;
 }
@@ -24024,4 +24036,222 @@ html[data-header-stats='tiles'] .header-plan-usage:not(:has(.pu-row)) {
    inside .xterm-screen, so they move with it, and every hit test reads rects. */
 body.keyboard-visible .terminal-container .xterm-screen {
   transform: translateY(calc(-1 * var(--kb-clip, 0px)));
+}
+
+/* ═══ Chat view (chat-view.js) ═══════════════════════════════════════════════
+   A session's conversation as its main view. It covers the terminal inside
+   .terminal-wrap; the terminal stays mounted and sized underneath, so switching
+   views never resizes the PTY. The message list carries .response-viewer-body,
+   so it renders exactly as the Response Viewer does. Theme tokens only. */
+.chat-view {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-dark);
+  color: var(--text);
+}
+
+.chat-view[hidden],
+.chat-view-toggle[hidden],
+.chat-view-dialog[hidden],
+.chat-view-status[hidden],
+.chat-view-empty[hidden] {
+  display: none;
+}
+
+.chat-view-scroll {
+  flex: 1;
+  min-height: 0;
+  padding-top: 48px;
+}
+
+.chat-view-thread,
+.chat-view-empty {
+  max-width: 820px;
+  margin: 0 auto;
+}
+
+.chat-view-empty {
+  color: var(--text-muted);
+  text-align: center;
+  padding-top: 15vh;
+}
+
+/* The notice is a paragraph directly inside the scroller, which carries the Response Viewer's
+   `.response-viewer-body > p` margin rule; this one outranks it so the notice stays centred. */
+.chat-view-scroll > .chat-view-empty {
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.chat-view-show-all {
+  margin-top: 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.chat-view-show-all:hover {
+  text-decoration: underline;
+}
+
+.chat-view-dialog {
+  width: calc(100% - 32px);
+  max-width: 820px;
+  margin-inline: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-inline-start: 3px solid var(--yellow);
+  border-radius: 10px;
+  background: var(--bg-card);
+  font-size: 14px;
+}
+
+.chat-view-dialog-text {
+  flex: 1;
+}
+
+/* Sits in the message list, right under the last message. */
+.chat-view-status {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  max-width: 820px;
+  margin: 4px auto 0;
+  padding-inline-start: 4px;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.chat-view-status-body {
+  min-width: 0;
+}
+
+.chat-view-status-dot {
+  flex: none;
+  margin-top: 6px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: chat-view-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes chat-view-pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+
+.chat-view-btn {
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-input);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.chat-view-btn:hover {
+  background: var(--bg-hover);
+}
+
+.chat-view-btn-primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--bg-card);
+  font-weight: 600;
+}
+
+.chat-view-btn-primary:hover {
+  background: var(--accent);
+  filter: brightness(1.08);
+}
+
+.chat-view-btn:focus-visible,
+.chat-view-toggle-btn:focus-visible,
+.chat-view-show-all:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Chat / Terminal switch: top right of the session area, above both views. */
+.chat-view-toggle {
+  position: absolute;
+  top: 8px;
+  inset-inline-end: 18px;
+  z-index: 21;
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--floating-bg);
+  overflow: hidden;
+  opacity: 0.8;
+  transition: opacity 0.15s ease;
+}
+
+.chat-view-toggle:hover,
+.chat-view-toggle:focus-within,
+.chat-view-toggle--over-chat {
+  opacity: 1;
+}
+
+.chat-view-toggle-btn {
+  padding: 4px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.chat-view-toggle-btn[aria-pressed="true"] {
+  background: rgba(var(--accent-rgb), 0.16);
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* The partial-history banner draws its Load full history and dismiss buttons at
+   the right end of the top row, where the Chat / Terminal switch sits. */
+.terminal-wrap:has(> .chat-view-toggle:not([hidden])) .history-trunc-bar {
+  padding-inline-end: 170px;
+}
+
+/* The keyboard accessory bar's keys write straight into the pane, which the chat
+   view hides, so the bar stays hidden while the chat view shows. */
+body.chat-view-showing .keyboard-accessory-bar.visible {
+  display: none;
+}
+
+/* On touch devices the CJK input field is fixed over the bottom of the chat view, and its text
+   goes into the pane, so it stays hidden while the chat view shows. !important beats the inline
+   display that app.js _updateCjkInputState sets. */
+body.chat-view-showing.touch-device #cjkInput.cjk-input-visible {
+  display: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-view-status-dot { animation: none; }
+  .chat-view-toggle { transition: none; }
+}
+
+/* The conversation takes focus only so keys never reach the hidden terminal; it draws no ring. */
+.chat-view-scroll:focus {
+  outline: none;
 }

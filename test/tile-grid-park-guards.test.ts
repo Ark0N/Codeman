@@ -199,6 +199,20 @@ describe('parking the main terminal', () => {
     app.closeTileGrid({ reselect: false });
     expect(app.selectSession).not.toHaveBeenCalled();
   });
+
+  it('opening and closing re-sync the chat view, so it hides for the tiles and comes back after', () => {
+    const app = makeApp();
+    // What the grid reported when the chat view was told, one entry per call.
+    const owned: boolean[] = [];
+    app._chatViewSync = vi.fn(() => owned.push(app._tilesOwnTerminal()));
+
+    app.openTileGrid(IDS);
+    expect(owned).toContain(true);
+
+    owned.length = 0;
+    app.closeTileGrid({ reselect: false });
+    expect(owned).toContain(false);
+  });
 });
 
 /** An app with the grid open on IDS (focus s-a), or closed, for the paired guard checks. */

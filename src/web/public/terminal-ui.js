@@ -920,6 +920,13 @@ Object.assign(CodemanApp.prototype, {
         return false;
       }
 
+      // Chat / Terminal view toggle (default Alt+Shift+C, chat-view.js): the same trap, so the
+      // chord does not also type ESC C into the session. Only while the active session can show
+      // the chat view.
+      if (ev.type === 'keydown' && this.shouldToggleChatViewFromShortcut?.(ev)) {
+        return false;
+      }
+
       // Ctrl+V / Cmd+V: intercept before xterm sends ^V to PTY.
       // Route through our paste trap which handles both images and text.
       if ((ev.ctrlKey || ev.metaKey) && ev.key === 'v' && ev.type === 'keydown') {
@@ -2940,6 +2947,7 @@ Object.assign(CodemanApp.prototype, {
   },
 
   showWelcome() {
+    this._chatViewHide?.();
     // Phones get the session overview instead of the welcome screen: on a small
     // screen "which session is blocked on me" beats "how do I start one". The
     // gate lives in mobile-overview.js; every other device falls through

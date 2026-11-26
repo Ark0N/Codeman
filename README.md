@@ -765,6 +765,7 @@ The web UI remains the primary surface; see **[docs/tui.md](docs/tui.md)** for t
 | `Alt/Option+[` / `Alt/Option+]` | Previous / next session                                       |
 | `Alt/Option+1`-`Alt/Option+9`   | Switch to tab N (physical keys, so macOS Option layouts work) |
 | `Alt/Option+B`                  | Collapse / expand the session sidebar (sidebar layout only)   |
+| `Alt/Option+Shift+C`            | Switch a local or Docker Claude session between Chat and Terminal view (not on phones; see [Settings Reference](docs/wiki/Settings-Reference.md)) |
 | `Ctrl+Shift+{` / `Ctrl+Shift+}` | Move active tab left / right                                  |
 | `Ctrl/Cmd+C`                    | Copy selection, or interrupt when nothing is selected         |
 | `Ctrl+Shift+C`                  | Copy selection (never interrupts)                             |

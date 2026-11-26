@@ -263,6 +263,16 @@ describe('WebServer.renderIndexHtml', () => {
     }
   });
 
+  it('injects the chat view modes from the transcript capability, in solo windows too', async () => {
+    for (const solo of [undefined, 'sess-123']) {
+      const { server } = makeServer();
+      const html = await render(server, solo);
+      const match = html.match(/window\.__codemanChatViewModes=(\[[^<]*\]);/);
+      expect(match).not.toBeNull();
+      expect(JSON.parse(match![1])).toEqual(['claude']);
+    }
+  });
+
   it('escapes the solo id so it cannot break out of the inline <script>', async () => {
     const { server } = makeServer({});
     const html = await render(server, 'a</script><b>');

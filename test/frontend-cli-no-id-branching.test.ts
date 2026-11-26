@@ -41,6 +41,9 @@ const SCANNED_FILES = [
   // The harness a local model is paired with arrives as a label in the payload
   // (`Candidate.cliLabel`); the card names no CLI and compares no id.
   'local-model-ui.js',
+  // Which sessions can show the chat view comes from the injected transcript capability
+  // (window.__codemanChatViewModes), never from an id here.
+  'chat-view.js',
 ];
 
 /**
