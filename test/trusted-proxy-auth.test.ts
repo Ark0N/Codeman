@@ -21,7 +21,7 @@ import WebSocket from 'ws';
 import { WebServer } from '../src/web/server.js';
 import { TmuxManager } from '../src/tmux-manager.js';
 import { createUser, invalidateUsersCache, touchLastLogin, updateUser } from '../src/user-store.js';
-import { AUTH_FAILURE_MAX } from '../src/config/auth-config.js';
+import { AUTH_FAILURE_MAX, AUTH_IP_FAILURE_MAX } from '../src/config/auth-config.js';
 import {
   getTrustedProxyConfig,
   initTrustedProxySecret,
@@ -832,7 +832,43 @@ describe('trusted-proxy sign-in', () => {
       expect(res.statusCode, url).toBe(status);
       expect(res.headers['www-authenticate'], url).toBeUndefined();
     }
-    // 60 such requests did not fill the per-IP bucket: Basic from loopback still works.
+    // Two requests with no route status to copy get the hook's 403 too. Without the slash
+    // the route alone would redirect (302); an upgrade it would accept and close with 4003.
+    // Each is sent more often than the per-IP failure limit, so a counted one would turn the
+    // final sign-in below into a 429.
+    const deadCap = 'Z'.repeat(32);
+    const upgradeHeaders = {
+      connection: 'Upgrade',
+      upgrade: 'websocket',
+      'sec-websocket-version': '13',
+      'sec-websocket-key': 'dGhlIHNhbXBsZSBub25jZQ==',
+    };
+    for (let i = 0; i < AUTH_IP_FAILURE_MAX + 10; i++) {
+      const headers: Record<string, string> = { host: 'localhost' };
+      if (i % 2) headers.authorization = basic('bob', 'wrong-password');
+      const noSlash = await app.inject({
+        method: 'GET',
+        url: `/webview/${deadCap}`,
+        remoteAddress: '127.0.0.1',
+        headers,
+      });
+      expect(noSlash.statusCode).toBe(403);
+      expect(noSlash.headers['www-authenticate']).toBeUndefined();
+      expect(noSlash.headers.location).toBeUndefined();
+    }
+    for (let i = 0; i < AUTH_IP_FAILURE_MAX + 10; i++) {
+      const headers: Record<string, string> = { host: 'localhost', ...upgradeHeaders };
+      if (i % 2) headers.authorization = basic('bob', 'wrong-password');
+      const upgrade = await app.inject({
+        method: 'GET',
+        url: `/webview/${deadCap}/socket`,
+        remoteAddress: '127.0.0.1',
+        headers,
+      });
+      expect(upgrade.statusCode).toBe(403);
+      expect(upgrade.headers['www-authenticate']).toBeUndefined();
+    }
+    // None of these requests filled the per-IP bucket: Basic from loopback still works.
     expect((await injectMe(app, '127.0.0.1', { authorization: basic('bob', 'bobpass123') })).statusCode).toBe(200);
   });
 
