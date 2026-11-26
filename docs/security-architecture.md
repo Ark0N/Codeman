@@ -703,7 +703,11 @@ peer (§3).
   capability exemptions do not let through, whatever its token looks like, is refused with
   the route's own answer
   (`403` web tab, `404` HTML view) BEFORE the credential checks: no Basic challenge, no
-  password check, no failure count (`serveRefusedCapabilityPath`). The prefix is judged
+  password check, no failure count (`serveRefusedCapabilityPath`). Two requests under a
+  dead web‑tab capability have no route status to copy and get the hook's `403` as well: a
+  WebSocket upgrade is refused at the handshake (the route alone accepts it and closes
+  with `4003`), and `GET /webview/<cap>` without the trailing slash is not redirected
+  (the route alone answers `302`). The prefix is judged
   the way a proxy's path matcher would (`capabilityPrefixOf`: case‑insensitive,
   percent‑decoded, dot segments and doubled slashes resolved), since the proxy forwards
   every such spelling without its sign‑in. Under a base path (`CODEMAN_BASE_URL`) the
