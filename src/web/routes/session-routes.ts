@@ -230,6 +230,7 @@ import {
 import { readDeepSeekLastResponse } from '../../deepseek-transcript.js';
 import { appendClaudeCustomTitle } from '../../claude-session-title.js';
 import { UPLOADS_DIR } from '../paste-image-gc.js';
+import { KEEP_WARM_NUDGE } from '../../prompt-cache-keepwarm.js';
 
 // Path to linked-cases registry (same file used by case-routes resolveCasePath)
 const LINKED_CASES_FILE = dataPath('linked-cases.json');
@@ -1084,6 +1085,14 @@ function wakeableHost(host: RemoteHost): WakeableRemote {
     extraSshOptions: host.extraSshOptions,
   };
 }
+
+/**
+ * The transcript path a `context=full` read started a session's watcher on, per session.
+ * A hook moves the watcher whenever its own path changes, but a session without working hooks
+ * never does, so after a `/clear` the read moves the watcher it started itself. A watcher whose
+ * path no longer matches the entry was moved by a hook, and from then on the read leaves it alone.
+ */
+const readStartedWatchers = new WeakMap<Session, string>();
 
 export function registerSessionRoutes(
   app: FastifyInstance,
@@ -2944,6 +2953,11 @@ export function registerSessionRoutes(
     timestamp?: string;
     turn: number;
     queued?: boolean;
+    /**
+     * Part of a keep-warm turn (prompt-cache-keepwarm.ts): Codeman sent the prompt, not the user,
+     * and the reply is its "ok". The chat view leaves such turns out, as Read My Mind does.
+     */
+    keepAlive?: boolean;
   }
 
   interface ClaudeTranscriptEntry {
@@ -3016,13 +3030,27 @@ export function registerSessionRoutes(
     const currentAssistantFragments = new Set<string>();
     // Turn 0 is reserved for anything emitted before the first human prompt.
     let turn = 0;
+    // Whether the current turn opened with Codeman's keep-warm nudge.
+    let keepAliveTurn = false;
 
     const pushUserMessage = (text: string, timestamp: string | undefined, queued: boolean): void => {
       // A run of consecutive human inputs (a mid-turn queued burst) is ONE turn,
       // so the viewer renders it under one badge instead of one badge per line.
-      if (messages.at(-1)?.role !== 'user') turn += 1;
+      // The keep-warm nudge never joins an earlier user run: the turn before it
+      // may have ended without assistant text (an interrupt before Claude wrote
+      // anything, or a turn of tool calls only), and its reply belongs to the
+      // keep-alive turn, not to the user's prompt.
+      const isNudge = text === KEEP_WARM_NUDGE;
+      if (isNudge || messages.at(-1)?.role !== 'user') {
+        turn += 1;
+        keepAliveTurn = isNudge;
+      } else if (!isNudge) {
+        // A prompt the user queued during the keep-warm turn makes the turn theirs.
+        keepAliveTurn = false;
+      }
       const message: ClaudeResponseMessage = { kind: 'prompt', label: 'Prompt', role: 'user', text, timestamp, turn };
       if (queued) message.queued = true;
+      if (isNudge) message.keepAlive = true;
       messages.push(message);
       currentUserFragments.add(text);
       currentAssistantFragments.clear();
@@ -3083,7 +3111,16 @@ export function registerSessionRoutes(
 
       // Replayed snapshots repeat an identical text block inside one turn.
       if (currentAssistantFragments.has(text)) continue;
-      messages.push({ kind: 'response', label: 'Response', role: 'assistant', text, timestamp: entry.timestamp, turn });
+      const response: ClaudeResponseMessage = {
+        kind: 'response',
+        label: 'Response',
+        role: 'assistant',
+        text,
+        timestamp: entry.timestamp,
+        turn,
+      };
+      if (keepAliveTurn) response.keepAlive = true;
+      messages.push(response);
       currentAssistantFragments.add(text);
       currentUserFragments.clear();
     }
@@ -3145,32 +3182,58 @@ export function registerSessionRoutes(
     }
   }
 
+  // Where each conversation's transcript was last found, keyed by projects folder and id. The scan
+  // below stats one path per project folder, and the chat view reads on every reload, so a hit here
+  // costs one stat. A path that no longer names a file is dropped and the scan runs again.
+  const transcriptPathCache = new LRUMap<string, string>({ maxSize: 256 });
+
   /** Locate a top-level Claude transcript, including recovered tmux sessions. */
   async function findClaudeTranscript(
     projectsDir: string,
     conversationId: string,
     codemanSessionId: string
   ): Promise<{ sessionId: string; path: string } | null> {
-    let projectDirs: import('node:fs').Dirent[];
-    try {
-      projectDirs = await fs.readdir(projectsDir, { withFileTypes: true });
-    } catch {
-      return null;
-    }
+    let projectDirs: import('node:fs').Dirent[] | null = null;
+    const readProjectDirs = async (): Promise<import('node:fs').Dirent[] | null> => {
+      if (projectDirs) return projectDirs;
+      try {
+        projectDirs = await fs.readdir(projectsDir, { withFileTypes: true });
+      } catch {
+        return null;
+      }
+      return projectDirs;
+    };
 
     const safeIds = [...new Set([conversationId, codemanSessionId])].filter((value) => /^[a-zA-Z0-9._-]+$/.test(value));
     for (const candidateId of safeIds) {
-      for (const projectDir of projectDirs) {
+      const cacheKey = `${projectsDir}\0${candidateId}`;
+      const cached = transcriptPathCache.get(cacheKey);
+      if (cached) {
+        const stat = await fs.stat(cached).catch(() => null);
+        if (stat?.isFile()) return { sessionId: candidateId, path: cached };
+        transcriptPathCache.delete(cacheKey);
+      }
+      const dirs = await readProjectDirs();
+      if (!dirs) return null;
+      for (const projectDir of dirs) {
         if (!projectDir.isDirectory()) continue;
         const jsonlPath = join(projectsDir, projectDir.name, `${candidateId}.jsonl`);
         try {
           const stat = await fs.stat(jsonlPath);
-          if (stat.isFile()) return { sessionId: candidateId, path: jsonlPath };
+          if (stat.isFile()) {
+            transcriptPathCache.set(cacheKey, jsonlPath);
+            return { sessionId: candidateId, path: jsonlPath };
+          }
         } catch {
           /* continue */
         }
       }
     }
+
+    // The fallback below is never cached: it picks among files by a prefix, and a new one can
+    // change the answer.
+    const allProjectDirs = await readProjectDirs();
+    if (!allProjectDirs) return null;
 
     // If mux-sessions.json was lost or stale, reconcileSessions() historically
     // recovered `codeman-40568a29` as `restored-40568a29` and used the server cwd.
@@ -3182,7 +3245,7 @@ export function registerSessionRoutes(
     const candidates: Array<{ sessionId: string; path: string; mtimeMs: number }> = [];
     const uuidPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 
-    for (const projectDir of projectDirs) {
+    for (const projectDir of allProjectDirs) {
       if (!projectDir.isDirectory()) continue;
       const dirPath = join(projectsDir, projectDir.name);
       let files: import('node:fs').Dirent[];
@@ -3337,6 +3400,29 @@ export function registerSessionRoutes(
           session.docker.containerName,
           transcript.sessionId
         ).catch(() => {});
+      }
+    }
+
+    // The chat view lives on the watcher's events (tool starts, new lines). A watcher normally
+    // starts at the session's first hook or statusline report, so a session the server picked up
+    // mid-turn (a restart) has none until one of those arrives. Start one from the file just found
+    // when none runs. A watcher this read started itself follows the conversation to its new file
+    // after a `/clear`, since no hook or statusline report moves it. A watcher that a hook or a
+    // statusline report started or moved is never touched: the reported path stays the authority.
+    // A remote session's file is not here. The reads above await, so the session may have been
+    // deleted or detached meanwhile, and a watcher started for it then would never be stopped.
+    if (context === 'full' && !session.remote && ctx.sessions.get(session.id) === session) {
+      const current = ctx.getTranscriptPath(session.id);
+      if (current === null) {
+        ctx.startTranscriptWatcher(session.id, transcript.path);
+        readStartedWatchers.set(session, transcript.path);
+      } else if (readStartedWatchers.get(session) === current) {
+        if (current !== transcript.path) {
+          ctx.startTranscriptWatcher(session.id, transcript.path);
+          readStartedWatchers.set(session, transcript.path);
+        }
+      } else {
+        readStartedWatchers.delete(session);
       }
     }
 

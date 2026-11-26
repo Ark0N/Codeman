@@ -415,6 +415,8 @@ Object.assign(CodemanApp.prototype, {
     grid.rows = 0;
     grid.focusedId = focus;
     document.querySelector('.main')?.classList.add('tiles-active');
+    // Selecting a tile never reaches selectSession(), so the chat view is told here.
+    this._chatViewSync?.();
     const section = this._tileGridSection();
     this.hideWelcome();
     // Mount every tile and lay the grid out BEFORE any tile connects, so each
@@ -504,6 +506,7 @@ Object.assign(CodemanApp.prototype, {
     grid.zoomedId = null;
     grid.autoZoom = false;
     document.querySelector('.main')?.classList.remove('tiles-active');
+    this._chatViewSync?.();
     const section = document.getElementById('tileGrid');
     if (section) {
       section.style.gridTemplateColumns = '';

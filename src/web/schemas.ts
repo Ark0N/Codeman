@@ -747,6 +747,11 @@ export const StatusTelemetrySchema = z.object({
   sessionId: z.string().min(1).max(100),
   data: z
     .object({
+      // The conversation the pane runs, as every hook reports it (claude-conversation-report.ts).
+      // Claude Code runs the statusline again right after a `/clear`, so this is how the server
+      // learns of the new conversation before the next prompt. Bounded like any path.
+      session_id: z.string().max(200).nullish(),
+      transcript_path: z.string().max(4096).nullish(),
       rate_limits: z
         .object({
           five_hour: RateLimitWindowSchema,

@@ -338,6 +338,8 @@
         if (ev.type === 'keydown' && global.app?.shouldToggleSessionSidebarFromShortcut?.(ev)) {
           return false;
         }
+        // Alt+Shift+C flips the main view's chat view, so it must never type into this pane.
+        if (ev.type === 'keydown' && global.app?.shouldToggleChatViewFromShortcut?.(ev)) return false;
         // Tile grid chords (focus, toggle): acted on by the capture handler, so
         // they must never reach this tile's PTY. Every event type, and before
         // the Shift+Enter branch below.

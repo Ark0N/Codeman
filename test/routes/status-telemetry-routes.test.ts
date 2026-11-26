@@ -13,6 +13,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { createRouteTestHarness, type RouteTestHarness } from './_route-test-utils.js';
 import { registerStatusTelemetryRoutes } from '../../src/web/routes/status-telemetry-routes.js';
+import { registerHookEventRoutes } from '../../src/web/routes/hook-event-routes.js';
 import { SessionPromptCache, SessionStatusTelemetry } from '../../src/web/sse-events.js';
 import { Session } from '../../src/session.js';
 
@@ -78,6 +79,131 @@ describe('POST /api/status-telemetry', () => {
       h.ctx._session.mode = 'shell';
       await post(context({ total_input_tokens: 562411 }));
       expect(noted()).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('the conversation the pane runs', () => {
+    // As measured on Claude Code 2.1.332: the statusline runs about a second after a `/clear`,
+    // with the new conversation's id and transcript path, before any hook reports them.
+    const cleared = {
+      session_id: 'conv-2',
+      transcript_path: '/home/u/.claude/projects/-w/conv-2.jsonl',
+    };
+
+    it('follows the new conversation the statusline reports after /clear', async () => {
+      const res = await post({ sessionId: SID, data: cleared });
+      expect(res.statusCode).toBe(200);
+      expect(h.ctx._session.claudeSessionId).toBe('conv-2');
+      expect(h.ctx._session.claudeSessionIdIsFirstHand).toBe(true);
+      expect(h.ctx.startTranscriptWatcher).toHaveBeenCalledWith(SID, cleared.transcript_path);
+      expect(h.ctx.persistSessionState).toHaveBeenCalledTimes(1);
+      // The next render reports the same conversation: nothing is persisted again.
+      await post({ sessionId: SID, data: cleared });
+      expect(h.ctx.persistSessionState).toHaveBeenCalledTimes(1);
+    });
+
+    /**
+     * The exporter backgrounds its POST when it wraps the user's own statusline, so a report sent
+     * before the `/clear` can land after the one sent after it. That old report must not move the
+     * session back to the conversation the `/clear` ended.
+     */
+    it('ignores a delayed report that names an earlier conversation', async () => {
+      const report = (id: string) => ({
+        sessionId: SID,
+        data: { session_id: id, transcript_path: `/home/u/.claude/projects/-w/${id}.jsonl` },
+      });
+      await post(report('conv-1'));
+      await post(report('conv-2'));
+      await post(report('conv-1')); // the delayed old POST
+      const session = h.ctx._session;
+      expect(session.claudeSessionId).toBe('conv-2');
+      expect(session.claudeSessionChain[session.claudeSessionChain.length - 1]).toBe('conv-2');
+      expect(h.ctx.startTranscriptWatcher).toHaveBeenLastCalledWith(SID, report('conv-2').data.transcript_path);
+    });
+
+    /**
+     * With workspace hooks off no hook ever follows a `/resume`, so a statusline report that names
+     * an earlier conversation must move the session back once the last move is old enough that no
+     * delayed POST from before it can still arrive.
+     */
+    it('follows a /resume back to an earlier conversation once the last move is more than 10 s old', async () => {
+      const report = (id: string) => ({
+        sessionId: SID,
+        data: { session_id: id, transcript_path: `/home/u/.claude/projects/-w/${id}.jsonl` },
+      });
+      // Only the clock is faked: Fastify's inject still needs real timers.
+      vi.useFakeTimers({ toFake: ['Date'] });
+      try {
+        vi.setSystemTime(new Date('2026-11-26T10:00:00Z'));
+        await post(report('conv-1'));
+        await post(report('conv-2'));
+        vi.setSystemTime(new Date('2026-11-26T10:00:11Z'));
+        await post(report('conv-1')); // the /resume back
+      } finally {
+        vi.useRealTimers();
+      }
+      const session = h.ctx._session;
+      expect(session.claudeSessionId).toBe('conv-1');
+      expect(session.claudeSessionChain[session.claudeSessionChain.length - 1]).toBe('conv-1');
+      expect(h.ctx.startTranscriptWatcher).toHaveBeenLastCalledWith(SID, report('conv-1').data.transcript_path);
+    });
+
+    /**
+     * A report naming the session's current conversation is never refused, so after a server
+     * restart the statusline still starts the transcript watcher for it.
+     */
+    it('starts the transcript watcher for a report that names the current conversation', async () => {
+      await post({ sessionId: SID, data: cleared });
+      h.ctx.startTranscriptWatcher.mockClear();
+      await post({ sessionId: SID, data: cleared });
+      expect(h.ctx.startTranscriptWatcher).toHaveBeenCalledWith(SID, cleared.transcript_path);
+    });
+
+    /**
+     * The run summary records a `prompt_submitted` only for a `/clear` successor's first prompt.
+     * The statusline adopts the successor before that prompt's hook, so the hook must still learn
+     * that the conversation moved.
+     */
+    it("records the /clear successor's first prompt in the run summary after the statusline moved it", async () => {
+      const both = await createRouteTestHarness(
+        (app, ctx) => {
+          registerStatusTelemetryRoutes(app, ctx);
+          registerHookEventRoutes(app, ctx);
+        },
+        { sessionId: SID }
+      );
+      const tracker = { recordHookEvent: vi.fn() };
+      both.ctx.runSummaryTrackers.set(SID, tracker as never);
+      const prompt = () =>
+        both.app.inject({
+          method: 'POST',
+          url: '/api/hook-event',
+          payload: { event: 'prompt_submitted', sessionId: SID, data: { session_id: 'conv-2' } },
+        });
+
+      await both.app.inject({
+        method: 'POST',
+        url: '/api/status-telemetry',
+        payload: { sessionId: SID, data: cleared },
+      });
+      await prompt();
+      expect(tracker.recordHookEvent).toHaveBeenCalledTimes(1);
+      expect(tracker.recordHookEvent).toHaveBeenCalledWith('prompt_submitted', expect.any(Object));
+
+      await prompt(); // the next prompt in the same conversation
+      expect(tracker.recordHookEvent).toHaveBeenCalledTimes(1);
+    });
+
+    it('refuses a transcript path with shell syntax in it', async () => {
+      await post({ sessionId: SID, data: { ...cleared, transcript_path: '/tmp/$(id).jsonl' } });
+      expect(h.ctx.startTranscriptWatcher).not.toHaveBeenCalled();
+    });
+
+    it('takes no report from a CLI without a statusline exporter', async () => {
+      h.ctx._session.mode = 'shell';
+      await post({ sessionId: SID, data: cleared });
+      expect(h.ctx._session.claudeSessionId).not.toBe('conv-2');
+      expect(h.ctx.startTranscriptWatcher).not.toHaveBeenCalled();
     });
   });
 

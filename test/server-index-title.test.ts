@@ -118,6 +118,8 @@ describe('WebServer index.html <title> templating (#82)', () => {
       .replace(/<script>window\.__codemanTranscriptPageKeys=\[.*?\];<\/script>\n/, '')
       // And the keyboard-hold mode list, built the same way.
       .replace(/<script>window\.__codemanKeyboardHoldModes=\[.*?\];<\/script>\n/, '')
+      // And the chat view mode list, built the same way.
+      .replace(/<script>window\.__codemanChatViewModes=\[.*?\];<\/script>\n/, '')
       // And the wheel-forwarding rules: an object keyed by run mode, always injected.
       .replace(/<script>window\.__codemanWheelForward=\{.*?\};<\/script>\n/, '');
     const beforeTitle = rawTemplate.split('<title>Codeman</title>')[0];

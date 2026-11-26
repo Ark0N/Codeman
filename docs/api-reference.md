@@ -601,6 +601,26 @@ request returns. The capture runs synchronous tmux calls on the server; the
 | `lines=<n>` | With `full=1` only: read at most `<n>` lines of tmux history above the visible frame. An integer of at least 1, clamped to the configured history limit; absent or malformed, the whole limit (100,000 lines by default), as before. When a bound below the configured limit left older lines in tmux (its `history_size` is deeper), `truncated` is true with `truncationReason: 'tail'`; a byte cap still reports `'capped'`. Without it a full capture reads all of that history before `tail` cuts it, so a client that keeps a fixed number of lines (the tile grid sends its xterm's scrollback plus its rows) should send it. |
 | `alt=recording` | With `full=1` only: if the pane is in the alternate screen (a nested tmux, where tmux keeps no history, or any full-screen app such as vim or less while it is open), answer with the visible frame over the byte recording instead (`source: 'mux-visible'`, `tail` applied as without `full=1`). Shells' automatic loads send it. |
 
+## Conversation reads for the chat view
+
+### `GET /api/v1/sessions/:id/last-response?context=full`
+
+With `context=full`, the response carries the whole conversation as `messages`. Each
+message read from a Claude transcript has `kind`, `label`, `role`, `text`, `turn` and,
+when known, `timestamp`. A prompt the user typed while Claude was working also carries
+`queued: true`. That reader also marks the turns that Codeman's prompt-cache
+keep-warm sent. The nudge prompt and the reply to it both carry `keepAlive: true`, so a
+client can leave them out as the chat view does. A prompt the user queued during that
+turn makes the turn theirs, and its later messages carry no flag.
+
+A full read of a Claude transcript also starts a transcript watcher when none runs for
+the session. A watcher normally starts at the session's first hook or statusline report,
+so a session picked up after a server restart has none until one of those arrives. The
+read starts one from the file it found, and the session's `transcript:*` events then flow
+mid-turn. After a `/clear`, a read moves a watcher it started itself to the conversation's
+new file. It never replaces or moves a watcher that a hook or a statusline report started,
+and it starts none for a remote SSH session, whose transcript is not on this host.
+
 ## Experimental bounded agent inspection and guarded input
 
 **Experimental:** `codeman agent inspect`, `stage` and `submit`, and their
@@ -1902,6 +1922,13 @@ message is `event: <name>` + `data: <json>`. The event-name registry
 the stable contract — event names are not renamed without a major bump. An
 optional `?sessions=<id,...>` filter suppresses only the high-volume terminal
 stream; lifecycle/metadata events are delivered to all clients regardless.
+
+### `transcript:update` (the chat view's re-read)
+
+The server broadcasts `transcript:update` (`{ sessionId, timestamp }`) for a session whose
+transcript watcher runs, whenever new lines arrive in its transcript. It throttles the event
+to one per 750 ms per session. The first update after a quiet spell goes out at once, and a
+burst after it collapses into one trailing event.
 
 ### `sse:heartbeat` (liveness)
 

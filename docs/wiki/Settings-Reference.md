@@ -113,7 +113,21 @@ images it produced. Claude sessions, local and remote (SSH). Nothing is read unt
 stores those diffs (secrets included) under `~/.codeman/edit-history/`; see
 [Working With Files](Working-With-Files#edit-history).
 
-Most default to off. The stock desktop header is system stats, File Viewer, Tiles, and the gear.
+Under **Panels**, **Open Claude sessions in Chat view** (per device, off by default, never on
+phones) picks the view a Claude session opens in. The chat view draws the session's conversation
+as text, over the terminal. To type, switch to the Terminal view. The terminal keeps running underneath, so switching
+views never resizes it. The chat view applies to local and Docker Claude sessions in the main
+view. Remote (SSH) and adopted sessions keep the terminal, and so do the tiles of the tile grid
+and the second pane of a split. Each session remembers its own choice in this browser: press
+`Alt+Shift+C`, or use the Chat / Terminal switch at the terminal's top right, to change it.
+Another browser or device opens the same session in its own default until you choose there too.
+This setting decides only where a session with no choice of its own starts.
+
+**Show the Chat / Terminal switch** (per device, on by default, never on phones) shows that switch
+at the top right of a Claude session. Turn it off to keep the switch from covering the
+terminal's corner. Each session keeps the view it had, and `Alt+Shift+C` still switches views.
+
+Most header chips default to off. The stock desktop header is system stats, File Viewer, Tiles, and the gear.
 **Header Stats Style** picks how the system stats and plan usage are drawn: *Compact*
 (default; two pills with a ring beside every value), *Tiles* (label over value with a bar underneath) or *As before* (the bars and the `5H · 7D` chip). Desktop only, per device.
 New header controls never appear on phones. Split is desktop-only regardless of this
