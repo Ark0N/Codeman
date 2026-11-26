@@ -305,8 +305,9 @@ codeman.example.com {
 					copy_headers X-Auth-Request-Email
 					@unauthenticated status 401
 					handle_response @unauthenticated {
-						# Only a page navigation can complete a sign-in. Everything else
-						# (fetch, the live-update stream, WebSockets) gets a 401.
+						# Only a page navigation can complete a sign-in. A background request
+						# (fetch, the live-update stream, a WebSocket) gets a 401. A client
+						# that sends no Sec-Fetch-Mode header is still redirected.
 						@background {
 							header Sec-Fetch-Mode *
 							not header Sec-Fetch-Mode navigate
@@ -347,12 +348,14 @@ Codeman cannot see a mistake here:
 - **The proxy's own cookie stops at the proxy.** The `request_header Cookie …` lines remove
   it on both routes. With a different `cookie_name` in oauth2-proxy, change the name in
   the pattern.
-- **Only a page navigation is sent to the sign-in.** A request the page makes in the
-  background gets a `401`. Without that rule an open Codeman page whose proxy session has
-  ended keeps starting sign-ins in the background, several per second. Each one replaces
-  oauth2-proxy's CSRF cookie, and the person's real sign-in then ends on oauth2-proxy's
-  error page ("CSRF token mismatch"). `cookie_csrf_per_request` covers the remaining case
-  of several tabs signing in at once.
+- **A background request is not sent to the sign-in.** A request with a `Sec-Fetch-Mode`
+  other than `navigate` gets a `401`. Page navigations are redirected as before, and so
+  are clients that send no such header (command-line tools, old browsers). Without that
+  rule an open Codeman page whose proxy session has ended starts a sign-in with every
+  background request that follows the redirect, which `fetch()` and the live-update stream
+  do. Each one replaces oauth2-proxy's CSRF cookie, and the person's real sign-in then
+  ends on oauth2-proxy's error page ("CSRF token mismatch"). `cookie_csrf_per_request`
+  covers the remaining case of several tabs signing in at once.
 - **oauth2-proxy's identity headers stop at the proxy too.** `header_up -X-Auth-Request-Email`
   removes the address on the way to Codeman, because the web-tab relay passes headers it
   does not know on to dashboards.
