@@ -7,9 +7,20 @@
  * the verifier reads the last glyph line, re-sends Enter only while the prompt is
  * verifiably still there, stops the moment it is gone, never acts on a pane with no
  * composer, is capped, and is cancelled by a newer write or teardown.
+ *
+ * The browser's composers send a paste and a bare Enter as two writes, which used to arm
+ * nothing; the second half pins the pairing, through a real Session on both transports.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { SubmitVerifier, promptStillInComposer, SUBMIT_VERIFY_DELAYS_MS } from '../src/session-submit-verifier.js';
+import {
+  SubmitVerifier,
+  promptStillInComposer,
+  SUBMIT_VERIFY_DELAYS_MS,
+  bracketedPasteText,
+  PastedPromptWatch,
+  PASTE_ENTER_WINDOW_MS,
+} from '../src/session-submit-verifier.js';
+import { Session } from '../src/session.js';
 
 const PROMPT =
   'Read /home/arkon/.codeman/pr-bot/jobs/pr-439/brief.md and carry out the review it describes. Do not ask questions.';
@@ -173,5 +184,188 @@ describe('SubmitVerifier', () => {
     v.arm(PROMPT);
     await vi.advanceTimersByTimeAsync(3_000);
     expect(calls).toBe(2);
+  });
+});
+
+/** Composer chrome measured on Claude Code 2.1.303 (2026-10-19); the prompts are invented. */
+const RULE = '────────────────────────────────────────────────────────────────';
+const pane = (...composer: string[]) =>
+  [
+    ' ▐▛███▛█   Claude Code v2.1.303',
+    RULE,
+    ...composer,
+    RULE,
+    '  Opus 5.5  in:0 out:0',
+    '  paste again to expand',
+  ].join('\n');
+
+describe('promptStillInComposer: what a pasted prompt looks like', () => {
+  it('reads a short multi-line paste, shown inline, as the prompt', () => {
+    const prompt = 'Fix it\rThen run the tests\rand commit';
+    expect(promptStillInComposer(pane('❯\xa0Fix it', '  Then run the tests', '  and commit'), prompt, '❯')).toBe(true);
+    expect(promptStillInComposer(pane('❯\xa0'), prompt, '❯')).toBe(false);
+  });
+
+  it('reads a long word wrapped off the first line', () => {
+    const prompt = `Line 1 ${'x'.repeat(200)}`;
+    expect(promptStillInComposer(pane('❯\xa0Line 1', `  ${'x'.repeat(118)}`, `  ${'x'.repeat(82)}`), prompt, '❯')).toBe(
+      true
+    );
+  });
+
+  it('counts the stand-in for a long paste only when its line count is the prompt’s', () => {
+    const fourLines = 'a\rb\rc\rd';
+    expect(promptStillInComposer(pane('❯\xa0[Pasted text #1 +3 lines]'), fourLines, '❯')).toBe(true);
+    // `#n` counts pastes, so a later one is still ours.
+    expect(promptStillInComposer(pane('❯\xa0[Pasted text #4 +3 lines]'), fourLines, '❯')).toBe(true);
+    expect(promptStillInComposer(pane('❯\xa0[Pasted text #1 +1 lines]'), fourLines, '❯')).toBe(false);
+    expect(promptStillInComposer(pane('❯\xa0[Pasted text #1]'), fourLines, '❯')).toBe(false);
+    const oneLong = 'y'.repeat(900);
+    expect(promptStillInComposer(pane('❯\xa0[Pasted text #1]'), oneLong, '❯')).toBe(true);
+    expect(promptStillInComposer(pane('❯\xa0[Pasted text #1 +3 lines]'), oneLong, '❯')).toBe(false);
+  });
+
+  it('never takes the stand-in plus typed text, or a dialog row, for the prompt', () => {
+    expect(promptStillInComposer(pane('❯\xa0[Pasted text #1] and more'), 'y'.repeat(900), '❯')).toBe(false);
+    // A short answer has to match whole: `1` is not the highlighted `1. Yes`.
+    expect(promptStillInComposer(pane('❯ 1. Yes', '  2. No'), '1', '❯')).toBe(false);
+    expect(promptStillInComposer(pane('❯ yes please'), 'yes', '❯')).toBe(false);
+    expect(promptStillInComposer(pane('❯ yes'), 'yes', '❯')).toBe(true);
+  });
+});
+
+describe('bracketedPasteText', () => {
+  it('returns the text of exactly one paste and nothing else', () => {
+    expect(bracketedPasteText('\x1b[200~hello\rworld\x1b[201~')).toBe('hello\rworld');
+    expect(bracketedPasteText('hello\r')).toBeNull();
+    expect(bracketedPasteText('\x1b[200~hello\x1b[201~\r')).toBeNull();
+    expect(bracketedPasteText('\x1b[200~a\x1b[201~\x1b[200~b\x1b[201~')).toBeNull();
+    expect(bracketedPasteText('\x1b[200~')).toBeNull();
+  });
+});
+
+describe('PastedPromptWatch', () => {
+  const paste = (t: string) => `\x1b[200~${t}\x1b[201~`;
+
+  it('pairs a paste with the bare Enter right after it', () => {
+    const w = new PastedPromptWatch();
+    expect(w.feed(paste('Reply with ready'), 0)).toEqual({ kind: 'paste' });
+    expect(w.feed('\r', 120)).toEqual({ kind: 'submit', text: 'Reply with ready' });
+    // Spent: a second Enter submits nothing of ours.
+    expect(w.feed('\r', 200)).toBeNull();
+  });
+
+  it('lets nothing come between the two, and nothing arrive late', () => {
+    const w = new PastedPromptWatch();
+    w.feed(paste('one'), 0);
+    expect(w.feed('x', 50)).toBeNull();
+    expect(w.feed('\r', 100)).toBeNull();
+    w.feed(paste('two'), 1_000);
+    expect(w.feed('\r', 1_000 + PASTE_ENTER_WINDOW_MS + 1)).toBeNull();
+  });
+
+  it('ignores an Enter with no paste before it, and an empty paste', () => {
+    const w = new PastedPromptWatch();
+    expect(w.feed('\r', 0)).toBeNull();
+    expect(w.feed(paste('  '), 10)).toEqual({ kind: 'paste' });
+    expect(w.feed('\r', 20)).toBeNull();
+  });
+});
+
+describe('Session: a composer send is checked like any other prompt', () => {
+  const STRANDED_PASTE = pane('❯\xa0Reply with only the word ready.');
+  const EMPTY = pane('❯\xa0');
+  let screen: string;
+  let muxEnters: number;
+
+  /** A session with a scripted pane, a recording mux and a PTY that swallows writes. */
+  function makeSession(): Session {
+    const mux = {
+      isAvailable: () => true,
+      capturePaneText: () => screen,
+      sendInput: async (_id: string, input: string) => {
+        if (input === '\r') muxEnters++;
+        return true;
+      },
+    } as unknown as NonNullable<ConstructorParameters<typeof Session>[0]>['mux'];
+    const session = new Session({
+      workingDir: '/tmp',
+      mode: 'claude',
+      mux,
+      muxSession: { muxName: 'codeman-test', sessionId: 'test', createdAt: Date.now() },
+    } as ConstructorParameters<typeof Session>[0]);
+    (session as unknown as { ptyProcess: { write: (d: string) => void } }).ptyProcess = { write: () => {} };
+    return session;
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    screen = STRANDED_PASTE;
+    muxEnters = 0;
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('WebSocket: paste then Enter, both raw writes, re-presses Enter until the prompt leaves', async () => {
+    const session = makeSession();
+    session.write('\x1b[200~Reply with only the word ready.\x1b[201~', { fromUser: true });
+    session.write('\r', { fromUser: true });
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(muxEnters).toBe(1);
+    screen = EMPTY;
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(muxEnters).toBe(1);
+  });
+
+  it('POST fallback: the Enter goes through writeViaMux and arms the same check', async () => {
+    const session = makeSession();
+    session.write('\x1b[200~Reply with only the word ready.\x1b[201~', { fromUser: true });
+    await session.writeViaMux('\r', { fromUser: true });
+    expect(muxEnters).toBe(1); // the Enter itself
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(muxEnters).toBe(2);
+  });
+
+  it('a taken prompt costs nothing more', async () => {
+    screen = EMPTY;
+    const session = makeSession();
+    session.write('\x1b[200~Reply with only the word ready.\x1b[201~', { fromUser: true });
+    session.write('\r', { fromUser: true });
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(muxEnters).toBe(0);
+  });
+
+  it('a newer paste cancels the check, so Enter never sends the user’s own paste', async () => {
+    const session = makeSession();
+    session.write(`\x1b[200~${'y'.repeat(900)}\x1b[201~`, { fromUser: true });
+    session.write('\r', { fromUser: true });
+    // Taken; then the user pastes something long of their own into the terminal.
+    session.write(`\x1b[200~${'z'.repeat(900)}\x1b[201~`, { fromUser: true });
+    screen = pane('❯\xa0[Pasted text #2]');
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(muxEnters).toBe(0);
+  });
+
+  it('an API prompt of several lines is recognised by the stand-in Claude Code draws for it', async () => {
+    screen = pane('❯\xa0[Pasted text #1 +3 lines]');
+    const session = makeSession();
+    // One sendInput call carries the text and its Enter; a bare `\r` is a re-press.
+    await session.writeViaMux('\nfirst of four\nsecond of four\nthird of four\nfourth of four\r');
+    expect(muxEnters).toBe(0);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(muxEnters).toBe(1);
+    // A stand-in for another line count is someone else's paste: the check ends there.
+    screen = pane('❯\xa0[Pasted text #2 +5 lines]');
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(muxEnters).toBe(1);
+  });
+
+  it('typing in the terminal arms nothing', async () => {
+    screen = pane('❯\xa0hi');
+    const session = makeSession();
+    for (const key of ['h', 'i', '\r']) session.write(key, { fromUser: true });
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(muxEnters).toBe(0);
   });
 });
