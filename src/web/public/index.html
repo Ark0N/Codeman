@@ -2280,6 +2280,20 @@
                     <label class="set-chip" data-preview="panel" data-preview-order="3"><input type="checkbox" id="appSettingsShowFileBrowser"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span>File Browser</span></label>
                     <label class="set-chip" data-preview="panel" data-preview-order="4"><input type="checkbox" id="appSettingsShowSubagents"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.2 7.2 15.6 11M8.2 16.8 15.6 13"/></svg><span>Subagents</span></label>
                   </div>
+                  <div class="set-row" data-search="chat view conversation rendered markdown terminal default claude sessions readable">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Open Claude sessions in Chat view</span>
+                      <span class="set-row-desc">Show a session's conversation rendered as text instead of the terminal. Each session remembers its own choice, and Alt+Shift+C or the Chat / Terminal switch changes it. Not on phones.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsChatViewDefault"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row" data-search="chat view terminal switch toggle button show hide claude sessions">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Show the Chat / Terminal switch</span>
+                      <span class="set-row-desc">Show the Chat / Terminal switch at the top right of a Claude session. Alt+Shift+C switches views without it. Not on phones.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsShowChatViewSwitch"><span class="slider"></span></label>
+                  </div>
                 </div>
               </div>
 
@@ -4578,6 +4592,7 @@
   <script defer src="git-status-ui.js"></script>
   <script defer src="edit-history-ui.js"></script>
   <script defer src="local-model-ui.js"></script>
+  <script defer src="chat-view.js"></script>
   <script defer src="entrance-animations.js"></script>
   <script defer src="api-client.js"></script>
   <script defer src="subagent-windows.js"></script>

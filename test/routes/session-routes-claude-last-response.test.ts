@@ -8,13 +8,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyCookie from '@fastify/cookie';
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, renameSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import fsPromises from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { installRouteErrorHandler } from '../../src/web/route-error-handler.js';
 import { registerSessionRoutes } from '../../src/web/routes/session-routes.js';
 import { ApiErrorCode, httpStatusForErrorCode } from '../../src/types.js';
 import { createMockRouteContext, type MockRouteContext } from '../mocks/index.js';
+import { KEEP_WARM_NUDGE } from '../../src/prompt-cache-keepwarm.js';
 
 interface LocalHarness {
   app: FastifyInstance;
@@ -237,6 +239,261 @@ describe('GET /api/sessions/:id/last-response (claude)', () => {
       ['user', 'continue'],
       ['assistant', 'Second answer.'],
     ]);
+  });
+
+  it('starts a transcript watcher for the chat view when the session has none, and only then', async () => {
+    const sessionId = harness.ctx._session.id;
+    const session = harness.ctx._session as typeof harness.ctx._session & {
+      claudeSessionId: string;
+      adoptClaudeSessionId: ReturnType<typeof vi.fn>;
+    };
+    session.claudeSessionId = sessionId;
+    session.adoptClaudeSessionId = vi.fn();
+    writeTranscript(sessionId, [userEntry('Hi'), assistantEntry('Hello.', '2026-07-21T00:00:01Z')]);
+    const start = harness.ctx.startTranscriptWatcher as ReturnType<typeof vi.fn>;
+    const current = harness.ctx.getTranscriptPath as ReturnType<typeof vi.fn>;
+
+    // The brief view and agent pollers read without starting anything.
+    await getLastResponse(sessionId, false);
+    expect(start).not.toHaveBeenCalled();
+
+    await getLastResponse(sessionId, true);
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(start.mock.calls[0][0]).toBe(sessionId);
+    expect(String(start.mock.calls[0][1])).toMatch(new RegExp(`${sessionId}\\.jsonl$`));
+
+    // A watcher already running (a hook reported its path) is left alone.
+    current.mockReturnValue('/some/path.jsonl');
+    await getLastResponse(sessionId, true);
+    expect(start).toHaveBeenCalledTimes(1);
+  });
+
+  it('moves a watcher it started itself to the new file after /clear', async () => {
+    const sessionId = harness.ctx._session.id;
+    const session = harness.ctx._session as typeof harness.ctx._session & {
+      claudeSessionId: string;
+      adoptClaudeSessionId: ReturnType<typeof vi.fn>;
+    };
+    session.claudeSessionId = sessionId;
+    session.adoptClaudeSessionId = vi.fn();
+    writeTranscript(sessionId, [userEntry('Hi'), assistantEntry('Hello.', '2026-07-21T00:00:01Z')]);
+    const start = harness.ctx.startTranscriptWatcher as ReturnType<typeof vi.fn>;
+    const current = harness.ctx.getTranscriptPath as ReturnType<typeof vi.fn>;
+
+    await getLastResponse(sessionId, true);
+    expect(start).toHaveBeenCalledTimes(1);
+    const fileA = String(start.mock.calls[0][1]);
+    current.mockReturnValue(fileA);
+
+    // The same file again: nothing to move.
+    await getLastResponse(sessionId, true);
+    expect(start).toHaveBeenCalledTimes(1);
+
+    // A /clear starts a new conversation file, and no hook moves the watcher onto it.
+    const clearedId = 'b0c1d2e3-0000-4000-8000-000000000001';
+    session.claudeSessionId = clearedId;
+    writeTranscript(clearedId, [userEntry('After clear'), assistantEntry('Fresh.', '2026-07-21T00:00:02Z')]);
+    await getLastResponse(sessionId, true);
+    expect(start).toHaveBeenCalledTimes(2);
+    expect(start.mock.calls[1][0]).toBe(sessionId);
+    expect(String(start.mock.calls[1][1])).toMatch(new RegExp(`${clearedId}\\.jsonl$`));
+  });
+
+  it('never moves a watcher whose path a hook set', async () => {
+    const sessionId = harness.ctx._session.id;
+    const session = harness.ctx._session as typeof harness.ctx._session & {
+      claudeSessionId: string;
+      adoptClaudeSessionId: ReturnType<typeof vi.fn>;
+    };
+    session.claudeSessionId = sessionId;
+    session.adoptClaudeSessionId = vi.fn();
+    writeTranscript(sessionId, [userEntry('Hi'), assistantEntry('Hello.', '2026-07-21T00:00:01Z')]);
+    const start = harness.ctx.startTranscriptWatcher as ReturnType<typeof vi.fn>;
+    const current = harness.ctx.getTranscriptPath as ReturnType<typeof vi.fn>;
+
+    // A hook started the watcher on a path this read never recorded.
+    current.mockReturnValue('/hook/reported.jsonl');
+    await getLastResponse(sessionId, true);
+    const clearedId = 'b0c1d2e3-0000-4000-8000-000000000002';
+    session.claudeSessionId = clearedId;
+    writeTranscript(clearedId, [userEntry('After clear'), assistantEntry('Fresh.', '2026-07-21T00:00:02Z')]);
+    await getLastResponse(sessionId, true);
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it('leaves a watcher it started alone once a hook moved it', async () => {
+    const sessionId = harness.ctx._session.id;
+    const session = harness.ctx._session as typeof harness.ctx._session & {
+      claudeSessionId: string;
+      adoptClaudeSessionId: ReturnType<typeof vi.fn>;
+    };
+    session.claudeSessionId = sessionId;
+    session.adoptClaudeSessionId = vi.fn();
+    writeTranscript(sessionId, [userEntry('Hi'), assistantEntry('Hello.', '2026-07-21T00:00:01Z')]);
+    const start = harness.ctx.startTranscriptWatcher as ReturnType<typeof vi.fn>;
+    const current = harness.ctx.getTranscriptPath as ReturnType<typeof vi.fn>;
+
+    // The read starts the watcher on transcript A.
+    current.mockReturnValue(null);
+    await getLastResponse(sessionId, true);
+    expect(start).toHaveBeenCalledTimes(1);
+
+    // A hook then moves it to B, and a /clear leaves the conversation in C.
+    current.mockReturnValue('/hook/moved.jsonl');
+    const clearedId = 'b0c1d2e3-0000-4000-8000-000000000003';
+    session.claudeSessionId = clearedId;
+    writeTranscript(clearedId, [userEntry('After clear'), assistantEntry('Fresh.', '2026-07-21T00:00:02Z')]);
+    await getLastResponse(sessionId, true);
+    expect(start).toHaveBeenCalledTimes(1);
+
+    // The read forgot its record, so a later read leaves the hook's watcher alone too.
+    await getLastResponse(sessionId, true);
+    expect(start).toHaveBeenCalledTimes(1);
+
+    // Even once the watcher is back on the path the read first recorded, and the conversation
+    // moved on to a new file: a read that still held its record would move the watcher there.
+    current.mockReturnValue(String(start.mock.calls[0][1]));
+    const laterId = 'b0c1d2e3-0000-4000-8000-000000000004';
+    session.claudeSessionId = laterId;
+    writeTranscript(laterId, [userEntry('Later'), assistantEntry('Later still.', '2026-07-21T00:00:03Z')]);
+    await getLastResponse(sessionId, true);
+    expect(start).toHaveBeenCalledTimes(1);
+  });
+
+  it('starts no transcript watcher for a session removed while the read was in flight', async () => {
+    const sessionId = harness.ctx._session.id;
+    const session = harness.ctx._session as typeof harness.ctx._session & {
+      claudeSessionId: string;
+      adoptClaudeSessionId: ReturnType<typeof vi.fn>;
+    };
+    session.claudeSessionId = sessionId;
+    session.adoptClaudeSessionId = vi.fn();
+    writeTranscript(sessionId, [userEntry('Hi'), assistantEntry('Hello.', '2026-07-21T00:00:01Z')]);
+    const start = harness.ctx.startTranscriptWatcher as ReturnType<typeof vi.fn>;
+
+    // A delete or detach between the route's lookup and the transcript scan leaves the
+    // session out of the server's map; nothing would ever stop a watcher started for it.
+    harness.ctx.sessions.delete(sessionId);
+    const result = await harness.ctx.lastResponseFor!(session as never, 'full');
+    expect(start).not.toHaveBeenCalled();
+    expect((result as { messages?: unknown[] }).messages?.length).toBeGreaterThan(0);
+  });
+
+  it('remembers where a transcript was found, and scans again once the file moved', async () => {
+    const sessionId = harness.ctx._session.id;
+    const session = harness.ctx._session as typeof harness.ctx._session & {
+      claudeSessionId: string;
+      adoptClaudeSessionId: ReturnType<typeof vi.fn>;
+    };
+    session.claudeSessionId = sessionId;
+    session.adoptClaudeSessionId = vi.fn();
+    writeTranscript(sessionId, [userEntry('Hi'), assistantEntry('Hello.', '2026-07-21T00:00:01Z')]);
+    const projectsDir = join(testHome, '.claude', 'projects');
+    const readdir = vi.spyOn(fsPromises, 'readdir');
+    const projectScans = () => readdir.mock.calls.filter((call) => String(call[0]) === projectsDir).length;
+    try {
+      await getLastResponse(sessionId, true);
+      expect(projectScans()).toBe(1);
+
+      const second = await getLastResponse(sessionId, true);
+      expect(projectScans()).toBe(1);
+      expect(second.body.data.text).toBe('Hello.');
+
+      // The file moves to another project folder: the remembered path fails, the scan finds it.
+      const movedDir = join(projectsDir, '-elsewhere');
+      mkdirSync(movedDir, { recursive: true });
+      renameSync(join(projectsDir, '-workspace', `${sessionId}.jsonl`), join(movedDir, `${sessionId}.jsonl`));
+      const third = await getLastResponse(sessionId, true);
+      expect(projectScans()).toBe(2);
+      expect(third.body.data.text).toBe('Hello.');
+    } finally {
+      readdir.mockRestore();
+    }
+  });
+
+  it("marks Codeman's keep-warm turns so the chat view can leave them out", async () => {
+    const sessionId = harness.ctx._session.id;
+    const session = harness.ctx._session as typeof harness.ctx._session & {
+      claudeSessionId: string;
+      adoptClaudeSessionId: ReturnType<typeof vi.fn>;
+    };
+    session.claudeSessionId = sessionId;
+    session.adoptClaudeSessionId = vi.fn();
+    writeTranscript(sessionId, [
+      userEntry('Fix the bug'),
+      assistantEntry('Fixed.', '2026-07-21T00:00:01Z'),
+      userEntry(KEEP_WARM_NUDGE),
+      assistantEntry('ok', '2026-07-21T00:00:02Z'),
+      userEntry('Thanks'),
+      assistantEntry('You are welcome.', '2026-07-21T00:00:03Z'),
+    ]);
+
+    const { body } = await getLastResponse(sessionId, true);
+    expect(
+      body.data.messages.map((message: { role: string; text: string; keepAlive?: boolean }) => [
+        message.role,
+        message.text,
+        message.keepAlive === true,
+      ])
+    ).toEqual([
+      ['user', 'Fix the bug', false],
+      ['assistant', 'Fixed.', false],
+      ['user', KEEP_WARM_NUDGE, true],
+      ['assistant', 'ok', true],
+      ['user', 'Thanks', false],
+      ['assistant', 'You are welcome.', false],
+    ]);
+  });
+
+  it('keeps a prompt the user queued during a keep-warm turn, and the answer to it', async () => {
+    const sessionId = harness.ctx._session.id;
+    const session = harness.ctx._session as typeof harness.ctx._session & {
+      claudeSessionId: string;
+      adoptClaudeSessionId: ReturnType<typeof vi.fn>;
+    };
+    session.claudeSessionId = sessionId;
+    session.adoptClaudeSessionId = vi.fn();
+    writeTranscript(sessionId, [
+      userEntry(KEEP_WARM_NUDGE),
+      queuedEntry('Also run the tests', '2026-07-21T00:00:01Z'),
+      assistantEntry('ok. Tests pass.', '2026-07-21T00:00:02Z'),
+    ]);
+
+    const { body } = await getLastResponse(sessionId, true);
+    expect(
+      body.data.messages.map((message: { text: string; keepAlive?: boolean }) => [
+        message.text,
+        message.keepAlive === true,
+      ])
+    ).toEqual([
+      [KEEP_WARM_NUDGE, true],
+      ['Also run the tests', false],
+      ['ok. Tests pass.', false],
+    ]);
+  });
+
+  it('opens a keep-warm turn of its own after a turn that ended without assistant text', async () => {
+    const sessionId = harness.ctx._session.id;
+    const session = harness.ctx._session as typeof harness.ctx._session & {
+      claudeSessionId: string;
+      adoptClaudeSessionId: ReturnType<typeof vi.fn>;
+    };
+    session.claudeSessionId = sessionId;
+    session.adoptClaudeSessionId = vi.fn();
+    writeTranscript(sessionId, [
+      userEntry('Fix the bug'),
+      { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tool-1' }] } },
+      userEntry(KEEP_WARM_NUDGE),
+      assistantEntry('ok', '2026-07-21T00:00:02Z'),
+    ]);
+
+    const { body } = await getLastResponse(sessionId, true);
+    const messages = body.data.messages as Array<{ role: string; text: string; turn: number; keepAlive?: boolean }>;
+    const prompt = messages.find((message) => message.text === 'Fix the bug');
+    const reply = messages.find((message) => message.text === 'ok');
+    expect(prompt?.keepAlive).toBeUndefined();
+    expect(reply?.keepAlive).toBe(true);
+    expect(reply?.turn).not.toBe(prompt?.turn);
   });
 
   /**
@@ -727,7 +984,7 @@ describe('GET /api/sessions/:id/last-response (relocated Claude config folder, #
     expect(pane.adoptClaudeSessionId).toHaveBeenCalledWith('after-clear');
   });
 
-  it("keeps a Docker session off its override, which names a folder inside the container", async () => {
+  it('keeps a Docker session off its override, which names a folder inside the container', async () => {
     const home = join(testHome, '.claude');
     writeTranscript(home, 'conversation-a', 'what the host folder holds');
     writeTranscript(relocated, 'conversation-a', 'a host folder that only shares the path');

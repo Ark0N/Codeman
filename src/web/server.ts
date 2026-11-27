@@ -186,6 +186,7 @@ import {
 import {
   CleanupManager,
   KeyedDebouncer,
+  KeyedThrottle,
   StaleExpirationMap,
   startEventLoopMonitor,
   isSafePushEndpoint,
@@ -280,6 +281,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // while capping growth of `sseClientsById` and blocking pathological inputs.
 const SSE_CLIENT_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
 const CODEX_USAGE_POLL_INTERVAL_MS = 5 * 60_000;
+/** Longest a session's `transcript:update` broadcast waits behind the one before it. */
+const TRANSCRIPT_UPDATE_THROTTLE_MS = 750;
 // Copilot's quota is read over the network from GitHub, and a monthly figure moves slowly.
 const COPILOT_USAGE_POLL_INTERVAL_MS = 10 * 60_000;
 
@@ -430,6 +433,13 @@ export class WebServer extends EventEmitter {
   private respawnTimers: Map<string, { timer: NodeJS.Timeout; endAt: number; startedAt: number }> = new Map();
   private runSummaryTrackers: Map<string, RunSummaryTracker> = new Map();
   private transcriptWatchers: Map<string, TranscriptWatcher> = new Map();
+  /**
+   * Per-session throttle for the `transcript:update` broadcast: the first update in a quiet
+   * period goes out at once, and a burst after it collapses into one trailing event per
+   * TRANSCRIPT_UPDATE_THROTTLE_MS. A busy turn writes several lines a second, and every SSE
+   * client gets every broadcast.
+   */
+  private readonly transcriptUpdateThrottle = new KeyedThrottle(TRANSCRIPT_UPDATE_THROTTLE_MS);
   // Store session listener references for explicit cleanup (prevents memory leaks)
   private sessionListenerRefs: Map<string, SessionListenerRefs> = new Map();
   private scheduledRuns: Map<string, ScheduledRun> = new Map();
@@ -1477,6 +1487,9 @@ export class WebServer extends EventEmitter {
    * Creates a new watcher or updates an existing one with the new transcript path.
    */
   private startTranscriptWatcher(sessionId: string, transcriptPath: string): void {
+    // Cleanup stops the watcher before it removes the session from the map. A hook, statusline
+    // report or full read that lands in between must not start a watcher that nothing would stop.
+    if (this.cleaningUp.has(sessionId)) return;
     let watcher = this.transcriptWatchers.get(sessionId);
 
     if (!watcher) {
@@ -1501,6 +1514,10 @@ export class WebServer extends EventEmitter {
 
       watcher.on('transcript:tool_start', (toolName: string) => {
         this.broadcast(SseEvent.TranscriptToolStart, { sessionId, toolName, timestamp: Date.now() });
+      });
+
+      watcher.on('transcript:update', () => {
+        this.broadcastTranscriptUpdate(sessionId);
       });
 
       watcher.on('transcript:tool_end', (toolName: string, isError: boolean) => {
@@ -1548,10 +1565,18 @@ export class WebServer extends EventEmitter {
     }
   }
 
+  /** Broadcast `transcript:update` for a session, throttled (see `transcriptUpdateThrottle`). */
+  private broadcastTranscriptUpdate(sessionId: string): void {
+    this.transcriptUpdateThrottle.fire(sessionId, () => {
+      this.broadcast(SseEvent.TranscriptUpdate, { sessionId, timestamp: Date.now() });
+    });
+  }
+
   /**
    * Stop the transcript watcher for a session.
    */
   private stopTranscriptWatcher(sessionId: string): void {
+    this.transcriptUpdateThrottle.cancelKey(sessionId);
     const watcher = this.transcriptWatchers.get(sessionId);
     if (watcher) {
       watcher.removeAllListeners(); // Prevent memory leaks from attached listeners
@@ -2159,6 +2184,17 @@ export class WebServer extends EventEmitter {
     html = html.replace(
       '</head>',
       () => `<script>window.__codemanTranscriptPageKeys=${JSON.stringify(pageKeyClis)};</script>\n</head>`
+    );
+    // Which run modes the chat view can show (chat-view.js): the CLIs whose conversation Codeman
+    // reads from a Claude-format transcript, read off the `transcript` capability, never an id
+    // list here. Disabled entries are kept (`listClis`), like the wheel map below: disabling a CLI
+    // never ends its running sessions. Ids only, so JSON.stringify alone is enough.
+    const chatViewClis = listClis()
+      .filter((entry) => entry.capabilities.transcript === 'claude-jsonl')
+      .map((entry) => entry.id);
+    html = html.replace(
+      '</head>',
+      () => `<script>window.__codemanChatViewModes=${JSON.stringify(chatViewClis)};</script>\n</head>`
     );
     // Which run modes keep their PTY rows under a phone keyboard (inline renderers,
     // the `keyboardHold` capability; `_keyboardHoldEligible` in terminal-ui.js). Same
@@ -4856,6 +4892,7 @@ export class WebServer extends EventEmitter {
     this.respawnTimers.clear();
     this.runSummaryTrackers.clear();
     this.transcriptWatchers.clear();
+    this.transcriptUpdateThrottle.dispose();
     await this.editHistorySync.flushAll().catch((err) => {
       console.warn('[EditHistory] Saving on shutdown failed:', getErrorMessage(err));
     });

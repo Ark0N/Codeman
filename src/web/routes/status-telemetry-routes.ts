@@ -29,10 +29,14 @@ import {
 } from '../../usage-telemetry.js';
 import { SessionPromptCache, SessionStatusTelemetry } from '../sse-events.js';
 import { setLatestPlanUsage } from '../plan-usage-latest.js';
-import type { SessionPort, EventPort, KeepWarmPort } from '../ports/index.js';
+import type { SessionPort, EventPort, KeepWarmPort, ConfigPort } from '../ports/index.js';
+import { noteClaudeConversationReport } from '../claude-conversation-report.js';
 import { getCli } from '../../config/cli-registry/index.js';
 
-export function registerStatusTelemetryRoutes(app: FastifyInstance, ctx: SessionPort & EventPort & KeepWarmPort): void {
+export function registerStatusTelemetryRoutes(
+  app: FastifyInstance,
+  ctx: SessionPort & EventPort & KeepWarmPort & Pick<ConfigPort, 'startTranscriptWatcher'>
+): void {
   // Last broadcast telemetry signature per session — the statusline fires on
   // every assistant message, so we only rebroadcast when the value changes.
   const lastSig = new Map<string, string>();
@@ -63,6 +67,15 @@ export function registerStatusTelemetryRoutes(app: FastifyInstance, ctx: Session
     // broadcasts only a change.
     if (session && reportsStatusLine) {
       session.noteReportedModel('statusline', payload?.model?.display_name);
+    }
+
+    // The conversation the pane runs. Claude Code runs the statusline about a second after a
+    // `/clear`, with the new conversation's id and transcript path, so the transcript watcher and
+    // the chat view move to it at once; a hook would report it only with the next prompt.
+    // The exporter can post out of order, so this report moves the session back to an earlier
+    // conversation only when the session's last move is more than a few seconds old (forwardOnly).
+    if (session && reportsStatusLine) {
+      noteClaudeConversationReport(ctx, sessionId, data, { forwardOnly: true });
     }
 
     // The context size drives auto-compact and auto-clear. A render without one (the exporter

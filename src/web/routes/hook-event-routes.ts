@@ -9,10 +9,9 @@
 
 import { FastifyInstance } from 'fastify';
 import { ApiErrorCode, createErrorResponse } from '../../types.js';
-import { HookEventSchema, isValidWorkingDir } from '../schemas.js';
+import { HookEventSchema } from '../schemas.js';
 import { sanitizeHookData, parseBody } from '../route-helpers.js';
-import { persistDockerCaseClaudeSessionId } from '../../docker-hosts.js';
-import { getDataDir } from '../../config/instance.js';
+import { noteClaudeConversationReport, takeConversationMove } from '../claude-conversation-report.js';
 import {
   sessionWaits,
   hooksAvailableForMode,
@@ -138,56 +137,19 @@ export function registerHookEventRoutes(
       }
     }
 
-    // Start transcript watching if transcript_path is provided and safe
-    if (data && 'transcript_path' in data) {
-      const transcriptPath = String(data.transcript_path);
-      if (transcriptPath && isValidWorkingDir(transcriptPath)) {
-        ctx.startTranscriptWatcher(sessionId, transcriptPath);
-      }
-    }
-
-    // Sync Claude's current conversation id. Interactive PTY mode never emits
-    // `session_id` on stdout, so hooks are the only reliable way to learn that
-    // the user ran `/clear` (which spins up a new conversation jsonl).
-    let conversationChanged = false;
-    if (data && typeof data.session_id === 'string' && data.session_id) {
-      const session = ctx.sessions.get(sessionId);
-      const prevClaudeSessionId = session?.claudeSessionId;
-      const prevChainLength = session?.claudeSessionChain.length ?? 0;
-      // FIRST-HAND: this payload came from the CLI process itself and reached us
-      // because the pane's own $CODEMAN_SESSION_ID addressed it. No cwd, no
-      // timestamp, nothing a sibling pane on the same folder could win — so the
-      // response viewer can stop guessing entirely (see
-      // resolveActiveClaudeSessionIdFromHistory).
-      session?.adoptClaudeSessionId(data.session_id, { firstHand: true });
-      if (event === 'prompt_submitted') {
-        // Repairs `lastSubmitAt` for a pane driven straight from tmux: it was
-        // bumped only by input that flowed through Codeman's own write path, so
-        // it read 0 forever for those panes and every consumer of "when did this
-        // pane last submit" silently degraded.
-        // The prompt text tells a person's prompt from the keep-alive's (prompt-cache-keepwarm.ts).
-        session?.markPromptSubmitted(typeof data.prompt === 'string' ? data.prompt : undefined);
-      }
-      // Persist when the conversation actually moved: `/clear` emits no
-      // completion event, so without this the successor id is lost on restart
-      // and recovery falls back to the launch conversation.
-      if (
-        session &&
-        (session.claudeSessionId !== prevClaudeSessionId || session.claudeSessionChain.length !== prevChainLength)
-      ) {
-        conversationChanged = true;
-        ctx.persistSessionState(session);
-      }
-      // Docker sessions: keep the case's resume seed following the LIVE
-      // conversation (post-/clear id switches), so a container stop/reboot
-      // relaunch resumes the right transcript.
-      if (session?.docker && session.claudeSessionId && session.claudeSessionId !== prevClaudeSessionId) {
-        void persistDockerCaseClaudeSessionId(
-          getDataDir(),
-          session.docker.containerName,
-          session.claudeSessionId
-        ).catch(() => {});
-      }
+    // Follow the conversation the pane reports (transcript watcher, conversation id, persistence).
+    // The statusline exporter reports the same two fields (status-telemetry-routes.ts).
+    noteClaudeConversationReport(ctx, sessionId, data);
+    // Whether the conversation moved since the previous prompt. The statusline can adopt a `/clear`
+    // successor before this hook arrives, so this hook's own report may show no change.
+    const conversationMoved = event === 'prompt_submitted' && takeConversationMove(ctx.sessions.get(sessionId));
+    if (event === 'prompt_submitted' && data && typeof data.session_id === 'string' && data.session_id) {
+      // Repairs `lastSubmitAt` for a pane driven straight from tmux: it was
+      // bumped only by input that flowed through Codeman's own write path, so
+      // it read 0 forever for those panes and every consumer of "when did this
+      // pane last submit" silently degraded.
+      // The prompt text tells a person's prompt from the keep-alive's (prompt-cache-keepwarm.ts).
+      ctx.sessions.get(sessionId)?.markPromptSubmitted(typeof data.prompt === 'string' ? data.prompt : undefined);
     }
 
     // Sanitize forwarded data: only include known safe fields, limit size
@@ -317,7 +279,7 @@ export function registerHookEventRoutes(
     // left out too: the summary files a `stop` as a warning, which the Away digest lists under
     // Needs Attention, and that turn is Codeman's own, not the agent's.
     const summaryTracker = ctx.runSummaryTrackers.get(sessionId);
-    if (summaryTracker && !keepAliveReason && (event !== 'prompt_submitted' || conversationChanged)) {
+    if (summaryTracker && !keepAliveReason && (event !== 'prompt_submitted' || conversationMoved)) {
       summaryTracker.recordHookEvent(event, safeData);
     }
 

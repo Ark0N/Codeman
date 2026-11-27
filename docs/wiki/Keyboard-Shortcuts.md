@@ -14,6 +14,7 @@ Press `Ctrl+?` in the app for the same list in a floating overlay.
 | `Alt+1` to `Alt+9`              | Switch to tab N. Physical keys, so macOS Option layouts work.    |
 | `Ctrl+Shift+{` / `Ctrl+Shift+}` | Move the active tab left / right.                                |
 | `Alt+B`                         | Collapse / expand the session sidebar, when that layout is on.    |
+| `Alt+Shift+C`                   | Switch a Claude session between Chat and Terminal view, when [the chat view](Settings-Reference#header--panels) applies to it. |
 
 `Ctrl+W` is not a Codeman shortcut: it goes to the terminal, where shells and agent CLIs
 use it to delete the previous word. **Close Session** has no key by default; close a session
@@ -89,9 +90,20 @@ The terminal sees keystrokes before the app does. Any chord the app claims has t
 swallowed at the terminal layer, or xterm writes the control byte into the session as well
 as triggering the action. A chord **you** rebind an action to is kept out of the terminal
 too, so rebinding Previous Session to `Alt+J` switches the session and sends nothing to the
-CLI. The built-in defaults are deliberately not held back this way: `Ctrl+L` clears the
-screen and also reaches the CLI, which redraws on it. Binding an action back onto its own
-default behaves like the default.
+CLI. Several built-in defaults are held back too, each by a check of its own:
+
+- the tab switches (`Alt+1` to `Alt+9`, `Alt+[` and `Alt+]`) and the session finder
+  (`Ctrl+K`, `Alt+K`);
+- `Alt+B`, while the sidebar layout is on;
+- `Alt+Shift+C`, while the active session can show the chat view;
+- Copy Selection, whose `Ctrl+Shift+C` never reaches the CLI and whose `Ctrl+C` does not
+  while text is selected;
+- the tile grid chords.
+
+None of those chords types anything into the CLI when it acts as its shortcut; `Ctrl+C`
+with nothing selected is the interrupt and reaches the CLI. The other defaults still
+reach it: `Ctrl+L` clears the screen and also reaches the CLI, which redraws on it.
+Binding an action back onto its own default behaves like the default.
 
 `Alt+1` through `Alt+9` are matched on **physical key position** rather than the character
 produced, so macOS Option layouts that produce `¡™£` still switch tabs.

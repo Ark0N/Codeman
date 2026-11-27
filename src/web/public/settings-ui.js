@@ -616,6 +616,9 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('appSettingsGitFetchEnabled').checked = settings.gitFetchEnabled === true;
     document.getElementById('appSettingsGitFetchIntervalSeconds').value = settings.gitFetchIntervalSeconds ?? 300;
     document.getElementById('appSettingsShowEditHistory').checked = settings.showEditHistory ?? defaults.showEditHistory ?? false;
+    document.getElementById('appSettingsChatViewDefault').checked = settings.chatViewDefault === true;
+    // Absent means ON: the switch shows until this device turns it off.
+    document.getElementById('appSettingsShowChatViewSwitch').checked = settings.showChatViewSwitch !== false;
     // Gesture control lives in the Input section (alongside Local Echo / CJK Input)
     // but is only available when the instance runs with CODEMAN_GESTURE=1 (server sets
     // window.__codemanGestureAvailable). Hide just this item otherwise so the toggle
@@ -3177,6 +3180,8 @@ Object.assign(CodemanApp.prototype, {
         Math.max(30, parseInt(document.getElementById('appSettingsGitFetchIntervalSeconds').value, 10) || 300)
       ),
       showEditHistory: document.getElementById('appSettingsShowEditHistory').checked,
+      chatViewDefault: document.getElementById('appSettingsChatViewDefault').checked,
+      showChatViewSwitch: document.getElementById('appSettingsShowChatViewSwitch').checked,
       gestureControlEnabled: document.getElementById('appSettingsGestureControl').checked,
       subagentTrackingEnabled: document.getElementById('appSettingsSubagentTracking').checked,
       subagentActiveTabOnly: document.getElementById('appSettingsSubagentActiveTabOnly').checked,
@@ -3405,6 +3410,7 @@ Object.assign(CodemanApp.prototype, {
     this._updateTokensImmediate();  // Re-render token display (picks up showCost change)
     this.applyMonitorVisibility();
     this.renderApprovals?.();  // Approvals Inbox toggle (hide/show bell + drawer)
+    this._chatViewSync?.();  // Chat view default and the Chat / Terminal switch's visibility
     this.renderProjectInsightsPanel();  // Re-render to apply visibility setting
     this.updateSubagentWindowVisibility();  // Apply subagent window visibility setting
 
@@ -3491,6 +3497,10 @@ Object.assign(CodemanApp.prototype, {
       gitStatusTimeoutSeconds: _gst2,
       // Per-device header button (edit-history-ui.js), likewise absent from the .strict() schema.
       showEditHistory: _seh,
+      // Which view a session opens in (chat-view.js): per-device, absent from the .strict() schema.
+      chatViewDefault: _cvd,
+      // Whether the Chat / Terminal switch shows (chat-view.js): per-device, absent from the .strict() schema.
+      showChatViewSwitch: _scvs,
       showTabDetachButton: _tdb,
       showTabNewButton: _tnb,
       // Detach Tiles: what a tile drag does is a property of this device's
@@ -5217,7 +5227,7 @@ Object.assign(CodemanApp.prototype, {
       'language',
       'terminalWheelLocalScrollback',
       'autoCopySelection', 'copyStripMargin',
-      'showSessionButton', 'showAwayDigestButton', 'showCronButton', 'showGitStatus', 'gitStatusTree', 'gitStatusMaxRepos', 'gitStatusTimeoutSeconds', 'showEditHistory',
+      'showSessionButton', 'showAwayDigestButton', 'showCronButton', 'showGitStatus', 'gitStatusTree', 'gitStatusMaxRepos', 'gitStatusTimeoutSeconds', 'showEditHistory', 'chatViewDefault', 'showChatViewSwitch',
       'showTabDetachButton',
       'showTabNewButton',
       'mobileOverviewEnabled',

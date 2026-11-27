@@ -5,7 +5,7 @@
  * and referenced by the frontend (`SSE_EVENTS` in `constants.js`).
  * Both files MUST be kept in sync.
  *
- * 163 event constants organized by category:
+ * 165 event constants organized by category:
  * - **Core** (1): init
  * - **Transport** (1): sse:heartbeat
  * - **Session lifecycle** (25): created, updated, deleted, terminal, idle, working, ...
@@ -21,7 +21,7 @@
  * - **Scheduled** (6): created, updated, completed, stopped, log, deleted
  * - **Cron jobs** (4): jobsChanged, jobDeleted, runCreated, runUpdated
  * - **Teams** (4): created, updated, removed, taskUpdated
- * - **Transcript** (4): complete, plan_mode, tool_start, tool_end
+ * - **Transcript** (5): complete, plan_mode, tool_start, tool_end, update
  * - **Plan orchestration** (5): started, progress, subagent, completed, cancelled
  * - **Tunnel** (7): started, stopped, progress, error, qrRotated, qrRegenerated, qrAuthUsed
  * - **Image / attachments** (2): image:detected, attachment:detected
@@ -326,6 +326,11 @@ export const TranscriptPlanMode = 'transcript:plan_mode' as const;
 export const TranscriptToolStart = 'transcript:tool_start' as const;
 /** Tool invocation ended in transcript. */
 export const TranscriptToolEnd = 'transcript:tool_end' as const;
+/**
+ * New lines arrived in a session's transcript (throttled per session in server.ts). The chat
+ * view re-reads the conversation on it, so an answer shows while its turn is still running.
+ */
+export const TranscriptUpdate = 'transcript:update' as const;
 
 // ─── Plan Orchestration ──────────────────────────────────────────────────────
 
@@ -643,6 +648,7 @@ export const SseEvent = {
   TranscriptPlanMode,
   TranscriptToolStart,
   TranscriptToolEnd,
+  TranscriptUpdate,
 
   // Plan orchestration
   PlanStarted,

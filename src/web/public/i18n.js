@@ -225,6 +225,21 @@
     // input like Click (单击).
     Tabs: '标签页',
     'Toggle Session Sidebar': '切换会话侧边栏',
+    // Chat view (chat-view.js) and its App Settings row.
+    'Toggle Chat / Terminal View': '切换聊天 / 终端视图',
+    Chat: '聊天',
+    'Open terminal': '打开终端',
+    Conversation: '对话',
+    'Session view': '会话视图',
+    'Show the conversation (Alt+Shift+C)': '显示对话 (Alt+Shift+C)',
+    'Show the terminal (Alt+Shift+C)': '显示终端 (Alt+Shift+C)',
+    'No messages yet.': '还没有消息。',
+    'Open Claude sessions in Chat view': '以聊天视图打开 Claude 会话',
+    "Show a session's conversation rendered as text instead of the terminal. Each session remembers its own choice, and Alt+Shift+C or the Chat / Terminal switch changes it. Not on phones.":
+      '以渲染后的文本显示会话的对话，代替终端。每个会话记住自己的选择，可用 Alt+Shift+C 或聊天 / 终端开关切换。手机上不可用。',
+    'Show the Chat / Terminal switch': '显示聊天 / 终端开关',
+    'Show the Chat / Terminal switch at the top right of a Claude session. Alt+Shift+C switches views without it. Not on phones.':
+      '在 Claude 会话右上角显示聊天 / 终端开关。没有它时，Alt+Shift+C 也能切换视图。手机上不可用。',
     'Copy Selection': '复制选中内容',
     'Copy Selection (interrupts when nothing is selected)': '复制选中内容（无选中内容时中断）',
     'Focus Tabs': '聚焦标签页',
@@ -1708,6 +1723,8 @@
       [/^(\d+) running$/, (_m, count) => `${count} 个运行中`],
       [/^(\d+) active$/, (_m, count) => `${count} 个活动`],
       [/^Show (\d+) more$/, (_m, count) => `再显示 ${count} 项`],
+      // Chat view (chat-view.js).
+      [/^Show all \((\d+) lines?\)$/, (_m, count) => `显示全部（${count} 行）`],
       [/^Show (\d+) more \((\d+) remaining\)$/, (_m, count, remaining) => `再显示 ${count} 项（剩余 ${remaining} 项）`],
       [/^Lifetime: (\d+) sessions created$/, (_m, count) => `累计已创建 ${count} 个会话`],
       [/^Tunnel active: (.+)$/, (_m, url) => `隧道已启用：${url}`],
@@ -1807,8 +1824,12 @@
         (_m, name, why) => `案例“${name}”的选项已保存到本设备（同步前有效），但未保存到服务器：${ZH_CN[why] || why}`,
       ],
       // A dialog read off a hook-less CLI's screen (src/web/screen-blocked.ts), as the
-      // notification drawer shows it. The CLI's label passes through.
-      [/^(.+) is waiting for your answer in the terminal$/, (_m, cli) => `${cli} 正在终端中等待你的回答`],
+      // notification drawer shows it, and the chat view's notice, which ends in a period.
+      // The agent's label passes through.
+      [
+        /^(.+) is waiting for your answer in the terminal(\.?)$/,
+        (_m, who, dot) => `${who} 正在终端中等待你的回答${dot ? '。' : ''}`,
+      ],
       [/^The agent exited \(signal (\d+)\)$/, (_m, signal) => `智能体已退出（信号 ${signal}）`],
       // A session header's harness logo (tile grid, split pane): "<harness> · <model>",
       // and where the model came from when the CLI did not report it. The harness
