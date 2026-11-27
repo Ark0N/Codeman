@@ -1,13 +1,13 @@
 {
-  "version": "1.51.1",
+  "version": "1.52.0",
   "highlights": [
-    "Phone: Send on Enter for the input field (#820)",
-    "The terminal dashboard attaches by session name (#834)",
-    "Web tabs render the DeepSeek Harness web UI and Vite dashboards (#825)",
-    "Local model: Muse Glimmer 30B as its MLX build (#803)",
-    "A failing file watcher no longer floods the log (#818)",
-    "A password-protected Codeman installs as an app (#826)",
-    "A trusted web tab's WebSocket no longer sends Codeman's session cookie to the dashboard (#827)",
-    "Answers come back for a session on its own Claude config folder (#701, #812)"
+    "Closing a tab can no longer signal every process of your account",
+    "The Files panel loads one folder at a time (#848)",
+    "iPhone keyboard suggestions, dictation and hold-delete work in the terminal (#839, fixes #830)",
+    "Mac app: server tabs (#816)",
+    "An open tab after a restart no longer locks everyone out (#838)",
+    "Missing lines above the live screen can be fetched again (#815, fixes #814)",
+    "An agent that exited is seen again on tmux 3.8 (#840)",
+    "`codeman tui` takes its window size back (#853)"
   ]
 }
