@@ -5704,7 +5704,10 @@ export class Session extends EventEmitter {
       // to that terminal at its next key. A one-row nudge first makes this
       // client the latest one, as a real resize does. Under `manual` with no
       // attach the window ignores the client's pty, so the agent sees nothing.
-      if (!dimsChanged && rows > 1) {
+      // Only for a tmux-backed session: on a direct PTY the process is the
+      // agent itself, which would get two height changes for nothing (and
+      // every height change costs Claude's inline renderer transcript lines).
+      if (!dimsChanged && rows > 1 && this._useMux && this._muxSession) {
         this.nudgeThenResize(cols, rows);
         return;
       }

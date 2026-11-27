@@ -19,6 +19,13 @@ function attachFakePty(session: Session, cols = 160, rows = 48) {
   return resize;
 }
 
+/** Make the session tmux-backed, the way a real one is: its pty is the `tmux attach` client. */
+function attachFakeMux(session: Session) {
+  const internals = session as unknown as { _useMux: boolean; _muxSession: { muxName: string } };
+  internals._useMux = true;
+  internals._muxSession = { muxName: 'codeman-feed1234' };
+}
+
 describe('Session.ptyGeometry', () => {
   // ⚠️ `resize()` writes `_ptyCols`/`_ptyRows` only when `ptyProcess` is set,
   // and nothing seeds them from the spawn geometry — so the fields hold the
@@ -153,6 +160,7 @@ describe('Session resize arbitration', () => {
     try {
       const session = new Session({ workingDir: '/tmp', mode: 'shell' });
       const resize = attachFakePty(session, 120, 40);
+      attachFakeMux(session);
 
       session.resize(120, 40, { force: true });
       expect(resize.mock.calls).toEqual([[120, 39]]);
@@ -170,11 +178,28 @@ describe('Session resize arbitration', () => {
     }
   });
 
+  // Without tmux the pty IS the agent: a nudge there would be two height changes sent
+  // to the agent itself, and it has no tmux client to mark as used last.
+  it('does not nudge a session that has no tmux behind it', () => {
+    vi.useFakeTimers();
+    try {
+      const session = new Session({ workingDir: '/tmp', mode: 'shell' });
+      const resize = attachFakePty(session, 120, 40);
+
+      session.resize(120, 40, { force: true });
+      vi.advanceTimersByTime(Session.FORCED_RESIZE_NUDGE_MS);
+      expect(resize.mock.calls).toEqual([[120, 40]]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('drops the end of a nudge that a newer resize overtook', () => {
     vi.useFakeTimers();
     try {
       const session = new Session({ workingDir: '/tmp', mode: 'shell' });
       const resize = attachFakePty(session, 120, 40);
+      attachFakeMux(session);
 
       session.resize(120, 40, { force: true });
       session.resize(100, 30);
