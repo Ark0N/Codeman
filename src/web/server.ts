@@ -2094,6 +2094,7 @@ export class WebServer extends EventEmitter {
           order: entry.order,
           kind: entry.kind,
           external: entry.capabilities.external,
+          transcript: entry.capabilities.transcript,
           enabled,
           available: enabled && installed,
         };

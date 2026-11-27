@@ -1427,6 +1427,7 @@ class CodemanApp {
 
       // Escape - close panels and modals (different logic: no preventDefault, no return)
       if (e.key === 'Escape') {
+        if (this._maybeCloseDockedFilePreviewOnEscape?.(e)) return;
         // An open group menu (or a grouped-rail drag) owns this Escape: close
         // just that, not every panel behind it.
         if (this._tabGroupMenu && this._tabGroupMenuKeydown) {
@@ -2776,12 +2777,19 @@ class CodemanApp {
    * newline is the agent's line break, wrong for a file (the File Viewer passes
    * false), where a README hard-wrapped at 80 columns would break at every wrap.
    */
-  _renderMarkdown(text, { breaks = true } = {}) {
+  _renderMarkdown(text, { breaks = true, localFileLinks = false } = {}) {
     const src = text || '';
     if (typeof marked !== 'undefined' && marked.parse) {
       try {
         const prepared = this._preprocessAsciiArt(src);
-        let html = this._sanitizeHtml(marked.parse(prepared, { breaks, gfm: true }));
+        const options = { breaks, gfm: true };
+        if (localFileLinks) {
+          options.walkTokens = (token) => {
+            // Convert local URI destinations to inert path references before sanitizing.
+            if (token.type === 'link' && /^file:\/\/\/(?!\/)/i.test(token.href)) token.href = token.href.slice(7);
+          };
+        }
+        let html = this._sanitizeHtml(marked.parse(prepared, options));
         // Wrap tables in a horizontal-scroll container so they overflow gracefully
         // on mobile without collapsing into block-level cells.
         html = html.replace(/<table>/g, '<div class="rv-table-wrap"><table>')
@@ -3228,19 +3236,139 @@ class CodemanApp {
                         : 'Claude';
   }
 
-  async toggleResponseViewer() {
+  closeResponseViewer() {
+    this._responseViewerRequest = null;
+    const viewer = document.getElementById('responseViewer');
+    if (!viewer || !viewer.classList.contains('visible')) return false;
+    const backdrop = document.getElementById('responseViewerBackdrop');
+    viewer.classList.remove('visible');
+    if (backdrop) backdrop.classList.remove('visible');
+    const terminal = this._responseViewerReturnTerminal;
+    this._responseViewerReturnTerminal = null;
+    if (terminal && terminal.element?.isConnected !== false && this._shouldFocusTerminalForTabSwitch()) {
+      try {
+        terminal.focus();
+      } catch {
+        /* terminal may be detached mid-teardown */
+      }
+    }
+    return true;
+  }
+
+  _supportsCodexResponseFiles(sessionId) {
+    const mode = this.sessions?.get(sessionId)?.mode;
+    return window.__codemanCliCatalog?.find((entry) => entry.id === mode)?.transcript === 'codex-rollout';
+  }
+
+  _findCodexResponseFile(messages, label, sessionId, sidebar = false) {
+    const [prefix, suffix, ...extra] = sidebar ? label.split('…') : [];
+    const abbreviated = Boolean(prefix && suffix && extra.length === 0);
+    const containsFilename = (text) => abbreviated ? text.includes(prefix) && text.includes(suffix) : text.includes(label);
+    let match = null;
+    for (const message of messages) {
+      const { text } = message;
+      if (message.role !== 'assistant' || typeof text !== 'string') continue;
+      if (sidebar && !containsFilename(text)) {
+        // Markdown destinations can URI-encode the filename. Leave Markdown
+        // escapes and HTML entities to the renderer when present.
+        const decoded = text.replace(/(?:%[\da-f]{2})+/gi, (escapes) => {
+          try {
+            return decodeURIComponent(escapes);
+          } catch {
+            return escapes;
+          }
+        });
+        if (!containsFilename(decoded) && !/\\[!-~]|&(?:#\w+|[a-z]+);/i.test(decoded)) continue;
+      } else if (!sidebar && !text.includes(label)) {
+        continue;
+      }
+      const rendered = document.createElement('template');
+      rendered.innerHTML = this._renderMarkdown(text, { localFileLinks: true });
+      const links = Array.from(rendered.content.querySelectorAll('a')).filter(
+        (link) => sidebar || link.textContent.trim() === label
+      );
+      if (!links.length) continue;
+
+      this._linkifyFilePaths(rendered.content);
+      for (const link of links) {
+        const path = this._resolveLinkedFilePath(link.dataset.path, sessionId);
+        if (sidebar) {
+          const basename = path.split('/').pop();
+          // Codex preserves both ends of a filename when it shortens the tab.
+          const matchesEnds =
+            abbreviated && basename.length > prefix.length + suffix.length &&
+            basename.startsWith(prefix) && basename.endsWith(suffix);
+          if (basename !== label && !matchesEnds) continue;
+        }
+        // Ambiguity includes web URLs and unsupported files with the same label.
+        if (!link.dataset.linkified || link.dataset.folder || !/^\/(?!\/)/.test(path) || !previewsInFileViewer(path)) {
+          return null;
+        }
+        if (match && match !== path) return null;
+        match = path;
+      }
+    }
+    return match;
+  }
+
+  _openResponseFile(path, sessionId) {
+    const discard = 'Discard unsaved changes?';
+    if (this.filePreviewEdit?.dirty && !confirm(window.codemanT?.(discard) || discard)) return;
+    return this.openFilePreview(path, sessionId, null, { dock: true });
+  }
+
+  _renderResponseFiles(body, responses, sessionId) {
+    const list = document.createElement('ul');
+    const seen = new Set();
+    for (const response of responses) {
+      const rendered = document.createElement('template');
+      rendered.innerHTML = this._renderMarkdown(response, { localFileLinks: true });
+      this._linkifyFilePaths(rendered.content);
+      for (const link of rendered.content.querySelectorAll('a.rv-path')) {
+        if (link.dataset.folder) continue;
+        const path = this._resolveLinkedFilePath(link.dataset.path, sessionId);
+        if (!/^\/(?!\/)/.test(path) || !previewsInFileViewer(path) || seen.has(path)) continue;
+        seen.add(path);
+        const item = document.createElement('li');
+        const action = document.createElement('a');
+        action.href = '#';
+        action.className = 'rv-path rv-path-link';
+        action.textContent = link.textContent.trim() || path.split('/').pop();
+        action.title = path;
+        action.addEventListener('click', (event) => {
+          event.preventDefault();
+          this.closeResponseViewer();
+          this._openResponseFile(path, sessionId);
+        });
+        item.appendChild(action);
+        list.appendChild(item);
+      }
+    }
+    if (seen.size) body.replaceChildren(list);
+    else {
+      const empty = 'No previewable files in the latest response.';
+      body.textContent = window.codemanT?.(empty) || empty;
+    }
+  }
+
+  async toggleResponseViewer(filesOnly = false) {
     const viewer = document.getElementById('responseViewer');
     const backdrop = document.getElementById('responseViewerBackdrop');
     if (!viewer) return;
 
     const isOpen = viewer.classList.contains('visible');
-    if (isOpen) {
-      viewer.classList.remove('visible');
-      backdrop.classList.remove('visible');
+    if (isOpen && (viewer.dataset.filesOnly === 'true') === filesOnly) {
+      this.closeResponseViewer();
       return;
     }
 
     if (!this.activeSessionId) return;
+    const responseSessionId = this.activeSessionId;
+    const session = this.sessions?.get?.(responseSessionId);
+    if (filesOnly && !this._supportsCodexResponseFiles(responseSessionId)) return;
+    const returnTerminal = isOpen ? this._responseViewerReturnTerminal : this._focusedPane?.().terminal;
+    const request = Symbol('response-viewer');
+    this._responseViewerRequest = request;
     try {
       // Source 1: Transcript JSONL (best quality — clean structured text from Claude).
       // `context=turn` asks for the last ANSWERED turn as messages: a Claude
@@ -3249,8 +3377,10 @@ class CodemanApp {
       // rows before it. Readers that know no `turn` context (Codex, the pane
       // parser, an older server) answer with `text` only, and that path is
       // unchanged below.
-      const res = await fetch(`/api/sessions/${this.activeSessionId}/last-response?context=turn`);
+      const res = await fetch(`/api/sessions/${responseSessionId}/last-response?context=turn`);
+      if (filesOnly && !res.ok) throw new Error('Unable to load response files');
       const data = (await res.json())?.data ?? {};
+      if (this._responseViewerRequest !== request || this.activeSessionId !== responseSessionId) return;
       let lastResponse = data.text || '';
       const turnMessages = (Array.isArray(data.messages) ? data.messages : []).filter(
         (msg) => msg && msg.role === 'assistant' && typeof msg.text === 'string' && msg.text.trim()
@@ -3261,13 +3391,13 @@ class CodemanApp {
       // shell sessions have no transcript source at all; for TUI modes
       // (codex/opencode/gemini/antigravity) it yields repaint garbage, so a clear
       // placeholder beats a messy screen dump there.
-      const sessionMode = this.sessions.get(this.activeSessionId)?.mode || 'claude';
+      const sessionMode = session?.mode || 'claude';
       if (!lastResponse && (sessionMode === 'claude' || sessionMode === 'shell')) {
         // The no-param form is capped only by `terminalBufferMaxBytes` (32MB by
         // default), so it is the largest body the frontend asks for anywhere —
         // it gets the full-history budget, not the tail one.
         const termCapture = await this._fetchTerminalCapture(
-          `/api/sessions/${this.activeSessionId}/terminal`,
+          `/api/sessions/${responseSessionId}/terminal`,
           { full: true }
         );
         const termData = termCapture.json?.data ?? {};
@@ -3276,10 +3406,14 @@ class CodemanApp {
         }
       }
 
+      if (this._responseViewerRequest !== request || this.activeSessionId !== responseSessionId) return;
       this._responseViewerMarkdown = this._responseViewerMarkdownFrom(turnMessages) || lastResponse;
 
       const body = document.getElementById('responseViewerBody');
-      if (turnMessages.length > 0) {
+      if (filesOnly) {
+        const responses = turnMessages.length ? turnMessages.map((message) => message.text) : [lastResponse];
+        this._renderResponseFiles(body, responses, responseSessionId);
+      } else if (turnMessages.length > 0) {
         // The whole last turn, rendered exactly as the full view renders that
         // turn: one badge, then badge-less continuation segments. The same
         // numeric-`turn` gate as loadFullContext, never same-role adjacency.
@@ -3308,9 +3442,15 @@ class CodemanApp {
       // Reset state for fresh open
       const title = document.getElementById('responseViewerTitle');
       const moreBtn = document.getElementById('responseViewerMore');
-      if (title) title.textContent = 'Last Response';
-      if (moreBtn) { moreBtn.style.display = ''; moreBtn.textContent = 'More'; }
+      viewer.dataset.filesOnly = String(filesOnly);
+      const titleText = filesOnly ? 'Response files' : 'Last Response';
+      if (title) title.textContent = window.codemanT?.(titleText) || titleText;
+      if (moreBtn) {
+        moreBtn.style.display = '';
+        moreBtn.textContent = window.codemanT?.('More') || 'More';
+      }
 
+      this._responseViewerReturnTerminal = returnTerminal;
       viewer.classList.add('visible');
       backdrop.classList.add('visible');
       // A multi-row turn opens at its NEWEST text, matching loadFullContext's
@@ -3318,9 +3458,13 @@ class CodemanApp {
       // brief view was a single card holding the last row; with the whole turn
       // rendered, the top is the turn's first narration line and the answer the
       // eye button exists to show can be several screens down.
-      body.scrollTop = turnMessages.length > 1 ? body.scrollHeight : 0;
+      body.scrollTop = !filesOnly && turnMessages.length > 1 ? body.scrollHeight : 0;
     } catch (err) {
       console.error('Failed to load response:', err);
+      if (filesOnly && this._responseViewerRequest === request && this.activeSessionId === responseSessionId) {
+        const message = 'Unable to load response files';
+        this.showToast(window.codemanT?.(message) || message, 'error');
+      }
     }
   }
 
@@ -6592,6 +6736,8 @@ class CodemanApp {
   // ═══════════════════════════════════════════════════════════════
 
   renderSessionTabs({ immediate = false } = {}) {
+    const responseFilesButton = this.$('responseFilesBtn');
+    if (responseFilesButton) responseFilesButton.hidden = !this._supportsCodexResponseFiles(this.activeSessionId);
     // Don't re-render while user is typing in the inline rename input
     if (this._inlineRenameActive) return;
     if (immediate) {

@@ -24,6 +24,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import vm from 'node:vm';
+import { JSDOM } from 'jsdom';
 import { describe, expect, it, vi } from 'vitest';
 
 const PUBLIC = resolve(import.meta.dirname, '../src/web/public');
@@ -405,5 +406,109 @@ describe('file viewer on phones', () => {
       /\.file-preview-window,\s*\.file-preview-window\.expanded\s*\{[^}]*width: 100vw !important;[^}]*height: var\(--app-height, 100vh\) !important;/
     );
     expect(phone).toMatch(/#filePreviewExpandBtn,\s*\.file-preview-resize\s*\{\s*display: none;/);
+  });
+});
+
+describe('file preview dock lifecycle', () => {
+  function setup(layout: string, wide = true) {
+    const { window } = new JSDOM(`<!doctype html><main class="main ${layout}">
+      <div class="terminal-wrap"><div id="terminalContainer"></div></div>
+      </main><div id="filePreviewOverlay" class="visible">
+        <button id="filePreviewDockBtn" aria-pressed="false"></button>
+      </div>`);
+    const { document } = window;
+    const CodemanApp = function CodemanApp() {};
+    const context = vm.createContext({
+      CodemanApp,
+      document,
+      window: {
+        matchMedia: () => ({ matches: wide }),
+        innerWidth: 1400,
+        addEventListener: vi.fn(),
+        TerminalTile: class {
+          async connect() {}
+          destroy() {}
+        },
+      },
+      SPLIT_PANE_MIN_WIDTH: 1000,
+    });
+    vm.runInContext(panelsJs, context);
+    const splitJs = readFileSync(resolve(PUBLIC, 'terminal-split.js'), 'utf8');
+    vm.runInContext(splitJs, context);
+    const app = Object.assign(Object.create(CodemanApp.prototype), {
+      $: (id: string) => document.getElementById(id),
+      _resetFilePreviewEdit: vi.fn(),
+      _updateSplitButtonState: vi.fn(),
+      _buildSplitPaneHeader: () => ({ el: document.createElement('div') }),
+      _renderSplitChrome: vi.fn(),
+      _installSplitDividerDrag: vi.fn(),
+      activeSessionId: 'pane-a',
+      sessions: new Map([['pane-b', { pid: 1 }]]),
+      terminal: { focus: vi.fn() },
+    });
+    const overlay = document.getElementById('filePreviewOverlay')!;
+    const main = document.querySelector('.main')!;
+    const wrap = document.querySelector('.terminal-wrap')!;
+    const dockButton = document.getElementById('filePreviewDockBtn')!;
+    return { app, document, main, overlay, wrap, dockButton };
+  }
+
+  it('docks beside the terminal and returns to its original parent on close', () => {
+    const { app, document, main, overlay, wrap, dockButton } = setup('');
+    app.toggleFilePreviewDock();
+    expect(overlay.parentElement).toBe(main);
+    expect(wrap.nextElementSibling).toBe(overlay);
+    expect(dockButton.getAttribute('aria-pressed')).toBe('true');
+    app.closeFilePreview();
+    expect(overlay.parentElement).toBe(document.body);
+    expect(overlay.classList.contains('visible')).toBe(false);
+    expect(dockButton.getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('handles Escape inside the dock and leaves terminal Escape alone', () => {
+    const { app, document, overlay, wrap, dockButton } = setup('');
+    app.toggleFilePreviewDock();
+    const escape = { target: wrap, preventDefault: vi.fn(), stopPropagation: vi.fn() };
+    expect(app._maybeCloseDockedFilePreviewOnEscape(escape)).toBe(false);
+    expect(escape.preventDefault).not.toHaveBeenCalled();
+    expect(overlay.classList.contains('visible')).toBe(true);
+    expect(app._maybeCloseDockedFilePreviewOnEscape({ ...escape, target: dockButton })).toBe(true);
+    expect(escape.preventDefault).toHaveBeenCalledOnce();
+    expect(escape.stopPropagation).toHaveBeenCalledOnce();
+    expect(app.terminal.focus).toHaveBeenCalledOnce();
+    expect(overlay.parentElement).toBe(document.body);
+  });
+
+  it('stays floating during a split and survives closing and reopening the preview', () => {
+    const { app, document, main, overlay } = setup('');
+    app.toggleFilePreviewDock();
+    expect(overlay.parentElement).toBe(main);
+
+    app.openSplitPane('pane-b');
+    const split = document.querySelector('.terminal-split-container');
+    expect(split).not.toBeNull();
+    expect(overlay.parentElement).toBe(document.body);
+
+    app._setFilePreviewDocked(true);
+    expect(overlay.parentElement).toBe(document.body);
+    app.closeSplitPane();
+    expect(split?.isConnected).toBe(false);
+    expect(overlay.isConnected).toBe(true);
+
+    app.closeFilePreview();
+    overlay.classList.add('visible');
+    app.toggleFilePreviewDock();
+    expect(overlay.parentElement).toBe(main);
+  });
+
+  it.each([
+    ['', false],
+    ['tiles-active', true],
+    ['webview-active', true],
+  ])('stays floating when docking is unavailable (layout %s, wide %s)', (layout, wide) => {
+    const { app, document, overlay } = setup(layout, wide);
+    app._setFilePreviewDocked(true);
+    expect(overlay.parentElement).toBe(document.body);
+    expect(app._isFilePreviewDocked()).toBe(false);
   });
 });

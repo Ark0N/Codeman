@@ -207,6 +207,7 @@ Object.assign(CodemanApp.prototype, {
     headerA.el.classList.add('terminal-pane-a-header');
     this._splitHeaders = { a: headerA, b: headerB };
 
+    this._setFilePreviewDocked?.(false);
     parent.insertBefore(container, wrap);
     wrap.insertBefore(headerA.el, wrap.firstChild);
     container.appendChild(wrap);

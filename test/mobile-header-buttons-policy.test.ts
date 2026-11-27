@@ -34,7 +34,8 @@ const PHONE_WIDTH = 393;
 // Its per-device setting still defaults off on a handheld. With the blanket phone
 // hide gone, that default and the startup hide are the whole lock, so both are
 // pinned below ("File Viewer on a phone: off until it is switched on").
-const MOBILE_VISIBLE_ALLOWLIST = new Set<string>(['btn-file-viewer']);
+// Response files is currently available in Codex sessions, and its preview floats on phones.
+const MOBILE_VISIBLE_ALLOWLIST = new Set<string>(['btn-file-viewer', 'btn-response-files']);
 
 // Buttons we expect to STAY hidden on phones — an explicit lock so a future edit
 // that removes a hide rule fails loudly (not silently). The attachments button is
