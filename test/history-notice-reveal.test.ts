@@ -121,6 +121,8 @@ function makeApp() {
   let resolvePull: (() => void) | null = null;
   const app = {
     activeSessionId: 's1' as string | null,
+    sessions: new Map([['s1', { mode: 'omp' }]]),
+    _liveOutputSinceFullPull: new Set<string>(),
     terminal: { buffer: { active: buffer } },
     // Each gesture's pull is held open until the test settles it.
     _maybeRefetchFullHistory: vi.fn(
@@ -181,6 +183,34 @@ describe('partial-history notice: lazy reveal', () => {
     await settle();
     expect(bar.hidden).toBe(false);
     expect(bar.textContent).toContain('40,000 lines of scrollback are retained.');
+    expect(loadButton(bar)?.textContent).toBe('Load full history');
+  });
+
+  it.each([0, 200])('marked scrolling from row %s remains top-only', async (viewportY) => {
+    const { app, bar, buffer, settle } = makeApp();
+    app._setHistoryTruncation('s1', TAIL);
+    app._liveOutputSinceFullPull.add('s1');
+    buffer.viewportY = viewportY;
+    app._maybeLoadMoreHistoryOnScroll(-5);
+    await settle();
+    expect(app._maybeRefetchFullHistory).toHaveBeenCalledTimes(viewportY === 0 ? 1 : 0);
+    if (viewportY === 0) expect(app._maybeRefetchFullHistory).toHaveBeenCalledWith();
+    expect(bar.hidden).toBe(viewportY !== 0);
+  });
+
+  it('reveals the resulting notice when a top pull grows the buffer and restores below row zero', async () => {
+    const { app, bar, buffer } = makeApp();
+    app._setHistoryTruncation('s1', TAIL);
+    app._maybeRefetchFullHistory.mockImplementation(async () => {
+      buffer.baseY += 100;
+      buffer.viewportY = 100; // Recovered rows precede the old top reading position.
+    });
+    buffer.viewportY = 0;
+    app._maybeLoadMoreHistoryOnScroll(-500);
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(buffer.viewportY).toBe(100);
+    expect(app._historyNoticeRevealedFor).toBe('s1');
+    expect(bar.hidden).toBe(false);
     expect(loadButton(bar)?.textContent).toBe('Load full history');
   });
 

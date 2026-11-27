@@ -250,7 +250,10 @@ describe('terminal capture deadline covers the response body', () => {
     for (const site of ['_onSessionNeedsRefresh(event = {}) {', 'async _onSessionClearTerminal(data) {']) {
       const start = app.indexOf(site);
       expect(start, `${site} not found — renamed?`).toBeGreaterThan(-1);
-      const body = app.slice(start, start + 4000);
+      // The whole method, not a fixed-size window: a byte count broke on an
+      // unrelated comment, and a reset past it would have read as missing.
+      const next = /^ {2}(?:async )?[A-Za-z_$][\w$]*\(/m.exec(app.slice(start + 1));
+      const body = next ? app.slice(start, start + 1 + next.index) : app.slice(start);
       expect(body, `${site} must clear via _resetTerminalForReplay`).toContain('this._resetTerminalForReplay()');
       expect(body, `${site} hand-rolled a clear again`).not.toContain('this.terminal.clear()');
     }
