@@ -1185,9 +1185,20 @@ ensure_sudo() {
     if ! command -v sudo &>/dev/null; then
         die "sudo is required but not installed. Please install packages manually or run as root."
     fi
+    # A sudo that runs without a password (NOPASSWD, or the timestamp
+    # sudo_session_try keeps warm) needs no terminal and nothing validated.
+    # `sudo -v` is no substitute for this test: it asks for a password as soon as
+    # ONE sudoers entry of the account asks for one, so an account in the sudo
+    # group with a NOPASSWD entry of its own (the cloud-image layout) runs
+    # `sudo <command>` freely and is refused by `sudo -v` (measured on sudo 1.9.15).
+    if sudo -n true 2>/dev/null; then
+        return 0
+    fi
     # Validate sudo access
-    # When piped (curl | bash), stdin is the pipe — redirect from /dev/tty so sudo can prompt
-    if [[ -e /dev/tty ]]; then
+    # When piped (curl | bash), stdin is the pipe: redirect from /dev/tty so sudo can prompt.
+    # Only when it can be opened (see tty_openable): with no terminal at all, sudo gets
+    # its chance as it is and fails by itself when it would have to ask.
+    if tty_openable; then
         if ! sudo -v 2>/dev/null < /dev/tty; then
             die "Failed to obtain sudo privileges."
         fi
@@ -1217,8 +1228,9 @@ ensure_homebrew() {
     fi
 
     info "Installing Homebrew first..."
-    # When piped (curl | bash), stdin is the pipe — Homebrew needs TTY for sudo password prompt
-    if [[ -e /dev/tty ]]; then
+    # When piped (curl | bash), stdin is the pipe: Homebrew needs TTY for sudo password prompt.
+    # With no terminal to open (see tty_openable) it runs unattended instead.
+    if tty_openable; then
         /bin/bash -c "$(download_to_stdout https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" < /dev/tty
     else
         NONINTERACTIVE=1 /bin/bash -c "$(download_to_stdout https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
@@ -2019,9 +2031,21 @@ fetch_source_archive() {
 # the keyboard even though the user is sitting at a terminal. These helpers
 # prompt via /dev/tty whenever a real terminal is available, and only fall back
 # to defaults when there is genuinely none (CI, truly headless pipes).
+
+# True when /dev/tty can really be OPENED. The node is there on every Linux and
+# macOS, also for a process with no controlling terminal (su -c, cron, a CI
+# runner, cloud-init, a container started without -t): `[[ -e /dev/tty ]]` says
+# yes there, and a `< /dev/tty` behind it fails before the command ever runs.
+# That ended a headless install with a working passwordless sudo on "Failed to
+# obtain sudo privileges". Opening the node is the only test, so every redirect
+# from /dev/tty asks this first, never `-e`.
+tty_openable() {
+    { : < /dev/tty; } 2>/dev/null
+}
+
 has_tty() {
     [[ -t 0 ]] && return 0
-    { : < /dev/tty; } 2>/dev/null
+    tty_openable
 }
 
 read_reply() {
@@ -2102,7 +2126,7 @@ sudo_session_try() {
     if ! sudo -n true 2>/dev/null; then
         echo "" >&2
         info "Some steps need administrator rights. You will be asked for your password once."
-        if [[ -e /dev/tty ]]; then
+        if tty_openable; then
             sudo -v < /dev/tty || return 1
         else
             sudo -v || return 1
@@ -2124,7 +2148,7 @@ sudo_session_start() {
     if sudo_session_try; then
         return 0
     fi
-    if [[ -e /dev/tty ]]; then
+    if tty_openable; then
         die "Failed to obtain sudo privileges."
     fi
     die "Failed to obtain sudo privileges. Try running the script directly instead of piping."
@@ -2920,8 +2944,9 @@ offer_install_tailscale() {
         sudo_session_start
         info "Running the official Tailscale installer..."
         # When piped (curl | bash), stdin is our pipe: give the child installer
-        # the real terminal so its own sudo prompt works.
-        if [[ -e /dev/tty ]]; then
+        # the real terminal so its own sudo prompt works. A run with no terminal
+        # to open (see tty_openable) hands it stdin as it is.
+        if tty_openable; then
             if ! sh -c "$(download_to_stdout https://tailscale.com/install.sh)" < /dev/tty; then
                 warn "Tailscale installation failed."
                 return 1
@@ -2966,7 +2991,7 @@ ensure_tailscale_login() {
         if "$ts_bin" up --timeout=300s; then up_ok="1"; fi
     else
         sudo_session_start
-        if [[ -e /dev/tty ]]; then
+        if tty_openable; then
             if run_as_root "$ts_bin" up --timeout=300s < /dev/tty; then up_ok="1"; fi
         else
             if run_as_root "$ts_bin" up --timeout=300s; then up_ok="1"; fi

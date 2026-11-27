@@ -110,7 +110,9 @@ approve those steps. With nothing else said, that also installs the first agent 
 catalogue when none is found; `--ai-cli` (or `CODEMAN_AI_CLI`) says which one, or none.
 `CODEMAN_TAILSCALE=1` preselects the Tailscale answer, and never
 installs Tailscale itself non-interactively; a non-interactive run never renames the
-machine and never starts a service. Everything the unattended steps print goes to
+machine and never starts a service. With no terminal there is nowhere to type a password,
+so a step that needs `sudo` works only where `sudo` asks for none (a `NOPASSWD` entry, as
+cloud images and CI runners have). Everything the unattended steps print goes to
 `~/.codeman/install.log`, and the last lines of it are shown when a step fails.
 
 ### Without administrator rights
