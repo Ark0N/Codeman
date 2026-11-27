@@ -112,6 +112,9 @@ const SENSITIVE_PATTERNS: RegExp[] = [
   // agent wrote, keys and .env contents included; written 0600 and kept out of
   // /api/search for the same reason as intents.json.
   /\/\.codeman[^/]*\/edit-history\//,
+  // Saved terminal transcripts (transcript-store.ts): whatever the terminal showed, secrets
+  // included, written 0600 and kept out of /api/search.
+  /\/\.codeman[^/]*\/transcripts\//,
   // Credentials kept outside settings.json: the Discord bot token, the webhook URL
   // (a bearer secret), the custom endpoints' API keys, and the generated per-session
   // configs, some of which carry that key inline.

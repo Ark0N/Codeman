@@ -73,6 +73,7 @@ run('xterm css', 'cp node_modules/@xterm/xterm/css/xterm.css dist/web/public/ven
 run('xterm js', 'npx esbuild node_modules/@xterm/xterm/lib/xterm.js --minify --outfile=dist/web/public/vendor/xterm.min.js');
 run('xterm-addon-fit', 'npx esbuild node_modules/@xterm/addon-fit/lib/addon-fit.js --minify --outfile=dist/web/public/vendor/xterm-addon-fit.min.js');
 run('xterm-addon-serialize', 'npx esbuild node_modules/@xterm/addon-serialize/lib/addon-serialize.js --minify --outfile=dist/web/public/vendor/xterm-addon-serialize.min.js');
+run('xterm-addon-search', 'npx esbuild node_modules/@xterm/addon-search/lib/addon-search.js --minify --outfile=dist/web/public/vendor/xterm-addon-search.min.js');
 run('xterm-addon-webgl', 'cp node_modules/@xterm/addon-webgl/lib/addon-webgl.js dist/web/public/vendor/xterm-addon-webgl.min.js');
 run('xterm-addon-unicode11', 'npx esbuild node_modules/@xterm/addon-unicode11/lib/addon-unicode11.js --minify --outfile=dist/web/public/vendor/xterm-addon-unicode11.min.js');
 run('xterm-zerolag-input', 'npx esbuild packages/xterm-zerolag-input/src/zerolag-input-addon.ts --bundle --minify --format=iife --global-name=XtermZerolagInput --outfile=dist/web/public/vendor/xterm-zerolag-input.js');

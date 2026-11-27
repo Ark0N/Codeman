@@ -64,6 +64,7 @@ const ASSETS = [
     out: 'xterm-addon-serialize.min.js',
     mode: 'minify',
   },
+  { src: join(NM, '@xterm/addon-search/lib/addon-search.js'), out: 'xterm-addon-search.min.js', mode: 'minify' },
   {
     src: join(NM, '@xterm/addon-unicode11/lib/addon-unicode11.js'),
     out: 'xterm-addon-unicode11.min.js',

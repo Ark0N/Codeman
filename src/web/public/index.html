@@ -39,6 +39,8 @@
        without codeman having to replay codex's byte stream (which loses earlier
        conversation because codex's TUI redraws drop it from the viewport). -->
   <script defer src="vendor/xterm-addon-serialize.min.js"></script>
+  <!-- SearchAddon: the Ctrl+Shift+F find bar over the terminal's own scrollback. -->
+  <script defer src="vendor/xterm-addon-search.min.js"></script>
   <!-- WebGL addon lazy-loaded by app.js on desktop only (skipped on mobile, saving 244KB) -->
   <script defer src="vendor/xterm-addon-unicode11.min.js"></script>
   <script defer src="vendor/xterm-zerolag-input.js"></script>
@@ -2306,6 +2308,21 @@
                       <span class="set-row-desc">Saves pending <code>codeman agent post</code> messages to <code>agent-inbox.json</code> in the data dir (readable by you only), so they survive a server restart. Off by default; turning it off deletes the file. Messages expire after 12 hours either way.</span>
                     </div>
                     <label class="switch switch-sm"><input type="checkbox" id="appSettingsAgentInboxPersist"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row" data-search="terminal find search text scrollback ctrl shift f">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Terminal find bar</span>
+                      <span class="set-row-desc">Press Ctrl+Shift+F (Cmd+Shift+F on a Mac) to search the text in the terminal, with next and previous match. It searches what the browser holds in scrollback. On by default.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsTerminalFind"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row" data-search="saved history transcript search disk terminal text delete clear">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Saved history search</span>
+                      <span class="set-row-desc">Saves a plain-text copy of each session's terminal to the <code>transcripts</code> folder in the data dir (readable by you only, newest 16 MB per session, refreshed about once a minute), so the find bar's History button can search further back than the browser holds. It can contain anything the terminal showed, secrets included. Off by default. A transcript is deleted when its session is closed or deleted, and turning this off deletes them all.</span>
+                      <button type="button" class="btn-toolbar btn-sm" id="appSettingsTranscriptClear">Delete all saved history now</button>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsTranscriptSearch"><span class="slider"></span></label>
                   </div>
                   <div class="set-row" data-search="experimental agent coordination inspect stage submit codeman agent guarded input">
                     <div class="set-row-text">

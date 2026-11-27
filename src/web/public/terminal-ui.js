@@ -1213,6 +1213,7 @@ Object.assign(CodemanApp.prototype, {
     }
 
     this._installOsc52Clipboard(this.terminal);
+    this._installTerminalFind();
 
     const container = document.getElementById('terminalContainer');
     this.terminal.open(container);
@@ -1270,6 +1271,9 @@ Object.assign(CodemanApp.prototype, {
       if (ev.type === 'keydown' && this.shouldOpenCommandPaletteFromShortcut?.(ev)) {
         return false;
       }
+
+      // Find bar chord (Ctrl+Shift+F): opened by the document capture handler; keep it out of the PTY.
+      if (this.isTerminalFindChord?.(ev)) return false;
 
       // Tile grid chords (Ctrl+Shift+G, Alt+Shift+Arrows): the capture handler
       // has already acted on one that applies, and its preventDefault() does not
@@ -7737,5 +7741,278 @@ Object.assign(CodemanApp.prototype, {
     } catch (err) {
       console.error('[search] jump failed', err);
     }
+  },
+});
+
+// Terminal find bar (Ctrl+Shift+F): xterm's SearchAddon over the live scrollback, plus the
+// optional saved-history search (server transcript, opt-in `transcriptSearchEnabled`).
+Object.assign(CodemanApp.prototype, {
+  _FIND_DECORATIONS: {
+    matchBackground: '#5c4a00',
+    matchOverviewRuler: '#d7ba7d',
+    activeMatchBackground: '#a86f00',
+    activeMatchColorOverviewRuler: '#ffcc66',
+  },
+
+  /** Called once after terminal.open(). A missing vendor bundle just leaves the find bar off. */
+  _installTerminalFind() {
+    if (typeof SearchAddon === 'undefined' || this._searchAddon) return;
+    try {
+      this._searchAddon = new SearchAddon.SearchAddon();
+      this.terminal.loadAddon(this._searchAddon);
+      this._searchAddon.onDidChangeResults((r) => this._renderTerminalFindCount(r));
+    } catch (_e) {
+      this._searchAddon = null;
+      return;
+    }
+    // Capture phase: runs before xterm sees the key, and the xterm handler below also refuses it.
+    document.addEventListener(
+      'keydown',
+      (ev) => {
+        if (!this.isTerminalFindChord(ev)) return;
+        ev.preventDefault();
+        this.openTerminalFind();
+      },
+      true
+    );
+  },
+
+  /** On unless the user switched it off in App Settings (an absent key means ON). */
+  terminalFindEnabled() {
+    return !!this._searchAddon && this.loadAppSettingsFromStorage().terminalFindEnabled !== false;
+  },
+
+  isTerminalFindChord(ev) {
+    return (
+      ev.type === 'keydown' &&
+      (ev.ctrlKey || ev.metaKey) &&
+      ev.shiftKey &&
+      !ev.altKey &&
+      ev.code === 'KeyF' &&
+      this.terminalFindEnabled()
+    );
+  },
+
+  _terminalFindHistoryEnabled() {
+    return this.loadAppSettingsFromStorage().transcriptSearchEnabled === true;
+  },
+
+  openTerminalFind() {
+    if (!this.terminalFindEnabled()) return;
+    let bar = document.getElementById('terminalFindBar');
+    if (!bar) bar = this._buildTerminalFindBar();
+    bar.hidden = false;
+    bar.querySelector('.tf-history').hidden = !this._terminalFindHistoryEnabled();
+    const input = bar.querySelector('.tf-input');
+    // Start from the selected text, the way a browser's find does.
+    const selected = this.terminal?.hasSelection?.() ? this.terminal.getSelection().trim() : '';
+    if (selected && !selected.includes('\n')) input.value = selected.slice(0, 200);
+    input.focus();
+    input.select();
+    this._savedHistoryTotal = 0;
+    if (input.value) {
+      this._terminalFindStep(1);
+      this._queueSavedHistorySearch();
+    }
+  },
+
+  /** With saved history on, one search covers both: the terminal as you type, the saved copy a moment after. */
+  _queueSavedHistorySearch() {
+    clearTimeout(this._savedHistoryTimer);
+    if (!this._terminalFindHistoryEnabled()) return;
+    this._savedHistoryTimer = setTimeout(() => void this._searchSavedHistory(), 300);
+  },
+
+  closeTerminalFind() {
+    const bar = document.getElementById('terminalFindBar');
+    if (!bar || bar.hidden) return;
+    bar.hidden = true;
+    this._searchAddon?.clearDecorations();
+    this._clearTerminalFindHistory();
+    this.terminal?.focus();
+  },
+
+  _buildTerminalFindBar() {
+    const bar = document.createElement('div');
+    bar.id = 'terminalFindBar';
+    bar.className = 'terminal-find-bar';
+    bar.setAttribute('role', 'search');
+    bar.setAttribute('data-i18n-skip', '');
+    bar.innerHTML =
+      '<div class="tf-row">' +
+      '<input class="tf-input" type="text" spellcheck="false" autocomplete="off" aria-label="Find in terminal" placeholder="Find in terminal">' +
+      '<span class="tf-count" aria-live="polite"></span>' +
+      '<button type="button" class="tf-btn tf-prev" title="Previous match (Shift+Enter)" aria-label="Previous match">&uarr;</button>' +
+      '<button type="button" class="tf-btn tf-next" title="Next match (Enter)" aria-label="Next match">&darr;</button>' +
+      '<button type="button" class="tf-btn tf-history" title="Search the saved history of this session" hidden>History</button>' +
+      '<button type="button" class="tf-btn tf-close" title="Close (Esc)" aria-label="Close find bar">&times;</button>' +
+      '</div>' +
+      '<div class="tf-hist" hidden>' +
+      '<div class="tf-hist-head"><span class="tf-hist-info"></span>' +
+      '<button type="button" class="tf-btn tf-hist-clear" title="Delete the saved history of this session from the server">Clear saved</button></div>' +
+      '<ul class="tf-hist-list"></ul></div>';
+    const host = document.getElementById('terminalContainer')?.parentElement || document.body;
+    host.appendChild(bar);
+    const input = bar.querySelector('.tf-input');
+    input.addEventListener('input', () => {
+      this._savedHistoryTotal = 0;
+      this._terminalFindStep(1, true);
+      this._clearTerminalFindHistory();
+      this._queueSavedHistorySearch();
+    });
+    // On the bar, not the input: focus can be on a button or a result when Esc is pressed.
+    bar.addEventListener('keydown', (ev) => {
+      if (ev.key !== 'Escape') return;
+      ev.preventDefault();
+      this.closeTerminalFind();
+    });
+    input.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') {
+        ev.preventDefault();
+        this._terminalFindStep(ev.shiftKey ? -1 : 1);
+      }
+    });
+    bar.querySelector('.tf-prev').addEventListener('click', () => this._terminalFindStep(-1));
+    bar.querySelector('.tf-next').addEventListener('click', () => this._terminalFindStep(1));
+    bar.querySelector('.tf-close').addEventListener('click', () => this.closeTerminalFind());
+    bar.querySelector('.tf-history').addEventListener('click', () => void this._searchSavedHistory());
+    bar.querySelector('.tf-hist-clear').addEventListener('click', () => void this._clearSavedHistory());
+    return bar;
+  },
+
+  /** `incremental`: re-run from the current match while typing instead of skipping past it. */
+  _terminalFindStep(direction, incremental = false) {
+    const input = document.querySelector('#terminalFindBar .tf-input');
+    const term = input?.value || '';
+    if (!term) {
+      this._searchAddon?.clearDecorations();
+      this._renderTerminalFindCount(null);
+      return false;
+    }
+    const opts = { decorations: this._FIND_DECORATIONS, incremental };
+    return direction < 0 ? this._searchAddon.findPrevious(term, opts) : this._searchAddon.findNext(term, opts);
+  },
+
+  _renderTerminalFindCount(r) {
+    this._findLive = r;
+    const el = document.querySelector('#terminalFindBar .tf-count');
+    if (!el) return;
+    const term = document.querySelector('#terminalFindBar .tf-input')?.value;
+    const hist = this._savedHistoryTotal;
+    const inHistory = hist ? `${hist} in history` : '';
+    if (!term) el.textContent = '';
+    else if (!r || !r.resultCount) el.textContent = hist ? `Not in terminal, ${inHistory}` : 'No matches';
+    // xterm stops counting at 1000 matches and reports resultIndex -1 past it.
+    else {
+      const live = r.resultIndex >= 0 ? `${r.resultIndex + 1} of ${r.resultCount}` : `${r.resultCount}+`;
+      el.textContent = hist ? `${live}, ${inHistory}` : live;
+    }
+  },
+
+  _clearTerminalFindHistory() {
+    const panel = document.querySelector('#terminalFindBar .tf-hist');
+    if (panel) panel.hidden = true;
+  },
+
+  async _searchSavedHistory() {
+    const bar = document.getElementById('terminalFindBar');
+    const q = bar?.querySelector('.tf-input').value.trim();
+    const id = this.activeSessionId;
+    if (!bar || !q || !id) return;
+    const data = await this._apiJson(`/api/sessions/${encodeURIComponent(id)}/transcript/search?q=${encodeURIComponent(q)}`);
+    // The box changed (or closed) while this was in flight: a newer search owns the panel.
+    if (bar.hidden || bar.querySelector('.tf-input').value.trim() !== q || this.activeSessionId !== id) return;
+    this._savedHistoryTotal = data?.total || 0;
+    this._renderTerminalFindCount(this._findLive);
+    const panel = bar.querySelector('.tf-hist');
+    const info = panel.querySelector('.tf-hist-info');
+    const list = panel.querySelector('.tf-hist-list');
+    list.textContent = '';
+    panel.hidden = false;
+    if (!data || !data.matches) {
+      info.textContent = 'No saved history yet. It is captured about once a minute.';
+      return;
+    }
+    const size = data.bytes < 1024 ? `${data.bytes} B` : `${Math.round(data.bytes / 1024)} KB`;
+    info.textContent = `${data.total} matching line${data.total === 1 ? '' : 's'} in saved history (${size})`;
+    for (const m of data.matches) {
+      const li = document.createElement('li');
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'tf-hist-hit';
+      // textContent only: a transcript is whatever the agent printed.
+      btn.textContent = m.text;
+      btn.title = [...m.before, m.text, ...m.after].join('\n');
+      // A fullscreen CLI (Claude) keeps its history inside the app, so the terminal cannot scroll to
+      // it: a hit opens in place, with room to read around it, and can be copied.
+      btn.addEventListener('click', () => void this._toggleSavedHit(id, m, li));
+      li.appendChild(btn);
+      list.appendChild(li);
+    }
+  },
+
+  async _toggleSavedHit(id, m, li) {
+    const open = li.querySelector('.tf-hist-open');
+    if (open) return void open.remove();
+    const data = await this._apiJson(`/api/sessions/${encodeURIComponent(id)}/transcript/lines?line=${m.line}&radius=20`);
+    if (!data || !data.lines || li.querySelector('.tf-hist-open')) return;
+    const box = document.createElement('div');
+    box.className = 'tf-hist-open';
+    const pre = document.createElement('pre');
+    pre.className = 'tf-hist-lines';
+    data.lines.forEach((text, i) => {
+      const row = document.createElement('div');
+      if (data.start + i === m.line) row.className = 'tf-hist-line-hit';
+      // textContent only: a transcript is whatever the agent printed.
+      row.textContent = text || ' ';
+      pre.appendChild(row);
+    });
+    const actions = document.createElement('div');
+    actions.className = 'tf-hist-actions';
+    const mk = (label, title, fn) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'tf-btn';
+      b.textContent = label;
+      b.title = title;
+      b.addEventListener('click', fn);
+      actions.appendChild(b);
+    };
+    mk('Copy', 'Copy these lines', async () => {
+      const ok = await this._copyText(data.lines.join('\n'));
+      this.showToast(ok ? 'Copied' : 'Could not copy', ok ? 'success' : 'error');
+    });
+    // Only worth it for a CLI that leaves its output in the terminal scrollback.
+    mk('Find in terminal', 'Jump to this line in the live terminal, if it is still there', () => {
+      const input = document.querySelector('#terminalFindBar .tf-input');
+      // The saved copy adds its own "You: " / "Claude: " label and the CLI wraps and indents long lines
+      // on screen, so look for the start of the text, shorter each time, not the whole saved line.
+      const body = m.text.replace(/^(You|Claude): /, '').replace(/^\[[^\]]+\] /, '').trim();
+      const found = [60, 30, 15].some((n) => {
+        input.value = body.slice(0, n).trim();
+        return !!input.value && this._terminalFindStep(1);
+      });
+      if (found) return;
+      // No rows above the screen: a fullscreen CLI (Claude) keeps its older text in its own scrollback.
+      const noScrollback = (this.terminal?.buffer.active.baseY || 0) === 0;
+      this.showToast(
+        noScrollback
+          ? 'Not on screen, and this terminal keeps no scrollback. The CLI holds that part itself, so read or copy it here.'
+          : 'That line is no longer in the terminal scrollback',
+        'info'
+      );
+    });
+    box.append(pre, actions);
+    li.appendChild(box);
+  },
+
+  async _clearSavedHistory() {
+    const id = this.activeSessionId;
+    if (!id) return;
+    const res = await this._api(`/api/sessions/${encodeURIComponent(id)}/transcript`, { method: 'DELETE' });
+    this._clearTerminalFindHistory();
+    // The button that had focus was just hidden: put focus back so Esc still closes the bar.
+    document.querySelector('#terminalFindBar .tf-input')?.focus();
+    this.showToast(res && res.ok ? 'Saved history deleted' : 'Could not delete saved history', res && res.ok ? 'success' : 'error');
   },
 });

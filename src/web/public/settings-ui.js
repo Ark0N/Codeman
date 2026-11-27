@@ -541,6 +541,9 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('appSettingsApprovalsInbox').checked = settings.approvalsInboxEnabled === true;
     // Agent inbox snapshot on disk: synced, default OFF.
     document.getElementById('appSettingsAgentInboxPersist').checked = settings.agentInboxPersistEnabled === true;
+    // Terminal find bar: synced, default ON (an absent key means on). Saved history: synced, default OFF.
+    document.getElementById('appSettingsTerminalFind').checked = settings.terminalFindEnabled !== false;
+    document.getElementById('appSettingsTranscriptSearch').checked = settings.transcriptSearchEnabled === true;
     // Experimental agent coordination (inspect/stage/submit routes): synced, default OFF.
     document.getElementById('appSettingsAgentCoordination').checked = settings.agentCoordinationEnabled === true;
     // Custom Model Endpoint Profiles: synced, default OFF. The toggle governs both
@@ -938,6 +941,12 @@ Object.assign(CodemanApp.prototype, {
     this._buildSettingsJumpMenu();
     if (modal.dataset.navReady === '1') return;
     modal.dataset.navReady = '1';
+
+    document.getElementById('appSettingsTranscriptClear')?.addEventListener('click', async () => {
+      if (!confirm('Delete the saved history of every session now? Search in the terminal itself is not affected.')) return;
+      const res = await this._api('/api/transcripts', { method: 'DELETE' });
+      this.showToast(res && res.ok ? 'Saved history deleted' : 'Could not delete saved history', res && res.ok ? 'success' : 'error');
+    });
 
     // Delegated so rail entries injected later (Users) work without rewiring.
     modal.querySelector('.set-rail-items')?.addEventListener('click', e => {
@@ -3151,6 +3160,8 @@ Object.assign(CodemanApp.prototype, {
       configBackupDir: document.getElementById('appSettingsConfigBackupDir').value.trim(),
       ...this._configBackupRetentionPayload(_prev),
       agentInboxPersistEnabled: document.getElementById('appSettingsAgentInboxPersist').checked,
+      terminalFindEnabled: document.getElementById('appSettingsTerminalFind').checked,
+      transcriptSearchEnabled: document.getElementById('appSettingsTranscriptSearch').checked,
       agentCoordinationEnabled: document.getElementById('appSettingsAgentCoordination').checked,
       readMyMindEnabled: document.getElementById('appSettingsReadMyMind').checked,
       ultracodeFloatingWindows: document.getElementById('appSettingsUltracodeFloatingWindows').checked,

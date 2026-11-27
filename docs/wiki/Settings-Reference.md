@@ -133,6 +133,27 @@ memory and a restart empties it; switching it off deletes the file and keeps wha
 memory. Messages expire 12 hours after they were posted either way. See
 [Driving Codeman From An Agent](Driving-Codeman-From-An-Agent#the-codeman-agent-commands).
 
+**Terminal find bar** (under **Cross-session features**, synced, **on** by default) adds a
+find bar over the terminal. Press `Ctrl+Shift+F` (`Cmd+Shift+F` on a Mac) to open it, type to
+search, `Enter` and `Shift+Enter` for the next and previous match, `Esc` to close. It searches
+the text the browser holds in scrollback, for every CLI, and costs no tokens.
+
+**Saved history search** (under **Cross-session features**, synced, **off** by default) also
+saves a plain-text copy of each session to `transcripts/<session id>.txt` in the data dir,
+readable by you only, newest 16 MB per session, refreshed about once a minute while the
+session is live. A local Claude session is saved from its conversation file (what you typed,
+Claude's text answers and one line per tool call; tool results and thinking are left out),
+because Claude's fullscreen view keeps its history inside the app and the browser and tmux
+hold only the screen. Other CLIs are saved from the terminal's scrollback, so a CLI that
+also draws fullscreen is only as deep as its screen. With it on, the find bar gets a **History** button that lists matching
+lines from that copy, so you can search further back than the browser holds; click a line to
+jump to it if it is still in the scrollback. The copy can contain anything the terminal
+showed, secrets included, which is why it is opt-in. A session's copy is deleted when the
+session is closed or deleted (a pinned session that survives a close keeps it, and a detach
+or server restart keeps it), **Clear saved** in the find bar deletes the open session's copy,
+**Delete all saved history now** in Settings deletes every copy, and switching the setting off
+deletes them all. Copies are never read by search or the file viewer.
+
 **Experimental agent coordination** (under **Cross-session features**, synced, off by
 default) turns on the `codeman agent inspect`, `stage` and `submit` commands: bounded,
 paged reads of another session's output, and typing a prompt into a local Codex composer
