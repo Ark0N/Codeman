@@ -5,7 +5,7 @@
 
 ### Thanks
 
-- @HadrienKerlero for the iPhone keyboard fix (#839), nine review rounds of it, and for the report that started it (#830).
+- @HadrienKerlero for two big ones: the iPhone keyboard fix (#839, nine review rounds) and the Reload history action (#815, eighteen rounds), and for the reports that started both (#830, #814).
 - @DodgyBadger for the Files panel that loads one folder at a time (#848), built on the design from #759.
 - @kkalisz for three fixes: the login lockout after a restart (#838), exited agents on tmux 3.8 (#840, five review rounds), and the terminal dashboard's window size (#853).
 - @bearyjd for the installer's multi-user guidance (#847) and the wiki section on keeping reverse-proxy hostnames across restarts (#845), a first contribution.
@@ -21,6 +21,7 @@
 **Fixes.**
 
 - **An open tab after a restart no longer locks everyone out (#838).** A request with no `Authorization` header always gets the login prompt and is no longer counted as a failed login. Before, an open tab's background requests filled the per-IP limit within seconds of a restart, and everyone behind the same tunnel address was locked out for 15 minutes. Wrong passwords and malformed headers are counted as before.
+- **Missing lines above the live screen can be fetched again (#815, fixes #814).** In some agent sessions (seen with OMP) a few lines were missing right above the live output until you scrolled to the very top. The history banner now has a Reload history action, on desktop and on phones, that fetches the whole history again and keeps the text you are reading in place. It can be switched off per device in Settings > Terminal & Input > Scrolling & rendering. Also, while you are scrolled up, new output no longer moves the text you are reading once the scrollback is full.
 - **An agent that exited is seen again on tmux 3.8 (#840).** tmux 3.8 prints no process number for a finished pane, so a session whose agent had exited stayed on the board as idle, and a restart of Codeman dropped its record while its tmux session stayed behind. Such a session is now seen as exited and closed, as on older tmux. Finished sessions that piled up on tmux 3.8 are relaunched once, at the first start after this update. A dead `codeman-*` tmux session that was orphaned before this fix is not found again: remove it with `tmux -L codeman kill-session -t codeman-<id>`.
 - **`codeman tui` takes its window size back (#853).** While a terminal is attached, the window follows whichever client was used last, as plain tmux does. Before, a browser tab that opened or resized the same session pinned the window to the tab's size until you detached and attached again. Now typing, pasting or resizing the terminal fills it again, and typing in the tab, or its Redraw, gives the tab the size. Needs tmux 3.3 or newer.
 - **Closing a dialog you opened with the mouse puts the keyboard back in the terminal (#857).** After App Settings or Session Options was opened with a click and closed again, nothing you typed reached the terminal until you clicked it. A dialog now returns the keyboard to the field you were typing in when you clicked, which with the tile grid or the split open is the pane you were in. The Session Manager and the command palette follow the same rule, and a dialog opened with the keyboard still returns to the control it was opened from.
