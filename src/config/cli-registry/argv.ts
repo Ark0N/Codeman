@@ -71,6 +71,20 @@ function renderToken(value: string, style: QuoteStyle | undefined): string {
   }
 }
 
+/**
+ * The value an enum param resolves to: the caller's when it is a declared one, else the
+ * default. Exported so `applyRootValues()` (root-launch.ts) judges the same value the
+ * renderer is about to emit, rather than restating this rule.
+ */
+export function resolveEnumValue(
+  spec: Extract<ParamSpec, { type: 'enum' }>,
+  raw: string | boolean | undefined
+): string | undefined {
+  if (raw === undefined) return spec.default;
+  const s = String(raw);
+  return spec.values.includes(s) ? s : spec.default;
+}
+
 /** Resolve one parameter to a plain string, or undefined if it is unset / invalid. */
 function resolveParam(
   name: string,
@@ -82,13 +96,10 @@ function resolveParam(
   if (spec.type === 'engine') return engineValues[spec.source];
 
   const raw = params[name];
-  if (raw === undefined) return spec.type === 'enum' ? spec.default : undefined;
+  if (spec.type === 'enum') return resolveEnumValue(spec, raw);
+  if (raw === undefined) return undefined;
 
   if (spec.type === 'bool') return typeof raw === 'boolean' ? String(raw) : undefined;
-  if (spec.type === 'enum') {
-    const s = String(raw);
-    return spec.values.includes(s) ? s : spec.default;
-  }
   // token
   const s = String(raw);
   return matchesPattern(spec.pattern, s) ? s : undefined;

@@ -21,6 +21,7 @@ import { getDiscordStartupHint } from './discord-bridge.js';
 import type { CliEntry } from './config/cli-registry/types.js';
 import { renderLaunch, type EngineValues, type ParamValues } from './config/cli-registry/argv.js';
 import { matchesPattern } from './config/cli-registry/patterns.js';
+import { applyRootValues, type RootValueChange } from './config/cli-registry/root-launch.js';
 import { buildAdvisorSettings, buildEffortCliArgs, sanitizeCliSessionName } from './session-cli-builder.js';
 import { compareVersions } from './utils/dependency-checker.js';
 import { resolveSessionCliVersion } from './utils/cli-resolver.js';
@@ -77,6 +78,16 @@ export interface SpawnBridgeOptions {
    * passed) by TmuxManager._resolveIdleCompactionOptOut, which records it on the mux record.
    */
   idleCompactionOff?: boolean;
+  /**
+   * True when this command will run as a child of a server process whose uid is 0: a LOCAL
+   * launch under a root server. Params that declare a `rootValue` then take it (see
+   * config/cli-registry/root-launch.ts). Decided by the caller, never here: this bridge also
+   * renders commands that run under another account (the remote omp relaunch), where the
+   * server's uid means nothing. Absent or false leaves the command byte-identical.
+   */
+  runsAsServerRoot?: boolean;
+  /** Told which params took their `rootValue`, so the launch site can log it. Never called with none. */
+  onRootValue?: (changes: RootValueChange[]) => void;
 }
 
 /**
@@ -209,7 +220,14 @@ function gateVersion(entry: CliEntry, explicit: string | null | undefined): stri
 export function buildSpawnCommandFromRegistry(entry: CliEntry, options: SpawnBridgeOptions): string | undefined {
   if (entry.kind === 'shell' || entry.launch.variants.length === 0) return undefined;
 
-  const params = buildParamsFromLegacyConfig(entry, legacyConfigFor(entry, options));
+  // A value the CLI refuses under root gives way to its declared `rootValue` before the engine
+  // sees it. Not root: `applyRootValues` hands back the very object it was given.
+  const { params, changes: rootChanges } = applyRootValues(
+    entry.launch,
+    buildParamsFromLegacyConfig(entry, legacyConfigFor(entry, options)),
+    options.runsAsServerRoot === true
+  );
+  if (rootChanges.length > 0) options.onRootValue?.(rootChanges);
 
   const engineValues: EngineValues = {
     sessionId: options.sessionId,
