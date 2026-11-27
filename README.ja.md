@@ -46,15 +46,15 @@ codeman web
 # Open http://localhost:3000 and start your first session
 ```
 
-インストーラーはシステムを変更する前に毎回確認を求め、同じ1行を再実行するとその場で更新されます。詳細は[クイックスタート - インストール](#quick-start---installation)をご覧ください。
+インストーラーはシステムを変更する前に毎回確認を求め、同じ1行を再実行するとその場で更新されます。詳細は[クイックスタート - インストール](#クイックスタート---インストール)をご覧ください。
 
-Macではターミナルを使わずに済みます。[Codeman.dmgをダウンロード](https://github.com/Ark0N/Codeman/releases/latest/download/Codeman.dmg)すると、アプリがCodemanをインストールするか、すでに実行中のものを開くか、別のマシン上のCodemanに接続します。詳しくは[Macの場合:Codemanアプリ](#on-a-mac-the-codeman-app)をご覧ください。
+Macではターミナルを使わずに済みます。[Codeman.dmgをダウンロード](https://github.com/Ark0N/Codeman/releases/latest/download/Codeman.dmg)すると、アプリがCodemanをインストールするか、すでに実行中のものを開くか、別のマシン上のCodemanに接続します。詳しくは[Macの場合:Codemanアプリ](#macの場合codemanアプリ)をご覧ください。
 
-- **ひとつのダッシュボードで11のCLI** - セッションごとに[Claude Code、OpenCode、Codex、Antigravity、Gemini、Pi、Grok、DeepSeek、OMP、GitHub Copilot、jcode](#more-features)(さらに素のシェル)を、ローカル、[Docker内](#isolated-docker-sessions)、または[SSH経由](#remote-ssh-sessions)で実行でき、その横に独自のダッシュボードを[Webタブ](#more-features)として開けます
-- **本当にスマホに優しい** - 即時ローカルエコー、QRログイン、スワイプナビゲーション、プッシュ通知を備えた[タッチ最適化ターミナル](#mobile-optimized-web-ui)
+- **ひとつのダッシュボードで11のCLI** - セッションごとに[Claude Code、OpenCode、Codex、Antigravity、Gemini、Pi、Grok、DeepSeek、OMP、GitHub Copilot、jcode](#その他の機能)(さらに素のシェル)を、ローカル、[Docker内](#隔離されたdockerセッション)、または[SSH経由](#リモートsshセッション)で実行でき、その横に独自のダッシュボードを[Webタブ](#その他の機能)として開けます
+- **本当にスマホに優しい** - 即時ローカルエコー、QRログイン、スワイプナビゲーション、プッシュ通知を備えた[タッチ最適化ターミナル](#モバイル最適化されたweb-ui)
 - **寝ている間も動き続ける** - [アイドル検出+再起動サイクル](#respawn-controller)と、サブスクリプションの制限リセット時の自動再開により、24時間以上の無人実行が可能です
-- **エージェントの思考が見える** - すべてのサブエージェントとチームメイトの[ライブフローティングウィンドウ](#live-agent-visualization)と、リアルタイムのトランスクリプト
-- **エージェント自身も操作できる** - [codemanスキル](#the-agent-skill-start-here)(すべてのエージェントCLI向け)、[`codeman agent`](#codeman-agent--session-to-session-verbs-in-every-cli-mode)、そして[MCPサーバー](#mcp-server-codeman-mcp-drive-codeman-from-any-mcp-client)により、あるエージェントが任意のCLIでワーカーを起動し、プロンプトを送り、完了を待ち、回答を収集できます
+- **エージェントの思考が見える** - すべてのサブエージェントとチームメイトの[ライブフローティングウィンドウ](#ライブエージェント可視化)と、リアルタイムのトランスクリプト
+- **エージェント自身も操作できる** - [codemanスキル](#エージェントスキルここから始めましょう)(すべてのエージェントCLI向け)、[`codeman agent`](#codeman-agent--すべてのcliモードで使えるセッション間操作の動詞)、そして[MCPサーバー](#mcpサーバーcodeman-mcp任意のmcpクライアントからcodemanを操作する)により、あるエージェントが任意のCLIでワーカーを起動し、プロンプトを送り、完了を待ち、回答を収集できます
 - **何も失われない** - 再起動やネットワーク切断をまたいだtmuxの永続化、exactly-onceの入力配信、スクロールバック全体のリプレイ
 - **セルフホストでプライベート** - デフォルトでループバックのみ、MITライセンス、テレメトリなし、すべてあなたのマシン上で動作します
 
@@ -93,7 +93,7 @@ codeman users add alice --admin      # create the first admin account
 codeman web --multiuser              # named logins + per-user case spaces
 ```
 
-詳細は下記の[マルチユーザーモード](#multi-user-mode-opt-in)をご覧ください。
+詳細は下記の[マルチユーザーモード](#マルチユーザーモードオプトイン)をご覧ください。
 
 **Docker Composeが好みですか?** リポジトリをクローンして、スクリプトを1つ実行します(Linux、Compose v2プラグイン付きのDocker):
 
@@ -329,9 +329,9 @@ codeman service install           # systemd/launchd service: comes back after re
 ### 7. 運用と保守
 
 - **App Settings** — モデル、effort、権限の起動モード、テーマ/スキン、ターミナルのフォントファミリーとウェイト、入場アニメーションとタイルアニメーション(専用の**Animations**セクション)、通知(トーストとブラウザ通知の表示時間を調整可能)、表示の切り替え、CLIごとのオプション、同期されるカスタム表示名、デバイスごとの英語/簡体字中国語のUI言語を設定できます。**Apply**を押すとSettingsを閉じずに保存します。
-- **バックグラウンドで実行** — `codeman web -d`はシェルから切り離して実行します(`--status`、`--stop`)。`codeman service install`は、再起動後も維持されるsystemdユーザーユニット/macOS LaunchAgentとして登録します。どちらも成功を報告する前にサーバーが実際に応答することを確認し、1つのデータディレクトリで2つ目のサーバーを起動することを拒否します。[バックグラウンドで実行し続ける](#quick-start---installation)を参照してください。
+- **バックグラウンドで実行** — `codeman web -d`はシェルから切り離して実行します(`--status`、`--stop`)。`codeman service install`は、再起動後も維持されるsystemdユーザーユニット/macOS LaunchAgentとして登録します。どちらも成功を報告する前にサーバーが実際に応答することを確認し、1つのデータディレクトリで2つ目のサーバーを起動することを拒否します。[バックグラウンドで実行し続ける](#クイックスタート---インストール)を参照してください。
 - **セルフアップデート** — git cloneでのインストールは、**App Settings → System → Updates**からその場で更新できます。
-- **独自の変更をデプロイ** — [開発](#development)を参照してください。
+- **独自の変更をデプロイ** — [開発](#開発)を参照してください。
 
 > ⚠️ **安全上の注意:** Codemanが管理するセッションの_中で_作業している場合(`echo $CODEMAN_MUX` → `1`)、`tmux kill-session`/`pkill claude`を直接実行しないでください。Web UIまたは`./scripts/tmux-manager.sh`を使用してください。
 
@@ -353,7 +353,7 @@ xterm.js内のピクセルパーフェクトなDOMオーバーレイが、キー
 - **再接続後も維持** — 未送信の入力はlocalStorageによりページを再読み込みしても保持されます
 - **デフォルトで有効** — デスクトップとモバイルの両方で、アイドル中でもビジー中のセッションでも動作します
 
-> スタンドアロンのライブラリとして切り出されています: [`xterm-zerolag-input`](https://www.npmjs.com/package/xterm-zerolag-input) — [公開パッケージ](#published-packages)を参照してください。
+> スタンドアロンのライブラリとして切り出されています: [`xterm-zerolag-input`](https://www.npmjs.com/package/xterm-zerolag-input) — [公開パッケージ](#公開パッケージ)を参照してください。
 
 ---
 
@@ -428,7 +428,7 @@ WATCHING → IDLE DETECTED → SEND UPDATE → /clear → /init → CONTINUE →
 - **タイルアニメーション** _(オプトイン)_: **App Settings → Animations → Tile Animations**で、グリッドを演出付きで開けます。**CRT**(上部のGIFのように、各タイルが光る線として点灯します)、**Fly from tab**、**Deal**、**Beam down**、**Cascade**、**Pop**、**Soft**から選べます。視差効果を減らす設定(reduced motion)では何も動きません。
 - **メインターミナルと同じようにスクロール**: マウスホイールでタイル内のフルスクリーンのClaude会話をスクロールでき、Codexのタイルではトランスクリプトをページ送りし、`Shift+wheel`でタイルのローカル履歴をスクロールします。
 - **Detach Tiles** _(ベータ、オプトイン)_: **App Settings → Appearance → Detach Tiles**をオンにすると、タイルのヘッダーをブラウザの外にドラッグして独立したウィンドウとして切り出せます。別のCodemanウィンドウのタイル上にドロップすると、そちらに移動します。
-- **ハンズフリー**: [ジェスチャーオーバーレイ](#more-features)をオンにすると、タイルをピンチして別のタイルの上に運ぶと入れ替え、空のセルに運ぶと移動し、タブをグリッドに運ぶと追加できます。
+- **ハンズフリー**: [ジェスチャーオーバーレイ](#その他の機能)をオンにすると、タイルをピンチして別のタイルの上に運ぶと入れ替え、空のセルに運ぶと移動し、タブをグリッドに運ぶと追加できます。
 
 ### 永続的なセッション
 
@@ -499,7 +499,7 @@ PTY Output → 16ms Server Batch → DEC 2026 Wrap → SSE → Client rAF → xt
 - **手動で開始したtmuxセッションを開く**: Codemanの外で開始したtmuxセッションはホーム画面に表示されます。このマシン上のものは自動的に、DockerケースのコンテナやSSHホストに保存したものはスキャンしたときに表示されます。ワンクリックでタブとして開けます。タブを閉じてもデタッチするだけで、Codemanは自分が開始していないエージェントを再起動したり再生成したりしません。[Opened outside Codeman](docs/wiki/The-Dashboard.md#opened-outside-codeman)を参照してください。
 - **マルチCLI** — セッションごとに**Claude Code**、**OpenCode**、**Codex**、**Antigravity**、**Gemini**、**Pi**、**Grok**、**DeepSeek Harness**、**OMP**、**GitHub Copilot CLI**、**jcode**を実行できます。環境変数のプレフィックスは自動で振り分けられます(`CLAUDE_CODE_*`、`OPENCODE_*`、`CODEX_*`、`ANTIGRAVITY_*`、`GEMINI_*`/`GOOGLE_*`、`PI_*`、`GROK_*`/`XAI_*`、`DSH_*`/`DEEPSEEK_*`、`OMP_*`、`COPILOT_*`)。[`docs/opencode-integration.md`](docs/opencode-integration.md)、[`docs/pi-integration.md`](docs/pi-integration.md)、[`docs/grok-integration.md`](docs/grok-integration.md)、[`docs/deepseek-integration.md`](docs/deepseek-integration.md)、[`docs/omp-integration.md`](docs/omp-integration.md)、[`docs/copilot-integration.md`](docs/copilot-integration.md)、[`docs/jcode-integration.md`](docs/jcode-integration.md)を参照してください(jcodeは環境変数のプレフィックスを持ちません。そのツールは1つの共有デーモン内で実行されます)
 - **カスタムモデルエンドポイント** _(1.29.0の新機能、現時点ではHTTP APIのみ)_ — セッションのCLIを、ネイティブのバックエンドではなく任意のOpenAI互換エンドポイントに向けられます。ローカルのllama.cpp、llama-swap、Ollama、vLLMのマシンや、Azure AI FoundryやOpenRouterのようなクラウドゲートウェイが使えます。エンドポイントを一度保存し(`POST /api/model-endpoints`、モデルは`/v1/models`から検出されます)、セッションに適用すると(`POST /api/sessions/:id/custom-model`)、CLIがそのエンドポイントでその場で再起動します。Claude、OpenCode、Pi、Grok、OMPで実際に動作を確認済みです。Codex、Gemini、DeepSeekには文書化された制約があり、Antigravityには仕組みがありません。ツールバーのピッカーは今後対応予定です。[`docs/custom-model-endpoints.md`](docs/custom-model-endpoints.md)を参照してください
-- **このMac上のモデル** _(実験的機能、1.50.0の新機能)_: Apple siliconを搭載したMacでは、ウェルカム画面の**Run a local model**が、どのコーディングモデルが適合するかを表示し、ランタイムとコーディングエージェントとともにインストールして、そのモデルでセッションを開始します。アカウントもAPIキーも不要で、そのセッションのプロンプトとファイルはクラウドプロバイダーではなくこのMac上のモデルに送られます。さらにクラウドとローカルを組み合わせることもできます。[codemanスキル](#the-agent-skill-start-here)を通じて、Claude Codeセッションがそのモデルに作業を渡し(`spawn_worker <name> local`、`sendmark`)、回答を読み戻します。これにより、Claudeがクラウドで計画とレビューを行い、Macが要約、初稿、手元に置いておくべきファイルといった大部分の作業を担います。[`docs/local-models.md`](docs/local-models.md)を参照してください
+- **このMac上のモデル** _(実験的機能、1.50.0の新機能)_: Apple siliconを搭載したMacでは、ウェルカム画面の**Run a local model**が、どのコーディングモデルが適合するかを表示し、ランタイムとコーディングエージェントとともにインストールして、そのモデルでセッションを開始します。アカウントもAPIキーも不要で、そのセッションのプロンプトとファイルはクラウドプロバイダーではなくこのMac上のモデルに送られます。さらにクラウドとローカルを組み合わせることもできます。[codemanスキル](#エージェントスキルここから始めましょう)を通じて、Claude Codeセッションがそのモデルに作業を渡し(`spawn_worker <name> local`、`sendmark`)、回答を読み戻します。これにより、Claudeがクラウドで計画とレビューを行い、Macが要約、初稿、手元に置いておくべきファイルといった大部分の作業を担います。[`docs/local-models.md`](docs/local-models.md)を参照してください
 - **Webタブ** — Grafana、Uptime Kuma、Vite開発サーバー、または任意のダッシュボードのURLを、セッションと並べてタブとして開けます(Runドロップダウン → **Web / URL** → **Add URL**)。ダッシュボードはCodeman自身のオリジンを経由してプロキシされるため、`http://`のターゲットもHTTPS経由のスマートフォンやトンネル経由で動作し、シングルページアプリは独自のパスでルーティングされ、リロードしたフレームは自動で回復します。エージェントが出力した`localhost`のリンクは、自動的にWebタブとして開きます。[`docs/web-tabs.md`](docs/web-tabs.md)を参照してください
 - **Dockerセッション** — 隔離・強化されたコンテナ内でケースを実行します。**Create New**のチェックボックス1つで、適切なデフォルト設定のコンテナを起動し、その中でエージェントを開始します。複数のセッションがケースごとの1つのコンテナを共有でき、すでに稼働しているコンテナにケースをアタッチすることもできます。コンテナとそのワークスペースをポータブルな`.tar.gz`にエクスポートして、別のマシンに移すこともできます。[`docs/docker-cases.md`](docs/docker-cases.md)を参照してください
 - **リモートSSHセッション** — ケースを別のマシンに向け、永続的なリモートtmux内でエージェントをそこで実行します。SSHの切断に耐え、自動で再接続し、ホスト上ですでに実行中のセッションを検出してアタッチできます。ファイルのプレビューとダウンロードも同じssh接続を経由します。[`docs/remote-sessions.md`](docs/remote-sessions.md)を参照してください
@@ -519,7 +519,7 @@ PTY Output → 16ms Server Batch → DEC 2026 Wrap → SSE → Client rAF → xt
 - **ヘッダーのプラン使用量** — Claudeのサブスクリプション使用量(5時間枠と週間枠)をライブで表示します。これはCodemanが起動時に`claude`に渡すstatuslineエクスポーターから取得され、あなたの設定ファイルには書き込まれません。加えて、Codex自身のapp-serverから取得するCodexの制限と、GitHub Copilotの月間プレミアムリクエストのクォータも表示します(サーバーがCopilot自身のサインイントークンを使って10分ごとに`api.github.com`に問い合わせます。Copilot CLIがインストールされサインインしている間はデフォルトでオンで、Plan Usage Limitsをオフにすると停止します)。デバイスごとの設定で、デスクトップではオン、スマートフォンではオフです
 - **プロンプトキャッシュの表示**: 各Claudeセッションは、プロンプトキャッシュがウォーム(`cache:until HH:MM`)かコールドかを、フッター(独自のstatuslineがない場合)とSession Options → Respawnに表示し、再キャッシュのコストとコンパクション後の注記も示します。表示のみの機能で、再起動後も保持されます
 - **好みに合わせたセッション一覧** — ヘッダーストリップ、フィルターボックス付きの左サイドバー、または作成日時と状態のスタンプを含む詳細な行をアクティビティ順に並べる縦型レールから選べます。スマートフォンのホーム画面とデスクトップのホームレールも同じ順序を使います。レールでは、**Search sessions**がすべてのグループを横断して一致するタブに一覧を絞り込み、アラートのあるタブは名前が一致しなくても表示されたままになります。名前付きの**タブグループ**は折りたたみ、並べ替え、ドラッグの受け入れができます。グループのメニューには**New session**があり、エージェントが生成したワーカーは親のすぐ後ろに配置されます(**Spawned tabs follow their parent**はデフォルトでオフで、親と一緒に移動させ続けます)。**Add to Focus**は任意のタブへのショートカットをレール上部のセクションにピン留めし、**CLI Logos on Tabs**はデバイスごとにオフにできます
-- **ターミナルの外観** — 7種類のスキン(うち4種類はライト)、デバイスごとのフォントファミリーとウェイト(同梱のJetBrains Monoはウェイト100〜800をカバー)、そしてタブ、エージェントウィンドウ、ターミナルペイン、接続線、[タイルグリッドのタイル](#tile-grid)のオプトインのアニメーションがあり、すべてApp Settings → Animationsで設定できます(試せるラボ付き)
+- **ターミナルの外観** — 7種類のスキン(うち4種類はライト)、デバイスごとのフォントファミリーとウェイト(同梱のJetBrains Monoはウェイト100〜800をカバー)、そしてタブ、エージェントウィンドウ、ターミナルペイン、接続線、[タイルグリッドのタイル](#タイルグリッド)のオプトインのアニメーションがあり、すべてApp Settings → Animationsで設定できます(試せるラボ付き)
 - **OS通知とホスト名を考慮したタイトル** — デスクトップのアラートとタブのタイトルには`codeman:<host>`というプレフィックスが付くため、複数ホストの構成でも区別がつきます
 
 ---
@@ -732,7 +732,7 @@ QR表示はSSE経由で60秒ごとに自動更新され、SVGはイベントペ�
 - **固定・検証済みの依存関係** — セキュリティ上重要な推移的依存関係は、npmの`overrides`によってパッチ適用済みのバージョンに強制されます。ロックファイルの整合性はすべてのコミット/PRでチェックされます(すべてのエントリが`sha512`ハッシュ付きで`registry.npmjs.org`に解決されること)。公開アセットはCIでNULバイトのスキャンと`node --check`による検証が行われます
 - **マルチインスタンスの分離** — `CODEMAN_INSTANCE`はtmuxソケット(`-L codeman-<name>`)とデータディレクトリ(`~/.codeman-<name>`)の両方をスコープするため、2つのインスタンスが互いのライブセッションにアタッチすることはありません
 
-> モバイルのログインには使い捨ての60秒QRトークンを使用します。設計の全容については上記の[QRコード認証](#qr-code-authentication)を参照してください(USENIX Security 2025のQRログイン研究で指摘された6つの欠陥すべてに対処しています)。
+> モバイルのログインには使い捨ての60秒QRトークンを使用します。設計の全容については上記の[QRコード認証](#qrコード認証)を参照してください(USENIX Security 2025のQRログイン研究で指摘された6つの欠陥すべてに対処しています)。
 
 ---
 
@@ -896,7 +896,7 @@ CLIがCodeman管理下のセッションで実行されている場合、以下�
 
 ### 守るべきルール（POSTする前に読んでください）
 
-1. **入力は`\r`で終わる必要があります。** プログラムからの入力はリテラルテキストとして送信され、Enterは**入力にキャリッジリターンが含まれている場合にのみ**発火します：`{"input":"run tests\r"}`。`\r`がないと、テキストはセッションのプロンプト上に送信されないまま残ります（そして組み合わせた`wait`は、開始されなかったターンに対してタイムアウトいっぱいまで待ち続けます）。`useMux`を使うと埋め込まれた改行は保持され、各行は1つのペーストとして入力されるため、`"echo A\necho B\r"`はシェルで両方のコマンドを実行します。取り残されたEnterを押し直すチェックは複数行のペーストを確実に認識できないため、長い複数行の内容はファイルに書き、エージェントにそれを読むよう指示してください。
+1. **入力は`\r`で終わる必要があります。** プログラムからの入力はリテラルテキストとして送信され、Enterは**入力にキャリッジリターンが含まれている場合にのみ**発火します：`{"input":"run tests\r"}`。`\r`がないと、テキストはセッションのプロンプト上に送信されないまま残ります（そして組み合わせた`wait`は、開始されなかったターンに対してタイムアウトいっぱいまで待ち続けます）。`useMux`を使うと埋め込まれた改行は保持され、すべての行が1回のペーストとしてまとめて入力されるため、`"echo A\necho B\r"`はシェルで両方のコマンドを実行します。取り残されたEnterを押し直すチェックは複数行のペーストを確実に認識できないため、長い複数行の内容はファイルに書き、エージェントにそれを読むよう指示してください。
 2. **入力を冪等にしてください。** `POST …/input`には安定した`clientId`と、セッションごとに単調増加する`seq`を含めてください。サーバーが重複を排除するため、接続が切れた後の再試行でプロンプトが二重に配信されることはありません。
 3. **認証。** `CODEMAN_PASSWORD`が設定されている場合は、HTTP Basic認証（ユーザー`admin`または`CODEMAN_USERNAME`）か`codeman_session`クッキーを送信してください。デフォルトのループバックインストールではパスワードは不要です。`Origin`ヘッダーがない場合は許可されるため、素の`curl`で動作します。クロスサイトのブラウザオリジンは拒否されます（CSRFガード）。⚠️ `401`はJSONエンベロープ**ではなく**、素の文字列`Unauthorized`を返すため、`jq`にパイプすると失敗内容が表示されずにパースエラーになります。パースする前にステータスを確認してください。
 4. **レスポンスエンベロープ。** ほとんどのエンドポイントは`{ "success": true, "data": … }`を返します（エラー時：`{ "success": false, "error", "errorCode" }`）。一部のレガシーなGETは素のボディを返すため、**両方を処理してください**（`body.data ?? body`）。

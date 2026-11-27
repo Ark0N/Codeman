@@ -5,7 +5,7 @@
  *
  * Port: N/A (no server).
  */
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -125,6 +125,12 @@ describe('publishWithReadmeAside', () => {
 
   it('no aside name is one npm treats as a readme', () => {
     for (const name of HIDDEN_READMES) expect(/^readme/i.test(asideName(name))).toBe(false);
+  });
+
+  it('every translated root README is moved aside for the publish', () => {
+    const root = join(import.meta.dirname, '..');
+    const translated = readdirSync(root).filter((name) => /^readme\./i.test(name) && name !== 'README.md');
+    expect([...translated].sort()).toEqual([...HIDDEN_READMES].sort());
   });
 
   it('package.json routes npm run release through the wrapper', () => {
