@@ -81,6 +81,8 @@ import {
 } from './session-cli-registry-bridge.js';
 import { keepWarmOn } from './prompt-cache-keepwarm.js';
 import type { CliEntry } from './config/cli-registry/types.js';
+import { describeRootValueChanges, type RootValueChange } from './config/cli-registry/root-launch.js';
+import { serverRunsAsRoot } from './utils/server-uid.js';
 import {
   resolveStatusLineCliCommand,
   readPlanUsageTelemetryEnabled,
@@ -1258,6 +1260,44 @@ export function decideIdleCompactionOptOut(o: {
   );
 }
 
+/** What `serverRootSpawnOptions()` adds to a `buildSpawnCommand` call; empty for every launch that is not root. */
+export interface ServerRootSpawnOptions {
+  runsAsServerRoot?: true;
+  onRootValue?: (changes: RootValueChange[]) => void;
+}
+
+/**
+ * The `buildSpawnCommand` options for a launch under a Codeman server that itself runs as
+ * root (uid 0), which is common on a VPS and in an LXC container.
+ *
+ * A CLI started locally is the server's child and runs as root too, and Claude Code exits
+ * on `--dangerously-skip-permissions` there, so its default launch was a dead pane. With
+ * these options a param that declares a `rootValue` takes it (registry data, see
+ * config/cli-registry/root-launch.ts), and the swap is logged once per launch.
+ *
+ * ⚠️ The ONE place the tmux launch path asks for the uid. `createSession` and `respawnPane`
+ * both spread the result into `buildSpawnCommand`, and every local tmux launch (new
+ * session, resume, dead-pane respawn, `restartCli()`, cron, quick-start, reboot restore) is
+ * one of those two calls. The two launches with no tmux (direct-PTY fallback, one-shot) get
+ * the same registry data in `buildPermissionArgs()` (session-cli-builder.ts).
+ * ⚠️ `launchedElsewhere` (remote, Docker, adopted) returns nothing: that CLI runs under
+ * another account, and the local command built for it is never used. Docker answers the
+ * same refusal with `overlays.docker.rootCommand`, by the CONTAINER's uid.
+ * ⚠️ Not root returns `{}`, so the command line stays byte-identical.
+ */
+export function serverRootSpawnOptions(o: {
+  mode: SessionMode;
+  sessionId: string;
+  launchedElsewhere: boolean;
+}): ServerRootSpawnOptions {
+  if (o.launchedElsewhere || !serverRunsAsRoot()) return {};
+  const what = `${getCli(o.mode)?.label ?? o.mode} session ${o.sessionId.slice(0, 8)}`;
+  return {
+    runsAsServerRoot: true,
+    onRootValue: (changes) => console.warn(`[TmuxManager] ${describeRootValueChanges(what, changes)}`),
+  };
+}
+
 export function buildSpawnCommand(options: {
   mode: SessionMode;
   sessionId: string;
@@ -1292,6 +1332,14 @@ export function buildSpawnCommand(options: {
    * gate measuring the RIGHT binary, the local one.
    */
   claudeCliVersion?: string | null;
+  /**
+   * The command will run as a child of a server process whose uid is 0, so a param declaring
+   * a `rootValue` takes it. Only ever supplied through `serverRootSpawnOptions()`, which the
+   * two local launch sites spread in; absent, the command is byte-identical.
+   */
+  runsAsServerRoot?: boolean;
+  /** Told which params took their `rootValue` (see `serverRootSpawnOptions`). */
+  onRootValue?: (changes: RootValueChange[]) => void;
 }): string {
   // Every CLI's command shape is registry DATA, rendered by the argv engine — see
   // config/cli-registry/argv.ts for why config can never contain shell text. A `shell`-kind
@@ -2731,6 +2779,8 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       statusLineCommand,
       idleCompactionOff,
       sessionName: cliName,
+      // A local launch under a server that runs as root: see serverRootSpawnOptions.
+      ...serverRootSpawnOptions({ mode, sessionId, launchedElsewhere: !!(remote || docker || adopt) }),
     });
 
     const config = niceConfig || DEFAULT_NICE_CONFIG;
@@ -3055,6 +3105,8 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       statusLineCommand,
       idleCompactionOff,
       sessionName: cliName,
+      // Same as createSession: a respawn under a root server must not bring the refused value back.
+      ...serverRootSpawnOptions({ mode, sessionId, launchedElsewhere: !!(remote || docker || adopt) }),
     });
     const config = niceConfig || DEFAULT_NICE_CONFIG;
     const cmd = wrapWithNice(baseCmd, config);

@@ -14,12 +14,50 @@ import { getAugmentedPath } from './utils/index.js';
 import { compareVersions } from './utils/dependency-checker.js';
 import { dataPath } from './config/instance.js';
 import { getCli } from './config/cli-registry/registry.js';
+import { applyRootValues, describeRootValueChanges } from './config/cli-registry/root-launch.js';
+import { serverRunsAsRoot } from './utils/server-uid.js';
+
+/** Narrow a registry value back to the wire type; anything else keeps the caller's own mode. */
+function isClaudeMode(value: unknown): value is ClaudeMode {
+  return value === 'dangerously-skip-permissions' || value === 'auto' || value === 'normal' || value === 'allowedTools';
+}
+
+/**
+ * The permission mode a claude process started DIRECTLY by this server gets (the direct-PTY
+ * fallback and the one-shot `-p` run, both children of the server process).
+ *
+ * Under a server that runs as root the bypass mode gives way to the registry's declared
+ * `rootValue` (`normal`): Claude Code exits on `--dangerously-skip-permissions` under uid 0.
+ * The tmux path applies the same registry data through `serverRootSpawnOptions()`; this is
+ * its counterpart for the two launches that never reach the argv engine. Pure: the caller
+ * says whether the server is root, and `onChange` gets the log line when the mode moved.
+ */
+export function directLaunchClaudeMode(
+  claudeMode: ClaudeMode,
+  runsAsRoot: boolean,
+  onChange?: (line: string) => void
+): ClaudeMode {
+  const launch = getCli('claude')?.launch;
+  if (!launch) return claudeMode;
+  const { params, changes } = applyRootValues(launch, { claudeMode }, runsAsRoot);
+  const effective = params.claudeMode;
+  if (changes.length === 0 || !isClaudeMode(effective)) return claudeMode;
+  onChange?.(describeRootValueChanges('A directly started Claude Code process', changes));
+  return effective;
+}
 
 /**
  * Build Claude CLI permission flags based on the configured mode.
  * Returns an array of args to pass to the CLI.
+ *
+ * ⚠️ Both direct launches (`buildInteractiveArgs`, `buildPromptArgs`) get their flags here,
+ * so this is where the root downgrade is applied for them: see `directLaunchClaudeMode`.
+ * The uid is asked at call time (`serverRunsAsRoot()`), never cached.
  */
-function buildPermissionArgs(claudeMode: ClaudeMode, allowedTools?: string): string[] {
+function buildPermissionArgs(configuredMode: ClaudeMode, allowedTools?: string): string[] {
+  const claudeMode = directLaunchClaudeMode(configuredMode, serverRunsAsRoot(), (line) =>
+    console.warn(`[Session] ${line}`)
+  );
   switch (claudeMode) {
     case 'dangerously-skip-permissions':
       return ['--dangerously-skip-permissions'];

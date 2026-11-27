@@ -131,6 +131,17 @@ That prompt comes from Claude Code, not Codeman. Codeman's default is to start w
 permission prompts skipped, which is what the security model is built around. If you would
 rather it prompted, change **App Settings → Agents & CLIs → Claude → Startup Mode**.
 
+### Claude asks for permission although Startup Mode skips the prompts (Codeman runs as root)
+
+When the Codeman server itself runs as root (common on a VPS and in an LXC container),
+Claude sessions start without the permission bypass and ask before they act. Claude Code
+refuses `--dangerously-skip-permissions` under root and exits, which on older versions left
+every Claude tab with a dead pane (`--dangerously-skip-permissions cannot be used with
+root/sudo privileges for security reasons`). Codeman now leaves the flag out there and writes
+one line to the server log for each such launch; the other startup modes are passed through
+unchanged. Run Codeman as a normal user to get the default back. A session in a Docker case
+or on a remote host runs under the account on that side, so this does not apply to it.
+
 ### My settings were reset, or a CLI I enabled is gone
 
 Something rewrote a file in `~/.codeman/` (a hand edit, a restart that loaded a bad file, a

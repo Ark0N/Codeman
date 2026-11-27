@@ -460,6 +460,41 @@ describe('cross-field integrity', () => {
     expect(CliEntrySchema.safeParse(wrong).success).toBe(false);
   });
 
+  it('holds a rootValue to the values its param declares', () => {
+    // `rootValue` swaps one declared value for another when the server runs as root (claude's
+    // bypass mode, which Claude Code refuses under uid 0). A key or a replacement outside
+    // `values` is a swap that can never apply, or one that launches with a value no arg tests.
+    const withRootValue = (rootValue: Record<string, string>): Record<string, unknown> => {
+      const entry = baseEntry('claude');
+      const params = (entry.launch as { params: Record<string, Record<string, unknown>> }).params;
+      params.claudeMode.rootValue = rootValue;
+      return entry;
+    };
+    expect(CliEntrySchema.safeParse(withRootValue({ 'dangerously-skip-permissions': 'normal' })).success).toBe(true);
+    expect(CliEntrySchema.safeParse(withRootValue({})).success).toBe(true);
+    expect(CliEntrySchema.safeParse(withRootValue({ 'no-such-mode': 'normal' })).success, 'unknown key').toBe(false);
+    expect(
+      CliEntrySchema.safeParse(withRootValue({ 'dangerously-skip-permissions': 'no-such-mode' })).success,
+      'unknown replacement'
+    ).toBe(false);
+    expect(
+      CliEntrySchema.safeParse(withRootValue({ 'dangerously-skip-permissions': 'dangerously-skip-permissions' }))
+        .success,
+      'a value replaced by itself'
+    ).toBe(false);
+    expect(
+      CliEntrySchema.safeParse(withRootValue({ 'dangerously-skip-permissions': 'auto', auto: 'normal' })).success,
+      'a replacement that is replaced again'
+    ).toBe(false);
+  });
+
+  it('takes a rootValue on an enum param only', () => {
+    expectRejected((e) => {
+      const params = (e.launch as { params: Record<string, Record<string, unknown>> }).params;
+      params.rootToggle = { type: 'bool', rootValue: { true: 'false' } };
+    }, 'the strict bool spec has no rootValue key');
+  });
+
   it('rejects a profile name this build does not implement', () => {
     expectRejected((e) => {
       (e.discovery as Record<string, unknown>).launcherProfile = 'no-such-profile';

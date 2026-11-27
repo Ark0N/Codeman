@@ -142,6 +142,13 @@ const CLAUDE: CliEntry = {
         type: 'enum',
         values: ['dangerously-skip-permissions', 'auto', 'normal', 'allowedTools'],
         default: 'dangerously-skip-permissions',
+        // ⚠️ Claude Code REFUSES the bypass flag under uid 0 ("cannot be used with root/sudo
+        // privileges for security reasons") and exits, so under a server that runs as root (a
+        // VPS, an LXC container) every local session was a dead pane, this being the default.
+        // There it starts as `normal` and asks. The same refusal `overlays.docker.rootCommand`
+        // below answers for a root container; the other three modes do not carry the flag
+        // and stay as they are. Never force the bypass back on with `IS_SANDBOX`.
+        rootValue: { 'dangerously-skip-permissions': 'normal' },
       },
       allowedTools: { type: 'token', pattern: 'tool-list' },
       model: { type: 'token', pattern: 'model-claude' },

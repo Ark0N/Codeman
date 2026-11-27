@@ -67,7 +67,13 @@ const condSchema: z.ZodType<import('./types.js').Cond> = z.lazy(() =>
 
 const paramSpecSchema = z.union([
   z
-    .object({ type: z.literal('enum'), values: z.array(z.string()).min(1).max(16), default: z.string().optional() })
+    .object({
+      type: z.literal('enum'),
+      values: z.array(z.string()).min(1).max(16),
+      default: z.string().optional(),
+      // Cross-checked against `values` in launchSchema's superRefine below.
+      rootValue: z.record(z.string(), z.string()).optional(),
+    })
     .strict(),
   z.object({ type: z.literal('bool') }).strict(),
   z.object({ type: z.literal('token'), pattern: z.enum(TOKEN_PATTERNS as [string, ...string[]]) }).strict(),
@@ -143,6 +149,29 @@ const launchSchema = z
           message: 'the last variant of a fallback chain must have no `when` (it must be the guaranteed terminal case)',
           path: ['variants', launch.variants.length - 1, 'when'],
         });
+      }
+    }
+    // `rootValue` swaps one declared value for another when the server runs as root. A key or
+    // a replacement outside `values` could never apply (or would launch with a value no arg
+    // tests for), and a replacement that is itself replaced would make the outcome depend on
+    // how many passes the reader makes.
+    for (const [paramName, spec] of Object.entries(launch.params)) {
+      if (spec.type !== 'enum' || !spec.rootValue) continue;
+      for (const [from, to] of Object.entries(spec.rootValue)) {
+        const path = ['params', paramName, 'rootValue', from];
+        if (!spec.values.includes(from)) {
+          ctx.addIssue({ code: 'custom', message: `rootValue key "${from}" is not one of this param's values`, path });
+        }
+        if (!spec.values.includes(to)) {
+          ctx.addIssue({ code: 'custom', message: `rootValue "${to}" is not one of this param's values`, path });
+        }
+        if (to === from || Object.hasOwn(spec.rootValue, to)) {
+          ctx.addIssue({
+            code: 'custom',
+            message: `rootValue "${to}" must be a value that is launched as it is under root`,
+            path,
+          });
+        }
       }
     }
     if (launch.legacyConfigAliases) {

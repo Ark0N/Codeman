@@ -197,6 +197,162 @@ describe('install.sh runtime safety', () => {
   });
 });
 
+describe('install.sh and a /dev/tty that exists but cannot be opened', () => {
+  // The /dev/tty node is there on every Linux and macOS, also for a process with no controlling
+  // terminal (`su - user -c`, cron, a CI runner, cloud-init). `[[ -e /dev/tty ]]` says yes
+  // there, and the `< /dev/tty` behind it fails before the command runs. Measured 2026-11-27 in
+  // a fresh ubuntu:24.04 container: a headless run with a working passwordless sudo ended on
+  // "Failed to obtain sudo privileges", because `sudo -v < /dev/tty` never started sudo.
+  // The fix is one probe, `tty_openable`, which OPENS the node.
+
+  /** A file test on the node (`[[ -e /dev/tty ]]`, `test -c /dev/tty`): true with no terminal behind it. */
+  const NODE_TEST = /(?:\[\[?|\btest)\s+!?\s*-[a-zA-Z]\s+"?\/dev\/tty"?/;
+
+  /**
+   * Every command that takes its stdin from /dev/tty, and the ones that do not sit directly
+   * under `if tty_openable; then`. The probe itself and the two readers are the exceptions:
+   * read_reply and read_secret run only after has_tty said yes, and with stdin not a terminal
+   * that IS tty_openable.
+   */
+  function ttyRedirects(source: string): { sites: string[]; unguarded: string[] } {
+    const exempt = (line: string): boolean =>
+      /^\s*\{ : < \/dev\/tty; \} 2>\/dev\/null$/.test(line) || /^\s*read -rs? "\$1" < \/dev\/tty$/.test(line);
+    const lines = source.split('\n');
+    const indentOf = (line: string): number => line.length - line.trimStart().length;
+    const sites: string[] = [];
+    const unguarded: string[] = [];
+    lines.forEach((line, i) => {
+      if (/^\s*#/.test(line) || !/<\s*\/dev\/tty\b/.test(line) || exempt(line)) return;
+      sites.push(line.trim());
+      // The enclosing statement: the nearest line above with less indentation.
+      let j = i - 1;
+      while (j >= 0 && (lines[j].trim() === '' || indentOf(lines[j]) >= indentOf(line))) j--;
+      if (j < 0 || lines[j].trim() !== 'if tty_openable; then') unguarded.push(`${i + 1}: ${line.trim()}`);
+    });
+    return { sites, unguarded };
+  }
+
+  it('never tests the /dev/tty node, only whether it opens', () => {
+    const offenders = CODE_LINES.filter((line) => NODE_TEST.test(line));
+    expect(
+      offenders,
+      `a file test on /dev/tty says nothing about a controlling terminal; use tty_openable:\n  ${offenders.join('\n  ')}`
+    ).toEqual([]);
+    expect(SOURCE).toMatch(/^tty_openable\(\) \{\n {4}\{ : < \/dev\/tty; \} 2>\/dev\/null\n\}$/m);
+  });
+
+  it('takes stdin from /dev/tty only directly under `if tty_openable; then`', () => {
+    const { sites, unguarded } = ttyRedirects(SOURCE);
+    expect(unguarded, `redirect from /dev/tty without the open probe:\n  ${unguarded.join('\n  ')}`).toEqual([]);
+    // Anti-vacuity: both sudo sites are among what was checked.
+    expect(sites.filter((line) => /\bsudo -v\b/.test(line)).length).toBe(2);
+    expect(sites.length).toBeGreaterThanOrEqual(5);
+  });
+
+  it('fails for a sudo site that redirects from /dev/tty behind a bare -e test (anti-vacuity)', () => {
+    // The shape ensure_sudo had when the headless install died.
+    const old = [
+      'ensure_sudo() {',
+      '    if [[ -e /dev/tty ]]; then',
+      '        if ! sudo -v 2>/dev/null < /dev/tty; then',
+      '            die "Failed to obtain sudo privileges."',
+      '        fi',
+      '    fi',
+      '}',
+    ];
+    expect(old.filter((line) => NODE_TEST.test(line))).toEqual(['    if [[ -e /dev/tty ]]; then']);
+    expect(ttyRedirects(old.join('\n')).unguarded).toEqual(['3: if ! sudo -v 2>/dev/null < /dev/tty; then']);
+    // And the same site behind the probe passes.
+    old[1] = '    if tty_openable; then';
+    expect(ttyRedirects(old.join('\n'))).toEqual({
+      sites: ['if ! sudo -v 2>/dev/null < /dev/tty; then'],
+      unguarded: [],
+    });
+  });
+
+  /**
+   * Drive the sudo helpers in a real bash that has NO controlling terminal: `detached` puts
+   * the child in a session of its own, which is what `su -c`, cron and a CI runner do. `sudo`
+   * is a shell function that records its arguments and answers from the environment, so no
+   * real sudo runs. Each stub reads stdin's state the way the real one would.
+   */
+  function driveSudo(body: string, sudo: { n: number; v: number }) {
+    const driver = `
+      set -euo pipefail
+      export CODEMAN_INSTALL_SH_LIB=1
+      . "$1"
+      [[ -e /dev/tty ]] && echo "node=present"
+      if { : < /dev/tty; } 2>/dev/null; then echo "tty=open"; else echo "tty=closed"; fi
+      sudo() {
+        echo "sudo $*"
+        case "$1" in
+          -n) return "$SUDO_N_RC" ;;
+          -v) return "$SUDO_V_RC" ;;
+        esac
+        return 0
+      }
+      NO_ADMIN=0
+      ${body}
+    `;
+    const env = { ...process.env, SUDO_N_RC: String(sudo.n), SUDO_V_RC: String(sudo.v) };
+    return spawnSync('bash', ['-c', driver, 'bash', INSTALL_SH], {
+      encoding: 'utf-8',
+      timeout: 30_000,
+      env,
+      detached: true,
+    });
+  }
+
+  // As root the helpers return before they reach sudo, so there is nothing to drive.
+  const asUser = it.skipIf(process.getuid?.() === 0);
+
+  asUser('reproduces the condition: the node is there and does not open', () => {
+    const result = driveSudo('true', { n: 0, v: 0 });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain('node=present');
+    expect(result.stdout).toContain('tty=closed');
+  });
+
+  asUser('ensure_sudo passes on a passwordless sudo with no terminal, without validating', () => {
+    const result = driveSudo('ensure_sudo; echo "ensure=ok"', { n: 0, v: 1 });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain('ensure=ok');
+    expect(result.stdout).toContain('sudo -n true');
+    // `sudo -v` wants a password wherever one sudoers entry of the account asks for one,
+    // even when `sudo <command>` does not, so a sudo that already runs is not validated.
+    expect(result.stdout).not.toContain('sudo -v');
+  });
+
+  asUser('ensure_sudo falls back to a plain `sudo -v` when the terminal cannot be opened', () => {
+    const result = driveSudo('ensure_sudo; echo "ensure=ok"', { n: 1, v: 0 });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain('sudo -v');
+    expect(result.stdout).toContain('ensure=ok');
+  });
+
+  asUser('ensure_sudo names the missing terminal when sudo would have to ask', () => {
+    const result = driveSudo('ensure_sudo; echo "ensure=ok"', { n: 1, v: 1 });
+    expect(result.status).toBe(1);
+    expect(result.stdout).not.toContain('ensure=ok');
+    expect(result.stderr).toContain('Failed to obtain sudo privileges. Try running the script directly');
+  });
+
+  asUser('sudo_session_try reaches sudo instead of failing on the redirect', () => {
+    // -n fails, so the keepalive loop it starts ends at once and the driver does not wait for it.
+    const result = driveSudo('sudo_session_try >/dev/null; echo "try=$?"', { n: 1, v: 0 });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain('try=0');
+    expect(result.stderr).not.toContain('/dev/tty');
+  });
+
+  asUser('sudo_session_start says to run it directly when there is no terminal to ask on', () => {
+    const result = driveSudo('sudo_session_start >/dev/null', { n: 1, v: 1 });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('Failed to obtain sudo privileges. Try running the script directly');
+    expect(result.stderr).not.toContain('/dev/tty');
+  });
+});
+
 describe('install.sh DeepSeek identity probe', () => {
   it('greps for the same banner the registry identity regex demands', () => {
     // dsh_banner_probe is the ONE hand-written identity check left in the script (the

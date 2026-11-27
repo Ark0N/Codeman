@@ -45,7 +45,25 @@ export type EngineValue =
  * the only ones that need a pattern; `engine` params are produced in code.
  */
 export type ParamSpec =
-  | { type: 'enum'; values: string[]; default?: string }
+  | {
+      type: 'enum';
+      values: string[];
+      default?: string;
+      /**
+       * The value this param takes INSTEAD when the Codeman server process runs as uid 0 and
+       * the launch is LOCAL (the CLI is then a child of that process, so it runs as root too).
+       * Keyed by the value the param would otherwise resolve to, the default included; a
+       * value with no key is launched as it is.
+       *
+       * For a value the CLI REFUSES under root, where the alternative is a pane that dies at
+       * once. It is the host-level form of `overlays.docker.rootCommand`, which answers the
+       * same refusal for a container whose exec user is uid 0. Remote and Docker launches
+       * never read it: the server's uid says nothing about the account on the other side.
+       * Applied by `applyRootValues()` (root-launch.ts); the schema requires every key and
+       * every replacement to be one of `values`, and no replacement to be replaced again.
+       */
+      rootValue?: Record<string, string>;
+    }
   | { type: 'bool' }
   | { type: 'token'; pattern: TokenPattern }
   | { type: 'engine'; source: EngineValue };
