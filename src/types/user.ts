@@ -50,6 +50,12 @@ export interface UsersFile {
 export interface AuthUser {
   username: string;
   role: UserRole;
+  /**
+   * True when a trusted reverse proxy vouched for this request (see
+   * src/config/trusted-proxy.ts), so no Codeman password was involved. Absent for
+   * cookie, Basic and QR sign-ins.
+   */
+  viaTrustedProxy?: boolean;
 }
 
 /** Admin-facing projection of a user: never carries the password hash. */

@@ -110,6 +110,25 @@ any other endpoint. On-disk state (`local-model.json`, the `local-model/` folder
 internal, as for every other file in the data directory. Promotion to stable requires
 an explicit documented decision.
 
+### Experimental trusted-proxy sign-in
+
+Sign-in through an authenticating reverse proxy in multi-user mode
+([security-architecture.md](security-architecture.md) §10a) is labeled experimental, so
+item 3 above applies to all of its surface: the environment variables
+`CODEMAN_TRUSTED_PROXY_SECRET_FILE`, `CODEMAN_TRUSTED_PROXY_SECRET` and
+`CODEMAN_TRUSTED_PROXY_USER_HEADER`, the request headers `X-Codeman-Proxy-Secret` and
+`X-Codeman-User`, the `viaTrustedProxy` field of `GET /api/v1/me` (and its `/api` alias),
+the status codes and messages of its refusals, and the conditions under which a
+configured setup stops the start. They may change or be removed in a MINOR or PATCH
+release.
+
+It is off unless a secret is configured. With it off, sign-in works as before. Three
+things still apply: the identity headers (the two above and a configured username
+header) are dropped on arrival, downloads and attachments refuse the secret file, and a
+trusted-proxy setting that cannot be used stops the start. The other fields
+of `GET /api/v1/me` keep their existing guarantees. Promotion to stable requires an
+explicit documented decision.
+
 ## Deprecation policy
 
 When we need to change a covered surface:

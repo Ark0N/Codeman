@@ -16,9 +16,12 @@
  * feature), so the "stays attachable" cases matter just as much: over-blocking
  * breaks the publish skill and the review-card loop.
  */
-import { homedir } from 'node:os';
+import { mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { isSensitivePath } from '../src/web/sensitive-path.js';
+import { initTrustedProxySecret, resetTrustedProxySecretForTests } from '../src/config/trusted-proxy.js';
 
 const HOME = '/home/dev';
 const dotenvPaths: Array<[string, string]> = [
@@ -80,6 +83,7 @@ describe('isSensitivePath', () => {
       ['codeman hook secret', `${HOME}/.codeman/hook-secret`],
       ['codeman user table', `${HOME}/.codeman/users.json`],
       ['codeman hook secret on a named instance', `${HOME}/.codeman-beta/hook-secret`],
+      ['codeman trusted-proxy secret (documented name)', `${HOME}/.codeman/proxy-secret`],
       // state.json persists SessionState.envOverrides, and the env allowlist
       // admits key-shaped names (GEMINI_API_KEY, CLAUDE_CODE_*), so it can hold
       // a live credential. Named once .json became previewable from outside the
@@ -235,5 +239,61 @@ describe('isSensitivePath', () => {
     ])('keeps %s servable', (_label, path) => {
       expect(isSensitivePath(path)).toBe(false);
     });
+  });
+
+  describe('the configured trusted-proxy secret file', () => {
+    it('blocks CODEMAN_TRUSTED_PROXY_SECRET_FILE whatever its name, and only while configured', () => {
+      const prev = process.env.CODEMAN_TRUSTED_PROXY_SECRET_FILE;
+      const file = '/srv/secrets/codeman-sso.key';
+      try {
+        delete process.env.CODEMAN_TRUSTED_PROXY_SECRET_FILE;
+        resetTrustedProxySecretForTests();
+        expect(isSensitivePath(file)).toBe(false);
+        process.env.CODEMAN_TRUSTED_PROXY_SECRET_FILE = file;
+        expect(isSensitivePath(file)).toBe(true);
+        expect(isSensitivePath('/srv/secrets/other.txt')).toBe(false);
+        // Once the secret is read, the variable is gone from process.env (so sessions don't
+        // inherit it); the path stays blocked through the trusted-proxy module.
+        initTrustedProxySecret();
+        expect(process.env.CODEMAN_TRUSTED_PROXY_SECRET_FILE).toBeUndefined();
+        expect(isSensitivePath(file)).toBe(true);
+        expect(isSensitivePath('/srv/secrets/other.txt')).toBe(false);
+      } finally {
+        resetTrustedProxySecretForTests();
+        if (prev === undefined) delete process.env.CODEMAN_TRUSTED_PROXY_SECRET_FILE;
+        else process.env.CODEMAN_TRUSTED_PROXY_SECRET_FILE = prev;
+      }
+    });
+
+    it.skipIf(process.platform === 'win32')(
+      'blocks the file under its real path when the setting names a symlink, and the other way round',
+      () => {
+        const prev = process.env.CODEMAN_TRUSTED_PROXY_SECRET_FILE;
+        const dir = realpathSync(mkdtempSync(join(tmpdir(), 'tp-secret-link-')));
+        const real = join(dir, 'real.key');
+        const link = join(dir, 'link.key');
+        writeFileSync(real, 'x', { mode: 0o600 });
+        symlinkSync(real, link);
+        try {
+          // The setting names the symlink; a caller resolves the served path to the target.
+          process.env.CODEMAN_TRUSTED_PROXY_SECRET_FILE = link;
+          resetTrustedProxySecretForTests();
+          expect(isSensitivePath(real)).toBe(true);
+          initTrustedProxySecret(); // resolved once here, then answered from the cache
+          expect(isSensitivePath(real)).toBe(true);
+          expect(isSensitivePath(join(dir, 'other.key'))).toBe(false);
+          // The setting names the target; the symlink resolves to it.
+          process.env.CODEMAN_TRUSTED_PROXY_SECRET_FILE = real;
+          resetTrustedProxySecretForTests();
+          initTrustedProxySecret();
+          expect(isSensitivePath(realpathSync(link))).toBe(true);
+        } finally {
+          resetTrustedProxySecretForTests();
+          if (prev === undefined) delete process.env.CODEMAN_TRUSTED_PROXY_SECRET_FILE;
+          else process.env.CODEMAN_TRUSTED_PROXY_SECRET_FILE = prev;
+          rmSync(dir, { recursive: true, force: true });
+        }
+      }
+    );
   });
 });

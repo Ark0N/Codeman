@@ -34,6 +34,7 @@
 
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { trustedProxySecretFilePath, trustedProxySecretFileRealPath } from '../config/trusted-proxy.js';
 
 const SENSITIVE_PATTERNS: RegExp[] = [
   // System account databases.
@@ -81,6 +82,9 @@ const SENSITIVE_PATTERNS: RegExp[] = [
   // Named individually so the surrounding trees stay attachable (see above).
   /\/\.claude\/\.credentials\.json$/,
   /\/\.codeman[^/]*\/hook-secret$/,
+  // Trusted reverse-proxy secret under its documented name (the configured path, whatever
+  // its name, is checked separately in isSensitivePath).
+  /\/\.codeman[^/]*\/proxy-secret$/,
   /\/\.codeman[^/]*\/users\.json$/,
   // The data dir's `.env` is the CODEMAN_USERNAME/PASSWORD fallback `codeman attach`
   // reads. Named here as well as in DOTENV_PATTERNS so `allowDotenv` (the File
@@ -154,6 +158,18 @@ const DOTENV_PATTERNS: RegExp[] = [/\/\.env$/, /\/\.env\./];
 const HOME_SENSITIVE_MEMBERS = ['.claude.json', '.claude/settings.json', '.claude/settings.local.json'];
 
 /**
+ * Whether `absPath` is the configured trusted-proxy secret file
+ * (`CODEMAN_TRUSTED_PROXY_SECRET_FILE`, any name and location). The variable is removed
+ * from `process.env` once the secret is read, so the path comes from the trusted-proxy
+ * module, which keeps it, as configured and with symlinks resolved (resolved once).
+ */
+function isTrustedProxySecretFile(absPath: string): boolean {
+  const file = trustedProxySecretFilePath();
+  if (!file) return false;
+  return absPath === file || absPath === trustedProxySecretFileRealPath();
+}
+
+/**
  * Returns true if the given ABSOLUTE, symlink-resolved path matches the
  * sensitive-file blocklist and must not be served to the browser.
  * `allowDotenv` skips only DOTENV_PATTERNS: a dotenv file inside a blocked tree
@@ -162,6 +178,7 @@ const HOME_SENSITIVE_MEMBERS = ['.claude.json', '.claude/settings.json', '.claud
 export function isSensitivePath(absPath: string, opts: { allowDotenv?: boolean } = {}): boolean {
   if (!opts.allowDotenv && DOTENV_PATTERNS.some((pattern) => pattern.test(absPath))) return true;
   if (SENSITIVE_PATTERNS.some((pattern) => pattern.test(absPath))) return true;
+  if (isTrustedProxySecretFile(absPath)) return true;
   const home = homedir();
   return HOME_SENSITIVE_MEMBERS.some((member) => absPath === join(home, member));
 }

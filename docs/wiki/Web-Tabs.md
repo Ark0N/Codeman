@@ -97,7 +97,10 @@ The reason: an opaque-origin frame's stylesheet, script, and API requests do not
 proxy's authentication cookie. The proxy redirects them to the login provider, and CORS or
 CSP kills them there.
 
-Trusted mode keeps a real origin and the cookie, so it works. Test cannot catch this, because
+Trusted mode keeps a real origin and the cookie, so it works. In trusted mode Codeman
+forwards the browser's cookies to the dashboard, and that includes the proxy's own session
+cookie unless the proxy removes it from what it forwards to Codeman (the Caddy example in
+[Multi-User Mode](Multi-User-Mode#single-sign-on-through-a-reverse-proxy) does). Test cannot catch this, because
 it checks the server's reach, not the browser's.
 
 ## Security notes

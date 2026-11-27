@@ -45,6 +45,7 @@
 import { createHash } from 'node:crypto';
 import { WEBVIEW_PROXY_PREFIX } from '../config/webview-limits.js';
 import { stripBasePath } from '../config/base-path.js';
+import { resolveTrustedProxyUserHeader } from '../config/trusted-proxy.js';
 
 /** Headers that are per-connection and must never be relayed in either direction. */
 const HOP_BY_HOP = new Set([
@@ -76,6 +77,12 @@ const DROP_REQUEST_HEADERS = new Set([
   'origin',
   'referer',
   'x-codeman-hook-secret',
+  // Trusted reverse-proxy sign-in headers. The auth middleware already deletes them from
+  // every request (takeTrustedProxyHeaders); listed here too so the relay never forwards
+  // them even if that ever changes. A custom username header name
+  // (CODEMAN_TRUSTED_PROXY_USER_HEADER) is added per request in buildUpstreamRequestHeaders.
+  'x-codeman-proxy-secret',
+  'x-codeman-user',
 ]);
 
 /** Response headers dropped on the way back to the browser. */
@@ -409,10 +416,13 @@ export function buildUpstreamRequestHeaders(
   }
 ): Record<string, string> {
   const headers: Record<string, string> = {};
+  // The configured trusted-proxy username header (the default name is already in
+  // DROP_REQUEST_HEADERS). Only ever a name that passed validation.
+  const proxyUserHeader = resolveTrustedProxyUserHeader();
 
   for (const [key, value] of Object.entries(incoming)) {
     const lower = key.toLowerCase();
-    if (DROP_REQUEST_HEADERS.has(lower)) continue;
+    if (DROP_REQUEST_HEADERS.has(lower) || lower === proxyUserHeader) continue;
     if (value === undefined) continue;
     headers[lower] = Array.isArray(value) ? value.join(', ') : value;
   }

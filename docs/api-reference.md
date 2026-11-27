@@ -59,10 +59,13 @@ payload return `{ "success": true, "data": {} }`.
 > to 600 s. Proxy operators and HTTP clients with a global read timeout need to know
 > that before pointing them at Codeman.
 
-⚠️ **A `401` is the one status that is not an envelope.** Authentication is rejected
+⚠️ **A `401` is not an envelope.** Authentication is rejected
 in a request hook, before any handler runs, and it replies with the bare string
-`Unauthorized` (`Unauthorized: hook secret required` on the hook path) plus
-`WWW-Authenticate: Basic realm="Codeman"`. There is no `success`, no `error`, and no
+`Unauthorized` plus `WWW-Authenticate: Basic realm="Codeman"` (on the hook path it is
+`Unauthorized: hook secret required`, without that header). With trusted-proxy sign-in on (experimental,
+see [Authentication](#authentication)) the same hook has more plain-text replies: a `401`
+without `WWW-Authenticate`, a `403` and a `503` for a refused proxy identity, and a `403`
+or `404` for a `/webview/` or `/html-view/` path without a live capability. There is no `success`, no `error`, and no
 `errorCode`, because the wrapping hook only wraps object payloads. So a client that
 pipes every response straight into a JSON parser dies with a parse error rather than
 reporting an auth failure, which is a confusing way to discover that a password is
@@ -1019,7 +1022,8 @@ by the owner's decision the page may load from and send requests to any host), `
 `Referrer-Policy: no-referrer` and `Access-Control-Allow-Origin: *`. A `Range`
 request is answered with `206` + `Content-Range` (`416` past the end), like
 `file-raw`. Every refusal is a plain-text `404 Not found`; with a password set, an
-unknown or revoked capability is the auth hook's `401` instead.
+unknown or revoked capability is the auth hook's `401` instead. With trusted-proxy sign-in
+on it is the hook's plain-text `404`, with no challenge.
 
 ## Session lineage (`parentSessionId`)
 
@@ -1936,6 +1940,24 @@ Optional HTTP Basic (`CODEMAN_USERNAME`/`CODEMAN_PASSWORD`) → opaque
 `codeman_session` cookie. When enabled, unauthenticated requests get
 `401 UNAUTHORIZED`; rate-limited requests get `429 RATE_LIMITED`. See
 [`security-architecture.md`](security-architecture.md).
+
+**Trusted-proxy sign-in (experimental, multi-user mode, off unless a secret is
+configured).** An authenticating reverse proxy on the same host sends
+`X-Codeman-Proxy-Secret` and `X-Codeman-User` over loopback, and the request runs as that
+existing, enabled account. No cookie is issued, and `GET /api/me` reports
+`viaTrustedProxy: true`. The hook's refusals on this path are plain text, not envelopes:
+
+| Status | When |
+|---|---|
+| `401`, no `WWW-Authenticate` | the secret is wrong, or the request did not arrive over loopback |
+| `403` | the secret is right, but there is no username or no enabled account with that name |
+| `503` | the user store cannot be read |
+| `429` | too many wrong secrets from one address |
+
+With the feature on, a path under `/webview/` or `/html-view/` without a live capability is
+answered by the hook before any credential is looked at: plain-text `403` for a web tab,
+`404` for an HTML view, no challenge. See
+[`security-architecture.md` §10a](security-architecture.md).
 
 ## SSE event channel
 
