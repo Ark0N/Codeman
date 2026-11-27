@@ -25,8 +25,12 @@ vi.mock('node:child_process', async () => {
 /** The kill path's pane read, as killSession() sends it. */
 const KILL_READ = "'#{pane_dead}|#{pane_pid}|#{pane_dead_time}'";
 
-/** A machine: init, kthreadd, the user's own programs, and one agent (4242) with a child. */
-const PS = ['1 0', '2 0', '900 1', '901 900', '902 900', '4242 901', '4243 4242'].join('\n') + '\n';
+/**
+ * A machine: init, kthreadd, the user's own programs, one agent (4242) with a child, and a
+ * second program (4343) with a child, for a pane whose process is not the recorded one.
+ */
+const PS =
+  ['1 0', '2 0', '900 1', '901 900', '902 900', '4242 901', '4243 4242', '4343 901', '4344 4343'].join('\n') + '\n';
 
 describe('isSignalablePid', () => {
   it('admits only a process of the user', () => {
@@ -129,6 +133,23 @@ describe('killSession and a pane without a process', () => {
   // `0|0|` on 3.7, and `0||` is tmux 3.8's closing window (pty closed, exit not
   // collected). Each falls back to the recorded agent pid, as master does, and
   // nothing outside that pid's tree is signalled.
+  // The counterpart of the dead-pane rule: it must not stop a close from killing a pane
+  // whose program still runs. Here, never in tmux-manager.test.ts: that file's mock keeps
+  // the real execFile, so the walk would read this machine's process table.
+  it('signals the tree of the pid tmux prints for a live pane, not the recorded one', async () => {
+    paneRead = '0|4343|\n';
+    const m = await manager(4242);
+    expect(await m.killSession('feed1234')).toBe(true);
+    expect(signals).toContainEqual([4344, 'SIGTERM']);
+    expect(signals).toContainEqual([-4343, 'SIGTERM']);
+    expect(signals.every(([pid]) => [4343, 4344].includes(Math.abs(pid)))).toBe(true);
+    // The whole kill read: dropping `#{pane_dead_time}` would trust a pre-3.7 dead flag again.
+    expect(readTheKillFormat()).toBe(true);
+    expect(closedByTmux()).toBe(true);
+    expect(m.getSession('feed1234')).toBeUndefined();
+    m.destroy();
+  });
+
   for (const answer of ['1|0|', '0|0|', '0||']) {
     it(`falls back to the recorded pid when the kill read answers ${answer}`, async () => {
       paneRead = `${answer}\n`;

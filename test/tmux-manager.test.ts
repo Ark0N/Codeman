@@ -1406,66 +1406,6 @@ describe('TmuxManager (unit)', () => {
         nonTestManager.destroy();
       }
     });
-
-    // The counterpart: the dead-pane rule must not stop a close from killing a
-    // pane whose program still runs.
-    it('still signals the process tree of a live pane on close', async () => {
-      const defaultExec = mockedExec.getMockImplementation();
-      mockedExec.mockImplementation(((cmd: string, optionsOrCallback?: unknown, maybeCallback?: unknown) => {
-        const callback = (typeof optionsOrCallback === 'function' ? optionsOrCallback : maybeCallback) as
-          | ((err: Error | null, out: unknown, stderr: string) => void)
-          | undefined;
-        // promisify(exec) on this mock resolves with the second argument. A live
-        // pane: not dead, its own pid, no exit time.
-        const stdout = cmd.includes(' display-message ') ? (cmd.includes('#{pane_dead}') ? '0|4343|\n' : '4343\n') : '';
-        if (callback) setImmediate(() => callback(null, { stdout, stderr: '' }, ''));
-        return { on: vi.fn(), kill: vi.fn(), pid: 12345 };
-      }) as unknown as typeof exec);
-      // The pane's process exits on its first real signal, as a live CLI does.
-      // Afterwards the liveness probe (`kill(pid, 0)`) throws, so the kill path
-      // stops waiting before it reads /proc, which this file mocks (Linux CI).
-      let paneAlive = true;
-      const kill = vi.spyOn(process, 'kill').mockImplementation(((pid: number, signal?: string | number) => {
-        if (Math.abs(pid) !== 4343) return true;
-        if (signal === 0) {
-          if (paneAlive) return true;
-          throw Object.assign(new Error('kill ESRCH'), { code: 'ESRCH' });
-        }
-        paneAlive = false;
-        return true;
-      }) as typeof process.kill);
-      const NonTestTmuxManager = await importWithTmuxCommandsEnabled();
-      const nonTestManager = new NonTestTmuxManager();
-      nonTestManager.registerSession({
-        sessionId: 'beef5555',
-        muxName: 'codeman-beef5555',
-        pid: 4242,
-        createdAt: Date.now(),
-        workingDir: '/tmp',
-        mode: 'claude',
-        attached: false,
-      });
-
-      try {
-        expect(await nonTestManager.killSession('beef5555')).toBe(true);
-        // The pid tmux printed is signalled, not the recorded one.
-        expect(kill.mock.calls.some(([pid]) => Math.abs(Number(pid)) === 4343)).toBe(true);
-        expect(kill.mock.calls.filter(([pid]) => Math.abs(Number(pid)) === 4242)).toEqual([]);
-        const commands = mockedExec.mock.calls.map(([cmd]) => String(cmd));
-        // The whole kill read: dropping `#{pane_dead_time}` would trust a pre-3.7 dead flag again.
-        expect(
-          commands.some(
-            (cmd) => cmd.includes('display-message') && cmd.includes("'#{pane_dead}|#{pane_pid}|#{pane_dead_time}'")
-          )
-        ).toBe(true);
-        expect(commands.some((cmd) => cmd.includes('kill-session -t "codeman-beef5555"'))).toBe(true);
-        expect(nonTestManager.getSession('beef5555')).toBeUndefined();
-      } finally {
-        kill.mockRestore();
-        mockedExec.mockImplementation(defaultExec!);
-        nonTestManager.destroy();
-      }
-    });
   });
 });
 
