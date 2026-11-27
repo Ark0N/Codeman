@@ -29,6 +29,10 @@ import {
   tuiSwitchBindingTty,
   tuiSwitchAttachHook,
   tuiSwitchGuard,
+  parseFollowHooks,
+  TUI_FOLLOW_HOOKS,
+  TUI_FOLLOW_OWNER,
+  TUI_FOLLOW_PID,
   isTuiClientTty,
   ATTACH_BANNER_MARKER,
   parseTmuxSessionList,
@@ -516,6 +520,223 @@ describe('degraded-mode tmux enumeration', () => {
       throw new Error('no server running on /tmp/tmux-1000/codeman');
     };
     await expect(enumerateTmuxSessions({ exec })).resolves.toEqual([]);
+  });
+});
+
+describe('the follow hooks', () => {
+  const HOOK = 'client-active[91]';
+  let sockets = 0;
+
+  /**
+   * A fake tmux holding one session's options and hooks plus the global hooks,
+   * so arm, disarm and the sweep run against state rather than canned answers.
+   * It splits each call at `;` like tmux does. Every fake gets its own socket,
+   * because the "armed by this process" record is keyed by socket.
+   */
+  function fakeTmux(
+    initial: {
+      owner?: string;
+      pid?: string;
+      hooks?: Record<string, string>;
+      global?: Record<string, string>;
+      refuseHook?: string;
+    } = {}
+  ) {
+    const state = {
+      owner: initial.owner ?? null,
+      pid: initial.pid ?? null,
+      hooks: { ...(initial.hooks ?? {}) } as Record<string, string>,
+      /** Events left with an empty session array (what `set-hook -u name[i]` leaves). */
+      empty: [] as string[],
+    };
+    const calls: string[][] = [];
+    const writes: string[] = [];
+    const session = 'codeman-1a2b3c4d';
+    const listHooks = (hooks: Record<string, string>, empty: string[]) =>
+      [...Object.entries(hooks).map(([name, command]) => `${name} ${command}`), ...empty].join('\n') + '\n';
+    const run = (cmd: string[]): string => {
+      const [verb] = cmd;
+      if (verb === 'list-sessions') return `${session}\t${state.owner ?? ''}\t${state.pid ?? ''}\n`;
+      if (verb === 'display-message') return `${cmd[cmd.length - 1]}\n`;
+      if (verb === 'show-hooks' && cmd.includes('-g')) return listHooks(initial.global ?? {}, []);
+      if (verb === 'show-hooks') return listHooks(state.hooks, state.empty);
+      if (verb === 'show-options') {
+        const lines = ['status off'];
+        if (state.owner) lines.unshift(`${TUI_FOLLOW_OWNER} ${state.owner}`);
+        if (state.pid) lines.unshift(`${TUI_FOLLOW_PID} ${state.pid}`);
+        return lines.join('\n') + '\n';
+      }
+      const unset = cmd.includes('-u');
+      const key = unset ? cmd[cmd.length - 1] : cmd[cmd.length - 2];
+      if (verb === 'set-option' && key === TUI_FOLLOW_OWNER) state.owner = unset ? null : cmd[cmd.length - 1];
+      else if (verb === 'set-option' && key === TUI_FOLLOW_PID) state.pid = unset ? null : cmd[cmd.length - 1];
+      else if (verb === 'set-hook' && !unset) {
+        if (key === initial.refuseHook) throw new Error(`invalid option: ${key}`);
+        state.hooks[key] = cmd[cmd.length - 1];
+        state.empty = state.empty.filter((event) => !key.startsWith(`${event}[`));
+      } else if (verb === 'set-hook' && key.includes('[')) {
+        delete state.hooks[key];
+        const event = key.slice(0, key.indexOf('['));
+        if (!Object.keys(state.hooks).some((name) => name.startsWith(`${event}[`)) && !state.empty.includes(event)) {
+          state.empty.push(event);
+        }
+      } else if (verb === 'set-hook') {
+        for (const name of Object.keys(state.hooks)) if (name.startsWith(`${key}[`)) delete state.hooks[name];
+        state.empty = state.empty.filter((event) => event !== key);
+      }
+      return '';
+    };
+    const exec: TuiExecFile = async (_file, args) => {
+      calls.push([...args]);
+      const commands: string[][] = [[]];
+      for (const arg of args.slice(2)) {
+        if (arg === ';') commands.push([]);
+        else commands[commands.length - 1].push(arg);
+      }
+      if (commands.some((cmd) => cmd[0]?.startsWith('set-'))) writes.push(args.slice(2).join(' '));
+      let stdout = '';
+      for (const cmd of commands) stdout += run(cmd);
+      return { stdout, stderr: '' };
+    };
+    sockets += 1;
+    return { client: new TuiClient({ baseUrl, socket: `codeman-follow-${sockets}`, exec }), state, calls, writes };
+  }
+
+  it('builds a constant command that reads the owner option, with no -t and no tty in it', () => {
+    expect(Object.keys(TUI_FOLLOW_HOOKS)).toEqual([HOOK]);
+    const command = TUI_FOLLOW_HOOKS[HOOK];
+    // Acts only for the owner's client.
+    expect(command).toContain(`#{==:#{client_tty},#{${TUI_FOLLOW_OWNER}}}`);
+    expect(command).toContain('"set-window-option window-size latest"');
+    // tmux parses a hook command when it is set: an unquoted #{...} after -t is a comment.
+    expect(command).not.toContain('-t ');
+    expect(command).not.toContain('/dev/');
+  });
+
+  it('tells our hook from the user ones, and counts the other entries of the event', () => {
+    expect(parseFollowHooks(`${HOOK} ${TUI_FOLLOW_HOOKS[HOOK]}\n`)).toEqual({ [HOOK]: { slot: 'ours', others: 0 } });
+    expect(parseFollowHooks('client-active[91] display-message mine\nclient-active[0] x\n')).toEqual({
+      [HOOK]: { slot: 'theirs', others: 1 },
+    });
+    // An empty session array (what `set-hook -u name[i]` leaves) is no entry.
+    expect(parseFollowHooks('client-active\nafter-resize-window[2] y\n')).toEqual({ [HOOK]: { others: 0 } });
+  });
+
+  it('arms in one write, owner and pid first, and disarms in one, owner first', async () => {
+    const { client, state, writes } = fakeTmux();
+    await expect(client.armFollowTyping('codeman-1a2b3c4d', '/dev/pts/4')).resolves.toBe(true);
+    expect(writes).toEqual([
+      `set-option -t codeman-1a2b3c4d ${TUI_FOLLOW_OWNER} /dev/pts/4 ; ` +
+        `set-option -t codeman-1a2b3c4d ${TUI_FOLLOW_PID} ${process.pid} ; ` +
+        `set-hook -t codeman-1a2b3c4d ${HOOK} ${TUI_FOLLOW_HOOKS[HOOK]}`,
+    ]);
+    writes.length = 0;
+    await client.disarmFollowTyping('codeman-1a2b3c4d', '/dev/pts/4');
+    // The whole array goes when ours was its only entry: an empty one would keep
+    // hiding a global hook on the event.
+    expect(writes).toEqual([
+      `set-option -u -t codeman-1a2b3c4d ${TUI_FOLLOW_OWNER} ; ` +
+        `set-option -u -t codeman-1a2b3c4d ${TUI_FOLLOW_PID} ; ` +
+        'set-hook -u -t codeman-1a2b3c4d client-active',
+    ]);
+    expect(state).toEqual({ owner: null, pid: null, hooks: {}, empty: [] });
+  });
+
+  it('takes one tmux call to read and one to write, per arm and per disarm', async () => {
+    const { client, calls } = fakeTmux();
+    await client.armFollowTyping('codeman-1a2b3c4d', '/dev/pts/4');
+    expect(calls).toHaveLength(2);
+    calls.length = 0;
+    await client.disarmFollowTyping('codeman-1a2b3c4d', '/dev/pts/4');
+    expect(calls).toHaveLength(2);
+  });
+
+  it('removes only our index when the user has another entry on the event', async () => {
+    const { client, state } = fakeTmux({ hooks: { 'client-active[3]': 'display-message mine' } });
+    await expect(client.armFollowTyping('codeman-1a2b3c4d', '/dev/pts/4')).resolves.toBe(true);
+    await client.disarmFollowTyping('codeman-1a2b3c4d', '/dev/pts/4');
+    expect(state.hooks).toEqual({ 'client-active[3]': 'display-message mine' });
+  });
+
+  it('undoes a half-done arm, as on a tmux without client-active (before 3.3)', async () => {
+    const { client, state } = fakeTmux({ refuseHook: HOOK });
+    await expect(client.armFollowTyping('codeman-1a2b3c4d', '/dev/pts/4')).resolves.toBe(false);
+    // restore() disarms only what armed, so nothing may be left behind here.
+    expect(state).toEqual({ owner: null, pid: null, hooks: {}, empty: [] });
+  });
+
+  it('installs nothing over a hook of the user, and never removes one', async () => {
+    const { client, state, writes } = fakeTmux({ hooks: { [HOOK]: 'display-message mine' } });
+    await expect(client.armFollowTyping('codeman-1a2b3c4d', '/dev/pts/4')).resolves.toBe(false);
+    expect(writes).toEqual([]);
+    // Even with an owner recorded (a TUI killed before restore), the user's hook stays.
+    state.owner = '/dev/pts/4';
+    await client.disarmFollowTyping('codeman-1a2b3c4d', '/dev/pts/4');
+    expect(state.hooks).toEqual({ [HOOK]: 'display-message mine' });
+  });
+
+  it('installs nothing while the user has a global hook on the event, which a session array would hide', async () => {
+    for (const global of [{ 'client-active[0]': 'display-message g' }, { [HOOK]: 'display-message g' }]) {
+      const { client, writes } = fakeTmux({ global });
+      await expect(client.armFollowTyping('codeman-1a2b3c4d', '/dev/pts/4')).resolves.toBe(false);
+      expect(writes).toEqual([]);
+    }
+  });
+
+  it('leaves the session to a second TUI that took it over', async () => {
+    const { client, state } = fakeTmux();
+    await client.armFollowTyping('codeman-1a2b3c4d', '/dev/pts/4');
+    state.owner = '/dev/pts/41';
+    // pts/4 is a prefix of pts/41, and its restore must not take pts/41's hook.
+    await client.disarmFollowTyping('codeman-1a2b3c4d', '/dev/pts/4');
+    expect(state.owner).toBe('/dev/pts/41');
+    expect(Object.keys(state.hooks)).toEqual([HOOK]);
+  });
+
+  it('sweeps by process, never by tty: a dead pid goes, a live one and this process stay', async () => {
+    const hooks = { ...TUI_FOLLOW_HOOKS };
+    // The pty number came back to a live terminal; the pid says it is a leak.
+    const dead = fakeTmux({ owner: '/dev/pts/7', pid: String(2 ** 22 + 1), hooks });
+    await expect(dead.client.clearLeakedFollowTyping()).resolves.toBe(1);
+    expect(dead.state).toEqual({ owner: null, pid: null, hooks: {}, empty: [] });
+
+    // An owner with no pid at all is a leak too (nothing can vouch for it).
+    const nopid = fakeTmux({ owner: '/dev/pts/7', hooks });
+    await expect(nopid.client.clearLeakedFollowTyping()).resolves.toBe(1);
+
+    // A second TUI mid-attach: another live process.
+    const live = fakeTmux({ owner: '/dev/pts/8', pid: String(process.ppid), hooks });
+    await expect(live.client.clearLeakedFollowTyping()).resolves.toBe(0);
+    expect(live.state.owner).toBe('/dev/pts/8');
+
+    // This process's own arm (an Enter pressed before the startup sweep ended).
+    const own = fakeTmux();
+    await own.client.armFollowTyping('codeman-1a2b3c4d', '/dev/pts/7');
+    await expect(own.client.clearLeakedFollowTyping()).resolves.toBe(0);
+    expect(own.state.owner).toBe('/dev/pts/7');
+    // Once disarmed it is no longer ours, so a copy left behind would be swept.
+    await own.client.disarmFollowTyping('codeman-1a2b3c4d', '/dev/pts/7');
+    Object.assign(own.state, { owner: '/dev/pts/7', pid: String(process.pid), hooks: { ...hooks } });
+    await expect(own.client.clearLeakedFollowTyping()).resolves.toBe(1);
+  });
+
+  it('refuses names and ttys it must not pass on, and swallows a dead tmux', async () => {
+    const { client, writes } = fakeTmux();
+    await expect(client.armFollowTyping('other-session', '/dev/pts/4')).resolves.toBe(false);
+    await expect(client.armFollowTyping('codeman-1a2b3c4d', '/tmp/not-a-tty')).resolves.toBe(false);
+    await client.disarmFollowTyping('codeman-ssh-prod', '/dev/pts/4');
+    expect(writes).toEqual([]);
+
+    const dead = new TuiClient({
+      baseUrl,
+      socket: 'codeman-beta',
+      exec: async () => {
+        throw new Error('no server running on /tmp/tmux-1000/codeman-beta');
+      },
+    });
+    await expect(dead.armFollowTyping('codeman-1a2b3c4d', '/dev/pts/4')).resolves.toBe(false);
+    await expect(dead.disarmFollowTyping('codeman-1a2b3c4d', '/dev/pts/4')).resolves.toBeUndefined();
+    await expect(dead.clearLeakedFollowTyping()).resolves.toBe(0);
   });
 });
 

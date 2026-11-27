@@ -624,6 +624,7 @@ describe('the way out when F1 is taken, on a socket with no detach key', () => {
       restoreSessionOptions: async () => true,
       readWindowSizing: async () => null,
       presizeWindow: async () => true,
+      clearLeakedFollowTyping: async () => 0,
       followAttachingClient: async () => true,
       restoreWindowSizing: async () => true,
     } as unknown as TuiClient;
@@ -672,10 +673,13 @@ describe('attach switch keys stay on the TUI client', () => {
       restoreSessionOptions: async () => true,
       readWindowSizing: async () => null,
       presizeWindow: async () => true,
+      clearLeakedFollowTyping: async () => 0,
       followAttachingClient: async () => {
         order.push('follow');
         return true;
       },
+      armFollowTyping: async () => true,
+      disarmFollowTyping: async () => undefined,
       restoreWindowSizing: async () => true,
     } as unknown as TuiClient;
 
@@ -723,6 +727,88 @@ describe('attach switch keys stay on the TUI client', () => {
     await beginAttachHandoff(client, 'codeman-aaaa1111', 'w1', tabs, undefined, undefined, null);
     expect(armed).toBeNull();
     expect(binds).toEqual([]);
+  });
+});
+
+describe('attach takes the window back from a browser when the terminal is used', () => {
+  /** Records the sizing calls in order; everything else is a no-op. */
+  function sizingFake(armResult = true) {
+    const calls: string[] = [];
+    const client = {
+      readPrefixKey: async () => 'C-b',
+      readDetachKey: async () => 'd',
+      readPrefixBinding: async () => null,
+      bindDetachKey: async () => true,
+      unbindDetachKey: async () => true,
+      armTuiSwitchGuard: async () => true,
+      disarmTuiSwitchGuard: async () => undefined,
+      bindSwitchKey: async () => true,
+      unbindSwitchKey: async () => undefined,
+      readSessionOptions: async () => null,
+      applySessionOptions: async () => true,
+      restoreSessionOptions: async () => undefined,
+      readWindowSizing: async () => ({ cols: 60, rows: 30, mode: 'manual' }),
+      presizeWindow: async () => true,
+      clearLeakedFollowTyping: async () => {
+        calls.push('sweep');
+        return 0;
+      },
+      followAttachingClient: async (muxName: string) => {
+        calls.push(`follow ${muxName}`);
+        return true;
+      },
+      armFollowTyping: async (muxName: string, tty: string) => {
+        calls.push(`arm ${muxName} ${tty}`);
+        return armResult;
+      },
+      disarmFollowTyping: async (muxName: string, tty: string) => {
+        calls.push(`disarm ${muxName} ${tty}`);
+      },
+      restoreWindowSizing: async (muxName: string) => {
+        calls.push(`size ${muxName}`);
+      },
+    } as unknown as TuiClient;
+    return { client, calls };
+  }
+
+  const tabs = [
+    { index: 1, label: 'w1', active: true, muxName: 'codeman-aaaa1111' },
+    { index: 2, label: 'w2', active: false, muxName: 'codeman-bbbb2222' },
+  ];
+
+  it('arms the hook on every session the strip can reach, and drops it before the size is put back', async () => {
+    const { client, calls } = sizingFake();
+    const handoff = await beginAttachHandoff(client, 'codeman-aaaa1111', 'w1', tabs, 200, 50, '/dev/pts/4');
+    // Leaks first, so a killed TUI's hook cannot undo the presize. Then
+    // Alt+2 lands in the second session, and a phone can pin that one too.
+    expect(calls).toEqual([
+      'sweep',
+      'follow codeman-aaaa1111',
+      'arm codeman-aaaa1111 /dev/pts/4',
+      'arm codeman-bbbb2222 /dev/pts/4',
+    ]);
+
+    calls.length = 0;
+    await handoff.restore();
+    // Disarmed first: the size restore re-pins the browser's authority, and
+    // a hook still armed after it could hand the window back to a reused pty.
+    expect(calls).toEqual([
+      'disarm codeman-aaaa1111 /dev/pts/4',
+      'disarm codeman-bbbb2222 /dev/pts/4',
+      'size codeman-aaaa1111',
+      'size codeman-bbbb2222',
+    ]);
+  });
+
+  it('arms nothing without a tty to guard on, and disarms only what it armed', async () => {
+    const bare = sizingFake();
+    await (await beginAttachHandoff(bare.client, 'codeman-aaaa1111', 'w1', tabs, 200, 50, null)).restore();
+    expect(bare.calls.filter((call) => call.startsWith('arm') || call.startsWith('disarm'))).toEqual([]);
+
+    // A session whose hook slot is the user's (arm answered false) is not disarmed.
+    const refused = sizingFake(false);
+    await (await beginAttachHandoff(refused.client, 'codeman-aaaa1111', 'w1', tabs, 200, 50, '/dev/pts/4')).restore();
+    expect(refused.calls.filter((call) => call.startsWith('disarm'))).toEqual([]);
   });
 });
 

@@ -5696,11 +5696,44 @@ export class Session extends EventEmitter {
       this._guardedGeometryRevision++;
       this._ptyCols = cols;
       this._ptyRows = rows;
-      if (!IS_TEST_MODE && this._mux && this._muxSession) {
-        this._mux.resizeWindow?.(this._muxSession.muxName, cols, rows);
+      // ⚠️ A forced resize at an unchanged size is a device asking for the pane
+      // back (the Redraw button, a closing pop-out window, the split pane). An
+      // unchanged pty sends tmux no SIGWINCH, so tmux never counts this client
+      // as the one used last, and while a `codeman tui` attach keeps the window
+      // on `latest`, its follow hook (TUI_FOLLOW_HOOKS) hands the window back
+      // to that terminal at its next key. A one-row nudge first makes this
+      // client the latest one, as a real resize does. Under `manual` with no
+      // attach the window ignores the client's pty, so the agent sees nothing.
+      if (!dimsChanged && rows > 1) {
+        this.nudgeThenResize(cols, rows);
+        return;
       }
-      this.ptyProcess.resize(cols, rows);
+      this.applyResize(cols, rows);
     }
+  }
+
+  /** How long tmux gets to read the nudged size before the real one. */
+  static readonly FORCED_RESIZE_NUDGE_MS = 60;
+
+  private applyResize(cols: number, rows: number): void {
+    if (!IS_TEST_MODE && this._mux && this._muxSession) {
+      this._mux.resizeWindow?.(this._muxSession.muxName, cols, rows);
+    }
+    this.ptyProcess?.resize(cols, rows);
+  }
+
+  private nudgeThenResize(cols: number, rows: number): void {
+    const revision = this._guardedGeometryRevision;
+    this.ptyProcess?.resize(cols, rows - 1);
+    const timer = setTimeout(() => {
+      // A newer resize won: it set its own size, so this one has nothing left to do.
+      if (revision !== this._guardedGeometryRevision || !this.ptyProcess) return;
+      // The pane moves a second time, so guarded input read between the two
+      // must see a new revision too.
+      this._guardedGeometryRevision++;
+      this.applyResize(cols, rows);
+    }, Session.FORCED_RESIZE_NUDGE_MS);
+    timer.unref?.();
   }
 
   // Legacy method for compatibility with session-manager

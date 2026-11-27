@@ -144,13 +144,56 @@ describe('Session resize arbitration', () => {
     expect(resize).toHaveBeenCalledWith(100, 30);
   });
 
-  it('applies forced resizes even when the dimensions did not change', () => {
+  // A forced resize at an unchanged size is a device asking for the pane back
+  // (Redraw). An unchanged pty gives tmux no SIGWINCH, so a `codeman tui`
+  // attach would keep the window; a one-row nudge first makes this client
+  // the one tmux counts as used last.
+  it('applies forced resizes even when the dimensions did not change, through a one-row nudge', () => {
+    vi.useFakeTimers();
+    try {
+      const session = new Session({ workingDir: '/tmp', mode: 'shell' });
+      const resize = attachFakePty(session, 120, 40);
+
+      session.resize(120, 40, { force: true });
+      expect(resize.mock.calls).toEqual([[120, 39]]);
+      const between = session.guardedInputGeneration;
+      vi.advanceTimersByTime(Session.FORCED_RESIZE_NUDGE_MS);
+      // The second move invalidates guarded input read between the two.
+      expect(session.guardedInputGeneration).not.toBe(between);
+      expect(resize.mock.calls).toEqual([
+        [120, 39],
+        [120, 40],
+      ]);
+      expect(session.ptyGeometry).toEqual({ cols: 120, rows: 40 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('drops the end of a nudge that a newer resize overtook', () => {
+    vi.useFakeTimers();
+    try {
+      const session = new Session({ workingDir: '/tmp', mode: 'shell' });
+      const resize = attachFakePty(session, 120, 40);
+
+      session.resize(120, 40, { force: true });
+      session.resize(100, 30);
+      vi.advanceTimersByTime(Session.FORCED_RESIZE_NUDGE_MS);
+      expect(resize.mock.calls).toEqual([
+        [120, 39],
+        [100, 30],
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not nudge a forced resize that changes the size', () => {
     const session = new Session({ workingDir: '/tmp', mode: 'shell' });
     const resize = attachFakePty(session, 120, 40);
 
-    session.resize(120, 40, { force: true });
-
-    expect(resize).toHaveBeenCalledWith(120, 40);
+    session.resize(100, 30, { force: true });
+    expect(resize.mock.calls).toEqual([[100, 30]]);
   });
 
   describe('idle-desktop override (whoever is active wins)', () => {

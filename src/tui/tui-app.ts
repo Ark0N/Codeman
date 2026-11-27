@@ -638,10 +638,15 @@ export async function beginAttachHandoff(
   const banner = bannerFor(muxName, label);
   const dressed: Array<{ muxName: string; options: TuiSessionOptions }> = [];
   const resized: Array<{ muxName: string; sizing: TuiWindowSizing }> = [];
+  const followTyping: string[] = [];
   const targets = new Map<string, string>([[muxName, label]]);
   for (const tab of tabs.slice(0, 9)) {
     if (tab.muxName && !targets.has(tab.muxName)) targets.set(tab.muxName, tab.label);
   }
+  // A follow hook a killed TUI left behind would undo the presize below, so
+  // leaks go first. The dashboard also sweeps at startup; this covers
+  // `codeman tui <n>`, which has no dashboard.
+  await client.clearLeakedFollowTyping().catch(() => 0);
   for (const [target, targetLabel] of targets) {
     const snapshot = await client.readSessionOptions(target, Object.keys(banner));
     if (snapshot) dressed.push({ muxName: target, options: snapshot });
@@ -659,6 +664,16 @@ export async function beginAttachHandoff(
     // let the session we are actually opening follow the terminal live.
     if (cols && rows && rows > 1) await client.presizeWindow(target, cols, rows - 1);
     if (target === muxName) await client.followAttachingClient(target);
+    // ⚠️ `latest` does not hold for the whole attach. A browser that opens or
+    // resizes this session mid-attach goes through Codeman's `resize-window`,
+    // which puts the window back on `manual` at the BROWSER's size: a phone
+    // opening it left the terminal showing a phone-sized pane, and typing or
+    // pasting here changed nothing until a detach and a fresh attach. The
+    // follow hook (TUI_FOLLOW_HOOKS) puts `latest` back when this terminal is
+    // used again, so the window follows whichever client was used last. It
+    // needs the tty to name its owner, like the switch keys, so without one
+    // the attach keeps the old behaviour.
+    if (guarded && (await client.armFollowTyping(target, tty as string))) followTyping.push(target);
   }
   // ⚠️ Armed LAST, as the final tmux call before the caller's `spawnSync`. The
   // hook is one-shot for this tty, so a TUI killed between arming and attaching
@@ -676,6 +691,9 @@ export async function beginAttachHandoff(
       if (tty && isTuiClientTty(tty)) await client.disarmTuiSwitchGuard(tty);
       if (oneKey) await client.unbindDetachKey(ONE_KEY_DETACH, 'root');
       if (claimed && alias) await client.unbindDetachKey(alias);
+      // The follow hook before the size, so nothing of this attach acts on
+      // the window once the restore below has re-pinned the browser's size.
+      for (const target of followTyping) await client.disarmFollowTyping(target, tty as string);
       // Options first, then the size: dropping the status bar gives its row
       // back to the pane, and the resize is what re-pins the browser's
       // authority over the window.
@@ -1265,6 +1283,7 @@ class TuiApp {
     // Fire and forget: a bar stranded by a previous run is cosmetic, so it must
     // never delay the first frame or fail a start.
     void this.client.clearLeakedAttachBanners().catch(() => undefined);
+    void this.client.clearLeakedFollowTyping().catch(() => undefined);
 
     return new Promise<number>((resolve) => {
       this.resolveExit = resolve;
