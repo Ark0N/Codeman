@@ -763,6 +763,8 @@ describe('manual full-history recovery while reading (#814)', () => {
         _serializeAddon: null,
         _disconnectWs: vi.fn(),
         _flushLocalEchoTo: vi.fn(),
+        // Both cleanups settle the main pane's native input first (#839).
+        _settleMainInput: vi.fn(),
         _clearTimer: vi.fn(),
         _pendingDroppedOutputRecovery: { sessionId: 's1', attempt: 2 },
         activeSessionId: 's1',
