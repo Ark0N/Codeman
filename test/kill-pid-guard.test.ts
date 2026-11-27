@@ -22,6 +22,9 @@ vi.mock('node:child_process', async () => {
   return { ...actual, exec: vi.fn(), execFile: vi.fn(), execSync: vi.fn(), spawn: vi.fn() };
 });
 
+/** The kill path's pane read, as killSession() sends it. */
+const KILL_READ = "'#{pane_dead}|#{pane_pid}|#{pane_dead_time}'";
+
 /** A machine: init, kthreadd, the user's own programs, and one agent (4242) with a child. */
 const PS = ['1 0', '2 0', '900 1', '901 900', '902 900', '4242 901', '4243 4242'].join('\n') + '\n';
 
@@ -36,12 +39,18 @@ describe('isSignalablePid', () => {
 
 describe('killSession and a pane without a process', () => {
   let panePid: string;
+  /**
+   * The kill path's own read, `#{pane_dead}|#{pane_pid}|#{pane_dead_time}`. Unset, it
+   * answers a live pane with `panePid`, which is what tmux prints for one.
+   */
+  let paneRead: string | undefined;
   let commands: string[];
   let kill: MockInstance<typeof process.kill>;
   let signals: [number, string | number | undefined][];
 
   beforeEach(() => {
     panePid = '4242\n';
+    paneRead = undefined;
     commands = [];
     signals = [];
     vi.mocked(execSync).mockImplementation(((cmd: string) => {
@@ -51,7 +60,11 @@ describe('killSession and a pane without a process', () => {
     vi.mocked(exec).mockImplementation(((cmd: string, options: unknown, maybeCallback?: unknown) => {
       commands.push(cmd);
       const callback = (typeof options === 'function' ? options : maybeCallback) as (e: null, out: object) => void;
-      const stdout = cmd.includes('display-message') ? panePid : '';
+      const stdout = !cmd.includes('display-message')
+        ? ''
+        : cmd.includes(KILL_READ)
+          ? (paneRead ?? `0|${panePid.trim()}|\n`)
+          : panePid;
       setImmediate(() => callback(null, { stdout, stderr: '' }));
       return { on: vi.fn(), kill: vi.fn(), pid: 12345 };
     }) as unknown as typeof exec);
@@ -97,6 +110,8 @@ describe('killSession and a pane without a process', () => {
     return m;
   }
   const closedByTmux = () => commands.some((c) => c.includes('kill-session -t "codeman-feed1234"'));
+  /** The close read the pane through the three-field kill read, and not the old pid-only one. */
+  const readTheKillFormat = () => commands.some((c) => c.includes(KILL_READ));
 
   // The control: without it, a guard that refused every kill would pass the rest.
   it('still signals the process tree of a real pane', async () => {
@@ -106,8 +121,35 @@ describe('killSession and a pane without a process', () => {
     expect(signals).toContainEqual([-4242, 'SIGTERM']);
     expect(signals.every(([pid]) => [4242, 4243].includes(Math.abs(pid)))).toBe(true);
     expect(closedByTmux()).toBe(true);
+    expect(readTheKillFormat()).toBe(true);
     m.destroy();
   });
+
+  // tmux's own 0, for an empty active pane beside the agent: `1|0|` up to tmux 3.6,
+  // `0|0|` on 3.7, and `0||` is tmux 3.8's closing window (pty closed, exit not
+  // collected). Each falls back to the recorded agent pid, as master does, and
+  // nothing outside that pid's tree is signalled.
+  for (const answer of ['1|0|', '0|0|', '0||']) {
+    it(`falls back to the recorded pid when the kill read answers ${answer}`, async () => {
+      paneRead = `${answer}\n`;
+      const m = await manager(4242);
+      expect(await m.killSession('feed1234')).toBe(true);
+      expect(readTheKillFormat()).toBe(true);
+      expect(signals).toContainEqual([-4242, 'SIGTERM']);
+      expect(signals.every(([pid]) => [4242, 4243].includes(Math.abs(pid)))).toBe(true);
+      expect(closedByTmux()).toBe(true);
+      m.destroy();
+    });
+
+    it(`signals nothing for ${answer} when the record holds 0 too`, async () => {
+      paneRead = `${answer}\n`;
+      const m = await manager(0);
+      expect(await m.killSession('feed1234')).toBe(true);
+      expect(signals).toEqual([]);
+      expect(closedByTmux()).toBe(true);
+      m.destroy();
+    });
+  }
 
   for (const pid of [0, 1]) {
     it(`signals nothing for pid ${pid}, and tmux still closes the session`, async () => {

@@ -277,11 +277,17 @@ const PANE_LIST_SEP = '|';
 /**
  * Format string for `tmux list-panes -F`. Keep in sync with {@link parsePaneRows}.
  *
- * The three `pane_dead*` fields carry the agent-exit signal of Ark0N/Codeman#446.
+ * The four `pane_dead*` fields carry the agent-exit signal of Ark0N/Codeman#446.
  * Appending them is backward compatible in both directions. A tmux that does not
  * know a variable substitutes the empty string rather than failing, which is how
  * tmux 3.2a answers `#{pane_dead_signal}` (added in 3.4), and the parser reads a
  * short row as "pid known, deadness unknown" rather than discarding it.
+ *
+ * `#{pane_dead_time}` is what tells one exit from the next. tmux 3.8 prints a
+ * blank `#{pane_pid}` once a pane's program has exited, so the pid cannot do it
+ * there, and the time is stamped once per exit, so a respawned pane that exits
+ * again reads as a new exit even with the same status. The stamp is in whole
+ * seconds, so two exits with the same status in the same second read as one.
  *
  * `#{pane_current_path}` comes last on purpose: a directory name may contain the
  * separator, and only the final field can absorb it without ambiguity.
@@ -289,7 +295,7 @@ const PANE_LIST_SEP = '|';
 const PANE_LIST_FORMAT =
   `#{session_name}${PANE_LIST_SEP}#{pane_pid}` +
   `${PANE_LIST_SEP}#{pane_dead}${PANE_LIST_SEP}#{pane_dead_status}${PANE_LIST_SEP}#{pane_dead_signal}` +
-  `${PANE_LIST_SEP}#{pane_current_path}`;
+  `${PANE_LIST_SEP}#{pane_dead_time}${PANE_LIST_SEP}#{pane_current_path}`;
 
 /**
  * 构建 pane 启动前的 nofile 修复命令。
@@ -308,31 +314,41 @@ export function buildNofileLimitCommand(targetLimit = CLAUDE_CODE_NOFILE_LIMIT):
 export interface PaneRow {
   /** tmux session this pane belongs to. Repeats once per pane of a split session. */
   sessionName: string;
-  /** `#{pane_pid}` — the process tmux started in the pane. */
-  pid: number;
+  /**
+   * `#{pane_pid}` — the process tmux started in the pane. Absent only when tmux
+   * printed it blank: tmux 3.8 does that once the pane's pty has closed, which
+   * can be seconds before `#{pane_dead}` turns 1.
+   */
+  pid?: number;
   /** `#{pane_dead}` — true for 1, false for 0, undefined when tmux said nothing. */
   dead?: boolean;
   /** `#{pane_dead_status}` — the exit code, absent when tmux reported none. */
   exitStatus?: number;
   /** `#{pane_dead_signal}` — the killing signal, absent before tmux 3.4 and when unsignalled. */
   exitSignal?: number;
+  /** `#{pane_dead_time}` — when the program exited (epoch seconds), absent while it runs. */
+  deadTime?: number;
   /** `#{pane_current_path}` — the pane's current directory, absent when tmux reported none. */
   currentPath?: string;
 }
 
 /**
- * One pane-exit reading, with the pane pid that produced it.
+ * One pane-exit reading, with the pane pid and exit time that identify it.
  *
- * The pid never leaves this module. It is what distinguishes "the same dead
- * pane, seen again" from "a second command in the same pane that also exited
- * with the same status", so the `at` stamp can hold across the first and must
- * not across the second. {@link PaneExit} itself stays free of it: the pid on
- * the session record is the attach client's, and a second pid there would
- * invite exactly the confusion Ark0N/Codeman#446 is about.
+ * Neither leaves this module. Together they distinguish "the same dead pane,
+ * seen again" from "a second command in the same pane that also exited with
+ * the same status", so the `at` stamp can hold across the first and must not
+ * across the second. Either may be absent: tmux 3.8 blanks the pid of a dead
+ * pane, and a tmux that does not know `#{pane_dead_time}` prints it empty.
+ * {@link PaneExit} itself stays free of both: the pid on the session record is
+ * the attach client's, and a second pid there would invite exactly the
+ * confusion Ark0N/Codeman#446 is about.
  */
 export interface PaneExitObservation {
-  /** `#{pane_pid}` of the pane this reading came from. */
-  panePid: number;
+  /** `#{pane_pid}` of the pane this reading came from, when tmux reported one. */
+  panePid?: number;
+  /** `#{pane_dead_time}` of the exit this reading saw, when tmux reported one. */
+  deadTime?: number;
   /** What to publish on the session record. */
   exit: PaneExit;
 }
@@ -363,7 +379,13 @@ function paneField(fields: string[], index: number): number | undefined {
  * into one row per pane, in tmux's own order. Exported for unit testing.
  *
  * - Skips empty lines and lines without the separator.
- * - Skips entries with a non-numeric pid or empty name.
+ * - Skips entries with an empty name, and entries where tmux answered neither a
+ *   pid nor `#{pane_dead}`, which is a bad read. tmux 3.8 blanks `#{pane_pid}`
+ *   as soon as the pane's pty closes, while `#{pane_dead}` turns 1 only once
+ *   tmux has collected the exit status. Collecting it took several seconds for
+ *   some exits (measured on tmux 3.4, where the pid itself stays). A row with
+ *   no pid and `pane_dead` 0 is that window, and dropping it would report a
+ *   live session as gone.
  * - Leaves every field after the pid undefined when it is blank or absent, so a
  *   row from an older tmux still yields its pid.
  */
@@ -374,20 +396,54 @@ export function parsePaneRows(output: string): PaneRow[] {
     if (!line.includes(PANE_LIST_SEP)) continue;
     const fields = line.split(PANE_LIST_SEP);
     const sessionName = fields[0];
-    const pid = parseInt(fields[1] ?? '', 10);
-    if (!sessionName || Number.isNaN(pid)) continue;
     const deadFlag = fields[2];
+    const dead = deadFlag === '1' ? true : deadFlag === '0' ? false : undefined;
+    const pid = paneField(fields, 1);
+    if (!sessionName || (pid === undefined && dead === undefined)) continue;
     rows.push({
       sessionName,
-      pid,
-      dead: deadFlag === '1' ? true : deadFlag === '0' ? false : undefined,
+      ...(pid !== undefined ? { pid } : {}),
+      dead,
       exitStatus: paneField(fields, 3),
       exitSignal: paneField(fields, 4),
-      // Everything after the fifth separator, so a path containing `|` stays whole.
-      currentPath: fields.slice(5).join(PANE_LIST_SEP) || undefined,
+      deadTime: paneField(fields, 5),
+      // Everything after the sixth separator, so a path containing `|` stays whole.
+      currentPath: fields.slice(6).join(PANE_LIST_SEP) || undefined,
     });
   }
   return rows;
+}
+
+/** What {@link TmuxManager.killSession} reads about a pane before it signals anything. */
+export interface PaneKillRead {
+  /**
+   * The pane's program exited, so no process is left to signal: `#{pane_dead}`
+   * was 1 AND either the pid was blank or `#{pane_dead_time}` was set.
+   */
+  dead: boolean;
+  /** `#{pane_pid}`, or null when tmux printed none (tmux 3.8 for a dead pane) or the read failed. */
+  pid: number | null;
+}
+
+/**
+ * Parse the kill path's `#{pane_dead}|#{pane_pid}|#{pane_dead_time}` read.
+ * Exported for unit testing.
+ *
+ * Only an explicit `1` can be dead, and only with a second sign of an exit.
+ * Before tmux 3.7 `#{pane_dead}` means only that the pane's pty is closed, so
+ * a program that closed its tty and ignores SIGHUP reads as dead while it
+ * still runs, with its pid printed and no exit time. Trusting the flag alone
+ * would leave that program running after a close that used to kill it. tmux
+ * 3.8 blanks the pid of an exited program and stamps `#{pane_dead_time}`, so
+ * either one confirms the exit. Anything else keeps the old behaviour of
+ * signalling the pid (or the recorded one when tmux printed none).
+ */
+export function parsePaneKillRead(output: string): PaneKillRead {
+  const [deadFlag = '', pidField = '', deadTimeField = ''] = output.trim().split(PANE_LIST_SEP);
+  const parsedPid = parseInt(pidField, 10);
+  const pid = Number.isNaN(parsedPid) ? null : parsedPid;
+  const exited = pid === null || !Number.isNaN(parseInt(deadTimeField, 10));
+  return { dead: deadFlag === '1' && exited, pid };
 }
 
 /**
@@ -420,7 +476,8 @@ export function derivePaneExits(rows: PaneRow[], now: number): Map<string, PaneE
     if (panesPerSession.get(row.sessionName) !== 1) continue;
     if (row.dead !== true) continue;
     exits.set(row.sessionName, {
-      panePid: row.pid,
+      ...(row.pid !== undefined ? { panePid: row.pid } : {}),
+      ...(row.deadTime !== undefined ? { deadTime: row.deadTime } : {}),
       exit: {
         ...(row.exitStatus !== undefined ? { status: row.exitStatus } : {}),
         ...(row.exitSignal !== undefined ? { signal: row.exitSignal } : {}),
@@ -2868,24 +2925,26 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
   }
 
   /**
-   * {@link getPanePid} without blocking the event loop, for the kill path: a close
-   * must not stall every other session's I/O while tmux answers.
+   * The kill path's pane read: the pane pid and whether the pane is dead, in one
+   * `display-message`, without blocking the event loop (a close must not stall
+   * every other session's I/O while tmux answers). A failed read answers
+   * `{ dead: false, pid: null }`, so the caller falls back to the recorded pid
+   * exactly as before.
    */
-  private async getPanePidAsync(muxName: string): Promise<number | null> {
-    if (IS_TEST_MODE) return 99999;
+  private async readPaneForKill(muxName: string): Promise<PaneKillRead> {
+    if (IS_TEST_MODE) return { dead: false, pid: 99999 };
     if (!isValidMuxName(muxName)) {
-      console.error('[TmuxManager] Invalid session name in getPanePidAsync:', muxName);
-      return null;
+      console.error('[TmuxManager] Invalid session name in readPaneForKill:', muxName);
+      return { dead: false, pid: null };
     }
     try {
-      const { stdout } = await execAsync(`${this.tmux()} display-message -t "${muxName}" -p '#{pane_pid}'`, {
-        encoding: 'utf-8',
-        timeout: EXEC_TIMEOUT_MS,
-      });
-      const pid = parseInt(stdout.trim(), 10);
-      return Number.isNaN(pid) ? null : pid;
+      const { stdout } = await execAsync(
+        `${this.tmux()} display-message -t "${muxName}" -p '#{pane_dead}${PANE_LIST_SEP}#{pane_pid}${PANE_LIST_SEP}#{pane_dead_time}'`,
+        { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
+      );
+      return parsePaneKillRead(stdout);
     } catch {
-      return null;
+      return { dead: false, pid: null };
     }
   }
 
@@ -3242,6 +3301,62 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
   }
 
   /**
+   * Strategies 1 and 2 of {@link killSession}: SIGTERM then SIGKILL the pane
+   * process's killable descendants, then its process group. Every pid it
+   * targets is appended to `allPids` for the final verify. Only ever called
+   * with the pid of a LIVE pane.
+   */
+  private async killPaneProcessTree(mode: SessionMode, panePid: number, allPids: number[]): Promise<void> {
+    allPids.push(panePid);
+
+    // Strategy 1: Kill all child processes recursively (but never a shared daemon the
+    // pane's CLI started for every session of that CLI: see killableDescendants)
+    let childPids = await this.killableDescendants(mode, panePid, await this.getChildPidsFresh(panePid));
+    if (childPids.length > 0) {
+      console.log(`[TmuxManager] Found ${childPids.length} child processes to kill`);
+      allPids.push(...childPids);
+
+      for (const childPid of [...childPids].reverse()) {
+        if (this.isProcessAlive(childPid)) {
+          try {
+            this.signalProcess(childPid, 'SIGTERM');
+          } catch {
+            // Process may already be dead
+          }
+        }
+      }
+
+      // Most children are gone within a few ms; the re-scan below still runs, to
+      // catch anything spawned since the first one.
+      await waitForProcessesExit(childPids, { timeoutMs: TMUX_KILL_WAIT_MS });
+
+      childPids = await this.killableDescendants(mode, panePid, await this.getChildPidsFresh(panePid));
+      for (const childPid of childPids) {
+        if (this.isProcessAlive(childPid)) {
+          try {
+            this.signalProcess(childPid, 'SIGKILL');
+          } catch {
+            // Process already terminated
+          }
+        }
+      }
+    }
+
+    // Strategy 2: Kill the entire process group
+    if (this.isProcessAlive(panePid)) {
+      try {
+        this.signalProcess(-panePid, 'SIGTERM');
+        await waitForProcessesExit([panePid], { timeoutMs: GRACEFUL_SHUTDOWN_WAIT_MS });
+        if (this.isProcessAlive(panePid)) {
+          this.signalProcess(-panePid, 'SIGKILL');
+        }
+      } catch {
+        // Process group may not exist or already terminated
+      }
+    }
+  }
+
+  /**
    * Kill a tmux session and all its child processes.
    * Uses a 4-strategy approach (children → process group → tmux kill → SIGKILL).
    * In test mode: removes from memory only (no real kill).
@@ -3361,63 +3476,34 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       return true;
     }
 
-    // Get current PID (may have changed)
-    const currentPid = (await this.getPanePidAsync(session.muxName)) || session.pid;
-    // An empty pane has no process: tmux says 0, and so does the record once a server
-    // start has read it. Nothing is signalled then, and only tmux is asked to close it.
-    const hasProcess = isSignalablePid(currentPid);
+    // Get current PID (may have changed). A dead pane has no process left to
+    // signal, and the pid on the record is the one that exited, which the OS may
+    // since have handed to an unrelated process: walking its tree or signalling
+    // it could kill that. tmux 3.8 prints no pid for a dead pane, so without this
+    // check the fallback below would pick that stale pid every time. Only the
+    // kill-session below runs for it. A blank pid with `#{pane_dead}` still 0
+    // (tmux 3.8, pty closed, exit not collected yet) keeps the fallback: tmux
+    // has not reaped the pane's process yet. That holds when the recorded pid is
+    // the one the pane was started with; a hand-run `respawn-pane` breaks it.
+    // A pid of 0 is no pid either: tmux prints it for an empty active pane
+    // (`split-window ''`) before 3.8, beside a session's running agent, so
+    // `||` falls back to the recorded pid as master always did. Nothing is
+    // ever signalled for 0 or 1 (isSignalablePid): then only tmux is asked to
+    // close the session.
+    const pane = await this.readPaneForKill(session.muxName);
+    const candidatePid = pane.dead ? null : pane.pid || session.pid;
+    const currentPid = candidatePid !== null && isSignalablePid(candidatePid) ? candidatePid : null;
 
     console.log(
-      `[TmuxManager] Killing session ${session.muxName} (${hasProcess ? `PID ${currentPid}` : `no process, pane pid ${currentPid}`})`
+      currentPid !== null
+        ? `[TmuxManager] Killing session ${session.muxName} (PID ${currentPid})`
+        : pane.dead
+          ? `[TmuxManager] Killing session ${session.muxName} (pane dead, PID ${session.pid} not signalled)`
+          : `[TmuxManager] Killing session ${session.muxName} (no usable pid, recorded ${session.pid}, nothing signalled)`
     );
 
-    const allPids: number[] = hasProcess ? [currentPid] : [];
-
-    // Strategy 1: Kill all child processes recursively (but never a shared daemon the
-    // pane's CLI started for every session of that CLI: see killableDescendants)
-    let childPids = await this.killableDescendants(session.mode, currentPid, await this.getChildPidsFresh(currentPid));
-    if (childPids.length > 0) {
-      console.log(`[TmuxManager] Found ${childPids.length} child processes to kill`);
-      allPids.push(...childPids);
-
-      for (const childPid of [...childPids].reverse()) {
-        if (this.isProcessAlive(childPid)) {
-          try {
-            this.signalProcess(childPid, 'SIGTERM');
-          } catch {
-            // Process may already be dead
-          }
-        }
-      }
-
-      // Most children are gone within a few ms; the re-scan below still runs, to
-      // catch anything spawned since the first one.
-      await waitForProcessesExit(childPids, { timeoutMs: TMUX_KILL_WAIT_MS });
-
-      childPids = await this.killableDescendants(session.mode, currentPid, await this.getChildPidsFresh(currentPid));
-      for (const childPid of childPids) {
-        if (this.isProcessAlive(childPid)) {
-          try {
-            this.signalProcess(childPid, 'SIGKILL');
-          } catch {
-            // Process already terminated
-          }
-        }
-      }
-    }
-
-    // Strategy 2: Kill the entire process group
-    if (hasProcess && this.isProcessAlive(currentPid)) {
-      try {
-        this.signalProcess(-currentPid, 'SIGTERM');
-        await waitForProcessesExit([currentPid], { timeoutMs: GRACEFUL_SHUTDOWN_WAIT_MS });
-        if (this.isProcessAlive(currentPid)) {
-          this.signalProcess(-currentPid, 'SIGKILL');
-        }
-      } catch {
-        // Process group may not exist or already terminated
-      }
-    }
+    const allPids: number[] = [];
+    if (currentPid !== null) await this.killPaneProcessTree(session.mode, currentPid, allPids);
 
     // Strategy 3: Kill tmux session by name (guard the name before it reaches the shell).
     // Async: tmux takes tens of ms to tear a session down, and execSync held the
@@ -3459,7 +3545,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     }
 
     // Strategy 4: Direct kill by PID as final fallback
-    if (hasProcess && this.isProcessAlive(currentPid)) {
+    if (currentPid !== null && this.isProcessAlive(currentPid)) {
       try {
         this.signalProcess(currentPid, 'SIGKILL');
       } catch {
@@ -3522,7 +3608,10 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     // socket a session's location is a constant, so there is no per-session
     // socket tag to reconcile and no cross-socket ambiguity that could mark a
     // live session dead (the root cause of vanished/duplicate tabs).
-    let active: Map<string, number>;
+    // Every tmux session on the socket, with its pane pid when tmux printed one.
+    // A session whose only pane is dead or closing is still listed, with no pid (tmux 3.8
+    // blanks it): the session exists, so it must not be reported as gone.
+    let active: Map<string, number | undefined>;
     const paneDirs = new Map<string, string>();
     try {
       const output = execSync(`${this.tmux()} list-panes -a -F '${PANE_LIST_FORMAT}' 2>/dev/null || true`, {
@@ -3532,7 +3621,10 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       // Not trimmed: the directory is the last field, so trimming would cut a
       // trailing space off the last row's path. parsePaneRows skips empty lines.
       const rows = parsePaneRows(output);
-      active = new Map(rows.map((row) => [row.sessionName, row.pid]));
+      active = new Map();
+      for (const row of rows) {
+        if (row.pid !== undefined || !active.has(row.sessionName)) active.set(row.sessionName, row.pid);
+      }
       // A discovered session's directory, from its first pane with a usable path.
       // The path is admitted only if it passes the same check createSession and
       // respawnPane apply, since it was set by whoever owns the pane, not by us.
@@ -3567,10 +3659,13 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
     // Check tracked sessions against the live pane list.
     for (const [sessionId, session] of this.sessions) {
-      const pid = active.get(session.muxName);
-      if (pid !== undefined) {
+      if (active.has(session.muxName)) {
         alive.push(sessionId);
-        if (pid !== session.pid) session.pid = pid;
+        // No pid is a dead or closing pane (tmux 3.8 blanks it once the pty
+        // closes): keep the last one known, which is what tmux itself reported
+        // for such a pane before 3.8.
+        const pid = active.get(session.muxName);
+        if (pid !== undefined && pid !== session.pid) session.pid = pid;
       } else {
         dead.push(sessionId);
         this.sessions.delete(sessionId);
@@ -3590,6 +3685,9 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
     for (const [sessionName, pid] of active) {
       if (!sessionName.startsWith('codeman-') && !sessionName.startsWith('claudeman-')) continue;
+      // A session with no live pane has no pid to record, and a made-up one would
+      // reach killSession()'s process-tree walk. Left undiscovered, as before.
+      if (pid === undefined) continue;
       // Only admit names that pass the safe-name pattern. A foreign process on the
       // shared `tmux -L codeman` socket could create a `codeman-…` session whose name
       // contains shell metacharacters; rejecting it here keeps it out of this.sessions
@@ -3910,9 +4008,12 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    *
    * An entry keeps the `at` of the FIRST read that saw that exit, so the stamp
    * says when the agent was found gone rather than when the last poll ran. A
-   * changed status, a changed signal, or a different pane pid all start a new
-   * observation — the pid is what catches a second command in the same pane
-   * that happened to exit the same way.
+   * changed status, a changed signal, a different pane pid or a different exit
+   * time all start a new observation — the pid and the time are what catch a
+   * second command in the same pane that happened to exit the same way (the
+   * time alone on tmux 3.8, which blanks a dead pane's pid). `#{pane_dead_time}`
+   * is stamped to the second, so two exits with the same status in the same
+   * second read as one there.
    *
    * The same rule decides the read count: a repeat of the stored exit adds one,
    * and anything that starts a new observation starts the count again at 1.
@@ -3926,6 +4027,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       const sameExit =
         prev !== undefined &&
         prev.panePid === next.panePid &&
+        prev.deadTime === next.deadTime &&
         prev.exit.status === next.exit.status &&
         prev.exit.signal === next.exit.signal;
       this.paneExits.set(muxName, sameExit ? { ...prev, reads: prev.reads + 1 } : { ...next, reads: 1 });

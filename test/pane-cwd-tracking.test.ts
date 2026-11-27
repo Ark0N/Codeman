@@ -48,7 +48,7 @@ const docker: SessionDocker = { hostId: 'd1', label: 'ctr', containerName: 'ctr'
 
 describe('derivePaneCurrentPaths', () => {
   it("maps each single-pane session to its pane's directory", () => {
-    const rows = parsePaneRows(['codeman-a|100|0|||/work/proj/sub', 'codeman-b|200|0|||/srv/app'].join('\n'));
+    const rows = parsePaneRows(['codeman-a|100|0||||/work/proj/sub', 'codeman-b|200|0||||/srv/app'].join('\n'));
     const paths = derivePaneCurrentPaths(rows);
     expect(paths.get('codeman-a')).toBe('/work/proj/sub');
     expect(paths.get('codeman-b')).toBe('/srv/app');
@@ -56,19 +56,19 @@ describe('derivePaneCurrentPaths', () => {
   });
 
   it('keeps a separator that belongs to the directory name', () => {
-    const paths = derivePaneCurrentPaths(parsePaneRows('codeman-a|100|0|||/home/u/weird|dir/sub'));
+    const paths = derivePaneCurrentPaths(parsePaneRows('codeman-a|100|0||||/home/u/weird|dir/sub'));
     expect(paths.get('codeman-a')).toBe('/home/u/weird|dir/sub');
   });
 
   it('answers nothing for a session split into several panes', () => {
     // Codeman creates one pane per session; which of a hand-split session's
     // panes "the" directory belongs to is a guess, so none is made.
-    const rows = parsePaneRows(['codeman-a|100|0|||/one', 'codeman-a|101|0|||/two'].join('\n'));
+    const rows = parsePaneRows(['codeman-a|100|0||||/one', 'codeman-a|101|0||||/two'].join('\n'));
     expect(derivePaneCurrentPaths(rows).has('codeman-a')).toBe(false);
   });
 
   it('drops a missing or relative directory', () => {
-    const rows = parsePaneRows(['codeman-a|100|0|||', 'codeman-b|200|0|||rel/ative'].join('\n'));
+    const rows = parsePaneRows(['codeman-a|100|0||||', 'codeman-b|200|0||||rel/ative'].join('\n'));
     expect(derivePaneCurrentPaths(rows).size).toBe(0);
   });
 
@@ -76,7 +76,7 @@ describe('derivePaneCurrentPaths', () => {
     // A blank `#{pane_current_path}` is a tmux that could not read the process
     // cwd that tick, not a pane that has no directory.
     const previous = new Map([['codeman-a', '/work/proj/sub']]);
-    const paths = derivePaneCurrentPaths(parsePaneRows('codeman-a|100|0|||'), previous);
+    const paths = derivePaneCurrentPaths(parsePaneRows('codeman-a|100|0||||'), previous);
     expect(paths.get('codeman-a')).toBe('/work/proj/sub');
   });
 
@@ -89,7 +89,7 @@ describe('derivePaneCurrentPaths', () => {
       ['codeman-rel', '/three'],
     ]);
     const rows = parsePaneRows(
-      ['codeman-split|100|0|||', 'codeman-split|101|0|||', 'codeman-rel|300|0|||rel/ative'].join('\n')
+      ['codeman-split|100|0||||', 'codeman-split|101|0||||', 'codeman-rel|300|0||||rel/ative'].join('\n')
     );
     expect(derivePaneCurrentPaths(rows, previous).size).toBe(0);
   });
@@ -117,7 +117,7 @@ describe('TmuxManager pane directory bookkeeping', () => {
   it('records the directory from the same read the pane-exit watcher makes', async () => {
     const manager = new TestManager();
     manager.registerSession(localSession('s1'));
-    manager.rows = parsePaneRows('codeman-s1|100|0|||/work/proj/sub');
+    manager.rows = parsePaneRows('codeman-s1|100|0||||/work/proj/sub');
     await manager.refreshPaneExits();
     expect(manager.getPaneCurrentPath('codeman-s1')).toBe('/work/proj/sub');
   });
@@ -125,7 +125,7 @@ describe('TmuxManager pane directory bookkeeping', () => {
   it('keeps the last known directory when a read comes back empty', async () => {
     const manager = new TestManager();
     manager.registerSession(localSession('s1'));
-    manager.rows = parsePaneRows('codeman-s1|100|0|||/work/proj/sub');
+    manager.rows = parsePaneRows('codeman-s1|100|0||||/work/proj/sub');
     await manager.refreshPaneExits();
     manager.rows = [];
     await manager.refreshPaneExits();
@@ -135,9 +135,9 @@ describe('TmuxManager pane directory bookkeeping', () => {
   it('keeps the last directory across a blank field on a single-pane read', async () => {
     const manager = new TestManager();
     manager.registerSession(localSession('s1'));
-    manager.rows = parsePaneRows('codeman-s1|100|0|||/work/proj/sub');
+    manager.rows = parsePaneRows('codeman-s1|100|0||||/work/proj/sub');
     await manager.refreshPaneExits();
-    manager.rows = parsePaneRows('codeman-s1|100|0|||');
+    manager.rows = parsePaneRows('codeman-s1|100|0||||');
     await manager.refreshPaneExits();
     expect(manager.getPaneCurrentPath('codeman-s1')).toBe('/work/proj/sub');
   });
@@ -145,9 +145,9 @@ describe('TmuxManager pane directory bookkeeping', () => {
   it('forgets the directory once the session is split into several panes', async () => {
     const manager = new TestManager();
     manager.registerSession(localSession('s1'));
-    manager.rows = parsePaneRows('codeman-s1|100|0|||/work/proj/sub');
+    manager.rows = parsePaneRows('codeman-s1|100|0||||/work/proj/sub');
     await manager.refreshPaneExits();
-    manager.rows = parsePaneRows(['codeman-s1|100|0|||/work/proj/sub', 'codeman-s1|101|0|||/work/proj'].join('\n'));
+    manager.rows = parsePaneRows(['codeman-s1|100|0||||/work/proj/sub', 'codeman-s1|101|0||||/work/proj'].join('\n'));
     await manager.refreshPaneExits();
     expect(manager.getPaneCurrentPath('codeman-s1')).toBeUndefined();
   });
@@ -163,7 +163,7 @@ describe('TmuxManager pane directory bookkeeping', () => {
     }
     const manager = new RacingManager();
     manager.registerSession(localSession('s1'));
-    manager.rows = parsePaneRows('codeman-s1|100|1|0||/work/proj/sub');
+    manager.rows = parsePaneRows('codeman-s1|100|1|0|||/work/proj/sub');
     await manager.refreshPaneExits();
     expect(manager.getPaneCurrentPath('codeman-s1')).toBe('/work/proj/sub');
     expect(manager.getPaneExit('codeman-s1')).toBeUndefined();
@@ -174,7 +174,7 @@ describe('TmuxManager pane directory bookkeeping', () => {
     const read = vi.spyOn(manager as unknown as { readPaneRows: () => Promise<PaneRow[]> }, 'readPaneRows');
     manager.registerSession({ ...localSession('s1'), remote } as MuxSession);
     manager.registerSession({ ...localSession('s2'), docker } as MuxSession);
-    manager.rows = parsePaneRows('codeman-s1|100|0|||/tmp');
+    manager.rows = parsePaneRows('codeman-s1|100|0||||/tmp');
     await manager.refreshPaneExits();
     expect(read).not.toHaveBeenCalled();
     expect(manager.getPaneCurrentPath('codeman-s1')).toBeUndefined();
@@ -183,9 +183,9 @@ describe('TmuxManager pane directory bookkeeping', () => {
   it('forgets a session that an authoritative read no longer lists', async () => {
     const manager = new TestManager();
     manager.registerSession(localSession('s1'));
-    manager.rows = parsePaneRows('codeman-s1|100|0|||/work/proj/sub');
+    manager.rows = parsePaneRows('codeman-s1|100|0||||/work/proj/sub');
     await manager.refreshPaneExits();
-    manager.rows = parsePaneRows('codeman-other|300|0|||/elsewhere');
+    manager.rows = parsePaneRows('codeman-other|300|0||||/elsewhere');
     await manager.refreshPaneExits();
     expect(manager.getPaneCurrentPath('codeman-s1')).toBeUndefined();
   });
@@ -584,37 +584,37 @@ describe('a pane read reaching the session record', () => {
 
   it('clears the directory once the session is split into several panes', async () => {
     const { session, broadcast, tick } = buildWithRealManager();
-    await tick('codeman-aaaa|100|0|||/work/proj/sub');
+    await tick('codeman-aaaa|100|0||||/work/proj/sub');
     expect(session.toState().paneCwd).toBe('/work/proj/sub');
     expect(broadcast).toHaveBeenCalledTimes(1);
 
-    await tick(['codeman-aaaa|100|0|||/work/proj/sub', 'codeman-aaaa|101|0|||/work/proj'].join('\n'));
+    await tick(['codeman-aaaa|100|0||||/work/proj/sub', 'codeman-aaaa|101|0||||/work/proj'].join('\n'));
     // An absent cwd is what makes the browser fall back to workingDir.
     expect(session.toState().paneCwd).toBeUndefined();
     expect(broadcast).toHaveBeenCalledTimes(2);
 
     // The clear is announced once, not on every later tick that agrees.
-    await tick(['codeman-aaaa|100|0|||/work/proj/sub', 'codeman-aaaa|101|0|||/work/proj'].join('\n'));
+    await tick(['codeman-aaaa|100|0||||/work/proj/sub', 'codeman-aaaa|101|0||||/work/proj'].join('\n'));
     expect(broadcast).toHaveBeenCalledTimes(2);
   });
 
   it('clears the directory once a read no longer lists the session', async () => {
     const { session, broadcast, tick } = buildWithRealManager();
-    await tick('codeman-aaaa|100|0|||/work/proj/sub');
+    await tick('codeman-aaaa|100|0||||/work/proj/sub');
     expect(session.toState().paneCwd).toBe('/work/proj/sub');
 
-    await tick('codeman-other|300|0|||/elsewhere');
+    await tick('codeman-other|300|0||||/elsewhere');
     expect(session.toState().paneCwd).toBeUndefined();
     expect(broadcast).toHaveBeenCalledTimes(2);
-    await tick('codeman-other|300|0|||/elsewhere');
+    await tick('codeman-other|300|0||||/elsewhere');
     expect(broadcast).toHaveBeenCalledTimes(2);
   });
 
   it('keeps the directory across a blank field and across a failed read', async () => {
     const { session, broadcast, tick } = buildWithRealManager();
-    await tick('codeman-aaaa|100|0|||/work/proj/sub');
+    await tick('codeman-aaaa|100|0||||/work/proj/sub');
     // tmux could not read the process cwd for one tick.
-    await tick('codeman-aaaa|100|0|||');
+    await tick('codeman-aaaa|100|0||||');
     expect(session.toState().paneCwd).toBe('/work/proj/sub');
     // A failed read arrives as no rows at all.
     await tick('');
